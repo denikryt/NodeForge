@@ -1,6 +1,9 @@
 """Math and procedural scalar/vector built-ins for NodeForge DSL."""
 
 import ast
+import math as _py_math
+from dataclasses import dataclass
+from typing import Callable
 
 from ..constants import (
     TYPE_FLOAT,
@@ -26,15 +29,71 @@ from ..statements import _kw_dict, _check_no_extra_keywords
 from ..consteval import _const_eval
 from ..values import Value
 
-_FIELD_MATH_NAMES = {
-    "inverse_lerp", "remap", "saturate", "step",
-    "smoothstep", "smootherstep", "pingpong", "wrap",
-}
 
-NAMES = set(_FLOAT_FUNCS_1) | set(_FLOAT_FUNCS_2) | {
-    "clamp", "mix", "lerp", "select", "map_range",
-    "noise", "random_value",
-} | _FIELD_MATH_NAMES
+
+@dataclass(frozen=True)
+class MathBuiltinSpec:
+    """Describe one table-driven math builtin."""
+
+    name: str
+    params: tuple[str, ...]
+    compile_fn: Callable
+
+
+def _compile_unary_math(name, op):
+    """Return a compiler adapter for one-input Blender Math operations."""
+
+    def compile_unary(group, args, x, y):
+        if len(args) != 1:
+            raise CompileError(f"{name}() expects 1 argument")
+        return _math(group, op, args, x, y)
+
+    return compile_unary
+
+
+def _compile_binary_math(name, op):
+    """Return a compiler adapter for two-input Blender Math operations."""
+
+    def compile_binary(group, args, x, y):
+        if len(args) != 2:
+            raise CompileError(f"{name}() expects 2 arguments")
+        return _math(group, op, args, x, y)
+
+    return compile_binary
+
+
+
+def _compile_ln_spec(group, args, x, y):
+    """Compile ln(value) as logarithm with base e."""
+    if len(args) != 1:
+        raise CompileError("ln(value) expects 1 argument")
+    e_value = _value(group, _py_math.e, x + 20, y - 40)
+    return _math(group, "LOGARITHM", [args[0], e_value], x, y)
+
+def _compile_clamp_spec(group, args, x, y):
+    """Compile clamp(value, min, max)."""
+    if len(args) != 3:
+        raise CompileError("clamp(value, min, max) expects 3 arguments")
+    return _clamp(group, args[0], args[1], args[2], x, y)
+
+
+def _compile_mix_spec(group, args, x, y):
+    """Compile mix(a, b, factor) and lerp(a, b, factor)."""
+    if len(args) != 3:
+        raise CompileError("mix(a, b, factor) expects 3 arguments")
+    return _mix(group, args[0], args[1], args[2], x, y)
+
+
+def _compile_select_spec(group, args, x, y):
+    """Compile select(cond, false, true)."""
+    if len(args) != 3:
+        raise CompileError("select(cond, false, true) expects 3 arguments")
+    return _switch(group, args[0], args[1], args[2], x, y)
+
+
+def _compile_map_range_spec(group, args, x, y):
+    """Compile map_range(value, from_min, from_max, to_min, to_max)."""
+    return _map_range(group, args, x, y)
 
 
 def compile_call(comp, expr, depth=0):
@@ -48,77 +107,22 @@ def compile_call(comp, expr, depth=0):
     if name == "random_value":
         return _compile_random_value(comp, expr, x, y)
 
+    spec = _SPECS.get(name)
+    if spec is None:
+        raise CompileError(f"Unsupported math builtin: {name}")
+
     if expr.keywords:
-        args_exprs = _ordered_keyword_args(name, expr)
+        args_exprs = _ordered_keyword_args(spec, expr)
     else:
         args_exprs = list(expr.args)
     args = [comp.compile(arg) for arg in args_exprs]
-    if name in _FLOAT_FUNCS_1:
-        if len(args) != 1:
-            raise CompileError(f"{name}() expects 1 argument")
-        return _math(comp.group, _FLOAT_FUNCS_1[name], args, x, y)
-    if name in _FLOAT_FUNCS_2:
-        if len(args) != 2:
-            raise CompileError(f"{name}() expects 2 arguments")
-        return _math(comp.group, _FLOAT_FUNCS_2[name], args, x, y)
-    if name == "clamp":
-        if len(args) != 3:
-            raise CompileError("clamp(value, min, max) expects 3 arguments")
-        return _clamp(comp.group, args[0], args[1], args[2], x, y)
-    if name in {"mix", "lerp"}:
-        if len(args) != 3:
-            raise CompileError("mix(a, b, factor) expects 3 arguments")
-        return _mix(comp.group, args[0], args[1], args[2], x, y)
-    if name == "select":
-        if len(args) != 3:
-            raise CompileError("select(cond, false, true) expects 3 arguments")
-        return _switch(comp.group, args[0], args[1], args[2], x, y)
-    if name == "map_range":
-        return _map_range(comp.group, args, x, y)
-    if name == "inverse_lerp":
-        return _compile_inverse_lerp(comp.group, args, x, y)
-    if name == "remap":
-        return _compile_remap(comp.group, args, x, y)
-    if name == "saturate":
-        return _compile_saturate(comp.group, args, x, y)
-    if name == "step":
-        return _compile_step(comp.group, args, x, y)
-    if name == "smoothstep":
-        return _compile_smoothstep(comp.group, args, x, y)
-    if name == "smootherstep":
-        return _compile_smootherstep(comp.group, args, x, y)
-    if name == "pingpong":
-        return _compile_pingpong(comp.group, args, x, y)
-    if name == "wrap":
-        return _compile_wrap(comp.group, args, x, y)
-    raise CompileError(f"Unsupported math builtin: {name}")
+    return spec.compile_fn(comp.group, args, x, y)
 
 
-def _ordered_keyword_args(name, expr):
-    """Return positional AST args after applying simple keyword aliases."""
-    specs = {}
-    for fn in _FLOAT_FUNCS_1:
-        specs[fn] = ["value"]
-    for fn in _FLOAT_FUNCS_2:
-        specs[fn] = ["a", "b"]
-    specs.update({
-        "clamp": ["value", "min", "max"],
-        "mix": ["a", "b", "factor"],
-        "lerp": ["a", "b", "factor"],
-        "select": ["cond", "false", "true"],
-        "map_range": ["value", "from_min", "from_max", "to_min", "to_max"],
-        "inverse_lerp": ["a", "b", "x"],
-        "remap": ["x", "in_min", "in_max", "out_min", "out_max"],
-        "saturate": ["x"],
-        "step": ["edge", "x"],
-        "smoothstep": ["edge0", "edge1", "x"],
-        "smootherstep": ["edge0", "edge1", "x"],
-        "pingpong": ["x", "length"],
-        "wrap": ["x", "min", "max"],
-    })
-    if name not in specs:
-        raise CompileError(f"{name}() does not support keyword arguments")
-    names = specs[name]
+def _ordered_keyword_args(spec, expr):
+    """Return positional AST args after applying the builtin parameter order."""
+    name = spec.name
+    names = spec.params
     if len(expr.args) > len(names):
         raise CompileError(f"{name}() got too many positional arguments")
     out = list(expr.args)
@@ -137,7 +141,6 @@ def _ordered_keyword_args(name, expr):
             raise CompileError(f"{name}() missing argument: {param}")
         out.append(by_name[param])
     return out
-
 
 def _ensure_numeric_args(name, args, count):
     """Validate the number and semantic type of scalar helper arguments."""
@@ -317,3 +320,39 @@ def _wire_or_default_numeric(comp, socket, expr, label):
     if not _is_number_type(value.typ):
         raise CompileError(f"{label} expects numeric input")
     comp.group.links.new(value.socket, socket)
+
+_SPECS = {
+    **{
+        name: MathBuiltinSpec(
+            name=name,
+            params=("value",),
+            compile_fn=_compile_unary_math(name, op),
+        )
+        for name, op in _FLOAT_FUNCS_1.items()
+    },
+    **{
+        name: MathBuiltinSpec(
+            name=name,
+            params=("a", "b"),
+            compile_fn=_compile_binary_math(name, op),
+        )
+        for name, op in _FLOAT_FUNCS_2.items()
+    },
+    "ln": MathBuiltinSpec("ln", ("value",), _compile_ln_spec),
+    "clamp": MathBuiltinSpec("clamp", ("value", "min", "max"), _compile_clamp_spec),
+    "mix": MathBuiltinSpec("mix", ("a", "b", "factor"), _compile_mix_spec),
+    "lerp": MathBuiltinSpec("lerp", ("a", "b", "factor"), _compile_mix_spec),
+    "select": MathBuiltinSpec("select", ("cond", "false", "true"), _compile_select_spec),
+    "map_range": MathBuiltinSpec("map_range", ("value", "from_min", "from_max", "to_min", "to_max"), _compile_map_range_spec),
+    "inverse_lerp": MathBuiltinSpec("inverse_lerp", ("a", "b", "x"), _compile_inverse_lerp),
+    "remap": MathBuiltinSpec("remap", ("x", "in_min", "in_max", "out_min", "out_max"), _compile_remap),
+    "saturate": MathBuiltinSpec("saturate", ("x",), _compile_saturate),
+    "step": MathBuiltinSpec("step", ("edge", "x"), _compile_step),
+    "smoothstep": MathBuiltinSpec("smoothstep", ("edge0", "edge1", "x"), _compile_smoothstep),
+    "smootherstep": MathBuiltinSpec("smootherstep", ("edge0", "edge1", "x"), _compile_smootherstep),
+    "pingpong": MathBuiltinSpec("pingpong", ("x", "length"), _compile_pingpong),
+    "wrap": MathBuiltinSpec("wrap", ("x", "min", "max"), _compile_wrap),
+}
+_CUSTOM_NAMES = {"noise", "random_value"}
+NAMES = set(_SPECS) | _CUSTOM_NAMES
+
