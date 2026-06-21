@@ -39,7 +39,7 @@ geo = set_position(
     vector(cx, cy, value * max_iter * z_scale)
 )
 
-geo = store_named_attribute(geo, "mandelbrot_color", color, type="VECTOR")
+geo = store_named_attribute(geo, "mandelbrot_color", color, type="COLOR")
 geo = apply_mandelbrot_material(geo, "mandelbrot_color")
 
 output("Geometry", geo)

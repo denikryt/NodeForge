@@ -46,18 +46,23 @@ def _ensure_attribute_color_material(attribute_name: str):
     label = "NodeForge Mandelbrot Attribute Color"
     attr = next((n for n in nodes if getattr(n, "label", "") == label), None)
     if attr is None:
-        attr = nodes.new("ShaderNodeAttribute")
+        try:
+            attr = nodes.new("ShaderNodeVertexColor")
+        except Exception:
+            attr = nodes.new("ShaderNodeAttribute")
         attr.label = label
         attr.location = (-300, 80)
-    attr.attribute_name = attribute_name
+    if attr.bl_idname == "ShaderNodeVertexColor":
+        attr.layer_name = attribute_name
+    else:
+        attr.attribute_name = attribute_name
 
     target = _principled_base_color_socket(bsdf)
     for link in list(links):
         if link.to_socket == target:
             links.remove(link)
-    vector_output = attr.outputs.get("Vector")
     color_output = attr.outputs.get("Color")
-    output = vector_output or color_output or attr.outputs[0]
+    output = color_output or attr.outputs[0]
     links.new(output, target)
     try:
         material.diffuse_color = (0.1, 0.25, 0.9, 1.0)

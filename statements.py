@@ -11,6 +11,9 @@ _ALLOWED_STORE_TYPES = {
     "INTEGER": "INT",
     "VECTOR": "FLOAT_VECTOR",
     "FLOAT_VECTOR": "FLOAT_VECTOR",
+    "COLOR": "FLOAT_COLOR",
+    "RGBA": "FLOAT_COLOR",
+    "FLOAT_COLOR": "FLOAT_COLOR",
     "BOOL": "BOOLEAN",
     "BOOLEAN": "BOOLEAN",
 }
@@ -62,7 +65,7 @@ def _store_named_attribute(group, geometry_socket, attr_name, value, selection=N
     if data_type_override:
         data_type = _ALLOWED_STORE_TYPES.get(data_type_override.upper())
         if data_type is None:
-            raise CompileError("Unsupported store() type. Use FLOAT, INT, VECTOR or BOOLEAN")
+            raise CompileError("Unsupported store() type. Use FLOAT, INT, VECTOR, COLOR or BOOLEAN")
     else:
         data_type = _attribute_data_type(value.typ)
     if data_type is None:

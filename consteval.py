@@ -270,20 +270,24 @@ def _handle_compile_time_stmt(stmt, env, out_stmts, preserve_names=None):
 def _runtime_range_state_names(stmts):
     """Names initialized before runtime_range loops that must remain GN values."""
     preserve = set()
+
+    def assigned_names(sub_stmts):
+        """Collect simple assignment targets from runtime statements recursively."""
+        names = set()
+        for sub in sub_stmts:
+            if isinstance(sub, ast.Assign) and len(sub.targets) == 1 and isinstance(sub.targets[0], ast.Name):
+                names.add(sub.targets[0].id)
+            elif isinstance(sub, ast.If):
+                names |= assigned_names(sub.body)
+                names |= assigned_names(sub.orelse)
+        return names
+
+    before = set()
     for stmt in stmts:
         if isinstance(stmt, ast.For) and isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id == "runtime_range":
-            assigned = set()
-            for sub in stmt.body:
-                if isinstance(sub, ast.Assign) and len(sub.targets) == 1 and isinstance(sub.targets[0], ast.Name):
-                    assigned.add(sub.targets[0].id)
-            # Initial state variables are the ones assigned in the loop and assigned before it.
-            before = set()
-            for prev in stmts:
-                if prev is stmt:
-                    break
-                if isinstance(prev, ast.Assign) and len(prev.targets) == 1 and isinstance(prev.targets[0], ast.Name):
-                    before.add(prev.targets[0].id)
-            preserve |= (assigned & before)
+            preserve |= (assigned_names(stmt.body) & before)
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
+            before.add(stmt.targets[0].id)
     return preserve
 
 def _preprocess_compile_time(stmts):

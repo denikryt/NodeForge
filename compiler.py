@@ -68,10 +68,10 @@ class Compiler:
         if isinstance(expr, ast.Name):
             if expr.id in _ALLOWED_CONSTS:
                 return _value(self.group, _ALLOWED_CONSTS[expr.id], x, y)
-            if expr.id in self.consts:
-                return self._compile_const_value(self.consts[expr.id], x, y)
             if expr.id in self.vars:
                 return self.vars[expr.id]
+            if expr.id in self.consts:
+                return self._compile_const_value(self.consts[expr.id], x, y)
             raise CompileError(f"Unknown name: {expr.id}")
 
         if isinstance(expr, ast.Attribute):
