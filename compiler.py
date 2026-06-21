@@ -492,6 +492,16 @@ def _make_group(source: str, name: str = "NodeForge Group", existing_group=None,
     output_names = set()
     auto_final_output = None
 
+    def _compile_iteration_count(expr, x=0, y=0):
+        """Compile a repeat-count expression while preserving integer constants as Int sockets."""
+        try:
+            value = _const_eval(expr, comp.consts)
+        except CompileError:
+            value = None
+        if isinstance(value, int) and not isinstance(value, bool):
+            return _int_value(group, value, x, y)
+        return comp.compile(expr)
+
     def _as_array_iter_value(value):
         """Return a script-level list value when a for-loop can be unrolled."""
         if isinstance(value, list):
@@ -569,7 +579,7 @@ def _make_group(source: str, name: str = "NodeForge Group", existing_group=None,
         if isinstance(stmt, ast.For):
             if isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id == "runtime_range":
                 iterations_expr, body = _parse_runtime_range_for(stmt)
-                iterations = comp.compile(iterations_expr)
+                iterations = _compile_iteration_count(iterations_expr, 240 + idx * 120, -260 - idx * 50)
                 if iterations.typ != TYPE_INT:
                     raise CompileError("runtime_range(n) expects an Int input or integer value")
                 results = _repeat_scalar_assignments(group, comp, iterations, body, index_name=stmt.target.id, x=300 + idx * 160, y=-380 - idx * 70)
@@ -623,7 +633,7 @@ def _make_group(source: str, name: str = "NodeForge Group", existing_group=None,
             geom_name, iterations_expr, body_expr = _parse_runtime_for(stmt, consts)
             if geom_name not in comp.vars or not isinstance(comp.vars[geom_name], Value) or comp.vars[geom_name].typ != TYPE_GEOMETRY:
                 raise CompileError("runtime for requires an existing Geometry variable, e.g. geo = cube(1)")
-            iterations = comp.compile(iterations_expr)
+            iterations = _compile_iteration_count(iterations_expr, 240 + idx * 120, -260 - idx * 50)
             if iterations.typ != TYPE_INT:
                 raise CompileError("range(steps) expects an Int input or integer constant")
             geo = comp.vars[geom_name]

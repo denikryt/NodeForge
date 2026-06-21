@@ -22,6 +22,14 @@ def _new_node(group, bl_idname, x=0, y=0):
     node.location = (x, y)
     return node
 
+
+def _int_value(group, value, x=0, y=0):
+    """Create an integer constant node for sockets that require Int values."""
+    node = _new_node(group, "FunctionNodeInputInt", x, y)
+    node.label = str(value)
+    node.integer = int(value)
+    return Value(node.outputs[0], TYPE_INT)
+
 def _value(group, value, x=0, y=0):
     """Function `_value` used by the NodeForge addon."""
     node = _new_node(group, "ShaderNodeValue", x, y)
@@ -191,4 +199,4 @@ def _ensure_float(v):
     if v.typ != TYPE_FLOAT:
         raise CompileError("Expected Float")
 
-__all__ = ['_socket_type_for', '_new_node', '_value', '_is_number_type', '_math', '_vector_math', '_combine_xyz', '_combine_xyz_mixed', '_separate_xyz', '_compare', '_boolean_math', '_switch', '_mix', '_clamp', '_position', '_normal', '_index', '_id', '_map_range', '_ensure_float']
+__all__ = ['_socket_type_for', '_new_node', '_value', '_int_value', '_is_number_type', '_math', '_vector_math', '_combine_xyz', '_combine_xyz_mixed', '_separate_xyz', '_compare', '_boolean_math', '_switch', '_mix', '_clamp', '_position', '_normal', '_index', '_id', '_map_range', '_ensure_float']

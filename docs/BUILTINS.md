@@ -327,6 +327,73 @@ Maps a value from one numeric range to another.
 
 Returns: `Float`.
 
+
+### `inverse_lerp(a, b, x)`
+
+Returns the normalized position of `x` inside the range `a..b`.
+
+Parameters:
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `a` | `Float` | Range start. |
+| `b` | `Float` | Range end. |
+| `x` | `Float` | Value to normalize. |
+
+Returns: `Float`.
+
+### `remap(x, in_min, in_max, out_min, out_max)`
+
+Maps `x` from one numeric range into another range without clamping the output.
+
+Parameters:
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `x` | `Float` | Input value. |
+| `in_min` | `Float` | Input range start. |
+| `in_max` | `Float` | Input range end. |
+| `out_min` | `Float` | Output range start. |
+| `out_max` | `Float` | Output range end. |
+
+Returns: `Float`.
+
+### `saturate(x)`
+
+Clamps `x` to the `0..1` range.
+
+Returns: `Float`.
+
+### `step(edge, x)`
+
+Returns `0` below `edge` and `1` at or above `edge`.
+
+Returns: `Float`.
+
+### `smoothstep(edge0, edge1, x)`
+
+Returns a cubic smoothed transition from `0` to `1` across `edge0..edge1`.
+
+Returns: `Float`.
+
+### `smootherstep(edge0, edge1, x)`
+
+Returns a quintic smoothed transition from `0` to `1` across `edge0..edge1`.
+
+Returns: `Float`.
+
+### `pingpong(x, length)`
+
+Repeats `x` as a positive triangular wave in the `0..length` range.
+
+Returns: `Float`.
+
+### `wrap(x, min, max)`
+
+Wraps `x` into the positive repeating range `min..max`, including negative inputs.
+
+Returns: `Float`.
+
 ### `noise(vector=position(), scale=..., detail=..., roughness=..., lacunarity=..., distortion=..., normalize=...)`
 
 Creates a 3D noise texture field and returns its factor output.
@@ -384,3 +451,50 @@ cross(a, b)
 reflect(v, normal)
 project(v, normal)
 ```
+
+### `rotate2d(v, angle)`
+
+Rotates `v` around the Z axis by `angle` radians and preserves the original Z component.
+
+Parameters:
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `v` | `Vector` | Input vector. |
+| `angle` | `Float` | Rotation angle in radians. |
+
+Returns: `Vector`.
+
+### `polar(radius, angle)`
+
+Creates an XY vector from polar coordinates.
+
+Parameters:
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `radius` | `Float` | Distance from origin. |
+| `angle` | `Float` | Angle in radians. |
+
+Returns: `Vector`.
+
+### `angle_between(a, b)`
+
+Returns the angle in radians between two vectors.
+
+Returns: `Float`.
+
+### `rotate_around_axis(v, axis, angle)`
+
+Rotates `v` around `axis` by `angle` radians.
+
+Parameters:
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `v` | `Vector` | Input vector. |
+| `axis` | `Vector` | Rotation axis. |
+| `angle` | `Float` | Rotation angle in radians. |
+
+Returns: `Vector`.
+
