@@ -7,7 +7,7 @@ from .values import Value
 
 
 def _socket_type_for(typ):
-    """Function `_socket_type_for` used by the GN Script MVP addon."""
+    """Function `_socket_type_for` used by the NodeForge addon."""
     return {
         TYPE_FLOAT: "NodeSocketFloat",
         TYPE_VECTOR: "NodeSocketVector",
@@ -17,24 +17,24 @@ def _socket_type_for(typ):
     }[typ]
 
 def _new_node(group, bl_idname, x=0, y=0):
-    """Function `_new_node` used by the GN Script MVP addon."""
+    """Function `_new_node` used by the NodeForge addon."""
     node = group.nodes.new(bl_idname)
     node.location = (x, y)
     return node
 
 def _value(group, value, x=0, y=0):
-    """Function `_value` used by the GN Script MVP addon."""
+    """Function `_value` used by the NodeForge addon."""
     node = _new_node(group, "ShaderNodeValue", x, y)
     node.label = str(value)
     node.outputs[0].default_value = float(value)
     return Value(node.outputs[0], TYPE_FLOAT)
 
 def _is_number_type(typ):
-    """Function `_is_number_type` used by the GN Script MVP addon."""
+    """Function `_is_number_type` used by the NodeForge addon."""
     return typ in {TYPE_FLOAT, TYPE_INT}
 
 def _math(group, operation, args, x=0, y=0):
-    """Function `_math` used by the GN Script MVP addon."""
+    """Function `_math` used by the NodeForge addon."""
     node = _new_node(group, "ShaderNodeMath", x, y)
     node.operation = operation
     for i, arg in enumerate(args):
@@ -44,7 +44,7 @@ def _math(group, operation, args, x=0, y=0):
     return Value(node.outputs[0], TYPE_FLOAT)
 
 def _vector_math(group, operation, args, out_type=TYPE_VECTOR, x=0, y=0):
-    """Function `_vector_math` used by the GN Script MVP addon."""
+    """Function `_vector_math` used by the NodeForge addon."""
     node = _new_node(group, "ShaderNodeVectorMath", x, y)
     node.operation = operation
     vi = 0
@@ -59,7 +59,7 @@ def _vector_math(group, operation, args, out_type=TYPE_VECTOR, x=0, y=0):
     return Value(node.outputs[1 if out_type == TYPE_FLOAT else 0], out_type)
 
 def _combine_xyz(group, xval, yval, zval, x=0, y=0):
-    """Function `_combine_xyz` used by the GN Script MVP addon."""
+    """Function `_combine_xyz` used by the NodeForge addon."""
     return _combine_xyz_mixed(group, [xval, yval, zval], x, y)
 
 def _combine_xyz_mixed(group, comps, x=0, y=0):
@@ -84,7 +84,7 @@ def _combine_xyz_mixed(group, comps, x=0, y=0):
     return Value(node.outputs[0], TYPE_VECTOR)
 
 def _separate_xyz(group, val, component, x=0, y=0):
-    """Function `_separate_xyz` used by the GN Script MVP addon."""
+    """Function `_separate_xyz` used by the NodeForge addon."""
     if val.typ != TYPE_VECTOR:
         raise CompileError(".x/.y/.z can only be used on Vector values")
     node = _new_node(group, "ShaderNodeSeparateXYZ", x, y)
@@ -92,7 +92,7 @@ def _separate_xyz(group, val, component, x=0, y=0):
     return Value(node.outputs[{"x": 0, "y": 1, "z": 2}[component]], TYPE_FLOAT)
 
 def _compare(group, operation, left, right, x=0, y=0):
-    """Function `_compare` used by the GN Script MVP addon."""
+    """Function `_compare` used by the NodeForge addon."""
     if _is_number_type(left.typ) and _is_number_type(right.typ):
         data_type = "FLOAT"
     elif left.typ == right.typ and left.typ in {TYPE_BOOL, TYPE_VECTOR}:
@@ -107,7 +107,7 @@ def _compare(group, operation, left, right, x=0, y=0):
     return Value(node.outputs[0], TYPE_BOOL)
 
 def _boolean_math(group, operation, args, x=0, y=0):
-    """Function `_boolean_math` used by the GN Script MVP addon."""
+    """Function `_boolean_math` used by the NodeForge addon."""
     node = _new_node(group, "FunctionNodeBooleanMath", x, y)
     node.operation = operation
     for i, arg in enumerate(args):
@@ -117,7 +117,7 @@ def _boolean_math(group, operation, args, x=0, y=0):
     return Value(node.outputs[0], TYPE_BOOL)
 
 def _switch(group, cond, false_val, true_val, x=0, y=0):
-    """Function `_switch` used by the GN Script MVP addon."""
+    """Function `_switch` used by the NodeForge addon."""
     if cond.typ != TYPE_BOOL:
         raise CompileError("select(cond, false, true): cond must be Bool")
     if false_val.typ != true_val.typ:
@@ -130,7 +130,7 @@ def _switch(group, cond, false_val, true_val, x=0, y=0):
     return Value(node.outputs[0], false_val.typ)
 
 def _mix(group, a, b, factor, x=0, y=0):
-    """Function `_mix` used by the GN Script MVP addon."""
+    """Function `_mix` used by the NodeForge addon."""
     if a.typ != b.typ or a.typ not in {TYPE_FLOAT, TYPE_VECTOR}:
         raise CompileError("mix(a, b, factor) supports Float or Vector a/b of same type")
     if not _is_number_type(factor.typ):
@@ -147,7 +147,7 @@ def _mix(group, a, b, factor, x=0, y=0):
     return Value(node.outputs[out_i], a.typ)
 
 def _clamp(group, val, minv, maxv, x=0, y=0):
-    """Function `_clamp` used by the GN Script MVP addon."""
+    """Function `_clamp` used by the NodeForge addon."""
     if not (_is_number_type(val.typ) and _is_number_type(minv.typ) and _is_number_type(maxv.typ)):
         raise CompileError("clamp(value, min, max) expects numeric arguments")
     node = _new_node(group, "ShaderNodeClamp", x, y)
@@ -155,27 +155,27 @@ def _clamp(group, val, minv, maxv, x=0, y=0):
     return Value(node.outputs[0], TYPE_FLOAT)
 
 def _position(group, x=0, y=0):
-    """Function `_position` used by the GN Script MVP addon."""
+    """Function `_position` used by the NodeForge addon."""
     node = _new_node(group, "GeometryNodeInputPosition", x, y)
     return Value(node.outputs[0], TYPE_VECTOR)
 
 def _normal(group, x=0, y=0):
-    """Function `_normal` used by the GN Script MVP addon."""
+    """Function `_normal` used by the NodeForge addon."""
     node = _new_node(group, "GeometryNodeInputNormal", x, y)
     return Value(node.outputs[0], TYPE_VECTOR)
 
 def _index(group, x=0, y=0):
-    """Function `_index` used by the GN Script MVP addon."""
+    """Function `_index` used by the NodeForge addon."""
     node = _new_node(group, "GeometryNodeInputIndex", x, y)
     return Value(node.outputs[0], TYPE_INT)
 
 def _id(group, x=0, y=0):
-    """Function `_id` used by the GN Script MVP addon."""
+    """Function `_id` used by the NodeForge addon."""
     node = _new_node(group, "GeometryNodeInputID", x, y)
     return Value(node.outputs[0], TYPE_INT)
 
 def _map_range(group, args, x=0, y=0):
-    """Function `_map_range` used by the GN Script MVP addon."""
+    """Function `_map_range` used by the NodeForge addon."""
     if len(args) != 5:
         raise CompileError("map_range(value, from_min, from_max, to_min, to_max) expects 5 arguments")
     if not all(_is_number_type(arg.typ) for arg in args):
@@ -187,7 +187,7 @@ def _map_range(group, args, x=0, y=0):
     return Value(node.outputs[0], TYPE_FLOAT)
 
 def _ensure_float(v):
-    """Function `_ensure_float` used by the GN Script MVP addon."""
+    """Function `_ensure_float` used by the NodeForge addon."""
     if v.typ != TYPE_FLOAT:
         raise CompileError("Expected Float")
 

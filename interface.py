@@ -5,7 +5,7 @@ from .storage import INPUT_DEFAULTS_PROP
 
 
 def _json_safe_default(value):
-    """Function `_json_safe_default` used by the GN Script MVP addon."""
+    """Function `_json_safe_default` used by the NodeForge addon."""
     if value is None:
         return None
     if isinstance(value, bool):
@@ -42,7 +42,7 @@ def _set_socket_default(socket, value):
         return False
 
 def _set_interface_socket_default(group, name, in_out, value):
-    """Function `_set_interface_socket_default` used by the GN Script MVP addon."""
+    """Function `_set_interface_socket_default` used by the NodeForge addon."""
     if value is None:
         return False
     ok = False
@@ -55,7 +55,7 @@ def _set_interface_socket_default(group, name, in_out, value):
     return ok
 
 def _record_group_input_default(group, name, typ, default):
-    """Function `_record_group_input_default` used by the GN Script MVP addon."""
+    """Function `_record_group_input_default` used by the NodeForge addon."""
     if default is None:
         return
     try:
@@ -88,7 +88,7 @@ def _idprop_to_plain(value):
         return value
 
 def _get_group_input_defaults(group):
-    """Function `_get_group_input_defaults` used by the GN Script MVP addon."""
+    """Function `_get_group_input_defaults` used by the NodeForge addon."""
     if group is None:
         return {}
     try:

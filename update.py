@@ -26,7 +26,7 @@ def _apply_group_defaults_to_node(node, *, preserve_existing=None):
             _set_socket_default(sock, entry.get("default"))
 
 def _copy_socket_default_value(socket):
-    """Function `_copy_socket_default_value` used by the GN Script MVP addon."""
+    """Function `_copy_socket_default_value` used by the NodeForge addon."""
     if socket is None or not hasattr(socket, "default_value"):
         return None
     try:
@@ -41,7 +41,7 @@ def _copy_socket_default_value(socket):
         return None
 
 def _defaults_equal(a, b, eps=1e-6):
-    """Function `_defaults_equal` used by the GN Script MVP addon."""
+    """Function `_defaults_equal` used by the NodeForge addon."""
     if a is None or b is None:
         return False
     if isinstance(a, (tuple, list)) or isinstance(b, (tuple, list)):
@@ -59,7 +59,7 @@ def _defaults_equal(a, b, eps=1e-6):
         return a == b
 
 def _is_zero_like_default(value):
-    """Function `_is_zero_like_default` used by the GN Script MVP addon."""
+    """Function `_is_zero_like_default` used by the NodeForge addon."""
     if value is None:
         return True
     if isinstance(value, bool):
@@ -106,14 +106,14 @@ def _capture_node_external_state(tree, node):
     return state
 
 def _find_socket_by_name(sockets, name):
-    """Function `_find_socket_by_name` used by the GN Script MVP addon."""
+    """Function `_find_socket_by_name` used by the NodeForge addon."""
     for sock in sockets:
         if sock.name == name:
             return sock
     return None
 
 def _restore_node_external_state(tree, node, state):
-    """Function `_restore_node_external_state` used by the GN Script MVP addon."""
+    """Function `_restore_node_external_state` used by the NodeForge addon."""
     _apply_group_defaults_to_node(node, preserve_existing=state.get("input_defaults", {}))
     restored = 0
     for item in state.get("incoming", []):

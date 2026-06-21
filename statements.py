@@ -17,7 +17,7 @@ _ALLOWED_STORE_TYPES = {
 _ALLOWED_DOMAINS = {"POINT", "EDGE", "FACE", "CORNER", "CURVE", "INSTANCE"}
 
 def _attribute_data_type(typ):
-    """Function `_attribute_data_type` used by the GN Script MVP addon."""
+    """Function `_attribute_data_type` used by the NodeForge addon."""
     return {
         TYPE_FLOAT: "FLOAT",
         TYPE_INT: "INT",
@@ -26,7 +26,7 @@ def _attribute_data_type(typ):
     }.get(typ)
 
 def _kw_dict(call):
-    """Function `_kw_dict` used by the GN Script MVP addon."""
+    """Function `_kw_dict` used by the NodeForge addon."""
     result = {}
     for kw in call.keywords:
         if kw.arg is None:
@@ -37,13 +37,13 @@ def _kw_dict(call):
     return result
 
 def _optional_string_kw(kws, name, default=None):
-    """Function `_optional_string_kw` used by the GN Script MVP addon."""
+    """Function `_optional_string_kw` used by the NodeForge addon."""
     if name not in kws:
         return default
     return _literal_string(kws[name], f"{name}=")
 
 def _selection_kw(comp, kws, default=None):
-    """Function `_selection_kw` used by the GN Script MVP addon."""
+    """Function `_selection_kw` used by the NodeForge addon."""
     if "selection" not in kws:
         return default
     selection = comp.compile(kws["selection"])
@@ -52,13 +52,13 @@ def _selection_kw(comp, kws, default=None):
     return selection
 
 def _check_no_extra_keywords(kws, allowed):
-    """Function `_check_no_extra_keywords` used by the GN Script MVP addon."""
+    """Function `_check_no_extra_keywords` used by the NodeForge addon."""
     extra = set(kws) - set(allowed)
     if extra:
         raise CompileError("Unsupported keyword argument(s): " + ", ".join(sorted(extra)))
 
 def _store_named_attribute(group, geometry_socket, attr_name, value, selection=None, domain="POINT", data_type_override=None, x=0, y=0):
-    """Function `_store_named_attribute` used by the GN Script MVP addon."""
+    """Function `_store_named_attribute` used by the NodeForge addon."""
     if data_type_override:
         data_type = _ALLOWED_STORE_TYPES.get(data_type_override.upper())
         if data_type is None:
@@ -85,7 +85,7 @@ def _store_named_attribute(group, geometry_socket, attr_name, value, selection=N
     return node.outputs[0]
 
 def _set_position_node(group, geometry_socket, pos, selection=None, x=0, y=0):
-    """Function `_set_position_node` used by the GN Script MVP addon."""
+    """Function `_set_position_node` used by the NodeForge addon."""
     if pos.typ != TYPE_VECTOR:
         raise CompileError("set_position() expects a Vector argument")
     node = _new_node(group, "GeometryNodeSetPosition", x, y)
@@ -96,7 +96,7 @@ def _set_position_node(group, geometry_socket, pos, selection=None, x=0, y=0):
     return node.outputs[0]
 
 def _unique_output_name(existing, requested):
-    """Function `_unique_output_name` used by the GN Script MVP addon."""
+    """Function `_unique_output_name` used by the NodeForge addon."""
     base = requested or "out"
     name = base
     idx = 2

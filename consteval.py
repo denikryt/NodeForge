@@ -4,26 +4,99 @@ import ast
 from .constants import *
 from .errors import CompileError
 
+_ALLOWED_MATH_FUNCS = {
+    "sin": __import__("math").sin,
+    "cos": __import__("math").cos,
+    "tan": __import__("math").tan,
+    "asin": __import__("math").asin,
+    "acos": __import__("math").acos,
+    "atan": __import__("math").atan,
+    "sqrt": __import__("math").sqrt,
+    "floor": __import__("math").floor,
+    "ceil": __import__("math").ceil,
+    "round": round,
+    "abs": abs,
+    "radians": __import__("math").radians,
+    "degrees": __import__("math").degrees,
+    "exp": __import__("math").exp,
+    "ln": __import__("math").log,
+    "sign": lambda x: -1 if x < 0 else (1 if x > 0 else 0),
+}
 
 
 class ConstVector(tuple):
-    """Class `ConstVector` used by the GN Script MVP addon."""
+    """Class `ConstVector` used by the NodeForge addon."""
     pass
 
 def _is_const_vector(v):
-    """Function `_is_const_vector` used by the GN Script MVP addon."""
+    """Function `_is_const_vector` used by the NodeForge addon."""
     return isinstance(v, ConstVector) and len(v) == 3
 
 def _as_float_const(v, context="value"):
-    """Function `_as_float_const` used by the GN Script MVP addon."""
+    """Function `_as_float_const` used by the NodeForge addon."""
     if isinstance(v, bool):
         return 1.0 if v else 0.0
     if isinstance(v, (int, float)):
         return float(v)
     raise CompileError(f"Expected numeric compile-time {context}")
 
+def _const_len(value):
+    """Return the length of a compile-time sequence."""
+    if isinstance(value, (list, tuple, str)):
+        return len(value)
+    raise CompileError("len() expects a compile-time list/tuple/string")
+
+
+def _is_num(v):
+    """Return True for compile-time scalar numbers, excluding booleans."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _vec(v):
+    """Normalize a compile-time vector-like value to ConstVector."""
+    if _is_const_vector(v):
+        return v
+    if isinstance(v, (tuple, list)) and len(v) == 3 and all(_is_num(c) for c in v):
+        return ConstVector((float(v[0]), float(v[1]), float(v[2])))
+    return None
+
+
+def _bin_add(a, b):
+    """Evaluate compile-time addition, including vector addition."""
+    av = _vec(a); bv = _vec(b)
+    if av is not None and bv is not None:
+        return ConstVector((av[0] + bv[0], av[1] + bv[1], av[2] + bv[2]))
+    return a + b
+
+
+def _bin_sub(a, b):
+    """Evaluate compile-time subtraction, including vector subtraction."""
+    av = _vec(a); bv = _vec(b)
+    if av is not None and bv is not None:
+        return ConstVector((av[0] - bv[0], av[1] - bv[1], av[2] - bv[2]))
+    return a - b
+
+
+def _bin_mul(a, b):
+    """Evaluate compile-time multiplication, including vector-scalar multiplication."""
+    av = _vec(a); bv = _vec(b)
+    if av is not None and _is_num(b):
+        return ConstVector((av[0] * b, av[1] * b, av[2] * b))
+    if bv is not None and _is_num(a):
+        return ConstVector((a * bv[0], a * bv[1], a * bv[2]))
+    return a * b
+
+
+def _bin_div(a, b):
+    """Evaluate compile-time division, including vector-scalar division."""
+    av = _vec(a)
+    if av is not None and _is_num(b):
+        return ConstVector((av[0] / b, av[1] / b, av[2] / b))
+    return a / b
+
+
 def _const_eval(expr, env):
-    """Function `_const_eval` used by the GN Script MVP addon."""
+    """Evaluate a supported compile-time AST expression."""
     if isinstance(expr, ast.Constant):
         if isinstance(expr.value, (int, float, bool, str)):
             return expr.value
@@ -38,20 +111,40 @@ def _const_eval(expr, env):
         return [_const_eval(e, env) for e in expr.elts]
     if isinstance(expr, ast.Tuple):
         return tuple(_const_eval(e, env) for e in expr.elts)
+    if isinstance(expr, ast.Subscript):
+        seq = _const_eval(expr.value, env)
+        idx = _const_eval(expr.slice, env)
+        if not isinstance(idx, int):
+            idx = int(idx)
+        try:
+            return seq[idx]
+        except Exception as exc:
+            raise CompileError("compile-time list indexing failed") from exc
+    if isinstance(expr, ast.Attribute):
+        base = _const_eval(expr.value, env)
+        v = _vec(base)
+        if v is not None and expr.attr in {"x", "y", "z"}:
+            return v[{"x": 0, "y": 1, "z": 2}[expr.attr]]
+        raise CompileError(f"Unsupported compile-time attribute .{expr.attr}")
     if isinstance(expr, ast.UnaryOp):
         v = _const_eval(expr.operand, env)
+        vv = _vec(v)
         if isinstance(expr.op, ast.USub):
+            if vv is not None:
+                return ConstVector((-vv[0], -vv[1], -vv[2]))
             return -_as_float_const(v)
         if isinstance(expr.op, ast.UAdd):
+            if vv is not None:
+                return vv
             return _as_float_const(v)
         if isinstance(expr.op, ast.Not):
             return not bool(v)
     if isinstance(expr, ast.BinOp):
         a = _const_eval(expr.left, env); b = _const_eval(expr.right, env)
-        if isinstance(expr.op, ast.Add): return a + b
-        if isinstance(expr.op, ast.Sub): return a - b
-        if isinstance(expr.op, ast.Mult): return a * b
-        if isinstance(expr.op, ast.Div): return a / b
+        if isinstance(expr.op, ast.Add): return _bin_add(a, b)
+        if isinstance(expr.op, ast.Sub): return _bin_sub(a, b)
+        if isinstance(expr.op, ast.Mult): return _bin_mul(a, b)
+        if isinstance(expr.op, ast.Div): return _bin_div(a, b)
         if isinstance(expr.op, ast.Pow): return a ** b
         if isinstance(expr.op, ast.Mod): return a % b
     if isinstance(expr, ast.BoolOp):
@@ -82,21 +175,41 @@ def _const_eval(expr, env):
             raise CompileError("range() expects 1-3 arguments")
         if name == "count_zero":
             return sum(1 for a in args if a == 0)
-        if name in {"len", "sum"}:
-            return getattr(__builtins__, name)(args[0]) if len(args) == 1 else None
+        if name == "len":
+            if len(args) != 1:
+                raise CompileError("len() expects one argument")
+            return _const_len(args[0])
+        if name == "sum":
+            if len(args) != 1:
+                raise CompileError("sum() expects one argument")
+            return sum(args[0])
+        if name in _ALLOWED_MATH_FUNCS:
+            if len(args) != 1:
+                raise CompileError(f"{name}() expects one argument")
+            return _ALLOWED_MATH_FUNCS[name](args[0])
     raise CompileError(f"Unsupported compile-time expression: {type(expr).__name__}")
 
-def _handle_compile_time_stmt(stmt, env, out_stmts):
-    """Function `_handle_compile_time_stmt` used by the GN Script MVP addon."""
+def _handle_compile_time_stmt(stmt, env, out_stmts, preserve_names=None):
+    """Function `_handle_compile_time_stmt` used by the NodeForge addon."""
+    preserve_names = preserve_names or set()
     if isinstance(stmt, ast.Assign):
         target = stmt.targets[0]
         if not isinstance(target, ast.Name):
             raise CompileError("Assignment target must be a simple name")
-        # Treat [] and any fully constant assignment as compile-time only.
+        # Preserve initial values for runtime_range state variables; they must become GN values.
+        if target.id in preserve_names:
+            out_stmts.append(stmt)
+            return
+        # Empty lists are script-level runtime arrays: keep them for the compiler
+        # so later `items.append(dynamic_value)` can collect node Values.
+        if isinstance(stmt.value, ast.List) and not stmt.value.elts:
+            out_stmts.append(stmt)
+            return
+        # Treat non-empty fully-constant assignments as compile-time only.
+        # Plain scalar assignments are preserved as node values so `a = 1; output(a)` works.
         try:
             val = _const_eval(stmt.value, env)
-            # Do not swallow expressions that are meant to become GN values, except lists/vectors/strings/bools/int literals used by compile-time code.
-            if isinstance(stmt.value, (ast.List, ast.Tuple)) or isinstance(val, (list, tuple, ConstVector, str, bool, int)):
+            if isinstance(stmt.value, (ast.List, ast.Tuple)) or isinstance(val, (list, tuple, ConstVector, str, bool)):
                 env[target.id] = val
                 return
         except CompileError:
@@ -107,18 +220,27 @@ def _handle_compile_time_stmt(stmt, env, out_stmts):
         call = stmt.value
         if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr == "append":
             if not isinstance(call.func.value, ast.Name) or len(call.args) != 1:
-                raise CompileError("compile-time append must look like offsets.append(value)")
+                raise CompileError("append must look like items.append(value)")
             list_name = call.func.value.id
-            if list_name not in env or not isinstance(env[list_name], list):
-                raise CompileError(f"{list_name} is not a compile-time list")
-            env[list_name].append(_const_eval(call.args[0], env))
+            if list_name in env and isinstance(env[list_name], list):
+                try:
+                    env[list_name].append(_const_eval(call.args[0], env))
+                    return
+                except CompileError:
+                    pass
+            # Non-constant append is a script-level runtime array operation.
+            out_stmts.append(stmt)
             return
         out_stmts.append(stmt)
         return
     if isinstance(stmt, ast.If):
-        branch = stmt.body if bool(_const_eval(stmt.test, env)) else stmt.orelse
+        try:
+            branch = stmt.body if bool(_const_eval(stmt.test, env)) else stmt.orelse
+        except CompileError:
+            out_stmts.append(stmt)
+            return
         for sub in branch:
-            _handle_compile_time_stmt(sub, env, out_stmts)
+            _handle_compile_time_stmt(sub, env, out_stmts, preserve_names)
         return
     if isinstance(stmt, ast.For):
         # Runtime for range(input) is preserved; compile-time for requires a const iterable.
@@ -127,31 +249,57 @@ def _handle_compile_time_stmt(stmt, env, out_stmts):
         except CompileError:
             out_stmts.append(stmt)
             return
+        # Keep loops with array append for the main compiler; it can unroll them
+        # while preserving dynamic node Values inside the array.
+        for sub in stmt.body:
+            if isinstance(sub, ast.Expr) and isinstance(sub.value, ast.Call) and isinstance(sub.value.func, ast.Attribute) and sub.value.func.attr == "append":
+                out_stmts.append(stmt)
+                return
         if not isinstance(stmt.target, ast.Name):
             raise CompileError("Only simple compile-time for targets are supported")
         old = env.get(stmt.target.id, None); had_old = stmt.target.id in env
         for item in iterable:
             env[stmt.target.id] = item
             for sub in stmt.body:
-                _handle_compile_time_stmt(sub, env, out_stmts)
+                _handle_compile_time_stmt(sub, env, out_stmts, preserve_names)
         if had_old: env[stmt.target.id] = old
         else: env.pop(stmt.target.id, None)
         return
     out_stmts.append(stmt)
 
+def _runtime_range_state_names(stmts):
+    """Names initialized before runtime_range loops that must remain GN values."""
+    preserve = set()
+    for stmt in stmts:
+        if isinstance(stmt, ast.For) and isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id == "runtime_range":
+            assigned = set()
+            for sub in stmt.body:
+                if isinstance(sub, ast.Assign) and len(sub.targets) == 1 and isinstance(sub.targets[0], ast.Name):
+                    assigned.add(sub.targets[0].id)
+            # Initial state variables are the ones assigned in the loop and assigned before it.
+            before = set()
+            for prev in stmts:
+                if prev is stmt:
+                    break
+                if isinstance(prev, ast.Assign) and len(prev.targets) == 1 and isinstance(prev.targets[0], ast.Name):
+                    before.add(prev.targets[0].id)
+            preserve |= (assigned & before)
+    return preserve
+
 def _preprocess_compile_time(stmts):
-    """Function `_preprocess_compile_time` used by the GN Script MVP addon."""
+    """Function `_preprocess_compile_time` used by the NodeForge addon."""
     env = {}
     out = []
+    preserve = _runtime_range_state_names(stmts)
     for stmt in stmts:
-        _handle_compile_time_stmt(stmt, env, out)
+        _handle_compile_time_stmt(stmt, env, out, preserve)
     return out, env
 
 def _infer_input_types(stmts):
-    """Function `_infer_input_types` used by the GN Script MVP addon."""
+    """Function `_infer_input_types` used by the NodeForge addon."""
     result = {}
     for stmt in stmts:
-        if isinstance(stmt, ast.For) and isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id == "range":
+        if isinstance(stmt, ast.For) and isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id in {"range", "runtime_range"}:
             for arg in stmt.iter.args:
                 if isinstance(arg, ast.Name):
                     result[arg.id] = TYPE_INT
