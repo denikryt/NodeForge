@@ -1,13 +1,12 @@
-# Mandelbrot height field.
+# Mandelbrot color field.
 #
 # The fractal algorithm is written in NodeForge DSL. The package-local Python
-# helper only creates the shader material that displays the generated color
+# helper only creates the shader material that displays the generated face color
 # attribute; it is not a global DSL built-in.
 
 width = input_int("Width", default=160)
 height = input_int("Height", default=100)
 max_iter = input_int("Max Iter", default=48)
-z_scale = input_float("Z Scale", default=0.025)
 
 geo = grid(width, height)
 
@@ -36,10 +35,10 @@ color = vector(value, value * value, 1 - value)
 
 geo = set_position(
     geo,
-    vector(cx, cy, value * max_iter * z_scale)
+    vector(cx, cy, 0)
 )
 
-geo = store_named_attribute(geo, "mandelbrot_color", color, type="COLOR")
+geo = store_named_attribute(geo, "mandelbrot_color", color, domain="FACE", type="COLOR")
 geo = apply_mandelbrot_material(geo, "mandelbrot_color")
 
 output("Geometry", geo)
