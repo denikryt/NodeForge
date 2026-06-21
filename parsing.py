@@ -1,7 +1,7 @@
 """AST parsing and lightweight script inspection helpers."""
 
 import ast
-from .constants import _BUILTIN_NAMES, _ALLOWED_CONSTS
+from .constants import _ALLOWED_CONSTS
 from .errors import CompileError
 
 
@@ -65,18 +65,24 @@ def _assigned_names(stmts):
         visit_stmt(stmt)
     return names
 
+def _builtin_names():
+    from .builtins import registry as builtin_registry
+    return set(builtin_registry.BUILTIN_NAMES) | {"output", "store"}
+
+
 def _collect_external_names(node, assigned, names, extra_builtin_names=None):
     """Collect names that should become implicit numeric inputs.
 
     User library function names are passed in as extra builtins so calls such as
     my_function(...) are not mistaken for external input variables.
     """
+    builtin_names = _builtin_names()
     extra_builtin_names = extra_builtin_names or set()
     if isinstance(node, ast.Name):
         if (
             isinstance(node.ctx, ast.Load)
             and node.id not in assigned
-            and node.id not in _BUILTIN_NAMES
+            and node.id not in builtin_names
             and node.id not in _ALLOWED_CONSTS
             and node.id not in extra_builtin_names
         ):

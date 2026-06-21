@@ -29,14 +29,6 @@ from .library import (
     _normalized_socket_name,
 )
 
-# Local compatibility guard: these core calls intentionally accept keyword arguments.
-# File-based function modules are handled by has_library_function(...).
-_KEYWORD_GEOMETRY_MACRO_NAMES = set(GEOMETRY_MACRO_NAMES) | {
-    "cube", "join", "transform", "polyline",
-    "realize_instances", "input_geometry", "input_float", "input_int",
-    "input_bool", "input_vector",
-}
-
 class Compiler:
     """Class `Compiler` used by the NodeForge addon."""
     def __init__(self, group, group_input, consts=None, local_functions=None, local_group_cache=None):
@@ -196,7 +188,7 @@ class Compiler:
             if name in self.local_functions:
                 return self._compile_local_function_call(expr, depth)
             if has_library_function(name):
-                return self._compile_geometry_macro(expr, depth)
+                return self._compile_library_function_call(expr, depth)
             if name in {"output", "store"}:
                 raise CompileError(f"{name}() is only supported as a top-level call")
             raise CompileError(f"Unsupported function: {name}")
@@ -222,6 +214,7 @@ class Compiler:
         raise CompileError("Unsupported compile-time value in runtime expression")
 
     def _value_type_for_const(self, value):
+        """Infer the NodeForge runtime type represented by a local constant value."""
         if _is_const_vector(value) or (isinstance(value, (tuple, list)) and len(value) == 3 and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value)):
             return TYPE_VECTOR
         if isinstance(value, bool):
@@ -233,6 +226,7 @@ class Compiler:
         raise CompileError("Local function constant arguments must be numbers, booleans or vectors")
 
     def _input_call_for_type(self, param_name, typ):
+        """Return source code that recreates a local function parameter as an input."""
         if typ == TYPE_GEOMETRY:
             return f'{param_name} = input_geometry({param_name!r})'
         if typ == TYPE_VECTOR:
@@ -244,6 +238,7 @@ class Compiler:
         return f'{param_name} = input_float({param_name!r})'
 
     def _local_function_source(self, fn, param_types):
+        """Lower a local Python function into a temporary NodeForge group source."""
         lines = []
         for arg in fn.args.args:
             name = arg.arg
@@ -262,6 +257,7 @@ class Compiler:
         return "\n".join(lines)
 
     def _compile_local_function_call(self, expr, depth=0):
+        """Compile a call to a script-local helper function as a cached node group."""
         name = expr.func.id
         fn = self.local_functions[name]
         params = [a.arg for a in fn.args.args]
@@ -420,173 +416,6 @@ class Compiler:
 
         return make_library_call_node(self.group, function_group, compiled_args, const_args, x=x, y=y)
 
-    def _compile_geometry_macro(self, expr, depth=0):
-        """Function `_compile_geometry_macro` used by the NodeForge addon."""
-        name = expr.func.id
-        x = depth * 240
-        y = -depth * 90
-        kws = _kw_dict(expr)
-
-        if has_library_function(name):
-            return self._compile_library_function_call(expr, depth)
-        if builtin_registry.has_callable_builtin(name):
-            return builtin_registry.compile_call(self, expr, depth)
-
-        if name in {"input_geometry", "input_float", "input_int", "input_bool", "input_vector"}:
-            _check_no_extra_keywords(kws, {"default"})
-            if len(expr.args) != 1:
-                raise CompileError(f'{name}(name, ...) expects exactly one name argument')
-            input_name = _literal_string(expr.args[0], f"{name}() name")
-            if name == "input_geometry":
-                if kws:
-                    raise CompileError("input_geometry(name) does not support default=")
-                return self._create_input_socket_value(input_name, TYPE_GEOMETRY, None)
-            default_expr = kws.get("default", None)
-            if name == "input_float":
-                default = 0.0 if default_expr is None else _as_float_const(_const_eval(default_expr, self.consts), "input_float default")
-                return self._create_input_socket_value(input_name, TYPE_FLOAT, default)
-            if name == "input_int":
-                default = 0 if default_expr is None else int(_as_float_const(_const_eval(default_expr, self.consts), "input_int default"))
-                return self._create_input_socket_value(input_name, TYPE_INT, default)
-            if name == "input_bool":
-                default = False if default_expr is None else bool(_const_eval(default_expr, self.consts))
-                return self._create_input_socket_value(input_name, TYPE_BOOL, default)
-            if name == "input_vector":
-                if default_expr is None:
-                    default = (0.0, 0.0, 0.0)
-                else:
-                    default = _const_eval(default_expr, self.consts)
-                    if _is_const_vector(default):
-                        default = tuple(default)
-                    elif isinstance(default, (tuple, list)) and len(default) == 3:
-                        default = tuple(_as_float_const(v, "input_vector default component") for v in default)
-                    else:
-                        raise CompileError("input_vector default= must be vector(x,y,z) or a 3-number tuple/list")
-                return self._create_input_socket_value(input_name, TYPE_VECTOR, default)
-
-        if name == "points":
-            if kws:
-                raise CompileError("points() does not support keyword arguments")
-            if len(expr.args) != 1:
-                raise CompileError("points(count) expects one Int argument")
-            try:
-                count = _const_eval(expr.args[0], self.consts)
-            except CompileError:
-                count = self.compile(expr.args[0])
-            return _points_geometry(self.group, count, x, y)
-
-        if name == "set_position":
-            _check_no_extra_keywords(kws, {"selection"})
-            if len(expr.args) != 2:
-                raise CompileError("set_position(geo, position, selection=...) expects Geometry and Vector")
-            geo = self.compile(expr.args[0])
-            pos = self.compile(expr.args[1])
-            selection = None
-            if "selection" in kws:
-                selection = self.compile(kws["selection"])
-            return _set_position_geometry(self.group, geo, pos, selection, x, y)
-
-        if name == "instance_on_points":
-            _check_no_extra_keywords(kws, {"scale", "rotation", "realize"})
-            if len(expr.args) != 2:
-                raise CompileError("instance_on_points(instance, points, ...) expects two Geometry arguments")
-            instance = self.compile(expr.args[0])
-            points_geo = self.compile(expr.args[1])
-            scale = None
-            rotation = None
-            realize = True
-            if "scale" in kws:
-                try:
-                    scale = _const_eval(kws["scale"], self.consts)
-                except CompileError:
-                    scale = self.compile(kws["scale"])
-            if "rotation" in kws:
-                try:
-                    rotation = _const_eval(kws["rotation"], self.consts)
-                except CompileError:
-                    rotation = self.compile(kws["rotation"])
-            if "realize" in kws:
-                try:
-                    realize = bool(_const_eval(kws["realize"], self.consts))
-                except CompileError:
-                    raise CompileError("instance_on_points realize= must be a compile-time bool")
-            return _instance_on_points(self.group, instance, points_geo, scale=scale, rotation=rotation, realize=realize, x=x, y=y)
-
-        if name == "cube":
-            _check_no_extra_keywords(kws, {"size"})
-            if len(expr.args) > 1:
-                raise CompileError("cube(size) expects 0 or 1 positional argument")
-            size_expr = expr.args[0] if expr.args else kws.get("size", ast.Constant(value=1.0))
-            try:
-                size = _const_eval(size_expr, self.consts)
-            except CompileError:
-                size = self.compile(size_expr)
-            return _cube_geometry(self.group, size, x, y)
-
-        if name == "join":
-            if kws:
-                raise CompileError("join() does not support keyword arguments")
-            if len(expr.args) < 1:
-                raise CompileError("join([geo_a, geo_b, ...]) or join(geo_a, geo_b, ...) expects Geometry")
-            if len(expr.args) == 1 and isinstance(expr.args[0], (ast.List, ast.Tuple)):
-                geos = [self.compile(arg) for arg in expr.args[0].elts]
-            else:
-                geos = [self.compile(arg) for arg in expr.args]
-            if not geos:
-                raise CompileError("join() expects at least one Geometry")
-            return _join_geometry(self.group, geos, x, y)
-
-        if name == "transform":
-            _check_no_extra_keywords(kws, {"translation", "scale", "rotation"})
-            if not expr.args or len(expr.args) > 3:
-                raise CompileError("transform(geo, translation=..., scale=..., rotation=...) expects Geometry")
-            geo = self.compile(expr.args[0])
-            if geo.typ != TYPE_GEOMETRY:
-                raise CompileError("transform() first argument must be Geometry")
-            translation_expr = kws.get("translation", expr.args[1] if len(expr.args) > 1 else None)
-            scale_expr = kws.get("scale", expr.args[2] if len(expr.args) > 2 else None)
-            rotation_expr = kws.get("rotation", None)
-            if translation_expr is not None:
-                try:
-                    translation = _const_eval(translation_expr, self.consts)
-                except CompileError:
-                    translation = self.compile(translation_expr)
-            else:
-                translation = None
-            if scale_expr is not None:
-                try:
-                    scale = _const_eval(scale_expr, self.consts)
-                except CompileError:
-                    scale = self.compile(scale_expr)
-            else:
-                scale = None
-            if rotation_expr is not None:
-                try:
-                    rotation = _const_eval(rotation_expr, self.consts)
-                except CompileError:
-                    rotation = self.compile(rotation_expr)
-            else:
-                rotation = None
-            return _transform_geometry(self.group, geo, translation=translation, scale=scale, rotation=rotation, x=x, y=y)
-
-        if name == "polyline":
-            if kws:
-                raise CompileError("polyline() does not support keyword arguments")
-            if len(expr.args) != 1:
-                raise CompileError("polyline(points) expects one compile-time list of vector points")
-            points = self._const_eval_macro_arg(expr.args[0])
-            return _polyline_geometry(self.group, points, x, y)
-
-
-        if name == "realize_instances":
-            if kws:
-                raise CompileError("realize_instances() does not support keyword arguments")
-            if len(expr.args) != 1:
-                raise CompileError("realize_instances(geo) expects one Geometry")
-            geo = self.compile(expr.args[0])
-            return _realize_instances(self.group, geo, x, y)
-
-        raise CompileError(f"Unsupported geometry macro: {name}")
 
 def _make_group(source: str, name: str = "NodeForge Group", existing_group=None, local_functions=None):
     """Compile NodeForge source into a GeometryNodeTree."""
@@ -652,11 +481,13 @@ def _make_group(source: str, name: str = "NodeForge Group", existing_group=None,
     auto_final_output = None
 
     def _as_array_iter_value(value):
+        """Return a script-level list value when a for-loop can be unrolled."""
         if isinstance(value, list):
             return value
         return None
 
     def _compile_statement(stmt, idx=0, allow_final_expr=False):
+        """Compile one top-level statement into the active geometry node group."""
         nonlocal geometry_socket, auto_final_output
         call = _is_top_level_call(stmt)
 
@@ -748,6 +579,7 @@ def _make_group(source: str, name: str = "NodeForge Group", existing_group=None,
                     iter_values = None
             if iter_values is not None:
                 def _target_names(target):
+                    """Return simple variable names bound by an unrolled array for-loop target."""
                     if isinstance(target, ast.Name):
                         return [target.id]
                     if isinstance(target, (ast.Tuple, ast.List)) and all(isinstance(e, ast.Name) for e in target.elts):
@@ -805,6 +637,7 @@ def _make_group(source: str, name: str = "NodeForge Group", existing_group=None,
             saved_auto = auto_final_output
 
             def _compile_runtime_if_branch(branch_stmts):
+                """Compile one dynamic if branch and report variables changed by the branch."""
                 nonlocal auto_final_output
                 comp.vars.clear(); comp.vars.update(base_vars)
                 auto_final_output = saved_auto

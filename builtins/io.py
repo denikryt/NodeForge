@@ -10,6 +10,7 @@ NAMES = {"input_geometry", "input_float", "input_int", "input_bool", "input_vect
 
 
 def compile_call(comp, expr, depth=0):
+    """Compile input socket built-ins and apply compile-time defaults."""
     name = expr.func.id
     kws = _kw_dict(expr)
     _check_no_extra_keywords(kws, {"default"})

@@ -3,10 +3,121 @@
 from .constants import *
 from .errors import CompileError
 from .values import Value
-from .nodes import _new_node, _value, _combine_xyz, _combine_xyz_mixed, _is_number_type, _vector_math, _compare, _switch
+from .nodes import _new_node, _value, _combine_xyz, _combine_xyz_mixed, _is_number_type, _vector_math, _compare, _switch, _math
 from .consteval import _is_const_vector, _as_float_const
 
 
+
+
+def _as_number_value(group, value, x=0, y=0, label="value"):
+    """Return a numeric compile-time constant or Value as a node Value."""
+    if _is_const_number(value):
+        return _value(group, value, x, y)
+    if isinstance(value, Value) and _is_number_type(value.typ):
+        return value
+    raise CompileError(f"{label} expects Float/Int")
+
+
+def _set_int_like_socket(group, socket, value, x=0, y=0, label="value", minimum=None):
+    """Write or link a numeric value into an integer-like Blender node socket."""
+    if _is_const_number(value):
+        intval = int(value)
+        if minimum is not None:
+            intval = max(int(minimum), intval)
+        socket.default_value = intval
+        return
+    if isinstance(value, Value) and _is_number_type(value.typ):
+        group.links.new(value.socket, socket)
+        return
+    raise CompileError(f"{label} expects Float/Int")
+
+
+def _set_float_like_socket(group, socket, value, x=0, y=0, label="value", minimum=None):
+    """Write or link a numeric value into a float-like Blender node socket."""
+    if _is_const_number(value):
+        fval = float(value)
+        if minimum is not None:
+            fval = max(float(minimum), fval)
+        socket.default_value = fval
+        return
+    if isinstance(value, Value) and _is_number_type(value.typ):
+        group.links.new(value.socket, socket)
+        return
+    raise CompileError(f"{label} expects Float/Int")
+
+
+def _grid_geometry(group, width, height, x=0, y=0):
+    """Create one rectangular mesh grid and return its geometry plus UV field.
+
+    The DSL-level grid(width, height) represents a real surface, not a
+    point cloud. Blender's Mesh Grid node creates a single mesh datablock with
+    shared vertices and quad faces, so one material can shade the whole grid
+    through per-element attributes such as escape_iter.
+    """
+    node = _new_node(group, "GeometryNodeMeshGrid", x, y)
+    _set_float_like_socket(group, node.inputs[0], width, x - 220, y, "grid() width", minimum=1)
+    _set_float_like_socket(group, node.inputs[1], height, x - 220, y - 50, "grid() height", minimum=1)
+    _set_int_like_socket(group, node.inputs[2], width, x - 220, y - 100, "grid() width", minimum=2)
+    _set_int_like_socket(group, node.inputs[3], height, x - 220, y - 150, "grid() height", minimum=2)
+    return Value(node.outputs[0], TYPE_GEOMETRY), Value(node.outputs[1], TYPE_VECTOR)
+
+def _store_named_attribute_geometry(group, geo, attr_name, value, selection=None, domain="POINT", data_type_override=None, x=0, y=0):
+    """Expression-form Store Named Attribute returning Geometry."""
+    from .statements import _store_named_attribute
+    if geo.typ != TYPE_GEOMETRY:
+        raise CompileError("store_named_attribute() first argument must be Geometry")
+    socket = _store_named_attribute(group, geo.socket, attr_name, value, selection, domain, data_type_override, x, y)
+    return Value(socket, TYPE_GEOMETRY)
+
+
+def _ensure_default_mandelbrot_material(material):
+    """Create a simple escape_iter-driven material node tree when empty/default."""
+    material.use_nodes = True
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+    if any(getattr(n, "label", "") == "NodeForge escape_iter Attribute" for n in nodes):
+        return
+    bsdf = next((n for n in nodes if n.bl_idname == "ShaderNodeBsdfPrincipled"), None)
+    if bsdf is None:
+        bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+        bsdf.location = (260, 0)
+    attr = nodes.new("ShaderNodeAttribute")
+    attr.label = "NodeForge escape_iter Attribute"
+    attr.location = (-520, 120)
+    attr.attribute_name = "escape_iter"
+    ramp = nodes.new("ShaderNodeValToRGB")
+    ramp.label = "NodeForge escape_iter Ramp"
+    ramp.location = (-260, 120)
+    try:
+        ramp.color_ramp.elements[0].position = 0.0
+        ramp.color_ramp.elements[0].color = (0.02, 0.02, 0.05, 1.0)
+        ramp.color_ramp.elements[1].position = 1.0
+        ramp.color_ramp.elements[1].color = (1.0, 0.65, 0.12, 1.0)
+    except Exception:
+        pass
+    try:
+        links.new(attr.outputs[2], ramp.inputs[0])
+    except Exception:
+        links.new(attr.outputs[0], ramp.inputs[0])
+    target = bsdf.inputs.get("Base Color") or bsdf.inputs[0]
+    links.new(ramp.outputs[0], target)
+
+
+def _set_material_geometry(group, geo, material_name, x=0, y=0):
+    """Assign a named Blender material to geometry, creating it when needed."""
+    if geo.typ != TYPE_GEOMETRY:
+        raise CompileError("set_material() first argument must be Geometry")
+    import bpy
+    mat = bpy.data.materials.get(material_name)
+    if mat is None:
+        mat = bpy.data.materials.new(material_name)
+    if material_name == "NodeForge_Mandelbrot":
+        _ensure_default_mandelbrot_material(mat)
+    node = _new_node(group, "GeometryNodeSetMaterial", x, y)
+    group.links.new(geo.socket, node.inputs[0])
+    node.inputs[1].default_value = True
+    node.inputs[2].default_value = mat
+    return Value(node.outputs[0], TYPE_GEOMETRY)
 
 
 def _set_vector_socket_default(socket, vec):
@@ -216,4 +327,4 @@ def _instance_on_points(group, instance, points, scale=None, rotation=None, real
     return out
 
 
-__all__ = ['_set_vector_socket_default', '_set_rotation_socket_default', '_euler_to_rotation', '_is_const_number', '_is_const_vector_like', '_cube_geometry', '_join_geometry', '_normalize_points', '_polyline_geometry', '_transform_geometry', '_realize_instances', '_points_geometry', '_set_position_geometry', '_instance_on_points']
+__all__ = ['_as_number_value', '_set_int_like_socket', '_set_float_like_socket', '_grid_geometry', '_store_named_attribute_geometry', '_set_material_geometry', '_set_vector_socket_default', '_set_rotation_socket_default', '_euler_to_rotation', '_is_const_number', '_is_const_vector_like', '_cube_geometry', '_join_geometry', '_normalize_points', '_polyline_geometry', '_transform_geometry', '_realize_instances', '_points_geometry', '_set_position_geometry', '_instance_on_points']

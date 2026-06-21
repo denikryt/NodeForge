@@ -10,6 +10,7 @@ NAMES = {"instance_on_points", "realize_instances"}
 
 
 def compile_call(comp, expr, depth=0):
+    """Compile instancing DSL built-ins through the registry dispatcher."""
     name = expr.func.id
     x = depth * 240
     y = -depth * 90
@@ -45,6 +46,7 @@ def compile_call(comp, expr, depth=0):
 
 
 def _const_or_compile(comp, expr):
+    """Return a compile-time option value or compile a dynamic node value."""
     try:
         return _const_eval(expr, comp.consts)
     except CompileError:
