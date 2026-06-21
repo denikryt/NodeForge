@@ -1,0 +1,316 @@
+"""Top-level statement lowering for NodeForge group compilation."""
+
+import ast
+from dataclasses import dataclass, field
+
+from .constants import *
+from .errors import CompileError
+from .values import Value
+from .nodes import _int_value, _switch
+from .parsing import _literal_string, _is_top_level_call
+from .statements import (
+    _kw_dict,
+    _optional_string_kw,
+    _selection_kw,
+    _check_no_extra_keywords,
+    _store_named_attribute,
+    _set_position_node,
+    _unique_output_name,
+)
+from .consteval import _const_eval
+from .runtime import (
+    _parse_runtime_for,
+    _parse_runtime_range_for,
+    _repeat_geometry_assignment,
+    _repeat_scalar_assignments,
+)
+
+
+@dataclass
+class GroupBuildContext:
+    """Mutable statement-compilation state for one group build."""
+
+    group: object
+    comp: object
+    consts: dict
+    geometry_mode: bool
+    geometry_socket: object = None
+    explicit_outputs: list = field(default_factory=list)
+    auto_final_output: object = None
+    output_names: set = field(default_factory=set)
+
+
+def _compile_iteration_count(ctx, expr, x=0, y=0):
+    """Compile a repeat count while preserving integer constants as Int sockets."""
+    try:
+        value = _const_eval(expr, ctx.comp.consts)
+    except CompileError:
+        value = None
+    if isinstance(value, int) and not isinstance(value, bool):
+        return _int_value(ctx.group, value, x, y)
+    return ctx.comp.compile(expr)
+
+
+def _as_array_iter_value(value):
+    """Return a script-level list value when a for-loop can be unrolled."""
+    if isinstance(value, list):
+        return value
+    return None
+
+
+def _target_names(target):
+    """Return simple variable names bound by an unrolled array for-loop target."""
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)) and all(isinstance(e, ast.Name) for e in target.elts):
+        return [e.id for e in target.elts]
+    raise CompileError("array for target must be a simple name or tuple of names")
+
+
+def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
+    """Compile one top-level statement into the active geometry node group."""
+    comp = ctx.comp
+    group = ctx.group
+    call = _is_top_level_call(stmt)
+
+    if isinstance(stmt, ast.Assign):
+        if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
+            raise CompileError("Only simple assignments like name = value are supported")
+        target = stmt.targets[0].id
+        try:
+            comp.consts[target] = _const_eval(stmt.value, comp.consts)
+        except CompileError:
+            comp.consts.pop(target, None)
+        if isinstance(stmt.value, (ast.List, ast.Tuple)):
+            if isinstance(stmt.value, ast.List) and not stmt.value.elts:
+                comp.consts.pop(target, None)
+            comp.vars[target] = [comp.compile(e) for e in stmt.value.elts]
+            ctx.auto_final_output = None
+            return
+        value = comp.compile(stmt.value)
+        comp.vars[target] = value
+        if isinstance(value, list):
+            ctx.auto_final_output = None
+        else:
+            ctx.auto_final_output = (target, value)
+        return
+
+    if isinstance(stmt, ast.AugAssign):
+        if not isinstance(stmt.target, ast.Name):
+            raise CompileError("Only simple augmented assignments like name += value are supported")
+        target = stmt.target.id
+        if target not in comp.vars:
+            raise CompileError(f"Unknown name for augmented assignment: {target}")
+        bin_expr = ast.BinOp(left=ast.Name(id=target, ctx=ast.Load()), op=stmt.op, right=stmt.value)
+        value = comp.compile(bin_expr)
+        comp.vars[target] = value
+        comp.consts.pop(target, None)
+        if isinstance(value, list):
+            ctx.auto_final_output = None
+        else:
+            ctx.auto_final_output = (target, value)
+        return
+
+    if isinstance(stmt, ast.Expr):
+        expr = stmt.value
+        if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute) and expr.func.attr == "append":
+            if not isinstance(expr.func.value, ast.Name) or len(expr.args) != 1:
+                raise CompileError("append must look like items.append(value)")
+            list_name = expr.func.value.id
+            arr = comp.vars.get(list_name)
+            if not isinstance(arr, list):
+                raise CompileError(f"{list_name} is not an array")
+            arr.append(comp.compile(expr.args[0]))
+            comp.consts.pop(list_name, None)
+            ctx.auto_final_output = None
+            return
+        if not (call and call.func.id in {"store", "set_position", "output"}):
+            if not allow_final_expr:
+                raise CompileError("Only assignments, array append, for/if blocks, store(), set_position() and output() may appear before the final expression")
+            value = comp.compile(expr)
+            if isinstance(value, list):
+                raise CompileError("A final expression cannot be an array; use join(array) or index it")
+            ctx.auto_final_output = ("out", value)
+            return
+
+    if isinstance(stmt, ast.For):
+        if isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id == "runtime_range":
+            iterations_expr, body = _parse_runtime_range_for(stmt)
+            iterations = _compile_iteration_count(ctx, iterations_expr, 240 + idx * 120, -260 - idx * 50)
+            if iterations.typ != TYPE_INT:
+                raise CompileError("runtime_range(n) expects an Int input or integer value")
+            results = _repeat_scalar_assignments(group, comp, iterations, body, index_name=stmt.target.id, x=300 + idx * 160, y=-380 - idx * 70)
+            if results:
+                last_name = list(results.keys())[-1]
+                ctx.auto_final_output = (last_name, results[last_name])
+            return
+
+        iter_values = None
+        if isinstance(stmt.iter, ast.Name) and stmt.iter.id in comp.vars:
+            iter_values = _as_array_iter_value(comp.vars[stmt.iter.id])
+        if iter_values is None:
+            try:
+                raw_iter = _const_eval(stmt.iter, ctx.consts)
+                if isinstance(raw_iter, (list, tuple)):
+                    iter_values = [comp._compile_const_value(v, 260 + idx * 120, -220 - idx * 50) for v in raw_iter]
+            except CompileError:
+                iter_values = None
+        if iter_values is not None:
+            target_names = _target_names(stmt.target)
+            old_values = {name: comp.vars.get(name) for name in target_names}
+            had_old = {name: name in comp.vars for name in target_names}
+            try:
+                for item in iter_values:
+                    if len(target_names) == 1:
+                        comp.vars[target_names[0]] = item
+                    else:
+                        if not isinstance(item, list) or len(item) != len(target_names):
+                            raise CompileError("tuple unpack in for loop needs matching tuple/list item length")
+                        for name, val in zip(target_names, item):
+                            comp.vars[name] = val
+                    for sub in stmt.body:
+                        compile_statement(ctx, sub, idx, allow_final_expr=False)
+            finally:
+                for name in target_names:
+                    if had_old[name]:
+                        comp.vars[name] = old_values[name]
+                    else:
+                        comp.vars.pop(name, None)
+            return
+
+        geom_name, iterations_expr, body_expr = _parse_runtime_for(stmt, ctx.consts)
+        if geom_name not in comp.vars or not isinstance(comp.vars[geom_name], Value) or comp.vars[geom_name].typ != TYPE_GEOMETRY:
+            raise CompileError("runtime for requires an existing Geometry variable, e.g. geo = cube(1)")
+        iterations = _compile_iteration_count(ctx, iterations_expr, 240 + idx * 120, -260 - idx * 50)
+        if iterations.typ != TYPE_INT:
+            raise CompileError("range(steps) expects an Int input or integer constant")
+        geo = comp.vars[geom_name]
+        new_geo = _repeat_geometry_assignment(group, comp, geom_name, geo, iterations, body_expr, 300 + idx * 160, -380 - idx * 70)
+        comp.vars[geom_name] = new_geo
+        ctx.auto_final_output = (geom_name, new_geo)
+        return
+
+    if isinstance(stmt, ast.If):
+        try:
+            branch = stmt.body if bool(_const_eval(stmt.test, ctx.consts)) else stmt.orelse
+            for sub in branch:
+                compile_statement(ctx, sub, idx, allow_final_expr=False)
+            return
+        except CompileError:
+            pass
+        if not stmt.orelse:
+            raise CompileError("runtime if currently requires an else branch")
+
+        cond = comp.compile(stmt.test)
+        base_vars = dict(comp.vars)
+        saved_auto = ctx.auto_final_output
+
+        def _compile_runtime_if_branch(branch_stmts):
+            """Compile one dynamic if branch and report variables changed by the branch."""
+            comp.vars.clear(); comp.vars.update(base_vars)
+            ctx.auto_final_output = saved_auto
+            for sub in branch_stmts:
+                compile_statement(ctx, sub, idx, allow_final_expr=False)
+            branch_vars = dict(comp.vars)
+            changed = {
+                name for name, value in branch_vars.items()
+                if name not in base_vars or base_vars.get(name) is not value
+            }
+            comp.vars.clear(); comp.vars.update(base_vars)
+            ctx.auto_final_output = saved_auto
+            return branch_vars, changed
+
+        true_vars, true_changed = _compile_runtime_if_branch(stmt.body)
+        false_vars, false_changed = _compile_runtime_if_branch(stmt.orelse)
+        common_changed = sorted(true_changed & false_changed)
+        if not common_changed:
+            raise CompileError("runtime if branches must assign at least one common variable")
+
+        last_target = None
+        for target in common_changed:
+            true_val = true_vars[target]
+            false_val = false_vars[target]
+            if isinstance(true_val, list) or isinstance(false_val, list):
+                raise CompileError("runtime if cannot assign arrays")
+            if not isinstance(true_val, Value) or not isinstance(false_val, Value):
+                raise CompileError("runtime if branches must assign node values")
+            if true_val.typ != false_val.typ:
+                raise CompileError(f"runtime if branch values for {target} have different types")
+            merged = _switch(group, cond, false_val, true_val, 360 + idx * 160, -220 - idx * 70)
+            comp.vars[target] = merged
+            last_target = target
+
+        if last_target is not None:
+            ctx.auto_final_output = (last_target, comp.vars[last_target])
+        return
+
+    if call and call.func.id == "store":
+        if ctx.geometry_socket is None:
+            raise CompileError("Internal error: store() requires geometry mode")
+        if len(call.args) != 2:
+            raise CompileError('store("attribute_name", value, selection=..., domain="POINT", type="FLOAT") expects 2 positional arguments')
+        kws = _kw_dict(call)
+        _check_no_extra_keywords(kws, {"selection", "domain", "type"})
+        attr_name = _literal_string(call.args[0], "store() attribute name")
+        value = comp.compile(call.args[1])
+        if isinstance(value, list):
+            raise CompileError("store() value cannot be an array")
+        selection = _selection_kw(comp, kws)
+        domain = _optional_string_kw(kws, "domain", "POINT")
+        data_type_override = _optional_string_kw(kws, "type", None)
+        ctx.geometry_socket = _store_named_attribute(group, ctx.geometry_socket, attr_name, value, selection, domain, data_type_override, 520 + idx * 130, -260 - idx * 60)
+        ctx.auto_final_output = None
+        return
+
+    if call and call.func.id == "set_position":
+        if ctx.geometry_socket is None:
+            raise CompileError("Internal error: set_position() requires geometry mode")
+        if len(call.args) != 1:
+            raise CompileError("set_position(position_vector, selection=...) expects exactly one positional argument")
+        kws = _kw_dict(call)
+        _check_no_extra_keywords(kws, {"selection"})
+        pos = comp.compile(call.args[0])
+        selection = _selection_kw(comp, kws)
+        ctx.geometry_socket = _set_position_node(group, ctx.geometry_socket, pos, selection, 520 + idx * 130, -40 - idx * 60)
+        ctx.auto_final_output = None
+        return
+
+    if call and call.func.id == "output":
+        if call.keywords:
+            kws = _kw_dict(call)
+            _check_no_extra_keywords(kws, {"name", "value"})
+            if call.args:
+                raise CompileError('output() cannot mix positional and keyword arguments')
+            if "value" not in kws:
+                raise CompileError('output(name="Name", value=value) expects value=...')
+            if "name" in kws:
+                out_name = _unique_output_name(ctx.output_names, _literal_string(kws["name"], "output() name"))
+            else:
+                out_name = _unique_output_name(ctx.output_names, "out")
+            value_expr = kws["value"]
+        elif len(call.args) == 1:
+            out_name = _unique_output_name(ctx.output_names, "out")
+            value_expr = call.args[0]
+        elif len(call.args) == 2:
+            out_name = _unique_output_name(ctx.output_names, _literal_string(call.args[0], "output() name"))
+            value_expr = call.args[1]
+        else:
+            raise CompileError('output(value), output("Name", value), or output(name="Name", value=value) expected')
+        value = comp.compile(value_expr)
+        if isinstance(value, list):
+            raise CompileError("output() cannot output an array directly; use join(array) or index it")
+        ctx.explicit_outputs.append((out_name, value))
+        ctx.auto_final_output = None
+        return
+
+    raise CompileError("Unsupported statement")
+
+
+def compile_statements(ctx, stmts):
+    """Compile all top-level statements in order."""
+    for idx, stmt in enumerate(stmts):
+        compile_statement(ctx, stmt, idx, allow_final_expr=(idx == len(stmts) - 1))
+    return ctx
+
+
+__all__ = ["GroupBuildContext", "compile_statement", "compile_statements"]
