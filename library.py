@@ -141,6 +141,27 @@ def has_module_library_function(name: str) -> bool:
     return _module_path_for_name(name) is not None
 
 
+def has_native_compile_call(name: str) -> bool:
+    """Return True when a function module owns the whole call compilation."""
+    if _module_path_for_name(name) is None:
+        return False
+    module = _load_function_module(name)
+    return callable(getattr(module, "compile_call", None))
+
+
+def backend_builtins_for_function(name: str) -> dict[str, object]:
+    """Return package-local backend helpers exposed while compiling source.nf."""
+    if _module_path_for_name(name) is None:
+        return {}
+    module = _load_function_module(name)
+    builtins = getattr(module, "BACKEND_BUILTINS", None)
+    if builtins is None:
+        return {}
+    if not isinstance(builtins, dict):
+        raise CompileError(f"Function module {name} BACKEND_BUILTINS must be a dict")
+    return dict(builtins)
+
+
 def _load_function_module(name: str):
     """Load a native function helper from the functions folder."""
     path = _module_path_for_name(name)
@@ -243,21 +264,25 @@ def _output_sockets(node):
 def get_or_create_library_group(name: str, compile_group_callback):
     """Compile/update the node group that backs an editable .nf library function."""
     source = load_library_source(name)
+    backend_builtins = backend_builtins_for_function(name)
+    module_path = _module_path_for_name(name)
+    backend_signature = str(module_path.stat().st_mtime_ns) if module_path is not None else ""
     group_name = _safe_group_name(name)
     existing = bpy.data.node_groups.get(group_name)
     if existing is not None and getattr(existing, "bl_idname", None) == "GeometryNodeTree":
         try:
-            if existing.get("nodeforge_library_source") == source:
+            if existing.get("nodeforge_library_source") == source and existing.get("nodeforge_backend_signature") == backend_signature:
                 return existing
         except Exception:
             pass
-        group = compile_group_callback(source, group_name, existing_group=existing)
+        group = compile_group_callback(source, group_name, existing_group=existing, backend_builtins=backend_builtins)
     else:
-        group = compile_group_callback(source, group_name)
+        group = compile_group_callback(source, group_name, backend_builtins=backend_builtins)
     try:
         group["nodeforge_library_name"] = name
         group["nodeforge_library_source"] = source
         group["nodeforge_function_kind"] = _record_kind(name)
+        group["nodeforge_backend_signature"] = backend_signature
     except Exception:
         pass
     return group
@@ -332,6 +357,8 @@ __all__ = [
     "display_name_for_group",
     "apply_function_node_display_name",
     "has_module_library_function",
+    "has_native_compile_call",
+    "backend_builtins_for_function",
     "compile_module_library_function_call",
     "_normalized_socket_name",
 ]

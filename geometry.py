@@ -52,7 +52,7 @@ def _grid_geometry(group, width, height, x=0, y=0):
     The DSL-level grid(width, height) represents a real surface, not a
     point cloud. Blender's Mesh Grid node creates a single mesh datablock with
     shared vertices and quad faces, so one material can shade the whole grid
-    through per-element attributes such as escape_iter.
+    through generic geometry attributes.
     """
     node = _new_node(group, "GeometryNodeMeshGrid", x, y)
     _set_float_like_socket(group, node.inputs[0], width, x - 220, y, "grid() width", minimum=1)
@@ -70,39 +70,6 @@ def _store_named_attribute_geometry(group, geo, attr_name, value, selection=None
     return Value(socket, TYPE_GEOMETRY)
 
 
-def _ensure_default_mandelbrot_material(material):
-    """Create a simple escape_iter-driven material node tree when empty/default."""
-    material.use_nodes = True
-    nodes = material.node_tree.nodes
-    links = material.node_tree.links
-    if any(getattr(n, "label", "") == "NodeForge escape_iter Attribute" for n in nodes):
-        return
-    bsdf = next((n for n in nodes if n.bl_idname == "ShaderNodeBsdfPrincipled"), None)
-    if bsdf is None:
-        bsdf = nodes.new("ShaderNodeBsdfPrincipled")
-        bsdf.location = (260, 0)
-    attr = nodes.new("ShaderNodeAttribute")
-    attr.label = "NodeForge escape_iter Attribute"
-    attr.location = (-520, 120)
-    attr.attribute_name = "escape_iter"
-    ramp = nodes.new("ShaderNodeValToRGB")
-    ramp.label = "NodeForge escape_iter Ramp"
-    ramp.location = (-260, 120)
-    try:
-        ramp.color_ramp.elements[0].position = 0.0
-        ramp.color_ramp.elements[0].color = (0.02, 0.02, 0.05, 1.0)
-        ramp.color_ramp.elements[1].position = 1.0
-        ramp.color_ramp.elements[1].color = (1.0, 0.65, 0.12, 1.0)
-    except Exception:
-        pass
-    try:
-        links.new(attr.outputs[2], ramp.inputs[0])
-    except Exception:
-        links.new(attr.outputs[0], ramp.inputs[0])
-    target = bsdf.inputs.get("Base Color") or bsdf.inputs[0]
-    links.new(ramp.outputs[0], target)
-
-
 def _set_material_geometry(group, geo, material_name, x=0, y=0):
     """Assign a named Blender material to geometry, creating it when needed."""
     if geo.typ != TYPE_GEOMETRY:
@@ -111,8 +78,6 @@ def _set_material_geometry(group, geo, material_name, x=0, y=0):
     mat = bpy.data.materials.get(material_name)
     if mat is None:
         mat = bpy.data.materials.new(material_name)
-    if material_name == "NodeForge_Mandelbrot":
-        _ensure_default_mandelbrot_material(mat)
     node = _new_node(group, "GeometryNodeSetMaterial", x, y)
     group.links.new(geo.socket, node.inputs[0])
     node.inputs[1].default_value = True

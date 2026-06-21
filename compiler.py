@@ -21,7 +21,7 @@ from .update import _apply_group_defaults_to_node, _capture_node_external_state,
 from .library import (
     library_function_names,
     has_library_function,
-    has_module_library_function,
+    has_native_compile_call,
     compile_module_library_function_call,
     get_or_create_library_group,
     make_library_call_node,
@@ -31,14 +31,15 @@ from .library import (
 
 class Compiler:
     """Class `Compiler` used by the NodeForge addon."""
-    def __init__(self, group, group_input, consts=None, local_functions=None, local_group_cache=None):
-        """Function `__init__` used by the NodeForge addon."""
+    def __init__(self, group, group_input, consts=None, local_functions=None, local_group_cache=None, backend_builtins=None):
+        """Initialize a compiler for one Geometry Nodes group build."""
         self.group = group
         self.group_input = group_input
         self.vars = {}
         self.consts = consts or {}
         self.local_functions = local_functions or {}
         self.local_group_cache = local_group_cache if local_group_cache is not None else {}
+        self.backend_builtins = dict(backend_builtins or {})
         self.depth = 0
 
     def compile(self, expr):
@@ -181,12 +182,14 @@ class Compiler:
             if not isinstance(expr.func, ast.Name):
                 raise CompileError("Only simple function calls are supported")
             name = expr.func.id
-            if expr.keywords and not builtin_registry.has_callable_builtin(name) and not has_library_function(name) and name not in self.local_functions:
-                raise CompileError(f"Keyword arguments are only supported for builtins, library functions or local functions; {name} is not registered as one")
+            if expr.keywords and not builtin_registry.has_callable_builtin(name) and not has_library_function(name) and name not in self.local_functions and name not in self.backend_builtins:
+                raise CompileError(f"Keyword arguments are only supported for builtins, library functions, local functions or local backend helpers; {name} is not registered as one")
             if builtin_registry.has_callable_builtin(name):
                 return builtin_registry.compile_call(self, expr, depth)
             if name in self.local_functions:
                 return self._compile_local_function_call(expr, depth)
+            if name in self.backend_builtins:
+                return self._compile_backend_builtin_call(expr, depth)
             if has_library_function(name):
                 return self._compile_library_function_call(expr, depth)
             if name in {"output", "store"}:
@@ -256,6 +259,15 @@ class Compiler:
             raise CompileError(f"Local function {fn.name} must end with return ...")
         return "\n".join(lines)
 
+    def _compile_backend_builtin_call(self, expr, depth=0):
+        """Compile a package-local Python helper exposed only to source.nf."""
+        name = expr.func.id
+        helper = self.backend_builtins.get(name)
+        if not callable(helper):
+            raise CompileError(f"Local backend helper {name} is not callable")
+        return helper(self, expr, depth)
+
+
     def _compile_local_function_call(self, expr, depth=0):
         """Compile a call to a script-local helper function as a cached node group."""
         name = expr.func.id
@@ -314,9 +326,9 @@ class Compiler:
         if function_group is None or getattr(function_group, "name", None) not in bpy.data.node_groups:
             existing = bpy.data.node_groups.get(group_name)
             if existing is not None and getattr(existing, "bl_idname", None) == "GeometryNodeTree":
-                function_group = _make_group(source, group_name, existing_group=existing, local_functions=self.local_functions)
+                function_group = _make_group(source, group_name, existing_group=existing, local_functions=self.local_functions, backend_builtins=self.backend_builtins)
             else:
-                function_group = _make_group(source, group_name, local_functions=self.local_functions)
+                function_group = _make_group(source, group_name, local_functions=self.local_functions, backend_builtins=self.backend_builtins)
             try:
                 function_group["nodeforge_local_function_name"] = name
                 function_group["nodeforge_local_function_source"] = source
@@ -371,7 +383,7 @@ class Compiler:
         the library group's inputs and returns its single output.
         """
         name = expr.func.id
-        if has_module_library_function(name):
+        if has_native_compile_call(name):
             return compile_module_library_function_call(self, expr, depth)
         x = depth * 240
         y = -depth * 90
@@ -417,7 +429,7 @@ class Compiler:
         return make_library_call_node(self.group, function_group, compiled_args, const_args, x=x, y=y)
 
 
-def _make_group(source: str, name: str = "NodeForge Group", existing_group=None, local_functions=None):
+def _make_group(source: str, name: str = "NodeForge Group", existing_group=None, local_functions=None, backend_builtins=None):
     """Compile NodeForge source into a GeometryNodeTree."""
     raw_stmts = _parse_source(source)
 
@@ -432,7 +444,7 @@ def _make_group(source: str, name: str = "NodeForge Group", existing_group=None,
             body_stmts.append(stmt)
 
     stmts, consts = _preprocess_compile_time(body_stmts)
-    callable_names = library_function_names() | set(local_function_defs)
+    callable_names = library_function_names() | set(local_function_defs) | set(backend_builtins or {})
     input_names = sorted(set(_collect_inputs(stmts, extra_builtin_names=callable_names)) - set(consts.keys()))
     input_types = _infer_input_types(stmts)
     if existing_group is not None:
@@ -464,7 +476,7 @@ def _make_group(source: str, name: str = "NodeForge Group", existing_group=None,
     group_input = _new_node(group, "NodeGroupInput", -1100, 0)
     group_output = _new_node(group, "NodeGroupOutput", 1100, 0)
     group_output.is_active_output = True
-    comp = Compiler(group, group_input, consts, local_functions=local_function_defs, local_group_cache={})
+    comp = Compiler(group, group_input, consts, local_functions=local_function_defs, local_group_cache={}, backend_builtins=backend_builtins)
 
     for socket in group_input.outputs:
         if socket.name in input_names:
