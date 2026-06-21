@@ -10,7 +10,7 @@ if str(PACKAGE_PARENT) not in sys.path:
 
 import bpy
 import NodeForge
-from NodeForge import compiler
+from NodeForge import compiler, library
 from NodeForge.builtins import registry
 from NodeForge.builtins import fields, geometry, instancing, io, math, vector
 
@@ -127,6 +127,13 @@ output("x", x)
 
 def run_library_checks():
     """Compile all packaged library functions and verify helper scoping."""
+    flat_probe = ROOT / "functions" / "flat_legacy_probe.py"
+    flat_probe.write_text("def compile_call(comp, expr, depth=0):\n    raise AssertionError('flat layout loaded')\n", encoding="utf-8")
+    try:
+        check(not library.has_module_library_function("flat_legacy_probe"), "legacy flat function module was discovered")
+        check(not library.has_library_function("flat_legacy_probe"), "legacy flat function appeared as library function")
+    finally:
+        flat_probe.unlink(missing_ok=True)
     for fname in ["copy_by_offsets", "dragon_curve", "fibonacci", "fibonacci_spiral", "koch_curve", "mandelbrot", "sierpinski_carpet"]:
         group = compiler.create_library_function_group(fname)
         check(getattr(group, "bl_idname", None) == "GeometryNodeTree", fname)

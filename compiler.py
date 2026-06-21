@@ -28,8 +28,6 @@ from .update import _apply_group_defaults_to_node, _capture_node_external_state,
 from .library import library_function_names, materialize_library_function_group
 from .statements import _unique_output_name
 from . import expression_compiler
-from . import local_functions
-from . import library_calls
 from .statement_compiler import GroupBuildContext, compile_statements
 
 
@@ -65,10 +63,6 @@ class Compiler:
         finally:
             self.depth -= 1
 
-    def _compile(self, expr, depth=0):
-        """Compatibility facade for expression lowering helpers."""
-        return expression_compiler.compile_expr(self, expr, depth)
-
     def _compile_const_value(self, value, x=0, y=0):
         """Turn a compile-time constant into a node Value or script-level array."""
         if _is_const_vector(value) or (
@@ -88,26 +82,6 @@ class Compiler:
         if isinstance(value, (list, tuple)):
             return [self._compile_const_value(v, x, y) for v in value]
         raise CompileError("Unsupported compile-time value in runtime expression")
-
-    def _value_type_for_const(self, value):
-        """Infer the NodeForge type represented by a compile-time argument."""
-        return local_functions.value_type_for_const(value)
-
-    def _input_call_for_type(self, param_name, typ):
-        """Return source code that recreates a local function parameter as an input."""
-        return local_functions.input_call_for_type(param_name, typ)
-
-    def _local_function_source(self, fn, param_types):
-        """Lower a script-local function definition into a temporary group source."""
-        return local_functions.local_function_source(fn, param_types)
-
-    def _compile_backend_builtin_call(self, expr, depth=0):
-        """Compile a package-local backend helper call."""
-        return local_functions.compile_backend_builtin_call(self, expr, depth)
-
-    def _compile_local_function_call(self, expr, depth=0):
-        """Compile a script-local helper function call."""
-        return local_functions.compile_local_function_call(self, expr, depth)
 
     def _create_input_socket_value(self, name, typ, default=None):
         """Create or reuse a group input socket and expose it as a Value."""
@@ -139,14 +113,6 @@ class Compiler:
             return _const_eval(expr, self.consts), False
         except CompileError:
             return self.compile(expr), True
-
-    def _const_or_compile_library_arg(self, expr, depth=0):
-        """Compatibility wrapper for the shared const/dynamic argument classifier."""
-        return self._const_or_compile_arg(expr, depth)
-
-    def _compile_library_function_call(self, expr, depth=0):
-        """Compile a function-library call through the library-call adapter."""
-        return library_calls.compile_library_function_call(self, expr, depth)
 
 
 def _make_group(source: str, name: str = "NodeForge Group", existing_group=None, local_functions=None, backend_builtins=None):

@@ -107,19 +107,10 @@ def _source_path_for_name(name: str) -> Path | None:
 
 
 def _module_path_for_name(name: str) -> Path | None:
-    """Find a native Python helper module for a function name.
-
-    Supported layouts:
-      functions/foo.py            legacy flat module
-      functions/foo/function.py   packaged native helper
-    """
+    """Find a packaged native Python helper module for a function name."""
     if not _is_valid_function_name(name):
         return None
-    root = _library_dir()
-    flat = root / f"{name}.py"
-    if flat.exists() and flat.is_file():
-        return flat
-    packaged = root / name / _NATIVE_FILE_NAME
+    packaged = _library_dir() / name / _NATIVE_FILE_NAME
     if packaged.exists() and packaged.is_file():
         return packaged
     return None
@@ -168,10 +159,7 @@ def _load_function_module(name: str):
     if path is None:
         raise CompileError(f"Unknown native library function: {name}")
     package = __package__ or "NodeForge"
-    if path.name == _NATIVE_FILE_NAME:
-        module_name = f"{package}.functions.{name}.function"
-    else:
-        module_name = f"{package}.functions.{name}"
+    module_name = f"{package}.functions.{name}.function"
     existing = sys.modules.get(module_name)
     if existing is not None and getattr(existing, "__file__", None) == str(path):
         return existing
@@ -205,8 +193,6 @@ def library_function_names() -> set[str]:
             continue
         if path.is_file():
             if path.suffix in _SOURCE_EXTENSIONS and _is_valid_function_name(path.stem):
-                names.add(path.stem)
-            elif path.suffix == ".py" and _is_valid_function_name(path.stem):
                 names.add(path.stem)
         elif path.is_dir() and _is_valid_function_name(path.name):
             if _source_path_for_name(path.name) is not None or _module_path_for_name(path.name) is not None:
