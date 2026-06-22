@@ -3,11 +3,17 @@
 from ...compile_time import reject_compile_time_object
 from ...errors import CompileError
 from .analysis import analyze
-from .backends import branch_free_vectorized_runtime_backend, limited_segment_node_backend, select_backend_category, static_baked_backend, validate_stage1_backend_available
+from .backends import (
+    branch_aware_vectorized_runtime_backend,
+    branch_free_vectorized_runtime_backend,
+    select_backend_category,
+    static_baked_backend,
+    validate_branch_aware_backend_available,
+)
 from .expander import expand
 from .model import LSystemAngle, LSystemAxiom, LSystemIterations, LSystemPart, LSystemRule, LSystemSpec, LSystemStep
-from .runtime_tables import build_branch_free_command_table
-from .turtle import interpret, interpret_static
+from .runtime_tables import build_branch_aware_command_table, build_branch_free_command_table
+from .turtle import interpret_static
 
 
 def build_spec(parts: list[LSystemPart]) -> LSystemSpec:
@@ -79,9 +85,18 @@ def compile_lsystem(comp, expr, depth=0):
             x=depth * 240 + 260,
             y=-depth * 120,
         )
-    validate_stage1_backend_available(metrics, category)
-    segments = interpret(comp.group, stream, angle_degrees=spec.angle, step=spec.step, x=depth * 240, y=-depth * 120 - 200)
-    return limited_segment_node_backend(comp, segments, x=depth * 240 + 260, y=-depth * 120)
+    if category == "branched_runtime":
+        validate_branch_aware_backend_available(metrics, category)
+        table = build_branch_aware_command_table(stream)
+        return branch_aware_vectorized_runtime_backend(
+            comp,
+            table,
+            angle_degrees=spec.angle,
+            step=spec.step,
+            x=depth * 240 + 260,
+            y=-depth * 120,
+        )
+    raise CompileError(f"Unsupported L-system backend category: {category}")
 
 
 __all__ = ["build_spec", "compile_lsystem"]

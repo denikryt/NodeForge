@@ -527,12 +527,12 @@ def _write_attribute_values(attribute, values) -> None:
         item.value = value
 
 
-def create_command_mesh_object_from_table(transaction: GeneratedResourceTransaction, table, *, name_hint: str):
-    """Create generated Mesh/Object command data for branch-free runtime L-systems."""
+def _create_command_mesh_object_from_specs(transaction: GeneratedResourceTransaction, table, *, name_hint: str, mesh_role: str, object_role: str, point_attributes, edge_attributes):
+    """Create generated Mesh/Object command data from explicit attribute specs."""
     safe_hint = _safe_name_hint(name_hint)
     base = f"NodeForge.{safe_hint}.{transaction.owner_group_uuid[:8]}.{transaction.generation_uuid[:8]}"
     mesh = bpy.data.meshes.new(base + ".CommandMesh")
-    transaction.add(mesh, "MESH", "branch_free_runtime_command_mesh")
+    transaction.add(mesh, "MESH", mesh_role)
     global _TEST_FAIL_AFTER_MESH_CREATE, _TEST_FAIL_AFTER_MESH_ATTRIBUTE_WRITE, _TEST_FAIL_AFTER_OBJECT_CREATE
     if _TEST_FAIL_AFTER_MESH_CREATE:
         _TEST_FAIL_AFTER_MESH_CREATE = False
@@ -541,12 +541,12 @@ def create_command_mesh_object_from_table(transaction: GeneratedResourceTransact
     try:
         mesh.from_pydata(list(table.vertices), list(table.edges), [])
         mesh.update()
-        move_attr = mesh.attributes.new("nf_lsys_move_mask", "FLOAT", "POINT")
-        heading_attr = mesh.attributes.new("nf_lsys_heading_index", "FLOAT", "POINT")
-        draw_attr = mesh.attributes.new("nf_lsys_draw_mask", "BOOLEAN", "EDGE")
-        _write_attribute_values(move_attr, table.move_mask)
-        _write_attribute_values(heading_attr, table.heading_index)
-        _write_attribute_values(draw_attr, table.draw_mask)
+        for attr_name, data_type, values in point_attributes:
+            attr = mesh.attributes.new(attr_name, data_type, "POINT")
+            _write_attribute_values(attr, values)
+        for attr_name, data_type, values in edge_attributes:
+            attr = mesh.attributes.new(attr_name, data_type, "EDGE")
+            _write_attribute_values(attr, values)
         if _TEST_FAIL_AFTER_MESH_ATTRIBUTE_WRITE:
             _TEST_FAIL_AFTER_MESH_ATTRIBUTE_WRITE = False
             raise RuntimeError("Injected NodeForge command-mesh attribute failure")
@@ -555,7 +555,7 @@ def create_command_mesh_object_from_table(transaction: GeneratedResourceTransact
         transaction.rollback()
         raise
     obj = bpy.data.objects.new(base + ".CommandObject", mesh)
-    transaction.add(obj, "OBJECT", "branch_free_runtime_command_object")
+    transaction.add(obj, "OBJECT", object_role)
     if _TEST_FAIL_AFTER_OBJECT_CREATE:
         _TEST_FAIL_AFTER_OBJECT_CREATE = False
         transaction.rollback()
@@ -563,11 +563,47 @@ def create_command_mesh_object_from_table(transaction: GeneratedResourceTransact
     _link_object_to_context_collection(obj)
     _hide_generated_object(obj)
     return mesh, obj
+
+def create_command_mesh_object_from_table(transaction: GeneratedResourceTransaction, table, *, name_hint: str):
+    """Create generated Mesh/Object command data for branch-free runtime L-systems."""
+    return _create_command_mesh_object_from_specs(
+        transaction,
+        table,
+        name_hint=name_hint,
+        mesh_role="branch_free_runtime_command_mesh",
+        object_role="branch_free_runtime_command_object",
+        point_attributes=(
+            ("nf_lsys_move_mask", "FLOAT", table.move_mask),
+            ("nf_lsys_heading_index", "FLOAT", table.heading_index),
+        ),
+        edge_attributes=(("nf_lsys_draw_mask", "BOOLEAN", table.draw_mask),),
+    )
+
+
+def create_branch_aware_command_mesh_object_from_table(transaction: GeneratedResourceTransaction, table, *, name_hint: str):
+    """Create generated Mesh/Object command data for branch-aware runtime L-systems."""
+    return _create_command_mesh_object_from_specs(
+        transaction,
+        table,
+        name_hint=name_hint,
+        mesh_role="branch_aware_runtime_command_mesh",
+        object_role="branch_aware_runtime_command_object",
+        point_attributes=(
+            ("nf_lsys_move_mask", "FLOAT", table.move_mask),
+            ("nf_lsys_heading_index", "FLOAT", table.heading_index),
+            ("nf_lsys_path_id", "INT", table.path_id),
+            ("nf_lsys_path_depth", "INT", table.path_depth),
+            ("nf_lsys_parent_attach_index", "INT", table.parent_attach_index),
+            ("nf_lsys_anchor_mask", "BOOLEAN", table.anchor_mask),
+        ),
+        edge_attributes=(("nf_lsys_draw_mask", "BOOLEAN", table.draw_mask),),
+    )
+
 __all__ = [
     "GROUP_MANIFEST_PROP", "ID_METADATA_PROP", "SCHEMA_VERSION",
     "GeneratedResourceRef", "GeneratedResourceTransaction", "create_transaction",
     "read_group_manifest", "write_group_manifest", "write_empty_manifest", "clear_group_manifest",
     "manifest_resources", "cleanup_previous_after_commit", "cleanup_restart_orphans",
     "cleanup_live_group_resources", "create_curve_object_from_segments",
-    "create_command_mesh_object_from_table", "delete_generated_ref",
+    "create_command_mesh_object_from_table", "create_branch_aware_command_mesh_object_from_table", "delete_generated_ref",
 ]

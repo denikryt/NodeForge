@@ -18,11 +18,17 @@ from NodeForge.builtins import registry
 from NodeForge.systems import registry as systems_registry
 from NodeForge.systems.lsystem import resources as generated_resources
 from NodeForge.systems.lsystem.runtime_tables import (
+    ANCHOR_MASK_ATTR,
     DRAW_MASK_ATTR,
     HEADING_INDEX_ATTR,
     MOVE_MASK_ATTR,
+    PARENT_ATTACH_INDEX_ATTR,
+    PATH_DEPTH_ATTR,
+    PATH_ID_ATTR,
+    build_branch_aware_command_table,
     build_branch_free_command_table,
 )
+from NodeForge.systems.lsystem.backends import MAX_LSYSTEM_BRANCH_DEPTH
 from NodeForge.builtins import fields, geometry, instancing, io, math, vector
 
 
@@ -539,6 +545,28 @@ output("Geometry", geo)
     _assert_static_baked_group(large)
     check(len(large.nodes) <= 4, f"static baked node graph grew per segment: {len(large.nodes)} nodes")
 
+
+    static_branch_edge_cases = {
+        "[F]": 1,
+        "[+F]F": 2,
+        "F[[F]F]": 3,
+        "F[+fF]F": 3,
+        "F[+XF]F": 3,
+        "F[-F[+F]F]F": 5,
+    }
+    for index, (axiom, expected_splines) in enumerate(static_branch_edge_cases.items()):
+        edge_group = compile_group(
+            f'geo = ls_system(ls_axiom("{axiom}"), ls_iterations(0), ls_angle(90), ls_step(1))\noutput("Geometry", geo)',
+            f"NFTest_lsystem_stage2_static_branch_edge_{index}",
+        )
+        _edge_manifest, edge_refs, edge_obj = _assert_static_baked_group(edge_group)
+        curve_ref = _ref_by_kind(edge_refs, "CURVE")
+        curve = bpy.data.curves.get(curve_ref.name)
+        check(curve is not None, f"static branch edge fixture {axiom} missing Curve")
+        check(len(curve.splines) == expected_splines, f"static branch edge fixture {axiom} segment count changed")
+        check(all(len(spline.points) == 2 for spline in curve.splines), f"static branch edge fixture {axiom} created non-polyline segment")
+        check(edge_obj.hide_viewport and edge_obj.hide_render, f"static branch edge fixture {axiom} generated Object is visible")
+
     before_resource_failure = _owned_generated_id_keys()
     generated_resources._TEST_FAIL_AFTER_OBJECT_CREATE = True
     try:
@@ -1012,19 +1040,307 @@ output("Geometry", geo)
     _static_manifest, static_refs, _ = _assert_static_baked_group(static_group)
     check({ref.kind for ref in static_refs} == {"CURVE", "OBJECT"}, "static baked backend started using command Mesh")
 
-    branched_runtime = compile_group('''
-angle_value = input_float("Angle", default=25.0)
-geo = ls_system(ls_axiom("F[+F]F[-F]F"), ls_iterations(0), ls_angle(angle_value), ls_step(0.1))
-output("Geometry", geo)
-''', "NFTest_lsystem_stage3_branched_runtime_unchanged")
-    check(generated_resources.read_group_manifest(branched_runtime) is None, "branched runtime unexpectedly created generated resources")
-    check(any(getattr(node, "bl_idname", "") == "GeometryNodeCurvePrimitiveLine" for node in branched_runtime.nodes), "branched runtime no longer uses bounded Stage 1 backend")
-    expect_compile_error('''
-angle_value = input_float("Angle", default=25.0)
-geo = ls_system(ls_axiom("F[+F]"), ls_rule("F", "FF"), ls_iterations(10), ls_angle(angle_value), ls_step(0.1))
-output("Geometry", geo)
-''', "NFTest_lsystem_stage3_branched_runtime_budget")
     print("LSYSTEM_STAGE3_OK")
+
+def _attribute_values(attr):
+    values = []
+    for item in attr.data:
+        if hasattr(item, "value"):
+            values.append(item.value)
+        else:
+            values.append(None)
+    return tuple(values)
+
+
+def _assert_branch_aware_table_anchor_contract():
+    table = build_branch_aware_command_table("F[+F]F[-F]F")
+    check(table.draw_count == 5 and table.max_branch_depth == 1, "branch-aware table draw/depth counts drifted")
+    check(len(table.paths) == 3, "branch-aware sibling path count changed")
+    check(table.paths[0].anchor_point_index == 0, "root anchor is not first point")
+    check(table.paths[1].parent_attach_point_index == 1, "first sibling branch attach point changed")
+    check(table.paths[2].parent_attach_point_index == 5, "second sibling branch attach point changed")
+    anchors = [idx for idx, is_anchor in enumerate(table.anchor_mask) if is_anchor]
+    check(anchors == [path.anchor_point_index for path in table.paths], "each path must have exactly one synthetic anchor")
+    for path in table.paths:
+        anchor = path.anchor_point_index
+        check(table.move_mask[anchor] == 0.0, "anchor must be movement-neutral")
+        check(table.path_id[anchor] == path.path_id, "anchor path id mismatch")
+        check(table.path_depth[anchor] == path.depth, "anchor depth mismatch")
+        check(table.heading_index[anchor] == float(path.initial_heading_index), "anchor heading mismatch")
+
+    for stream in ("[F]", "[+F]F", "F[[F]F]"):
+        table = build_branch_aware_command_table(stream)
+        for path in table.paths[1:]:
+            attach = path.parent_attach_point_index
+            check(0 <= attach < table.vertex_count, f"{stream}: child attach is not a real point")
+            check(table.path_id[attach] == path.parent_path_id, f"{stream}: child attach is not on parent path")
+
+    nested = build_branch_aware_command_table("F[+F[-F]F]F")
+    check(nested.max_branch_depth == 2, "nested branch depth changed")
+    check(any(path.depth == 2 for path in nested.paths), "nested depth-2 path missing")
+    moved = build_branch_aware_command_table("F[+fF]F")
+    check(moved.draw_mask.count(True) == 3, "lowercase f should not draw but later F should")
+    ignored = build_branch_aware_command_table("F[+XF]F")
+    check(ignored.draw_count == 3, "ignored grammar symbol changed draw count")
+    try:
+        build_branch_aware_command_table("[F")
+    except CompileError:
+        pass
+    else:
+        raise AssertionError("branch-aware table builder accepted unclosed branch")
+    try:
+        build_branch_aware_command_table("[f]")
+    except CompileError:
+        pass
+    else:
+        raise AssertionError("branch-aware table builder accepted zero-draw stream")
+
+
+def _input_socket_by_name(node, name):
+    if isinstance(name, int):
+        try:
+            return node.inputs[name]
+        except Exception as exc:
+            raise AssertionError(f"node {getattr(node, 'bl_idname', node)!r} has no input socket index {name}") from exc
+    try:
+        return node.inputs[name]
+    except Exception:
+        pass
+    for socket in node.inputs:
+        if getattr(socket, "name", "") == name:
+            return socket
+    raise AssertionError(f"node {getattr(node, 'bl_idname', node)!r} has no input socket {name!r}")
+
+
+def _linked_source_node(group, node, input_name):
+    socket = _input_socket_by_name(node, input_name)
+    matches = [
+        link
+        for link in group.links
+        if link.to_node == node
+        and (link.to_socket == socket or getattr(link.to_socket, "identifier", None) == getattr(socket, "identifier", None))
+    ]
+    check(len(matches) == 1, f"expected one link into {getattr(node, 'bl_idname', node)}.{input_name}, got {len(matches)}")
+    return matches[0].from_node
+
+
+def _named_attribute_node_name(node):
+    for socket in getattr(node, "inputs", []):
+        if getattr(socket, "name", "") == "Name":
+            return getattr(socket, "default_value", None)
+    for socket in getattr(node, "inputs", []):
+        value = getattr(socket, "default_value", None)
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def _assert_stage4_sample_index_uses_safe_parent_index(group):
+    sample_nodes = [node for node in group.nodes if getattr(node, "bl_idname", "") == "GeometryNodeSampleIndex"]
+    check(sample_nodes, "branch-aware runtime graph has no Sample Index node")
+    for node in sample_nodes:
+        index_source = _linked_source_node(group, node, "Index")
+        check(
+            getattr(index_source, "bl_idname", "") == "GeometryNodeSwitch",
+            "branch-aware Sample Index must receive a depth-safe parent attach index, not raw parent_attach_index",
+        )
+        false_source = _linked_source_node(group, index_source, 1)
+        true_source = _linked_source_node(group, index_source, 2)
+        check(
+            getattr(false_source, "bl_idname", "") == "GeometryNodeInputNamedAttribute"
+            and _named_attribute_node_name(false_source) == PARENT_ATTACH_INDEX_ATTR,
+            "safe parent attach switch must preserve raw parent_attach_index for non-root paths",
+        )
+        check(
+            getattr(true_source, "bl_idname", "") == "FunctionNodeInputInt"
+            and getattr(true_source, "integer", None) == 0,
+            "safe parent attach switch must replace root sentinel with a valid root anchor index",
+        )
+
+def _runtime_branched_source(axiom="F[+F]F[-F]F", angle_default=90.0, step_default=1.0):
+    return '''
+angle_value = input_float("Angle", default={angle_default})
+step_value = input_float("Step", default={step_default})
+geo = ls_system(ls_axiom("{axiom}"), ls_iterations(0), ls_angle(angle_value), ls_step(step_value))
+output("Geometry", geo)
+'''.format(axiom=axiom, angle_default=angle_default, step_default=step_default)
+
+
+def _assert_stage4_modifier_runtime_updates(compiled_group):
+    manifest_before = generated_resources.read_group_manifest(compiled_group)
+    generation_before = manifest_before["generation_uuid"]
+    wrapper, obj, mesh_data, mod = _attach_stage3_eval_modifier(compiled_group, "NFTest_lsystem_stage4_runtime_eval")
+    try:
+        _set_modifier_input(mod, wrapper, "Angle", 90.0)
+        _set_modifier_input(mod, wrapper, "Step", 1.0)
+        obj.update_tag()
+        bpy.context.view_layer.update()
+        vertices_90, edges_90, polygons_90 = _evaluated_mesh_snapshot(obj)
+        check(polygons_90 == 0, "branched runtime evaluated mesh unexpectedly has polygons")
+        check(len(edges_90) == 3, f"branched runtime expected 3 drawn edges, got {edges_90}")
+        expected_vertices = ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0))
+        expected_edges = ((0, 1), (1, 2), (3, 4))
+        check(vertices_90 == expected_vertices, f"branched runtime Angle=90 vertices changed: {vertices_90}")
+        check(edges_90 == expected_edges, f"branched runtime Angle=90 edges changed: {edges_90}")
+
+        _set_modifier_input(mod, wrapper, "Angle", 0.0)
+        obj.update_tag()
+        bpy.context.view_layer.update()
+        vertices_angle_changed, edges_angle_changed, _polygons = _evaluated_mesh_snapshot(obj)
+        expected_zero = ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0))
+        check(vertices_angle_changed == expected_zero, f"branched runtime Angle update did not change evaluated positions: {vertices_angle_changed}")
+        check(edges_angle_changed == edges_90, "branched runtime Angle update changed topology")
+        check(generated_resources.read_group_manifest(compiled_group)["generation_uuid"] == generation_before, "branched runtime Angle update churned resources")
+
+        _set_modifier_input(mod, wrapper, "Step", 2.0)
+        obj.update_tag()
+        bpy.context.view_layer.update()
+        vertices_step_changed, edges_step_changed, _polygons = _evaluated_mesh_snapshot(obj)
+        expected_step = ((0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (4.0, 0.0, 0.0), (2.0, 0.0, 0.0), (4.0, 0.0, 0.0))
+        check(vertices_step_changed == expected_step, f"branched runtime Step update did not scale positions: {vertices_step_changed}")
+        check(edges_step_changed == edges_90, "branched runtime Step update changed topology")
+        check(generated_resources.read_group_manifest(compiled_group)["generation_uuid"] == generation_before, "branched runtime Step update churned resources")
+    finally:
+        _cleanup_stage3_eval_objects(wrapper, obj, mesh_data)
+
+
+
+
+def _assert_stage4_evaluated_fixture(axiom, expected_vertices, expected_edges, name_suffix):
+    group = compile_group(_runtime_branched_source(axiom), "NFTest_lsystem_stage4_eval_" + name_suffix)
+    _assert_stage4_sample_index_uses_safe_parent_index(group)
+    wrapper, obj, mesh_data, mod = _attach_stage3_eval_modifier(group, "NFTest_lsystem_stage4_eval_" + name_suffix)
+    try:
+        _set_modifier_input(mod, wrapper, "Angle", 90.0)
+        _set_modifier_input(mod, wrapper, "Step", 1.0)
+        obj.update_tag()
+        bpy.context.view_layer.update()
+        vertices, edges, polygons = _evaluated_mesh_snapshot(obj)
+        check(vertices == expected_vertices, f"branched runtime fixture {axiom} vertices changed: {vertices}")
+        check(edges == expected_edges, f"branched runtime fixture {axiom} edges changed: {edges}")
+        check(polygons == 0, f"branched runtime fixture {axiom} unexpectedly has polygons")
+    finally:
+        _cleanup_stage3_eval_objects(wrapper, obj, mesh_data)
+
+def run_lsystem_stage4_checks():
+    """Exercise Stage 4 branch-aware vectorized runtime backend."""
+    _assert_branch_aware_table_anchor_contract()
+
+    origin_group = compile_group(_runtime_branched_source("[F]"), "NFTest_lsystem_stage4_branch_origin")
+    _origin_manifest, origin_refs = _manifest_refs(origin_group)
+    check({ref.kind for ref in origin_refs} == {"MESH", "OBJECT"}, "branch-at-origin runtime did not use generated Mesh/Object")
+    origin_mesh = bpy.data.meshes.get(_ref_by_kind(origin_refs, "MESH").name)
+    check(origin_mesh is not None, "branch-at-origin command Mesh missing")
+    check(len(origin_mesh.vertices) == 3 and len(origin_mesh.edges) == 1, "branch-at-origin anchor topology changed")
+    check(_attribute_values(origin_mesh.attributes[PARENT_ATTACH_INDEX_ATTR]) == (-1, 0, 0), "branch-at-origin parent attach indices changed")
+
+    group = compile_group(_runtime_branched_source("F[+F]F"), "NFTest_lsystem_stage4_branched_runtime")
+    _manifest, refs = _manifest_refs(group)
+    check({ref.kind for ref in refs} == {"MESH", "OBJECT"}, "branched runtime generated unexpected resources")
+    check(any(ref.role == "branch_aware_runtime_command_mesh" for ref in refs), "branch-aware Mesh role missing")
+    check(any(ref.role == "branch_aware_runtime_command_object" for ref in refs), "branch-aware Object role missing")
+    mesh = bpy.data.meshes.get(_ref_by_kind(refs, "MESH").name)
+    obj = bpy.data.objects.get(_ref_by_kind(refs, "OBJECT").name)
+    check(mesh is not None and obj is not None and obj.data is mesh, "branch-aware Mesh/Object graph missing")
+    for attr_name, domain, data_type, expected_len in [
+        (MOVE_MASK_ATTR, "POINT", "FLOAT", len(mesh.vertices)),
+        (HEADING_INDEX_ATTR, "POINT", "FLOAT", len(mesh.vertices)),
+        (PATH_ID_ATTR, "POINT", "INT", len(mesh.vertices)),
+        (PATH_DEPTH_ATTR, "POINT", "INT", len(mesh.vertices)),
+        (PARENT_ATTACH_INDEX_ATTR, "POINT", "INT", len(mesh.vertices)),
+        (ANCHOR_MASK_ATTR, "POINT", "BOOLEAN", len(mesh.vertices)),
+        (DRAW_MASK_ATTR, "EDGE", "BOOLEAN", len(mesh.edges)),
+    ]:
+        attr = mesh.attributes.get(attr_name)
+        check(attr is not None, f"branch-aware command Mesh attribute missing: {attr_name}")
+        check(attr.domain == domain, f"{attr_name} domain changed: {attr.domain}")
+        check(attr.data_type == data_type, f"{attr_name} data type changed: {attr.data_type}")
+        check(len(attr.data) == expected_len, f"{attr_name} length mismatch")
+    node_types = [getattr(node, "bl_idname", "") for node in group.nodes]
+    check("GeometryNodeCurvePrimitiveLine" not in node_types, "branched runtime used per-segment Curve Line nodes")
+    for required in {
+        "GeometryNodeObjectInfo",
+        "GeometryNodeInputNamedAttribute",
+        "GeometryNodeAccumulateField",
+        "GeometryNodeStoreNamedAttribute",
+        "GeometryNodeSampleIndex",
+        "GeometryNodeSetPosition",
+        "GeometryNodeDeleteGeometry",
+        "GeometryNodeMeshToCurve",
+    }:
+        check(required in node_types, f"branch-aware runtime graph missing {required}")
+    check(len(group.nodes) < 120, f"branch-aware runtime node graph grew unexpectedly: {len(group.nodes)} nodes")
+    _assert_stage4_sample_index_uses_safe_parent_index(group)
+    object_infos = [node for node in group.nodes if getattr(node, "bl_idname", "") == "GeometryNodeObjectInfo"]
+    check(object_infos and _object_info_source(object_infos[0]) is obj, "Object Info does not source branch-aware command Object")
+    _assert_stage4_modifier_runtime_updates(group)
+
+
+    evaluated_edge_cases = [
+        ("[F]", ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0)), ((0, 1),), "branch_origin"),
+        ("[+F]F", ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 1.0, 0.0)), ((0, 1), (2, 3)), "branch_before_root_draw"),
+        ("F[[F]F]", ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0)), ((0, 1), (2, 3), (4, 5)), "nested_branch_at_child_origin"),
+        ("F[+fF]F", ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0), (1.0, 1.0, 0.0), (1.0, 2.0, 0.0)), ((0, 1), (1, 2), (3, 4)), "lowercase_move_branch"),
+        ("F[+XF]F", ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0)), ((0, 1), (1, 2), (3, 4)), "ignored_symbol_branch"),
+    ]
+    for axiom, expected_vertices, expected_edges, suffix in evaluated_edge_cases:
+        _assert_stage4_evaluated_fixture(axiom, expected_vertices, expected_edges, suffix)
+
+    large_source = _runtime_branched_source("F[+F]" + "F" * 1100, angle_default=0.0, step_default=1.0)
+    large_group = compile_group(large_source, "NFTest_lsystem_stage4_large_branched_runtime")
+    large_manifest, large_refs = _manifest_refs(large_group)
+    large_mesh = bpy.data.meshes.get(_ref_by_kind(large_refs, "MESH").name)
+    check(large_mesh is not None and len(large_mesh.edges) > 1000, "large branched runtime did not exceed Stage 1 segment topology")
+    check(len(large_group.nodes) < 120, f"large branched runtime node graph grew unexpectedly: {len(large_group.nodes)} nodes")
+    check(generated_resources.read_group_manifest(large_group) == large_manifest, "large branched runtime compile mutated manifest unexpectedly")
+
+    depth_stream = "[" * (MAX_LSYSTEM_BRANCH_DEPTH + 1) + "F" + "]" * (MAX_LSYSTEM_BRANCH_DEPTH + 1)
+    expect_compile_error(_runtime_branched_source(depth_stream), "NFTest_lsystem_stage4_depth_budget")
+
+    stable_manifest, stable_refs = _manifest_refs(group)
+    stable_source = compiler._extract_group_source(group)
+    before_failure = _owned_generated_id_keys()
+    generated_resources._TEST_FAIL_AFTER_MESH_ATTRIBUTE_WRITE = True
+    try:
+        compiler.update_expression_group(group, _runtime_branched_source("F[+F]F[-F]F"))
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("fault-injected branch-aware Mesh attribute failure did not raise")
+    check(generated_resources.read_group_manifest(group)["generation_uuid"] == stable_manifest["generation_uuid"], "failed branch-aware update changed manifest")
+    check(compiler._extract_group_source(group) == stable_source, "failed branch-aware update changed stored source")
+    check(_owned_generated_id_keys() == before_failure, "failed branch-aware update leaked or deleted generated IDs")
+    for ref in stable_refs:
+        check(_collection_for_ref(ref).get(ref.name) is not None, f"failed branch-aware update removed stable {ref.kind}")
+
+    compiler.update_expression_group(group, _static_lsystem_source(iterations=1, step=0.2))
+    static_manifest, static_refs, _ = _assert_static_baked_group(group)
+    for ref in stable_refs:
+        check(_collection_for_ref(ref).get(ref.name) is None, f"old branch-aware resource survived static replacement: {ref.name}")
+    compiler.update_expression_group(group, _runtime_branched_source("F[+F]F"))
+    runtime_manifest, runtime_refs = _manifest_refs(group)
+    check(runtime_manifest["owner_group_uuid"] == static_manifest["owner_group_uuid"], "static-to-branched replacement changed owner UUID")
+    for ref in static_refs:
+        check(_collection_for_ref(ref).get(ref.name) is None, f"old static resource survived branch-aware replacement: {ref.name}")
+    compiler.update_expression_group(group, '''
+angle_value = input_float("Angle", default=0.0)
+step_value = input_float("Step", default=1.0)
+geo = ls_system(ls_axiom("F+F"), ls_iterations(0), ls_angle(angle_value), ls_step(step_value))
+output("Geometry", geo)
+''')
+    bf_manifest, bf_refs = _manifest_refs(group)
+    check(any(ref.role == "branch_free_runtime_command_mesh" for ref in bf_refs), "branched-to-branch-free replacement did not select branch-free backend")
+    for ref in runtime_refs:
+        check(_collection_for_ref(ref).get(ref.name) is None, f"old branch-aware resource survived branch-free replacement: {ref.name}")
+
+    shutdown_group = compile_group(_runtime_branched_source("F[+F]F"), "NFTest_lsystem_stage4_shutdown")
+    _shutdown_manifest, shutdown_refs = _manifest_refs(shutdown_group)
+    generated_resources.cleanup_live_group_resources()
+    for ref in shutdown_refs:
+        check(_collection_for_ref(ref).get(ref.name) is None, f"unregister cleanup left branch-aware {ref.kind}")
+    check(generated_resources.read_group_manifest(shutdown_group)["resources"] == [], "unregister cleanup did not clear branch-aware manifest")
+
+    print("LSYSTEM_STAGE4_OK")
 
 def run_update_checks():
     """Exercise successful and failed update_expression_group paths."""
@@ -1080,6 +1396,7 @@ def main():
     run_lsystem_stage1_checks()
     run_lsystem_stage2_checks()
     run_lsystem_stage3_checks()
+    run_lsystem_stage4_checks()
     run_library_checks()
     run_update_checks()
     run_mandelbrot_eval_check()
