@@ -498,3 +498,69 @@ Parameters:
 
 Returns: `Vector`.
 
+
+## Embedded L-systems
+
+L-system constructors are global DSL calls resolved by the embedded systems registry. They use the `ls_` prefix and are not registered as ordinary built-ins in `builtins/registry.py`.
+
+```python
+angle_value = input_float("Angle", default=60.0)
+step_value = input_float("Step", default=0.1)
+
+geo = ls_system(
+    ls_axiom("F"),
+    ls_rule("F", "F+F--F+F"),
+    ls_iterations(4),
+    ls_angle(angle_value),
+    ls_step(step_value),
+)
+
+geo = transform(geo, translation=vector(0, 0, 1))
+output("Geometry", geo)
+```
+
+### `ls_system(part, ...)`
+
+Builds an L-system and returns normal `Geometry`. The returned value can be transformed, joined, assigned materials, stored in variables, and passed to `output(...)`.
+
+A system requires exactly one axiom, iteration count, angle, and step. It can include any number of rewrite rules. Duplicate singleton parts and duplicate rule predecessors raise `CompileError`.
+
+Stage 1 materializes accepted L-systems through a bounded bootstrap backend: one Curve Line node per drawn segment, joined as one geometry result. Systems with more than 1000 drawn `F` segments raise `CompileError` instead of creating an unbounded node graph. Static baked geometry and vectorized runtime backends are later backend implementations; user syntax stays the same.
+Stage 1 also rejects systems that emit no drawn `F` segments until the empty-geometry Blender node contract is verified in the supported headless runtime. Non-command grammar symbols remain valid and are ignored by turtle emission when other draw commands are present.
+
+### `ls_axiom(value)`
+
+Defines the initial symbol stream. `value` must be a compile-time string.
+
+### `ls_rule(symbol, replacement)`
+
+Defines one rewrite rule. `symbol` must be a compile-time string containing exactly one allowed symbol. `replacement` must be a compile-time string.
+
+Rules rewrite one input symbol at a time. Symbols without a matching rule pass through unchanged.
+
+### `ls_iterations(value)`
+
+Defines the number of rewrite passes. `value` must be a non-negative compile-time integer.
+
+### `ls_angle(value)`
+
+Defines the turtle turn angle in degrees. `value` can be a compile-time number or a runtime numeric `Value`, such as `input_float(...)`.
+
+### `ls_step(value)`
+
+Defines the turtle forward distance. `value` can be a compile-time number or a runtime numeric `Value`, such as `input_float(...)`.
+
+### Supported symbols
+
+Turtle commands:
+
+| Symbol | Meaning |
+| --- | --- |
+| `F` | Draw forward. |
+| `f` | Move forward without drawing. |
+| `+` | Turn left. |
+| `-` | Turn right. |
+| `[` | Push turtle state. |
+| `]` | Pop turtle state. |
+
+ASCII letters, digits, and `_` are grammar symbols. They are preserved during expansion and ignored by turtle emission unless a rule rewrites them. Whitespace, Unicode symbols, and unsupported punctuation raise `CompileError`.

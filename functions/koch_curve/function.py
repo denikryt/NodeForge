@@ -19,6 +19,7 @@ import bpy
 from ...constants import TYPE_INT
 from ...errors import CompileError
 from ...values import Value
+from ...compile_time import reject_compile_time_object
 from ...nodes import _new_node, _value, _compare, _switch
 from ...interface import _set_interface_socket_default, _record_group_input_default
 from ...storage import _reset_node_group, _store_group_source, INPUT_DEFAULTS_PROP
@@ -174,6 +175,7 @@ def compile_call(comp, expr: ast.Call, depth=0) -> Value:
         mode = "static"
     except CompileError:
         steps = comp.compile(steps_expr)
+        reject_compile_time_object(steps, f"{expr.func.id}() steps")
         if steps.typ != TYPE_INT:
             raise CompileError("koch_curve steps= must be Int")
         mode = "runtime"

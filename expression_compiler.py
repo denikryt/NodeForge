@@ -9,6 +9,8 @@ from .nodes import *
 from .consteval import _const_eval
 from .library import has_library_function
 from .builtins import registry as builtin_registry
+from .compile_time import reject_compile_time_object
+from .systems import registry as systems_registry
 from . import local_functions
 from . import library_calls
 
@@ -39,12 +41,15 @@ def compile_expr(comp, expr, depth=0):
     if isinstance(expr, ast.Attribute):
         base = compile_expr(comp, expr.value, depth + 1)
         if expr.attr in {"x", "y", "z"}:
+            reject_compile_time_object(base, f".{expr.attr} attribute access")
             return _separate_xyz(comp.group, base, expr.attr, x, y)
         raise CompileError("Only .x, .y and .z vector attributes are supported")
 
     if isinstance(expr, ast.BinOp):
         left = compile_expr(comp, expr.left, depth + 1)
         right = compile_expr(comp, expr.right, depth + 1)
+        reject_compile_time_object(left, "binary expression")
+        reject_compile_time_object(right, "binary expression")
         op_type = type(expr.op)
         if op_type not in _BIN_OPS:
             raise CompileError(f"Unsupported binary operator: {op_type.__name__}")
@@ -66,6 +71,7 @@ def compile_expr(comp, expr, depth=0):
 
     if isinstance(expr, ast.UnaryOp):
         val = compile_expr(comp, expr.operand, depth + 1)
+        reject_compile_time_object(val, "unary expression")
         if isinstance(expr.op, ast.UAdd):
             return val
         if isinstance(expr.op, ast.USub):
@@ -89,8 +95,10 @@ def compile_expr(comp, expr, depth=0):
         if not op:
             raise CompileError("Unsupported boolean operator")
         current = compile_expr(comp, expr.values[0], depth + 1)
+        reject_compile_time_object(current, "boolean expression")
         for nxt_expr in expr.values[1:]:
             nxt = compile_expr(comp, nxt_expr, depth + 1)
+            reject_compile_time_object(nxt, "boolean expression")
             current = _boolean_math(comp.group, op, [current, nxt], x, y)
         return current
 
@@ -102,6 +110,8 @@ def compile_expr(comp, expr, depth=0):
         for op_node, right_expr in zip(expr.ops, expr.comparators):
             left = compile_expr(comp, left_expr, depth + 1)
             right = compile_expr(comp, right_expr, depth + 1)
+            reject_compile_time_object(left, "comparison")
+            reject_compile_time_object(right, "comparison")
             op = _COMPARE_OPS.get(type(op_node))
             if not op:
                 raise CompileError("Unsupported comparison operator")
@@ -116,6 +126,9 @@ def compile_expr(comp, expr, depth=0):
         cond = compile_expr(comp, expr.test, depth + 1)
         true_val = compile_expr(comp, expr.body, depth + 1)
         false_val = compile_expr(comp, expr.orelse, depth + 1)
+        reject_compile_time_object(cond, "if-expression condition")
+        reject_compile_time_object(true_val, "if-expression result")
+        reject_compile_time_object(false_val, "if-expression result")
         if isinstance(true_val, list) or isinstance(false_val, list):
             raise CompileError("if-expression cannot return arrays")
         return _switch(comp.group, cond, false_val, true_val, x, y)
@@ -129,6 +142,7 @@ def compile_expr(comp, expr, depth=0):
             idx = int(_const_eval(expr.slice, comp.consts))
         except CompileError as exc:
             raise CompileError("array/vector indexing currently requires a compile-time integer index") from exc
+        reject_compile_time_object(base, "subscript")
         if isinstance(base, list):
             try:
                 return base[idx]
@@ -147,6 +161,7 @@ def compile_expr(comp, expr, depth=0):
         if (
             expr.keywords
             and not builtin_registry.has_callable_builtin(name)
+            and not systems_registry.has_system_constructor(name)
             and not has_library_function(name)
             and name not in comp.local_functions
             and name not in comp.backend_builtins
@@ -156,6 +171,8 @@ def compile_expr(comp, expr, depth=0):
             )
         if builtin_registry.has_callable_builtin(name):
             return builtin_registry.compile_call(comp, expr, depth)
+        if systems_registry.has_system_constructor(name):
+            return systems_registry.compile_call(comp, expr, depth)
         if name in comp.local_functions:
             return local_functions.compile_local_function_call(comp, expr, depth)
         if name in comp.backend_builtins:

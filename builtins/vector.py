@@ -18,6 +18,7 @@ from ..nodes import (
     _is_number_type,
 )
 from ..consteval import _const_eval, _as_float_const
+from ..compile_time import reject_compile_time_object
 
 _FIELD_VECTOR_NAMES = {"rotate2d", "polar", "angle_between", "rotate_around_axis"}
 
@@ -36,7 +37,9 @@ def compile_call(comp, expr, depth=0):
             try:
                 comps.append(_as_float_const(_const_eval(comp_expr, comp.consts), "vector component"))
             except CompileError:
-                comps.append(comp.compile(comp_expr))
+                value = comp.compile(comp_expr)
+                reject_compile_time_object(value, "vector() component")
+                comps.append(value)
         return _combine_xyz_mixed(comp.group, comps, x, y)
 
     if expr.keywords:
@@ -44,6 +47,7 @@ def compile_call(comp, expr, depth=0):
     else:
         args_exprs = list(expr.args)
     args = [comp.compile(arg) for arg in args_exprs]
+    reject_compile_time_object(args, f"{name}() arguments")
     if name in _VECTOR_MATH_FLOAT_OUTPUT:
         expected = 2 if name in {"distance", "dot"} else 1
         if len(args) != expected:

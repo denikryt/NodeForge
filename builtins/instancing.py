@@ -5,6 +5,7 @@ from ..errors import CompileError
 from ..statements import _kw_dict, _check_no_extra_keywords
 from ..consteval import _const_eval
 from ..geometry import _instance_on_points, _realize_instances
+from ..compile_time import reject_compile_time_object
 
 NAMES = {"instance_on_points", "realize_instances"}
 
@@ -22,6 +23,8 @@ def compile_call(comp, expr, depth=0):
             raise CompileError("instance_on_points(instance, points, ...) expects two Geometry arguments")
         instance = comp.compile(expr.args[0])
         points_geo = comp.compile(expr.args[1])
+        reject_compile_time_object(instance, "instance_on_points() instance")
+        reject_compile_time_object(points_geo, "instance_on_points() points")
         if instance.typ != TYPE_GEOMETRY or points_geo.typ != TYPE_GEOMETRY:
             raise CompileError("instance_on_points(instance, points, ...) expects two Geometry arguments")
         scale = _const_or_compile(comp, kws["scale"]) if "scale" in kws else None
@@ -40,6 +43,7 @@ def compile_call(comp, expr, depth=0):
         if len(expr.args) != 1:
             raise CompileError("realize_instances(geo) expects one Geometry")
         geo = comp.compile(expr.args[0])
+        reject_compile_time_object(geo, "realize_instances() geometry")
         return _realize_instances(comp.group, geo, x, y)
 
     raise CompileError(f"Unsupported instancing builtin: {name}")
@@ -50,4 +54,6 @@ def _const_or_compile(comp, expr):
     try:
         return _const_eval(expr, comp.consts)
     except CompileError:
-        return comp.compile(expr)
+        value = comp.compile(expr)
+        reject_compile_time_object(value, "instancing builtin argument")
+        return value

@@ -18,6 +18,7 @@ from .statements import (
     _unique_output_name,
 )
 from .consteval import _const_eval
+from .compile_time import reject_compile_time_object
 from .runtime import (
     _parse_runtime_for,
     _parse_runtime_range_for,
@@ -92,7 +93,12 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
         if isinstance(value, list):
             ctx.auto_final_output = None
         else:
-            ctx.auto_final_output = (target, value)
+            try:
+                reject_compile_time_object(value, "final auto-output")
+            except CompileError:
+                ctx.auto_final_output = None
+            else:
+                ctx.auto_final_output = (target, value)
         return
 
     if isinstance(stmt, ast.AugAssign):
@@ -103,6 +109,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
             raise CompileError(f"Unknown name for augmented assignment: {target}")
         bin_expr = ast.BinOp(left=ast.Name(id=target, ctx=ast.Load()), op=stmt.op, right=stmt.value)
         value = comp.compile(bin_expr)
+        reject_compile_time_object(value, "augmented assignment")
         comp.vars[target] = value
         comp.consts.pop(target, None)
         if isinstance(value, list):
@@ -128,6 +135,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
             if not allow_final_expr:
                 raise CompileError("Only assignments, array append, for/if blocks, store(), set_position() and output() may appear before the final expression")
             value = comp.compile(expr)
+            reject_compile_time_object(value, "final expression")
             if isinstance(value, list):
                 raise CompileError("A final expression cannot be an array; use join(array) or index it")
             ctx.auto_final_output = ("out", value)
@@ -137,6 +145,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
         if isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id == "runtime_range":
             iterations_expr, body = _parse_runtime_range_for(stmt)
             iterations = _compile_iteration_count(ctx, iterations_expr, 240 + idx * 120, -260 - idx * 50)
+            reject_compile_time_object(iterations, "runtime_range iteration count")
             if iterations.typ != TYPE_INT:
                 raise CompileError("runtime_range(n) expects an Int input or integer value")
             results = _repeat_scalar_assignments(group, comp, iterations, body, index_name=stmt.target.id, x=300 + idx * 160, y=-380 - idx * 70)
@@ -182,6 +191,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
         if geom_name not in comp.vars or not isinstance(comp.vars[geom_name], Value) or comp.vars[geom_name].typ != TYPE_GEOMETRY:
             raise CompileError("runtime for requires an existing Geometry variable, e.g. geo = cube(1)")
         iterations = _compile_iteration_count(ctx, iterations_expr, 240 + idx * 120, -260 - idx * 50)
+        reject_compile_time_object(iterations, "runtime loop iteration count")
         if iterations.typ != TYPE_INT:
             raise CompileError("range(steps) expects an Int input or integer constant")
         geo = comp.vars[geom_name]
@@ -202,6 +212,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
             raise CompileError("runtime if currently requires an else branch")
 
         cond = comp.compile(stmt.test)
+        reject_compile_time_object(cond, "runtime if condition")
         base_vars = dict(comp.vars)
         saved_auto = ctx.auto_final_output
 
@@ -232,6 +243,8 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
             false_val = false_vars[target]
             if isinstance(true_val, list) or isinstance(false_val, list):
                 raise CompileError("runtime if cannot assign arrays")
+            reject_compile_time_object(true_val, "runtime if branch merge")
+            reject_compile_time_object(false_val, "runtime if branch merge")
             if not isinstance(true_val, Value) or not isinstance(false_val, Value):
                 raise CompileError("runtime if branches must assign node values")
             if true_val.typ != false_val.typ:
@@ -253,6 +266,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
         _check_no_extra_keywords(kws, {"selection", "domain", "type"})
         attr_name = _literal_string(call.args[0], "store() attribute name")
         value = comp.compile(call.args[1])
+        reject_compile_time_object(value, "store() value")
         if isinstance(value, list):
             raise CompileError("store() value cannot be an array")
         selection = _selection_kw(comp, kws)
@@ -270,6 +284,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
         kws = _kw_dict(call)
         _check_no_extra_keywords(kws, {"selection"})
         pos = comp.compile(call.args[0])
+        reject_compile_time_object(pos, "set_position() position")
         selection = _selection_kw(comp, kws)
         ctx.geometry_socket = _set_position_node(group, ctx.geometry_socket, pos, selection, 520 + idx * 130, -40 - idx * 60)
         ctx.auto_final_output = None
@@ -297,6 +312,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
         else:
             raise CompileError('output(value), output("Name", value), or output(name="Name", value=value) expected')
         value = comp.compile(value_expr)
+        reject_compile_time_object(value, "output() value")
         if isinstance(value, list):
             raise CompileError("output() cannot output an array directly; use join(array) or index it")
         ctx.explicit_outputs.append((out_name, value))

@@ -4,6 +4,7 @@ from .constants import *
 from .errors import CompileError
 from .nodes import _new_node
 from .parsing import _literal_string
+from .compile_time import reject_compile_time_object
 
 _ALLOWED_STORE_TYPES = {
     "FLOAT": "FLOAT",
@@ -50,6 +51,7 @@ def _selection_kw(comp, kws, default=None):
     if "selection" not in kws:
         return default
     selection = comp.compile(kws["selection"])
+    reject_compile_time_object(selection, "selection= expression")
     if selection.typ != TYPE_BOOL:
         raise CompileError("selection= must be a Bool expression")
     return selection

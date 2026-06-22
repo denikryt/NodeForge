@@ -20,6 +20,9 @@ Key files:
 | `nodes.py` | Low-level node creation and socket wiring. |
 | `geometry.py` | Reusable helpers that build Geometry Nodes structures. |
 | `values.py` | Typed socket values passed through the compiler. |
+| `compile_time.py` | Base protocol and guards for compile-time-only compiler objects. |
+| `systems/registry.py` | Embedded subsystem constructor dispatch and reserved-name policy. |
+| `systems/lsystem/` | L-system constructors, validation, expansion, analysis, turtle interpretation, and Stage 1 backend. |
 | `interface.py` | Node group input/output sockets and defaults. |
 | `library.py` | Function discovery, function-group materialization, and group-node calls. |
 
@@ -93,8 +96,29 @@ Keep reusable operations in `builtins/`. Keep algorithm scripts in `source.nf` w
 When compiling a call expression, NodeForge resolves it in this order:
 
 1. global callable built-ins from `builtins/registry.py`
-2. local DSL functions in the current source
-3. package-local backend helpers from the current function package
-4. library functions from `functions/`
+2. embedded system constructors from `systems/registry.py`
+3. local DSL functions in the current source
+4. package-local backend helpers from the current function package
+5. library functions from `functions/`
 
 Global built-ins define the shared DSL vocabulary. Package-local helpers extend one function package without changing global semantics.
+
+
+## Embedded systems
+
+Embedded systems add subsystem-specific constructor syntax without creating a second compiler or UI mode. Stage 1 includes the L-system subsystem under `systems/lsystem/` and exposes these reserved constructor names:
+
+```text
+ls_system
+ls_axiom
+ls_rule
+ls_iterations
+ls_angle
+ls_step
+```
+
+The constructor names are excluded from implicit input discovery and cannot be reused by local functions, package-local backend helpers, or function-library entries. Existing ordinary built-ins keep priority over system constructors.
+
+System constructors can return compile-time-only objects. These objects may be assigned and later consumed by their subsystem, but shared runtime consumers reject them before node socket/type handling. The generic `CompileTimeObject` base also fails closed on accidental `.typ` or `.socket` access so leaked compile-time objects raise `CompileError` instead of Python attribute errors.
+
+Stage 1 L-systems use a bounded per-segment Curve Line backend. The backend creates only nodes in the active node group. It does not create generated Blender datablocks, persistent ownership metadata, restart cleanup state, or unregister cleanup hooks.

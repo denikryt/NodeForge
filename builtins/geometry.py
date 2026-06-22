@@ -6,6 +6,7 @@ from ..errors import CompileError
 from ..statements import _kw_dict, _check_no_extra_keywords, _selection_kw, _optional_string_kw
 from ..consteval import _const_eval
 from ..parsing import _literal_string
+from ..compile_time import reject_compile_time_object
 from ..geometry import (
     _points_geometry,
     _set_position_geometry,
@@ -37,6 +38,7 @@ def compile_call(comp, expr, depth=0):
             count = _const_eval(expr.args[0], comp.consts)
         except CompileError:
             count = comp.compile(expr.args[0])
+            reject_compile_time_object(count, "points() count")
         return _points_geometry(comp.group, count, x, y)
 
     if name == "grid":
@@ -67,6 +69,9 @@ def compile_call(comp, expr, depth=0):
         geo = comp.compile(expr.args[0])
         pos = comp.compile(expr.args[1])
         selection = comp.compile(kws["selection"]) if "selection" in kws else None
+        reject_compile_time_object(geo, "set_position() geometry")
+        reject_compile_time_object(pos, "set_position() position")
+        reject_compile_time_object(selection, "set_position() selection")
         return _set_position_geometry(comp.group, geo, pos, selection, x, y)
 
     if name == "store_named_attribute":
@@ -76,6 +81,8 @@ def compile_call(comp, expr, depth=0):
         geo = comp.compile(expr.args[0])
         attr_name = _literal_string(expr.args[1], "store_named_attribute() name")
         value = comp.compile(expr.args[2])
+        reject_compile_time_object(geo, "store_named_attribute() geometry")
+        reject_compile_time_object(value, "store_named_attribute() value")
         if isinstance(value, list):
             raise CompileError("store_named_attribute() value cannot be an array")
         selection = _selection_kw(comp, kws)
@@ -89,6 +96,7 @@ def compile_call(comp, expr, depth=0):
         if len(expr.args) != 2:
             raise CompileError('set_material(geometry, "MaterialName") expects Geometry and a compile-time material name')
         geo = comp.compile(expr.args[0])
+        reject_compile_time_object(geo, "set_material() geometry")
         material_name = _literal_string(expr.args[1], "set_material() material name")
         return _set_material_geometry(comp.group, geo, material_name, x, y)
 
@@ -111,9 +119,11 @@ def compile_call(comp, expr, depth=0):
         geos = []
         if len(expr.args) == 1 and isinstance(expr.args[0], (ast.List, ast.Tuple)):
             geos = [comp.compile(arg) for arg in expr.args[0].elts]
+            reject_compile_time_object(geos, "join() arguments")
         else:
             for arg in expr.args:
                 val = comp.compile(arg)
+                reject_compile_time_object(val, "join() argument")
                 if isinstance(val, list):
                     geos.extend(val)
                 else:
@@ -127,6 +137,7 @@ def compile_call(comp, expr, depth=0):
         if not expr.args or len(expr.args) > 3:
             raise CompileError("transform(geo, translation=..., scale=..., rotation=...) expects Geometry")
         geo = comp.compile(expr.args[0])
+        reject_compile_time_object(geo, "transform() geometry")
         if geo.typ != TYPE_GEOMETRY:
             raise CompileError("transform() first argument must be Geometry")
         translation_expr = kws.get("translation", expr.args[1] if len(expr.args) > 1 else None)
@@ -153,4 +164,6 @@ def _const_or_compile(comp, expr):
     try:
         return _const_eval(expr, comp.consts)
     except CompileError:
-        return comp.compile(expr)
+        value = comp.compile(expr)
+        reject_compile_time_object(value, "geometry builtin argument")
+        return value

@@ -2,6 +2,7 @@
 
 from .errors import CompileError
 from .nodes import _new_node
+from .compile_time import reject_compile_time_object
 from .library import (
     has_native_compile_call,
     compile_module_library_function_call,
@@ -35,6 +36,7 @@ def compile_library_function_call(comp, expr, depth=0):
         socket_name = input_names[idx]
         value, is_dynamic = comp._const_or_compile_arg(arg_expr, depth + 1)
         if is_dynamic:
+            reject_compile_time_object(value, "function-library argument")
             compiled_args[socket_name] = value
         else:
             const_args[socket_name] = value
@@ -52,6 +54,7 @@ def compile_library_function_call(comp, expr, depth=0):
         socket_name = normalized_inputs[key]
         value, is_dynamic = comp._const_or_compile_arg(kw.value, depth + 1)
         if is_dynamic:
+            reject_compile_time_object(value, "function-library argument")
             compiled_args[socket_name] = value
         else:
             const_args[socket_name] = value

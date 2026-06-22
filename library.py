@@ -15,6 +15,7 @@ from .errors import CompileError
 from .interface import _set_socket_default
 from .nodes import _new_node
 from .values import Value
+from .systems import registry as systems_registry
 
 _LIBRARY_DIR_NAME = "functions"
 _SOURCE_EXTENSIONS = (".nf", ".nodeforge")
@@ -182,6 +183,18 @@ def compile_module_library_function_call(comp, expr, depth=0):
     return compile_call(comp, expr, depth)
 
 
+def _validate_library_function_name(name: str) -> None:
+    """Reject function-library names reserved for embedded system constructors."""
+    systems_registry.validate_no_reserved_collision(name, "Library function")
+
+
+def _validate_library_function_names(names: set[str]) -> set[str]:
+    """Reject discovered function-library names reserved for system constructors."""
+    for name in sorted(names, key=str.lower):
+        _validate_library_function_name(name)
+    return names
+
+
 def library_function_names() -> set[str]:
     """Return all callable function names from the functions folder."""
     root = _library_dir()
@@ -197,16 +210,18 @@ def library_function_names() -> set[str]:
         elif path.is_dir() and _is_valid_function_name(path.name):
             if _source_path_for_name(path.name) is not None or _module_path_for_name(path.name) is not None:
                 names.add(path.name)
-    return names
+    return _validate_library_function_names(names)
 
 
 def has_library_function(name: str) -> bool:
     """Return True if a script source or native helper exists for the function."""
+    _validate_library_function_name(name)
     return _source_path_for_name(name) is not None or _module_path_for_name(name) is not None
 
 
 def load_library_source(name: str) -> str:
     """Load editable NodeForge source code for a library function."""
+    _validate_library_function_name(name)
     path = _source_path_for_name(name)
     if path is None:
         raise CompileError(f"Library function {name!r} has no editable .nf source")
@@ -249,6 +264,7 @@ def _output_sockets(node):
 
 def get_or_create_library_group(name: str, compile_group_callback):
     """Compile/update the node group that backs an editable .nf library function."""
+    _validate_library_function_name(name)
     source = load_library_source(name)
     backend_builtins = backend_builtins_for_function(name)
     module_path = _module_path_for_name(name)
@@ -319,6 +335,7 @@ def materialize_library_function_group(name: str, compile_group_callback):
     still stored on the generated group when source.nf exists, so Load Script can
     return a useful user-facing script instead of native Python implementation text.
     """
+    _validate_library_function_name(name)
     if _module_path_for_name(name) is not None:
         module = _load_function_module(name)
         materialize = getattr(module, "materialize_group", None)

@@ -129,6 +129,7 @@ Helper implementation guidelines:
 
 - Validate argument count and keywords.
 - Compile DSL arguments through `comp.compile(...)`.
+- Reject compile-time-only objects after dynamic argument compilation and before reading `.typ` or `.socket`. Use `reject_compile_time_object(value, "context")` from `compile_time.py`.
 - Return a `Value` object or an existing helper result that returns one.
 - Raise `CompileError` for user-facing errors.
 - Keep helper names specific to the package when the behavior is package-specific.
@@ -143,7 +144,7 @@ def compile_call(comp, expr, depth=0):
     ...
 ```
 
-Use this when a function needs direct data-block generation, static level baking, or a specialized node group that would be verbose or expensive in DSL.
+Use this when a function needs direct data-block generation, static level baking, or a specialized node group that would be verbose or expensive in DSL. Native `compile_call(...)` implementations receive raw AST and must guard any dynamically compiled arguments with `reject_compile_time_object(...)` before reading `.typ` or `.socket`.
 
 ## Testing a function
 

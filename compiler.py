@@ -27,6 +27,8 @@ from .interface import _set_socket_default, _set_interface_socket_default, _reco
 from .update import _apply_group_defaults_to_node, _capture_node_external_state, _restore_node_external_state
 from .library import library_function_names, materialize_library_function_group
 from .statements import _unique_output_name
+from .compile_time import reject_compile_time_object
+from .systems import registry as systems_registry
 from . import expression_compiler
 from .statement_compiler import GroupBuildContext, compile_statements
 
@@ -120,17 +122,27 @@ def _make_group(source: str, name: str = "NodeForge Group", existing_group=None,
     raw_stmts = _parse_source(source)
 
     local_function_defs = dict(local_functions or {})
+    for existing_local_name in local_function_defs:
+        systems_registry.validate_no_reserved_collision(existing_local_name, "Local function")
     body_stmts = []
     for stmt in raw_stmts:
         if isinstance(stmt, ast.FunctionDef):
+            systems_registry.validate_no_reserved_collision(stmt.name, "Local function")
             if stmt.name in local_function_defs:
                 raise CompileError(f"Duplicate local function: {stmt.name}")
             local_function_defs[stmt.name] = stmt
         else:
             body_stmts.append(stmt)
 
+    backend_names = set(backend_builtins or {})
+    for helper_name in backend_names:
+        systems_registry.validate_no_reserved_collision(helper_name, "Local backend helper")
+    library_names = library_function_names()
+    for library_name in library_names:
+        systems_registry.validate_no_reserved_collision(library_name, "Library function")
+
     stmts, consts = _preprocess_compile_time(body_stmts)
-    callable_names = library_function_names() | set(local_function_defs) | set(backend_builtins or {})
+    callable_names = library_names | set(local_function_defs) | backend_names | systems_registry.NAMES
     input_names = sorted(set(_collect_inputs(stmts, extra_builtin_names=callable_names)) - set(consts.keys()))
     input_types = _infer_input_types(stmts)
     if existing_group is not None:
@@ -205,6 +217,7 @@ def _make_group(source: str, name: str = "NodeForge Group", existing_group=None,
     for output_name, result in outputs:
         if isinstance(result, list):
             raise CompileError("Cannot output an array directly; use join(array) or index it")
+        reject_compile_time_object(result, "final output")
         final_name = _unique_output_name(used_interface_names, output_name)
         group.interface.new_socket(name=final_name, in_out="OUTPUT", socket_type=_socket_type_for(result.typ))
         group.links.new(result.socket, group_output.inputs[final_name])

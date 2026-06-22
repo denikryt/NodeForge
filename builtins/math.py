@@ -28,6 +28,7 @@ from ..nodes import (
 from ..statements import _kw_dict, _check_no_extra_keywords
 from ..consteval import _const_eval
 from ..values import Value
+from ..compile_time import reject_compile_time_object
 
 
 
@@ -116,6 +117,7 @@ def compile_call(comp, expr, depth=0):
     else:
         args_exprs = list(expr.args)
     args = [comp.compile(arg) for arg in args_exprs]
+    reject_compile_time_object(args, f"{name}() arguments")
     return spec.compile_fn(comp.group, args, x, y)
 
 
@@ -248,6 +250,7 @@ def _compile_noise(comp, expr, x, y):
             raise CompileError("noise(..., normalize=...) must be a compile-time bool") from exc
 
     vector = comp.compile(expr.args[0]) if expr.args else _position(comp.group, x + 20, y - 80)
+    reject_compile_time_object(vector, "noise() vector")
     if vector.typ != TYPE_VECTOR:
         raise CompileError("noise(vector, ...) expects a Vector input")
     comp.group.links.new(vector.socket, node.inputs[0])
@@ -276,6 +279,9 @@ def _compile_random_value(comp, expr, x, y):
     min_val = comp.compile(expr.args[0]) if len(expr.args) == 2 else _value(comp.group, 0.0, x + 20, y - 80)
     max_val = comp.compile(expr.args[1]) if len(expr.args) == 2 else _value(comp.group, 1.0, x + 20, y - 120)
 
+    reject_compile_time_object(min_val, "random_value() min")
+    reject_compile_time_object(max_val, "random_value() max")
+
     if min_val.typ == TYPE_VECTOR and max_val.typ == TYPE_VECTOR:
         data_type = "FLOAT_VECTOR"
         out_type = TYPE_VECTOR
@@ -292,11 +298,13 @@ def _compile_random_value(comp, expr, x, y):
 
     if "id" in kws:
         id_val = comp.compile(kws["id"])
+        reject_compile_time_object(id_val, "random_value() id")
         if id_val.typ != TYPE_INT:
             raise CompileError("random_value(..., id=...) expects Int")
         comp.group.links.new(id_val.socket, node.inputs[2])
     if "seed" in kws:
         seed_val = comp.compile(kws["seed"])
+        reject_compile_time_object(seed_val, "random_value() seed")
         if seed_val.typ != TYPE_INT:
             # Compile-time numeric seed defaults are common; set the socket default instead.
             try:
@@ -317,6 +325,7 @@ def _wire_or_default_numeric(comp, socket, expr, label):
     except CompileError:
         pass
     value = comp.compile(expr)
+    reject_compile_time_object(value, label)
     if not _is_number_type(value.typ):
         raise CompileError(f"{label} expects numeric input")
     comp.group.links.new(value.socket, socket)

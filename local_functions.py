@@ -8,6 +8,7 @@ from .constants import *
 from .errors import CompileError
 from .library import make_library_call_node
 from .consteval import _is_const_vector
+from .compile_time import reject_compile_time_object
 
 
 def value_type_for_const(value):
@@ -87,6 +88,7 @@ def compile_local_function_call(comp, expr, depth=0):
         param = params[idx]
         value, is_dynamic = comp._const_or_compile_arg(arg_expr, depth + 1)
         if is_dynamic:
+            reject_compile_time_object(value, "script-local function argument")
             if isinstance(value, list):
                 raise CompileError("Local function arguments cannot be arrays")
             compiled_args[param] = value
@@ -105,6 +107,7 @@ def compile_local_function_call(comp, expr, depth=0):
             raise CompileError(f"{name}() got multiple values for argument {kw.arg!r}")
         value, is_dynamic = comp._const_or_compile_arg(kw.value, depth + 1)
         if is_dynamic:
+            reject_compile_time_object(value, "script-local function argument")
             if isinstance(value, list):
                 raise CompileError("Local function arguments cannot be arrays")
             compiled_args[kw.arg] = value

@@ -13,6 +13,7 @@ import ast
 import bpy
 
 from ...constants import TYPE_GEOMETRY
+from ...compile_time import reject_compile_time_object
 from ...errors import CompileError
 from ...geometry import _set_material_geometry
 from ...parsing import _literal_string
@@ -78,6 +79,7 @@ def compile_apply_mandelbrot_material(comp, expr: ast.Call, depth=0):
     if len(expr.args) != 2:
         raise CompileError('apply_mandelbrot_material(geometry, "attribute_name") expects Geometry and a string')
     geo = comp.compile(expr.args[0])
+    reject_compile_time_object(geo, "package-local backend helper argument")
     if geo.typ != TYPE_GEOMETRY:
         raise CompileError("apply_mandelbrot_material() first argument must be Geometry")
     attribute_name = _literal_string(expr.args[1], "apply_mandelbrot_material() attribute name")

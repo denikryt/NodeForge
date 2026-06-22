@@ -4,6 +4,7 @@ import ast
 from .constants import *
 from .errors import CompileError
 from .values import Value
+from .compile_time import reject_compile_time_object
 from .nodes import _new_node, _socket_type_for, _switch
 
 
@@ -83,6 +84,8 @@ def _remove_default_repeat_items(repeat_output):
 
 def _repeat_geometry_assignment(group, comp, geom_name, start_geo, iterations, body_expr, x=0, y=0):
     """Compile legacy geometry assignment loop into a Repeat Zone."""
+    reject_compile_time_object(start_geo, "runtime for geometry state")
+    reject_compile_time_object(iterations, "runtime for iteration count")
     if start_geo.typ != TYPE_GEOMETRY:
         raise CompileError("runtime for input must be Geometry")
     ri = _new_node(group, "GeometryNodeRepeatInput", x, y)
@@ -100,6 +103,7 @@ def _repeat_geometry_assignment(group, comp, geom_name, start_geo, iterations, b
             comp.vars.pop(geom_name, None)
         else:
             comp.vars[geom_name] = old
+    reject_compile_time_object(body, "runtime for body result")
     if body.typ != TYPE_GEOMETRY:
         raise CompileError("runtime for body must assign Geometry")
     group.links.new(body.socket, ro.inputs[0])
@@ -139,6 +143,7 @@ def _repeat_scalar_assignments(group, comp, iterations, body_stmts, index_name=N
     else conditionally updates state variables and preserves their previous values
     when the condition is false.
     """
+    reject_compile_time_object(iterations, "runtime_range iteration count")
     if iterations.typ != TYPE_INT:
         raise CompileError("runtime_range(n) expects an Int value")
 
@@ -151,6 +156,7 @@ def _repeat_scalar_assignments(group, comp, iterations, body_stmts, index_name=N
         raise CompileError("runtime_range loop must update at least one existing variable")
 
     for name in state_names:
+        reject_compile_time_object(comp.vars[name], "runtime_range state")
         if comp.vars[name].typ == TYPE_GEOMETRY:
             raise CompileError("runtime_range is for scalar/vector state; use for i in range(...) for Geometry")
 
@@ -181,6 +187,7 @@ def _repeat_scalar_assignments(group, comp, iterations, body_stmts, index_name=N
         """Compile a runtime_range assignment and update the current variable frame."""
         target = sub.targets[0].id
         val = comp.compile(sub.value)
+        reject_compile_time_object(val, "runtime_range assignment")
         if isinstance(val, list):
             raise CompileError("runtime_range assignments cannot assign arrays")
         if target in state_set and not compatible_state_type(target, val):
@@ -190,6 +197,7 @@ def _repeat_scalar_assignments(group, comp, iterations, body_stmts, index_name=N
     def compile_if(sub, depth=0):
         """Compile a runtime if block and merge changed state with Switch nodes."""
         cond = comp.compile(sub.test)
+        reject_compile_time_object(cond, "runtime_range if condition")
         if cond.typ != TYPE_BOOL:
             raise CompileError("runtime_range if condition must be Bool")
         base_vars = dict(comp.vars)
@@ -214,6 +222,8 @@ def _repeat_scalar_assignments(group, comp, iterations, body_stmts, index_name=N
         for name in changed:
             true_val = true_vars.get(name, base_vars[name])
             false_val = false_vars.get(name, base_vars[name])
+            reject_compile_time_object(true_val, "runtime_range if branch merge")
+            reject_compile_time_object(false_val, "runtime_range if branch merge")
             if not isinstance(true_val, Value) or not isinstance(false_val, Value):
                 raise CompileError("runtime_range if can only merge node state values")
             if true_val.typ != false_val.typ:
@@ -249,6 +259,7 @@ def _repeat_scalar_assignments(group, comp, iterations, body_stmts, index_name=N
             val = comp.vars.get(name)
             if val is None:
                 raise CompileError(f"runtime_range state {name!r} was not assigned")
+            reject_compile_time_object(val, "runtime_range state output")
             if not compatible_state_type(name, val):
                 raise CompileError(f"runtime_range state {name!r} changed type from {old_vars[name].typ} to {val.typ}")
             group.links.new(val.socket, _socket_by_name(ro.inputs, name))

@@ -22,7 +22,7 @@ output("Geometry", geo)
 
 Built-ins are the primitive operations of the DSL. They live in `builtins/` and are registered through `builtins/registry.py`.
 
-Built-ins cover input sockets, scalar math, vector math, field inputs, geometry primitives, attributes, materials, instancing, and runtime loops. They form the compiler-level vocabulary used by scripts and library functions.
+Built-ins cover input sockets, scalar math, vector math, field inputs, geometry primitives, attributes, materials, instancing, and runtime loops. They form the compiler-level vocabulary used by scripts and library functions. Embedded system constructors such as `ls_system(...)` are resolved through `systems/registry.py` and return normal geometry while keeping subsystem-specific constructor objects out of ordinary runtime value paths.
 
 ### Function library
 
@@ -59,9 +59,11 @@ NodeForge/
 ├── geometry.py              # Low-level Geometry Nodes construction helpers
 ├── nodes.py                 # Node creation and link utilities
 ├── values.py                # Typed socket wrappers
+├── compile_time.py          # Compile-time-only object guards
 ├── interface.py             # Node group interface sockets and defaults
 ├── library.py               # Function discovery, compilation, calls
 ├── builtins/                # DSL primitive registry and category modules
+├── systems/                 # Embedded subsystems such as L-systems
 ├── functions/               # Reusable NodeForge functions
 └── docs/                    # Architecture and authoring documentation
 ```
