@@ -3,9 +3,10 @@
 from ...compile_time import reject_compile_time_object
 from ...errors import CompileError
 from .analysis import analyze
-from .backends import limited_segment_node_backend, select_backend_category, static_baked_backend, validate_stage1_backend_available
+from .backends import branch_free_vectorized_runtime_backend, limited_segment_node_backend, select_backend_category, static_baked_backend, validate_stage1_backend_available
 from .expander import expand
 from .model import LSystemAngle, LSystemAxiom, LSystemIterations, LSystemPart, LSystemRule, LSystemSpec, LSystemStep
+from .runtime_tables import build_branch_free_command_table
 from .turtle import interpret, interpret_static
 
 
@@ -68,6 +69,16 @@ def compile_lsystem(comp, expr, depth=0):
     if category == "static":
         segments = interpret_static(stream, angle_degrees=spec.angle, step=spec.step)
         return static_baked_backend(comp, segments, x=depth * 240 + 260, y=-depth * 120)
+    if category == "branch_free_runtime":
+        table = build_branch_free_command_table(stream)
+        return branch_free_vectorized_runtime_backend(
+            comp,
+            table,
+            angle_degrees=spec.angle,
+            step=spec.step,
+            x=depth * 240 + 260,
+            y=-depth * 120,
+        )
     validate_stage1_backend_available(metrics, category)
     segments = interpret(comp.group, stream, angle_degrees=spec.angle, step=spec.step, x=depth * 240, y=-depth * 120 - 200)
     return limited_segment_node_backend(comp, segments, x=depth * 240 + 260, y=-depth * 120)

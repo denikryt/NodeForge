@@ -13,6 +13,8 @@ GROUP_MANIFEST_PROP = "nodeforge_generated_resources_v1"
 ID_METADATA_PROP = "nodeforge_generated_id_v1"
 SCHEMA_VERSION = 1
 _TEST_FAIL_AFTER_OBJECT_CREATE = False
+_TEST_FAIL_AFTER_MESH_CREATE = False
+_TEST_FAIL_AFTER_MESH_ATTRIBUTE_WRITE = False
 _CLEANUP_WARNINGS: list[str] = []
 
 
@@ -42,6 +44,8 @@ def _record_cleanup_warning(message: str) -> None:
 def _id_collection(kind: str):
     if kind == "CURVE":
         return bpy.data.curves
+    if kind == "MESH":
+        return bpy.data.meshes
     if kind == "OBJECT":
         return bpy.data.objects
     return None
@@ -54,11 +58,18 @@ def _kind_for_id(id_obj) -> str | None:
         ident = getattr(id_obj.bl_rna, "identifier", "")
         if ident == "Curve":
             return "CURVE"
+        if ident == "Mesh":
+            return "MESH"
         if ident == "Object":
             return "OBJECT"
     try:
         if bpy.data.curves.get(id_obj.name) is id_obj:
             return "CURVE"
+    except Exception:
+        pass
+    try:
+        if bpy.data.meshes.get(id_obj.name) is id_obj:
+            return "MESH"
     except Exception:
         pass
     try:
@@ -97,7 +108,7 @@ class GeneratedResourceRef:
         owner = data.get("owner_group_uuid")
         generation = data.get("generation_uuid")
         role = data.get("role", "")
-        if kind not in {"CURVE", "OBJECT"} or not isinstance(name, str) or not isinstance(owner, str) or not isinstance(generation, str):
+        if kind not in {"CURVE", "MESH", "OBJECT"} or not isinstance(name, str) or not isinstance(owner, str) or not isinstance(generation, str):
             return None
         return cls(kind=kind, name=name, owner_group_uuid=owner, generation_uuid=generation, role=str(role))
 
@@ -261,8 +272,8 @@ def delete_generated_ref(ref: GeneratedResourceRef) -> bool:
     return delete_generated_id_object(id_obj, expected_owner_group_uuid=ref.owner_group_uuid)
 
 
-def _curve_object_users(curve) -> list:
-    """Return live Blender Objects that currently use *curve* as their data-block."""
+def _data_block_object_users(data_block) -> list:
+    """Return live Blender Objects that currently use *data_block* as their data-block."""
     users = []
     try:
         objects = list(bpy.data.objects)
@@ -270,7 +281,7 @@ def _curve_object_users(curve) -> list:
         return users
     for obj in objects:
         try:
-            if getattr(obj, "data", None) is curve:
+            if getattr(obj, "data", None) is data_block:
                 users.append(obj)
         except ReferenceError:
             continue
@@ -284,8 +295,8 @@ def _has_matching_generated_object_metadata(obj, owner_group_uuid: str) -> bool:
     return meta is not None and meta.kind == "OBJECT" and meta.owner_group_uuid == owner_group_uuid
 
 
-def _curve_has_non_owned_object_users(curve, owner_group_uuid: str) -> bool:
-    for obj in _curve_object_users(curve):
+def _data_block_has_non_owned_object_users(data_block, owner_group_uuid: str) -> bool:
+    for obj in _data_block_object_users(data_block):
         if not _has_matching_generated_object_metadata(obj, owner_group_uuid):
             return True
     return False
@@ -308,12 +319,20 @@ def delete_generated_id_object(id_obj, *, expected_owner_group_uuid: str | None 
             # current users are NodeForge-owned; fail closed rather than unlinking
             # user Objects from their data-block.  Cleanup paths delete generated
             # Objects first, then re-enter this branch for the Curve.
-            if _curve_has_non_owned_object_users(id_obj, meta.owner_group_uuid):
+            if _data_block_has_non_owned_object_users(id_obj, meta.owner_group_uuid):
                 _record_cleanup_warning(
                     f"Skipped generated Curve deletion because non-owned Object users remain: {getattr(id_obj, 'name', '<unknown>')}"
                 )
                 return False
             bpy.data.curves.remove(id_obj, do_unlink=True)
+            return True
+        if kind == "MESH":
+            if _data_block_has_non_owned_object_users(id_obj, meta.owner_group_uuid):
+                _record_cleanup_warning(
+                    f"Skipped generated Mesh deletion because non-owned Object users remain: {getattr(id_obj, 'name', '<unknown>')}"
+                )
+                return False
+            bpy.data.meshes.remove(id_obj, do_unlink=True)
             return True
     except ReferenceError:
         return False
@@ -326,12 +345,16 @@ def cleanup_previous_after_commit(old_manifest, new_manifest) -> None:
     """Delete old verified resources that are absent from the committed new manifest."""
     old_refs = manifest_resources(old_manifest)
     new_keys = {(r.kind, r.name, r.owner_group_uuid, r.generation_uuid) for r in manifest_resources(new_manifest)}
-    # Delete objects before curves so object users release curve data first.
-    old_refs.sort(key=lambda r: 0 if r.kind == "OBJECT" else 1)
+    # Delete objects before data-blocks so object users release Curve/Mesh data first.
+    old_refs.sort(key=_resource_delete_order)
     for ref in old_refs:
         key = (ref.kind, ref.name, ref.owner_group_uuid, ref.generation_uuid)
         if key not in new_keys:
             delete_generated_ref(ref)
+
+
+def _resource_delete_order(ref: GeneratedResourceRef) -> int:
+    return 0 if ref.kind == "OBJECT" else 1
 
 
 def live_manifest_resource_keys() -> set[tuple[str, str, str, str]]:
@@ -351,6 +374,7 @@ def _can_access_blender_id_collections() -> bool:
         getattr(bpy.data, "node_groups")
         getattr(bpy.data, "objects")
         getattr(bpy.data, "curves")
+        getattr(bpy.data, "meshes")
     except Exception:
         return False
     return True
@@ -386,8 +410,12 @@ def cleanup_restart_orphans() -> None:
         ref = read_id_metadata(curve)
         if ref is not None:
             refs.append((curve, ref))
+    for mesh in list(bpy.data.meshes):
+        ref = read_id_metadata(mesh)
+        if ref is not None:
+            refs.append((mesh, ref))
     # Objects first.
-    refs.sort(key=lambda pair: 0 if pair[1].kind == "OBJECT" else 1)
+    refs.sort(key=lambda pair: _resource_delete_order(pair[1]))
     for id_obj, ref in refs:
         key = (ref.kind, ref.name, ref.owner_group_uuid, ref.generation_uuid)
         if key not in live:
@@ -400,7 +428,7 @@ def cleanup_live_group_resources() -> None:
         if getattr(group, "bl_idname", None) != "GeometryNodeTree":
             continue
         manifest = read_group_manifest(group)
-        for ref in sorted(manifest_resources(manifest), key=lambda r: 0 if r.kind == "OBJECT" else 1):
+        for ref in sorted(manifest_resources(manifest), key=_resource_delete_order):
             delete_generated_ref(ref)
         if manifest is not None:
             write_empty_manifest(group, manifest["owner_group_uuid"])
@@ -458,10 +486,88 @@ def create_curve_object_from_segments(transaction: GeneratedResourceTransaction,
     return curve, obj
 
 
+
+def _safe_name_hint(name_hint: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in (name_hint or "NodeForge"))[:48]
+
+
+def _hide_generated_object(obj) -> None:
+    obj.hide_viewport = True
+    obj.hide_render = True
+    try:
+        obj.hide_select = True
+    except Exception:
+        pass
+    try:
+        obj.use_fake_user = False
+    except Exception:
+        pass
+
+
+def _link_object_to_context_collection(obj) -> None:
+    try:
+        scene = getattr(bpy.context, "scene", None)
+        collection = getattr(scene, "collection", None) or getattr(bpy.context, "collection", None)
+        if collection is not None:
+            collection.objects.link(obj)
+    except Exception:
+        pass
+
+
+def _write_attribute_values(attribute, values) -> None:
+    data = attribute.data
+    if len(data) != len(values):
+        raise RuntimeError(f"Generated attribute {attribute.name} length mismatch")
+    try:
+        data.foreach_set("value", values)
+        return
+    except Exception:
+        pass
+    for item, value in zip(data, values):
+        item.value = value
+
+
+def create_command_mesh_object_from_table(transaction: GeneratedResourceTransaction, table, *, name_hint: str):
+    """Create generated Mesh/Object command data for branch-free runtime L-systems."""
+    safe_hint = _safe_name_hint(name_hint)
+    base = f"NodeForge.{safe_hint}.{transaction.owner_group_uuid[:8]}.{transaction.generation_uuid[:8]}"
+    mesh = bpy.data.meshes.new(base + ".CommandMesh")
+    transaction.add(mesh, "MESH", "branch_free_runtime_command_mesh")
+    global _TEST_FAIL_AFTER_MESH_CREATE, _TEST_FAIL_AFTER_MESH_ATTRIBUTE_WRITE, _TEST_FAIL_AFTER_OBJECT_CREATE
+    if _TEST_FAIL_AFTER_MESH_CREATE:
+        _TEST_FAIL_AFTER_MESH_CREATE = False
+        transaction.rollback()
+        raise RuntimeError("Injected NodeForge generated-mesh failure")
+    try:
+        mesh.from_pydata(list(table.vertices), list(table.edges), [])
+        mesh.update()
+        move_attr = mesh.attributes.new("nf_lsys_move_mask", "FLOAT", "POINT")
+        heading_attr = mesh.attributes.new("nf_lsys_heading_index", "FLOAT", "POINT")
+        draw_attr = mesh.attributes.new("nf_lsys_draw_mask", "BOOLEAN", "EDGE")
+        _write_attribute_values(move_attr, table.move_mask)
+        _write_attribute_values(heading_attr, table.heading_index)
+        _write_attribute_values(draw_attr, table.draw_mask)
+        if _TEST_FAIL_AFTER_MESH_ATTRIBUTE_WRITE:
+            _TEST_FAIL_AFTER_MESH_ATTRIBUTE_WRITE = False
+            raise RuntimeError("Injected NodeForge command-mesh attribute failure")
+        mesh.update()
+    except Exception:
+        transaction.rollback()
+        raise
+    obj = bpy.data.objects.new(base + ".CommandObject", mesh)
+    transaction.add(obj, "OBJECT", "branch_free_runtime_command_object")
+    if _TEST_FAIL_AFTER_OBJECT_CREATE:
+        _TEST_FAIL_AFTER_OBJECT_CREATE = False
+        transaction.rollback()
+        raise RuntimeError("Injected NodeForge generated-object failure")
+    _link_object_to_context_collection(obj)
+    _hide_generated_object(obj)
+    return mesh, obj
 __all__ = [
     "GROUP_MANIFEST_PROP", "ID_METADATA_PROP", "SCHEMA_VERSION",
     "GeneratedResourceRef", "GeneratedResourceTransaction", "create_transaction",
     "read_group_manifest", "write_group_manifest", "write_empty_manifest", "clear_group_manifest",
     "manifest_resources", "cleanup_previous_after_commit", "cleanup_restart_orphans",
-    "cleanup_live_group_resources", "create_curve_object_from_segments", "delete_generated_ref",
+    "cleanup_live_group_resources", "create_curve_object_from_segments",
+    "create_command_mesh_object_from_table", "delete_generated_ref",
 ]

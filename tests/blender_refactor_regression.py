@@ -17,6 +17,12 @@ from NodeForge.errors import CompileError
 from NodeForge.builtins import registry
 from NodeForge.systems import registry as systems_registry
 from NodeForge.systems.lsystem import resources as generated_resources
+from NodeForge.systems.lsystem.runtime_tables import (
+    DRAW_MASK_ATTR,
+    HEADING_INDEX_ATTR,
+    MOVE_MASK_ATTR,
+    build_branch_free_command_table,
+)
 from NodeForge.builtins import fields, geometry, instancing, io, math, vector
 
 
@@ -440,7 +446,7 @@ def _manifest_refs(group):
 def _owned_generated_id_keys():
     """Return all live NodeForge-generated Blender ID metadata keys."""
     keys = set()
-    for id_obj in list(bpy.data.objects) + list(bpy.data.curves):
+    for id_obj in list(bpy.data.objects) + list(bpy.data.curves) + list(bpy.data.meshes):
         ref = generated_resources.read_id_metadata(id_obj)
         if ref is not None:
             keys.add((ref.kind, ref.name, ref.owner_group_uuid, ref.generation_uuid))
@@ -455,7 +461,11 @@ def _ref_by_kind(refs, kind):
 
 
 def _collection_for_ref(ref):
-    return bpy.data.curves if ref.kind == "CURVE" else bpy.data.objects
+    if ref.kind == "CURVE":
+        return bpy.data.curves
+    if ref.kind == "MESH":
+        return bpy.data.meshes
+    return bpy.data.objects
 
 
 def _create_user_object_using_generated_curve(ref, name):
@@ -543,9 +553,12 @@ output("Geometry", geo)
 angle_value = input_float("Angle", default=60)
 geo = ls_system(ls_axiom("F"), ls_rule("F", "FF"), ls_iterations(2), ls_angle(angle_value), ls_step(0.1))
 output("Geometry", geo)
-''', "NFTest_lsystem_stage2_runtime_still_limited")
-    check(generated_resources.read_group_manifest(runtime) is None, "runtime L-system unexpectedly used generated static backend")
-    check(any(getattr(node, "bl_idname", "") == "GeometryNodeCurvePrimitiveLine" for node in runtime.nodes), "runtime L-system no longer uses bounded Stage 1 path")
+''', "NFTest_lsystem_stage2_runtime_branch_free")
+    runtime_manifest, runtime_refs = _manifest_refs(runtime)
+    check({ref.kind for ref in runtime_refs} == {"MESH", "OBJECT"}, "branch-free runtime L-system used static Curve resources")
+    check(any(ref.role == "branch_free_runtime_command_mesh" for ref in runtime_refs), "branch-free runtime command Mesh role missing")
+    check(not any(getattr(node, "bl_idname", "") == "GeometryNodeCurvePrimitiveLine" for node in runtime.nodes), "branch-free runtime still uses bounded Stage 1 path")
+    check(runtime_manifest["owner_group_uuid"], "branch-free runtime manifest lacks owner UUID")
 
     compiler.update_expression_group(group, _static_lsystem_source(iterations=1, step=0.2))
     new_manifest, new_refs, _new_obj = _assert_static_baked_group(group)
@@ -561,14 +574,14 @@ geo = ls_system(ls_axiom("F"), ls_rule("F", "FF"), ls_iterations(2), ls_angle(an
 output("Geometry", geo)
 '''
     compiler.update_expression_group(group, runtime_update_source)
-    runtime_empty_manifest = generated_resources.read_group_manifest(group)
-    check(runtime_empty_manifest is not None and runtime_empty_manifest["resources"] == [], "runtime replacement did not commit empty manifest")
-    check(runtime_empty_manifest["owner_group_uuid"] == new_manifest["owner_group_uuid"], "runtime empty manifest did not preserve owner UUID")
-    check(any(getattr(node, "bl_idname", "") == "GeometryNodeCurvePrimitiveLine" for node in group.nodes), "runtime update did not use bounded Stage 1 path")
+    runtime_manifest, runtime_refs = _manifest_refs(group)
+    check({ref.kind for ref in runtime_refs} == {"MESH", "OBJECT"}, "runtime replacement did not commit branch-free Mesh/Object manifest")
+    check(runtime_manifest["owner_group_uuid"] == new_manifest["owner_group_uuid"], "runtime manifest did not preserve owner UUID")
+    check(not any(getattr(node, "bl_idname", "") == "GeometryNodeCurvePrimitiveLine" for node in group.nodes), "runtime update used bounded Stage 1 path")
     check(compiler._extract_group_source(group) == runtime_update_source, "runtime update did not store replacement source")
     for ref in previous_refs:
-        coll = bpy.data.curves if ref.kind == "CURVE" else bpy.data.objects
-        check(coll.get(ref.name) is None, f"old generated resource survived runtime zero-resource update: {ref.name}")
+        coll = _collection_for_ref(ref)
+        check(coll.get(ref.name) is None, f"old generated resource survived runtime replacement: {ref.name}")
 
     compiler.update_expression_group(group, _static_lsystem_source(iterations=1, step=0.25))
     grid_manifest, grid_refs, _ = _assert_static_baked_group(group)
@@ -686,6 +699,333 @@ output("Geometry", geo)
     generated_resources.cleanup_restart_orphans()
     print("LSYSTEM_STAGE2_OK")
 
+
+def _socket_identifier_by_name(group, socket_name, in_out="INPUT"):
+    for item in getattr(group.interface, "items_tree", []):
+        if (
+            getattr(item, "item_type", None) == "SOCKET"
+            and getattr(item, "name", None) == socket_name
+            and getattr(item, "in_out", None) == in_out
+        ):
+            return getattr(item, "identifier", None)
+    raise AssertionError(f"missing {in_out} interface socket {socket_name!r}")
+
+
+def _new_stage3_eval_wrapper(compiled_group, name):
+    """Wrap a compiled L-system group with Curve to Mesh so depsgraph output is inspectable."""
+    wrapper = bpy.data.node_groups.new(name, "GeometryNodeTree")
+    wrapper.interface.new_socket(name="Angle", in_out="INPUT", socket_type="NodeSocketFloat")
+    wrapper.interface.new_socket(name="Step", in_out="INPUT", socket_type="NodeSocketFloat")
+    wrapper.interface.new_socket(name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    group_input = wrapper.nodes.new("NodeGroupInput")
+    group_output = wrapper.nodes.new("NodeGroupOutput")
+    group_output.is_active_output = True
+    group_node = wrapper.nodes.new("GeometryNodeGroup")
+    group_node.node_tree = compiled_group
+    curve_to_mesh = wrapper.nodes.new("GeometryNodeCurveToMesh")
+    wrapper.links.new(group_input.outputs["Angle"], group_node.inputs["Angle"])
+    wrapper.links.new(group_input.outputs["Step"], group_node.inputs["Step"])
+    wrapper.links.new(group_node.outputs["Geometry"], curve_to_mesh.inputs["Curve"])
+    wrapper.links.new(curve_to_mesh.outputs["Mesh"], group_output.inputs["Geometry"])
+    return wrapper
+
+
+def _modifier_input_prop(modifier, group, socket_name):
+    identifier = _socket_identifier_by_name(group, socket_name, "INPUT")
+    try:
+        prop = getattr(modifier.properties.inputs, identifier)
+    except Exception as exc:
+        raise AssertionError(f"modifier input {socket_name!r} / {identifier!r} is unavailable") from exc
+    if not hasattr(prop, "value"):
+        raise AssertionError(f"modifier input {socket_name!r} / {identifier!r} has no runtime value property")
+    return prop
+
+
+def _set_modifier_input(modifier, group, socket_name, value):
+    prop = _modifier_input_prop(modifier, group, socket_name)
+    try:
+        prop.value = float(value)
+    except Exception as exc:
+        raise AssertionError(f"could not set modifier input {socket_name!r}") from exc
+
+
+def _attach_stage3_eval_modifier(compiled_group, name):
+    wrapper = _new_stage3_eval_wrapper(compiled_group, name + "_Wrapper")
+    mesh_data = bpy.data.meshes.new(name + "_BaseMesh")
+    obj = bpy.data.objects.new(name + "_Object", mesh_data)
+    bpy.context.collection.objects.link(obj)
+    mod = obj.modifiers.new("NodeForge", "NODES")
+    mod.node_group = wrapper
+    return wrapper, obj, mesh_data, mod
+
+
+def _evaluated_mesh_snapshot(obj):
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    depsgraph.update()
+    evaluated = obj.evaluated_get(depsgraph)
+    mesh = evaluated.to_mesh()
+    try:
+        vertices = tuple(tuple(round(float(coord), 6) for coord in vertex.co) for vertex in mesh.vertices)
+        edges = tuple(tuple(int(index) for index in edge.vertices) for edge in mesh.edges)
+        polygons = len(mesh.polygons)
+    finally:
+        evaluated.to_mesh_clear()
+    return vertices, edges, polygons
+
+
+def _cleanup_stage3_eval_objects(wrapper, obj, mesh_data):
+    try:
+        if bpy.data.objects.get(obj.name) is obj:
+            bpy.data.objects.remove(obj, do_unlink=True)
+    except Exception:
+        pass
+    try:
+        if bpy.data.meshes.get(mesh_data.name) is mesh_data:
+            bpy.data.meshes.remove(mesh_data, do_unlink=True)
+    except Exception:
+        pass
+    try:
+        if bpy.data.node_groups.get(wrapper.name) is wrapper:
+            bpy.data.node_groups.remove(wrapper, do_unlink=True)
+    except Exception:
+        pass
+
+
+def _assert_stage3_modifier_runtime_updates(compiled_group):
+    """Evaluate branch-free runtime output and mutate Angle/Step without recompilation."""
+    manifest_before = generated_resources.read_group_manifest(compiled_group)
+    generation_before = manifest_before["generation_uuid"]
+    wrapper, obj, mesh_data, mod = _attach_stage3_eval_modifier(compiled_group, "NFTest_lsystem_stage3_runtime_eval")
+    try:
+        _set_modifier_input(mod, wrapper, "Angle", 90.0)
+        _set_modifier_input(mod, wrapper, "Step", 1.0)
+        obj.update_tag()
+        bpy.context.view_layer.update()
+        vertices_90, edges_90, polygons_90 = _evaluated_mesh_snapshot(obj)
+        check(vertices_90 == ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0)), f"runtime Angle=90 vertices changed: {vertices_90}")
+        check(edges_90 == ((0, 1), (2, 3)), f"runtime Angle=90 edges changed: {edges_90}")
+        check(polygons_90 == 0, "runtime evaluated mesh unexpectedly has polygons")
+
+        _set_modifier_input(mod, wrapper, "Angle", 0.0)
+        obj.update_tag()
+        bpy.context.view_layer.update()
+        vertices_angle_changed, edges_angle_changed, _polygons = _evaluated_mesh_snapshot(obj)
+        check(vertices_angle_changed == ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0)), f"runtime Angle update did not change evaluated positions: {vertices_angle_changed}")
+        check(edges_angle_changed == edges_90, "runtime Angle update changed topology")
+        check(generated_resources.read_group_manifest(compiled_group)["generation_uuid"] == generation_before, "runtime Angle update churned generated resources")
+
+        _set_modifier_input(mod, wrapper, "Step", 2.0)
+        obj.update_tag()
+        bpy.context.view_layer.update()
+        vertices_step_changed, edges_step_changed, _polygons = _evaluated_mesh_snapshot(obj)
+        check(vertices_step_changed == ((0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (2.0, 0.0, 0.0), (4.0, 0.0, 0.0)), f"runtime Step update did not scale evaluated positions: {vertices_step_changed}")
+        check(edges_step_changed == edges_90, "runtime Step update changed topology")
+        check(generated_resources.read_group_manifest(compiled_group)["generation_uuid"] == generation_before, "runtime Step update churned generated resources")
+    finally:
+        _cleanup_stage3_eval_objects(wrapper, obj, mesh_data)
+
+
+def run_lsystem_stage3_checks():
+    """Exercise Stage 3 branch-free vectorized runtime backend and Mesh ownership."""
+    table = build_branch_free_command_table("+F-F")
+    check(table.vertex_count == 8 and table.edge_count == 4, "branch-free table size mismatch")
+    check(table.move_mask == (0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0), "branch-free move masks drifted")
+    check(table.heading_index == (0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0), "branch-free heading semantics drifted")
+    check(table.draw_mask == (False, True, False, True), "branch-free draw masks drifted")
+    table = build_branch_free_command_table("XfF")
+    check(table.move_mask == (0.0, 0.0, 0.0, 1.0, 0.0, 1.0), "ignored/move command masks drifted")
+    check(table.draw_mask == (False, False, True), "ignored/move draw masks drifted")
+    try:
+        build_branch_free_command_table("F[+F]")
+    except CompileError:
+        pass
+    else:
+        raise AssertionError("branch-free table builder accepted branch commands")
+    try:
+        build_branch_free_command_table("Xf")
+    except CompileError:
+        pass
+    else:
+        raise AssertionError("branch-free table builder accepted zero draw stream")
+
+    eval_source = '''
+angle_value = input_float("Angle", default=90.0)
+step_value = input_float("Step", default=1.0)
+geo = ls_system(ls_axiom("F+F"), ls_iterations(0), ls_angle(angle_value), ls_step(step_value))
+output("Geometry", geo)
+'''
+    eval_group = compile_group(eval_source, "NFTest_lsystem_stage3_runtime_eval_source")
+    _assert_stage3_modifier_runtime_updates(eval_group)
+
+    large_source = '''
+angle_value = input_float("Angle", default=0.0)
+step_value = input_float("Step", default=1.0)
+geo = ls_system(ls_axiom("F"), ls_rule("F", "FF"), ls_iterations(11), ls_angle(angle_value), ls_step(step_value))
+output("Geometry", geo)
+'''
+    large_group = compile_group(large_source, "NFTest_lsystem_stage3_large_branch_free_runtime")
+    large_manifest, large_refs = _manifest_refs(large_group)
+    check({ref.kind for ref in large_refs} == {"MESH", "OBJECT"}, "large branch-free runtime did not use generated Mesh/Object backend")
+    large_mesh = bpy.data.meshes.get(_ref_by_kind(large_refs, "MESH").name)
+    check(large_mesh is not None and len(large_mesh.edges) == 2048, "large branch-free command Mesh did not exceed Stage 1 segment budget")
+    check(len(large_group.nodes) < 40, f"large branch-free runtime node graph grew unexpectedly: {len(large_group.nodes)} nodes")
+    wrapper, obj, mesh_data, mod = _attach_stage3_eval_modifier(large_group, "NFTest_lsystem_stage3_large_runtime_eval")
+    try:
+        _set_modifier_input(mod, wrapper, "Angle", 0.0)
+        _set_modifier_input(mod, wrapper, "Step", 1.0)
+        obj.update_tag()
+        bpy.context.view_layer.update()
+        vertices, edges, polygons = _evaluated_mesh_snapshot(obj)
+        check(len(vertices) == 4096 and len(edges) == 2048 and polygons == 0, "large branch-free runtime evaluated output size changed")
+        check(vertices[-1] == (2048.0, 0.0, 0.0), f"large branch-free runtime endpoint changed: {vertices[-1]}")
+        check(generated_resources.read_group_manifest(large_group) == large_manifest, "large branch-free runtime evaluation churned manifest")
+    finally:
+        _cleanup_stage3_eval_objects(wrapper, obj, mesh_data)
+
+    source = '''
+angle_value = input_float("Angle", default=60.0)
+step_value = input_float("Step", default=0.1)
+geo = ls_system(ls_axiom("F"), ls_rule("F", "F+F--F+F"), ls_iterations(3), ls_angle(angle_value), ls_step(step_value))
+output("Geometry", geo)
+'''
+    group = compile_group(source, "NFTest_lsystem_stage3_branch_free_runtime")
+    manifest, refs = _manifest_refs(group)
+    kinds = {ref.kind for ref in refs}
+    check(kinds == {"MESH", "OBJECT"}, f"branch-free runtime generated unexpected resources: {kinds}")
+    mesh_ref = _ref_by_kind(refs, "MESH")
+    object_ref = _ref_by_kind(refs, "OBJECT")
+    mesh = bpy.data.meshes.get(mesh_ref.name)
+    obj = bpy.data.objects.get(object_ref.name)
+    check(mesh is not None and obj is not None, "branch-free runtime Mesh/Object missing")
+    check(obj.data is mesh, "branch-free command Object does not reference command Mesh")
+    for ref in refs:
+        id_obj = _collection_for_ref(ref).get(ref.name)
+        meta = generated_resources.read_id_metadata(id_obj)
+        check(meta is not None, f"generated {ref.kind} lacks metadata")
+        check(meta.owner_group_uuid == manifest["owner_group_uuid"], "branch-free owner UUID mismatch")
+    check(len(mesh.vertices) == 2 * 148, "command Mesh vertex count does not match expanded stream")
+    check(len(mesh.edges) == 148, "command Mesh edge count does not match expanded stream")
+    for attr_name, domain, data_type, expected_len in [
+        (MOVE_MASK_ATTR, "POINT", "FLOAT", len(mesh.vertices)),
+        (HEADING_INDEX_ATTR, "POINT", "FLOAT", len(mesh.vertices)),
+        (DRAW_MASK_ATTR, "EDGE", "BOOLEAN", len(mesh.edges)),
+    ]:
+        attr = mesh.attributes.get(attr_name)
+        check(attr is not None, f"command Mesh attribute missing: {attr_name}")
+        check(attr.domain == domain, f"{attr_name} domain changed: {attr.domain}")
+        check(attr.data_type == data_type, f"{attr_name} data type changed: {attr.data_type}")
+        check(len(attr.data) == expected_len, f"{attr_name} length mismatch")
+    node_types = [getattr(node, "bl_idname", "") for node in group.nodes]
+    check("GeometryNodeCurvePrimitiveLine" not in node_types, "branch-free runtime used per-segment Curve Line nodes")
+    for required in {
+        "GeometryNodeObjectInfo",
+        "GeometryNodeInputNamedAttribute",
+        "GeometryNodeAccumulateField",
+        "GeometryNodeSetPosition",
+        "GeometryNodeDeleteGeometry",
+        "GeometryNodeMeshToCurve",
+    }:
+        check(required in node_types, f"branch-free runtime graph missing {required}")
+    check(len(group.nodes) < 40, f"branch-free runtime node graph grew unexpectedly: {len(group.nodes)} nodes")
+    object_infos = [node for node in group.nodes if getattr(node, "bl_idname", "") == "GeometryNodeObjectInfo"]
+    check(object_infos and _object_info_source(object_infos[0]) is obj, "Object Info does not source branch-free command Object")
+
+    old_keys = _owned_generated_id_keys()
+    old_manifest = generated_resources.read_group_manifest(group)
+    compiler.update_expression_group(group, source.replace('ls_iterations(3)', 'ls_iterations(2)'))
+    new_manifest, new_refs = _manifest_refs(group)
+    check(new_manifest["generation_uuid"] != old_manifest["generation_uuid"], "successful branch-free recompile did not advance generation")
+    check(_owned_generated_id_keys() != old_keys, "successful branch-free recompile did not replace generated IDs")
+    for ref in refs:
+        check(_collection_for_ref(ref).get(ref.name) is None, f"successful branch-free recompile left old {ref.kind}")
+    check({ref.kind for ref in new_refs} == {"MESH", "OBJECT"}, "branch-free recompile lost Mesh/Object manifest")
+
+    runtime_refs_before_static = list(new_refs)
+    compiler.update_expression_group(group, source.replace('ls_angle(angle_value)', 'ls_angle(60.0)').replace('ls_step(step_value)', 'ls_step(0.1)'))
+    static_manifest_after_runtime, static_refs_after_runtime, _ = _assert_static_baked_group(group)
+    check(static_manifest_after_runtime["owner_group_uuid"] == new_manifest["owner_group_uuid"], "runtime-to-static replacement did not preserve owner UUID")
+    for ref in runtime_refs_before_static:
+        check(_collection_for_ref(ref).get(ref.name) is None, f"old branch-free generated resource survived static replacement: {ref.name}")
+    compiler.update_expression_group(group, source.replace('ls_iterations(3)', 'ls_iterations(2)'))
+    stable_runtime_manifest, stable_runtime_refs = _manifest_refs(group)
+    check({ref.kind for ref in stable_runtime_refs} == {"MESH", "OBJECT"}, "static-to-runtime replacement did not restore Mesh/Object manifest")
+    for ref in static_refs_after_runtime:
+        check(_collection_for_ref(ref).get(ref.name) is None, f"old static generated resource survived branch-free replacement: {ref.name}")
+
+    stable_manifest, stable_refs = _manifest_refs(group)
+    stable_source = compiler._extract_group_source(group)
+    before_failure = _owned_generated_id_keys()
+    generated_resources._TEST_FAIL_AFTER_MESH_ATTRIBUTE_WRITE = True
+    try:
+        compiler.update_expression_group(group, source.replace('ls_iterations(3)', 'ls_iterations(1)'))
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("fault-injected command Mesh attribute failure did not raise")
+    check(generated_resources.read_group_manifest(group)["generation_uuid"] == stable_manifest["generation_uuid"], "failed branch-free update changed manifest")
+    check(compiler._extract_group_source(group) == stable_source, "failed branch-free update changed stored source")
+    check(_owned_generated_id_keys() == before_failure, "failed branch-free update leaked or deleted generated IDs")
+    for ref in stable_refs:
+        check(_collection_for_ref(ref).get(ref.name) is not None, f"failed branch-free update removed stable {ref.kind}")
+
+    before_cutover = _owned_generated_id_keys()
+    compiler._TEST_CUTOVER_FAIL_AFTER_RESET = True
+    try:
+        compiler.update_expression_group(group, source.replace('ls_iterations(3)', 'ls_iterations(1)'))
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("fault-injected branch-free cutover did not raise")
+    check(generated_resources.read_group_manifest(group)["generation_uuid"] == stable_manifest["generation_uuid"], "branch-free cutover failure changed manifest")
+    check(compiler._extract_group_source(group) == stable_source, "branch-free cutover failure changed source")
+    check(_owned_generated_id_keys() == before_cutover, "branch-free cutover failure leaked or deleted generated IDs")
+
+    shared_group = compile_group(source.replace('ls_iterations(3)', 'ls_iterations(1)'), "NFTest_lsystem_stage3_shared_mesh")
+    shared_manifest, shared_refs = _manifest_refs(shared_group)
+    shared_mesh_ref = _ref_by_kind(shared_refs, "MESH")
+    shared_object_ref = _ref_by_kind(shared_refs, "OBJECT")
+    shared_mesh = bpy.data.meshes.get(shared_mesh_ref.name)
+    user_obj = bpy.data.objects.new("NFTest_lsystem_stage3_user_mesh", shared_mesh)
+    try:
+        bpy.context.collection.objects.link(user_obj)
+    except Exception:
+        pass
+    try:
+        generated_resources.write_empty_manifest(shared_group, shared_manifest["owner_group_uuid"])
+        generated_resources.cleanup_restart_orphans()
+        check(bpy.data.objects.get(shared_object_ref.name) is None, "restart cleanup left generated command Object")
+        check(bpy.data.meshes.get(shared_mesh.name) is shared_mesh, "restart cleanup deleted generated Mesh used by user Object")
+        check(bpy.data.objects.get(user_obj.name) is user_obj, "restart cleanup deleted user Object sharing Mesh")
+    finally:
+        try:
+            if bpy.data.objects.get(user_obj.name) is user_obj:
+                bpy.data.objects.remove(user_obj, do_unlink=True)
+        except Exception:
+            pass
+        try:
+            if bpy.data.meshes.get(shared_mesh.name) is shared_mesh:
+                bpy.data.meshes.remove(shared_mesh, do_unlink=True)
+        except Exception:
+            pass
+
+    static_group = compile_group(_static_lsystem_source(iterations=1), "NFTest_lsystem_stage3_static_unchanged")
+    _static_manifest, static_refs, _ = _assert_static_baked_group(static_group)
+    check({ref.kind for ref in static_refs} == {"CURVE", "OBJECT"}, "static baked backend started using command Mesh")
+
+    branched_runtime = compile_group('''
+angle_value = input_float("Angle", default=25.0)
+geo = ls_system(ls_axiom("F[+F]F[-F]F"), ls_iterations(0), ls_angle(angle_value), ls_step(0.1))
+output("Geometry", geo)
+''', "NFTest_lsystem_stage3_branched_runtime_unchanged")
+    check(generated_resources.read_group_manifest(branched_runtime) is None, "branched runtime unexpectedly created generated resources")
+    check(any(getattr(node, "bl_idname", "") == "GeometryNodeCurvePrimitiveLine" for node in branched_runtime.nodes), "branched runtime no longer uses bounded Stage 1 backend")
+    expect_compile_error('''
+angle_value = input_float("Angle", default=25.0)
+geo = ls_system(ls_axiom("F[+F]"), ls_rule("F", "FF"), ls_iterations(10), ls_angle(angle_value), ls_step(0.1))
+output("Geometry", geo)
+''', "NFTest_lsystem_stage3_branched_runtime_budget")
+    print("LSYSTEM_STAGE3_OK")
+
 def run_update_checks():
     """Exercise successful and failed update_expression_group paths."""
     group = compile_group('x = 1\noutput("x", x)', "NFTest_update")
@@ -739,6 +1079,7 @@ def main():
     run_math_table_dispatch_checks()
     run_lsystem_stage1_checks()
     run_lsystem_stage2_checks()
+    run_lsystem_stage3_checks()
     run_library_checks()
     run_update_checks()
     run_mandelbrot_eval_check()
