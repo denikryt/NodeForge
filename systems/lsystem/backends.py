@@ -1,4 +1,4 @@
-"""Backend selection and bounded Stage 1 materialization for L-systems."""
+"""Backend selection and materialization for L-systems."""
 
 from ...constants import TYPE_GEOMETRY
 from ...errors import CompileError
@@ -6,6 +6,7 @@ from ...geometry import _set_vector_socket_default
 from ...nodes import _new_node
 from ...values import Value
 from .turtle import _point_to_vector
+from . import resources
 
 MAX_LSYSTEM_SEGMENTS = 1000
 
@@ -57,4 +58,55 @@ def limited_segment_node_backend(comp, segments, x=0, y=0):
     return Value(join.outputs[0], TYPE_GEOMETRY)
 
 
-__all__ = ["MAX_LSYSTEM_SEGMENTS", "select_backend_category", "validate_stage1_backend_available", "limited_segment_node_backend"]
+def _object_info_geometry_output(node):
+    try:
+        return node.outputs["Geometry"]
+    except Exception:
+        pass
+    for socket in node.outputs:
+        if getattr(socket, "name", "") == "Geometry":
+            return socket
+    raise CompileError("GeometryNodeObjectInfo has no Geometry output in this Blender runtime")
+
+
+def _set_object_info_source(node, obj):
+    if hasattr(node, "object"):
+        try:
+            node.object = obj
+            return
+        except Exception:
+            pass
+    try:
+        node.inputs["Object"].default_value = obj
+        return
+    except Exception:
+        pass
+    for socket in node.inputs:
+        if getattr(socket, "name", "") == "Object":
+            socket.default_value = obj
+            return
+    raise CompileError("GeometryNodeObjectInfo has no Object source input in this Blender runtime")
+
+
+def static_baked_backend(comp, segments, x=0, y=0):
+    """Materialize static turtle segments as generated Curve/Object IDs and Object Info geometry."""
+    if not segments:
+        raise CompileError("Static L-system backend requires at least one drawn F segment")
+    tx = getattr(comp, "generated_resource_transaction", None)
+    if tx is None:
+        tx = resources.create_transaction(comp.group)
+        comp.generated_resource_transaction = tx
+    _curve, obj = resources.create_curve_object_from_segments(tx, segments, name_hint=getattr(comp.group, "name", "NodeForge"))
+    node = _new_node(comp.group, "GeometryNodeObjectInfo", x, y)
+    try:
+        node.transform_space = "ORIGINAL"
+    except Exception:
+        pass
+    _set_object_info_source(node, obj)
+    return Value(_object_info_geometry_output(node), TYPE_GEOMETRY)
+
+
+__all__ = [
+    "MAX_LSYSTEM_SEGMENTS", "select_backend_category", "validate_stage1_backend_available",
+    "limited_segment_node_backend", "static_baked_backend",
+]

@@ -97,4 +97,37 @@ def interpret(group, stream: str, *, angle_degrees, step, x=0, y=0) -> list[Turt
     return segments
 
 
-__all__ = ["interpret", "_point_to_vector"]
+def interpret_static(stream: str, *, angle_degrees, step) -> list[TurtleSegment]:
+    """Interpret an expanded static L-system stream into float turtle segments."""
+    if not _is_const_number(angle_degrees):
+        raise CompileError("static L-system angle must be a compile-time number")
+    if not _is_const_number(step):
+        raise CompileError("static L-system step must be a compile-time number")
+    angle = float(angle_degrees) * math.pi / 180.0
+    step_value = float(step)
+    pos = TurtlePoint(0.0, 0.0, 0.0)
+    heading = 0.0
+    stack = []
+    segments = []
+    for ch in stream:
+        if ch == "+":
+            heading += angle
+        elif ch == "-":
+            heading -= angle
+        elif ch == "[":
+            stack.append((pos, heading))
+        elif ch == "]":
+            pos, heading = stack.pop()
+        elif ch in {"F", "f"}:
+            next_pos = TurtlePoint(
+                pos.x + step_value * math.cos(heading),
+                pos.y + step_value * math.sin(heading),
+                pos.z,
+            )
+            if ch == "F":
+                segments.append(TurtleSegment(pos, next_pos))
+            pos = next_pos
+    return segments
+
+
+__all__ = ["interpret", "interpret_static", "_point_to_vector"]

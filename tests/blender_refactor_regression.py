@@ -16,6 +16,7 @@ from NodeForge.constants import _FLOAT_FUNCS_1, _FLOAT_FUNCS_2
 from NodeForge.errors import CompileError
 from NodeForge.builtins import registry
 from NodeForge.systems import registry as systems_registry
+from NodeForge.systems.lsystem import resources as generated_resources
 from NodeForge.builtins import fields, geometry, instancing, io, math, vector
 
 
@@ -346,7 +347,6 @@ output("Geometry", geo)
         "list_smuggle": "p = [ls_axiom(\"F\")]\ngeo = ls_system(p, ls_iterations(1), ls_angle(60), ls_step(1))\noutput(\"Geometry\", geo)",
         "zero_draw_bootstrap_limit": "geo = ls_system(ls_axiom(\"Xf\"), ls_iterations(0), ls_angle(60), ls_step(1))\noutput(\"Geometry\", geo)",
         "max_symbols": "geo = ls_system(ls_axiom(\"F\"), ls_rule(\"F\", \"FF\"), ls_iterations(18), ls_angle(60), ls_step(1))\noutput(\"Geometry\", geo)",
-        "max_segments": "geo = ls_system(ls_axiom(\"F\"), ls_rule(\"F\", \"FF\"), ls_iterations(11), ls_angle(60), ls_step(1))\noutput(\"Geometry\", geo)",
     }
     for name, source in error_sources.items():
         expect_compile_error(source, "NFTest_lsystem_error_" + name)
@@ -408,6 +408,284 @@ output("Geometry", geo)
     )
     print("LSYSTEM_STAGE1_OK")
 
+def _object_info_source(node):
+    """Return the Object referenced by an Object Info node."""
+    if hasattr(node, "object"):
+        obj = getattr(node, "object", None)
+        if obj is not None:
+            return obj
+    try:
+        return node.inputs["Object"].default_value
+    except Exception:
+        pass
+    for socket in node.inputs:
+        if getattr(socket, "name", "") == "Object":
+            return getattr(socket, "default_value", None)
+    return None
+
+
+def _static_lsystem_source(iterations=1, step=0.1):
+    return """
+geo = ls_system(ls_axiom("F"), ls_rule("F", "F+F--F+F"), ls_iterations(%d), ls_angle(60), ls_step(%s))
+output("Geometry", geo)
+""" % (iterations, step)
+
+
+def _manifest_refs(group):
+    manifest = generated_resources.read_group_manifest(group)
+    check(manifest is not None, "expected generated-resource manifest")
+    return manifest, generated_resources.manifest_resources(manifest)
+
+
+def _owned_generated_id_keys():
+    """Return all live NodeForge-generated Blender ID metadata keys."""
+    keys = set()
+    for id_obj in list(bpy.data.objects) + list(bpy.data.curves):
+        ref = generated_resources.read_id_metadata(id_obj)
+        if ref is not None:
+            keys.add((ref.kind, ref.name, ref.owner_group_uuid, ref.generation_uuid))
+    return keys
+
+
+def _ref_by_kind(refs, kind):
+    for ref in refs:
+        if ref.kind == kind:
+            return ref
+    raise AssertionError(f"missing generated {kind} ref")
+
+
+def _collection_for_ref(ref):
+    return bpy.data.curves if ref.kind == "CURVE" else bpy.data.objects
+
+
+def _create_user_object_using_generated_curve(ref, name):
+    curve = bpy.data.curves.get(ref.name)
+    check(curve is not None, f"generated Curve missing before user-share test: {ref.name}")
+    user_obj = bpy.data.objects.new(name, curve)
+    check(generated_resources.read_id_metadata(user_obj) is None, "user-created Object unexpectedly has NodeForge metadata")
+    check(user_obj.data is curve, "user Object did not retain generated Curve data")
+    try:
+        scene = getattr(bpy.context, "scene", None)
+        collection = getattr(scene, "collection", None) or getattr(bpy.context, "collection", None)
+        if collection is not None:
+            collection.objects.link(user_obj)
+    except Exception:
+        pass
+    return curve, user_obj
+
+
+def _remove_user_object_and_generated_curve(user_obj, curve):
+    try:
+        if bpy.data.objects.get(user_obj.name) is user_obj:
+            bpy.data.objects.remove(user_obj, do_unlink=True)
+    except ReferenceError:
+        pass
+    except Exception:
+        pass
+    try:
+        if bpy.data.curves.get(curve.name) is curve:
+            generated_resources.delete_generated_id_object(curve)
+            if bpy.data.curves.get(curve.name) is curve:
+                bpy.data.curves.remove(curve, do_unlink=True)
+    except ReferenceError:
+        pass
+    except Exception:
+        pass
+
+
+def _assert_static_baked_group(group):
+    manifest, refs = _manifest_refs(group)
+    check(len(refs) == 2, f"expected Curve/Object resources, got {refs}")
+    kinds = {ref.kind for ref in refs}
+    check(kinds == {"CURVE", "OBJECT"}, f"unexpected generated resource kinds: {kinds}")
+    for ref in refs:
+        coll = bpy.data.curves if ref.kind == "CURVE" else bpy.data.objects
+        id_obj = coll.get(ref.name)
+        check(id_obj is not None, f"generated {ref.kind} missing: {ref.name}")
+        meta = generated_resources.read_id_metadata(id_obj)
+        check(meta is not None, f"generated {ref.kind} lacks positive ownership metadata")
+        check(meta.owner_group_uuid == manifest["owner_group_uuid"], "ID/group owner UUID mismatch")
+    object_infos = [node for node in group.nodes if getattr(node, "bl_idname", "") == "GeometryNodeObjectInfo"]
+    check(len(object_infos) == 1, f"expected one Object Info node, got {len(object_infos)}")
+    obj = _object_info_source(object_infos[0])
+    check(obj is not None and generated_resources.read_id_metadata(obj) is not None, "Object Info does not source owned hidden object")
+    geometry_outputs = [socket for socket in object_infos[0].outputs if getattr(socket, "name", "") == "Geometry"]
+    check(geometry_outputs, "Object Info Geometry output missing")
+    curve_line_nodes = [node for node in group.nodes if getattr(node, "bl_idname", "") == "GeometryNodeCurvePrimitiveLine"]
+    check(not curve_line_nodes, "static baked backend used Stage 1 Curve Line nodes")
+    return manifest, refs, obj
+
+
+def run_lsystem_stage2_checks():
+    """Exercise Stage 2 static baked ownership, update, cutover, and cleanup behavior."""
+    group = compile_group(_static_lsystem_source(iterations=2), "NFTest_lsystem_stage2_static")
+    old_manifest, old_refs, old_obj = _assert_static_baked_group(group)
+    old_names = {(ref.kind, ref.name) for ref in old_refs}
+
+    large = compile_group('''
+geo = ls_system(ls_axiom("F"), ls_rule("F", "FF"), ls_iterations(11), ls_angle(0), ls_step(0.01))
+output("Geometry", geo)
+''', "NFTest_lsystem_stage2_large_static")
+    _assert_static_baked_group(large)
+    check(len(large.nodes) <= 4, f"static baked node graph grew per segment: {len(large.nodes)} nodes")
+
+    before_resource_failure = _owned_generated_id_keys()
+    generated_resources._TEST_FAIL_AFTER_OBJECT_CREATE = True
+    try:
+        compile_group(_static_lsystem_source(iterations=1, step=0.15), "NFTest_lsystem_stage2_resource_failure")
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("fault-injected generated-object failure did not raise")
+    check(_owned_generated_id_keys() == before_resource_failure, "generated-object failure leaked temporary IDs")
+
+    runtime = compile_group('''
+angle_value = input_float("Angle", default=60)
+geo = ls_system(ls_axiom("F"), ls_rule("F", "FF"), ls_iterations(2), ls_angle(angle_value), ls_step(0.1))
+output("Geometry", geo)
+''', "NFTest_lsystem_stage2_runtime_still_limited")
+    check(generated_resources.read_group_manifest(runtime) is None, "runtime L-system unexpectedly used generated static backend")
+    check(any(getattr(node, "bl_idname", "") == "GeometryNodeCurvePrimitiveLine" for node in runtime.nodes), "runtime L-system no longer uses bounded Stage 1 path")
+
+    compiler.update_expression_group(group, _static_lsystem_source(iterations=1, step=0.2))
+    new_manifest, new_refs, _new_obj = _assert_static_baked_group(group)
+    check(new_manifest["owner_group_uuid"] == old_manifest["owner_group_uuid"], "owner_group_uuid was not preserved across update")
+    for kind, name in old_names:
+        coll = bpy.data.curves if kind == "CURVE" else bpy.data.objects
+        check(coll.get(name) is None, f"old generated {kind} survived successful replacement: {name}")
+
+    previous_refs = list(new_refs)
+    runtime_update_source = '''
+angle_value = input_float("Angle", default=60)
+geo = ls_system(ls_axiom("F"), ls_rule("F", "FF"), ls_iterations(2), ls_angle(angle_value), ls_step(0.1))
+output("Geometry", geo)
+'''
+    compiler.update_expression_group(group, runtime_update_source)
+    runtime_empty_manifest = generated_resources.read_group_manifest(group)
+    check(runtime_empty_manifest is not None and runtime_empty_manifest["resources"] == [], "runtime replacement did not commit empty manifest")
+    check(runtime_empty_manifest["owner_group_uuid"] == new_manifest["owner_group_uuid"], "runtime empty manifest did not preserve owner UUID")
+    check(any(getattr(node, "bl_idname", "") == "GeometryNodeCurvePrimitiveLine" for node in group.nodes), "runtime update did not use bounded Stage 1 path")
+    check(compiler._extract_group_source(group) == runtime_update_source, "runtime update did not store replacement source")
+    for ref in previous_refs:
+        coll = bpy.data.curves if ref.kind == "CURVE" else bpy.data.objects
+        check(coll.get(ref.name) is None, f"old generated resource survived runtime zero-resource update: {ref.name}")
+
+    compiler.update_expression_group(group, _static_lsystem_source(iterations=1, step=0.25))
+    grid_manifest, grid_refs, _ = _assert_static_baked_group(group)
+    previous_refs = list(grid_refs)
+    grid_source = 'geo = grid(2, 2)\noutput("Geometry", geo)'
+    compiler.update_expression_group(group, grid_source)
+    empty_manifest = generated_resources.read_group_manifest(group)
+    check(empty_manifest is not None and empty_manifest["resources"] == [], "zero-resource replacement did not commit empty manifest")
+    check(empty_manifest["owner_group_uuid"] == grid_manifest["owner_group_uuid"], "empty manifest did not preserve owner UUID")
+    check(compiler._extract_group_source(group) == grid_source, "zero-resource update did not store replacement source")
+    for ref in previous_refs:
+        coll = bpy.data.curves if ref.kind == "CURVE" else bpy.data.objects
+        check(coll.get(ref.name) is None, f"old generated resource survived zero-resource update: {ref.name}")
+
+    shared_group = compile_group(_static_lsystem_source(iterations=1, step=0.31), "NFTest_lsystem_stage2_shared_recompile")
+    _shared_manifest, shared_refs, _ = _assert_static_baked_group(shared_group)
+    shared_curve_ref = _ref_by_kind(shared_refs, "CURVE")
+    shared_object_ref = _ref_by_kind(shared_refs, "OBJECT")
+    shared_curve, shared_user_obj = _create_user_object_using_generated_curve(shared_curve_ref, "NFTest_lsystem_stage2_user_curve_recompile")
+    try:
+        compiler.update_expression_group(shared_group, _static_lsystem_source(iterations=2, step=0.32))
+        check(bpy.data.objects.get(shared_object_ref.name) is None, "recompile left old generated Object")
+        check(bpy.data.curves.get(shared_curve.name) is shared_curve, "recompile deleted generated Curve still used by user Object")
+        check(bpy.data.objects.get(shared_user_obj.name) is shared_user_obj, "recompile deleted user Object sharing generated Curve")
+        check(shared_user_obj.data is shared_curve, "recompile unlinked user Object from generated Curve")
+    finally:
+        _remove_user_object_and_generated_curve(shared_user_obj, shared_curve)
+
+    compiler.update_expression_group(group, _static_lsystem_source(iterations=1, step=0.3))
+    stable_manifest, stable_refs, stable_obj = _assert_static_baked_group(group)
+    stable_source = compiler._extract_group_source(group)
+    before_failed_compile_keys = _owned_generated_id_keys()
+    try:
+        compiler.update_expression_group(group, 'geo = missing_func(1)\noutput("Geometry", geo)')
+    except Exception:
+        pass
+    else:
+        raise AssertionError("failed replacement compile did not raise")
+    after_fail_manifest = generated_resources.read_group_manifest(group)
+    check(after_fail_manifest["generation_uuid"] == stable_manifest["generation_uuid"], "failed compile changed group manifest")
+    check(bpy.data.objects.get(stable_obj.name) is stable_obj, "failed compile removed old generated object")
+    check(compiler._extract_group_source(group) == stable_source, "failed compile changed stored source")
+    check(_owned_generated_id_keys() == before_failed_compile_keys, "failed replacement compile changed generated ID set")
+
+    before_cutover_keys = _owned_generated_id_keys()
+    compiler._TEST_CUTOVER_FAIL_AFTER_RESET = True
+    try:
+        compiler.update_expression_group(group, _static_lsystem_source(iterations=2, step=0.4))
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("fault-injected cutover did not raise")
+    after_cutover_manifest = generated_resources.read_group_manifest(group)
+    check(after_cutover_manifest["generation_uuid"] == stable_manifest["generation_uuid"], "cutover failure changed group manifest")
+    check(bpy.data.objects.get(stable_obj.name) is stable_obj, "cutover failure removed old generated object")
+    check(compiler._extract_group_source(group) == stable_source, "cutover failure changed stored source")
+    check(_owned_generated_id_keys() == before_cutover_keys, "cutover failure leaked or deleted generated IDs")
+    object_infos = [node for node in group.nodes if getattr(node, "bl_idname", "") == "GeometryNodeObjectInfo"]
+    check(object_infos and _object_info_source(object_infos[0]) is stable_obj, "cutover failure did not restore Object Info source")
+
+    user_curve = bpy.data.curves.new("NodeForge.fake.UserCurve", "CURVE")
+    user_obj = bpy.data.objects.new("NodeForge.fake.UserObject", user_curve)
+    try:
+        generated_resources.cleanup_restart_orphans()
+        check(bpy.data.curves.get(user_curve.name) is user_curve, "cleanup deleted user curve without metadata")
+        check(bpy.data.objects.get(user_obj.name) is user_obj, "cleanup deleted user object without metadata")
+    finally:
+        bpy.data.objects.remove(user_obj, do_unlink=True)
+        bpy.data.curves.remove(user_curve, do_unlink=True)
+
+    orphan_group = compile_group(_static_lsystem_source(iterations=1, step=0.5), "NFTest_lsystem_stage2_orphan")
+    orphan_manifest, orphan_refs, _ = _assert_static_baked_group(orphan_group)
+    generated_resources.write_empty_manifest(orphan_group, orphan_manifest["owner_group_uuid"])
+    generated_resources.cleanup_restart_orphans()
+    for ref in orphan_refs:
+        coll = bpy.data.curves if ref.kind == "CURVE" else bpy.data.objects
+        check(coll.get(ref.name) is None, f"restart orphan cleanup left {ref.name}")
+
+    shared_orphan_group = compile_group(_static_lsystem_source(iterations=1, step=0.55), "NFTest_lsystem_stage2_shared_orphan")
+    shared_orphan_manifest, shared_orphan_refs, _ = _assert_static_baked_group(shared_orphan_group)
+    shared_orphan_curve_ref = _ref_by_kind(shared_orphan_refs, "CURVE")
+    shared_orphan_object_ref = _ref_by_kind(shared_orphan_refs, "OBJECT")
+    shared_orphan_curve, shared_orphan_user_obj = _create_user_object_using_generated_curve(shared_orphan_curve_ref, "NFTest_lsystem_stage2_user_curve_orphan")
+    try:
+        generated_resources.write_empty_manifest(shared_orphan_group, shared_orphan_manifest["owner_group_uuid"])
+        generated_resources.cleanup_restart_orphans()
+        check(bpy.data.objects.get(shared_orphan_object_ref.name) is None, "restart orphan cleanup left generated Object sharing Curve")
+        check(bpy.data.curves.get(shared_orphan_curve.name) is shared_orphan_curve, "restart orphan cleanup deleted generated Curve still used by user Object")
+        check(bpy.data.objects.get(shared_orphan_user_obj.name) is shared_orphan_user_obj, "restart orphan cleanup deleted user Object sharing generated Curve")
+        check(shared_orphan_user_obj.data is shared_orphan_curve, "restart orphan cleanup unlinked user Object from generated Curve")
+    finally:
+        _remove_user_object_and_generated_curve(shared_orphan_user_obj, shared_orphan_curve)
+
+    shutdown_group = compile_group(_static_lsystem_source(iterations=1, step=0.6), "NFTest_lsystem_stage2_shutdown")
+    _shutdown_manifest, shutdown_refs, _ = _assert_static_baked_group(shutdown_group)
+    generated_resources.cleanup_live_group_resources()
+    for ref in shutdown_refs:
+        coll = bpy.data.curves if ref.kind == "CURVE" else bpy.data.objects
+        check(coll.get(ref.name) is None, f"shutdown cleanup left {ref.name}")
+
+    shared_shutdown_group = compile_group(_static_lsystem_source(iterations=1, step=0.65), "NFTest_lsystem_stage2_shared_shutdown")
+    _shared_shutdown_manifest, shared_shutdown_refs, _ = _assert_static_baked_group(shared_shutdown_group)
+    shared_shutdown_curve_ref = _ref_by_kind(shared_shutdown_refs, "CURVE")
+    shared_shutdown_object_ref = _ref_by_kind(shared_shutdown_refs, "OBJECT")
+    shared_shutdown_curve, shared_shutdown_user_obj = _create_user_object_using_generated_curve(shared_shutdown_curve_ref, "NFTest_lsystem_stage2_user_curve_shutdown")
+    try:
+        generated_resources.cleanup_live_group_resources()
+        check(bpy.data.objects.get(shared_shutdown_object_ref.name) is None, "shutdown cleanup left generated Object sharing Curve")
+        check(bpy.data.curves.get(shared_shutdown_curve.name) is shared_shutdown_curve, "shutdown cleanup deleted generated Curve still used by user Object")
+        check(bpy.data.objects.get(shared_shutdown_user_obj.name) is shared_shutdown_user_obj, "shutdown cleanup deleted user Object sharing generated Curve")
+        check(shared_shutdown_user_obj.data is shared_shutdown_curve, "shutdown cleanup unlinked user Object from generated Curve")
+    finally:
+        _remove_user_object_and_generated_curve(shared_shutdown_user_obj, shared_shutdown_curve)
+    generated_resources.cleanup_live_group_resources()
+    generated_resources.cleanup_restart_orphans()
+    print("LSYSTEM_STAGE2_OK")
+
 def run_update_checks():
     """Exercise successful and failed update_expression_group paths."""
     group = compile_group('x = 1\noutput("x", x)', "NFTest_update")
@@ -460,6 +738,7 @@ def main():
     run_compile_fixtures()
     run_math_table_dispatch_checks()
     run_lsystem_stage1_checks()
+    run_lsystem_stage2_checks()
     run_library_checks()
     run_update_checks()
     run_mandelbrot_eval_check()

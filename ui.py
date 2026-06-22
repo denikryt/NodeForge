@@ -19,6 +19,7 @@ from .compiler import (
     create_library_function_group,
 )
 from .library import library_function_records, apply_function_node_display_name
+from .systems.lsystem import resources as generated_resources
 
 def _source_from_props(props):
     """Return source code from the selected Blender Text datablock only."""
@@ -374,6 +375,7 @@ classes = (NODEFORGE_OT_reload_addon, NODEFORGE_AddonPreferences, NODEFORGE_Func
 
 def register():
     """Function `register` used by the NodeForge addon."""
+    generated_resources.cleanup_restart_orphans_deferred()
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.Scene.gn_script_mvp = PointerProperty(type=GNSCRIPT_MVP_Properties)
@@ -381,6 +383,10 @@ def register():
 
 def unregister():
     """Function `unregister` used by the NodeForge addon."""
+    try:
+        generated_resources.cleanup_live_group_resources()
+    except Exception:
+        pass
     try:
         bpy.types.NODE_MT_add.remove(menu_func)
     except Exception:

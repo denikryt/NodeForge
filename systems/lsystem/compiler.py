@@ -3,10 +3,10 @@
 from ...compile_time import reject_compile_time_object
 from ...errors import CompileError
 from .analysis import analyze
-from .backends import limited_segment_node_backend, select_backend_category, validate_stage1_backend_available
+from .backends import limited_segment_node_backend, select_backend_category, static_baked_backend, validate_stage1_backend_available
 from .expander import expand
 from .model import LSystemAngle, LSystemAxiom, LSystemIterations, LSystemPart, LSystemRule, LSystemSpec, LSystemStep
-from .turtle import interpret
+from .turtle import interpret, interpret_static
 
 
 def build_spec(parts: list[LSystemPart]) -> LSystemSpec:
@@ -65,6 +65,9 @@ def compile_lsystem(comp, expr, depth=0):
     stream = expand(spec.axiom, spec.rules, spec.iterations)
     metrics = analyze(stream, angle=spec.angle, step=spec.step)
     category = select_backend_category(metrics)
+    if category == "static":
+        segments = interpret_static(stream, angle_degrees=spec.angle, step=spec.step)
+        return static_baked_backend(comp, segments, x=depth * 240 + 260, y=-depth * 120)
     validate_stage1_backend_available(metrics, category)
     segments = interpret(comp.group, stream, angle_degrees=spec.angle, step=spec.step, x=depth * 240, y=-depth * 120 - 200)
     return limited_segment_node_backend(comp, segments, x=depth * 240 + 260, y=-depth * 120)

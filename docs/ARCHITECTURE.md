@@ -22,7 +22,7 @@ Key files:
 | `values.py` | Typed socket values passed through the compiler. |
 | `compile_time.py` | Base protocol and guards for compile-time-only compiler objects. |
 | `systems/registry.py` | Embedded subsystem constructor dispatch and reserved-name policy. |
-| `systems/lsystem/` | L-system constructors, validation, expansion, analysis, turtle interpretation, and Stage 1 backend. |
+| `systems/lsystem/` | L-system constructors, validation, expansion, analysis, turtle interpretation, static baked generated-data backend, and bounded runtime bootstrap backend. |
 | `interface.py` | Node group input/output sockets and defaults. |
 | `library.py` | Function discovery, function-group materialization, and group-node calls. |
 
@@ -121,4 +121,6 @@ The constructor names are excluded from implicit input discovery and cannot be r
 
 System constructors can return compile-time-only objects. These objects may be assigned and later consumed by their subsystem, but shared runtime consumers reject them before node socket/type handling. The generic `CompileTimeObject` base also fails closed on accidental `.typ` or `.socket` access so leaked compile-time objects raise `CompileError` instead of Python attribute errors.
 
-Stage 1 L-systems use a bounded per-segment Curve Line backend. The backend creates only nodes in the active node group. It does not create generated Blender datablocks, persistent ownership metadata, restart cleanup state, or unregister cleanup hooks.
+Static L-systems, where `ls_angle(...)` and `ls_step(...)` are compile-time numeric constants, use a baked generated-data backend. The compiler expands and interprets the turtle stream in Python, stores the result in a generated `Curve` datablock, creates a hidden generated `Object` for Object Info sourcing, and returns the Object Info `Geometry` output as a normal `Geometry` value. Runtime-angle or runtime-step L-systems remain on the bounded Stage 1 per-segment backend until the vectorized runtime stages are implemented.
+
+Generated Curve/Object IDs are owned by `systems/lsystem/resources.py`. Deletion requires positive NodeForge metadata on the generated ID; deterministic names are diagnostics, not ownership proof. Live group metadata is the authoritative index for successful recompiles, while ID metadata is used for restart/orphan cleanup when no live group references the ID. Existing-group updates compile into a replacement group first and cut over only after replacement graph/resources are ready. Failed replacement compile or cutover restores the previous graph, source/default metadata, generated-resource manifest, and generated IDs. Successful zero-resource replacements after a generated-resource group commit an explicit empty manifest before old verified resources are cleaned.

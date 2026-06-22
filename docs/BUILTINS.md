@@ -525,8 +525,9 @@ Builds an L-system and returns normal `Geometry`. The returned value can be tran
 
 A system requires exactly one axiom, iteration count, angle, and step. It can include any number of rewrite rules. Duplicate singleton parts and duplicate rule predecessors raise `CompileError`.
 
-Stage 1 materializes accepted L-systems through a bounded bootstrap backend: one Curve Line node per drawn segment, joined as one geometry result. Systems with more than 1000 drawn `F` segments raise `CompileError` instead of creating an unbounded node graph. Static baked geometry and vectorized runtime backends are later backend implementations; user syntax stays the same.
-Stage 1 also rejects systems that emit no drawn `F` segments until the empty-geometry Blender node contract is verified in the supported headless runtime. Non-command grammar symbols remain valid and are ignored by turtle emission when other draw commands are present.
+Static systems, where `ls_angle(...)` and `ls_step(...)` are compile-time numbers, are baked into generated Curve/Object datablocks and sourced back into the node graph through Object Info. The node graph stays small as segment count grows, but static angle/step changes require recompilation because turtle coordinates are already baked. The generated datablocks carry NodeForge ownership metadata and are cleaned on successful replacement, failed replacement rollback, restart orphan cleanup, and add-on unregister cleanup.
+
+Runtime-angle or runtime-step systems keep using the bounded bootstrap backend in this stage: one Curve Line node per drawn segment, joined as one geometry result. Runtime systems with more than 1000 drawn `F` segments still raise `CompileError` instead of creating an unbounded node graph. Systems that emit no drawn `F` segments are rejected until the empty-geometry Blender node contract is verified in the supported headless runtime. Non-command grammar symbols remain valid and are ignored by turtle emission when other draw commands are present.
 
 ### `ls_axiom(value)`
 
