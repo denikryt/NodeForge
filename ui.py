@@ -394,7 +394,11 @@ def unregister():
     if hasattr(bpy.types.Scene, "gn_script_mvp"):
         del bpy.types.Scene.gn_script_mvp
     for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
+        try:
+            bpy.utils.unregister_class(cls)
+        except RuntimeError as exc:
+            if "missing bl_rna attribute" not in str(exc):
+                raise
 
 if __name__ == "__main__":
     register()

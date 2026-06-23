@@ -15,7 +15,6 @@ from .runtime_tables import (
     PATH_ID_ATTR,
     WORLD_POSITION_ATTR,
 )
-from . import resources
 
 MAX_LSYSTEM_BRANCH_DEPTH = 32
 
@@ -281,6 +280,8 @@ def branch_free_vectorized_runtime_backend(comp, table, *, angle_degrees, step, 
     """Materialize branch-free runtime L-systems as a bounded vectorized field graph."""
     if table.draw_count <= 0:
         raise CompileError("Branch-free runtime L-system backend requires at least one drawn F segment")
+    from . import resources
+
     tx = getattr(comp, "generated_resource_transaction", None)
     if tx is None:
         tx = resources.create_transaction(comp.group)
@@ -330,6 +331,8 @@ def branch_aware_vectorized_runtime_backend(comp, table, *, angle_degrees, step,
         raise CompileError(
             f"L-system branched_runtime backend exceeds MAX_LSYSTEM_BRANCH_DEPTH={MAX_LSYSTEM_BRANCH_DEPTH}"
         )
+    from . import resources
+
     tx = getattr(comp, "generated_resource_transaction", None)
     if tx is None:
         tx = resources.create_transaction(comp.group)
@@ -427,6 +430,8 @@ def static_baked_backend(comp, segments, x=0, y=0):
     """Materialize static turtle segments as generated Curve/Object IDs and Object Info geometry."""
     if not segments:
         raise CompileError("Static L-system backend requires at least one drawn F segment")
+    from . import resources
+
     tx = getattr(comp, "generated_resource_transaction", None)
     if tx is None:
         tx = resources.create_transaction(comp.group)

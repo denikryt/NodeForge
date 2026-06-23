@@ -76,3 +76,4 @@ NodeForge/
 - [`docs/WRITING_FUNCTIONS.md`](docs/WRITING_FUNCTIONS.md) — guide for adding functions under `functions/`.
 - [`docs/BUILTINS.md`](docs/BUILTINS.md) — reference for DSL built-ins.
 - [`docs/LSYSTEMS.md`](docs/LSYSTEMS.md) — reference for embedded L-system constructors, limits, and examples.
+- [`docs/TESTING.md`](docs/TESTING.md) — commands for running unit tests, Blender tests, and optional L-system benchmarks.

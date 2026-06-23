@@ -140,13 +140,17 @@ The budgets below cover three things: how large the expanded L-system string may
 | Runtime command Mesh size | Conservative structural budget. | Generated Mesh vertices/edges grow with the expanded command stream. Runtime angle and step changes reuse the same generated resources. |
 | Branch-aware node graph depth | Hard branch-depth limit plus conservative structural budget. | The depth-unrolled branch-origin chain grows with maximum branch depth, not with total segment count. |
 
-NodeForge also provides an optional L-system benchmark mode for maintainers. It checks representative static, runtime, and branched runtime systems and reports compile time, update time, generated topology size, node count, runtime evaluation timing, and cleanup status.
+NodeForge also provides optional pytest L-system benchmarks for maintainers. They check representative static, runtime, and branched runtime systems and report compile time, update time, generated topology size, node count, runtime evaluation timing, and cleanup status.
 
-Enable it with `NODEFORGE_LSYSTEM_BENCHMARK=1` when running the Blender regression script. Results depend on Blender version and hardware, so use them as local guidance rather than fixed performance guarantees.
+Run them from the add-on repository root:
 
 ```bash
-NODEFORGE_LSYSTEM_BENCHMARK=1 blender --background --factory-startup --python tests/blender_refactor_regression.py
+NODEFORGE_LSYSTEM_BENCHMARK=1 \
+blender --background --factory-startup \
+  --python tests/run_pytest_in_blender.py -- tests/blender/lsystem/test_benchmarks.py
 ```
+
+The benchmark writes machine-readable `LSYSTEM_BENCHMARK_ENV` and `LSYSTEM_BENCHMARK_ROW` JSON lines to stdout. Timing values depend on hardware and Blender version, so use them as trend data rather than fixed thresholds.
 
 ## Examples
 
