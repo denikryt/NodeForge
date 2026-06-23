@@ -255,14 +255,36 @@ def _lookup_ref(ref: GeneratedResourceRef):
     return collection.get(ref.name)
 
 
+def _metadata_matches_ref(meta: GeneratedResourceRef | None, ref: GeneratedResourceRef) -> bool:
+    return (
+        meta is not None
+        and meta.kind == ref.kind
+        and meta.name == ref.name
+        and meta.owner_group_uuid == ref.owner_group_uuid
+        and meta.generation_uuid == ref.generation_uuid
+        and meta.role == ref.role
+    )
+
+
 def _verified_id_for_ref(ref: GeneratedResourceRef):
     id_obj = _lookup_ref(ref)
-    meta = read_id_metadata(id_obj)
-    if meta is None:
+    if _metadata_matches_ref(read_id_metadata(id_obj), ref):
+        return id_obj
+
+    collection = _id_collection(ref.kind)
+    if collection is None:
         return None
-    if meta.kind != ref.kind or meta.owner_group_uuid != ref.owner_group_uuid or meta.generation_uuid != ref.generation_uuid:
-        return None
-    return id_obj
+    matches = []
+    for candidate in list(collection):
+        if _metadata_matches_ref(read_id_metadata(candidate), ref):
+            matches.append(candidate)
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        _record_cleanup_warning(
+            f"Skipped generated {ref.kind} cleanup because ownership metadata matched multiple IDs: {ref.name}"
+        )
+    return None
 
 
 def delete_generated_ref(ref: GeneratedResourceRef) -> bool:

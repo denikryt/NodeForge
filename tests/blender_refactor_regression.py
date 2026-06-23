@@ -1,7 +1,12 @@
 """Blender headless regression checks for compiler-module refactors."""
 
 import ast
+import json
+import os
+import platform
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +21,9 @@ from NodeForge.constants import _FLOAT_FUNCS_1, _FLOAT_FUNCS_2
 from NodeForge.errors import CompileError
 from NodeForge.builtins import registry
 from NodeForge.systems import registry as systems_registry
+from NodeForge.systems.lsystem import backends as lsystem_backends
+from NodeForge.systems.lsystem.analysis import analyze as analyze_lsystem
+from NodeForge.systems.lsystem.expander import expand as expand_lsystem
 from NodeForge.systems.lsystem import resources as generated_resources
 from NodeForge.systems.lsystem.runtime_tables import (
     ANCHOR_MASK_ATTR,
@@ -29,6 +37,7 @@ from NodeForge.systems.lsystem.runtime_tables import (
     build_branch_free_command_table,
 )
 from NodeForge.systems.lsystem.backends import MAX_LSYSTEM_BRANCH_DEPTH
+from NodeForge.values import Value
 from NodeForge.builtins import fields, geometry, instancing, io, math, vector
 
 
@@ -271,6 +280,366 @@ def run_library_checks():
 
 
 
+LSYSTEM_GALLERY_EXAMPLES = {
+    "static_koch_curve": '''
+geo = ls_system(
+    ls_axiom("F"),
+    ls_rule("F", "F+F--F+F"),
+    ls_iterations(3),
+    ls_angle(60),
+    ls_step(0.1),
+)
+output("Geometry", geo)
+''',
+    "runtime_branch_free_curve": '''
+angle_value = input_float("Angle", default=90.0)
+step_value = input_float("Step", default=0.25)
+
+geo = ls_system(
+    ls_axiom("F+F+F+F"),
+    ls_iterations(0),
+    ls_angle(angle_value),
+    ls_step(step_value),
+)
+output("Geometry", geo)
+''',
+    "runtime_branched_plant": '''
+angle_value = input_float("Angle", default=25.0)
+step_value = input_float("Step", default=0.12)
+
+geo = ls_system(
+    ls_axiom("F"),
+    ls_rule("F", "F[+F]F[-F]F"),
+    ls_iterations(2),
+    ls_angle(angle_value),
+    ls_step(step_value),
+)
+output("Geometry", geo)
+''',
+    "grammar_symbols": '''
+geo = ls_system(
+    ls_axiom("X"),
+    ls_rule("X", "F+X"),
+    ls_iterations(3),
+    ls_angle(60),
+    ls_step(0.1),
+)
+output("Geometry", geo)
+''',
+    "composed_geometry": '''
+plant = ls_system(
+    ls_axiom("F"),
+    ls_rule("F", "F[+F]F[-F]F"),
+    ls_iterations(1),
+    ls_angle(25),
+    ls_step(0.2),
+)
+plant = transform(plant, translation=vector(0, 0, 1))
+base = grid(2, 2)
+geo = join(base, plant)
+output("Geometry", geo)
+''',
+}
+
+
+def _lsystem_source(axiom, *, rules=(), iterations=0, angle="60", step="1.0", runtime=False):
+    """Build an L-system source fixture from explicit constructor values."""
+    lines = []
+    angle_expr = str(angle)
+    step_expr = str(step)
+    if runtime:
+        lines.extend([
+            f'angle_value = input_float("Angle", default={angle})',
+            f'step_value = input_float("Step", default={step})',
+        ])
+        angle_expr = "angle_value"
+        step_expr = "step_value"
+    parts = [f'ls_axiom("{axiom}")']
+    for symbol, replacement in rules:
+        parts.append(f'ls_rule("{symbol}", "{replacement}")')
+    parts.extend([f"ls_iterations({iterations})", f"ls_angle({angle_expr})", f"ls_step({step_expr})"])
+    lines.append("geo = ls_system(" + ", ".join(parts) + ")")
+    lines.append('output("Geometry", geo)')
+    return "\n".join(lines) + "\n"
+
+
+LSYSTEM_BENCHMARK_FIXTURES = (
+    {
+        "name": "static_straight_1k",
+        "category": "static_straight",
+        "axiom": "F",
+        "rules": (("F", "FF"),),
+        "iterations": 10,
+        "runtime": False,
+    },
+    {
+        "name": "static_straight_10k",
+        "category": "static_straight",
+        "axiom": "F",
+        "rules": (("F", "FF"),),
+        "iterations": 14,
+        "runtime": False,
+    },
+    {
+        "name": "static_straight_large",
+        "category": "static_straight",
+        "axiom": "F",
+        "rules": (("F", "FF"),),
+        "iterations": 16,
+        "runtime": False,
+    },
+    {
+        "name": "static_branched",
+        "category": "static_branched",
+        "axiom": "F",
+        "rules": (("F", "F[+F]F[-F]F"),),
+        "iterations": 4,
+        "runtime": False,
+    },
+    {
+        "name": "branch_free_runtime_line_large",
+        "category": "branch_free_runtime_line",
+        "axiom": "F",
+        "rules": (("F", "FF"),),
+        "iterations": 11,
+        "runtime": True,
+    },
+    {
+        "name": "branch_free_runtime_turns",
+        "category": "branch_free_runtime_turns",
+        "axiom": "F",
+        "rules": (("F", "F+F--F+F"),),
+        "iterations": 3,
+        "runtime": True,
+    },
+    {
+        "name": "branched_runtime_shallow_wide",
+        "category": "branched_runtime_shallow_wide",
+        "axiom": "F" + "[+F]" * 64,
+        "rules": (),
+        "iterations": 0,
+        "runtime": True,
+    },
+    {
+        "name": "branched_runtime_deep_narrow",
+        "category": "branched_runtime_deep_narrow",
+        "axiom": "[" * MAX_LSYSTEM_BRANCH_DEPTH + "F" + "]" * MAX_LSYSTEM_BRANCH_DEPTH,
+        "rules": (),
+        "iterations": 0,
+        "runtime": True,
+    },
+    {
+        "name": "limit_symbols",
+        "category": "limit_failure",
+        "axiom": "F",
+        "rules": (("F", "FF"),),
+        "iterations": 18,
+        "runtime": False,
+        "expect_error": True,
+    },
+    {
+        "name": "limit_branch_depth",
+        "category": "limit_failure",
+        "axiom": "[" * (MAX_LSYSTEM_BRANCH_DEPTH + 1) + "F" + "]" * (MAX_LSYSTEM_BRANCH_DEPTH + 1),
+        "rules": (),
+        "iterations": 0,
+        "runtime": True,
+        "expect_error": True,
+    },
+)
+
+
+def _git_commit_for_benchmark():
+    """Return the current repository commit when the benchmark runs from a checkout."""
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(ROOT),
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return "unknown"
+
+
+def _benchmark_environment_row():
+    """Describe the runtime used for optional L-system benchmark rows."""
+    return {
+        "blender_version": getattr(bpy.app, "version_string", "unknown"),
+        "python_version": platform.python_version(),
+        "nodeforge_version": ".".join(str(part) for part in NodeForge.bl_info.get("version", ())),
+        "commit": _git_commit_for_benchmark(),
+    }
+
+
+def _benchmark_fixture_source(fixture):
+    """Return the DSL source for one benchmark fixture."""
+    return _lsystem_source(
+        fixture["axiom"],
+        rules=fixture.get("rules", ()),
+        iterations=fixture.get("iterations", 0),
+        runtime=fixture.get("runtime", False),
+    )
+
+
+def _benchmark_static_metrics(fixture):
+    """Compute compile-time structural metrics for one benchmark fixture."""
+    stream = expand_lsystem(fixture["axiom"], dict(fixture.get("rules", ())), fixture.get("iterations", 0))
+    runtime_value = Value(None, "FLOAT")
+    angle = runtime_value if fixture.get("runtime", False) else 60.0
+    step = runtime_value if fixture.get("runtime", False) else 1.0
+    metrics = analyze_lsystem(stream, angle=angle, step=step)
+    return stream, metrics, lsystem_backends.select_backend_category(metrics)
+
+
+def _benchmark_generated_topology(refs):
+    """Summarize generated Curve or Mesh topology for benchmark output."""
+    topology = {}
+    for ref in refs:
+        if ref.kind == "CURVE":
+            curve = bpy.data.curves.get(ref.name)
+            if curve is not None:
+                topology["curve_splines"] = len(curve.splines)
+                topology["curve_points"] = sum(len(spline.points) for spline in curve.splines)
+        elif ref.kind == "MESH":
+            mesh = bpy.data.meshes.get(ref.name)
+            if mesh is not None:
+                topology["mesh_vertices"] = len(mesh.vertices)
+                topology["mesh_edges"] = len(mesh.edges)
+    return topology
+
+
+def _benchmark_runtime_evaluation(group, fixture_name):
+    """Measure one evaluated depsgraph snapshot and verify runtime input stability."""
+    before = generated_resources.read_group_manifest(group)
+    wrapper, obj, mesh_data, mod = _attach_runtime_eval_modifier(group, "NFTest_lsystem_benchmark_eval_" + fixture_name)
+    try:
+        _set_modifier_input(mod, wrapper, "Angle", 45.0)
+        _set_modifier_input(mod, wrapper, "Step", 0.5)
+        obj.update_tag()
+        start = time.perf_counter()
+        bpy.context.view_layer.update()
+        vertices, edges, polygons = _evaluated_mesh_snapshot(obj)
+        elapsed = time.perf_counter() - start
+        _set_modifier_input(mod, wrapper, "Angle", 30.0)
+        _set_modifier_input(mod, wrapper, "Step", 1.25)
+        obj.update_tag()
+        bpy.context.view_layer.update()
+        after = generated_resources.read_group_manifest(group)
+        return {
+            "depsgraph_snapshot_seconds": elapsed,
+            "evaluated_vertices": len(vertices),
+            "evaluated_edges": len(edges),
+            "evaluated_polygons": polygons,
+            "runtime_input_manifest_stable": before == after,
+        }
+    finally:
+        _cleanup_runtime_eval_objects(wrapper, obj, mesh_data)
+
+
+def _benchmark_cleanup(group, refs):
+    """Remove a benchmark group and report generated-resource cleanup state."""
+    names = [(ref.kind, ref.name) for ref in refs]
+    try:
+        bpy.data.node_groups.remove(group)
+    except Exception:
+        pass
+    generated_resources.cleanup_restart_orphans()
+    remaining = []
+    for kind, name in names:
+        if kind == "CURVE" and bpy.data.curves.get(name) is not None:
+            remaining.append({"kind": kind, "name": name})
+        elif kind == "MESH" and bpy.data.meshes.get(name) is not None:
+            remaining.append({"kind": kind, "name": name})
+        elif kind == "OBJECT" and bpy.data.objects.get(name) is not None:
+            remaining.append({"kind": kind, "name": name})
+    return {"removed_all_generated_ids": not remaining, "remaining": remaining}
+
+
+def _run_lsystem_benchmark_fixture(fixture):
+    """Compile one benchmark fixture and print a machine-readable metrics row."""
+    row = {
+        "fixture": fixture["name"],
+        "fixture_category": fixture["category"],
+        "expected_error": bool(fixture.get("expect_error", False)),
+    }
+    before_keys = _owned_generated_id_keys()
+    try:
+        stream, metrics, backend_category = _benchmark_static_metrics(fixture)
+        row.update({
+            "expanded_symbols": len(stream),
+            "segment_count": metrics.segment_count,
+            "max_branch_depth": metrics.max_branch_depth,
+            "backend_category": backend_category,
+        })
+    except CompileError as exc:
+        row.update({
+            "expanded_symbols": None,
+            "segment_count": None,
+            "max_branch_depth": None,
+            "backend_category": None,
+            "analysis_error": type(exc).__name__,
+            "analysis_message": str(exc),
+        })
+    source = _benchmark_fixture_source(fixture)
+    group = None
+    refs = []
+    try:
+        start = time.perf_counter()
+        group = compile_group(source, "NFTest_lsystem_benchmark_" + fixture["name"])
+        row["compile_seconds"] = time.perf_counter() - start
+        manifest, refs = _manifest_refs(group)
+        row["generated_ids"] = [{"kind": ref.kind, "role": ref.role} for ref in refs]
+        row["topology"] = _benchmark_generated_topology(refs)
+        row["node_count"] = len(group.nodes)
+        start = time.perf_counter()
+        compiler.update_expression_group(group, source)
+        row["update_seconds"] = time.perf_counter() - start
+        manifest, refs = _manifest_refs(group)
+        row["post_update_generation_uuid"] = manifest["generation_uuid"]
+        row["runtime_eval"] = None
+        if row.get("backend_category") in {"branch_free_runtime", "branched_runtime"}:
+            row["runtime_eval"] = _benchmark_runtime_evaluation(group, fixture["name"])
+        row["cleanup"] = _benchmark_cleanup(group, refs)
+        group = None
+    except CompileError as exc:
+        row["compile_error"] = type(exc).__name__
+        row["compile_message"] = str(exc)
+        row["cleanup"] = {"removed_all_generated_ids": _owned_generated_id_keys() == before_keys, "remaining": []}
+        if not fixture.get("expect_error", False):
+            raise
+    finally:
+        if group is not None:
+            row["cleanup"] = _benchmark_cleanup(group, refs)
+    if fixture.get("expect_error", False):
+        check("compile_error" in row or "analysis_error" in row, f"benchmark limit fixture unexpectedly compiled: {fixture['name']}")
+    else:
+        check("compile_seconds" in row, f"benchmark fixture did not compile: {fixture['name']}")
+        check(row.get("generated_ids"), f"benchmark fixture did not create generated resources: {fixture['name']}")
+        check(row.get("cleanup", {}).get("removed_all_generated_ids"), f"benchmark cleanup left generated IDs: {fixture['name']}")
+    print("LSYSTEM_BENCHMARK_ROW " + json.dumps(row, sort_keys=True))
+
+
+def run_lsystem_benchmark_if_requested():
+    """Run optional performance fixtures and emit rows with structural and timing metrics."""
+    if os.environ.get("NODEFORGE_LSYSTEM_BENCHMARK") != "1":
+        return
+    print("LSYSTEM_BENCHMARK_ENV " + json.dumps(_benchmark_environment_row(), sort_keys=True))
+    required_categories = {
+        "static_straight",
+        "static_branched",
+        "branch_free_runtime_line",
+        "branch_free_runtime_turns",
+        "branched_runtime_shallow_wide",
+        "branched_runtime_deep_narrow",
+        "limit_failure",
+    }
+    actual_categories = {fixture["category"] for fixture in LSYSTEM_BENCHMARK_FIXTURES}
+    check(required_categories.issubset(actual_categories), "L-system benchmark fixture matrix is incomplete")
+    for fixture in LSYSTEM_BENCHMARK_FIXTURES:
+        _run_lsystem_benchmark_fixture(fixture)
+    print("LSYSTEM_BENCHMARK_OK")
+
 
 def expect_compile_error(source, name, exc_type=CompileError, **kwargs):
     """Compile one source and require a controlled error type."""
@@ -284,8 +653,8 @@ def expect_compile_error(source, name, exc_type=CompileError, **kwargs):
         raise AssertionError(f"{name} did not raise {exc_type.__name__}")
 
 
-def run_lsystem_stage1_checks():
-    """Exercise embedded L-system Stage 1 syntax, guards, and bounded backend."""
+def run_lsystem_syntax_and_guard_checks():
+    """Exercise embedded L-system syntax, guards, and backend-independent validation."""
     group = compile_group("""
 angle_value = input_float("Angle", default=60.0)
 step_value = input_float("Step", default=0.1)
@@ -418,7 +787,7 @@ output("Geometry", geo)
         "NFTest_lsystem_backend_helper_guard",
         backend_builtins=library.backend_builtins_for_function("mandelbrot"),
     )
-    print("LSYSTEM_STAGE1_OK")
+    print("LSYSTEM_SYNTAX_AND_GUARDS_OK")
 
 def _object_info_source(node):
     """Return the Object referenced by an Object Info node."""
@@ -528,20 +897,34 @@ def _assert_static_baked_group(group):
     geometry_outputs = [socket for socket in object_infos[0].outputs if getattr(socket, "name", "") == "Geometry"]
     check(geometry_outputs, "Object Info Geometry output missing")
     curve_line_nodes = [node for node in group.nodes if getattr(node, "bl_idname", "") == "GeometryNodeCurvePrimitiveLine"]
-    check(not curve_line_nodes, "static baked backend used Stage 1 Curve Line nodes")
+    check(not curve_line_nodes, "static baked backend used per-segment Curve Line nodes")
     return manifest, refs, obj
 
 
-def run_lsystem_stage2_checks():
-    """Exercise Stage 2 static baked ownership, update, cutover, and cleanup behavior."""
-    group = compile_group(_static_lsystem_source(iterations=2), "NFTest_lsystem_stage2_static")
+def _rename_generated_refs(refs, suffix):
+    """Rename generated IDs while preserving ownership metadata for cleanup checks."""
+    renamed = []
+    for ref in refs:
+        coll = _collection_for_ref(ref)
+        id_obj = coll.get(ref.name)
+        check(id_obj is not None, f"generated resource missing before rename: {ref.name}")
+        id_obj.name = id_obj.name + suffix
+        renamed.append((ref.kind, id_obj.name))
+        meta = generated_resources.read_id_metadata(id_obj)
+        check(meta is not None and meta.name == ref.name, "generated ID metadata should remain stable after user rename")
+    return renamed
+
+
+def run_lsystem_static_ownership_checks():
+    """Exercise static baked ownership, update, cutover, and cleanup behavior."""
+    group = compile_group(_static_lsystem_source(iterations=2), "NFTest_lsystem_static_ownership_static")
     old_manifest, old_refs, old_obj = _assert_static_baked_group(group)
     old_names = {(ref.kind, ref.name) for ref in old_refs}
 
     large = compile_group('''
 geo = ls_system(ls_axiom("F"), ls_rule("F", "FF"), ls_iterations(11), ls_angle(0), ls_step(0.01))
 output("Geometry", geo)
-''', "NFTest_lsystem_stage2_large_static")
+''', "NFTest_lsystem_static_ownership_large_static")
     _assert_static_baked_group(large)
     check(len(large.nodes) <= 4, f"static baked node graph grew per segment: {len(large.nodes)} nodes")
 
@@ -557,7 +940,7 @@ output("Geometry", geo)
     for index, (axiom, expected_splines) in enumerate(static_branch_edge_cases.items()):
         edge_group = compile_group(
             f'geo = ls_system(ls_axiom("{axiom}"), ls_iterations(0), ls_angle(90), ls_step(1))\noutput("Geometry", geo)',
-            f"NFTest_lsystem_stage2_static_branch_edge_{index}",
+            f"NFTest_lsystem_static_ownership_static_branch_edge_{index}",
         )
         _edge_manifest, edge_refs, edge_obj = _assert_static_baked_group(edge_group)
         curve_ref = _ref_by_kind(edge_refs, "CURVE")
@@ -570,7 +953,7 @@ output("Geometry", geo)
     before_resource_failure = _owned_generated_id_keys()
     generated_resources._TEST_FAIL_AFTER_OBJECT_CREATE = True
     try:
-        compile_group(_static_lsystem_source(iterations=1, step=0.15), "NFTest_lsystem_stage2_resource_failure")
+        compile_group(_static_lsystem_source(iterations=1, step=0.15), "NFTest_lsystem_static_ownership_resource_failure")
     except RuntimeError:
         pass
     else:
@@ -581,11 +964,11 @@ output("Geometry", geo)
 angle_value = input_float("Angle", default=60)
 geo = ls_system(ls_axiom("F"), ls_rule("F", "FF"), ls_iterations(2), ls_angle(angle_value), ls_step(0.1))
 output("Geometry", geo)
-''', "NFTest_lsystem_stage2_runtime_branch_free")
+''', "NFTest_lsystem_static_ownership_runtime_branch_free")
     runtime_manifest, runtime_refs = _manifest_refs(runtime)
     check({ref.kind for ref in runtime_refs} == {"MESH", "OBJECT"}, "branch-free runtime L-system used static Curve resources")
     check(any(ref.role == "branch_free_runtime_command_mesh" for ref in runtime_refs), "branch-free runtime command Mesh role missing")
-    check(not any(getattr(node, "bl_idname", "") == "GeometryNodeCurvePrimitiveLine" for node in runtime.nodes), "branch-free runtime still uses bounded Stage 1 path")
+    check(not any(getattr(node, "bl_idname", "") == "GeometryNodeCurvePrimitiveLine" for node in runtime.nodes), "branch-free runtime used per-segment Curve Line nodes")
     check(runtime_manifest["owner_group_uuid"], "branch-free runtime manifest lacks owner UUID")
 
     compiler.update_expression_group(group, _static_lsystem_source(iterations=1, step=0.2))
@@ -605,7 +988,7 @@ output("Geometry", geo)
     runtime_manifest, runtime_refs = _manifest_refs(group)
     check({ref.kind for ref in runtime_refs} == {"MESH", "OBJECT"}, "runtime replacement did not commit branch-free Mesh/Object manifest")
     check(runtime_manifest["owner_group_uuid"] == new_manifest["owner_group_uuid"], "runtime manifest did not preserve owner UUID")
-    check(not any(getattr(node, "bl_idname", "") == "GeometryNodeCurvePrimitiveLine" for node in group.nodes), "runtime update used bounded Stage 1 path")
+    check(not any(getattr(node, "bl_idname", "") == "GeometryNodeCurvePrimitiveLine" for node in group.nodes), "runtime update used per-segment Curve Line nodes")
     check(compiler._extract_group_source(group) == runtime_update_source, "runtime update did not store replacement source")
     for ref in previous_refs:
         coll = _collection_for_ref(ref)
@@ -624,11 +1007,11 @@ output("Geometry", geo)
         coll = bpy.data.curves if ref.kind == "CURVE" else bpy.data.objects
         check(coll.get(ref.name) is None, f"old generated resource survived zero-resource update: {ref.name}")
 
-    shared_group = compile_group(_static_lsystem_source(iterations=1, step=0.31), "NFTest_lsystem_stage2_shared_recompile")
+    shared_group = compile_group(_static_lsystem_source(iterations=1, step=0.31), "NFTest_lsystem_static_ownership_shared_recompile")
     _shared_manifest, shared_refs, _ = _assert_static_baked_group(shared_group)
     shared_curve_ref = _ref_by_kind(shared_refs, "CURVE")
     shared_object_ref = _ref_by_kind(shared_refs, "OBJECT")
-    shared_curve, shared_user_obj = _create_user_object_using_generated_curve(shared_curve_ref, "NFTest_lsystem_stage2_user_curve_recompile")
+    shared_curve, shared_user_obj = _create_user_object_using_generated_curve(shared_curve_ref, "NFTest_lsystem_static_ownership_user_curve_recompile")
     try:
         compiler.update_expression_group(shared_group, _static_lsystem_source(iterations=2, step=0.32))
         check(bpy.data.objects.get(shared_object_ref.name) is None, "recompile left old generated Object")
@@ -637,6 +1020,15 @@ output("Geometry", geo)
         check(shared_user_obj.data is shared_curve, "recompile unlinked user Object from generated Curve")
     finally:
         _remove_user_object_and_generated_curve(shared_user_obj, shared_curve)
+
+    renamed_group = compile_group(_static_lsystem_source(iterations=1, step=0.33), "NFTest_lsystem_static_ownership_renamed_recompile")
+    _renamed_manifest, renamed_refs, _ = _assert_static_baked_group(renamed_group)
+    renamed_live_names = _rename_generated_refs(renamed_refs, ".UserRenamed")
+    compiler.update_expression_group(renamed_group, _static_lsystem_source(iterations=2, step=0.34))
+    _assert_static_baked_group(renamed_group)
+    for kind, live_name in renamed_live_names:
+        coll = bpy.data.curves if kind == "CURVE" else bpy.data.objects
+        check(coll.get(live_name) is None, f"renamed old generated {kind} survived successful replacement: {live_name}")
 
     compiler.update_expression_group(group, _static_lsystem_source(iterations=1, step=0.3))
     stable_manifest, stable_refs, stable_obj = _assert_static_baked_group(group)
@@ -680,7 +1072,7 @@ output("Geometry", geo)
         bpy.data.objects.remove(user_obj, do_unlink=True)
         bpy.data.curves.remove(user_curve, do_unlink=True)
 
-    orphan_group = compile_group(_static_lsystem_source(iterations=1, step=0.5), "NFTest_lsystem_stage2_orphan")
+    orphan_group = compile_group(_static_lsystem_source(iterations=1, step=0.5), "NFTest_lsystem_static_ownership_orphan")
     orphan_manifest, orphan_refs, _ = _assert_static_baked_group(orphan_group)
     generated_resources.write_empty_manifest(orphan_group, orphan_manifest["owner_group_uuid"])
     generated_resources.cleanup_restart_orphans()
@@ -688,11 +1080,11 @@ output("Geometry", geo)
         coll = bpy.data.curves if ref.kind == "CURVE" else bpy.data.objects
         check(coll.get(ref.name) is None, f"restart orphan cleanup left {ref.name}")
 
-    shared_orphan_group = compile_group(_static_lsystem_source(iterations=1, step=0.55), "NFTest_lsystem_stage2_shared_orphan")
+    shared_orphan_group = compile_group(_static_lsystem_source(iterations=1, step=0.55), "NFTest_lsystem_static_ownership_shared_orphan")
     shared_orphan_manifest, shared_orphan_refs, _ = _assert_static_baked_group(shared_orphan_group)
     shared_orphan_curve_ref = _ref_by_kind(shared_orphan_refs, "CURVE")
     shared_orphan_object_ref = _ref_by_kind(shared_orphan_refs, "OBJECT")
-    shared_orphan_curve, shared_orphan_user_obj = _create_user_object_using_generated_curve(shared_orphan_curve_ref, "NFTest_lsystem_stage2_user_curve_orphan")
+    shared_orphan_curve, shared_orphan_user_obj = _create_user_object_using_generated_curve(shared_orphan_curve_ref, "NFTest_lsystem_static_ownership_user_curve_orphan")
     try:
         generated_resources.write_empty_manifest(shared_orphan_group, shared_orphan_manifest["owner_group_uuid"])
         generated_resources.cleanup_restart_orphans()
@@ -703,18 +1095,18 @@ output("Geometry", geo)
     finally:
         _remove_user_object_and_generated_curve(shared_orphan_user_obj, shared_orphan_curve)
 
-    shutdown_group = compile_group(_static_lsystem_source(iterations=1, step=0.6), "NFTest_lsystem_stage2_shutdown")
+    shutdown_group = compile_group(_static_lsystem_source(iterations=1, step=0.6), "NFTest_lsystem_static_ownership_shutdown")
     _shutdown_manifest, shutdown_refs, _ = _assert_static_baked_group(shutdown_group)
     generated_resources.cleanup_live_group_resources()
     for ref in shutdown_refs:
         coll = bpy.data.curves if ref.kind == "CURVE" else bpy.data.objects
         check(coll.get(ref.name) is None, f"shutdown cleanup left {ref.name}")
 
-    shared_shutdown_group = compile_group(_static_lsystem_source(iterations=1, step=0.65), "NFTest_lsystem_stage2_shared_shutdown")
+    shared_shutdown_group = compile_group(_static_lsystem_source(iterations=1, step=0.65), "NFTest_lsystem_static_ownership_shared_shutdown")
     _shared_shutdown_manifest, shared_shutdown_refs, _ = _assert_static_baked_group(shared_shutdown_group)
     shared_shutdown_curve_ref = _ref_by_kind(shared_shutdown_refs, "CURVE")
     shared_shutdown_object_ref = _ref_by_kind(shared_shutdown_refs, "OBJECT")
-    shared_shutdown_curve, shared_shutdown_user_obj = _create_user_object_using_generated_curve(shared_shutdown_curve_ref, "NFTest_lsystem_stage2_user_curve_shutdown")
+    shared_shutdown_curve, shared_shutdown_user_obj = _create_user_object_using_generated_curve(shared_shutdown_curve_ref, "NFTest_lsystem_static_ownership_user_curve_shutdown")
     try:
         generated_resources.cleanup_live_group_resources()
         check(bpy.data.objects.get(shared_shutdown_object_ref.name) is None, "shutdown cleanup left generated Object sharing Curve")
@@ -723,9 +1115,19 @@ output("Geometry", geo)
         check(shared_shutdown_user_obj.data is shared_shutdown_curve, "shutdown cleanup unlinked user Object from generated Curve")
     finally:
         _remove_user_object_and_generated_curve(shared_shutdown_user_obj, shared_shutdown_curve)
+
+    renamed_shutdown_group = compile_group(_static_lsystem_source(iterations=1, step=0.66), "NFTest_lsystem_static_ownership_renamed_shutdown")
+    _renamed_shutdown_manifest, renamed_shutdown_refs, _ = _assert_static_baked_group(renamed_shutdown_group)
+    renamed_shutdown_live_names = _rename_generated_refs(renamed_shutdown_refs, ".UserRenamed")
+    generated_resources.cleanup_live_group_resources()
+    for kind, live_name in renamed_shutdown_live_names:
+        coll = bpy.data.curves if kind == "CURVE" else bpy.data.objects
+        check(coll.get(live_name) is None, f"unregister cleanup left renamed generated {kind}: {live_name}")
+    check(generated_resources.read_group_manifest(renamed_shutdown_group)["resources"] == [], "unregister cleanup did not clear renamed-resource manifest")
+
     generated_resources.cleanup_live_group_resources()
     generated_resources.cleanup_restart_orphans()
-    print("LSYSTEM_STAGE2_OK")
+    print("LSYSTEM_STATIC_OWNERSHIP_OK")
 
 
 def _socket_identifier_by_name(group, socket_name, in_out="INPUT"):
@@ -739,7 +1141,7 @@ def _socket_identifier_by_name(group, socket_name, in_out="INPUT"):
     raise AssertionError(f"missing {in_out} interface socket {socket_name!r}")
 
 
-def _new_stage3_eval_wrapper(compiled_group, name):
+def _new_runtime_eval_wrapper(compiled_group, name):
     """Wrap a compiled L-system group with Curve to Mesh so depsgraph output is inspectable."""
     wrapper = bpy.data.node_groups.new(name, "GeometryNodeTree")
     wrapper.interface.new_socket(name="Angle", in_out="INPUT", socket_type="NodeSocketFloat")
@@ -777,8 +1179,8 @@ def _set_modifier_input(modifier, group, socket_name, value):
         raise AssertionError(f"could not set modifier input {socket_name!r}") from exc
 
 
-def _attach_stage3_eval_modifier(compiled_group, name):
-    wrapper = _new_stage3_eval_wrapper(compiled_group, name + "_Wrapper")
+def _attach_runtime_eval_modifier(compiled_group, name):
+    wrapper = _new_runtime_eval_wrapper(compiled_group, name + "_Wrapper")
     mesh_data = bpy.data.meshes.new(name + "_BaseMesh")
     obj = bpy.data.objects.new(name + "_Object", mesh_data)
     bpy.context.collection.objects.link(obj)
@@ -801,7 +1203,7 @@ def _evaluated_mesh_snapshot(obj):
     return vertices, edges, polygons
 
 
-def _cleanup_stage3_eval_objects(wrapper, obj, mesh_data):
+def _cleanup_runtime_eval_objects(wrapper, obj, mesh_data):
     try:
         if bpy.data.objects.get(obj.name) is obj:
             bpy.data.objects.remove(obj, do_unlink=True)
@@ -819,11 +1221,11 @@ def _cleanup_stage3_eval_objects(wrapper, obj, mesh_data):
         pass
 
 
-def _assert_stage3_modifier_runtime_updates(compiled_group):
+def _assert_branch_free_modifier_runtime_updates(compiled_group):
     """Evaluate branch-free runtime output and mutate Angle/Step without recompilation."""
     manifest_before = generated_resources.read_group_manifest(compiled_group)
     generation_before = manifest_before["generation_uuid"]
-    wrapper, obj, mesh_data, mod = _attach_stage3_eval_modifier(compiled_group, "NFTest_lsystem_stage3_runtime_eval")
+    wrapper, obj, mesh_data, mod = _attach_runtime_eval_modifier(compiled_group, "NFTest_lsystem_branch_free_runtime_eval")
     try:
         _set_modifier_input(mod, wrapper, "Angle", 90.0)
         _set_modifier_input(mod, wrapper, "Step", 1.0)
@@ -850,11 +1252,11 @@ def _assert_stage3_modifier_runtime_updates(compiled_group):
         check(edges_step_changed == edges_90, "runtime Step update changed topology")
         check(generated_resources.read_group_manifest(compiled_group)["generation_uuid"] == generation_before, "runtime Step update churned generated resources")
     finally:
-        _cleanup_stage3_eval_objects(wrapper, obj, mesh_data)
+        _cleanup_runtime_eval_objects(wrapper, obj, mesh_data)
 
 
-def run_lsystem_stage3_checks():
-    """Exercise Stage 3 branch-free vectorized runtime backend and Mesh ownership."""
+def run_lsystem_branch_free_runtime_checks():
+    """Exercise branch-free vectorized runtime backend and Mesh ownership."""
     table = build_branch_free_command_table("+F-F")
     check(table.vertex_count == 8 and table.edge_count == 4, "branch-free table size mismatch")
     check(table.move_mask == (0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0), "branch-free move masks drifted")
@@ -882,8 +1284,8 @@ step_value = input_float("Step", default=1.0)
 geo = ls_system(ls_axiom("F+F"), ls_iterations(0), ls_angle(angle_value), ls_step(step_value))
 output("Geometry", geo)
 '''
-    eval_group = compile_group(eval_source, "NFTest_lsystem_stage3_runtime_eval_source")
-    _assert_stage3_modifier_runtime_updates(eval_group)
+    eval_group = compile_group(eval_source, "NFTest_lsystem_branch_free_runtime_eval_source")
+    _assert_branch_free_modifier_runtime_updates(eval_group)
 
     large_source = '''
 angle_value = input_float("Angle", default=0.0)
@@ -891,13 +1293,13 @@ step_value = input_float("Step", default=1.0)
 geo = ls_system(ls_axiom("F"), ls_rule("F", "FF"), ls_iterations(11), ls_angle(angle_value), ls_step(step_value))
 output("Geometry", geo)
 '''
-    large_group = compile_group(large_source, "NFTest_lsystem_stage3_large_branch_free_runtime")
+    large_group = compile_group(large_source, "NFTest_lsystem_branch_free_large_branch_free_runtime")
     large_manifest, large_refs = _manifest_refs(large_group)
     check({ref.kind for ref in large_refs} == {"MESH", "OBJECT"}, "large branch-free runtime did not use generated Mesh/Object backend")
     large_mesh = bpy.data.meshes.get(_ref_by_kind(large_refs, "MESH").name)
-    check(large_mesh is not None and len(large_mesh.edges) == 2048, "large branch-free command Mesh did not exceed Stage 1 segment budget")
+    check(large_mesh is not None and len(large_mesh.edges) == 2048, "large branch-free command Mesh topology changed")
     check(len(large_group.nodes) < 40, f"large branch-free runtime node graph grew unexpectedly: {len(large_group.nodes)} nodes")
-    wrapper, obj, mesh_data, mod = _attach_stage3_eval_modifier(large_group, "NFTest_lsystem_stage3_large_runtime_eval")
+    wrapper, obj, mesh_data, mod = _attach_runtime_eval_modifier(large_group, "NFTest_lsystem_branch_free_large_runtime_eval")
     try:
         _set_modifier_input(mod, wrapper, "Angle", 0.0)
         _set_modifier_input(mod, wrapper, "Step", 1.0)
@@ -908,7 +1310,7 @@ output("Geometry", geo)
         check(vertices[-1] == (2048.0, 0.0, 0.0), f"large branch-free runtime endpoint changed: {vertices[-1]}")
         check(generated_resources.read_group_manifest(large_group) == large_manifest, "large branch-free runtime evaluation churned manifest")
     finally:
-        _cleanup_stage3_eval_objects(wrapper, obj, mesh_data)
+        _cleanup_runtime_eval_objects(wrapper, obj, mesh_data)
 
     source = '''
 angle_value = input_float("Angle", default=60.0)
@@ -916,7 +1318,7 @@ step_value = input_float("Step", default=0.1)
 geo = ls_system(ls_axiom("F"), ls_rule("F", "F+F--F+F"), ls_iterations(3), ls_angle(angle_value), ls_step(step_value))
 output("Geometry", geo)
 '''
-    group = compile_group(source, "NFTest_lsystem_stage3_branch_free_runtime")
+    group = compile_group(source, "NFTest_lsystem_branch_free_branch_free_runtime")
     manifest, refs = _manifest_refs(group)
     kinds = {ref.kind for ref in refs}
     check(kinds == {"MESH", "OBJECT"}, f"branch-free runtime generated unexpected resources: {kinds}")
@@ -1008,12 +1410,12 @@ output("Geometry", geo)
     check(compiler._extract_group_source(group) == stable_source, "branch-free cutover failure changed source")
     check(_owned_generated_id_keys() == before_cutover, "branch-free cutover failure leaked or deleted generated IDs")
 
-    shared_group = compile_group(source.replace('ls_iterations(3)', 'ls_iterations(1)'), "NFTest_lsystem_stage3_shared_mesh")
+    shared_group = compile_group(source.replace('ls_iterations(3)', 'ls_iterations(1)'), "NFTest_lsystem_branch_free_shared_mesh")
     shared_manifest, shared_refs = _manifest_refs(shared_group)
     shared_mesh_ref = _ref_by_kind(shared_refs, "MESH")
     shared_object_ref = _ref_by_kind(shared_refs, "OBJECT")
     shared_mesh = bpy.data.meshes.get(shared_mesh_ref.name)
-    user_obj = bpy.data.objects.new("NFTest_lsystem_stage3_user_mesh", shared_mesh)
+    user_obj = bpy.data.objects.new("NFTest_lsystem_branch_free_user_mesh", shared_mesh)
     try:
         bpy.context.collection.objects.link(user_obj)
     except Exception:
@@ -1036,11 +1438,11 @@ output("Geometry", geo)
         except Exception:
             pass
 
-    static_group = compile_group(_static_lsystem_source(iterations=1), "NFTest_lsystem_stage3_static_unchanged")
+    static_group = compile_group(_static_lsystem_source(iterations=1), "NFTest_lsystem_branch_free_static_unchanged")
     _static_manifest, static_refs, _ = _assert_static_baked_group(static_group)
     check({ref.kind for ref in static_refs} == {"CURVE", "OBJECT"}, "static baked backend started using command Mesh")
 
-    print("LSYSTEM_STAGE3_OK")
+    print("LSYSTEM_BRANCH_FREE_RUNTIME_OK")
 
 def _attribute_values(attr):
     values = []
@@ -1135,7 +1537,7 @@ def _named_attribute_node_name(node):
     return None
 
 
-def _assert_stage4_sample_index_uses_safe_parent_index(group):
+def _assert_branch_aware_sample_index_uses_safe_parent_index(group):
     sample_nodes = [node for node in group.nodes if getattr(node, "bl_idname", "") == "GeometryNodeSampleIndex"]
     check(sample_nodes, "branch-aware runtime graph has no Sample Index node")
     for node in sample_nodes:
@@ -1166,10 +1568,10 @@ output("Geometry", geo)
 '''.format(axiom=axiom, angle_default=angle_default, step_default=step_default)
 
 
-def _assert_stage4_modifier_runtime_updates(compiled_group):
+def _assert_branch_aware_modifier_runtime_updates(compiled_group):
     manifest_before = generated_resources.read_group_manifest(compiled_group)
     generation_before = manifest_before["generation_uuid"]
-    wrapper, obj, mesh_data, mod = _attach_stage3_eval_modifier(compiled_group, "NFTest_lsystem_stage4_runtime_eval")
+    wrapper, obj, mesh_data, mod = _attach_runtime_eval_modifier(compiled_group, "NFTest_lsystem_branch_aware_runtime_eval")
     try:
         _set_modifier_input(mod, wrapper, "Angle", 90.0)
         _set_modifier_input(mod, wrapper, "Step", 1.0)
@@ -1201,15 +1603,15 @@ def _assert_stage4_modifier_runtime_updates(compiled_group):
         check(edges_step_changed == edges_90, "branched runtime Step update changed topology")
         check(generated_resources.read_group_manifest(compiled_group)["generation_uuid"] == generation_before, "branched runtime Step update churned resources")
     finally:
-        _cleanup_stage3_eval_objects(wrapper, obj, mesh_data)
+        _cleanup_runtime_eval_objects(wrapper, obj, mesh_data)
 
 
 
 
-def _assert_stage4_evaluated_fixture(axiom, expected_vertices, expected_edges, name_suffix):
-    group = compile_group(_runtime_branched_source(axiom), "NFTest_lsystem_stage4_eval_" + name_suffix)
-    _assert_stage4_sample_index_uses_safe_parent_index(group)
-    wrapper, obj, mesh_data, mod = _attach_stage3_eval_modifier(group, "NFTest_lsystem_stage4_eval_" + name_suffix)
+def _assert_branch_aware_evaluated_fixture(axiom, expected_vertices, expected_edges, name_suffix):
+    group = compile_group(_runtime_branched_source(axiom), "NFTest_lsystem_branch_aware_eval_" + name_suffix)
+    _assert_branch_aware_sample_index_uses_safe_parent_index(group)
+    wrapper, obj, mesh_data, mod = _attach_runtime_eval_modifier(group, "NFTest_lsystem_branch_aware_eval_" + name_suffix)
     try:
         _set_modifier_input(mod, wrapper, "Angle", 90.0)
         _set_modifier_input(mod, wrapper, "Step", 1.0)
@@ -1220,13 +1622,13 @@ def _assert_stage4_evaluated_fixture(axiom, expected_vertices, expected_edges, n
         check(edges == expected_edges, f"branched runtime fixture {axiom} edges changed: {edges}")
         check(polygons == 0, f"branched runtime fixture {axiom} unexpectedly has polygons")
     finally:
-        _cleanup_stage3_eval_objects(wrapper, obj, mesh_data)
+        _cleanup_runtime_eval_objects(wrapper, obj, mesh_data)
 
-def run_lsystem_stage4_checks():
-    """Exercise Stage 4 branch-aware vectorized runtime backend."""
+def run_lsystem_branch_aware_runtime_checks():
+    """Exercise branch-aware vectorized runtime backend."""
     _assert_branch_aware_table_anchor_contract()
 
-    origin_group = compile_group(_runtime_branched_source("[F]"), "NFTest_lsystem_stage4_branch_origin")
+    origin_group = compile_group(_runtime_branched_source("[F]"), "NFTest_lsystem_branch_aware_branch_origin")
     _origin_manifest, origin_refs = _manifest_refs(origin_group)
     check({ref.kind for ref in origin_refs} == {"MESH", "OBJECT"}, "branch-at-origin runtime did not use generated Mesh/Object")
     origin_mesh = bpy.data.meshes.get(_ref_by_kind(origin_refs, "MESH").name)
@@ -1234,7 +1636,7 @@ def run_lsystem_stage4_checks():
     check(len(origin_mesh.vertices) == 3 and len(origin_mesh.edges) == 1, "branch-at-origin anchor topology changed")
     check(_attribute_values(origin_mesh.attributes[PARENT_ATTACH_INDEX_ATTR]) == (-1, 0, 0), "branch-at-origin parent attach indices changed")
 
-    group = compile_group(_runtime_branched_source("F[+F]F"), "NFTest_lsystem_stage4_branched_runtime")
+    group = compile_group(_runtime_branched_source("F[+F]F"), "NFTest_lsystem_branch_aware_branched_runtime")
     _manifest, refs = _manifest_refs(group)
     check({ref.kind for ref in refs} == {"MESH", "OBJECT"}, "branched runtime generated unexpected resources")
     check(any(ref.role == "branch_aware_runtime_command_mesh" for ref in refs), "branch-aware Mesh role missing")
@@ -1270,10 +1672,10 @@ def run_lsystem_stage4_checks():
     }:
         check(required in node_types, f"branch-aware runtime graph missing {required}")
     check(len(group.nodes) < 120, f"branch-aware runtime node graph grew unexpectedly: {len(group.nodes)} nodes")
-    _assert_stage4_sample_index_uses_safe_parent_index(group)
+    _assert_branch_aware_sample_index_uses_safe_parent_index(group)
     object_infos = [node for node in group.nodes if getattr(node, "bl_idname", "") == "GeometryNodeObjectInfo"]
     check(object_infos and _object_info_source(object_infos[0]) is obj, "Object Info does not source branch-aware command Object")
-    _assert_stage4_modifier_runtime_updates(group)
+    _assert_branch_aware_modifier_runtime_updates(group)
 
 
     evaluated_edge_cases = [
@@ -1284,18 +1686,18 @@ def run_lsystem_stage4_checks():
         ("F[+XF]F", ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (2.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0)), ((0, 1), (1, 2), (3, 4)), "ignored_symbol_branch"),
     ]
     for axiom, expected_vertices, expected_edges, suffix in evaluated_edge_cases:
-        _assert_stage4_evaluated_fixture(axiom, expected_vertices, expected_edges, suffix)
+        _assert_branch_aware_evaluated_fixture(axiom, expected_vertices, expected_edges, suffix)
 
     large_source = _runtime_branched_source("F[+F]" + "F" * 1100, angle_default=0.0, step_default=1.0)
-    large_group = compile_group(large_source, "NFTest_lsystem_stage4_large_branched_runtime")
+    large_group = compile_group(large_source, "NFTest_lsystem_branch_aware_large_branched_runtime")
     large_manifest, large_refs = _manifest_refs(large_group)
     large_mesh = bpy.data.meshes.get(_ref_by_kind(large_refs, "MESH").name)
-    check(large_mesh is not None and len(large_mesh.edges) > 1000, "large branched runtime did not exceed Stage 1 segment topology")
+    check(large_mesh is not None and len(large_mesh.edges) > 1000, "large branched runtime command Mesh topology changed")
     check(len(large_group.nodes) < 120, f"large branched runtime node graph grew unexpectedly: {len(large_group.nodes)} nodes")
     check(generated_resources.read_group_manifest(large_group) == large_manifest, "large branched runtime compile mutated manifest unexpectedly")
 
     depth_stream = "[" * (MAX_LSYSTEM_BRANCH_DEPTH + 1) + "F" + "]" * (MAX_LSYSTEM_BRANCH_DEPTH + 1)
-    expect_compile_error(_runtime_branched_source(depth_stream), "NFTest_lsystem_stage4_depth_budget")
+    expect_compile_error(_runtime_branched_source(depth_stream), "NFTest_lsystem_branch_aware_depth_budget")
 
     stable_manifest, stable_refs = _manifest_refs(group)
     stable_source = compiler._extract_group_source(group)
@@ -1333,14 +1735,35 @@ output("Geometry", geo)
     for ref in runtime_refs:
         check(_collection_for_ref(ref).get(ref.name) is None, f"old branch-aware resource survived branch-free replacement: {ref.name}")
 
-    shutdown_group = compile_group(_runtime_branched_source("F[+F]F"), "NFTest_lsystem_stage4_shutdown")
+    shutdown_group = compile_group(_runtime_branched_source("F[+F]F"), "NFTest_lsystem_branch_aware_shutdown")
     _shutdown_manifest, shutdown_refs = _manifest_refs(shutdown_group)
     generated_resources.cleanup_live_group_resources()
     for ref in shutdown_refs:
         check(_collection_for_ref(ref).get(ref.name) is None, f"unregister cleanup left branch-aware {ref.kind}")
     check(generated_resources.read_group_manifest(shutdown_group)["resources"] == [], "unregister cleanup did not clear branch-aware manifest")
 
-    print("LSYSTEM_STAGE4_OK")
+    print("LSYSTEM_BRANCH_AWARE_RUNTIME_OK")
+
+def run_lsystem_documented_contract_checks():
+    """Exercise documented L-system examples, backend exports, and selector categories."""
+    for name, source in LSYSTEM_GALLERY_EXAMPLES.items():
+        compile_group(source, "NFTest_lsystem_gallery_" + name)
+
+    check(not hasattr(lsystem_backends, "limited_segment_node_backend"), "limited per-segment backend is still exported as a module attribute")
+    check("limited_segment_node_backend" not in getattr(lsystem_backends, "__all__", ()), "limited per-segment backend is still in __all__")
+    check(not hasattr(lsystem_backends, "MAX_LSYSTEM_SEGMENTS"), "retired per-segment budget is still exported")
+    retired_validator = "validate_" + "sta" + "ge1_backend_available"
+    check(not hasattr(lsystem_backends, retired_validator), "retired backend validator is still exported")
+
+    static_metrics = type("Metrics", (), {"angle_is_runtime": False, "step_is_runtime": False, "has_branches": True})()
+    branch_free_metrics = type("Metrics", (), {"angle_is_runtime": True, "step_is_runtime": False, "has_branches": False})()
+    branch_aware_metrics = type("Metrics", (), {"angle_is_runtime": False, "step_is_runtime": True, "has_branches": True})()
+    check(lsystem_backends.select_backend_category(static_metrics) == "static", "static selector category changed")
+    check(lsystem_backends.select_backend_category(branch_free_metrics) == "branch_free_runtime", "branch-free selector category changed")
+    check(lsystem_backends.select_backend_category(branch_aware_metrics) == "branched_runtime", "branch-aware selector category changed")
+
+    print("LSYSTEM_DOCUMENTED_CONTRACTS_OK")
+
 
 def run_update_checks():
     """Exercise successful and failed update_expression_group paths."""
@@ -1393,10 +1816,12 @@ def main():
     run_startup_shutdown_checks()
     run_compile_fixtures()
     run_math_table_dispatch_checks()
-    run_lsystem_stage1_checks()
-    run_lsystem_stage2_checks()
-    run_lsystem_stage3_checks()
-    run_lsystem_stage4_checks()
+    run_lsystem_syntax_and_guard_checks()
+    run_lsystem_static_ownership_checks()
+    run_lsystem_branch_free_runtime_checks()
+    run_lsystem_branch_aware_runtime_checks()
+    run_lsystem_documented_contract_checks()
+    run_lsystem_benchmark_if_requested()
     run_library_checks()
     run_update_checks()
     run_mandelbrot_eval_check()

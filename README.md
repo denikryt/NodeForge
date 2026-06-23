@@ -22,7 +22,9 @@ output("Geometry", geo)
 
 Built-ins are the primitive operations of the DSL. They live in `builtins/` and are registered through `builtins/registry.py`.
 
-Built-ins cover input sockets, scalar math, vector math, field inputs, geometry primitives, attributes, materials, instancing, and runtime loops. They form the compiler-level vocabulary used by scripts and library functions. Embedded system constructors such as `ls_system(...)` are resolved through `systems/registry.py` and return normal geometry while keeping subsystem-specific constructor objects out of ordinary runtime value paths. Static L-systems are baked into NodeForge-owned Curve/Object datablocks and sourced through Object Info. Runtime-parameter L-systems use generated command Mesh/Object resources plus bounded vectorized Geometry Nodes field graphs: branch-free systems accumulate a single command stream, and branched systems decompose the stream into path anchors/branch tables with depth-bounded branch-origin propagation.
+Built-ins cover input sockets, scalar math, vector math, field inputs, geometry primitives, attributes, materials, instancing, and runtime loops. They form the compiler-level vocabulary used by scripts and library functions.
+
+Embedded systems such as L-systems live under `systems/` and use reserved constructor names such as `ls_system(...)`. See [`docs/LSYSTEMS.md`](docs/LSYSTEMS.md) for L-system syntax, backend selection, limits, generated-resource behavior, and examples.
 
 ### Function library
 
@@ -73,3 +75,4 @@ NodeForge/
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — responsibility boundaries between DSL core, built-ins, function library, and Python backends.
 - [`docs/WRITING_FUNCTIONS.md`](docs/WRITING_FUNCTIONS.md) — guide for adding functions under `functions/`.
 - [`docs/BUILTINS.md`](docs/BUILTINS.md) — reference for DSL built-ins.
+- [`docs/LSYSTEMS.md`](docs/LSYSTEMS.md) — reference for embedded L-system constructors, limits, and examples.
