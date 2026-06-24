@@ -131,6 +131,85 @@ Parameters:
 
 Returns: `Geometry`.
 
+
+### Point layouts
+
+`layout_*` helpers reposition an existing point geometry and return `Geometry`. Matching `*_points(...)` shortcuts first create point geometry through `points(...)` and then apply the same layout formula. These helpers operate on point-domain geometry; `grid(width, height)` remains the existing planar mesh grid primitive and is not changed by `grid_points(...)`.
+
+Angles are radians. Use `radians(...)` when authoring degree values.
+
+#### `layout_grid(geometry, count, spacing=1.0, centered=False)`
+
+Places points in a 3D lattice. `count` is a `Vector` interpreted as `(count_x, count_y, count_z)`; compile-time components must be whole numbers and greater than zero because the input geometry already exists. `spacing` may be a scalar or a `Vector`. `centered` is a compile-time `Bool`.
+
+```python
+pts = points(6)
+pts = layout_grid(pts, count=vector(3, 2, 1), spacing=1.25, centered=True)
+```
+
+Returns: `Geometry`.
+
+#### `grid_points(count, spacing=1.0, centered=False)`
+
+Creates points and places them with the grid layout formula. `count` is a `Vector` interpreted as `(count_x, count_y, count_z)`; compile-time components must be whole numbers. Zero components are allowed and produce zero points, while negative components are rejected.
+
+```python
+pts = grid_points(count=vector(5, 4, 1), spacing=vector(1.0, 1.0, 0.0))
+```
+
+Returns: `Geometry`.
+
+#### `layout_circle(geometry, count, radius=1.0, start_angle=0.0, end_angle=tau, include_endpoint=False)`
+
+Places existing points on an XY circle or arc. `count` is explicit because this stage does not infer the number of points from a geometry domain. Compile-time negative counts are rejected. Full circles default to `include_endpoint=False` so the first and last point are not duplicated at the same location.
+
+```python
+pts = points(16)
+pts = layout_circle(pts, count=16, radius=2.0)
+arc = circle_points(8, radius=1.0, start_angle=0, end_angle=pi, include_endpoint=True)
+```
+
+Returns: `Geometry`.
+
+#### `circle_points(count, radius=1.0, start_angle=0.0, end_angle=tau, include_endpoint=False)`
+
+Creates points and places them with `layout_circle(...)`.
+
+Returns: `Geometry`.
+
+#### `layout_spiral(geometry, count, radius=1.0, turns=1.0, height=0.0, start_radius=0.0, start_angle=0.0)`
+
+Places existing points on a simple radial spiral in the XY plane with optional Z height. Compile-time negative counts are rejected.
+
+```python
+pts = spiral_points(64, radius=3.0, turns=4, height=2.0)
+```
+
+Returns: `Geometry`.
+
+#### `spiral_points(count, radius=1.0, turns=1.0, height=0.0, start_radius=0.0, start_angle=0.0)`
+
+Creates points and places them with `layout_spiral(...)`.
+
+Returns: `Geometry`.
+
+#### `layout_random(geometry, min=vector(-1, -1, -1), max=vector(1, 1, 1), seed=0)`
+
+Places existing points using the same Random Value node construction path as `random_value(...)`. Bounds must be `Vector` values. The current point `index()` is used as the random ID, so points receive stable per-index values for a given seed. This is uniform random placement, not Poisson or blue-noise sampling.
+
+```python
+pts = points(100)
+pts = layout_random(pts, min=vector(-2, -2, 0), max=vector(2, 2, 1), seed=3)
+```
+
+Returns: `Geometry`.
+
+#### `random_points(count, min=vector(-1, -1, -1), max=vector(1, 1, 1), seed=0)`
+
+Creates points and places them with `layout_random(...)`.
+
+Returns: `Geometry`.
+
 ### `store_named_attribute(geometry, name, value, selection=True, domain="POINT", type=None)`
 
 Stores a named attribute on geometry.
