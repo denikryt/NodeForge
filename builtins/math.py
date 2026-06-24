@@ -269,16 +269,8 @@ def _compile_noise(comp, expr, x, y):
     return Value(node.outputs[0], TYPE_FLOAT)
 
 
-def _compile_random_value(comp, expr, x, y):
-    """Compile random_value() or random_value(min, max, seed=..., id=...)."""
-    kws = _kw_dict(expr)
-    _check_no_extra_keywords(kws, {"seed", "id"})
-    if len(expr.args) not in {0, 2}:
-        raise CompileError("random_value() or random_value(min, max, seed=...) expects 0 or 2 positional arguments")
-
-    min_val = comp.compile(expr.args[0]) if len(expr.args) == 2 else _value(comp.group, 0.0, x + 20, y - 80)
-    max_val = comp.compile(expr.args[1]) if len(expr.args) == 2 else _value(comp.group, 1.0, x + 20, y - 120)
-
+def _random_value_node(group, min_val, max_val, *, seed_val=None, id_val=None, seed_default=None, x=0, y=0):
+    """Create a Random Value node shared by random_value() and random layouts."""
     reject_compile_time_object(min_val, "random_value() min")
     reject_compile_time_object(max_val, "random_value() max")
 
@@ -291,30 +283,67 @@ def _compile_random_value(comp, expr, x, y):
     else:
         raise CompileError("random_value(min, max, ...) expects both numeric or both Vector arguments")
 
-    node = _new_node(comp.group, "FunctionNodeRandomValue", x, y)
+    node = _new_node(group, "FunctionNodeRandomValue", x, y)
     node.data_type = data_type
-    comp.group.links.new(min_val.socket, node.inputs[0])
-    comp.group.links.new(max_val.socket, node.inputs[1])
+    group.links.new(min_val.socket, node.inputs[0])
+    group.links.new(max_val.socket, node.inputs[1])
 
-    if "id" in kws:
-        id_val = comp.compile(kws["id"])
+    if id_val is not None:
         reject_compile_time_object(id_val, "random_value() id")
         if id_val.typ != TYPE_INT:
             raise CompileError("random_value(..., id=...) expects Int")
-        comp.group.links.new(id_val.socket, node.inputs[2])
-    if "seed" in kws:
-        seed_val = comp.compile(kws["seed"])
+        group.links.new(id_val.socket, node.inputs[2])
+
+    if seed_val is not None:
         reject_compile_time_object(seed_val, "random_value() seed")
         if seed_val.typ != TYPE_INT:
-            # Compile-time numeric seed defaults are common; set the socket default instead.
-            try:
-                node.inputs[3].default_value = int(_const_eval(kws["seed"], comp.consts))
-            except CompileError as exc:
-                raise CompileError("random_value(..., seed=...) expects Int") from exc
+            if seed_default is None:
+                raise CompileError("random_value(..., seed=...) expects Int")
+            node.inputs[3].default_value = int(seed_default)
         else:
-            comp.group.links.new(seed_val.socket, node.inputs[3])
+            group.links.new(seed_val.socket, node.inputs[3])
+    elif seed_default is not None:
+        node.inputs[3].default_value = int(seed_default)
 
     return Value(node.outputs[0], out_type)
+
+
+def _compile_random_value(comp, expr, x, y):
+    """Compile random_value() or random_value(min, max, seed=..., id=...)."""
+    kws = _kw_dict(expr)
+    _check_no_extra_keywords(kws, {"seed", "id"})
+    if len(expr.args) not in {0, 2}:
+        raise CompileError("random_value() or random_value(min, max, seed=...) expects 0 or 2 positional arguments")
+
+    min_val = comp.compile(expr.args[0]) if len(expr.args) == 2 else _value(comp.group, 0.0, x + 20, y - 80)
+    max_val = comp.compile(expr.args[1]) if len(expr.args) == 2 else _value(comp.group, 1.0, x + 20, y - 120)
+    id_val = None
+    if "id" in kws:
+        id_val = comp.compile(kws["id"])
+
+    seed_val = None
+    seed_default = None
+    if "seed" in kws:
+        seed_val = comp.compile(kws["seed"])
+        if seed_val.typ != TYPE_INT:
+            try:
+                const_seed = _const_eval(kws["seed"], comp.consts)
+                if isinstance(const_seed, bool) or not isinstance(const_seed, (int, float)):
+                    raise CompileError("random_value(..., seed=...) expects Int")
+                seed_default = int(const_seed)
+            except CompileError as exc:
+                raise CompileError("random_value(..., seed=...) expects Int") from exc
+
+    return _random_value_node(
+        comp.group,
+        min_val,
+        max_val,
+        seed_val=seed_val,
+        id_val=id_val,
+        seed_default=seed_default,
+        x=x,
+        y=y,
+    )
 
 
 def _wire_or_default_numeric(comp, socket, expr, label):
