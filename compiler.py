@@ -350,15 +350,25 @@ def _copy_group_contents(src_group, dst_group):
         _TEST_CUTOVER_FAIL_AFTER_RESET = False
         raise RuntimeError("Injected NodeForge cutover failure after destructive reset")
     _copy_interface(src_group, dst_group)
+    from .builtins import raw_nodes as _raw_nodes
+
     node_map = {}
     for src_node in src_group.nodes:
         dst_node = dst_group.nodes.new(src_node.bl_idname)
-        _copy_node_properties(src_node, dst_node)
+        if _raw_nodes.is_raw_node(src_node):
+            _raw_nodes.copy_raw_node_properties(src_node, dst_node)
+        else:
+            _copy_node_properties(src_node, dst_node)
         node_map[src_node.name] = dst_node
     for src_link in src_group.links:
         from_node = node_map.get(src_link.from_node.name)
         to_node = node_map.get(src_link.to_node.name)
         if from_node is None or to_node is None:
+            continue
+        if _raw_nodes.is_raw_node(src_link.from_node) or _raw_nodes.is_raw_node(src_link.to_node):
+            from_socket = _raw_nodes.resolve_cutover_socket(src_link.from_node, src_link.from_socket, from_node, direction="output")
+            to_socket = _raw_nodes.resolve_cutover_socket(src_link.to_node, src_link.to_socket, to_node, direction="input")
+            dst_group.links.new(from_socket, to_socket)
             continue
         try:
             from_index = list(src_link.from_node.outputs).index(src_link.from_socket)
@@ -370,6 +380,9 @@ def _copy_group_contents(src_group, dst_group):
                 dst_group.links.new(from_node.outputs[src_link.from_socket.name], to_node.inputs[src_link.to_socket.name])
             except Exception:
                 raise
+    for dst_node in node_map.values():
+        if _raw_nodes.is_raw_node(dst_node):
+            _raw_nodes.validate_raw_node_after_cutover(dst_node, dst_group)
     try:
         dst_group.color_tag = src_group.color_tag
     except Exception:

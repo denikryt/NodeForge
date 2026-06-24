@@ -503,3 +503,55 @@ Returns: `Vector`.
 L-system constructors are global DSL calls resolved by the embedded systems registry, not ordinary built-ins in `builtins/registry.py`. They use the reserved `ls_` prefix and return normal `Geometry` through `ls_system(...)`.
 
 See [L-systems](LSYSTEMS.md) for constructor reference, symbol rules, backend selection, generated-resource ownership, limits, and examples.
+
+## Raw Blender node layer
+
+`node(...)` is a controlled escape hatch for creating ordinary Geometry Nodes by Blender `bl_idname` while keeping NodeForge's `Value(socket, typ)` boundary. It never exposes raw `bpy` objects, node trees, Blender nodes, or arbitrary sockets to DSL code.
+
+Single-output form:
+
+```python
+mask = node(
+    "FunctionNodeCompare",
+    props={"data_type": "FLOAT", "operation": "GREATER_THAN"},
+    inputs={"A": position().z, "B": 0.5},
+    output="Result",
+    typ=Bool,
+)
+```
+
+Multi-output form:
+
+```python
+sep = node(
+    "ShaderNodeSeparateXYZ",
+    inputs={"Vector": (1.0, 2.0, 3.0)},
+    outputs={"X": Float, "Y": Float, "Z": Float},
+)
+out = sep.X + sep["Y"]
+```
+
+`props`, `inputs`, and `outputs` must be literal dictionaries. Properties are assigned before sockets are resolved, because many Blender nodes expose property-dependent sockets. Sockets are resolved by exact enabled socket name only; missing, disabled, or ambiguous sockets raise `CompileError`.
+
+`inputs` values may be runtime NodeForge expressions, supported literal socket defaults, or a non-empty list for multi-input fanout. A list means repeated links into a verified multi-input socket; it is not vector syntax. Use tuple syntax such as `(1.0, 2.0, 3.0)` for vector-like literal defaults.
+
+Type declarations use reserved type-token names: `Float`, `Int`, `Bool`, `Vector`, and `Geometry`. These names are globally reserved and may only appear in `node(..., typ=...)` and `node(..., outputs={...})`. They cannot be used as variables, loop targets, function names, function parameters, normal expressions, or implicit inputs.
+
+Multi-output `node(...)` returns a compile-time-only `NodeResult`. Selecting a declared output, for example `result.Geometry` or `result["Socket Name"]`, returns a normal runtime `Value`. Passing the `NodeResult` itself to arithmetic, geometry built-ins, wrappers, `output(...)`, or final auto-output raises `CompileError`.
+
+Raw nodes store internal NodeForge metadata on the created Blender node. This metadata is not public API. It records the raw node's declared properties, input modes (`literal_default`, `single_link`, or `multi_link`), literal socket defaults, output sockets, and output mode so existing-group updates can copy and validate raw-node-owned surface fail-closed. Non-raw nodes continue to use the existing tolerant update copy path.
+
+### Compare wrappers
+
+The following wrappers are implemented through the same raw-node builder:
+
+```python
+greater_than(a, b)
+greater_equal(a, b)
+less_than(a, b)
+less_equal(a, b)
+equal(a, b)
+not_equal(a, b)
+```
+
+They produce `Bool` values using `FunctionNodeCompare` and support numeric and Vector comparisons. Bool-to-Bool comparisons are not exposed through these wrappers in this stage because the supported Blender compare-node surface for NodeForge raw wrappers is limited to verified `FunctionNodeCompare` data types and socket contracts.

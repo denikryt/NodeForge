@@ -9,6 +9,14 @@ TYPE_BOOL = "BOOL"
 TYPE_GEOMETRY = "GEOMETRY"
 TYPE_INT = "INT"
 
+TYPE_TOKEN_NAMES = {
+    "Float": TYPE_FLOAT,
+    "Int": TYPE_INT,
+    "Bool": TYPE_BOOL,
+    "Vector": TYPE_VECTOR,
+    "Geometry": TYPE_GEOMETRY,
+}
+
 _ALLOWED_CONSTS = {"pi": math.pi, "tau": math.tau, "e": math.e}
 
 _FLOAT_FUNCS_1 = {
