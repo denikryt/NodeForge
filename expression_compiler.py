@@ -4,7 +4,7 @@ import ast
 
 from .constants import *
 from .errors import CompileError
-from .values import Value
+from .values import Value, NodeResult
 from .nodes import *
 from .consteval import _const_eval
 from .library import has_library_function
@@ -30,6 +30,8 @@ def compile_expr(comp, expr, depth=0):
         raise CompileError("Only numeric and boolean constants are supported")
 
     if isinstance(expr, ast.Name):
+        if expr.id in TYPE_TOKEN_NAMES:
+            raise CompileError(f"Type token {expr.id} may only be used in node(...) type declarations")
         if expr.id in _ALLOWED_CONSTS:
             return _value(comp.group, _ALLOWED_CONSTS[expr.id], x, y)
         if expr.id in comp.vars:
@@ -40,6 +42,8 @@ def compile_expr(comp, expr, depth=0):
 
     if isinstance(expr, ast.Attribute):
         base = compile_expr(comp, expr.value, depth + 1)
+        if isinstance(base, NodeResult):
+            return base.get_output(expr.attr)
         if expr.attr in {"x", "y", "z"}:
             reject_compile_time_object(base, f".{expr.attr} attribute access")
             return _separate_xyz(comp.group, base, expr.attr, x, y)
@@ -138,6 +142,14 @@ def compile_expr(comp, expr, depth=0):
 
     if isinstance(expr, ast.Subscript):
         base = compile_expr(comp, expr.value, depth + 1)
+        if isinstance(base, NodeResult):
+            try:
+                key = _const_eval(expr.slice, comp.consts)
+            except CompileError as exc:
+                raise CompileError("raw node output lookup requires a compile-time string key") from exc
+            if not isinstance(key, str) or not key:
+                raise CompileError("raw node output lookup requires a non-empty string key")
+            return base.get_output(key)
         try:
             idx = int(_const_eval(expr.slice, comp.consts))
         except CompileError as exc:
