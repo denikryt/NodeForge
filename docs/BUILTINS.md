@@ -614,7 +614,7 @@ out = sep.X + sep["Y"]
 
 `inputs` values may be runtime NodeForge expressions, supported literal socket defaults, or a non-empty list for multi-input fanout. A list means repeated links into a verified multi-input socket; it is not vector syntax. Use tuple syntax such as `(1.0, 2.0, 3.0)` for vector-like literal defaults.
 
-Type declarations use reserved type-token names: `Float`, `Int`, `Bool`, `Vector`, and `Geometry`. These names are globally reserved and may only appear in `node(..., typ=...)` and `node(..., outputs={...})`. They cannot be used as variables, loop targets, function names, function parameters, normal expressions, or implicit inputs.
+Type declarations use reserved type-token names: `Float`, `Int`, `Bool`, `Vector`, and `Geometry`. These names are globally reserved and may only appear in `node(..., typ=...)` and `node(..., outputs={...})`. They cannot be used as variables, loop targets, function names, function parameters, normal expressions, or implicit inputs. Declared runtime output types and linked runtime input values must match supported Blender socket families (`Float`, `Int`, `Bool`, `Vector`, or `Geometry`); unsupported socket families such as string/object/material sockets and mismatched declarations raise `CompileError`.
 
 Multi-output `node(...)` returns a compile-time-only `NodeResult`. Selecting a declared output, for example `result.Geometry` or `result["Socket Name"]`, returns a normal runtime `Value`. Passing the `NodeResult` itself to arithmetic, geometry built-ins, wrappers, `output(...)`, or final auto-output raises `CompileError`.
 

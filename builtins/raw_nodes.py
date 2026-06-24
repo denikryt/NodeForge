@@ -201,11 +201,13 @@ def build_raw_node(
         values = {}
         for socket_name, out_typ in outputs.items():
             socket = resolve_socket(node.outputs, socket_name, direction="output", context=context)
+            _validate_runtime_socket_type(socket, out_typ, direction="output", context=context, socket_name=socket_name)
             values[socket_name] = Value(socket, out_typ)
         _write_raw_metadata(node, bl_idname, props, input_contracts, tuple(outputs.keys()), RAW_MULTI_MODE)
         return NodeResult(values)
 
     out_socket = resolve_socket(node.outputs, output, direction="output", context=context)
+    _validate_runtime_socket_type(out_socket, typ, direction="output", context=context, socket_name=output)
     _write_raw_metadata(node, bl_idname, props, input_contracts, (output,), RAW_SINGLE_MODE)
     return Value(out_socket, typ)
 
@@ -213,6 +215,40 @@ def build_raw_node(
 def _validate_public_type(typ, context):
     if typ not in _SUPPORTED_TYPES:
         raise CompileError(f"{context} must be a NodeForge type token")
+
+
+def _socket_runtime_type(socket):
+    """Return the NodeForge runtime type represented by a supported Blender socket."""
+    bl_idname = getattr(socket, "bl_idname", "") or ""
+    if bl_idname.startswith("NodeSocketFloat"):
+        return TYPE_FLOAT
+    if bl_idname.startswith("NodeSocketInt"):
+        return TYPE_INT
+    if bl_idname.startswith("NodeSocketBool"):
+        return TYPE_BOOL
+    if bl_idname.startswith("NodeSocketVector"):
+        return TYPE_VECTOR
+    if bl_idname.startswith("NodeSocketGeometry"):
+        return TYPE_GEOMETRY
+    return None
+
+
+def _validate_runtime_socket_type(socket, typ, *, direction, context, socket_name):
+    """Reject raw-node runtime declarations/links for unsupported or mismatched sockets."""
+    socket_type = _socket_runtime_type(socket)
+    bl_idname = getattr(socket, "bl_idname", "<unknown>")
+    if socket_type is None:
+        raise CompileError(
+            f"{context}: {direction} socket {socket_name!r} has unsupported Blender socket type {bl_idname!r}"
+        )
+    allowed = {socket_type}
+    if direction == "input" and socket_type == TYPE_FLOAT:
+        allowed.add(TYPE_INT)
+    if typ not in allowed:
+        expected = socket_type if len(allowed) == 1 else " or ".join(sorted(allowed))
+        raise CompileError(
+            f"{context}: {direction} socket {socket_name!r} expects {expected}, got {typ}"
+        )
 
 
 def _set_node_property(node, prop_name, prop_value, context):
@@ -321,6 +357,7 @@ def _require_multi_input(socket, context, socket_name):
 def _link_value(comp, value, socket, context, socket_name):
     if not isinstance(value, Value):
         raise CompileError(f"{context}: input {socket_name!r} expects a runtime node value")
+    _validate_runtime_socket_type(socket, value.typ, direction="input", context=context, socket_name=socket_name)
     try:
         comp.group.links.new(value.socket, socket)
     except Exception as exc:

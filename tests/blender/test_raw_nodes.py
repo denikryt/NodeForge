@@ -199,6 +199,16 @@ output("mask", mask)
     check(abs(float(node.inputs["B"].default_value) - 0.25) < 1e-6, "rollback did not restore previous literal default")
 
 
+def test_raw_node_rejects_unsupported_or_mismatched_runtime_socket_types():
+    bad_sources = [
+        'x = node("FunctionNodeInputString", output="String", typ=Float)\noutput("x", x)',
+        'x = node("ShaderNodeValue", output="Value", typ=Geometry)\noutput("Geometry", x)',
+        'x = node("ShaderNodeSeparateXYZ", inputs={"Vector": position().x}, outputs={"X": Float})\noutput("x", x.X)',
+    ]
+    for index, source in enumerate(bad_sources):
+        expect_compile_error(source, f"NFTest_raw_socket_type_error_{index}")
+
+
 def test_raw_node_error_fixtures_are_controlled_compile_errors():
     bad_sources = [
         'x = node("NoSuchNode", output="Result", typ=Bool)\noutput("x", x)',
