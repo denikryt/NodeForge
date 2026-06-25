@@ -159,12 +159,13 @@ pts = grid_points(count=vector(5, 4, 1), spacing=vector(1.0, 1.0, 0.0))
 
 Returns: `Geometry`.
 
-#### `layout_circle(geometry, count, radius=1.0, start_angle=0.0, end_angle=tau, include_endpoint=False)`
+#### `layout_circle(geometry, count=None, radius=1.0, start_angle=0.0, end_angle=tau, include_endpoint=False)`
 
-Places existing points on an XY circle or arc. `count` is explicit because this stage does not infer the number of points from a geometry domain. Compile-time negative counts are rejected. Full circles default to `include_endpoint=False` so the first and last point are not duplicated at the same location.
+Places existing points on an XY circle or arc. When `count` is omitted, the layout derives it from the Point-domain size of `geometry`. Pass `count=...` to override the derived value; compile-time negative counts are rejected. The second positional argument is still `count`, so pass `radius` by keyword when omitting `count`. Full circles default to `include_endpoint=False` so the first and last point are not duplicated at the same location.
 
 ```python
 pts = points(16)
+pts = layout_circle(pts, radius=2.0)
 pts = layout_circle(pts, count=16, radius=2.0)
 arc = circle_points(8, radius=1.0, start_angle=0, end_angle=pi, include_endpoint=True)
 ```
@@ -177,12 +178,14 @@ Creates points and places them with `layout_circle(...)`.
 
 Returns: `Geometry`.
 
-#### `layout_spiral(geometry, count, radius=1.0, turns=1.0, height=0.0, start_radius=0.0, start_angle=0.0)`
+#### `layout_spiral(geometry, count=None, radius=1.0, turns=1.0, height=0.0, start_radius=0.0, start_angle=0.0)`
 
-Places existing points on a simple radial spiral in the XY plane with optional Z height. Compile-time negative counts are rejected.
+Places existing points on a simple radial spiral in the XY plane with optional Z height. When `count` is omitted, the layout derives it from the Point-domain size of `geometry`. Pass `count=...` to override the derived value; compile-time negative counts are rejected. The second positional argument is still `count`, so pass `radius` by keyword when omitting `count`. For geometries with more than one point, the last point reaches the final radius and height.
 
 ```python
-pts = spiral_points(64, radius=3.0, turns=4, height=2.0)
+pts = points(64)
+pts = layout_spiral(pts, radius=3.0, turns=4, height=2.0)
+pts = layout_spiral(pts, count=64, radius=3.0, turns=4, height=2.0)
 ```
 
 Returns: `Geometry`.
@@ -592,7 +595,7 @@ Use `node(...)` when NodeForge does not yet have a normal wrapper for a Blender 
 Use Blender's Python node identifier as the first argument:
 
 ```python
-mask = node(
+value = node(
     "FunctionNodeCompare",
     props={"data_type": "FLOAT", "operation": "GREATER_THAN"},
     inputs={"A": position().z, "B": 0.5},

@@ -377,6 +377,35 @@ def _grid_points_geometry(group, count, spacing, centered=False, x=0, y=0):
     return _layout_grid_geometry(group, pts, count, spacing, centered, x, y)
 
 
+
+def _socket_by_name_or_compile_error(sockets, name, label):
+    """Return a named Blender socket or raise a controlled compile error."""
+    try:
+        return sockets[name]
+    except Exception as exc:
+        raise CompileError(f"{label}: Blender node missing {name!r} socket") from exc
+
+
+def _geometry_point_count(group, geo, label, x=0, y=0):
+    """Return the runtime Point-domain count of a Geometry value."""
+    if geo.typ != TYPE_GEOMETRY:
+        raise CompileError(f"{label}: count derivation expects Geometry")
+    try:
+        node = _new_node(group, "GeometryNodeAttributeDomainSize", x, y)
+    except Exception as exc:
+        raise CompileError(f"{label}: Blender Domain Size node is unavailable") from exc
+    geometry_input = _socket_by_name_or_compile_error(node.inputs, "Geometry", label)
+    point_count = _socket_by_name_or_compile_error(node.outputs, "Point Count", label)
+    group.links.new(geo.socket, geometry_input)
+    return Value(point_count, TYPE_INT)
+
+
+def _resolve_layout_count(group, geo, count, label, x=0, y=0):
+    """Use an explicit layout count or derive one from input geometry."""
+    if count is None:
+        return _geometry_point_count(group, geo, label, x, y)
+    return count
+
 def _layout_normalized_index(group, count, include_endpoint=False, x=0, y=0):
     count_val = _layout_numeric_value(group, count, x, y, "layout count")
     idx = _new_node(group, "GeometryNodeInputIndex", x + 20, y - 40)
@@ -392,18 +421,19 @@ def _layout_normalized_index(group, count, include_endpoint=False, x=0, y=0):
 def _layout_circle_geometry(group, geo, count, radius, start_angle, end_angle, include_endpoint=False, x=0, y=0):
     if geo.typ != TYPE_GEOMETRY:
         raise CompileError("layout_circle() first argument must be Geometry")
-    t = _layout_normalized_index(group, count, include_endpoint, x + 20, y - 40)
-    radius_val = _layout_numeric_value(group, radius, x + 20, y - 220, "layout_circle() radius")
-    start_val = _layout_numeric_value(group, start_angle, x + 20, y - 260, "layout_circle() start_angle")
-    end_val = _layout_numeric_value(group, end_angle, x + 20, y - 300, "layout_circle() end_angle")
-    span = _math(group, "SUBTRACT", [end_val, start_val], x + 40, y - 340)
-    scaled = _math(group, "MULTIPLY", [span, t], x + 60, y - 380)
-    angle = _math(group, "ADD", [start_val, scaled], x + 80, y - 420)
-    cos_a = _math(group, "COSINE", [angle], x + 100, y - 460)
-    sin_a = _math(group, "SINE", [angle], x + 100, y - 500)
-    px = _math(group, "MULTIPLY", [cos_a, radius_val], x + 120, y - 540)
-    py = _math(group, "MULTIPLY", [sin_a, radius_val], x + 120, y - 580)
-    pos = _combine_xyz_mixed(group, [px, py, 0.0], x + 140, y - 620)
+    count = _resolve_layout_count(group, geo, count, "layout_circle() count", x + 20, y - 40)
+    t = _layout_normalized_index(group, count, include_endpoint, x + 20, y - 80)
+    radius_val = _layout_numeric_value(group, radius, x + 20, y - 260, "layout_circle() radius")
+    start_val = _layout_numeric_value(group, start_angle, x + 20, y - 300, "layout_circle() start_angle")
+    end_val = _layout_numeric_value(group, end_angle, x + 20, y - 340, "layout_circle() end_angle")
+    span = _math(group, "SUBTRACT", [end_val, start_val], x + 40, y - 380)
+    scaled = _math(group, "MULTIPLY", [span, t], x + 60, y - 420)
+    angle = _math(group, "ADD", [start_val, scaled], x + 80, y - 460)
+    cos_a = _math(group, "COSINE", [angle], x + 100, y - 500)
+    sin_a = _math(group, "SINE", [angle], x + 100, y - 540)
+    px = _math(group, "MULTIPLY", [cos_a, radius_val], x + 120, y - 580)
+    py = _math(group, "MULTIPLY", [sin_a, radius_val], x + 120, y - 620)
+    pos = _combine_xyz_mixed(group, [px, py, 0.0], x + 140, y - 660)
     return _set_position_geometry(group, geo, pos, None, x, y)
 
 
@@ -416,22 +446,23 @@ def _circle_points_geometry(group, count, radius, start_angle, end_angle, includ
 def _layout_spiral_geometry(group, geo, count, radius, turns, height, start_radius, start_angle, x=0, y=0):
     if geo.typ != TYPE_GEOMETRY:
         raise CompileError("layout_spiral() first argument must be Geometry")
-    t = _layout_normalized_index(group, count, True, x + 20, y - 40)
-    radius_val = _layout_numeric_value(group, radius, x + 20, y - 220, "layout_spiral() radius")
-    turns_val = _layout_numeric_value(group, turns, x + 20, y - 260, "layout_spiral() turns")
-    height_val = _layout_numeric_value(group, height, x + 20, y - 300, "layout_spiral() height")
-    start_radius_val = _layout_numeric_value(group, start_radius, x + 20, y - 340, "layout_spiral() start_radius")
-    start_angle_val = _layout_numeric_value(group, start_angle, x + 20, y - 380, "layout_spiral() start_angle")
-    dr = _math(group, "SUBTRACT", [radius_val, start_radius_val], x + 40, y - 420)
-    r = _math(group, "ADD", [start_radius_val, _math(group, "MULTIPLY", [dr, t], x + 60, y - 460)], x + 80, y - 500)
-    tau_turns = _math(group, "MULTIPLY", [_value(group, 6.283185307179586, x + 40, y - 540), turns_val], x + 40, y - 540)
-    angle = _math(group, "ADD", [start_angle_val, _math(group, "MULTIPLY", [tau_turns, t], x + 60, y - 580)], x + 80, y - 620)
-    z = _math(group, "MULTIPLY", [height_val, t], x + 80, y - 660)
-    cos_a = _math(group, "COSINE", [angle], x + 100, y - 700)
-    sin_a = _math(group, "SINE", [angle], x + 100, y - 740)
-    px = _math(group, "MULTIPLY", [cos_a, r], x + 120, y - 780)
-    py = _math(group, "MULTIPLY", [sin_a, r], x + 120, y - 820)
-    pos = _combine_xyz_mixed(group, [px, py, z], x + 140, y - 860)
+    count = _resolve_layout_count(group, geo, count, "layout_spiral() count", x + 20, y - 40)
+    t = _layout_normalized_index(group, count, True, x + 20, y - 80)
+    radius_val = _layout_numeric_value(group, radius, x + 20, y - 260, "layout_spiral() radius")
+    turns_val = _layout_numeric_value(group, turns, x + 20, y - 300, "layout_spiral() turns")
+    height_val = _layout_numeric_value(group, height, x + 20, y - 340, "layout_spiral() height")
+    start_radius_val = _layout_numeric_value(group, start_radius, x + 20, y - 380, "layout_spiral() start_radius")
+    start_angle_val = _layout_numeric_value(group, start_angle, x + 20, y - 420, "layout_spiral() start_angle")
+    dr = _math(group, "SUBTRACT", [radius_val, start_radius_val], x + 40, y - 460)
+    r = _math(group, "ADD", [start_radius_val, _math(group, "MULTIPLY", [dr, t], x + 60, y - 500)], x + 80, y - 540)
+    tau_turns = _math(group, "MULTIPLY", [_value(group, 6.283185307179586, x + 40, y - 580), turns_val], x + 40, y - 580)
+    angle = _math(group, "ADD", [start_angle_val, _math(group, "MULTIPLY", [tau_turns, t], x + 60, y - 620)], x + 80, y - 660)
+    z = _math(group, "MULTIPLY", [height_val, t], x + 80, y - 700)
+    cos_a = _math(group, "COSINE", [angle], x + 100, y - 740)
+    sin_a = _math(group, "SINE", [angle], x + 100, y - 780)
+    px = _math(group, "MULTIPLY", [cos_a, r], x + 120, y - 820)
+    py = _math(group, "MULTIPLY", [sin_a, r], x + 120, y - 860)
+    pos = _combine_xyz_mixed(group, [px, py, z], x + 140, y - 900)
     return _set_position_geometry(group, geo, pos, None, x, y)
 
 
@@ -502,4 +533,4 @@ def _instance_on_points(group, instance, points, scale=None, rotation=None, real
     return out
 
 
-__all__ = ['_as_number_value', '_set_int_like_socket', '_set_float_like_socket', '_grid_geometry', '_store_named_attribute_geometry', '_set_material_geometry', '_set_vector_socket_default', '_set_rotation_socket_default', '_euler_to_rotation', '_is_const_number', '_is_const_vector_like', '_cube_geometry', '_join_geometry', '_normalize_points', '_polyline_geometry', '_transform_geometry', '_realize_instances', '_points_geometry', '_set_position_geometry', '_layout_grid_geometry', '_grid_points_geometry', '_layout_circle_geometry', '_circle_points_geometry', '_layout_spiral_geometry', '_spiral_points_geometry', '_layout_random_geometry', '_random_points_geometry', '_instance_on_points']
+__all__ = ['_as_number_value', '_set_int_like_socket', '_set_float_like_socket', '_grid_geometry', '_store_named_attribute_geometry', '_set_material_geometry', '_set_vector_socket_default', '_set_rotation_socket_default', '_euler_to_rotation', '_is_const_number', '_is_const_vector_like', '_cube_geometry', '_join_geometry', '_normalize_points', '_polyline_geometry', '_transform_geometry', '_realize_instances', '_points_geometry', '_set_position_geometry', '_layout_grid_geometry', '_grid_points_geometry', '_geometry_point_count', '_layout_circle_geometry', '_circle_points_geometry', '_layout_spiral_geometry', '_spiral_points_geometry', '_layout_random_geometry', '_random_points_geometry', '_instance_on_points']

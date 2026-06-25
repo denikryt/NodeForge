@@ -57,10 +57,11 @@ def compile_call(comp, expr, depth=0):
             expr,
             name,
             ("geometry", "count", "radius", "start_angle", "end_angle", "include_endpoint"),
-            {"radius": 1.0, "start_angle": 0.0, "end_angle": 6.283185307179586, "include_endpoint": False},
+            {"count": None, "radius": 1.0, "start_angle": 0.0, "end_angle": 6.283185307179586, "include_endpoint": False},
         )
         geo = _compile_value(comp, args["geometry"], "layout_circle() geometry")
-        count = _compile_scalar_count(comp, args["count"], "layout_circle() count", reject_negative=True)
+        count_expr = args["count"]
+        count = None if count_expr is None else _compile_scalar_count(comp, count_expr, "layout_circle() count", reject_negative=True)
         radius = _compile_numeric(comp, args["radius"], "layout_circle() radius")
         start_angle = _compile_numeric(comp, args["start_angle"], "layout_circle() start_angle")
         end_angle = _compile_numeric(comp, args["end_angle"], "layout_circle() end_angle")
@@ -86,10 +87,11 @@ def compile_call(comp, expr, depth=0):
             expr,
             name,
             ("geometry", "count", "radius", "turns", "height", "start_radius", "start_angle"),
-            {"radius": 1.0, "turns": 1.0, "height": 0.0, "start_radius": 0.0, "start_angle": 0.0},
+            {"count": None, "radius": 1.0, "turns": 1.0, "height": 0.0, "start_radius": 0.0, "start_angle": 0.0},
         )
         geo = _compile_value(comp, args["geometry"], "layout_spiral() geometry")
-        count = _compile_scalar_count(comp, args["count"], "layout_spiral() count", reject_negative=True)
+        count_expr = args["count"]
+        count = None if count_expr is None else _compile_scalar_count(comp, count_expr, "layout_spiral() count", reject_negative=True)
         radius = _compile_numeric(comp, args["radius"], "layout_spiral() radius")
         turns = _compile_numeric(comp, args["turns"], "layout_spiral() turns")
         height = _compile_numeric(comp, args["height"], "layout_spiral() height")
