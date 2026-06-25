@@ -6,7 +6,7 @@ pytestmark = pytest.mark.blender_eval
 
 
 def test_mandelbrot_modifier_evaluation():
-    group = compile_group('geo = mandelbrot(resolution=12, max_iter=8)\noutput("Geometry", geo)', 'NFTest_mandelbrot_eval')
+    group = compile_group('from functions import mandelbrot\ngeo = mandelbrot(resolution=12, max_iter=8)\noutput("Geometry", geo)', 'NFTest_mandelbrot_eval')
     mesh_data = bpy.data.meshes.new('NFTestMesh')
     obj = bpy.data.objects.new('NFTestObject', mesh_data)
     bpy.context.collection.objects.link(obj)

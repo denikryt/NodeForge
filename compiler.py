@@ -3,7 +3,7 @@
 import ast
 import bpy
 
-from .constants import TYPE_FLOAT, TYPE_INT, TYPE_TOKEN_NAMES
+from .constants import TYPE_FLOAT, TYPE_INT, TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
 from .errors import CompileError
 from .values import Value
 from .nodes import (
@@ -129,7 +129,7 @@ def _validate_import_bindings(import_pairs, body_stmts, library_names, local_fun
     """Validate and return source-local function import bindings."""
     imported = {}
     local_bindings = _binding_names(body_stmts)
-    reserved_names = set(builtin_registry.BUILTIN_NAMES) | {"output", "store"} | set(systems_registry.NAMES) | set(backend_names) | set(TYPE_TOKEN_NAMES)
+    reserved_names = set(builtin_registry.BUILTIN_NAMES) | {"output", "store"} | set(_ALLOWED_CONSTS) | set(systems_registry.NAMES) | set(backend_names) | set(TYPE_TOKEN_NAMES)
 
     def validate_pair(canonical_name, exposed_name, *, inherited=False):
         if canonical_name not in library_names:

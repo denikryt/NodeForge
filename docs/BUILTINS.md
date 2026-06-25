@@ -607,7 +607,7 @@ value = node(
 Use the returned value like any other NodeForge value:
 
 ```python
-geo = delete_geometry(input_geometry("Geometry"), mask)
+geo = delete_geometry(input_geometry("Geometry"), value)
 output("Geometry", geo)
 ```
 
