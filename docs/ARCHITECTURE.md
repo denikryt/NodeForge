@@ -99,9 +99,9 @@ When compiling a call expression, NodeForge resolves it in this order:
 2. embedded system constructors from `systems/registry.py`
 3. local DSL functions in the current source
 4. package-local backend helpers from the current function package
-5. library functions from `functions/`
+5. explicit imported library bindings from `functions/`
 
-Global built-ins define the shared DSL vocabulary. Package-local helpers extend one function package without changing global semantics.
+Global built-ins define the shared DSL vocabulary. Package-local helpers extend one function package without changing global semantics. Library bindings are source-local `from functions import ...` declarations that map an exposed name or alias to a canonical function-library entry.
 
 
 ## Embedded systems

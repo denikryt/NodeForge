@@ -173,9 +173,9 @@ def _load_function_module(name: str):
     return module
 
 
-def compile_module_library_function_call(comp, expr, depth=0):
+def compile_module_library_function_call(comp, expr, depth=0, function_name=None):
     """Compile a call handled by a native helper in the functions folder."""
-    name = expr.func.id
+    name = function_name or expr.func.id
     module = _load_function_module(name)
     compile_call = getattr(module, "compile_call", None)
     if compile_call is None:

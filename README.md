@@ -14,6 +14,8 @@ A NodeForge script describes a node group. The script declares inputs, builds ge
 resolution = input_int("Resolution", default=120)
 max_iter = input_int("Max Iter", default=32)
 
+from functions import mandelbrot
+
 geo = mandelbrot(resolution=resolution, max_iter=max_iter)
 output("Geometry", geo)
 ```
@@ -39,7 +41,14 @@ functions/<function_name>/
 └── function.py      # optional
 ```
 
-A function can be called from another NodeForge script like a regular function. The compiler materializes it as a reusable nested Geometry Nodes group.
+A function can be called from another NodeForge script after an explicit import:
+
+```python
+from functions import sierpinski_carpet
+from functions import koch_curve as kc
+```
+
+The compiler materializes imported function calls as reusable nested Geometry Nodes groups. Imported aliases are compile-time callable names only; they are not runtime values or group inputs.
 
 ### Python backend helpers
 

@@ -6,14 +6,14 @@ from .errors import CompileError
 
 
 
-def _binding_names(target):
+def _target_binding_names(target):
     """Yield simple names bound by a supported assignment/loop target."""
     if isinstance(target, ast.Name):
         yield target.id
         return
     if isinstance(target, (ast.Tuple, ast.List)):
         for item in target.elts:
-            yield from _binding_names(item)
+            yield from _target_binding_names(item)
 
 
 def _reject_type_token_binding(name, context):
@@ -26,15 +26,15 @@ def _validate_no_type_token_bindings(stmts):
     def visit_stmt(stmt):
         if isinstance(stmt, ast.Assign):
             for target in stmt.targets:
-                for name in _binding_names(target):
+                for name in _target_binding_names(target):
                     _reject_type_token_binding(name, "assignment")
             return
         if isinstance(stmt, ast.AugAssign):
-            for name in _binding_names(stmt.target):
+            for name in _target_binding_names(stmt.target):
                 _reject_type_token_binding(name, "augmented assignment")
             return
         if isinstance(stmt, ast.For):
-            for name in _binding_names(stmt.target):
+            for name in _target_binding_names(stmt.target):
                 _reject_type_token_binding(name, "for target")
             for sub in stmt.body:
                 visit_stmt(sub)
@@ -71,15 +71,52 @@ def _parse_source(source: str):
     if not source:
         raise CompileError("Script is empty")
     tree = ast.parse(source, mode="exec")
-    allowed = (ast.Assign, ast.AugAssign, ast.Expr, ast.For, ast.If, ast.FunctionDef)
+    allowed = (ast.Assign, ast.AugAssign, ast.Expr, ast.For, ast.If, ast.FunctionDef, ast.ImportFrom)
     if not tree.body or any(not isinstance(stmt, allowed) for stmt in tree.body):
-        raise CompileError("Only assignments, function definitions, for/if blocks, and expression/call statements are supported")
+        raise CompileError("Only function imports, assignments, function definitions, for/if blocks, and expression/call statements are supported")
     _validate_no_type_token_bindings(tree.body)
     for stmt in tree.body:
+        if not isinstance(stmt, ast.ImportFrom):
+            for nested in ast.walk(stmt):
+                if nested is stmt:
+                    continue
+                if isinstance(nested, (ast.Import, ast.ImportFrom)):
+                    raise CompileError("Import statements are only supported at top level")
         if isinstance(stmt, ast.Assign):
             if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
                 raise CompileError("Assignment target must be a simple name, e.g. out = sin(x)")
+        elif isinstance(stmt, ast.ImportFrom):
+            if stmt.level != 0 or stmt.module != "functions":
+                raise CompileError("Only 'from functions import name' imports are supported")
+            if not stmt.names:
+                raise CompileError("Import statement must name at least one function")
+            for alias in stmt.names:
+                if alias.name == "*":
+                    raise CompileError("Star imports from functions are not supported")
+                if not isinstance(alias.name, str) or not alias.name:
+                    raise CompileError("Function imports must use simple names")
+                if alias.asname is not None and not alias.asname:
+                    raise CompileError("Function import aliases must be non-empty names")
     return tree.body
+
+
+def _extract_function_imports(stmts):
+    """Return body statements and raw from-functions import bindings.
+
+    The returned import pairs are ``(canonical_name, exposed_name)``. Validation
+    against the available function library and reserved namespaces is owned by
+    the compiler, where all relevant registries are available.
+    """
+    body = []
+    imports = []
+    for stmt in stmts:
+        if isinstance(stmt, ast.ImportFrom):
+            for alias in stmt.names:
+                imports.append((alias.name, alias.asname or alias.name))
+        else:
+            body.append(stmt)
+    return body, imports
+
 
 def _assigned_names(stmts):
     """Return names assigned by statements, including if/for bodies.
@@ -125,15 +162,70 @@ def _assigned_names(stmts):
         visit_stmt(stmt)
     return names
 
+
+def _binding_names(stmts):
+    """Return source-level local bindings that cannot share import names."""
+    names = set()
+
+    def add_target(target):
+        if isinstance(target, ast.Name):
+            names.add(target.id)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                add_target(elt)
+
+    def visit_stmt(stmt):
+        if isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                add_target(target)
+            return
+        if isinstance(stmt, ast.AugAssign):
+            add_target(stmt.target)
+            return
+        if isinstance(stmt, ast.For):
+            add_target(stmt.target)
+            for sub in stmt.body:
+                visit_stmt(sub)
+            for sub in stmt.orelse:
+                visit_stmt(sub)
+            return
+        if isinstance(stmt, ast.If):
+            for sub in stmt.body:
+                visit_stmt(sub)
+            for sub in stmt.orelse:
+                visit_stmt(sub)
+            return
+        if isinstance(stmt, ast.FunctionDef):
+            names.add(stmt.name)
+            for arg in stmt.args.args:
+                names.add(arg.arg)
+            for arg in stmt.args.posonlyargs:
+                names.add(arg.arg)
+            for arg in stmt.args.kwonlyargs:
+                names.add(arg.arg)
+            if stmt.args.vararg is not None:
+                names.add(stmt.args.vararg.arg)
+            if stmt.args.kwarg is not None:
+                names.add(stmt.args.kwarg.arg)
+            for sub in stmt.body:
+                visit_stmt(sub)
+            return
+
+    for stmt in stmts:
+        visit_stmt(stmt)
+    return names
+
+
 def _builtin_names():
     from .builtins import registry as builtin_registry
     return set(builtin_registry.BUILTIN_NAMES) | {"output", "store"}
 
 
+
 def _collect_external_names(node, assigned, names, extra_builtin_names=None):
     """Collect names that should become implicit numeric inputs.
 
-    User library function names are passed in as extra builtins so calls such as
+    User library import aliases are passed in as extra builtins so calls such as
     my_function(...) are not mistaken for external input variables.
     """
     builtin_names = _builtin_names()
@@ -152,6 +244,7 @@ def _collect_external_names(node, assigned, names, extra_builtin_names=None):
     for child in ast.iter_child_nodes(node):
         _collect_external_names(child, assigned, names, extra_builtin_names)
 
+
 def _collect_inputs(stmts, extra_builtin_names=None):
     """Return implicit external numeric input names used by the script."""
     assigned = _assigned_names(stmts)
@@ -160,11 +253,13 @@ def _collect_inputs(stmts, extra_builtin_names=None):
         _collect_external_names(stmt, assigned, names, extra_builtin_names or set())
     return sorted(names)
 
+
 def _literal_string(expr, context="argument"):
     """Function `_literal_string` used by the NodeForge addon."""
     if isinstance(expr, ast.Constant) and isinstance(expr.value, str) and expr.value:
         return expr.value
     raise CompileError(f"Expected a non-empty string literal for {context}")
+
 
 def _is_top_level_call(stmt, names=None):
     """Function `_is_top_level_call` used by the NodeForge addon."""
@@ -177,13 +272,28 @@ def _is_top_level_call(stmt, names=None):
         return None
     return call
 
+
 def _top_level_call_name(stmt):
     """Function `_top_level_call_name` used by the NodeForge addon."""
     call = _is_top_level_call(stmt)
     return call.func.id if call else None
 
+
 def _needs_geometry_io(stmts):
     """Function `_needs_geometry_io` used by the NodeForge addon."""
     return any(_top_level_call_name(stmt) in {"set_position", "store"} for stmt in stmts)
 
-__all__ = ['_parse_source', '_validate_no_type_token_bindings', '_assigned_names', '_collect_external_names', '_collect_inputs', '_literal_string', '_is_top_level_call', '_top_level_call_name', '_needs_geometry_io']
+
+__all__ = [
+    '_parse_source',
+    '_extract_function_imports',
+    '_validate_no_type_token_bindings',
+    '_assigned_names',
+    '_binding_names',
+    '_collect_external_names',
+    '_collect_inputs',
+    '_literal_string',
+    '_is_top_level_call',
+    '_top_level_call_name',
+    '_needs_geometry_io',
+]

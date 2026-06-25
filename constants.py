@@ -8,6 +8,7 @@ TYPE_VECTOR = "VECTOR"
 TYPE_BOOL = "BOOL"
 TYPE_GEOMETRY = "GEOMETRY"
 TYPE_INT = "INT"
+TYPE_TOKEN_NAMES = {"Float", "Int", "Bool", "Vector", "Geometry"}
 
 TYPE_TOKEN_NAMES = {
     "Float": TYPE_FLOAT,

@@ -10,6 +10,8 @@
 #
 # Runtime example: Steps is exposed as a group input and can be changed in UI.
 
+from functions import dragon_curve
+
 steps = input_int("Steps", default=8)
 
 geo = dragon_curve(
