@@ -279,6 +279,65 @@ def run_library_checks():
     print("LIBRARY_AND_SCOPE_OK")
 
 
+def run_explicit_function_import_checks():
+    """Exercise explicit function-library imports, aliases, and namespace guards."""
+    direct = compile_group('''
+from functions import sierpinski_carpet
+geo = sierpinski_carpet(cube(1), steps=1)
+output("Geometry", geo)
+''', "NFTest_explicit_import_direct")
+    check(getattr(direct, "bl_idname", None) == "GeometryNodeTree", "direct imported function did not compile")
+
+    alias = compile_group('''
+from functions import sierpinski_carpet as carpet
+geo = carpet(cube(1), steps=1)
+output("Geometry", geo)
+''', "NFTest_explicit_import_alias_keyword")
+    check("carpet" not in [sock.name for sock in alias.interface.items_tree if getattr(sock, "in_out", None) == "INPUT"], "alias leaked as group input")
+
+    native = compile_group('''
+from functions import koch_curve as kc
+geo = kc(steps=1)
+output("Geometry", geo)
+''', "NFTest_explicit_import_native_alias")
+    check(getattr(native, "bl_idname", None) == "GeometryNodeTree", "native alias did not compile")
+
+    local = compile_group('''
+from functions import sierpinski_carpet as carpet
+
+def make(g):
+    return carpet(g, steps=1)
+
+geo = make(cube(1))
+output("Geometry", geo)
+''', "NFTest_explicit_import_local_function")
+    check(getattr(local, "bl_idname", None) == "GeometryNodeTree", "local-function alias did not compile")
+
+    expect_compile_error('geo = sierpinski_carpet(cube(1), steps=1)\noutput("Geometry", geo)', "NFTest_explicit_import_unimported")
+    expect_compile_error('from functions import does_not_exist\nx = 1\noutput("x", x)', "NFTest_explicit_import_unknown")
+    expect_compile_error('from functions import fibonacci as f\nfrom functions import koch_curve as f\nx = 1\noutput("x", x)', "NFTest_explicit_import_duplicate_alias")
+    expect_compile_error('from functions import fibonacci as x\nx = 1\noutput("x", x)', "NFTest_explicit_import_assignment_conflict")
+    expect_compile_error('from functions import fibonacci as x\nx = 1\nx += 1\noutput("x", x)', "NFTest_explicit_import_augassign_conflict")
+    expect_compile_error('from functions import fibonacci as make\ndef make(a):\n    return a\nx = make(1)\noutput("x", x)', "NFTest_explicit_import_function_conflict")
+    expect_compile_error('from functions import sierpinski_carpet as g\ndef wrap(g):\n    return g\ngeo = wrap(cube(1))\noutput("Geometry", geo)', "NFTest_explicit_import_param_conflict_value")
+    expect_compile_error('from functions import sierpinski_carpet as g\ndef wrap(g):\n    return g(cube(1), steps=1)\ngeo = wrap(cube(1))\noutput("Geometry", geo)', "NFTest_explicit_import_param_conflict_call")
+    expect_compile_error('from functions import fibonacci as x\ndef unused():\n    x = 1\n    return x\nout = 1\noutput("out", out)', "NFTest_explicit_import_local_body_binding_conflict")
+    expect_compile_error('from functions import fibonacci as item\nitems = [1]\nfor item in items:\n    x = item\noutput("x", x)', "NFTest_explicit_import_for_conflict")
+    expect_compile_error('from functions import fibonacci as cube\nx = 1\noutput("x", x)', "NFTest_explicit_import_builtin_conflict")
+    expect_compile_error('from functions import fibonacci as ls_system\nx = 1\noutput("x", x)', "NFTest_explicit_import_system_conflict")
+    expect_compile_error('from functions import sierpinski_carpet as Geometry\ngeo = Geometry(cube(1), steps=1)\noutput("Geometry", geo)', "NFTest_explicit_import_type_token_geometry_conflict")
+    expect_compile_error('from functions import koch_curve as Float\ngeo = Float(steps=1)\noutput("Geometry", geo)', "NFTest_explicit_import_type_token_float_conflict")
+    expect_compile_error('from functions import *\nx = 1\noutput("x", x)', "NFTest_explicit_import_star")
+    expect_compile_error('def make():\n    from functions import koch_curve as kc\n    return kc(steps=1)\ngeo = make()\noutput("Geometry", geo)', "NFTest_explicit_import_nested_local_import")
+    expect_compile_error('if True:\n    from functions import koch_curve as kc\n    geo = kc(steps=1)\noutput("Geometry", geo)', "NFTest_explicit_import_nested_if_import")
+    expect_compile_error('items = [1]\nfor item in items:\n    from functions import koch_curve as kc\n    geo = kc(steps=1)\noutput("Geometry", geo)', "NFTest_explicit_import_nested_for_import")
+    expect_compile_error('from math import sin\nx = 1\noutput("x", x)', "NFTest_explicit_import_other_module")
+    expect_compile_error('from .functions import fibonacci\nx = 1\noutput("x", x)', "NFTest_explicit_import_relative")
+    expect_compile_error('import functions\nx = 1\noutput("x", x)', "NFTest_explicit_import_plain_import")
+    expect_compile_error('from functions import fibonacci as f\nx = f\noutput("x", x)', "NFTest_explicit_import_alias_not_value")
+    print("EXPLICIT_FUNCTION_IMPORTS_OK")
+
+
 
 LSYSTEM_GALLERY_EXAMPLES = {
     "static_koch_curve": '''
@@ -780,8 +839,8 @@ output("Geometry", geo)
             pycache.rmdir()
         native_collision_dir.rmdir()
 
-    expect_compile_error("x = koch_curve(ls_axiom(\"F\"))\noutput(\"Geometry\", x)", "NFTest_lsystem_koch_native_guard")
-    expect_compile_error("x = dragon_curve(ls_axiom(\"F\"))\noutput(\"Geometry\", x)", "NFTest_lsystem_dragon_native_guard")
+    expect_compile_error("from functions import koch_curve\nx = koch_curve(ls_axiom(\"F\"))\noutput(\"Geometry\", x)", "NFTest_lsystem_koch_native_guard")
+    expect_compile_error("from functions import dragon_curve\nx = dragon_curve(ls_axiom(\"F\"))\noutput(\"Geometry\", x)", "NFTest_lsystem_dragon_native_guard")
     expect_compile_error(
         "geo = apply_mandelbrot_material(ls_axiom(\"F\"), \"x\")\noutput(\"Geometry\", geo)",
         "NFTest_lsystem_backend_helper_guard",
@@ -1790,7 +1849,7 @@ def run_update_checks():
 
 def run_mandelbrot_eval_check():
     """Compile and evaluate a small Mandelbrot library call through Blender."""
-    group = compile_group('geo = mandelbrot(resolution=12, max_iter=8)\noutput("Geometry", geo)', "NFTest_mandelbrot_eval")
+    group = compile_group('from functions import mandelbrot\ngeo = mandelbrot(resolution=12, max_iter=8)\noutput("Geometry", geo)', "NFTest_mandelbrot_eval")
     mesh_data = bpy.data.meshes.new("NFTestMesh")
     obj = bpy.data.objects.new("NFTestObject", mesh_data)
     bpy.context.collection.objects.link(obj)
@@ -1823,6 +1882,7 @@ def main():
     run_lsystem_documented_contract_checks()
     run_lsystem_benchmark_if_requested()
     run_library_checks()
+    run_explicit_function_import_checks()
     run_update_checks()
     run_mandelbrot_eval_check()
     print("NODEFORGE_REFACTOR_REGRESSION_OK")

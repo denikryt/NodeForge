@@ -136,6 +136,7 @@ def compile_local_function_call(comp, expr, depth=0):
                 existing_group=existing,
                 local_functions=comp.local_functions,
                 backend_builtins=comp.backend_builtins,
+                imported_library_functions=comp.imported_library_functions,
             )
         else:
             function_group = comp.compile_group_callback(
@@ -143,6 +144,7 @@ def compile_local_function_call(comp, expr, depth=0):
                 group_name,
                 local_functions=comp.local_functions,
                 backend_builtins=comp.backend_builtins,
+                imported_library_functions=comp.imported_library_functions,
             )
         try:
             function_group["nodeforge_local_function_name"] = name

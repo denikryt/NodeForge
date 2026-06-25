@@ -3,7 +3,7 @@
 import ast
 import bpy
 
-from .constants import TYPE_FLOAT, TYPE_INT
+from .constants import TYPE_FLOAT, TYPE_INT, TYPE_TOKEN_NAMES
 from .errors import CompileError
 from .values import Value
 from .nodes import (
@@ -13,7 +13,7 @@ from .nodes import (
     _combine_xyz_mixed,
     _socket_type_for,
 )
-from .parsing import _parse_source, _collect_inputs, _needs_geometry_io
+from .parsing import _parse_source, _extract_function_imports, _binding_names, _collect_inputs, _needs_geometry_io
 from .consteval import _const_eval, _preprocess_compile_time, _infer_input_types, _is_const_vector
 from .storage import (
     _reset_node_group,
@@ -31,6 +31,7 @@ from .compile_time import reject_compile_time_object
 from .systems import registry as systems_registry
 from .systems.lsystem import resources as generated_resources
 from . import expression_compiler
+from .builtins import registry as builtin_registry
 
 _TEST_CUTOVER_FAIL_AFTER_RESET = False
 from .statement_compiler import GroupBuildContext, compile_statements
@@ -49,6 +50,7 @@ class Compiler:
         backend_builtins=None,
         compile_group_callback=None,
         generated_resource_transaction=None,
+        imported_library_functions=None,
     ):
         """Initialize state shared by expression, statement, and call compilers."""
         self.group = group
@@ -60,6 +62,7 @@ class Compiler:
         self.backend_builtins = dict(backend_builtins or {})
         self.compile_group_callback = compile_group_callback or _make_group
         self.generated_resource_transaction = generated_resource_transaction
+        self.imported_library_functions = dict(imported_library_functions or {})
         self.depth = 0
 
     def compile(self, expr):
@@ -122,15 +125,42 @@ class Compiler:
             return self.compile(expr), True
 
 
-def _build_group(source: str, name: str = "NodeForge Group", local_functions=None, backend_builtins=None, generated_resource_transaction=None):
+def _validate_import_bindings(import_pairs, body_stmts, library_names, local_function_defs, backend_names, inherited_imports=None):
+    """Validate and return source-local function import bindings."""
+    imported = {}
+    local_bindings = _binding_names(body_stmts)
+    reserved_names = set(builtin_registry.BUILTIN_NAMES) | {"output", "store"} | set(systems_registry.NAMES) | set(backend_names) | set(TYPE_TOKEN_NAMES)
+
+    def validate_pair(canonical_name, exposed_name, *, inherited=False):
+        if canonical_name not in library_names:
+            raise CompileError(f"Unknown function-library import: {canonical_name}")
+        if exposed_name in imported:
+            if inherited and imported[exposed_name] == canonical_name:
+                return
+            raise CompileError(f"Duplicate function import name: {exposed_name}")
+        if exposed_name in local_bindings or exposed_name in local_function_defs:
+            raise CompileError(f"Function import name conflicts with local binding: {exposed_name}")
+        if exposed_name in reserved_names:
+            raise CompileError(f"Function import name conflicts with reserved name: {exposed_name}")
+        imported[exposed_name] = canonical_name
+
+    for canonical_name, exposed_name in import_pairs:
+        validate_pair(canonical_name, exposed_name)
+    for inherited_exposed, inherited_canonical in dict(inherited_imports or {}).items():
+        validate_pair(inherited_canonical, inherited_exposed, inherited=True)
+    return imported
+
+
+def _build_group(source: str, name: str = "NodeForge Group", local_functions=None, backend_builtins=None, generated_resource_transaction=None, imported_library_functions=None):
     """Compile NodeForge source into a fresh GeometryNodeTree."""
     raw_stmts = _parse_source(source)
+    raw_body_stmts, import_pairs = _extract_function_imports(raw_stmts)
 
     local_function_defs = dict(local_functions or {})
     for existing_local_name in local_function_defs:
         systems_registry.validate_no_reserved_collision(existing_local_name, "Local function")
     body_stmts = []
-    for stmt in raw_stmts:
+    for stmt in raw_body_stmts:
         if isinstance(stmt, ast.FunctionDef):
             systems_registry.validate_no_reserved_collision(stmt.name, "Local function")
             if stmt.name in local_function_defs:
@@ -145,9 +175,17 @@ def _build_group(source: str, name: str = "NodeForge Group", local_functions=Non
     library_names = library_function_names()
     for library_name in library_names:
         systems_registry.validate_no_reserved_collision(library_name, "Library function")
+    own_imported_library_functions = _validate_import_bindings(
+        import_pairs,
+        raw_body_stmts,
+        library_names,
+        local_function_defs,
+        backend_names,
+        inherited_imports=imported_library_functions,
+    )
 
     stmts, consts = _preprocess_compile_time(body_stmts)
-    callable_names = library_names | set(local_function_defs) | backend_names | systems_registry.NAMES
+    callable_names = set(own_imported_library_functions) | set(local_function_defs) | backend_names | systems_registry.NAMES
     input_names = sorted(set(_collect_inputs(stmts, extra_builtin_names=callable_names)) - set(consts.keys()))
     input_types = _infer_input_types(stmts)
     group = bpy.data.node_groups.new(name, "GeometryNodeTree")
@@ -182,6 +220,7 @@ def _build_group(source: str, name: str = "NodeForge Group", local_functions=Non
             backend_builtins=backend_builtins,
             compile_group_callback=_make_group,
             generated_resource_transaction=generated_resource_transaction,
+            imported_library_functions=own_imported_library_functions,
         )
 
         for socket in group_input.outputs:
@@ -402,7 +441,7 @@ def _remove_node_group_if_live(group):
         pass
 
 
-def _compile_fresh_with_cleanup(source, name, *, local_functions=None, backend_builtins=None, owner_group=None):
+def _compile_fresh_with_cleanup(source, name, *, local_functions=None, backend_builtins=None, owner_group=None, imported_library_functions=None):
     """Compile a fresh group and clean temporary resources on failure."""
     if owner_group is not None:
         tx = generated_resources.create_transaction(owner_group)
@@ -416,6 +455,7 @@ def _compile_fresh_with_cleanup(source, name, *, local_functions=None, backend_b
             local_functions=local_functions,
             backend_builtins=backend_builtins,
             generated_resource_transaction=tx,
+            imported_library_functions=imported_library_functions,
         )
         if tx.resources:
             generated_resources.write_group_manifest(group, tx.manifest())
@@ -427,7 +467,7 @@ def _compile_fresh_with_cleanup(source, name, *, local_functions=None, backend_b
         raise
 
 
-def _make_group(source: str, name: str = "NodeForge Group", existing_group=None, local_functions=None, backend_builtins=None):
+def _make_group(source: str, name: str = "NodeForge Group", existing_group=None, local_functions=None, backend_builtins=None, imported_library_functions=None):
     """Compile NodeForge source into a GeometryNodeTree."""
     if existing_group is None:
         group, tx = _compile_fresh_with_cleanup(
@@ -436,6 +476,7 @@ def _make_group(source: str, name: str = "NodeForge Group", existing_group=None,
             local_functions=local_functions,
             backend_builtins=backend_builtins,
             owner_group=None,
+            imported_library_functions=imported_library_functions,
         )
         return group
     if getattr(existing_group, "bl_idname", None) != "GeometryNodeTree":
@@ -446,10 +487,11 @@ def _make_group(source: str, name: str = "NodeForge Group", existing_group=None,
         name,
         local_functions=local_functions,
         backend_builtins=backend_builtins,
+        imported_library_functions=imported_library_functions,
     )
 
 
-def _update_existing_group_transactional(existing_group, source, name, *, local_functions=None, backend_builtins=None):
+def _update_existing_group_transactional(existing_group, source, name, *, local_functions=None, backend_builtins=None, imported_library_functions=None):
     """Compile into a replacement group, then cut over with rollback on cutover failure."""
     old_manifest = generated_resources.read_group_manifest(existing_group)
     owner_uuid = old_manifest["owner_group_uuid"] if old_manifest is not None else __import__("uuid").uuid4().hex
@@ -463,6 +505,7 @@ def _update_existing_group_transactional(existing_group, source, name, *, local_
             local_functions=local_functions,
             backend_builtins=backend_builtins,
             generated_resource_transaction=tx,
+            imported_library_functions=imported_library_functions,
         )
         new_manifest = tx.manifest(empty=not bool(tx.resources)) if (old_manifest is not None or tx.resources) else None
         if new_manifest is not None:

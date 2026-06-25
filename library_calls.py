@@ -12,11 +12,11 @@ from .library import (
 )
 
 
-def compile_library_function_call(comp, expr, depth=0):
+def compile_library_function_call(comp, expr, depth=0, function_name=None):
     """Compile a function-library call without owning library discovery/materialization."""
-    name = expr.func.id
+    name = function_name or expr.func.id
     if has_native_compile_call(name):
-        return compile_module_library_function_call(comp, expr, depth)
+        return compile_module_library_function_call(comp, expr, depth, function_name=name)
     x = depth * 240
     y = -depth * 90
     function_group = get_or_create_library_group(name, comp.compile_group_callback)

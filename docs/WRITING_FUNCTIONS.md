@@ -92,10 +92,14 @@ Guidelines:
 Library functions can call other library functions.
 
 ```python
+from functions import sierpinski_carpet
+
 geo = input_geometry("Geometry")
 geo = sierpinski_carpet(geo, steps=3)
 output("Geometry", geo)
 ```
+
+User scripts and `source.nf` files must import function-library entries explicitly with `from functions import name` or `from functions import name as alias`. Bare auto-global library calls are not supported. Import aliases are compile-time callable bindings only, not first-class runtime values.
 
 Keyword names are normalized when connected to group sockets. A keyword such as `max_iter` can match an input socket named `Max Iter`.
 
@@ -153,7 +157,7 @@ For every function, verify:
 
 - the library scanner lists the function
 - the function group materializes successfully
-- a script can call the function by name
+- a script can import and call the function by name or alias
 - expected geometry, attributes, and materials exist on evaluated output
 - old library functions still compile
 - any package-local helper is scoped to its package

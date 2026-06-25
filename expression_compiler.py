@@ -7,7 +7,6 @@ from .errors import CompileError
 from .values import Value, NodeResult
 from .nodes import *
 from .consteval import _const_eval
-from .library import has_library_function
 from .builtins import registry as builtin_registry
 from .compile_time import reject_compile_time_object
 from .systems import registry as systems_registry
@@ -170,11 +169,12 @@ def compile_expr(comp, expr, depth=0):
         if not isinstance(expr.func, ast.Name):
             raise CompileError("Only simple function calls are supported")
         name = expr.func.id
+        is_imported_library_call = name in comp.imported_library_functions
         if (
             expr.keywords
             and not builtin_registry.has_callable_builtin(name)
             and not systems_registry.has_system_constructor(name)
-            and not has_library_function(name)
+            and not is_imported_library_call
             and name not in comp.local_functions
             and name not in comp.backend_builtins
         ):
@@ -189,8 +189,8 @@ def compile_expr(comp, expr, depth=0):
             return local_functions.compile_local_function_call(comp, expr, depth)
         if name in comp.backend_builtins:
             return local_functions.compile_backend_builtin_call(comp, expr, depth)
-        if has_library_function(name):
-            return library_calls.compile_library_function_call(comp, expr, depth)
+        if is_imported_library_call:
+            return library_calls.compile_library_function_call(comp, expr, depth, function_name=comp.imported_library_functions[name])
         if name in {"output", "store"}:
             raise CompileError(f"{name}() is only supported as a top-level call")
         raise CompileError(f"Unsupported function: {name}")
