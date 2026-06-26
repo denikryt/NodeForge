@@ -24,7 +24,8 @@ def test_math_compile_and_blender_enum_contracts():
         keyword_lines.append(f'k{index} = {_math_keyword_expr(name, math._SPECS[name].params)}')
     keyword_lines.append("output('v', k0)")
     compile_group('\n'.join(keyword_lines), 'NFTest_math_all_keywords')
-    error_sources = ["from functions import smoothstep\nx = smoothstep(edge0=0, edge1=1, value=0.5)\noutput('x', x)", "from functions import smoothstep\nx = smoothstep(0, edge0=1, edge1=2)\noutput('x', x)", "from functions import smoothstep\nx = smoothstep(edge0=0, edge1=1)\noutput('x', x)", "from functions import smoothstep\nx = smoothstep(**foo)\noutput('x', x)", "x = smoothstep(0, 1, 0.5)\noutput('x', x)", "x = lerp(0, 1, 0.5)\noutput('x', x)", "x = frac(0.5)\noutput('x', x)"]
+    compile_group("from functions import smoothstep\nx = smoothstep(edge0=0, edge1=1)\noutput('x', x)", 'NFTest_library_function_keyword_defaults')
+    error_sources = ["from functions import smoothstep\nx = smoothstep(edge0=0, edge1=1, value=0.5)\noutput('x', x)", "from functions import smoothstep\nx = smoothstep(0, edge0=1, edge1=2)\noutput('x', x)", "from functions import smoothstep\nx = smoothstep(**foo)\noutput('x', x)", "x = smoothstep(0, 1, 0.5)\noutput('x', x)", "x = lerp(0, 1, 0.5)\noutput('x', x)", "x = frac(0.5)\noutput('x', x)"]
     for index, source in enumerate(error_sources):
         try:
             compile_group(source, f'NFTest_math_keyword_error_{index}')

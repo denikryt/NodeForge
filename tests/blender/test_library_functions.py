@@ -7,23 +7,35 @@ def test_packaged_library_functions_and_helper_scoping():
     flat_probe = ROOT / 'functions' / 'flat_legacy_probe.py'
     flat_source = ROOT / 'functions' / 'stage2_flat_probe.nf'
     vector_source = ROOT / 'functions' / 'stage2_vector_probe.nf'
+    private_source = ROOT / 'functions' / '_stage2_private_probe.nf'
+    dunder_source = ROOT / 'functions' / '__stage2_dunder_probe.nf'
     flat_probe.write_text("def compile_call(comp, expr, depth=0):\n    raise AssertionError('flat layout loaded')\n", encoding='utf-8')
     flat_source.write_text('value = input_float("Value", default=2.0)\noutput("Value", value)\n', encoding='utf-8')
     vector_source.write_text('value = input_vector("Value", default=vector(1, 2, 3))\noutput("Value", value)\n', encoding='utf-8')
+    private_source.write_text('value = input_float("Value", default=2.0)\noutput("Value", value)\n', encoding='utf-8')
+    dunder_source.write_text('value = input_float("Value", default=2.0)\noutput("Value", value)\n', encoding='utf-8')
     try:
         check(not library.has_module_library_function('flat_legacy_probe'), 'legacy flat function module was discovered')
         check(not library.has_library_function('flat_legacy_probe'), 'legacy flat function appeared as library function')
         check(library.has_library_function('stage2_flat_probe'), 'flat .nf function was not discovered')
+        check(not library.has_library_function('_stage2_private_probe'), 'private flat .nf function was discovered')
+        check(not library.has_library_function('__stage2_dunder_probe'), 'dunder flat .nf function was discovered')
         names = library.library_function_names()
         check('stage2_flat_probe' in names, 'flat .nf function missing from public function names')
+        check('_stage2_private_probe' not in names, 'private flat .nf function leaked into public function names')
+        check('__stage2_dunder_probe' not in names, 'dunder flat .nf function leaked into public function names')
         compile_group('from functions import stage2_flat_probe\nx = stage2_flat_probe(3)\noutput("x", x)', 'NFTest_flat_function_import')
         compile_group('from functions import *\nx = stage2_flat_probe(3)\noutput("x", x)', 'NFTest_flat_function_star_import')
         compile_group('from functions import stage2_vector_probe\nv = stage2_vector_probe(vector(1, 2, 3))\noutput("v", v)', 'NFTest_flat_vector_function_import')
         expect_compile_error('from functions import stage2_vector_probe\nv = stage2_vector_probe(3)\noutput("v", v)', 'NFTest_flat_vector_function_scalar_rejected')
+        expect_compile_error('from functions import _stage2_private_probe\nx = _stage2_private_probe(1)\noutput("x", x)', 'NFTest_private_flat_function_explicit_import_rejected')
+        expect_compile_error('from functions import *\nx = _stage2_private_probe(1)\noutput("x", x)', 'NFTest_private_flat_function_star_import_rejected')
     finally:
         flat_probe.unlink(missing_ok=True)
         flat_source.unlink(missing_ok=True)
         vector_source.unlink(missing_ok=True)
+        private_source.unlink(missing_ok=True)
+        dunder_source.unlink(missing_ok=True)
     for fname in ['copy_by_offsets', 'layout_grid', 'grid_points', 'layout_circle', 'layout_spiral', 'spiral_points', 'layout_random', 'random_points', 'inverse_lerp', 'remap', 'saturate', 'step', 'smoothstep', 'smootherstep', 'pingpong', 'wrap', 'sign', 'rotate2d', 'polar', 'angle_between', 'rotate_around_axis', 'dragon_curve', 'fibonacci', 'fibonacci_spiral', 'koch_curve', 'mandelbrot', 'sierpinski_carpet']:
         group = compiler.create_library_function_group(fname)
         check(getattr(group, 'bl_idname', None) == 'GeometryNodeTree', fname)

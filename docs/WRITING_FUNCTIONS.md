@@ -57,7 +57,7 @@ This style fits functions that generate large static geometry, precompute levels
 A function file stem or package name must be a valid Python-like function name:
 
 ```text
-letters, digits, underscore; starts with a letter or underscore
+letters, digits, underscore; public importable names must start with a letter and must not start with underscore
 ```
 
 Recommended flat layout for reusable pure DSL functions:
@@ -113,7 +113,7 @@ output("Geometry", geo)
 
 User scripts and function source files must import function-library entries explicitly with `from functions import name`, `from functions import name as alias`, or `from functions import *`. Bare auto-global library calls are not supported. Import aliases and star-imported names are compile-time callable bindings only, not first-class runtime values.
 
-`from functions import *` expands to all public names discovered in `NodeForge/functions/` for the current source file. It is a convenience import for quick authoring; it does not add those names to the global built-in namespace and it does not make them callable from other scripts without an import.
+`from functions import *` expands to all public names discovered in `NodeForge/functions/` for the current source file. It is a convenience import for quick authoring; it does not add those names to the global built-in namespace and it does not make them callable from other scripts without an import. Files or package directories whose names start with `_` are private implementation entries and are not imported explicitly or by star import.
 
 Keyword names are normalized when connected to group sockets. A keyword such as `max_iter` can match an input socket named `Max Iter`.
 

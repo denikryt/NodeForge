@@ -33,6 +33,11 @@ def _is_valid_function_name(name: str) -> bool:
     return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name or ""))
 
 
+def _is_public_function_name(name: str) -> bool:
+    """Return True for callable function-library names exposed to user imports."""
+    return _is_valid_function_name(name) and not name.startswith("_")
+
+
 def display_name_for_function(name: str) -> str:
     """Return the user-facing node title for a library function name."""
     parts = [p for p in re.split(r"[_\s]+", name or "") if p]
@@ -94,7 +99,7 @@ def _source_path_for_name(name: str) -> Path | None:
       functions/foo.nodeforge
       functions/foo/source.nf
     """
-    if not _is_valid_function_name(name):
+    if not _is_public_function_name(name):
         return None
     root = _library_dir()
     for ext in _SOURCE_EXTENSIONS:
@@ -109,7 +114,7 @@ def _source_path_for_name(name: str) -> Path | None:
 
 def _module_path_for_name(name: str) -> Path | None:
     """Find a packaged native Python helper module for a function name."""
-    if not _is_valid_function_name(name):
+    if not _is_public_function_name(name):
         return None
     packaged = _library_dir() / name / _NATIVE_FILE_NAME
     if packaged.exists() and packaged.is_file():
@@ -205,9 +210,9 @@ def library_function_names() -> set[str]:
         if path.name == "__init__.py" or path.name.startswith("__"):
             continue
         if path.is_file():
-            if path.suffix in _SOURCE_EXTENSIONS and _is_valid_function_name(path.stem):
+            if path.suffix in _SOURCE_EXTENSIONS and _is_public_function_name(path.stem):
                 names.add(path.stem)
-        elif path.is_dir() and _is_valid_function_name(path.name):
+        elif path.is_dir() and _is_public_function_name(path.name):
             if _source_path_for_name(path.name) is not None or _module_path_for_name(path.name) is not None:
                 names.add(path.name)
     return _validate_library_function_names(names)

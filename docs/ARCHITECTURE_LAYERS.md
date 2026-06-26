@@ -146,7 +146,7 @@ from functions import *
 
 `from functions import *` imports all public discoverable function-library entries into the current source file's imported callable namespace. It is an authoring shortcut only. It does not mutate `builtins/registry.py`, does not add core globals, and does not make those names available to other scripts without an import.
 
-Public function discovery includes flat `.nf` files and supported package entries. It does not include package-local backend helper names, hidden files, systems, examples, or implementation files.
+Public function discovery includes flat `.nf` files and supported package entries whose names do not start with `_`. It does not include package-local backend helper names, underscore-private entries, hidden files, systems, examples, or implementation files.
 
 ## Package-local backend helpers
 
