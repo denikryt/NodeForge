@@ -133,6 +133,19 @@ output("Geometry", join(circle, grid))
 
 Migrated layout helpers include `circle_points`, `layout_circle`, `spiral_points`, `layout_spiral`, `grid_points`, `layout_grid`, `random_points`, `layout_random`, and `copy_by_offsets`. `layout_circle(...)` and `layout_spiral(...)` use an explicit `count` input; they do not derive count from the input geometry. Grid helpers use vector `spacing`, so scalar spacing should be written explicitly as `vector(s, s, s)` or another suitable vector.
 
+Migrated derived helpers include `inverse_lerp`, `remap`, `saturate`, `step`, `smoothstep`, `smootherstep`, `pingpong`, `wrap`, `sign`, `rotate2d`, `polar`, `angle_between`, and `rotate_around_axis`. These helpers are ordinary imported function-library entries; for example:
+
+```python
+from functions import smoothstep, rotate2d
+
+h = smoothstep(0, 1, grid_uv().x)
+v = rotate2d(vector(1, 0, 0), radians(45))
+output("h", h)
+output("v", v)
+```
+
+Use core `mix(...)` instead of the removed `lerp(...)` alias, core `fract(...)` instead of the removed `frac(...)` alias, and normal comparison operators instead of removed compare-wrapper calls.
+
 ## Adding package-local helpers
 
 `function.py` can expose package-local helpers through `BACKEND_BUILTINS`.

@@ -88,8 +88,7 @@ def _math_keyword_expr(name, params):
 def run_math_table_dispatch_checks():
     """Check table-driven math names, keyword support, and unsupported-name errors."""
     expected = set(_FLOAT_FUNCS_1) | set(_FLOAT_FUNCS_2) | {
-        "ln", "clamp", "mix", "lerp", "select", "map_range",
-        "inverse_lerp", "remap", "saturate", "step", "smoothstep", "smootherstep", "pingpong", "wrap",
+        "ln", "clamp", "mix", "select", "map_range",
         "noise", "random_value",
     }
     check(math.NAMES == expected, f"math.NAMES drifted: {sorted(math.NAMES ^ expected)}")
@@ -109,17 +108,8 @@ def run_math_table_dispatch_checks():
         "ln_v = ln(2)",
         "clamp_v = clamp(2, 0, 1)",
         "mix_v = mix(0, 1, 0.5)",
-        "lerp_v = lerp(0, 1, 0.5)",
         "select_v = select(True, 0, 1)",
         "map_range_v = map_range(0.5, 0, 1, -1, 1)",
-        "inverse_lerp_v = inverse_lerp(0, 10, 5)",
-        "remap_v = remap(0.5, 0, 1, -1, 1)",
-        "saturate_v = saturate(2)",
-        "step_v = step(0.5, 1)",
-        "smoothstep_v = smoothstep(0, 1, 0.5)",
-        "smootherstep_v = smootherstep(0, 1, 0.5)",
-        "pingpong_v = pingpong(-0.25, 1)",
-        "wrap_v = wrap(-1, 0, 2)",
         "noise_v = noise(vector(0,0,0), scale=1, detail=2, roughness=0.5)",
         "random_v = random_value(0, 1, seed=3)",
         "output('v', clamp_v)",
@@ -133,10 +123,10 @@ def run_math_table_dispatch_checks():
     compile_group("\n".join(keyword_lines), "NFTest_math_all_keywords")
 
     error_sources = [
-        "x = smoothstep(edge0=0, edge1=1, value=0.5)\noutput('x', x)",
-        "x = smoothstep(0, edge0=1, edge1=2)\noutput('x', x)",
-        "x = smoothstep(edge0=0, edge1=1)\noutput('x', x)",
-        "x = smoothstep(**foo)\noutput('x', x)",
+        "from functions import smoothstep\nx = smoothstep(edge0=0, edge1=1, value=0.5)\noutput('x', x)",
+        "from functions import smoothstep\nx = smoothstep(0, edge0=1, edge1=2)\noutput('x', x)",
+        "from functions import smoothstep\nx = smoothstep(edge0=0, edge1=1)\noutput('x', x)",
+        "from functions import smoothstep\nx = smoothstep(**foo)\noutput('x', x)",
     ]
     for index, source in enumerate(error_sources):
         try:
@@ -191,6 +181,7 @@ output("Bool", c)
 output("Vec", v)
 ''',
         "math_vector": '''
+from functions import inverse_lerp, remap, saturate, step, smoothstep, smootherstep, pingpong, wrap, rotate2d, polar, rotate_around_axis, angle_between
 a = inverse_lerp(0, 10, 5)
 b = remap(a, 0, 1, -1, 1)
 c = saturate(b + 2)
@@ -206,6 +197,7 @@ output("Scalar", a+b+c+d+e+f+g+h+ang)
 output("Vector", v + w)
 ''',
         "geometry_fields": '''
+from functions import smoothstep
 geo = grid(4, 3)
 uv = grid_uv()
 height = smoothstep(0, 1, uv.x)
@@ -223,6 +215,7 @@ for i in runtime_range(5):
 output("x", x)
 ''',
         "runtime_vector_bool": '''
+from functions import rotate_around_axis
 v = vector(1,0,0)
 flag = True
 for i in runtime_range(3):
@@ -780,7 +773,7 @@ geo = ls_system(ls_axiom("ffF"), ls_iterations(0), ls_angle(90), ls_step(step_va
 output("Geometry", geo)
 """, "NFTest_lsystem_lowercase_move_runtime_step")
 
-    compile_group("x = step(0.5, 1.0)\noutput(\"x\", x)", "NFTest_lsystem_builtin_step_priority")
+    compile_group("from functions import step\nx = step(0.5, 1.0)\noutput(\"x\", x)", "NFTest_lsystem_imported_step_coexists")
 
     error_sources = {
         "output_part": "output(\"Geometry\", ls_axiom(\"F\"))",

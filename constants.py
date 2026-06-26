@@ -24,8 +24,8 @@ _FLOAT_FUNCS_1 = {
     "sin": "SINE", "cos": "COSINE", "tan": "TANGENT",
     "asin": "ARCSINE", "acos": "ARCCOSINE", "atan": "ARCTANGENT",
     "sqrt": "SQRT", "abs": "ABSOLUTE", "floor": "FLOOR", "ceil": "CEIL",
-    "round": "ROUND", "fract": "FRACT", "frac": "FRACT", "radians": "RADIANS", "degrees": "DEGREES",
-    "exp": "EXPONENT", "sign": "SIGN",
+    "round": "ROUND", "fract": "FRACT", "radians": "RADIANS", "degrees": "DEGREES",
+    "exp": "EXPONENT",
 }
 _FLOAT_FUNCS_2 = {"min": "MINIMUM", "max": "MAXIMUM", "pow": "POWER", "log": "LOGARITHM", "atan2": "ARCTAN2", "mod": "MODULO"}
 _BIN_OPS = {ast.Add: "ADD", ast.Sub: "SUBTRACT", ast.Mult: "MULTIPLY", ast.Div: "DIVIDE", ast.Pow: "POWER", ast.Mod: "MODULO"}

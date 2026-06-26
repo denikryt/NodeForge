@@ -24,7 +24,7 @@ def test_packaged_library_functions_and_helper_scoping():
         flat_probe.unlink(missing_ok=True)
         flat_source.unlink(missing_ok=True)
         vector_source.unlink(missing_ok=True)
-    for fname in ['copy_by_offsets', 'layout_grid', 'grid_points', 'layout_circle', 'layout_spiral', 'spiral_points', 'layout_random', 'random_points', 'dragon_curve', 'fibonacci', 'fibonacci_spiral', 'koch_curve', 'mandelbrot', 'sierpinski_carpet']:
+    for fname in ['copy_by_offsets', 'layout_grid', 'grid_points', 'layout_circle', 'layout_spiral', 'spiral_points', 'layout_random', 'random_points', 'inverse_lerp', 'remap', 'saturate', 'step', 'smoothstep', 'smootherstep', 'pingpong', 'wrap', 'sign', 'rotate2d', 'polar', 'angle_between', 'rotate_around_axis', 'dragon_curve', 'fibonacci', 'fibonacci_spiral', 'koch_curve', 'mandelbrot', 'sierpinski_carpet']:
         group = compiler.create_library_function_group(fname)
         check(getattr(group, 'bl_idname', None) == 'GeometryNodeTree', fname)
     normal_names = set(bpy.data.node_groups.keys())
@@ -69,6 +69,7 @@ output("x", x)
 
     for source, name in (
         ('from functions import *\nfibonacci = 1\noutput("fibonacci", fibonacci)', 'NFTest_function_star_assignment_conflict'),
+        ('from functions import *\nsmoothstep = 1\noutput("smoothstep", smoothstep)', 'NFTest_function_star_smoothstep_assignment_conflict'),
         ('from functions import *\ndef fibonacci(n):\n    return n\nx = fibonacci(1)\noutput("x", x)', 'NFTest_function_star_local_function_conflict'),
         ('from functions import fibonacci\nfrom functions import *\nx = 1\noutput("x", x)', 'NFTest_function_star_explicit_conflict'),
         ('from functions import *\nfrom functions import fibonacci as fibonacci\nx = 1\noutput("x", x)', 'NFTest_function_star_later_explicit_conflict'),

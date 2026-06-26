@@ -18,7 +18,6 @@ from ..nodes import (
     _clamp,
     _mix,
     _switch,
-    _compare,
     _map_range,
     _new_node,
     _value,
@@ -79,7 +78,7 @@ def _compile_clamp_spec(group, args, x, y):
 
 
 def _compile_mix_spec(group, args, x, y):
-    """Compile mix(a, b, factor) and lerp(a, b, factor)."""
+    """Compile mix(a, b, factor)."""
     if len(args) != 3:
         raise CompileError("mix(a, b, factor) expects 3 arguments")
     return _mix(group, args[0], args[1], args[2], x, y)
@@ -143,94 +142,6 @@ def _ordered_keyword_args(spec, expr):
             raise CompileError(f"{name}() missing argument: {param}")
         out.append(by_name[param])
     return out
-
-def _ensure_numeric_args(name, args, count):
-    """Validate the number and semantic type of scalar helper arguments."""
-    if len(args) != count:
-        raise CompileError(f"{name}() expects {count} argument(s)")
-    if not all(_is_number_type(arg.typ) for arg in args):
-        raise CompileError(f"{name}() expects numeric arguments")
-
-
-def _compile_inverse_lerp(group, args, x, y):
-    """Compile inverse_lerp(a, b, x) as (x - a) / (b - a)."""
-    _ensure_numeric_args("inverse_lerp", args, 3)
-    a, b, value = args
-    numerator = _math(group, "SUBTRACT", [value, a], x + 20, y - 40)
-    denominator = _math(group, "SUBTRACT", [b, a], x + 20, y - 80)
-    return _math(group, "DIVIDE", [numerator, denominator], x, y)
-
-
-def _compile_remap(group, args, x, y):
-    """Compile remap(x, in_min, in_max, out_min, out_max) as an unclamped linear map."""
-    _ensure_numeric_args("remap", args, 5)
-    value, in_min, in_max, out_min, out_max = args
-    t = _compile_inverse_lerp(group, [in_min, in_max, value], x + 20, y - 40)
-    out_size = _math(group, "SUBTRACT", [out_max, out_min], x + 20, y - 80)
-    scaled = _math(group, "MULTIPLY", [t, out_size], x + 20, y - 120)
-    return _math(group, "ADD", [scaled, out_min], x, y)
-
-
-def _compile_saturate(group, args, x, y):
-    """Compile saturate(x) as clamp(x, 0, 1)."""
-    _ensure_numeric_args("saturate", args, 1)
-    return _clamp(group, args[0], _value(group, 0.0, x + 20, y - 40), _value(group, 1.0, x + 20, y - 80), x, y)
-
-
-def _compile_step(group, args, x, y):
-    """Compile step(edge, x) as 0 below the edge and 1 at or above it."""
-    _ensure_numeric_args("step", args, 2)
-    edge, value = args
-    cond = _compare(group, "GREATER_EQUAL", value, edge, x + 20, y - 40)
-    return _switch(group, cond, _value(group, 0.0, x + 20, y - 80), _value(group, 1.0, x + 20, y - 120), x, y)
-
-
-def _compile_smoothstep(group, args, x, y):
-    """Compile smoothstep(edge0, edge1, x) with cubic Hermite smoothing."""
-    _ensure_numeric_args("smoothstep", args, 3)
-    t = _compile_saturate(group, [_compile_inverse_lerp(group, args, x + 20, y - 40)], x + 20, y - 80)
-    t2 = _math(group, "MULTIPLY", [t, t], x + 40, y - 120)
-    two_t = _math(group, "MULTIPLY", [_value(group, 2.0, x + 40, y - 160), t], x + 40, y - 200)
-    three_minus_two_t = _math(group, "SUBTRACT", [_value(group, 3.0, x + 40, y - 240), two_t], x + 40, y - 280)
-    return _math(group, "MULTIPLY", [t2, three_minus_two_t], x, y)
-
-
-def _compile_smootherstep(group, args, x, y):
-    """Compile smootherstep(edge0, edge1, x) with quintic smoothing."""
-    _ensure_numeric_args("smootherstep", args, 3)
-    t = _compile_saturate(group, [_compile_inverse_lerp(group, args, x + 20, y - 40)], x + 20, y - 80)
-    t2 = _math(group, "MULTIPLY", [t, t], x + 40, y - 120)
-    t3 = _math(group, "MULTIPLY", [t2, t], x + 40, y - 160)
-    six_t = _math(group, "MULTIPLY", [_value(group, 6.0, x + 40, y - 200), t], x + 40, y - 240)
-    six_t_minus_15 = _math(group, "SUBTRACT", [six_t, _value(group, 15.0, x + 40, y - 280)], x + 40, y - 320)
-    inner = _math(group, "MULTIPLY", [six_t_minus_15, t], x + 40, y - 360)
-    inner_plus_10 = _math(group, "ADD", [inner, _value(group, 10.0, x + 40, y - 400)], x + 40, y - 440)
-    return _math(group, "MULTIPLY", [t3, inner_plus_10], x, y)
-
-
-def _compile_pingpong(group, args, x, y):
-    """Compile pingpong(x, length) as a positive triangular repeating wave."""
-    _ensure_numeric_args("pingpong", args, 2)
-    value, length = args
-    double_length = _math(group, "MULTIPLY", [_value(group, 2.0, x + 20, y - 40), length], x + 20, y - 80)
-    raw_wrapped = _math(group, "MODULO", [value, double_length], x + 20, y - 120)
-    positive_offset = _math(group, "ADD", [raw_wrapped, double_length], x + 20, y - 160)
-    wrapped = _math(group, "MODULO", [positive_offset, double_length], x + 20, y - 200)
-    centered = _math(group, "SUBTRACT", [wrapped, length], x + 20, y - 240)
-    distance = _math(group, "ABSOLUTE", [centered], x + 20, y - 280)
-    return _math(group, "SUBTRACT", [length, distance], x, y)
-
-
-def _compile_wrap(group, args, x, y):
-    """Compile wrap(x, min, max) as a positive repeating value in the given range."""
-    _ensure_numeric_args("wrap", args, 3)
-    value, min_value, max_value = args
-    size = _math(group, "SUBTRACT", [max_value, min_value], x + 20, y - 40)
-    shifted = _math(group, "SUBTRACT", [value, min_value], x + 20, y - 80)
-    raw_wrapped = _math(group, "MODULO", [shifted, size], x + 20, y - 120)
-    positive_offset = _math(group, "ADD", [raw_wrapped, size], x + 20, y - 160)
-    wrapped = _math(group, "MODULO", [positive_offset, size], x + 20, y - 200)
-    return _math(group, "ADD", [wrapped, min_value], x, y)
 
 
 def _compile_noise(comp, expr, x, y):
@@ -379,17 +290,8 @@ _SPECS = {
     "ln": MathBuiltinSpec("ln", ("value",), _compile_ln_spec),
     "clamp": MathBuiltinSpec("clamp", ("value", "min", "max"), _compile_clamp_spec),
     "mix": MathBuiltinSpec("mix", ("a", "b", "factor"), _compile_mix_spec),
-    "lerp": MathBuiltinSpec("lerp", ("a", "b", "factor"), _compile_mix_spec),
     "select": MathBuiltinSpec("select", ("cond", "false", "true"), _compile_select_spec),
     "map_range": MathBuiltinSpec("map_range", ("value", "from_min", "from_max", "to_min", "to_max"), _compile_map_range_spec),
-    "inverse_lerp": MathBuiltinSpec("inverse_lerp", ("a", "b", "x"), _compile_inverse_lerp),
-    "remap": MathBuiltinSpec("remap", ("x", "in_min", "in_max", "out_min", "out_max"), _compile_remap),
-    "saturate": MathBuiltinSpec("saturate", ("x",), _compile_saturate),
-    "step": MathBuiltinSpec("step", ("edge", "x"), _compile_step),
-    "smoothstep": MathBuiltinSpec("smoothstep", ("edge0", "edge1", "x"), _compile_smoothstep),
-    "smootherstep": MathBuiltinSpec("smootherstep", ("edge0", "edge1", "x"), _compile_smootherstep),
-    "pingpong": MathBuiltinSpec("pingpong", ("x", "length"), _compile_pingpong),
-    "wrap": MathBuiltinSpec("wrap", ("x", "min", "max"), _compile_wrap),
 }
 _CUSTOM_NAMES = {"noise", "random_value"}
 NAMES = set(_SPECS) | _CUSTOM_NAMES

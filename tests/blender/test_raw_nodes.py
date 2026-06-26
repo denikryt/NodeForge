@@ -104,17 +104,23 @@ output("Geometry", geo)
     check(_incoming_count(group, node, "Geometry") == 3, "multi-input links were not created")
 
 
-def test_compare_wrappers_use_raw_builder():
-    group = compile_group('''
-a = greater_than(position().z, 0.25)
-b = less_equal(position().x, 1.0)
+def test_removed_compare_wrappers_fail_but_operators_compile():
+    compile_group('''
+a = position().z > 0.25
+b = position().x <= 1.0
 out = a and b
 output("out", out)
-''', "NFTest_raw_compare_wrappers")
-    compares = _nodes(group, "FunctionNodeCompare")
-    raw_compares = [node for node in compares if raw_nodes.is_raw_node(node)]
-    check(len(raw_compares) == 2, "compare wrappers did not create raw compare nodes")
-    check({node.operation for node in raw_compares} == {"GREATER_THAN", "LESS_EQUAL"}, "compare wrapper operations mismatch")
+''', "NFTest_compare_operators_after_wrapper_removal")
+    for index, source in enumerate((
+        'a = greater_than(position().z, 0.25)\noutput("a", a)',
+        'a = less_equal(position().x, 1.0)\noutput("a", a)',
+    )):
+        try:
+            compile_group(source, f"NFTest_removed_compare_wrapper_{index}")
+        except CompileError:
+            pass
+        else:
+            raise AssertionError("removed compare wrapper compiled")
 
 
 def test_raw_node_update_cutover_preserves_props_defaults_and_links():

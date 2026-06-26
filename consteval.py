@@ -20,7 +20,6 @@ _ALLOWED_MATH_FUNCS = {
     "degrees": __import__("math").degrees,
     "exp": __import__("math").exp,
     "ln": __import__("math").log,
-    "sign": lambda x: -1 if x < 0 else (1 if x > 0 else 0),
 }
 
 

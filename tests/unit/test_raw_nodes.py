@@ -92,8 +92,8 @@ def test_raw_node_parser_accepts_type_tokens_without_comp_vars():
     assert parsed["typ"] == TYPE_BOOL
 
 
-def test_compare_wrappers_reject_bool_arguments_before_raw_blender_build():
+def test_compare_wrappers_do_not_register_public_helpers():
     from NodeForge.builtins import node_wrappers
 
-    with pytest.raises(CompileError, match="numeric or both Vector"):
-        node_wrappers._compare_data_type(TYPE_BOOL, TYPE_BOOL)
+    assert node_wrappers.NAMES == set()
+    assert not hasattr(node_wrappers, "_compare_data_type")

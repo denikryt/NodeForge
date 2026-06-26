@@ -329,7 +329,7 @@ for i in runtime_range(max_iter):
 Unary functions:
 
 ```text
-sin cos tan asin acos atan sqrt abs floor ceil round fract frac radians degrees exp ln sign
+sin cos tan asin acos atan sqrt abs floor ceil round fract radians degrees exp ln
 ```
 
 Signature:
@@ -360,7 +360,7 @@ Clamps a numeric value.
 
 Returns: `Float`.
 
-### `mix(a, b, factor)` / `lerp(a, b, factor)`
+### `mix(a, b, factor)`
 
 Interpolates between `a` and `b`.
 
@@ -383,73 +383,6 @@ Returns: selected value type.
 ### `map_range(value, from_min, from_max, to_min, to_max)`
 
 Maps a value from one numeric range to another.
-
-Returns: `Float`.
-
-
-### `inverse_lerp(a, b, x)`
-
-Returns the normalized position of `x` inside the range `a..b`.
-
-Parameters:
-
-| Name | Type | Description |
-| --- | --- | --- |
-| `a` | `Float` | Range start. |
-| `b` | `Float` | Range end. |
-| `x` | `Float` | Value to normalize. |
-
-Returns: `Float`.
-
-### `remap(x, in_min, in_max, out_min, out_max)`
-
-Maps `x` from one numeric range into another range without clamping the output.
-
-Parameters:
-
-| Name | Type | Description |
-| --- | --- | --- |
-| `x` | `Float` | Input value. |
-| `in_min` | `Float` | Input range start. |
-| `in_max` | `Float` | Input range end. |
-| `out_min` | `Float` | Output range start. |
-| `out_max` | `Float` | Output range end. |
-
-Returns: `Float`.
-
-### `saturate(x)`
-
-Clamps `x` to the `0..1` range.
-
-Returns: `Float`.
-
-### `step(edge, x)`
-
-Returns `0` below `edge` and `1` at or above `edge`.
-
-Returns: `Float`.
-
-### `smoothstep(edge0, edge1, x)`
-
-Returns a cubic smoothed transition from `0` to `1` across `edge0..edge1`.
-
-Returns: `Float`.
-
-### `smootherstep(edge0, edge1, x)`
-
-Returns a quintic smoothed transition from `0` to `1` across `edge0..edge1`.
-
-Returns: `Float`.
-
-### `pingpong(x, length)`
-
-Repeats `x` as a positive triangular wave in the `0..length` range.
-
-Returns: `Float`.
-
-### `wrap(x, min, max)`
-
-Wraps `x` into the positive repeating range `min..max`, including negative inputs.
 
 Returns: `Float`.
 
@@ -511,51 +444,7 @@ reflect(v, normal)
 project(v, normal)
 ```
 
-### `rotate2d(v, angle)`
-
-Rotates `v` around the Z axis by `angle` radians and preserves the original Z component.
-
-Parameters:
-
-| Name | Type | Description |
-| --- | --- | --- |
-| `v` | `Vector` | Input vector. |
-| `angle` | `Float` | Rotation angle in radians. |
-
-Returns: `Vector`.
-
-### `polar(radius, angle)`
-
-Creates an XY vector from polar coordinates.
-
-Parameters:
-
-| Name | Type | Description |
-| --- | --- | --- |
-| `radius` | `Float` | Distance from origin. |
-| `angle` | `Float` | Angle in radians. |
-
-Returns: `Vector`.
-
-### `angle_between(a, b)`
-
-Returns the angle in radians between two vectors.
-
-Returns: `Float`.
-
-### `rotate_around_axis(v, axis, angle)`
-
-Rotates `v` around `axis` by `angle` radians.
-
-Parameters:
-
-| Name | Type | Description |
-| --- | --- | --- |
-| `v` | `Vector` | Input vector. |
-| `axis` | `Vector` | Rotation axis. |
-| `angle` | `Float` | Rotation angle in radians. |
-
-Returns: `Vector`.
+Derived scalar and vector helpers such as `smoothstep(...)`, `sign(...)`, `rotate2d(...)`, and `angle_between(...)` are function-library entries. Import them from `functions` before use.
 
 ## Embedded L-systems
 
@@ -935,30 +824,15 @@ Supported literal defaults are booleans, integers, floats, strings, and numeric 
 6. Connect the returned value to normal NodeForge DSL calls.
 7. If the graph compiles but the result is visually unchanged, check whether a field value was connected to a field-aware socket.
 
-### Compare wrappers
+### Comparisons
 
-For common comparisons, use the wrapper functions instead of writing `FunctionNodeCompare` manually:
-
-```python
-greater_than(a, b)
-greater_equal(a, b)
-less_than(a, b)
-less_equal(a, b)
-equal(a, b)
-not_equal(a, b)
-```
-
-They return `Bool`.
+Use normal DSL comparison operators for common comparisons:
 
 ```python
-high = greater_than(position().z, 0.5)
-left = less_than(position().x, 0.0)
-
+high = position().z > 0.5
+left = position().x < 0.0
 mask = high and left
-
 output("mask", mask)
 ```
 
-Use the wrappers when you only need a comparison. Use `node("FunctionNodeCompare", ...)` when you need direct Blender compare-node control.
-
-Supported comparison inputs are numeric values and vectors. Bool-to-Bool compare wrappers are not exposed in this stage.
+Use `node("FunctionNodeCompare", ...)` when you need direct Blender compare-node control.
