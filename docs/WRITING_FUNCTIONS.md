@@ -117,6 +117,20 @@ User scripts and function source files must import function-library entries expl
 
 Keyword names are normalized when connected to group sockets. A keyword such as `max_iter` can match an input socket named `Max Iter`.
 
+
+## Built-in helpers migrated to functions
+
+Some reusable helpers that were previously global built-ins are function-library entries. Import them before use:
+
+```python
+from functions import circle_points
+
+pts = circle_points(16, radius=2.0)
+output("Geometry", pts)
+```
+
+`circle_points(count, radius=1.0, start_angle=0.0, end_angle=tau, include_endpoint=False)` creates points and places them on an XY circle or arc. Use `include_endpoint=True` for arcs where the first point should be at `start_angle` and the last point should be at `end_angle`.
+
 ## Adding package-local helpers
 
 `function.py` can expose package-local helpers through `BACKEND_BUILTINS`.

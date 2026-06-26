@@ -110,7 +110,6 @@ def test_layout_builtin_names_registered():
         "layout_grid",
         "grid_points",
         "layout_circle",
-        "circle_points",
         "layout_spiral",
         "spiral_points",
         "layout_random",
@@ -118,6 +117,8 @@ def test_layout_builtin_names_registered():
     }
     check(layout.NAMES == expected, f"layout.NAMES drifted: {sorted(layout.NAMES ^ expected)}")
     check(expected.issubset(registry.CALLABLE_BUILTIN_NAMES), "layout names missing from registry")
+    check("circle_points" not in layout.NAMES, "circle_points should not remain a layout built-in")
+    check("circle_points" not in registry.CALLABLE_BUILTIN_NAMES, "circle_points should not remain globally callable")
 
 
 def test_grid_layouts_compile_and_use_point_sources():
@@ -142,16 +143,101 @@ output("Geometry", geo)
     check(_nodes(group, "GeometryNodeMeshLine"), "expected Mesh Line zero-point source")
     check(_nodes(group, "GeometryNodeSetPosition"), "expected Set Position for zero-count shortcut")
 
-def test_circle_spiral_and_random_points_compile():
+def test_imported_circle_points_compile_forms_and_materializes_library_group():
+    for source, name in (
+        ('''
+from functions import circle_points
+geo = circle_points(16, radius=1.0)
+output("Geometry", geo)
+''', 'NFTest_circle_points_import'),
+        ('''
+from functions import circle_points as circle
+geo = circle(8, start_angle=0, end_angle=pi, include_endpoint=True)
+output("Geometry", geo)
+''', 'NFTest_circle_points_alias_import'),
+        ('''
+from functions import *
+geo = circle_points(12)
+output("Geometry", geo)
+''', 'NFTest_circle_points_star_import'),
+    ):
+        group = compile_group(source, name)
+        function_nodes = [
+            node for node in _nodes(group, "GeometryNodeGroup")
+            if getattr(getattr(node, "node_tree", None), "get", lambda key, default=None: default)("nodeforge_library_name") == "circle_points"
+        ]
+        check(function_nodes, "imported circle_points should call the materialized library group")
+
+
+def test_circle_points_library_discovery_and_reuse():
+    check(library.has_library_function("circle_points"), "circle_points flat function was not discovered")
+    check("circle_points" in library.library_function_names(), "circle_points missing from public function names")
+    check(not library.has_module_library_function("circle_points"), "circle_points must not use a package-local backend")
+    first = compiler.create_library_function_group("circle_points")
+    before = set(bpy.data.node_groups.keys())
+    second = compiler.create_library_function_group("circle_points")
+    check(first.name == second.name, "circle_points library group should be reused")
+    check(set(bpy.data.node_groups.keys()) == before, "circle_points library reuse created duplicate groups")
+
+
+def test_circle_points_import_does_not_mutate_global_builtins():
+    before_builtins = set(registry.CALLABLE_BUILTIN_NAMES)
+    compile_group('''
+from functions import *
+geo = circle_points(4)
+output("Geometry", geo)
+''', 'NFTest_circle_points_star_no_global_mutation')
+    check(set(registry.CALLABLE_BUILTIN_NAMES) == before_builtins, "circle_points star import mutated callable builtins")
+
+
+def test_circle_points_unimported_global_call_fails():
+    expect_compile_error('''
+geo = circle_points(16)
+output("Geometry", geo)
+''', 'NFTest_circle_points_unimported_fails')
+
+
+def test_circle_points_star_import_assignment_conflict():
+    expect_compile_error('''
+from functions import *
+circle_points = 1
+output("circle_points", circle_points)
+''', 'NFTest_circle_points_star_assignment_conflict')
+
+
+def test_imported_circle_points_evaluates_circle_arc_and_zero_count():
+    circle = compile_group('''
+from functions import circle_points
+geo = circle_points(4, radius=1.0)
+output("Geometry", geo)
+''', 'NFTest_circle_points_eval_circle')
+    circle_positions = _evaluated_vertices(circle, "NFTestCirclePointsEvalCircle")
+    check(_same_positions(circle_positions, [(1, 0, 0), (0, 1, 0), (-1, 0, 0), (0, -1, 0)]), "circle_points(4) should cover the full circle without duplicating the endpoint")
+
+    arc = compile_group('''
+from functions import circle_points
+geo = circle_points(3, start_angle=0, end_angle=pi, include_endpoint=True)
+output("Geometry", geo)
+''', 'NFTest_circle_points_eval_arc_endpoint')
+    arc_positions = _evaluated_vertices(arc, "NFTestCirclePointsEvalArc")
+    check(_same_positions(arc_positions, [(1, 0, 0), (0, 1, 0), (-1, 0, 0)]), "endpoint arc should include both endpoints")
+
+    zero = compile_group('''
+from functions import circle_points
+geo = circle_points(0)
+output("Geometry", geo)
+''', 'NFTest_circle_points_eval_zero')
+    check(_evaluated_vertices(zero, "NFTestCirclePointsEvalZero") == [], "circle_points(0) should produce no points")
+
+
+def test_spiral_and_random_points_remain_global_in_stage3():
     group = compile_group('''
-circle = circle_points(16, radius=1.0)
-arc = circle_points(5, start_angle=0, end_angle=pi, include_endpoint=True)
 spiral = spiral_points(32, radius=2.0, turns=3, height=2.0)
 rand = random_points(10, min=vector(-1,-1,-1), max=vector(1,1,1), seed=3)
-output("Geometry", join(circle, arc, spiral, rand))
-''', 'NFTest_layout_circle_spiral_random_compile')
-    check(len(_nodes(group, "GeometryNodeMeshLine")) >= 4, "expected Mesh Line for shortcut helpers")
-    check(len(_nodes(group, "GeometryNodeSetPosition")) >= 4, "expected Set Position for layouts")
+output("Geometry", join(spiral, rand))
+''', 'NFTest_layout_spiral_random_compile')
+    check(len(_nodes(group, "GeometryNodeMeshLine")) >= 2, "expected Mesh Line for remaining global shortcut helpers")
+    check(len(_nodes(group, "GeometryNodeSetPosition")) >= 2, "expected Set Position for remaining global layouts")
     random_nodes = _nodes(group, "FunctionNodeRandomValue")
     check(random_nodes, "random_points() should create Random Value node")
     check(any(getattr(node, "data_type", None) == "FLOAT_VECTOR" for node in random_nodes), "random_points() should use vector random values")
@@ -193,7 +279,6 @@ def test_layout_controlled_errors():
         'geo = layout_grid(points(3), count=3)\noutput("Geometry", geo)',
         'geo = grid_points(count=3)\noutput("Geometry", geo)',
         'geo = layout_circle(1, count=10)\noutput("Geometry", geo)',
-        'geo = circle_points(vector(1,2,3))\noutput("Geometry", geo)',
         'geo = layout_spiral(points(5), count=5, turns=vector(1,0,0))\noutput("Geometry", geo)',
         'geo = random_points(10, min=0, max=1)\noutput("Geometry", geo)',
         'geo = grid_points(count=vector(1,2,3), centered=input_bool("C"))\noutput("Geometry", geo)',
@@ -202,7 +287,6 @@ def test_layout_controlled_errors():
         'geo = layout_grid(points(3), count=vector(0,2,1))\noutput("Geometry", geo)',
         'geo = layout_grid(points(3), count=vector(2.5,2,1))\noutput("Geometry", geo)',
         'geo = grid_points(count=vector(2,2.5,1))\noutput("Geometry", geo)',
-        'geo = circle_points(-4)\noutput("Geometry", geo)',
         'geo = layout_circle(points(4), count=-1)\noutput("Geometry", geo)',
         'geo = layout_spiral(points(4), count=-1)\noutput("Geometry", geo)',
         'x = random_value(vector(0,0,0), 1)\noutput("x", x)',

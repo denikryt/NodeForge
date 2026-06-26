@@ -9,7 +9,6 @@ from ..geometry import (
     _layout_grid_geometry,
     _grid_points_geometry,
     _layout_circle_geometry,
-    _circle_points_geometry,
     _layout_spiral_geometry,
     _spiral_points_geometry,
     _layout_random_geometry,
@@ -22,7 +21,6 @@ NAMES = {
     "layout_grid",
     "grid_points",
     "layout_circle",
-    "circle_points",
     "layout_spiral",
     "spiral_points",
     "layout_random",
@@ -67,20 +65,6 @@ def compile_call(comp, expr, depth=0):
         end_angle = _compile_numeric(comp, args["end_angle"], "layout_circle() end_angle")
         include_endpoint = _compile_bool_const(comp, args["include_endpoint"], "layout_circle() include_endpoint")
         return _layout_circle_geometry(comp.group, geo, count, radius, start_angle, end_angle, include_endpoint, x, y)
-
-    if name == "circle_points":
-        args = _bind_args(
-            expr,
-            name,
-            ("count", "radius", "start_angle", "end_angle", "include_endpoint"),
-            {"radius": 1.0, "start_angle": 0.0, "end_angle": 6.283185307179586, "include_endpoint": False},
-        )
-        count = _compile_scalar_count(comp, args["count"], "circle_points() count", reject_negative=True)
-        radius = _compile_numeric(comp, args["radius"], "circle_points() radius")
-        start_angle = _compile_numeric(comp, args["start_angle"], "circle_points() start_angle")
-        end_angle = _compile_numeric(comp, args["end_angle"], "circle_points() end_angle")
-        include_endpoint = _compile_bool_const(comp, args["include_endpoint"], "circle_points() include_endpoint")
-        return _circle_points_geometry(comp.group, count, radius, start_angle, end_angle, include_endpoint, x, y)
 
     if name == "layout_spiral":
         args = _bind_args(

@@ -10,7 +10,6 @@ def test_layout_names_are_registered():
         "layout_grid",
         "grid_points",
         "layout_circle",
-        "circle_points",
         "layout_spiral",
         "spiral_points",
         "layout_random",
@@ -18,3 +17,5 @@ def test_layout_names_are_registered():
     }
     assert layout.NAMES == expected
     assert expected.issubset(registry.CALLABLE_BUILTIN_NAMES)
+    assert "circle_points" not in layout.NAMES
+    assert "circle_points" not in registry.CALLABLE_BUILTIN_NAMES

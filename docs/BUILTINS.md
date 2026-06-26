@@ -134,7 +134,7 @@ Returns: `Geometry`.
 
 ### Point layouts
 
-`layout_*` helpers reposition an existing point geometry and return `Geometry`. Matching `*_points(...)` shortcuts first create point geometry through `points(...)` and then apply the same layout formula. These helpers operate on point-domain geometry; `grid(width, height)` remains the existing planar mesh grid primitive and is not changed by `grid_points(...)`.
+`layout_*` helpers reposition an existing point geometry and return `Geometry`. Matching global `*_points(...)` shortcuts create point geometry through `points(...)` and then apply the same layout formula where those shortcuts are still built-ins. Migrated reusable helpers, such as `circle_points`, are imported from `functions`. These helpers operate on point-domain geometry; `grid(width, height)` remains the existing planar mesh grid primitive and is not changed by `grid_points(...)`.
 
 Angles are radians. Use `radians(...)` when authoring degree values.
 
@@ -167,14 +167,7 @@ Places existing points on an XY circle or arc. When `count` is omitted, the layo
 pts = points(16)
 pts = layout_circle(pts, radius=2.0)
 pts = layout_circle(pts, count=16, radius=2.0)
-arc = circle_points(8, radius=1.0, start_angle=0, end_angle=pi, include_endpoint=True)
 ```
-
-Returns: `Geometry`.
-
-#### `circle_points(count, radius=1.0, start_angle=0.0, end_angle=tau, include_endpoint=False)`
-
-Creates points and places them with `layout_circle(...)`.
 
 Returns: `Geometry`.
 
