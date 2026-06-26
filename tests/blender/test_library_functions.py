@@ -6,8 +6,10 @@ from helpers import *
 def test_packaged_library_functions_and_helper_scoping():
     flat_probe = ROOT / 'functions' / 'flat_legacy_probe.py'
     flat_source = ROOT / 'functions' / 'stage2_flat_probe.nf'
+    vector_source = ROOT / 'functions' / 'stage2_vector_probe.nf'
     flat_probe.write_text("def compile_call(comp, expr, depth=0):\n    raise AssertionError('flat layout loaded')\n", encoding='utf-8')
     flat_source.write_text('value = input_float("Value", default=2.0)\noutput("Value", value)\n', encoding='utf-8')
+    vector_source.write_text('value = input_vector("Value", default=vector(1, 2, 3))\noutput("Value", value)\n', encoding='utf-8')
     try:
         check(not library.has_module_library_function('flat_legacy_probe'), 'legacy flat function module was discovered')
         check(not library.has_library_function('flat_legacy_probe'), 'legacy flat function appeared as library function')
@@ -16,9 +18,12 @@ def test_packaged_library_functions_and_helper_scoping():
         check('stage2_flat_probe' in names, 'flat .nf function missing from public function names')
         compile_group('from functions import stage2_flat_probe\nx = stage2_flat_probe(3)\noutput("x", x)', 'NFTest_flat_function_import')
         compile_group('from functions import *\nx = stage2_flat_probe(3)\noutput("x", x)', 'NFTest_flat_function_star_import')
+        compile_group('from functions import stage2_vector_probe\nv = stage2_vector_probe(vector(1, 2, 3))\noutput("v", v)', 'NFTest_flat_vector_function_import')
+        expect_compile_error('from functions import stage2_vector_probe\nv = stage2_vector_probe(3)\noutput("v", v)', 'NFTest_flat_vector_function_scalar_rejected')
     finally:
         flat_probe.unlink(missing_ok=True)
         flat_source.unlink(missing_ok=True)
+        vector_source.unlink(missing_ok=True)
     for fname in ['copy_by_offsets', 'layout_grid', 'grid_points', 'layout_circle', 'layout_spiral', 'spiral_points', 'layout_random', 'random_points', 'dragon_curve', 'fibonacci', 'fibonacci_spiral', 'koch_curve', 'mandelbrot', 'sierpinski_carpet']:
         group = compiler.create_library_function_group(fname)
         check(getattr(group, 'bl_idname', None) == 'GeometryNodeTree', fname)
