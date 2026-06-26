@@ -263,7 +263,7 @@ def run_library_checks():
         check(not library.has_library_function("flat_legacy_probe"), "legacy flat function appeared as library function")
     finally:
         flat_probe.unlink(missing_ok=True)
-    for fname in ["copy_by_offsets", "dragon_curve", "fibonacci", "fibonacci_spiral", "koch_curve", "mandelbrot", "sierpinski_carpet"]:
+    for fname in ["copy_by_offsets", "layout_grid", "grid_points", "layout_circle", "layout_spiral", "spiral_points", "layout_random", "random_points", "dragon_curve", "fibonacci", "fibonacci_spiral", "koch_curve", "mandelbrot", "sierpinski_carpet"]:
         group = compiler.create_library_function_group(fname)
         check(getattr(group, "bl_idname", None) == "GeometryNodeTree", fname)
     normal_names = set(bpy.data.node_groups.keys())

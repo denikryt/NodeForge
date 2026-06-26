@@ -134,56 +134,45 @@ Returns: `Geometry`.
 
 ### Point layouts
 
-`layout_*` helpers reposition an existing point geometry and return `Geometry`. Matching global `*_points(...)` shortcuts create point geometry through `points(...)` and then apply the same layout formula where those shortcuts are still built-ins. Migrated reusable helpers, such as `circle_points`, are imported from `functions`. These helpers operate on point-domain geometry; `grid(width, height)` remains the existing planar mesh grid primitive and is not changed by `grid_points(...)`.
+Reusable point-layout helpers are function-library entries. Import them from `functions` before use. `from functions import *` is also available for exploratory scripts, but explicit imports are preferred in examples and reusable code. These helpers operate on point-domain geometry; `grid(width, height)` remains the planar mesh grid primitive and is not changed by `grid_points(...)`.
 
 Angles are radians. Use `radians(...)` when authoring degree values.
 
-#### `layout_grid(geometry, count, spacing=1.0, centered=False)`
-
-Places points in a 3D lattice. `count` is a `Vector` interpreted as `(count_x, count_y, count_z)`; compile-time components must be whole numbers and greater than zero because the input geometry already exists. `spacing` may be a scalar or a `Vector`. `centered` is a compile-time `Bool`.
-
 ```python
+from functions import layout_grid, grid_points, layout_circle
+
 pts = points(6)
-pts = layout_grid(pts, count=vector(3, 2, 1), spacing=1.25, centered=True)
+pts = layout_grid(pts, count=vector(3, 2, 1), spacing=vector(1.0, 2.0, 3.0))
+grid = grid_points(count=vector(5, 4, 1), spacing=vector(1.0, 1.0, 0.0))
+pts = layout_circle(pts, count=6, radius=2.0)
+output("Geometry", join(pts, grid))
 ```
+
+#### `layout_grid(geometry, count=vector(1, 1, 1), spacing=vector(1, 1, 1), centered=False)`
+
+Places existing points in a 3D lattice. `count` is a `Vector` interpreted as `(count_x, count_y, count_z)`. `spacing` is a `Vector`, so scalar spacing should be written explicitly as `vector(s, s, s)` or another vector appropriate for the layout. When `centered=True`, positions are shifted by half of the layout extent.
 
 Returns: `Geometry`.
 
-#### `grid_points(count, spacing=1.0, centered=False)`
+#### `grid_points(count=vector(1, 1, 1), spacing=vector(1, 1, 1), centered=False)`
 
-Creates points and places them with the grid layout formula. `count` is a `Vector` interpreted as `(count_x, count_y, count_z)`; compile-time components must be whole numbers. Zero components are allowed and produce zero points, while negative components are rejected.
-
-```python
-pts = grid_points(count=vector(5, 4, 1), spacing=vector(1.0, 1.0, 0.0))
-```
+Creates points and places them with `layout_grid(...)`. Zero count components produce zero points. Negative count components are clamped to zero for the generated point count.
 
 Returns: `Geometry`.
 
-#### `layout_circle(geometry, count=None, radius=1.0, start_angle=0.0, end_angle=tau, include_endpoint=False)`
+#### `layout_circle(geometry, count=16, radius=1.0, start_angle=0.0, end_angle=tau, include_endpoint=False)`
 
-Places existing points on an XY circle or arc. When `count` is omitted, the layout derives it from the Point-domain size of `geometry`. Pass `count=...` to override the derived value; compile-time negative counts are rejected. The second positional argument is still `count`, so pass `radius` by keyword when omitting `count`. Full circles default to `include_endpoint=False` so the first and last point are not duplicated at the same location.
-
-```python
-pts = points(16)
-pts = layout_circle(pts, radius=2.0)
-pts = layout_circle(pts, count=16, radius=2.0)
-```
+Places existing points on an XY circle or arc. The imported function uses the explicit `count` input; it does not derive count from the input geometry. Full circles default to `include_endpoint=False` so the first and last point are not duplicated at the same location.
 
 Returns: `Geometry`.
 
-#### `layout_spiral(geometry, count=None, radius=1.0, turns=1.0, height=0.0, start_radius=0.0, start_angle=0.0)`
+#### `layout_spiral(geometry, count=16, radius=1.0, turns=1.0, height=0.0, start_radius=0.0, start_angle=0.0)`
 
-Places existing points on a simple radial spiral in the XY plane with optional Z height. When `count` is omitted, the layout derives it from the Point-domain size of `geometry`. Pass `count=...` to override the derived value; compile-time negative counts are rejected. The second positional argument is still `count`, so pass `radius` by keyword when omitting `count`. For geometries with more than one point, the last point reaches the final radius and height.
-
-```python
-pts = points(64)
-pts = layout_spiral(pts, radius=3.0, turns=4, height=2.0)
-pts = layout_spiral(pts, count=64, radius=3.0, turns=4, height=2.0)
-```
+Places existing points on a simple radial spiral in the XY plane with optional Z height. The imported function uses the explicit `count` input; it does not derive count from the input geometry. For geometries with more than one point, the last point reaches the final radius and height.
 
 Returns: `Geometry`.
 
-#### `spiral_points(count, radius=1.0, turns=1.0, height=0.0, start_radius=0.0, start_angle=0.0)`
+#### `spiral_points(count=16, radius=1.0, turns=1.0, height=0.0, start_radius=0.0, start_angle=0.0)`
 
 Creates points and places them with `layout_spiral(...)`.
 
@@ -191,16 +180,11 @@ Returns: `Geometry`.
 
 #### `layout_random(geometry, min=vector(-1, -1, -1), max=vector(1, 1, 1), seed=0)`
 
-Places existing points using the same Random Value node construction path as `random_value(...)`. Bounds must be `Vector` values. The current point `index()` is used as the random ID, so points receive stable per-index values for a given seed. This is uniform random placement, not Poisson or blue-noise sampling.
-
-```python
-pts = points(100)
-pts = layout_random(pts, min=vector(-2, -2, 0), max=vector(2, 2, 1), seed=3)
-```
+Places existing points using `random_value(...)` with the current point `index()` as the random ID, so points receive stable per-index values for a given seed. Bounds are `Vector` values. This is uniform random placement, not Poisson or blue-noise sampling.
 
 Returns: `Geometry`.
 
-#### `random_points(count, min=vector(-1, -1, -1), max=vector(1, 1, 1), seed=0)`
+#### `random_points(count=16, min=vector(-1, -1, -1), max=vector(1, 1, 1), seed=0)`
 
 Creates points and places them with `layout_random(...)`.
 

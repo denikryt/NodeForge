@@ -123,13 +123,15 @@ Keyword names are normalized when connected to group sockets. A keyword such as 
 Some reusable helpers that were previously global built-ins are function-library entries. Import them before use:
 
 ```python
-from functions import circle_points
+from functions import circle_points, grid_points, layout_circle
 
-pts = circle_points(16, radius=2.0)
-output("Geometry", pts)
+circle = circle_points(16, radius=2.0)
+grid = grid_points(count=vector(4, 4, 1), spacing=vector(1.0, 1.0, 0.0))
+circle = layout_circle(circle, count=16, radius=2.0)
+output("Geometry", join(circle, grid))
 ```
 
-`circle_points(count, radius=1.0, start_angle=0.0, end_angle=tau, include_endpoint=False)` creates points and places them on an XY circle or arc. Use `include_endpoint=True` for arcs where the first point should be at `start_angle` and the last point should be at `end_angle`.
+Migrated layout helpers include `circle_points`, `layout_circle`, `spiral_points`, `layout_spiral`, `grid_points`, `layout_grid`, `random_points`, `layout_random`, and `copy_by_offsets`. `layout_circle(...)` and `layout_spiral(...)` use an explicit `count` input; they do not derive count from the input geometry. Grid helpers use vector `spacing`, so scalar spacing should be written explicitly as `vector(s, s, s)` or another suitable vector.
 
 ## Adding package-local helpers
 

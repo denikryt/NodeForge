@@ -6,6 +6,22 @@ def _nodes(group, bl_idname):
     return [node for node in group.nodes if getattr(node, "bl_idname", "") == bl_idname]
 
 
+def _library_nodes(group, library_name):
+    """Return top-level group nodes that call a materialized library function."""
+    out = []
+    for node in _nodes(group, "GeometryNodeGroup"):
+        tree = getattr(node, "node_tree", None)
+        getter = getattr(tree, "get", None)
+        if callable(getter) and getter("nodeforge_library_name") == library_name:
+            out.append(node)
+    return out
+
+
+def _library_tree(name):
+    """Return the materialized GeometryNodeTree for one function-library entry."""
+    group = compiler.create_library_function_group(name)
+    check(getattr(group, "bl_idname", None) == "GeometryNodeTree", name)
+    return group
 
 def _socket_key(socket):
     """Return a stable key for Blender RNA socket proxies used in link traversal."""
@@ -105,43 +121,52 @@ def _same_positions(left, right, epsilon=1e-4):
     return all(abs(a - b) <= epsilon for lco, rco in zip(left, right) for a, b in zip(lco, rco))
 
 
-def test_layout_builtin_names_registered():
-    expected = {
-        "layout_grid",
-        "grid_points",
-        "layout_circle",
-        "layout_spiral",
-        "spiral_points",
-        "layout_random",
-        "random_points",
-    }
-    check(layout.NAMES == expected, f"layout.NAMES drifted: {sorted(layout.NAMES ^ expected)}")
-    check(expected.issubset(registry.CALLABLE_BUILTIN_NAMES), "layout names missing from registry")
+MIGRATED_LAYOUT_NAMES = {
+    "layout_grid",
+    "grid_points",
+    "layout_circle",
+    "layout_spiral",
+    "spiral_points",
+    "layout_random",
+    "random_points",
+}
+
+
+def test_layout_builtin_names_removed_after_stage4():
+    check(layout.NAMES == set(), f"layout.NAMES should be empty after Stage 4: {sorted(layout.NAMES)}")
+    check(MIGRATED_LAYOUT_NAMES.isdisjoint(registry.CALLABLE_BUILTIN_NAMES), "migrated layout helpers should not be global built-ins")
     check("circle_points" not in layout.NAMES, "circle_points should not remain a layout built-in")
     check("circle_points" not in registry.CALLABLE_BUILTIN_NAMES, "circle_points should not remain globally callable")
 
 
 def test_grid_layouts_compile_and_use_point_sources():
     group = compile_group('''
+from functions import layout_grid, grid_points
 pts = points(6)
 pts = layout_grid(pts, count=vector(3, 2, 1), spacing=vector(1.0, 2.0, 3.0))
-out = grid_points(count=vector(3, 2, 1), spacing=1.25, centered=True)
+out = grid_points(count=vector(3, 2, 1), spacing=vector(1.25, 1.25, 1.25), centered=True)
 output("Geometry", join(pts, out))
 ''', 'NFTest_layout_grid_compile')
-    check(_nodes(group, "GeometryNodeSetPosition"), "expected Set Position nodes")
-    check(_nodes(group, "GeometryNodeMeshLine"), "expected Mesh Line point source")
-    check(not _nodes(group, "GeometryNodeMeshGrid"), "grid_points() must not use Mesh Grid")
+    check(_library_nodes(group, "layout_grid"), "expected imported layout_grid library call")
+    check(_library_nodes(group, "grid_points"), "expected imported grid_points library call")
+    grid_tree = _library_tree("grid_points")
+    layout_tree = _library_tree("layout_grid")
+    check(_nodes(layout_tree, "GeometryNodeSetPosition"), "expected Set Position inside layout_grid")
+    check(_nodes(grid_tree, "GeometryNodeMeshLine"), "expected Mesh Line point source inside grid_points")
+    check(not _nodes(grid_tree, "GeometryNodeMeshGrid"), "grid_points() must not use Mesh Grid")
 
 
 
 
 def test_grid_points_allows_compile_time_zero_count_component():
     group = compile_group('''
-geo = grid_points(count=vector(0, 2, 1), spacing=1.0)
+from functions import grid_points
+geo = grid_points(count=vector(0, 2, 1), spacing=vector(1.0, 1.0, 1.0))
 output("Geometry", geo)
 ''', 'NFTest_grid_points_zero_count_component')
-    check(_nodes(group, "GeometryNodeMeshLine"), "expected Mesh Line zero-point source")
-    check(_nodes(group, "GeometryNodeSetPosition"), "expected Set Position for zero-count shortcut")
+    check(_library_nodes(group, "grid_points"), "expected imported grid_points library call")
+    grid_tree = _library_tree("grid_points")
+    check(_nodes(grid_tree, "GeometryNodeMeshLine"), "expected Mesh Line zero-point source inside grid_points")
 
 def test_imported_circle_points_compile_forms_and_materializes_library_group():
     for source, name in (
@@ -230,38 +255,44 @@ output("Geometry", geo)
     check(_evaluated_vertices(zero, "NFTestCirclePointsEvalZero") == [], "circle_points(0) should produce no points")
 
 
-def test_spiral_and_random_points_remain_global_in_stage3():
+def test_imported_spiral_and_random_points_compile():
     group = compile_group('''
+from functions import spiral_points, random_points
 spiral = spiral_points(32, radius=2.0, turns=3, height=2.0)
 rand = random_points(10, min=vector(-1,-1,-1), max=vector(1,1,1), seed=3)
 output("Geometry", join(spiral, rand))
 ''', 'NFTest_layout_spiral_random_compile')
-    check(len(_nodes(group, "GeometryNodeMeshLine")) >= 2, "expected Mesh Line for remaining global shortcut helpers")
-    check(len(_nodes(group, "GeometryNodeSetPosition")) >= 2, "expected Set Position for remaining global layouts")
-    random_nodes = _nodes(group, "FunctionNodeRandomValue")
-    check(random_nodes, "random_points() should create Random Value node")
-    check(any(getattr(node, "data_type", None) == "FLOAT_VECTOR" for node in random_nodes), "random_points() should use vector random values")
+    check(_library_nodes(group, "spiral_points"), "expected imported spiral_points library call")
+    check(_library_nodes(group, "random_points"), "expected imported random_points library call")
+    random_tree = _library_tree("layout_random")
+    random_nodes = _nodes(random_tree, "FunctionNodeRandomValue")
+    check(random_nodes, "layout_random() should create Random Value node")
+    check(any(getattr(node, "data_type", None) == "FLOAT_VECTOR" for node in random_nodes), "layout_random() should use vector random values")
 
 
 def test_layout_random_on_existing_points_compile():
     group = compile_group('''
+from functions import layout_random
 pts = points(10)
 pts = layout_random(pts, min=vector(-2,-2,0), max=vector(2,2,1), seed=3)
 output("Geometry", pts)
 ''', 'NFTest_layout_random_existing_points')
     check(_nodes(group, "GeometryNodeMeshLine"), "expected source points")
-    check(_nodes(group, "GeometryNodeSetPosition"), "expected Set Position")
-    check(_nodes(group, "FunctionNodeRandomValue"), "expected Random Value node")
+    check(_library_nodes(group, "layout_random"), "expected imported layout_random library call")
+    random_tree = _library_tree("layout_random")
+    check(_nodes(random_tree, "GeometryNodeSetPosition"), "expected Set Position inside layout_random")
+    check(_nodes(random_tree, "FunctionNodeRandomValue"), "expected Random Value node inside layout_random")
 
 
 def test_layout_composition_fixture_compiles():
     group = compile_group('''
-pts = grid_points(count=vector(3, 2, 1), spacing=1.25)
+from functions import grid_points
+pts = grid_points(count=vector(3, 2, 1), spacing=vector(1.25, 1.25, 1.25))
 geo = instance_on_points(cube(0.5), pts)
 output("Geometry", geo)
 ''', 'NFTest_layout_composition_fixture')
     check(_nodes(group, "GeometryNodeInstanceOnPoints"), "expected Instance on Points")
-    check(_nodes(group, "GeometryNodeSetPosition"), "expected Set Position")
+    check(_library_nodes(group, "grid_points"), "expected imported grid_points library call")
 
 
 def test_random_value_existing_forms_still_compile():
@@ -273,22 +304,98 @@ output("v", a)
 ''', 'NFTest_layout_random_value_regression')
 
 
-def test_layout_controlled_errors():
+def test_migrated_layout_helpers_compile_through_import_forms_and_star_import():
+    cases = (
+        ('''
+from functions import layout_circle as lc
+pts = points(8)
+pts = lc(pts, count=8, radius=2.0)
+output("Geometry", pts)
+''', "NFTest_layout_circle_alias_import", "layout_circle"),
+        ('''
+from functions import layout_grid, grid_points
+pts = layout_grid(points(4), count=vector(2, 2, 1), spacing=vector(1, 1, 1))
+grid = grid_points(count=vector(2, 2, 1), spacing=vector(1, 1, 1), centered=True)
+output("Geometry", join(pts, grid))
+''', "NFTest_layout_multi_import", "layout_grid"),
+        ('''
+from functions import *
+pts = random_points(4, min=vector(-1, -1, -1), max=vector(1, 1, 1), seed=5)
+output("Geometry", pts)
+''', "NFTest_layout_star_import", "random_points"),
+    )
+    for source, name, library_name in cases:
+        group = compile_group(source, name)
+        check(_library_nodes(group, library_name), f"expected imported {library_name} library call")
+
+
+def test_layout_function_library_discovery_and_reuse():
+    expected = {
+        "layout_grid",
+        "grid_points",
+        "layout_circle",
+        "layout_spiral",
+        "spiral_points",
+        "layout_random",
+        "random_points",
+        "copy_by_offsets",
+    }
+    names = library.library_function_names()
+    check(expected.issubset(names), "migrated layout functions missing from public function names")
+    for name in expected:
+        check(library.has_library_function(name), f"{name} was not discovered")
+        check(not library.has_module_library_function(name), f"{name} must not use a package-local backend")
+    first = compiler.create_library_function_group("grid_points")
+    copy_first = compiler.create_library_function_group("copy_by_offsets")
+    before = set(bpy.data.node_groups.keys())
+    second = compiler.create_library_function_group("grid_points")
+    copy_second = compiler.create_library_function_group("copy_by_offsets")
+    check(first.name == second.name, "grid_points library group should be reused")
+    check(copy_first.name == copy_second.name, "copy_by_offsets library group should be reused")
+    check(set(bpy.data.node_groups.keys()) == before, "library reuse created duplicate groups")
+
+
+def test_layout_import_does_not_mutate_global_builtins():
+    before_builtins = set(registry.CALLABLE_BUILTIN_NAMES)
+    compile_group('''
+from functions import *
+geo = random_points(4)
+output("Geometry", geo)
+''', 'NFTest_layout_star_no_global_mutation')
+    check(set(registry.CALLABLE_BUILTIN_NAMES) == before_builtins, "layout star import mutated callable builtins")
+
+
+def test_migrated_layout_unimported_global_calls_fail():
+    sources = {
+        "layout_grid": 'geo = layout_grid(points(3), count=vector(3,1,1))\noutput("Geometry", geo)',
+        "grid_points": 'geo = grid_points(count=vector(3,1,1))\noutput("Geometry", geo)',
+        "layout_circle": 'geo = layout_circle(points(4), count=4)\noutput("Geometry", geo)',
+        "layout_spiral": 'geo = layout_spiral(points(4), count=4)\noutput("Geometry", geo)',
+        "spiral_points": 'geo = spiral_points(4)\noutput("Geometry", geo)',
+        "layout_random": 'geo = layout_random(points(4))\noutput("Geometry", geo)',
+        "random_points": 'geo = random_points(4)\noutput("Geometry", geo)',
+        "copy_by_offsets": 'geo = copy_by_offsets(cube(1))\noutput("Geometry", geo)',
+    }
+    for name, source in sources.items():
+        expect_compile_error(source, f'NFTest_layout_unimported_{name}')
+
+
+def test_layout_import_conflict_with_star_imported_helper():
+    expect_compile_error('''
+from functions import *
+layout_grid = 1
+output("layout_grid", layout_grid)
+''', 'NFTest_layout_star_assignment_conflict')
+
+
+def test_imported_layout_invalid_call_errors_are_controlled():
     sources = [
-        'geo = layout_grid(points(3), spacing=1.0)\noutput("Geometry", geo)',
-        'geo = layout_grid(points(3), count=3)\noutput("Geometry", geo)',
-        'geo = grid_points(count=3)\noutput("Geometry", geo)',
-        'geo = layout_circle(1, count=10)\noutput("Geometry", geo)',
-        'geo = layout_spiral(points(5), count=5, turns=vector(1,0,0))\noutput("Geometry", geo)',
-        'geo = random_points(10, min=0, max=1)\noutput("Geometry", geo)',
-        'geo = grid_points(count=vector(1,2,3), centered=input_bool("C"))\noutput("Geometry", geo)',
-        'geo = grid_points(count=vector(1,1,1), foo=1)\noutput("Geometry", geo)',
-        'geo = grid_points(count=vector(-1,2,1))\noutput("Geometry", geo)',
-        'geo = layout_grid(points(3), count=vector(0,2,1))\noutput("Geometry", geo)',
-        'geo = layout_grid(points(3), count=vector(2.5,2,1))\noutput("Geometry", geo)',
-        'geo = grid_points(count=vector(2,2.5,1))\noutput("Geometry", geo)',
-        'geo = layout_circle(points(4), count=-1)\noutput("Geometry", geo)',
-        'geo = layout_spiral(points(4), count=-1)\noutput("Geometry", geo)',
+        'from functions import layout_grid\ngeo = layout_grid(points(3), count=3)\noutput("Geometry", geo)',
+        'from functions import grid_points\ngeo = grid_points(count=3)\noutput("Geometry", geo)',
+        'from functions import layout_circle\ngeo = layout_circle(1, count=10)\noutput("Geometry", geo)',
+        'from functions import layout_spiral\ngeo = layout_spiral(points(5), count=5, turns=vector(1,0,0))\noutput("Geometry", geo)',
+        'from functions import random_points\ngeo = random_points(10, min=0, max=1)\noutput("Geometry", geo)',
+        'from functions import grid_points\ngeo = grid_points(count=vector(1,1,1), foo=1)\noutput("Geometry", geo)',
         'x = random_value(vector(0,0,0), 1)\noutput("x", x)',
         'x = random_value(0, 1, seed=vector(1,0,0))\noutput("x", x)',
         'x = random_value(0, 1, id=0.5)\noutput("x", x)',
@@ -297,105 +404,50 @@ def test_layout_controlled_errors():
         expect_compile_error(source, f'NFTest_layout_error_{index}')
 
 
-def test_layout_circle_derives_count_from_input_points():
+def test_imported_layout_circle_explicit_count_does_not_insert_domain_size():
     group = compile_group('''
-pts = points(16)
-pts = layout_circle(pts, radius=2.0)
-output("Geometry", pts)
-''', 'NFTest_layout_circle_derived_count')
-    domains = _nodes(group, "GeometryNodeAttributeDomainSize")
-    check(domains, "expected Domain Size for derived count")
-    domain = domains[0]
-    point_count = domain.outputs["Point Count"]
-    check(point_count.links, "derived Point Count must feed layout formula")
-    check(
-        any(getattr(link.to_node, "bl_idname", "") == "ShaderNodeMath" for link in point_count.links),
-        "Point Count should feed normalized-index math",
-    )
-    set_positions = _nodes(group, "GeometryNodeSetPosition")
-    check(set_positions, "expected Set Position")
-    check(
-        _socket_reaches_node_input(group, point_count, set_positions[0], "Position"),
-        "derived Point Count must be upstream of Set Position.Position",
-    )
-
-
-def test_layout_spiral_derives_count_from_input_points_with_endpoint_denominator():
-    group = compile_group('''
-pts = points(16)
-pts = layout_spiral(pts, radius=2.0, turns=3.0, height=1.0)
-output("Geometry", pts)
-''', 'NFTest_layout_spiral_derived_count')
-    domains = _nodes(group, "GeometryNodeAttributeDomainSize")
-    check(domains, "expected Domain Size for derived count")
-    domain = domains[0]
-    point_count = domain.outputs["Point Count"]
-    check(point_count.links, "derived Point Count must feed spiral formula")
-    set_positions = _nodes(group, "GeometryNodeSetPosition")
-    check(set_positions, "expected Set Position")
-    check(
-        _socket_reaches_node_input(group, point_count, set_positions[0], "Position"),
-        "derived Point Count must be upstream of Set Position.Position",
-    )
-    check(
-        _has_math_operation_from_socket(group, point_count, "SUBTRACT"),
-        "spiral derived count must use count - 1 endpoint denominator branch",
-    )
-
-
-def test_derived_circular_layouts_evaluate_like_matching_explicit_count():
-    circle_derived = compile_group("""
-pts = points(5)
-pts = layout_circle(pts, radius=2.0)
-output("Geometry", pts)
-""", 'NFTest_layout_circle_derived_eval')
-    circle_explicit = compile_group("""
-pts = points(5)
-pts = layout_circle(pts, count=5, radius=2.0)
-output("Geometry", pts)
-""", 'NFTest_layout_circle_explicit_eval')
-    spiral_derived = compile_group("""
-pts = points(5)
-pts = layout_spiral(pts, radius=2.0, turns=1.0, height=1.0)
-output("Geometry", pts)
-""", 'NFTest_layout_spiral_derived_eval')
-    spiral_explicit = compile_group("""
-pts = points(5)
-pts = layout_spiral(pts, count=5, radius=2.0, turns=1.0, height=1.0)
-output("Geometry", pts)
-""", 'NFTest_layout_spiral_explicit_eval')
-
-    circle_positions = _evaluated_vertices(circle_derived, "NFTestCircleDerivedEval")
-    spiral_positions = _evaluated_vertices(spiral_derived, "NFTestSpiralDerivedEval")
-    check(
-        _same_positions(circle_positions, _evaluated_vertices(circle_explicit, "NFTestCircleExplicitEval")),
-        "derived circle layout should evaluate like matching explicit count",
-    )
-    check(
-        _same_positions(spiral_positions, _evaluated_vertices(spiral_explicit, "NFTestSpiralExplicitEval")),
-        "derived spiral layout should evaluate like matching explicit count",
-    )
-    check(abs(spiral_positions[-1][2] - 1.0) <= 1e-4, "spiral derived endpoint should reach final height")
-
-
-def test_layout_circle_explicit_count_does_not_insert_domain_size():
-    group = compile_group('''
+from functions import layout_circle
 pts = points(16)
 pts = layout_circle(pts, count=8, radius=2.0)
 output("Geometry", pts)
 ''', 'NFTest_layout_circle_explicit_count_override')
-    check(not _nodes(group, "GeometryNodeAttributeDomainSize"), "explicit count should not need Domain Size")
+    check(_library_nodes(group, "layout_circle"), "expected imported layout_circle library call")
+    circle_tree = _library_tree("layout_circle")
+    check(not _nodes(circle_tree, "GeometryNodeAttributeDomainSize"), "imported explicit-count layout_circle should not need Domain Size")
 
 
-def test_layout_spiral_explicit_count_keeps_endpoint_denominator():
+def test_imported_layout_spiral_explicit_count_keeps_endpoint_denominator():
     group = compile_group('''
+from functions import layout_spiral
 pts = points(5)
 pts = layout_spiral(pts, count=5, radius=2.0, height=1.0)
 output("Geometry", pts)
 ''', 'NFTest_layout_spiral_explicit_endpoint')
-    set_positions = _nodes(group, "GeometryNodeSetPosition")
+    check(_library_nodes(group, "layout_spiral"), "expected imported layout_spiral library call")
+    spiral_tree = _library_tree("layout_spiral")
+    set_positions = _nodes(spiral_tree, "GeometryNodeSetPosition")
     check(set_positions, "expected Set Position")
     check(
-        _has_endpoint_denominator_chain_upstream_of_position(group, set_positions[0]),
+        _has_endpoint_denominator_chain_upstream_of_position(spiral_tree, set_positions[0]),
         "spiral explicit count must keep count - 1 endpoint denominator branch",
     )
+
+
+def test_imported_circular_layouts_evaluate_with_explicit_count():
+    circle = compile_group('''
+from functions import layout_circle
+pts = points(5)
+pts = layout_circle(pts, count=5, radius=2.0)
+output("Geometry", pts)
+''', 'NFTest_layout_circle_explicit_eval')
+    spiral = compile_group('''
+from functions import layout_spiral
+pts = points(5)
+pts = layout_spiral(pts, count=5, radius=2.0, turns=1.0, height=1.0)
+output("Geometry", pts)
+''', 'NFTest_layout_spiral_explicit_eval')
+    circle_positions = _evaluated_vertices(circle, "NFTestCircleExplicitEval")
+    spiral_positions = _evaluated_vertices(spiral, "NFTestSpiralExplicitEval")
+    check(len(circle_positions) == 5, "explicit circle layout should keep source point count")
+    check(len(spiral_positions) == 5, "explicit spiral layout should keep source point count")
+    check(abs(spiral_positions[-1][2] - 1.0) <= 1e-4, "spiral explicit endpoint should reach final height")
