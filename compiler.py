@@ -144,8 +144,12 @@ def _validate_import_bindings(import_pairs, body_stmts, library_names, local_fun
             raise CompileError(f"Function import name conflicts with reserved name: {exposed_name}")
         imported[exposed_name] = canonical_name
 
-    for canonical_name, exposed_name in import_pairs:
-        validate_pair(canonical_name, exposed_name)
+    for import_request in import_pairs:
+        if import_request.is_star:
+            for library_name in sorted(library_names, key=str.lower):
+                validate_pair(library_name, library_name)
+            continue
+        validate_pair(import_request.canonical_name, import_request.exposed_name)
     for inherited_exposed, inherited_canonical in dict(inherited_imports or {}).items():
         validate_pair(inherited_canonical, inherited_exposed, inherited=True)
     return imported

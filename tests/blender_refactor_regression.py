@@ -329,7 +329,25 @@ output("Geometry", geo)
     expect_compile_error('from functions import koch_curve as Float\ngeo = Float(steps=1)\noutput("Geometry", geo)', "NFTest_explicit_import_type_token_float_conflict")
     expect_compile_error('from functions import fibonacci as pi\nx = pi(8)\noutput("x", x)', "NFTest_explicit_import_const_pi_conflict")
     expect_compile_error('from functions import fibonacci as tau\nx = tau\noutput("x", x)', "NFTest_explicit_import_const_tau_conflict")
-    expect_compile_error('from functions import *\nx = 1\noutput("x", x)', "NFTest_explicit_import_star")
+    star = compile_group('from functions import *\nx = fibonacci(8)\noutput("x", x)', "NFTest_explicit_import_star_fibonacci")
+    check("fibonacci" not in [sock.name for sock in star.interface.items_tree if getattr(sock, "in_out", None) == "INPUT"], "star-imported function leaked as group input")
+    local_star = compile_group('''
+from functions import *
+
+def fib_value(n):
+    return fibonacci(n)
+
+x = fib_value(8)
+output("x", x)
+''', "NFTest_explicit_import_star_local_function")
+    check(getattr(local_star, "bl_idname", None) == "GeometryNodeTree", "star-imported function unavailable in local function")
+    before_builtins = set(registry.CALLABLE_BUILTIN_NAMES)
+    compile_group('from functions import *\nx = fibonacci(3)\noutput("x", x)', "NFTest_explicit_import_star_no_global_mutation")
+    check(set(registry.CALLABLE_BUILTIN_NAMES) == before_builtins, "star import mutated callable builtins")
+    expect_compile_error('from functions import *\nfibonacci = 1\noutput("fibonacci", fibonacci)', "NFTest_explicit_import_star_assignment_conflict")
+    expect_compile_error('from functions import *\ndef fibonacci(n):\n    return n\nx = fibonacci(1)\noutput("x", x)', "NFTest_explicit_import_star_function_conflict")
+    expect_compile_error('from functions import fibonacci\nfrom functions import *\nx = 1\noutput("x", x)', "NFTest_explicit_import_star_after_explicit_conflict")
+    expect_compile_error('from functions import *\nfrom functions import fibonacci as fibonacci\nx = 1\noutput("x", x)', "NFTest_explicit_import_explicit_after_star_conflict")
     expect_compile_error('def make():\n    from functions import koch_curve as kc\n    return kc(steps=1)\ngeo = make()\noutput("Geometry", geo)', "NFTest_explicit_import_nested_local_import")
     expect_compile_error('if True:\n    from functions import koch_curve as kc\n    geo = kc(steps=1)\noutput("Geometry", geo)', "NFTest_explicit_import_nested_if_import")
     expect_compile_error('items = [1]\nfor item in items:\n    from functions import koch_curve as kc\n    geo = kc(steps=1)\noutput("Geometry", geo)', "NFTest_explicit_import_nested_for_import")

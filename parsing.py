@@ -1,9 +1,21 @@
 """AST parsing and lightweight script inspection helpers."""
 
 import ast
+from dataclasses import dataclass
+
 from .constants import _ALLOWED_CONSTS, TYPE_TOKEN_NAMES
 from .errors import CompileError
 
+
+
+
+@dataclass(frozen=True)
+class FunctionImport:
+    """One source-level ``from functions import ...`` binding request."""
+
+    canonical_name: str | None
+    exposed_name: str | None
+    is_star: bool = False
 
 
 def _target_binding_names(target):
@@ -92,7 +104,9 @@ def _parse_source(source: str):
                 raise CompileError("Import statement must name at least one function")
             for alias in stmt.names:
                 if alias.name == "*":
-                    raise CompileError("Star imports from functions are not supported")
+                    if alias.asname is not None:
+                        raise CompileError("Function star imports cannot use aliases")
+                    continue
                 if not isinstance(alias.name, str) or not alias.name:
                     raise CompileError("Function imports must use simple names")
                 if alias.asname is not None and not alias.asname:
@@ -101,18 +115,22 @@ def _parse_source(source: str):
 
 
 def _extract_function_imports(stmts):
-    """Return body statements and raw from-functions import bindings.
+    """Return body statements and raw from-functions import requests.
 
-    The returned import pairs are ``(canonical_name, exposed_name)``. Validation
-    against the available function library and reserved namespaces is owned by
-    the compiler, where all relevant registries are available.
+    Validation against the available function library and reserved namespaces is
+    owned by the compiler, where all relevant registries are available. Star
+    imports are preserved as a distinct request so parsing does not own library
+    discovery.
     """
     body = []
     imports = []
     for stmt in stmts:
         if isinstance(stmt, ast.ImportFrom):
             for alias in stmt.names:
-                imports.append((alias.name, alias.asname or alias.name))
+                if alias.name == "*":
+                    imports.append(FunctionImport(None, None, is_star=True))
+                else:
+                    imports.append(FunctionImport(alias.name, alias.asname or alias.name))
         else:
             body.append(stmt)
     return body, imports

@@ -6,7 +6,13 @@ Function library entries live in `NodeForge/functions/`. Each entry is a callabl
 
 ### Pure DSL function
 
-Use a pure DSL function when the algorithm is expressible with existing built-ins.
+Use a pure DSL function when the algorithm is expressible with existing built-ins. New reusable pure DSL functions should use the flat file layout:
+
+```text
+functions/my_function.nf
+```
+
+Package-style pure DSL entries remain supported for existing library entries and for packages that also need package-local helpers:
 
 ```text
 functions/my_function/
@@ -46,15 +52,21 @@ A native backend defines `compile_call(comp, expr, depth=0)` and owns compilatio
 
 This style fits functions that generate large static geometry, precompute levels, or use Blender data-block APIs directly.
 
-## Function package rules
+## Function name and layout rules
 
-A package name must be a valid Python-like function name:
+A function file stem or package name must be a valid Python-like function name:
 
 ```text
 letters, digits, underscore; starts with a letter or underscore
 ```
 
-Recommended layout:
+Recommended flat layout for reusable pure DSL functions:
+
+```text
+functions/example_function.nf
+```
+
+Recommended package layout when package-local Python helpers or native compilation are needed:
 
 ```text
 functions/example_function/
@@ -63,11 +75,11 @@ functions/example_function/
 └── function.py
 ```
 
-`__init__.py` can be empty. It marks the folder as a package and keeps import behavior predictable.
+`__init__.py` can be empty. It marks the folder as a package and keeps package-local helper imports predictable.
 
-## Writing `source.nf`
+## Writing function source
 
-`source.nf` is the primary readable definition of the function.
+For flat functions, the source is the `.nf` file. For package functions, `source.nf` is the primary readable definition of the function.
 
 Example:
 
@@ -99,7 +111,9 @@ geo = sierpinski_carpet(geo, steps=3)
 output("Geometry", geo)
 ```
 
-User scripts and `source.nf` files must import function-library entries explicitly with `from functions import name` or `from functions import name as alias`. Bare auto-global library calls are not supported. Import aliases are compile-time callable bindings only, not first-class runtime values.
+User scripts and function source files must import function-library entries explicitly with `from functions import name`, `from functions import name as alias`, or `from functions import *`. Bare auto-global library calls are not supported. Import aliases and star-imported names are compile-time callable bindings only, not first-class runtime values.
+
+`from functions import *` expands to all public names discovered in `NodeForge/functions/` for the current source file. It is a convenience import for quick authoring; it does not add those names to the global built-in namespace and it does not make them callable from other scripts without an import.
 
 Keyword names are normalized when connected to group sockets. A keyword such as `max_iter` can match an input socket named `Max Iter`.
 
@@ -157,7 +171,7 @@ For every function, verify:
 
 - the library scanner lists the function
 - the function group materializes successfully
-- a script can import and call the function by name or alias
+- a script can import and call the function by name, alias, and when appropriate through `from functions import *`
 - expected geometry, attributes, and materials exist on evaluated output
 - old library functions still compile
 - any package-local helper is scoped to its package
