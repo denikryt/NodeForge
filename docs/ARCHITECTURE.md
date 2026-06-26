@@ -1,6 +1,6 @@
 # Architecture
 
-NodeForge has three authoring layers: compiler core, DSL built-ins, and function library.
+NodeForge uses one DSL compiler with separate ownership layers for core primitives, reusable function-library entries, examples, and embedded systems. See [Architecture Layers](ARCHITECTURE_LAYERS.md) for the public layer contract and migration rules.
 
 ## Compiler core
 
