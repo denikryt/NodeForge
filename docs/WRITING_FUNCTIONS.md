@@ -206,3 +206,17 @@ For every function, verify:
 - any package-local helper is scoped to its package
 
 A helper scope test should compile inside the package and fail from a normal top-level script with a clear `Unsupported function` error.
+
+## Examples and local scripts
+
+Finished showcase scripts live in `examples/`, not `functions/`. Prefer source-only DSL examples whenever the DSL can express the demo. Example packages that need package-specific Python use `backend.py`; `function.py` is reserved for reusable helper APIs under `functions/`.
+
+User-owned scripts saved from Blender live in `local/`. They are DSL-only. NodeForge discovers `.nf` and `.nodeforge` files recursively under `local/`, but folder paths are only organizational metadata. The public import name is the file basename. A file such as `local/math/noise.nf` is imported as:
+
+```python
+from local import noise
+```
+
+Nested module imports such as `from local.math import noise` are not supported. Package-style local layouts such as `local/noise/source.nf` are not supported in this stage. Duplicate physical entries that expose the same public name are rejected so restart and refresh behavior do not depend on filesystem order.
+
+The `Save to Local` operator asks for the source explicitly. Choose `Text Block` to save the selected Blender Text datablock. Choose `Selected Group` to save source embedded in the selected generated Geometry Node Group. NodeForge does not fall back from one source kind to the other.

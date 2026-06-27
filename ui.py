@@ -5,7 +5,7 @@ import sys
 import importlib
 import addon_utils
 from bpy.types import Operator, Panel, PropertyGroup, UIList, AddonPreferences
-from bpy.props import StringProperty, PointerProperty, CollectionProperty, IntProperty
+from bpy.props import StringProperty, PointerProperty, CollectionProperty, IntProperty, BoolProperty, EnumProperty
 
 from .compiler import (
     create_expression_group,
@@ -16,9 +16,10 @@ from .compiler import (
     _extract_group_source,
     _get_or_create_scratch_text,
     _replace_text_contents,
+    create_library_catalog_group,
     create_library_function_group,
 )
-from .library import library_function_records, apply_function_node_display_name
+from .library import library_entry_records, library_function_records, apply_function_node_display_name, create_local_folder, save_local_source
 from .systems.lsystem import resources as generated_resources
 
 def _source_from_props(props):
@@ -81,10 +82,11 @@ class NODEFORGE_AddonPreferences(AddonPreferences):
         layout.label(text="Use a symlinked addon folder for reliable development reloads.", icon='INFO')
 
 class NODEFORGE_FunctionItem(PropertyGroup):
-    """One row in the NodeForge function-library UI list."""
+    """One row in a NodeForge catalog-library UI list."""
     name: StringProperty(name="Name", default="")
     kind: StringProperty(name="Kind", default="")
     path: StringProperty(name="Path", default="")
+    folder_path: StringProperty(name="Folder", default="")
 
 
 class NODEFORGE_UL_function_library(UIList):
@@ -93,37 +95,64 @@ class NODEFORGE_UL_function_library(UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
         """Draw one discovered function entry."""
         row = layout.row(align=True)
-        row.label(text=item.name, icon='NODETREE')
+        label = item.name if not getattr(item, "folder_path", "") else f"{item.folder_path}/{item.name}"
+        row.label(text=label, icon='NODETREE')
 
 
-def _refresh_function_items(props):
-    """Reload the functions folder into the Scene collection property."""
+def _items_for_namespace(props, namespace: str):
+    """Return the UI collection/index pair for a library namespace."""
+    if namespace == "functions":
+        return props.function_items, "function_index"
+    if namespace == "examples":
+        return props.example_items, "example_index"
+    if namespace == "local":
+        return props.local_items, "local_index"
+    raise ValueError(f"Unknown library namespace: {namespace}")
+
+
+def _refresh_catalog_items(props, namespace: str):
+    """Reload one catalog folder into its Scene collection property."""
+    items, index_prop = _items_for_namespace(props, namespace)
+    old_index = getattr(props, index_prop)
     old_name = ""
-    if 0 <= props.function_index < len(props.function_items):
-        old_name = props.function_items[props.function_index].name
-    props.function_items.clear()
-    records = library_function_records()
+    if 0 <= old_index < len(items):
+        old_name = items[old_index].name
+    items.clear()
+    records = library_entry_records(namespace)
     for record in records:
-        item = props.function_items.add()
+        item = items.add()
         item.name = record.get("name", "")
         item.kind = record.get("kind", "")
         item.path = record.get("path", "")
-    props.function_index = 0
+        item.folder_path = record.get("folder_path", "")
+    setattr(props, index_prop, 0)
     if old_name:
-        for index, item in enumerate(props.function_items):
+        for index, item in enumerate(items):
             if item.name == old_name:
-                props.function_index = index
+                setattr(props, index_prop, index)
                 break
     return len(records)
 
 
-def _selected_function_item(props):
-    """Return the currently selected function-library item, or None."""
+def _refresh_function_items(props):
+    """Reload the functions folder into the Scene collection property."""
+    return _refresh_catalog_items(props, "functions")
+
+
+def _selected_catalog_item(props, namespace: str):
+    """Return the selected catalog-library item, or None."""
     if props is None:
         return None
-    if 0 <= props.function_index < len(props.function_items):
-        return props.function_items[props.function_index]
+    items, index_prop = _items_for_namespace(props, namespace)
+    index = getattr(props, index_prop)
+    if 0 <= index < len(items):
+        return items[index]
     return None
+
+
+def _selected_function_item(props):
+    """Return the currently selected function-library item, or None."""
+    return _selected_catalog_item(props, "functions")
 
 class GNSCRIPT_MVP_Properties(PropertyGroup):
     """Properties stored on the current Scene for NodeForge UI state."""
@@ -134,6 +163,22 @@ class GNSCRIPT_MVP_Properties(PropertyGroup):
     )
     function_items: CollectionProperty(type=NODEFORGE_FunctionItem)
     function_index: IntProperty(name="Function", default=0)
+    example_items: CollectionProperty(type=NODEFORGE_FunctionItem)
+    example_index: IntProperty(name="Example", default=0)
+    local_items: CollectionProperty(type=NODEFORGE_FunctionItem)
+    local_index: IntProperty(name="Local", default=0)
+    local_script_name: StringProperty(name="Script Name", default="")
+    local_folder_path: StringProperty(name="Folder", default="")
+    local_overwrite: BoolProperty(name="Overwrite", default=False)
+    local_source_kind: EnumProperty(
+        name="Source",
+        description="Source to save into the local catalog",
+        items=(
+            ("TEXT", "Text Block", "Save the selected Blender Text datablock"),
+            ("SELECTED_GROUP", "Selected Group", "Save the embedded source from the selected generated Node Group"),
+        ),
+        default="TEXT",
+    )
 
 class GNSCRIPT_MVP_OT_compile_expression(Operator):
     """Class `GNSCRIPT_MVP_OT_compile_expression` used by the NodeForge addon."""
@@ -241,51 +286,58 @@ class GNSCRIPT_MVP_OT_load_selected_group_source(Operator):
 
 
 class NODEFORGE_OT_refresh_function_library(Operator):
-    """Refresh the list of functions discovered in NodeForge/functions."""
+    """Refresh one namespace in the NodeForge library UI."""
     bl_idname = "nodeforge.refresh_function_library"
-    bl_label = "Refresh Function Library"
-    bl_description = "Reload available functions from the NodeForge/functions folder"
+    bl_label = "Refresh Library"
+    bl_description = "Reload available catalog entries"
     bl_options = {'REGISTER'}
 
+    namespace: StringProperty(default="functions")
+
     def execute(self, context):
-        """Reload function-library entries into the N-panel list."""
+        """Reload catalog entries into the N-panel list."""
         props = getattr(context.scene, "gn_script_mvp", None)
         if props is None:
             self.report({'ERROR'}, "NodeForge properties are not available")
             return {'CANCELLED'}
-        count = _refresh_function_items(props)
-        self.report({'INFO'}, f"Found {count} function(s)")
+        try:
+            count = _refresh_catalog_items(props, self.namespace)
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Found {count} {self.namespace} item(s)")
         return {'FINISHED'}
 
 
 class NODEFORGE_OT_create_function_group(Operator):
-    """Insert the selected function-library entry into the active Geometry Nodes editor."""
+    """Insert the selected catalog entry into the active Geometry Nodes editor."""
     bl_idname = "nodeforge.create_function_group"
-    bl_label = "Add Function Node Group"
-    bl_description = "Create the selected function node group if needed and insert it into the active Geometry Nodes editor"
+    bl_label = "Add Library Node Group"
+    bl_description = "Create the selected library node group if needed and insert it into the active Geometry Nodes editor"
     bl_options = {'REGISTER', 'UNDO'}
+
+    namespace: StringProperty(default="functions")
 
     @classmethod
     def poll(cls, context):
-        """Enable only when a function entry is selected."""
-        props = getattr(context.scene, "gn_script_mvp", None)
-        return _selected_function_item(props) is not None
+        """Enable whenever NodeForge scene properties exist."""
+        return getattr(context.scene, "gn_script_mvp", None) is not None
 
     def execute(self, context):
-        """Materialize the selected function and insert it as a group node."""
+        """Materialize the selected catalog entry and insert it as a group node."""
         props = getattr(context.scene, "gn_script_mvp", None)
-        item = _selected_function_item(props)
+        item = _selected_catalog_item(props, self.namespace)
         if item is None:
-            self.report({'ERROR'}, "Select a function from the list")
+            self.report({'ERROR'}, f"Select a {self.namespace} entry from the list")
             return {'CANCELLED'}
 
         tree = _active_gn_tree(context)
         if tree is None:
-            self.report({'ERROR'}, "Open a Geometry Nodes editor to add a function node group")
+            self.report({'ERROR'}, "Open a Geometry Nodes editor to add a library node group")
             return {'CANCELLED'}
 
         try:
-            group = create_library_function_group(item.name)
+            group = create_library_catalog_group(self.namespace, item.name)
         except Exception as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
@@ -299,7 +351,106 @@ class NODEFORGE_OT_create_function_group(Operator):
         for other in tree.nodes:
             other.select = False
         node.select = True
-        self.report({'INFO'}, f"Added function node group: {group.name}")
+        self.report({'INFO'}, f"Added library node group: {group.name}")
+        return {'FINISHED'}
+
+
+class NODEFORGE_OT_create_local_folder(Operator):
+    """Create a validated folder under the user-owned local catalog."""
+    bl_idname = "nodeforge.create_local_folder"
+    bl_label = "New Local Folder"
+    bl_description = "Create a folder inside NodeForge/local for organizing local scripts"
+    bl_options = {'REGISTER'}
+
+    folder_path: StringProperty(name="Folder", default="")
+
+    def invoke(self, context, event):
+        """Open Blender's normal operator-property dialog."""
+        props = getattr(context.scene, "gn_script_mvp", None)
+        if props is not None and not self.folder_path:
+            self.folder_path = props.local_folder_path
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        """Create the folder and refresh the Local list."""
+        props = getattr(context.scene, "gn_script_mvp", None)
+        try:
+            create_local_folder(self.folder_path)
+            if props is not None:
+                props.local_folder_path = self.folder_path
+                _refresh_catalog_items(props, "local")
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Created local folder: {self.folder_path}")
+        return {'FINISHED'}
+
+
+def _source_for_local_save(context, source_kind):
+    """Return source from exactly the user-selected local-save source kind."""
+    props = getattr(context.scene, "gn_script_mvp", None)
+    if source_kind == "TEXT":
+        source = _source_from_props(props)
+        if not source:
+            raise ValueError("Select a Blender Text datablock to save")
+        return source
+    if source_kind == "SELECTED_GROUP":
+        node = _selected_group_node(context)
+        if node is None:
+            raise ValueError("Select exactly one generated Node Group to save")
+        source = _extract_group_source(node.node_tree)
+        if not source:
+            raise ValueError("Selected Node Group has no embedded NodeForge source")
+        return source
+    raise ValueError(f"Unknown local save source kind: {source_kind}")
+
+
+class NODEFORGE_OT_save_to_local(Operator):
+    """Save a Text datablock or selected NodeForge group source into local/."""
+    bl_idname = "nodeforge.save_to_local"
+    bl_label = "Save to Local"
+    bl_description = "Save the selected Text script or selected NodeForge node group source into NodeForge/local"
+    bl_options = {'REGISTER'}
+
+    source_kind: EnumProperty(
+        name="Source",
+        description="Choose the source to save into local/",
+        items=(
+            ("TEXT", "Text Block", "Save the selected Blender Text datablock"),
+            ("SELECTED_GROUP", "Selected Group", "Save the embedded source from the selected generated Node Group"),
+        ),
+        default="TEXT",
+    )
+    name: StringProperty(name="Script Name", default="")
+    folder_path: StringProperty(name="Folder", default="")
+    overwrite: BoolProperty(name="Overwrite", default=False)
+
+    def invoke(self, context, event):
+        """Open Blender's normal operator-property dialog."""
+        props = getattr(context.scene, "gn_script_mvp", None)
+        if props is not None:
+            self.name = self.name or props.local_script_name
+            self.folder_path = self.folder_path or props.local_folder_path
+            self.overwrite = bool(props.local_overwrite)
+            self.source_kind = props.local_source_kind
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        """Write the source to a validated local file and refresh Local."""
+        props = getattr(context.scene, "gn_script_mvp", None)
+        try:
+            source = _source_for_local_save(context, self.source_kind)
+            path = save_local_source(self.name, source, folder_path=self.folder_path, overwrite=self.overwrite)
+            if props is not None:
+                props.local_script_name = self.name
+                props.local_folder_path = self.folder_path
+                props.local_overwrite = self.overwrite
+                props.local_source_kind = self.source_kind
+                _refresh_catalog_items(props, "local")
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Saved local script: {path.name}")
         return {'FINISHED'}
 
 class GNSCRIPT_MVP_PT_panel(Panel):
@@ -339,24 +490,45 @@ class GNSCRIPT_MVP_PT_panel(Panel):
             layout.label(text="Selected Group has no embedded NodeForge source", icon='INFO')
 
         layout.separator()
-        header = layout.row(align=True)
-        header.label(text="Function Library")
-        header.operator(NODEFORGE_OT_refresh_function_library.bl_idname, text="", icon='FILE_REFRESH')
-        if not props.function_items:
-            _refresh_function_items(props)
-        layout.template_list(
-            NODEFORGE_UL_function_library.__name__,
-            "",
-            props,
-            "function_items",
-            props,
-            "function_index",
-            rows=4,
-        )
-        item = _selected_function_item(props)
-        row = layout.row(align=True)
-        row.enabled = item is not None and _active_gn_tree(context) is not None
-        row.operator(NODEFORGE_OT_create_function_group.bl_idname, text="Add Node Group", icon='NODETREE')
+        box = layout.box()
+        header = box.row(align=True)
+        header.label(text="Library")
+
+        for namespace, label, collection_name, index_name in (
+            ("functions", "Functions", "function_items", "function_index"),
+            ("examples", "Examples", "example_items", "example_index"),
+            ("local", "Local", "local_items", "local_index"),
+        ):
+            sub = box.box()
+            row = sub.row(align=True)
+            row.label(text=label)
+            op = row.operator(NODEFORGE_OT_refresh_function_library.bl_idname, text="", icon='FILE_REFRESH')
+            op.namespace = namespace
+            items = getattr(props, collection_name)
+            if not items:
+                try:
+                    _refresh_catalog_items(props, namespace)
+                except Exception as exc:
+                    sub.label(text=str(exc), icon='ERROR')
+            sub.template_list(
+                NODEFORGE_UL_function_library.__name__,
+                namespace,
+                props,
+                collection_name,
+                props,
+                index_name,
+                rows=4 if namespace == "functions" else 3,
+            )
+            item = _selected_catalog_item(props, namespace)
+            row = sub.row(align=True)
+            row.enabled = item is not None and _active_gn_tree(context) is not None
+            op = row.operator(NODEFORGE_OT_create_function_group.bl_idname, text="Add Node Group", icon='NODETREE')
+            op.namespace = namespace
+            if namespace == "local":
+                row = sub.row(align=True)
+                row.operator(NODEFORGE_OT_create_local_folder.bl_idname, text="New Folder", icon='NEWFOLDER')
+                row.operator(NODEFORGE_OT_save_to_local.bl_idname, text="Save to Local", icon='FILE_TICK')
+
         if _active_gn_tree(context) is None:
             layout.label(text="Open a Geometry Nodes editor to add", icon='INFO')
 
@@ -371,7 +543,7 @@ def menu_func(self, context):
         op.expression = ""
         op.insert_node = True
 
-classes = (NODEFORGE_OT_reload_addon, NODEFORGE_AddonPreferences, NODEFORGE_FunctionItem, GNSCRIPT_MVP_Properties, NODEFORGE_UL_function_library, GNSCRIPT_MVP_OT_compile_expression, GNSCRIPT_MVP_OT_update_selected_group, GNSCRIPT_MVP_OT_load_selected_group_source, NODEFORGE_OT_refresh_function_library, NODEFORGE_OT_create_function_group, GNSCRIPT_MVP_PT_panel)
+classes = (NODEFORGE_OT_reload_addon, NODEFORGE_AddonPreferences, NODEFORGE_FunctionItem, GNSCRIPT_MVP_Properties, NODEFORGE_UL_function_library, GNSCRIPT_MVP_OT_compile_expression, GNSCRIPT_MVP_OT_update_selected_group, GNSCRIPT_MVP_OT_load_selected_group_source, NODEFORGE_OT_refresh_function_library, NODEFORGE_OT_create_function_group, NODEFORGE_OT_create_local_folder, NODEFORGE_OT_save_to_local, GNSCRIPT_MVP_PT_panel)
 
 def register():
     """Function `register` used by the NodeForge addon."""

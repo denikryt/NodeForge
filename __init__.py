@@ -3,10 +3,10 @@
 bl_info = {
     "name": "NodeForge",
     "author": "nachitima",
-    "version": (0, 49, 26),
+    "version": (0, 49, 27),
     "blender": (5, 2, 0),
     "location": "Geometry Nodes Editor > Sidebar > NodeForge; Add Menu > Script > Compile Group",
-    "description": "Compile a Python-like DSL into Geometry Nodes node groups. Packaged function library: editable .nf sources plus optional per-function native helpers.",
+    "description": "Compile a Python-like DSL into Geometry Nodes node groups. Catalog library: reusable functions, bundled examples, and user-owned local DSL scripts.",
     "category": "Node",
 }
 

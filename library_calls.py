@@ -1,15 +1,14 @@
-"""Adapters for calls into NodeForge function-library entries."""
+"""Adapters for calls into NodeForge library catalog entries."""
 
 from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR
 from .consteval import _is_const_vector
 from .errors import CompileError
-from .nodes import _new_node
 from .values import Value
 from .compile_time import reject_compile_time_object
 from .library import (
     has_native_compile_call,
-    compile_module_library_function_call,
-    get_or_create_library_group,
+    compile_module_library_entry_call,
+    get_or_create_library_entry_group,
     make_library_call_node,
     _normalized_socket_name,
     _socket_type_to_value_type,
@@ -53,16 +52,21 @@ def _validate_argument_type(function_name, socket_name, expected_type, value):
         )
 
 
-def compile_library_function_call(comp, expr, depth=0, function_name=None):
-    """Compile a function-library call without owning library discovery/materialization."""
-    name = function_name or expr.func.id
-    if has_native_compile_call(name):
-        return compile_module_library_function_call(comp, expr, depth, function_name=name)
+def compile_library_function_call(comp, expr, depth=0, function_name=None, namespace="functions", binding=None):
+    """Compile a namespace-aware library call without owning discovery."""
+    if binding is not None:
+        namespace = binding.namespace
+        name = binding.canonical_name
+    else:
+        name = function_name or expr.func.id
+    if has_native_compile_call(namespace, name):
+        return compile_module_library_entry_call(comp, expr, depth, namespace=namespace, entry_name=name)
     x = depth * 240
     y = -depth * 90
-    function_group = get_or_create_library_group(name, comp.compile_group_callback)
+    function_group = get_or_create_library_entry_group(namespace, name, comp.compile_group_callback)
 
-    probe = _new_node(comp.group, "GeometryNodeGroup", x, y)
+    probe = comp.group.nodes.new("GeometryNodeGroup")
+    probe.location = (x, y)
     probe.node_tree = function_group
     input_sockets = [s for s in probe.inputs if getattr(s, "enabled", True)]
     input_names = [s.name for s in input_sockets]

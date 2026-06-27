@@ -11,8 +11,9 @@ from .errors import CompileError
 
 @dataclass(frozen=True)
 class FunctionImport:
-    """One source-level ``from functions import ...`` binding request."""
+    """One source-level catalog import binding request."""
 
+    module: str
     canonical_name: str | None
     exposed_name: str | None
     is_star: bool = False
@@ -82,7 +83,10 @@ def _parse_source(source: str):
     source = (source or "").strip()
     if not source:
         raise CompileError("Script is empty")
-    tree = ast.parse(source, mode="exec")
+    try:
+        tree = ast.parse(source, mode="exec")
+    except SyntaxError as exc:
+        raise CompileError(str(exc)) from exc
     allowed = (ast.Assign, ast.AugAssign, ast.Expr, ast.For, ast.If, ast.FunctionDef, ast.ImportFrom)
     if not tree.body or any(not isinstance(stmt, allowed) for stmt in tree.body):
         raise CompileError("Only function imports, assignments, function definitions, for/if blocks, and expression/call statements are supported")
@@ -98,8 +102,8 @@ def _parse_source(source: str):
             if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
                 raise CompileError("Assignment target must be a simple name, e.g. out = sin(x)")
         elif isinstance(stmt, ast.ImportFrom):
-            if stmt.level != 0 or stmt.module != "functions":
-                raise CompileError("Only 'from functions import name' imports are supported")
+            if stmt.level != 0 or stmt.module not in {"functions", "examples", "local"}:
+                raise CompileError("Only 'from functions/examples/local import name' imports are supported")
             if not stmt.names:
                 raise CompileError("Import statement must name at least one function")
             for alias in stmt.names:
@@ -128,9 +132,9 @@ def _extract_function_imports(stmts):
         if isinstance(stmt, ast.ImportFrom):
             for alias in stmt.names:
                 if alias.name == "*":
-                    imports.append(FunctionImport(None, None, is_star=True))
+                    imports.append(FunctionImport(stmt.module, None, None, is_star=True))
                 else:
-                    imports.append(FunctionImport(alias.name, alias.asname or alias.name))
+                    imports.append(FunctionImport(stmt.module, alias.name, alias.asname or alias.name))
         else:
             body.append(stmt)
     return body, imports

@@ -65,15 +65,17 @@ Examples:
 | Function | Implementation style |
 | --- | --- |
 | `fibonacci` | Pure DSL source. |
-| `fibonacci_spiral` | Pure DSL source. |
-| `sierpinski_carpet` | Pure DSL source using another library function. |
-| `dragon_curve` | Native backend for specialized generated geometry. |
-| `koch_curve` | Native backend for optimized/static-runtime variants. |
-| `mandelbrot` | DSL algorithm with a package-local backend helper for material setup. |
+| `fibonacci` | Pure reusable DSL source. |
+| `sierpinski_carpet` | Reusable DSL source using another library function. |
+| `dragon_curve` | Example catalog source-only L-system demo. |
+| `koch_curve` | Example catalog source-only L-system demo. |
+| `fibonacci_spiral` | Example catalog source-only showcase. |
+| `fractal_plant` | Example catalog source-only L-system showcase. |
+| `mandelbrot` | Example catalog DSL algorithm with `backend.py` material helper. |
 
 ## Package-local backend helpers
 
-A package can expose helpers from `function.py`:
+A reusable function package can expose helpers from `function.py`. An example package uses `backend.py` for the same package-local boundary:
 
 ```python
 BACKEND_BUILTINS = {

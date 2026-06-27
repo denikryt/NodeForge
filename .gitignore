@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 plans/
 dev/
+# User-owned local catalog scripts
+local/**/*.nf
+local/**/*.nodeforge
+!local/.gitignore

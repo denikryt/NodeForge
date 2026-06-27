@@ -14,7 +14,7 @@ A NodeForge script describes a node group. The script declares inputs, builds ge
 resolution = input_int("Resolution", default=120)
 max_iter = input_int("Max Iter", default=32)
 
-from functions import mandelbrot
+from examples import mandelbrot
 
 geo = mandelbrot(resolution=resolution, max_iter=max_iter)
 output("Geometry", geo)
@@ -28,33 +28,27 @@ Built-ins cover input sockets, scalar math, vector math, field inputs, geometry 
 
 Embedded systems such as L-systems live under `systems/` and use reserved constructor names such as `ls_system(...)`. See [`docs/LSYSTEMS.md`](docs/LSYSTEMS.md) for L-system syntax, backend selection, limits, generated-resource behavior, and examples.
 
-### Function library
+### Script library catalogs
 
-Reusable functions live in `functions/`. A function can be a pure DSL script or a package with a DSL source and Python backend helpers.
-
-Common layout:
-
-```text
-functions/<function_name>/
-├── __init__.py
-├── source.nf
-└── function.py      # optional
-```
-
-A function can be called from another NodeForge script after an explicit import:
+NodeForge has three explicit script-library catalogs. Reusable helpers live in `functions/`, bundled demonstrations live in `examples/`, and user-owned scripts saved from Blender live in `local/`. Catalog entries are callable only after a source-local import.
 
 ```python
 from functions import sierpinski_carpet
-from functions import koch_curve as kc
+from examples import koch_curve as kc
+from local import my_custom_script
 ```
 
-The compiler materializes imported function calls as reusable nested Geometry Nodes groups. Imported aliases are compile-time callable names only; they are not runtime values or group inputs.
+`from functions import *`, `from examples import *`, and `from local import *` expand only the selected catalog for the current source file. They do not mutate the global DSL built-in namespace.
+
+`local/` may contain folders for organization, for example `local/math/noise.nf`, but import names remain flat: use `from local import noise`, not `from local.math import noise`.
 
 ### Python backend helpers
 
-`function.py` can expose package-local backend helpers through `BACKEND_BUILTINS`. These helpers are visible while compiling that package's `source.nf` and stay scoped to that package.
+Reusable function packages may use `functions/<name>/function.py`. Example packages may use `examples/<name>/backend.py` only as a private implementation detail behind `source.nf`. User-owned `local/` scripts are DSL-only and do not load `function.py` or `backend.py`.
 
-Use local backend helpers for function-specific Blender API work such as constructing a custom shader material or generating specialized data. Keep generic node operations in DSL built-ins.
+Package-local backend helpers can expose `BACKEND_BUILTINS`. These helpers are visible while compiling that package's `source.nf` and stay scoped to that package.
+
+Use backend helpers for package-specific Blender API work such as constructing a custom shader material. Keep generic node operations in DSL built-ins.
 
 ## Project layout
 
@@ -72,10 +66,12 @@ NodeForge/
 ├── values.py                # Typed socket wrappers
 ├── compile_time.py          # Compile-time-only object guards
 ├── interface.py             # Node group interface sockets and defaults
-├── library.py               # Function discovery, compilation, calls
+├── library.py               # Catalog discovery, local saves, materialization
 ├── builtins/                # DSL primitive registry and category modules
 ├── systems/                 # Embedded subsystems such as L-systems
 ├── functions/               # Reusable NodeForge functions
+├── examples/                # Bundled demo/showcase scripts
+├── local/                   # User-owned local scripts; .nf files are not packaged
 └── docs/                    # Architecture and authoring documentation
 ```
 

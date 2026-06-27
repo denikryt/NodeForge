@@ -1,6 +1,8 @@
 """Public compiler facade and high-level Geometry Nodes group assembly."""
 
 import ast
+from dataclasses import dataclass
+
 import bpy
 
 from .constants import TYPE_FLOAT, TYPE_INT, TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
@@ -25,7 +27,7 @@ from .storage import (
 )
 from .interface import _set_socket_default, _set_interface_socket_default, _record_group_input_default
 from .update import _apply_group_defaults_to_node, _capture_node_external_state, _restore_node_external_state
-from .library import library_function_names, materialize_library_function_group
+from .library import library_entry_names, materialize_library_entry_group
 from .statements import _unique_output_name
 from .compile_time import reject_compile_time_object
 from .systems import registry as systems_registry
@@ -35,6 +37,14 @@ from .builtins import registry as builtin_registry
 
 _TEST_CUTOVER_FAIL_AFTER_RESET = False
 from .statement_compiler import GroupBuildContext, compile_statements
+
+
+@dataclass(frozen=True)
+class LibraryBinding:
+    """Resolved source-local binding to one catalog entry."""
+
+    namespace: str
+    canonical_name: str
 
 
 class Compiler:
@@ -125,33 +135,39 @@ class Compiler:
             return self.compile(expr), True
 
 
-def _validate_import_bindings(import_pairs, body_stmts, library_names, local_function_defs, backend_names, inherited_imports=None):
-    """Validate and return source-local function import bindings."""
-    imported = {}
+def _validate_import_bindings(import_pairs, body_stmts, local_function_defs, backend_names, inherited_imports=None):
+    """Validate and return source-local namespace-aware catalog bindings."""
+    imported: dict[str, LibraryBinding] = {}
     local_bindings = _binding_names(body_stmts)
     reserved_names = set(builtin_registry.BUILTIN_NAMES) | {"output", "store"} | set(_ALLOWED_CONSTS) | set(systems_registry.NAMES) | set(backend_names) | set(TYPE_TOKEN_NAMES)
 
-    def validate_pair(canonical_name, exposed_name, *, inherited=False):
-        if canonical_name not in library_names:
-            raise CompileError(f"Unknown function-library import: {canonical_name}")
+    def validate_pair(namespace, canonical_name, exposed_name, *, inherited=False):
+        names = library_entry_names(namespace)
+        if canonical_name not in names:
+            raise CompileError(f"Unknown {namespace} import: {canonical_name}")
+        binding = LibraryBinding(namespace, canonical_name)
         if exposed_name in imported:
-            if inherited and imported[exposed_name] == canonical_name:
+            if inherited and imported[exposed_name] == binding:
                 return
             raise CompileError(f"Duplicate function import name: {exposed_name}")
         if exposed_name in local_bindings or exposed_name in local_function_defs:
             raise CompileError(f"Function import name conflicts with local binding: {exposed_name}")
         if exposed_name in reserved_names:
             raise CompileError(f"Function import name conflicts with reserved name: {exposed_name}")
-        imported[exposed_name] = canonical_name
+        imported[exposed_name] = binding
 
     for import_request in import_pairs:
+        namespace = import_request.module
         if import_request.is_star:
-            for library_name in sorted(library_names, key=str.lower):
-                validate_pair(library_name, library_name)
+            for library_name in sorted(library_entry_names(namespace), key=str.lower):
+                validate_pair(namespace, library_name, library_name)
             continue
-        validate_pair(import_request.canonical_name, import_request.exposed_name)
-    for inherited_exposed, inherited_canonical in dict(inherited_imports or {}).items():
-        validate_pair(inherited_canonical, inherited_exposed, inherited=True)
+        validate_pair(namespace, import_request.canonical_name, import_request.exposed_name)
+    for inherited_exposed, inherited_binding in dict(inherited_imports or {}).items():
+        if isinstance(inherited_binding, LibraryBinding):
+            validate_pair(inherited_binding.namespace, inherited_binding.canonical_name, inherited_exposed, inherited=True)
+        else:
+            validate_pair("functions", inherited_binding, inherited_exposed, inherited=True)
     return imported
 
 
@@ -176,13 +192,13 @@ def _build_group(source: str, name: str = "NodeForge Group", local_functions=Non
     backend_names = set(backend_builtins or {})
     for helper_name in backend_names:
         systems_registry.validate_no_reserved_collision(helper_name, "Local backend helper")
-    library_names = library_function_names()
-    for library_name in library_names:
-        systems_registry.validate_no_reserved_collision(library_name, "Library function")
+    # Preserve the existing invariant that bundled catalog entries cannot use
+    # reserved embedded-system names even when the current source has no imports.
+    for namespace in ("functions", "examples"):
+        library_entry_names(namespace)
     own_imported_library_functions = _validate_import_bindings(
         import_pairs,
         raw_body_stmts,
-        library_names,
         local_function_defs,
         backend_names,
         inherited_imports=imported_library_functions,
@@ -544,9 +560,14 @@ def create_expression_group(source: str, name: str = "NodeForge Group"):
     return _make_group(source, name)
 
 
+def create_library_catalog_group(namespace: str, name: str):
+    """Create or update a reusable node group for a catalog entry."""
+    return materialize_library_entry_group(namespace, name, _make_group)
+
+
 def create_library_function_group(name: str):
     """Create or update a reusable node group for a function-library entry."""
-    return materialize_library_function_group(name, _make_group)
+    return create_library_catalog_group("functions", name)
 
 
 def update_expression_group(group, source: str):
@@ -559,6 +580,7 @@ __all__ = [
     "Compiler",
     "create_expression_group",
     "update_expression_group",
+    "create_library_catalog_group",
     "create_library_function_group",
     "_apply_group_defaults_to_node",
     "_capture_node_external_state",

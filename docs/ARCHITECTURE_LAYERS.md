@@ -8,7 +8,8 @@ NodeForge has one DSL compiler and several authoring layers. The layers define w
 | --- | --- | --- | --- |
 | Core | `builtins/`, compiler modules | global callable names | language primitives and direct Geometry Nodes lowering |
 | Functions | `functions/` | `from functions import ...` | reusable DSL functions and intentionally scoped package helpers |
-| Examples | `examples/` after examples support is added | explicit examples import or opening | finished demo/showcase scripts |
+| Examples | `examples/` | `from examples import ...` | finished demo/showcase scripts |
+| Local | `local/` | `from local import ...` | user-owned DSL-only scripts saved from Blender UI |
 | Systems | `systems/` | subsystem constructors | embedded subsystems such as L-systems |
 
 The layer split is a public authoring contract. A callable belongs to exactly one public layer at a time. Reusable helpers that move to `functions/` are not kept as compatibility globals.
@@ -107,6 +108,12 @@ node
 ```
 
 Names currently exposed as globals outside this list are migration candidates, not permanent core by default. A migration stage must classify each such name before removing it from core or moving it to `functions/`.
+
+## Library catalogs
+
+The compiler accepts only fixed top-level catalog imports: `functions`, `examples`, and `local`. Catalog folder names are part of the public import contract, but `local` subfolders are only storage/UI metadata. `local/math/noise.nf` exposes `noise` through `from local import noise`; nested imports such as `from local.math import noise` are not part of this stage.
+
+Discovery rejects duplicate physical records that expose the same public name inside one catalog instead of choosing by path order. Generated `examples` and `local` node groups include catalog namespace/name metadata, and materialization refuses to update a same-named datablock unless that metadata matches.
 
 ## Functions
 

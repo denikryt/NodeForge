@@ -190,7 +190,7 @@ def compile_expr(comp, expr, depth=0):
         if name in comp.backend_builtins:
             return local_functions.compile_backend_builtin_call(comp, expr, depth)
         if is_imported_library_call:
-            return library_calls.compile_library_function_call(comp, expr, depth, function_name=comp.imported_library_functions[name])
+            return library_calls.compile_library_function_call(comp, expr, depth, binding=comp.imported_library_functions[name])
         if name in {"output", "store"}:
             raise CompileError(f"{name}() is only supported as a top-level call")
         raise CompileError(f"Unsupported function: {name}")
