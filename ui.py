@@ -453,6 +453,36 @@ class NODEFORGE_OT_save_to_local(Operator):
         self.report({'INFO'}, f"Saved local script: {path.name}")
         return {'FINISHED'}
 
+def _draw_library_catalog_panel(layout, context, namespace: str, collection_name: str, index_name: str, rows: int):
+    """Draw one collapsible library catalog panel body."""
+    props = context.scene.gn_script_mvp
+    row = layout.row(align=True)
+    op = row.operator(NODEFORGE_OT_refresh_function_library.bl_idname, text="Refresh", icon='FILE_REFRESH')
+    op.namespace = namespace
+    items = getattr(props, collection_name)
+    if not items:
+        try:
+            _refresh_catalog_items(props, namespace)
+        except Exception as exc:
+            layout.label(text=str(exc), icon='ERROR')
+    layout.template_list(
+        NODEFORGE_UL_function_library.__name__,
+        namespace,
+        props,
+        collection_name,
+        props,
+        index_name,
+        rows=rows,
+    )
+    item = _selected_catalog_item(props, namespace)
+    row = layout.row(align=True)
+    row.enabled = item is not None and _active_gn_tree(context) is not None
+    op = row.operator(NODEFORGE_OT_create_function_group.bl_idname, text="Add Node Group", icon='NODETREE')
+    op.namespace = namespace
+    if _active_gn_tree(context) is None:
+        layout.label(text="Open a Geometry Nodes editor to add", icon='INFO')
+
+
 class GNSCRIPT_MVP_PT_panel(Panel):
     """Class `GNSCRIPT_MVP_PT_panel` used by the NodeForge addon."""
     bl_label = "NodeForge"
@@ -489,48 +519,77 @@ class GNSCRIPT_MVP_PT_panel(Panel):
         elif not _extract_group_source(selected_group.node_tree):
             layout.label(text="Selected Group has no embedded NodeForge source", icon='INFO')
 
-        layout.separator()
-        box = layout.box()
-        header = box.row(align=True)
-        header.label(text="Library")
 
-        for namespace, label, collection_name, index_name in (
-            ("functions", "Functions", "function_items", "function_index"),
-            ("examples", "Examples", "example_items", "example_index"),
-            ("local", "Local", "local_items", "local_index"),
-        ):
-            sub = box.box()
-            row = sub.row(align=True)
-            row.label(text=label)
-            op = row.operator(NODEFORGE_OT_refresh_function_library.bl_idname, text="", icon='FILE_REFRESH')
-            op.namespace = namespace
-            items = getattr(props, collection_name)
-            if not items:
-                try:
-                    _refresh_catalog_items(props, namespace)
-                except Exception as exc:
-                    sub.label(text=str(exc), icon='ERROR')
-            sub.template_list(
-                NODEFORGE_UL_function_library.__name__,
-                namespace,
-                props,
-                collection_name,
-                props,
-                index_name,
-                rows=4 if namespace == "functions" else 3,
-            )
-            item = _selected_catalog_item(props, namespace)
-            row = sub.row(align=True)
-            row.enabled = item is not None and _active_gn_tree(context) is not None
-            op = row.operator(NODEFORGE_OT_create_function_group.bl_idname, text="Add Node Group", icon='NODETREE')
-            op.namespace = namespace
-            if namespace == "local":
-                row = sub.row(align=True)
-                row.operator(NODEFORGE_OT_create_local_folder.bl_idname, text="New Folder", icon='NEWFOLDER')
-                row.operator(NODEFORGE_OT_save_to_local.bl_idname, text="Save to Local", icon='FILE_TICK')
+class NODEFORGE_PT_library(Panel):
+    """Collapsible parent panel for NodeForge catalog libraries."""
+    bl_label = "Library"
+    bl_space_type = 'NODE_EDITOR'
+    bl_region_type = 'UI'
+    bl_category = "NodeForge"
+    bl_parent_id = "GNSCRIPT_MVP_PT_panel"
+    bl_order = 10
 
-        if _active_gn_tree(context) is None:
-            layout.label(text="Open a Geometry Nodes editor to add", icon='INFO')
+    @classmethod
+    def poll(cls, context):
+        return GNSCRIPT_MVP_PT_panel.poll(context)
+
+    def draw(self, context):
+        self.layout.label(text="Save, browse, and add catalog node groups.", icon='ASSET_MANAGER')
+
+
+class NODEFORGE_PT_library_local(Panel):
+    """Collapsible Local catalog panel."""
+    bl_label = "Local"
+    bl_space_type = 'NODE_EDITOR'
+    bl_region_type = 'UI'
+    bl_category = "NodeForge"
+    bl_parent_id = "NODEFORGE_PT_library"
+    bl_order = 0
+
+    @classmethod
+    def poll(cls, context):
+        return GNSCRIPT_MVP_PT_panel.poll(context)
+
+    def draw(self, context):
+        layout = self.layout
+        row = layout.row(align=True)
+        row.operator(NODEFORGE_OT_create_local_folder.bl_idname, text="New Folder", icon='NEWFOLDER')
+        row.operator(NODEFORGE_OT_save_to_local.bl_idname, text="Save to Local", icon='FILE_TICK')
+        _draw_library_catalog_panel(layout, context, "local", "local_items", "local_index", rows=3)
+
+
+class NODEFORGE_PT_library_functions(Panel):
+    """Collapsible Functions catalog panel."""
+    bl_label = "Functions"
+    bl_space_type = 'NODE_EDITOR'
+    bl_region_type = 'UI'
+    bl_category = "NodeForge"
+    bl_parent_id = "NODEFORGE_PT_library"
+    bl_order = 1
+
+    @classmethod
+    def poll(cls, context):
+        return GNSCRIPT_MVP_PT_panel.poll(context)
+
+    def draw(self, context):
+        _draw_library_catalog_panel(self.layout, context, "functions", "function_items", "function_index", rows=4)
+
+
+class NODEFORGE_PT_library_examples(Panel):
+    """Collapsible Examples catalog panel."""
+    bl_label = "Examples"
+    bl_space_type = 'NODE_EDITOR'
+    bl_region_type = 'UI'
+    bl_category = "NodeForge"
+    bl_parent_id = "NODEFORGE_PT_library"
+    bl_order = 2
+
+    @classmethod
+    def poll(cls, context):
+        return GNSCRIPT_MVP_PT_panel.poll(context)
+
+    def draw(self, context):
+        _draw_library_catalog_panel(self.layout, context, "examples", "example_items", "example_index", rows=3)
 
 
 def menu_func(self, context):
@@ -543,7 +602,25 @@ def menu_func(self, context):
         op.expression = ""
         op.insert_node = True
 
-classes = (NODEFORGE_OT_reload_addon, NODEFORGE_AddonPreferences, NODEFORGE_FunctionItem, GNSCRIPT_MVP_Properties, NODEFORGE_UL_function_library, GNSCRIPT_MVP_OT_compile_expression, GNSCRIPT_MVP_OT_update_selected_group, GNSCRIPT_MVP_OT_load_selected_group_source, NODEFORGE_OT_refresh_function_library, NODEFORGE_OT_create_function_group, NODEFORGE_OT_create_local_folder, NODEFORGE_OT_save_to_local, GNSCRIPT_MVP_PT_panel)
+classes = (
+    NODEFORGE_OT_reload_addon,
+    NODEFORGE_AddonPreferences,
+    NODEFORGE_FunctionItem,
+    GNSCRIPT_MVP_Properties,
+    NODEFORGE_UL_function_library,
+    GNSCRIPT_MVP_OT_compile_expression,
+    GNSCRIPT_MVP_OT_update_selected_group,
+    GNSCRIPT_MVP_OT_load_selected_group_source,
+    NODEFORGE_OT_refresh_function_library,
+    NODEFORGE_OT_create_function_group,
+    NODEFORGE_OT_create_local_folder,
+    NODEFORGE_OT_save_to_local,
+    GNSCRIPT_MVP_PT_panel,
+    NODEFORGE_PT_library,
+    NODEFORGE_PT_library_local,
+    NODEFORGE_PT_library_functions,
+    NODEFORGE_PT_library_examples,
+)
 
 def register():
     """Function `register` used by the NodeForge addon."""
