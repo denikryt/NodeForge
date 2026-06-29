@@ -1,4 +1,4 @@
-"""Turtle interpretation for L-system command streams."""
+"""Turtle interpretation for parsed L-system module streams."""
 
 import math
 
@@ -6,7 +6,7 @@ from ...errors import CompileError
 from ...geometry import _is_const_number
 from ...nodes import _combine_xyz_mixed, _is_number_type, _math, _value
 from ...values import Value
-from .model import TurtlePoint, TurtleSegment
+from .model import LSystemModule, TurtleInterpretation, TurtleMarkerPoint, TurtlePoint, TurtleSegment
 
 
 def _as_numeric_value(group, value, x, y, label):
@@ -65,8 +65,22 @@ def _angle_radians(group, angle_degrees, x, y):
     return _mul(group, angle_degrees, math.pi / 180.0, x, y)
 
 
+def _legacy_modules(stream: str) -> tuple[LSystemModule, ...]:
+    return tuple(LSystemModule(ch, (), ch) for ch in stream)
+
+
+def _effective_arg(module: LSystemModule, default):
+    return module.args[0].value if module.args else default
+
+
+def _require_const(value, label):
+    if not _is_const_number(value):
+        raise CompileError(f"static L-system {label} must be a compile-time number")
+    return float(value)
+
+
 def interpret(group, stream: str, *, angle_degrees, step, x=0, y=0) -> list[TurtleSegment]:
-    """Interpret an expanded L-system stream into drawn turtle segments."""
+    """Interpret a legacy expanded L-system stream into drawn turtle segments."""
     angle = _angle_radians(group, angle_degrees, x - 180, y - 80)
     pos = TurtlePoint(0.0, 0.0, 0.0)
     heading = 0.0
@@ -97,37 +111,61 @@ def interpret(group, stream: str, *, angle_degrees, step, x=0, y=0) -> list[Turt
     return segments
 
 
-def interpret_static(stream: str, *, angle_degrees, step) -> list[TurtleSegment]:
-    """Interpret an expanded static L-system stream into float turtle segments."""
-    if not _is_const_number(angle_degrees):
-        raise CompileError("static L-system angle must be a compile-time number")
-    if not _is_const_number(step):
-        raise CompileError("static L-system step must be a compile-time number")
-    angle = float(angle_degrees) * math.pi / 180.0
-    step_value = float(step)
+def interpret_static(stream, *, angle_degrees, step, markers=None, creation_iteration=None):
+    """Interpret an expanded static L-system module stream into segments and markers."""
+    modules = _legacy_modules(stream) if isinstance(stream, str) else tuple(stream)
+    markers = markers or {}
+    default_angle = _require_const(angle_degrees, "angle")
+    default_step = _require_const(step, "step")
     pos = TurtlePoint(0.0, 0.0, 0.0)
     heading = 0.0
     stack = []
+    path_stack: list[int] = []
+    next_path_id = 1
+    path_id = 0
+    branch_depth = 0
     segments = []
-    for ch in stream:
-        if ch == "+":
-            heading += angle
-        elif ch == "-":
-            heading -= angle
-        elif ch == "[":
-            stack.append((pos, heading))
-        elif ch == "]":
-            pos, heading = stack.pop()
-        elif ch in {"F", "f"}:
+    marker_points = []
+    for module in modules:
+        name = module.name
+        if name == "+":
+            heading += _require_const(_effective_arg(module, default_angle), "angle") * math.pi / 180.0
+        elif name == "-":
+            heading -= _require_const(_effective_arg(module, default_angle), "angle") * math.pi / 180.0
+        elif name == "[":
+            stack.append((pos, heading, branch_depth, path_id))
+            path_stack.append(path_id)
+            branch_depth += 1
+            path_id = next_path_id
+            next_path_id += 1
+        elif name == "]":
+            pos, heading, branch_depth, path_id = stack.pop()
+        elif name in {"F", "f"}:
+            distance = _require_const(_effective_arg(module, default_step), "step")
             next_pos = TurtlePoint(
-                pos.x + step_value * math.cos(heading),
-                pos.y + step_value * math.sin(heading),
+                pos.x + distance * math.cos(heading),
+                pos.y + distance * math.sin(heading),
                 pos.z,
             )
-            if ch == "F":
+            if name == "F":
                 segments.append(TurtleSegment(pos, next_pos))
             pos = next_pos
-    return segments
+        elif name in markers:
+            marker = markers[name]
+            tangent = TurtlePoint(math.cos(heading), math.sin(heading), 0.0)
+            params = {param_name: arg.value for param_name, arg in zip(marker.parameter_names, module.args)}
+            marker_points.append(TurtleMarkerPoint(
+                position=pos,
+                heading=heading,
+                tangent=tangent,
+                branch_depth=branch_depth,
+                path_id=path_id,
+                creation_iteration=creation_iteration,
+                marker_name=name,
+                marker_identity=marker.marker_identity,
+                parameters=params,
+            ))
+    return TurtleInterpretation(tuple(segments), tuple(marker_points))
 
 
-__all__ = ["interpret", "interpret_static", "_point_to_vector"]
+__all__ = ["interpret", "interpret_static", "_point_to_vector", "_as_numeric_value"]

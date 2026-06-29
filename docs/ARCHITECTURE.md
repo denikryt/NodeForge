@@ -117,6 +117,9 @@ ls_rule
 ls_iterations
 ls_angle
 ls_step
+ls_param
+ls_marker
+ls_points
 ```
 
 The constructor names are excluded from implicit input discovery and cannot be reused by local functions, package-local backend helpers, or function-library entries. Existing ordinary built-ins keep priority over system constructors.

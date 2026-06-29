@@ -448,7 +448,7 @@ Derived scalar and vector helpers such as `smoothstep(...)`, `sign(...)`, `rotat
 
 ## Embedded L-systems
 
-L-system constructors are global DSL calls resolved by the embedded systems registry, not ordinary built-ins in `builtins/registry.py`. They use the reserved `ls_` prefix and return normal `Geometry` through `ls_system(...)`.
+L-system constructors are global DSL calls resolved by the embedded systems registry, not ordinary built-ins in `builtins/registry.py`. They use the reserved `ls_` prefix and return normal `Geometry` through `ls_system(...)`. The L-system constructor set is `ls_system`, `ls_axiom`, `ls_rule`, `ls_iterations`, `ls_angle`, `ls_step`, `ls_param`, `ls_marker`, and `ls_points`.
 
 See [L-systems](LSYSTEMS.md) for constructor reference, symbol rules, backend selection, generated-resource ownership, limits, and examples.
 

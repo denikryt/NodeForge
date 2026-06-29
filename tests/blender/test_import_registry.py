@@ -6,7 +6,7 @@ from helpers import *
 def test_import_and_registry_checks():
     for modname in ['compiler', 'expression_compiler', 'statement_compiler', 'local_functions', 'library_calls', 'systems.registry', 'systems.lsystem.compiler']:
         __import__('NodeForge.' + modname)
-    check(systems_registry.NAMES == {'ls_system', 'ls_axiom', 'ls_rule', 'ls_iterations', 'ls_angle', 'ls_step'}, 'systems registry names drifted')
+    check(systems_registry.NAMES == {'ls_system', 'ls_axiom', 'ls_rule', 'ls_iterations', 'ls_angle', 'ls_step', 'ls_param', 'ls_marker', 'ls_points'}, 'systems registry names drifted')
     for module in (io, math, vector, geometry, fields, instancing):
         missing = sorted((name for name in module.NAMES if not registry.has_callable_builtin(name)))
         check(not missing, f'registry missing {module.__name__}: {missing}')

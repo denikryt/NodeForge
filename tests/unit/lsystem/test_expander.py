@@ -22,3 +22,19 @@ def test_expand_enforces_symbol_limit_for_initial_axiom():
 def test_expand_enforces_symbol_limit_during_rewrite():
     with pytest.raises(CompileError):
         expand("F" * MAX_LSYSTEM_SYMBOLS, {"F": "FF"}, 1)
+
+
+def test_expand_rewrites_parameterized_tokens_by_module_name():
+    from NodeForge.systems.lsystem.model import LSystemModule, ModuleArg
+    axiom = (LSystemModule("F", (ModuleArg("length", 1.0, False, "length"),), "F(length)"),)
+    repl = (
+        LSystemModule("F", (ModuleArg("length", 1.0, False, "length"),), "F(length)"),
+        LSystemModule("F", (ModuleArg("length", 1.0, False, "length"),), "F(length)"),
+    )
+    assert len(expand(axiom, {"F": repl}, 2)) == 4
+
+
+def test_expand_preserves_marker_modules():
+    from NodeForge.systems.lsystem.model import LSystemModule
+    marker = LSystemModule("Leaf", (), "Leaf")
+    assert expand((marker,), {}, 1) == (marker,)

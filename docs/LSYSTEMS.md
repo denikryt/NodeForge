@@ -19,6 +19,8 @@ A system requires:
 | `ls_angle(...)` | yes | Turn angle in degrees. Can be runtime input. |
 | `ls_step(...)` | yes | Forward distance. Can be runtime input. |
 | `ls_rule(...)` | optional, many | Rewrite rules. |
+| `ls_param(...)` | optional, many | Named numeric values used by parameterized modules. |
+| `ls_marker(...)` | optional, many | Declared marker modules that emit point-domain placement data. |
 
 Duplicate singleton parts and duplicate rule predecessors raise `CompileError`.
 
@@ -86,18 +88,46 @@ Defines the turtle forward distance.
 
 Runtime values commonly come from `input_float(...)`.
 
+### `ls_param(name, value)`
+
+Declares a named numeric value that can be used inside parameterized L-system modules such as `F(length)` or `+(angle)`. `name` is a compile-time identifier. `value` is a compile-time number or runtime numeric `Value`.
+
+### `ls_marker(name, *parameter_names)`
+
+Declares a multi-character marker module. Marker names use identifier syntax and cannot be one of the built-in turtle commands. Optional `parameter_names` define the point attribute names written by marker arguments.
+
+```python
+leaf_size = input_float("Leaf Size", default=0.8)
+plant = ls_system(
+    ls_axiom("FLeaf(leaf_size)"),
+    ls_iterations(0),
+    ls_angle(25),
+    ls_step(0.1),
+    ls_param("leaf_size", leaf_size),
+    ls_marker("Leaf", "size"),
+)
+```
+
+### `ls_points(geometry, marker="Name")`
+
+Extracts marker points for the requested marker name from ordinary geometry attributes. Filtering uses four numeric identity attributes derived from the marker name, so extraction works after assignment, `transform(...)`, and `join(...)` when attributes are preserved by Blender geometry evaluation. The optional human-readable marker name attribute is not part of the filtering contract.
+
 ## Turtle commands
 
 | Symbol | Meaning |
 | --- | --- |
-| `F` | Move forward and draw a segment. |
-| `f` | Move forward without drawing. |
+| `F` | Move forward by `ls_step(...)` and draw a segment. |
+| `F(length)` | Move forward by the literal or `ls_param` value `length` and draw a segment. |
+| `f` | Move forward by `ls_step(...)` without drawing. |
+| `f(length)` | Move forward by the literal or `ls_param` value `length` without drawing. |
 | `+` | Turn left by `ls_angle(...)`. |
+| `+(angle)` | Turn left by the literal or `ls_param` value `angle`. |
 | `-` | Turn right by `ls_angle(...)`. |
+| `-(angle)` | Turn right by the literal or `ls_param` value `angle`. |
 | `[` | Save current turtle state and begin a branch. |
 | `]` | Restore saved turtle state and end a branch. |
 
-ASCII letters, digits, and `_` can be grammar symbols. They participate in rewriting. If they remain in the final expanded stream and are not turtle commands, they are ignored by drawing.
+ASCII letters, digits, and `_` can be grammar symbols. They participate in rewriting. If they remain in the final expanded stream and are not turtle commands or declared marker modules, they are ignored by drawing. Declared multi-character marker modules such as `Leaf(size)` emit marker points at the current turtle position and do not move or rotate the turtle.
 
 Unsupported punctuation, whitespace, Unicode symbols, unmatched `]`, and unclosed `[` raise `CompileError`.
 
@@ -146,7 +176,7 @@ L-systems can grow quickly because the symbol stream is expanded before geometry
 | --- | --- | --- |
 | `MAX_LSYSTEM_SYMBOLS = 200000` | Expansion hard limit in `systems/lsystem/expander.py`. | Expansion stops before backend analysis when the stream is too large. |
 | `MAX_LSYSTEM_BRANCH_DEPTH = 32` | Branch-aware runtime hard limit in `systems/lsystem/backends.py`. | Deeper branched runtime systems raise `CompileError`. |
-| At least one drawn `F` segment | Backend precondition. | Streams with no drawn segments raise `CompileError`. |
+| At least one drawn `F` segment or marker point | Backend precondition. | Streams with no drawn segments and no markers raise `CompileError`. |
 
 Optional benchmark tests are available for maintainers:
 

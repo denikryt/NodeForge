@@ -140,6 +140,38 @@ branch topology
 
 Changing those means the L-system must be rebuilt.
 
+
+## Parameterized commands and marker points
+
+Use `ls_param(...)` when one system needs multiple lengths or angles. Inside L-system strings, module arguments are either numeric literals or names declared with `ls_param(...)`; they are not Python expressions.
+
+```python
+main_angle = input_float("Main Angle", default=24)
+side_angle = input_float("Side Angle", default=35)
+branch_len = input_float("Branch Length", default=0.06)
+leaf_size = input_float("Leaf Size", default=0.8)
+
+plant = ls_system(
+    ls_axiom("X"),
+    ls_rule("X", "F(branch_len)[+(main_angle)XLeaf(leaf_size)][-(side_angle)XBud]FX"),
+    ls_rule("F", "F(branch_len)F(branch_len)"),
+    ls_iterations(4),
+    ls_angle(25),
+    ls_step(0.1),
+    ls_param("main_angle", main_angle),
+    ls_param("side_angle", side_angle),
+    ls_param("branch_len", branch_len),
+    ls_param("leaf_size", leaf_size),
+    ls_marker("Leaf", "size"),
+    ls_marker("Bud"),
+)
+
+leaf_points = ls_points(plant, marker="Leaf")
+bud_points = ls_points(plant, marker="Bud")
+```
+
+`Leaf(size)` and `Bud` are marker modules because they are declared with `ls_marker(...)`. They emit point data at the current turtle position. They do not create leaf or bud geometry by themselves; use the extracted points with tools such as `instance_on_points(...)`. Compact syntax is intentional: whitespace is invalid in L-system strings and is not used to distinguish modules.
+
 ## Transforming and joining L-systems
 
 An L-system result is normal geometry.

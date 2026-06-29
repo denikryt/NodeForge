@@ -59,3 +59,39 @@ def test_branch_aware_lowercase_moves_and_ignored_symbols(stream, draw_count):
 def test_branch_aware_rejects_invalid_streams(stream):
     with pytest.raises(CompileError):
         build_branch_aware_command_table(stream)
+
+
+def test_branch_aware_table_preserves_marker_vertices_in_paths():
+    from NodeForge.systems.lsystem.model import LSystemMarker, LSystemModule
+    from NodeForge.systems.lsystem.modules import marker_identity
+    marker = LSystemMarker('Bud', (), marker_identity('Bud'))
+    modules = tuple(LSystemModule(ch, (), ch) for ch in 'F[') + (LSystemModule('Bud', (), 'Bud'),) + tuple(LSystemModule(ch, (), ch) for ch in ']F')
+    table = build_branch_aware_command_table(modules, angle_degrees=30.0, step=1.0, markers={'Bud': marker})
+    assert_branch_aware_table_invariants(table)
+    assert table.marker_count == 1
+    marker_index = table.marker_mask.index(True)
+    assert table.path_depth[marker_index] == 1
+    assert table.marker_id[marker_index] == marker_identity('Bud')
+    assert table.marker_tangent[marker_index] == pytest.approx((1.0, 0.0, 0.0))
+
+
+def test_branched_runtime_marker_param_arrays_match_vertex_count_when_attr_first_seen_at_marker():
+    from NodeForge.systems.lsystem.model import LSystemMarker, LSystemModule, ModuleArg
+    from NodeForge.systems.lsystem.modules import marker_identity
+    from NodeForge.values import Value
+
+    runtime = Value(None, "FLOAT")
+    marker = LSystemMarker("Leaf", ("size",), marker_identity("Leaf"))
+    stream = (
+        LSystemModule("F", (ModuleArg("length", runtime, True, "length"),), "F(length)"),
+        LSystemModule("["),
+        LSystemModule("+", (ModuleArg("angle", runtime, True, "angle"),), "+(angle)"),
+        LSystemModule("Leaf", (ModuleArg("size", runtime, True, "size"),), "Leaf(size)"),
+        LSystemModule("]"),
+    )
+
+    table = build_branch_aware_command_table(stream, angle_degrees=30, step=1, markers={"Leaf": marker})
+
+    assert len(table.marker_param_static["size"]) == table.vertex_count
+    assert len(table.marker_param_index["size"]) == table.vertex_count
+    assert table.marker_param_index["size"][-1] >= 0

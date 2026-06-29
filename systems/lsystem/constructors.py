@@ -1,11 +1,13 @@
 """Compiler handlers for public L-system constructor calls."""
 
 from ...compile_time import reject_compile_time_object
+from ...constants import TYPE_GEOMETRY, TYPE_INT, TYPE_BOOL
 from ...errors import CompileError
-from ...nodes import _is_number_type
+from ...nodes import _is_number_type, _compare
 from ...values import Value
 from .compiler import compile_lsystem
-from .model import LSystemAngle, LSystemAxiom, LSystemIterations, LSystemRule, LSystemStep
+from .model import LSystemAngle, LSystemAxiom, LSystemIterations, LSystemMarker, LSystemParam, LSystemRule, LSystemStep
+from .modules import BUILTIN_COMMANDS, marker_identity, validate_identifier
 from .validation import validate_rule_symbol, validate_stream
 
 
@@ -78,6 +80,55 @@ def compile_step(comp, expr, depth=0):
     return LSystemStep(_runtime_numeric_or_const(comp, expr.args[0], "ls_step()"))
 
 
+def compile_param(comp, expr, depth=0):
+    """Compile ls_param(name, value) into an LSystemParam part."""
+    _require_positional(expr, 2)
+    name = validate_identifier(_const(comp, expr.args[0], "ls_param() name"), "ls_param() name")
+    value = _runtime_numeric_or_const(comp, expr.args[1], "ls_param()")
+    return LSystemParam(name, value)
+
+
+def compile_marker(comp, expr, depth=0):
+    """Compile ls_marker(name, *parameter_names) into an LSystemMarker part."""
+    if expr.keywords:
+        raise CompileError("ls_marker() does not support keyword arguments")
+    if len(expr.args) < 1:
+        raise CompileError("ls_marker() expects at least 1 argument")
+    name = validate_identifier(_const(comp, expr.args[0], "ls_marker() name"), "ls_marker() name")
+    if name in BUILTIN_COMMANDS:
+        raise CompileError(f"ls_marker() name {name!r} collides with a built-in L-system command")
+    params = []
+    seen = set()
+    for arg in expr.args[1:]:
+        param_name = validate_identifier(_const(comp, arg, "ls_marker() parameter name"), "ls_marker() parameter name")
+        if param_name in seen:
+            raise CompileError(f"ls_marker() received duplicate parameter name {param_name!r}")
+        if param_name.startswith("nf_lsys_"):
+            raise CompileError(f"ls_marker() parameter name {param_name!r} uses reserved nf_lsys_ prefix")
+        seen.add(param_name)
+        params.append(param_name)
+    return LSystemMarker(name, tuple(params), marker_identity(name))
+
+
+def _keyword_marker(comp, expr):
+    if len(expr.args) != 1:
+        raise CompileError("ls_points() expects exactly one Geometry argument")
+    if len(expr.keywords) != 1 or expr.keywords[0].arg != "marker":
+        raise CompileError("ls_points() requires marker=\"Name\"")
+    marker = validate_identifier(_const(comp, expr.keywords[0].value, "ls_points() marker"), "ls_points() marker")
+    return marker
+
+
+def compile_points(comp, expr, depth=0):
+    """Compile ls_points(geometry, marker="Name") marker extraction."""
+    marker = _keyword_marker(comp, expr)
+    geo = comp.compile(expr.args[0])
+    if not isinstance(geo, Value) or geo.typ != TYPE_GEOMETRY:
+        raise CompileError("ls_points() first argument must be Geometry")
+    from .backends import filter_marker_points
+    return filter_marker_points(comp, geo, marker, x=depth * 240 + 260, y=-depth * 120)
+
+
 HANDLERS = {
     "ls_system": compile_lsystem,
     "ls_axiom": compile_axiom,
@@ -85,6 +136,9 @@ HANDLERS = {
     "ls_iterations": compile_iterations,
     "ls_angle": compile_angle,
     "ls_step": compile_step,
+    "ls_param": compile_param,
+    "ls_marker": compile_marker,
+    "ls_points": compile_points,
 }
 NAMES = frozenset(HANDLERS)
 

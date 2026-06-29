@@ -180,7 +180,7 @@ Helper implementation guidelines:
 - Return a `Value` object or an existing helper result that returns one.
 - Raise `CompileError` for user-facing errors.
 - Keep helper names specific to the package when the behavior is package-specific.
-- Avoid reserved embedded-system constructor names such as `ls_system`, `ls_axiom`, `ls_rule`, `ls_iterations`, `ls_angle`, and `ls_step`.
+- Avoid reserved embedded-system constructor names such as `ls_system`, `ls_axiom`, `ls_rule`, `ls_iterations`, `ls_angle`, `ls_step`, `ls_param`, `ls_marker`, and `ls_points`.
 
 ## Native `compile_call`
 
