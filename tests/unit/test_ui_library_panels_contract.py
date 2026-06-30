@@ -7,11 +7,13 @@ UI_SOURCE = Path(__file__).resolve().parents[2] / "ui.py"
 
 
 def test_library_uses_nested_blender_panels_in_requested_order():
-    """Library must be a collapsible parent with Local, Functions, Examples child panels."""
+    """Library must be a top-level parent with collapsed Local, Functions, Examples child panels."""
     source = UI_SOURCE.read_text(encoding="utf-8")
-    assert "class NODEFORGE_PT_library(Panel):" in source
-    assert 'bl_label = "Library"' in source
-    assert 'bl_parent_id = "GNSCRIPT_MVP_PT_panel"' in source
+    start = source.index("class NODEFORGE_PT_library(Panel):")
+    end = source.index("class NODEFORGE_PT_library_local", start)
+    library_block = source[start:end]
+    assert 'bl_label = "Library"' in library_block
+    assert "bl_parent_id" not in library_block
 
     local = source.index("class NODEFORGE_PT_library_local")
     functions = source.index("class NODEFORGE_PT_library_functions")
@@ -29,6 +31,7 @@ def test_library_uses_nested_blender_panels_in_requested_order():
         assert 'bl_parent_id = "NODEFORGE_PT_library"' in block
         assert f'bl_label = "{label}"' in block
         assert f"bl_order = {order}" in block
+        assert "bl_options = {'DEFAULT_CLOSED'}" in block
 
 
 def test_local_panel_draws_local_actions_before_catalog_list():

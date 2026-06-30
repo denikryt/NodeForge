@@ -521,12 +521,11 @@ class GNSCRIPT_MVP_PT_panel(Panel):
 
 
 class NODEFORGE_PT_library(Panel):
-    """Collapsible parent panel for NodeForge catalog libraries."""
+    """Top-level collapsible panel for NodeForge catalog libraries."""
     bl_label = "Library"
     bl_space_type = 'NODE_EDITOR'
     bl_region_type = 'UI'
     bl_category = "NodeForge"
-    bl_parent_id = "GNSCRIPT_MVP_PT_panel"
     bl_order = 10
 
     @classmethod
@@ -545,6 +544,7 @@ class NODEFORGE_PT_library_local(Panel):
     bl_category = "NodeForge"
     bl_parent_id = "NODEFORGE_PT_library"
     bl_order = 0
+    bl_options = {'DEFAULT_CLOSED'}
 
     @classmethod
     def poll(cls, context):
@@ -566,6 +566,7 @@ class NODEFORGE_PT_library_functions(Panel):
     bl_category = "NodeForge"
     bl_parent_id = "NODEFORGE_PT_library"
     bl_order = 1
+    bl_options = {'DEFAULT_CLOSED'}
 
     @classmethod
     def poll(cls, context):
@@ -583,6 +584,7 @@ class NODEFORGE_PT_library_examples(Panel):
     bl_category = "NodeForge"
     bl_parent_id = "NODEFORGE_PT_library"
     bl_order = 2
+    bl_options = {'DEFAULT_CLOSED'}
 
     @classmethod
     def poll(cls, context):
