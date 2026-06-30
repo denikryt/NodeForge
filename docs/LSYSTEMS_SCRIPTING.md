@@ -143,6 +143,24 @@ Changing those means the L-system must be rebuilt.
 
 ## Parameterized commands and marker points
 
+
+Rule strings may be assembled from compile-time string fragments before L-system validation runs:
+
+```python
+branch = "[+F]F[-F]"
+rule = f"F{branch}F"
+
+geo = ls_system(
+    ls_axiom("F"),
+    ls_rule("F", rule),
+    ls_iterations(2),
+    ls_angle(25),
+    ls_step(0.1),
+)
+```
+
+F-string interpolation is string-only. Interpolating runtime values, numeric constants, L-system parts, conversion flags, or format specs raises `CompileError`.
+
 Use `ls_param(...)` when one system needs multiple lengths or angles. Inside L-system strings, module arguments are either numeric literals or names declared with `ls_param(...)`; they are not Python expressions.
 
 ```python

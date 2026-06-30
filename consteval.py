@@ -94,12 +94,33 @@ def _bin_div(a, b):
     return a / b
 
 
+
+def _eval_joined_string(expr, env):
+    """Evaluate an f-string whose interpolations are compile-time strings."""
+    parts = []
+    for item in expr.values:
+        if isinstance(item, ast.Constant) and isinstance(item.value, str):
+            parts.append(item.value)
+            continue
+        if isinstance(item, ast.FormattedValue):
+            if item.conversion != -1 or item.format_spec is not None:
+                raise CompileError("compile-time f-strings support only plain string interpolation")
+            value = _const_eval(item.value, env)
+            if not isinstance(value, str):
+                raise CompileError("compile-time f-string interpolations must be strings")
+            parts.append(value)
+            continue
+        raise CompileError("Unsupported compile-time f-string element")
+    return "".join(parts)
+
 def _const_eval(expr, env):
     """Evaluate a supported compile-time AST expression."""
     if isinstance(expr, ast.Constant):
         if isinstance(expr.value, (int, float, bool, str)):
             return expr.value
         raise CompileError("Unsupported compile-time constant")
+    if isinstance(expr, ast.JoinedStr):
+        return _eval_joined_string(expr, env)
     if isinstance(expr, ast.Name):
         if expr.id in env:
             return env[expr.id]

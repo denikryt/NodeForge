@@ -58,6 +58,23 @@ Rules rewrite one symbol at a time. Symbols without a rule pass through unchange
 ls_rule("X", "F+X")
 ```
 
+Rule strings can be composed from named compile-time string fragments with f-strings. Every interpolated value must be a compile-time string.
+
+```python
+left = "[-F[+F]-F]"
+right = "[+F+F+F]"
+rule = f"F{left}FFF{right}FFF"
+
+geo = ls_system(
+    ls_axiom("F"),
+    ls_rule("F", rule),
+    ls_iterations(3),
+    ls_angle(60),
+    ls_step(0.1),
+)
+```
+
+
 ### `ls_iterations(value)`
 
 Defines how many rewrite passes run before geometry is generated.

@@ -40,11 +40,11 @@ def _kw_dict(call):
         result[kw.arg] = kw.value
     return result
 
-def _optional_string_kw(kws, name, default=None):
-    """Function `_optional_string_kw` used by the NodeForge addon."""
+def _optional_string_kw(kws, name, default=None, consts=None):
+    """Return an optional keyword value as a non-empty compile-time string."""
     if name not in kws:
         return default
-    return _literal_string(kws[name], f"{name}=")
+    return _literal_string(kws[name], f"{name}=", consts)
 
 def _selection_kw(comp, kws, default=None):
     """Function `_selection_kw` used by the NodeForge addon."""

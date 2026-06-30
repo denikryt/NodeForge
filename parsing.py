@@ -4,6 +4,7 @@ import ast
 from dataclasses import dataclass
 
 from .constants import _ALLOWED_CONSTS, TYPE_TOKEN_NAMES
+from .consteval import _const_eval
 from .errors import CompileError
 
 
@@ -244,7 +245,7 @@ def _builtin_names():
 
 
 
-def _collect_external_names(node, assigned, names, extra_builtin_names=None):
+def _collect_external_names(node, assigned, names, extra_builtin_names=None, consts=None):
     """Collect names that should become implicit numeric inputs.
 
     User library import aliases are passed in as extra builtins so calls such as
@@ -252,6 +253,14 @@ def _collect_external_names(node, assigned, names, extra_builtin_names=None):
     """
     builtin_names = _builtin_names()
     extra_builtin_names = extra_builtin_names or set()
+    consts = consts or {}
+    if isinstance(node, ast.JoinedStr):
+        try:
+            _const_eval(node, consts)
+        except CompileError:
+            pass
+        else:
+            return
     if isinstance(node, ast.Name):
         if (
             isinstance(node.ctx, ast.Load)
@@ -264,23 +273,27 @@ def _collect_external_names(node, assigned, names, extra_builtin_names=None):
             names.add(node.id)
         return
     for child in ast.iter_child_nodes(node):
-        _collect_external_names(child, assigned, names, extra_builtin_names)
+        _collect_external_names(child, assigned, names, extra_builtin_names, consts)
 
 
-def _collect_inputs(stmts, extra_builtin_names=None):
+def _collect_inputs(stmts, extra_builtin_names=None, consts=None):
     """Return implicit external numeric input names used by the script."""
     assigned = _assigned_names(stmts)
     names = set()
     for stmt in stmts:
-        _collect_external_names(stmt, assigned, names, extra_builtin_names or set())
+        _collect_external_names(stmt, assigned, names, extra_builtin_names or set(), consts or {})
     return sorted(names)
 
 
-def _literal_string(expr, context="argument"):
-    """Function `_literal_string` used by the NodeForge addon."""
-    if isinstance(expr, ast.Constant) and isinstance(expr.value, str) and expr.value:
-        return expr.value
-    raise CompileError(f"Expected a non-empty string literal for {context}")
+def _literal_string(expr, context="argument", consts=None):
+    """Return a non-empty string from a supported compile-time expression."""
+    try:
+        value = _const_eval(expr, consts or {})
+    except CompileError as exc:
+        raise CompileError(f"Expected a non-empty compile-time string for {context}") from exc
+    if isinstance(value, str) and value:
+        return value
+    raise CompileError(f"Expected a non-empty compile-time string for {context}")
 
 
 def _is_top_level_call(stmt, names=None):

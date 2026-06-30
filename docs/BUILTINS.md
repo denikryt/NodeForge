@@ -11,7 +11,16 @@ Types used below:
 | `Int` | Integer field or value. |
 | `Bool` | Boolean field or value. |
 | `Vector` | 3-component vector field or value. |
-| `String` | Compile-time string literal. |
+| `String` | Non-empty compile-time string expression. Use a quoted literal or an f-string whose interpolated values are compile-time strings. |
+
+
+String arguments are resolved before nodes, sockets, attributes, and materials are created. A supported f-string may interpolate only names or expressions that already evaluate to compile-time strings. Runtime values, numbers, booleans, conversion flags such as `!r`, and format specs such as `:>4` are rejected with `CompileError`.
+
+```python
+prefix = "Result"
+value = input_float(f"{prefix} Value", default=1.0)
+output(f"{prefix} Output", value)
+```
 
 ## Inputs
 
@@ -724,12 +733,12 @@ output("Geometry", geo)
 
 | Argument    | Required           | Description                                                                                                                                                                                |
 | ----------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `bl_idname` | yes                | Blender node identifier, such as `"GeometryNodeSetPosition"` or `"ShaderNodeSeparateXYZ"`. Must be a non-empty string literal.                                                             |
+| `bl_idname` | yes                | Blender node identifier, such as `"GeometryNodeSetPosition"` or `"ShaderNodeSeparateXYZ"`. Must be a non-empty compile-time string.                                                             |
 | `props`     | no                 | Literal dictionary of Blender node properties to assign before sockets are resolved. Use this for settings that change available sockets, such as compare type, switch type, or node mode. |
-| `inputs`    | no                 | Literal dictionary mapping exact input socket names to NodeForge values, literal defaults, or multi-input fanout lists.                                                                    |
+| `inputs`    | no                 | Literal dictionary mapping exact compile-time input socket names to NodeForge values, literal defaults, or multi-input fanout lists.                                                                    |
 | `output`    | single-output mode | Exact output socket name to return.                                                                                                                                                        |
 | `typ`       | single-output mode | NodeForge type token for the selected output socket.                                                                                                                                       |
-| `outputs`   | multi-output mode  | Literal dictionary mapping output socket names to NodeForge type tokens.                                                                                                                   |
+| `outputs`   | multi-output mode  | Literal dictionary mapping compile-time output socket names to NodeForge type tokens.                                                                                                                   |
 
 Use either:
 
@@ -744,6 +753,9 @@ outputs={"A": Float, "B": Vector}
 ```
 
 Do not combine the two forms.
+
+
+Raw node `bl_idname`, `props` keys, `inputs` keys, `output`, and `outputs` keys use the same compile-time `String` rules as other DSL string arguments. F-strings are resolved before duplicate-key checks and exact Blender socket/property validation.
 
 ### Supported socket types
 
@@ -812,7 +824,7 @@ inputs={
 }
 ```
 
-Supported literal defaults are booleans, integers, floats, strings, and numeric 3-tuples. A string literal is accepted only for sockets that Blender exposes as supported default-value sockets.
+Supported literal defaults are booleans, integers, floats, strings, and numeric 3-tuples. String defaults may use the same compile-time string expression rules as other `String` arguments and are accepted only for sockets that Blender exposes as supported default-value sockets.
 
 ### Typical workflow
 

@@ -16,7 +16,7 @@ def compile_call(comp, expr, depth=0):
     _check_no_extra_keywords(kws, {"default"})
     if len(expr.args) != 1:
         raise CompileError(f'{name}(name, ...) expects exactly one name argument')
-    input_name = _literal_string(expr.args[0], f"{name}() name")
+    input_name = _literal_string(expr.args[0], f"{name}() name", comp.consts)
 
     if name == "input_geometry":
         if kws:

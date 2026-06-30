@@ -206,7 +206,7 @@ def _build_group(source: str, name: str = "NodeForge Group", local_functions=Non
 
     stmts, consts = _preprocess_compile_time(body_stmts)
     callable_names = set(own_imported_library_functions) | set(local_function_defs) | backend_names | systems_registry.NAMES
-    input_names = sorted(set(_collect_inputs(stmts, extra_builtin_names=callable_names)) - set(consts.keys()))
+    input_names = sorted(set(_collect_inputs(stmts, extra_builtin_names=callable_names, consts=consts)) - set(consts.keys()))
     input_types = _infer_input_types(stmts)
     group = bpy.data.node_groups.new(name, "GeometryNodeTree")
     try:

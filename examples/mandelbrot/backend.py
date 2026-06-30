@@ -82,7 +82,7 @@ def compile_apply_mandelbrot_material(comp, expr: ast.Call, depth=0):
     reject_compile_time_object(geo, "package-local backend helper argument")
     if geo.typ != TYPE_GEOMETRY:
         raise CompileError("apply_mandelbrot_material() first argument must be Geometry")
-    attribute_name = _literal_string(expr.args[1], "apply_mandelbrot_material() attribute name")
+    attribute_name = _literal_string(expr.args[1], "apply_mandelbrot_material() attribute name", comp.consts)
     _ensure_attribute_color_material(attribute_name)
     return _set_material_geometry(comp.group, geo, _MATERIAL_NAME, depth * 240, -depth * 90)
 

@@ -57,9 +57,9 @@ def _parse_node_call(comp, expr):
     if extra:
         raise CompileError("node(...) got unsupported keyword argument(s): " + ", ".join(sorted(extra)))
 
-    output = _optional_literal_string(kws.get("output"), "output=")
+    output = _optional_literal_string(comp, kws.get("output"), "output=")
     typ = _optional_type_token(kws.get("typ"), "typ=")
-    outputs = _parse_outputs(kws.get("outputs"))
+    outputs = _parse_outputs(comp, kws.get("outputs"))
     has_single = output is not None or typ is not None
     has_multi = outputs is not None
     if has_single and has_multi:
@@ -70,27 +70,30 @@ def _parse_node_call(comp, expr):
         raise CompileError("node(...) requires output=/typ= or outputs=")
 
     return {
-        "bl_idname": _literal_string_node_arg(expr.args[0], "bl_idname"),
+        "bl_idname": _literal_string_node_arg(comp, expr.args[0], "bl_idname"),
         "props": _parse_literal_dict(comp, kws.get("props"), "props=") if "props" in kws else {},
-        "inputs": _parse_inputs(kws.get("inputs")) if "inputs" in kws else {},
+        "inputs": _parse_inputs(comp, kws.get("inputs")) if "inputs" in kws else {},
         "output": output,
         "typ": typ,
         "outputs": outputs,
     }
 
 
-def _literal_string_node_arg(expr, context):
-    if isinstance(expr, ast.Constant) and isinstance(expr.value, str) and expr.value:
-        return expr.value
-    raise CompileError(f"node(...) {context} must be a non-empty string literal")
+def _literal_string_node_arg(comp, expr, context):
+    """Return a node(...) string argument resolved from compile-time constants."""
+    try:
+        value = _const_eval(expr, comp.consts)
+    except CompileError as exc:
+        raise CompileError(f"node(...) {context} must be a non-empty compile-time string") from exc
+    if isinstance(value, str) and value:
+        return value
+    raise CompileError(f"node(...) {context} must be a non-empty compile-time string")
 
 
-def _optional_literal_string(expr, context):
+def _optional_literal_string(comp, expr, context):
     if expr is None:
         return None
-    if isinstance(expr, ast.Constant) and isinstance(expr.value, str) and expr.value:
-        return expr.value
-    raise CompileError(f"node(...) {context} must be a non-empty string literal")
+    return _literal_string_node_arg(comp, expr, context)
 
 
 def _optional_type_token(expr, context):
@@ -101,7 +104,7 @@ def _optional_type_token(expr, context):
     return TYPE_TOKEN_NAMES[expr.id]
 
 
-def _parse_outputs(expr):
+def _parse_outputs(comp, expr):
     if expr is None:
         return None
     if not isinstance(expr, ast.Dict):
@@ -110,7 +113,7 @@ def _parse_outputs(expr):
         raise CompileError("node(...) outputs= cannot be empty")
     out = {}
     for key_expr, value_expr in zip(expr.keys, expr.values):
-        key = _literal_string_node_arg(key_expr, "outputs key")
+        key = _literal_string_node_arg(comp, key_expr, "outputs key")
         if key in out:
             raise CompileError(f"node(...) outputs= has duplicate socket {key!r}")
         out[key] = _optional_type_token(value_expr, f"outputs[{key!r}]")
@@ -124,7 +127,7 @@ def _parse_literal_dict(comp, expr, context):
         raise CompileError(f"node(...) {context} must be written as a literal dict")
     out = {}
     for key_expr, value_expr in zip(expr.keys, expr.values):
-        key = _literal_string_node_arg(key_expr, f"{context} key")
+        key = _literal_string_node_arg(comp, key_expr, f"{context} key")
         if key in out:
             raise CompileError(f"node(...) {context} has duplicate key {key!r}")
         try:
@@ -135,14 +138,14 @@ def _parse_literal_dict(comp, expr, context):
     return out
 
 
-def _parse_inputs(expr):
+def _parse_inputs(comp, expr):
     if expr is None:
         return {}
     if not isinstance(expr, ast.Dict):
         raise CompileError("node(...) inputs= must be written as a literal dict")
     out = {}
     for key_expr, value_expr in zip(expr.keys, expr.values):
-        key = _literal_string_node_arg(key_expr, "inputs key")
+        key = _literal_string_node_arg(comp, key_expr, "inputs key")
         if key in out:
             raise CompileError(f"node(...) inputs= has duplicate socket {key!r}")
         if isinstance(value_expr, ast.List):

@@ -79,15 +79,15 @@ def compile_call(comp, expr, depth=0):
         if len(expr.args) != 3:
             raise CompileError('store_named_attribute(geometry, "name", value, selection=..., domain="POINT", type=...) expects 3 positional arguments')
         geo = comp.compile(expr.args[0])
-        attr_name = _literal_string(expr.args[1], "store_named_attribute() name")
+        attr_name = _literal_string(expr.args[1], "store_named_attribute() name", comp.consts)
         value = comp.compile(expr.args[2])
         reject_compile_time_object(geo, "store_named_attribute() geometry")
         reject_compile_time_object(value, "store_named_attribute() value")
         if isinstance(value, list):
             raise CompileError("store_named_attribute() value cannot be an array")
         selection = _selection_kw(comp, kws)
-        domain = _optional_string_kw(kws, "domain", "POINT")
-        data_type_override = _optional_string_kw(kws, "type", None)
+        domain = _optional_string_kw(kws, "domain", "POINT", comp.consts)
+        data_type_override = _optional_string_kw(kws, "type", None, comp.consts)
         return _store_named_attribute_geometry(comp.group, geo, attr_name, value, selection, domain, data_type_override, x, y)
 
     if name == "set_material":
@@ -97,7 +97,7 @@ def compile_call(comp, expr, depth=0):
             raise CompileError('set_material(geometry, "MaterialName") expects Geometry and a compile-time material name')
         geo = comp.compile(expr.args[0])
         reject_compile_time_object(geo, "set_material() geometry")
-        material_name = _literal_string(expr.args[1], "set_material() material name")
+        material_name = _literal_string(expr.args[1], "set_material() material name", comp.consts)
         return _set_material_geometry(comp.group, geo, material_name, x, y)
 
     if name == "cube":
