@@ -359,7 +359,7 @@ class NODEFORGE_OT_create_local_folder(Operator):
     """Create a validated folder under the user-owned local catalog."""
     bl_idname = "nodeforge.create_local_folder"
     bl_label = "New Local Folder"
-    bl_description = "Create a folder inside NodeForge/local for organizing local scripts"
+    bl_description = "Create a folder inside the persistent NodeForge local catalog for organizing local scripts"
     bl_options = {'REGISTER'}
 
     folder_path: StringProperty(name="Folder", default="")
@@ -406,15 +406,15 @@ def _source_for_local_save(context, source_kind):
 
 
 class NODEFORGE_OT_save_to_local(Operator):
-    """Save a Text datablock or selected NodeForge group source into local/."""
+    """Save a Text datablock or selected NodeForge group source into the persistent local catalog."""
     bl_idname = "nodeforge.save_to_local"
     bl_label = "Save to Local"
-    bl_description = "Save the selected Text script or selected NodeForge node group source into NodeForge/local"
+    bl_description = "Save the selected Text script or selected NodeForge node group source into the persistent NodeForge local catalog"
     bl_options = {'REGISTER'}
 
     source_kind: EnumProperty(
         name="Source",
-        description="Choose the source to save into local/",
+        description="Choose the source to save into the persistent local catalog",
         items=(
             ("TEXT", "Text Block", "Save the selected Blender Text datablock"),
             ("SELECTED_GROUP", "Selected Group", "Save the embedded source from the selected generated Node Group"),
@@ -461,10 +461,7 @@ def _draw_library_catalog_panel(layout, context, namespace: str, collection_name
     op.namespace = namespace
     items = getattr(props, collection_name)
     if not items:
-        try:
-            _refresh_catalog_items(props, namespace)
-        except Exception as exc:
-            layout.label(text=str(exc), icon='ERROR')
+        layout.label(text="Click Refresh to scan this catalog", icon='INFO')
     layout.template_list(
         NODEFORGE_UL_function_library.__name__,
         namespace,

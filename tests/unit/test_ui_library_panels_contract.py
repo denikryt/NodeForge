@@ -45,3 +45,13 @@ def test_local_panel_draws_local_actions_before_catalog_list():
     catalog = block.index('_draw_library_catalog_panel(layout, context, "local"')
     assert new_folder < catalog
     assert save < catalog
+
+
+def test_library_catalog_draw_does_not_refresh_scene_state():
+    """Panel draw must not mutate Scene collection state by auto-refreshing catalogs."""
+    source = UI_SOURCE.read_text(encoding="utf-8")
+    start = source.index("def _draw_library_catalog_panel")
+    end = source.index("class NODEFORGE_PT_library", start)
+    block = source[start:end]
+    assert "_refresh_catalog_items(props, namespace)" not in block
+    assert "Click Refresh to scan this catalog" in block

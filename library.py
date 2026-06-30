@@ -77,9 +77,17 @@ def _catalog(namespace: str) -> LibraryCatalog:
         raise CompileError(f"Unknown library catalog: {namespace}") from exc
 
 
+def _default_local_catalog_dir() -> Path:
+    """Return the persistent user-owned root for local catalog sources."""
+    return Path(bpy.utils.user_resource("DATAFILES", path="nodeforge/local", create=True))
+
+
 def catalog_dir(namespace: str) -> Path:
     """Return the filesystem root for a catalog namespace."""
-    return _package_root() / _catalog(namespace).dirname
+    catalog = _catalog(namespace)
+    if catalog.namespace == "local":
+        return _default_local_catalog_dir()
+    return _package_root() / catalog.dirname
 
 
 def _is_valid_function_name(name: str) -> bool:
