@@ -1,97 +1,600 @@
-# DSL Built-ins Reference
+# Core DSL Built-ins Reference
 
-Built-ins are callable DSL primitives registered by `builtins/registry.py`.
+Core built-ins are the primitive operations available in every NodeForge source file. They are registered by `builtins/registry.py` and do not require imports.
 
-Types used below:
+Use this file for the compiler-level DSL vocabulary: inputs, outputs, math, vectors, fields, geometry primitives, instancing, raw Blender nodes, and runtime loops. Reusable helpers under `functions/` are documented in [Function Library Reference](FUNCTIONS.md).
+
+## Type names
 
 | Type | Meaning |
 | --- | --- |
 | `Geometry` | Blender geometry socket. |
-| `Float` | Numeric field or value. |
-| `Int` | Integer field or value. |
-| `Bool` | Boolean field or value. |
-| `Vector` | 3-component vector field or value. |
-| `String` | Non-empty compile-time string expression. Use a quoted literal or an f-string whose interpolated values are compile-time strings. |
+| `Float` | Numeric value or field. |
+| `Int` | Integer value or field. |
+| `Bool` | Boolean value or field. |
+| `Vector` | 3-component vector value or field. |
+| `String` | Compile-time string expression. |
+| `Float`, `Int`, `Bool`, `Vector`, `Geometry` | Type tokens used by `node(..., typ=...)` and `node(..., outputs=...)`. |
 
+NodeForge values are typed socket wrappers. A value can be a constant lowered to a node, a linked runtime field, or geometry. Most built-ins accept either literal values or runtime values of the declared type.
 
-String arguments are resolved before nodes, sockets, attributes, and materials are created. A supported f-string may interpolate only names or expressions that already evaluate to compile-time strings. Runtime values, numbers, booleans, conversion flags such as `!r`, and format specs such as `:>4` are rejected with `CompileError`.
+## Compile-time constants
+
+NodeForge exposes three lowercase mathematical constants in every source file. They are compile-time numeric constants, so they can be used anywhere a numeric literal can be used.
+
+| Constant | Value | Typical use |
+| --- | --- | --- |
+| `pi` | π, approximately `3.141592653589793` | Half-turn angles, circle arcs, radians-based trigonometry. |
+| `tau` | 2π, approximately `6.283185307179586` | Full-turn angles and normalized circle formulas. |
+| `e` | Euler's number, approximately `2.718281828459045` | Exponential and natural-log formulas. |
 
 ```python
-prefix = "Result"
-value = input_float(f"{prefix} Value", default=1.0)
-output(f"{prefix} Output", value)
+radius = input_float('Radius', default=2.0)
+angle = input_float('Angle', default=pi / 4.0)
+cos_angle = cos(angle)
+x = cos_angle * radius
+sin_angle = sin(angle)
+y = sin_angle * radius
+pos = vector(x, y, 0)
+output('Position', pos)
+```
+
+String literals, f-strings, imports, assignments, local functions, loops, conditionals, arrays, and automatic final outputs are documented in [DSL Syntax and Semantics](SYNTAX.md).
+
+
+## Compile-time helper calls
+
+These helpers are evaluated during compilation. They do not create Geometry Nodes sockets and cannot operate on runtime values.
+
+### `range(stop)`
+### `range(start, stop)`
+### `range(start, stop, step)`
+
+Creates a compile-time list of integers. Use it mainly for unrolled `for` loops or compile-time indexing.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `start` | compile-time `Int` | First integer. Defaults to `0`. |
+| `stop` | compile-time `Int` | Exclusive upper bound. |
+| `step` | compile-time `Int` | Step size. Defaults to `1`. |
+
+Returns: compile-time `List[Int]`.
+
+```python
+items = []
+for i in range(4):
+    offset = vector(i * 1.25, 0, 0)
+    geo = cube(size=1.0)
+    moved = transform(geo, translation=offset)
+    items.append(moved)
+result = join(items)
+output('Geometry', result)
+```
+
+### `len(value)`
+
+Returns the length of a compile-time list, tuple, or string.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `value` | compile-time `List`, `Tuple`, or `String` | Sequence whose length is known during compilation. |
+
+Returns: compile-time `Int`.
+
+```python
+sizes = [0.5, 1.0, 1.5]
+count = len(sizes)
+step = 1.0 / count
+value = input_float('Value', default=step)
+output('Value', value)
+```
+
+### `sum(value)`
+
+Returns the numeric sum of a compile-time list or tuple.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `value` | compile-time numeric `List` or `Tuple` | Sequence whose elements can be added during compilation. |
+
+Returns: compile-time number.
+
+```python
+sizes = [0.5, 1.0, 1.5]
+total = sum(sizes)
+count = len(sizes)
+average = total / count
+geo = cube(size=average)
+output('Geometry', geo)
+```
+
+### Compile-time math calls
+
+The following math calls can be evaluated at compile time when all arguments are compile-time numbers: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sqrt`, `floor`, `ceil`, `round`, `abs`, `radians`, `degrees`, `exp`, and `ln`.
+
+```python
+angle = radians(45)
+x = cos(angle)
+y = sin(angle)
+pos = vector(x, y, 0)
+output('Position', pos)
+```
+
+## Outputs
+
+### `output(value)`
+### `output(name, value)`
+### `output(name="Name", value=value)`
+
+Creates a group output socket and connects a runtime value to it.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `name` | `String` | Optional output socket name. When omitted, the output socket is named `out`. Duplicate output names receive suffixes such as `_2`. |
+| `value` | `Float`, `Int`, `Bool`, `Vector`, or `Geometry` | Runtime value to expose on the node group. Arrays cannot be output directly; use `join(array)` or index the array first. |
+
+Returns: statement only.
+
+```python
+geo = cube(size=2.0)
+height = input_float('Height', default=1.0)
+vec_1 = vector(1, 1, height)
+geo_2 = transform(geo, scale=vec_1)
+output('Geometry', geo_2)
+output(name='Height', value=height)
+```
+
+Automatic final outputs are part of the source language semantics. See [DSL Syntax and Semantics](SYNTAX.md#automatic-final-outputs).
+
+## Active Geometry stream statements
+
+These statement-only forms operate on an implicit Geometry input/output stream. When a script contains `store(...)` or statement-form `set_position(...)`, NodeForge creates a Geometry group input named `Geometry` and a Geometry group output named `Geometry`.
+
+Use these forms when the node group is meant to modify geometry that is passed into it. Use expression-form `store_named_attribute(geometry, ...)` and `set_position(geometry, ...)` when you want to operate on an explicit Geometry value inside the script.
+
+### `store(name, value, selection=True, domain="POINT", type=None)`
+
+Stores a named attribute on the active Geometry stream.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `name` | `String` | required | Attribute name. |
+| `value` | `Float`, `Int`, `Bool`, or `Vector` | required | Attribute value field. Arrays are rejected. |
+| `selection` | `Bool` | `True` | Optional field mask. |
+| `domain` | `String` | `"POINT"` | Attribute domain, for example `"POINT"`, `"EDGE"`, `"FACE"`, `"CORNER"`, or `"INSTANCE"`. |
+| `type` | `String` or `None` | `None` | Optional Blender data type override, for example `"FLOAT"`, `"INT"`, `"BOOLEAN"`, `"VECTOR"`, or `"COLOR"`. |
+
+Returns: statement only.
+
+```python
+height = position().z
+store('height', height, domain='POINT', type='FLOAT')
+```
+
+### `set_position(position, selection=True)`
+
+Sets point positions on the active Geometry stream.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `position` | `Vector` | required | New position field. |
+| `selection` | `Bool` | `True` | Optional field mask. |
+
+Returns: statement only.
+
+```python
+pos = position()
+height = sin(pos.x * tau)
+offset = vector(0, 0, height)
+new_pos = pos + offset
+set_position(new_pos)
 ```
 
 ## Inputs
+
+Input built-ins create group input sockets. The `name` argument must be a compile-time string. Defaults must be compile-time values.
 
 ### `input_geometry(name)`
 
 Creates a Geometry input socket.
 
-Parameters:
-
-| Name | Type | Description |
-| --- | --- | --- |
-| `name` | `String` | Input socket name. |
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `name` | `String` | required | Input socket name. |
 
 Returns: `Geometry`.
+
+```python
+geo = input_geometry('Geometry')
+vec_1 = vector(1.5, 1.5, 1.5)
+geo_2 = transform(geo, scale=vec_1)
+output('Geometry', geo_2)
+```
 
 ### `input_float(name, default=0.0)`
 
 Creates a Float input socket.
 
-Parameters:
-
-| Name | Type | Description |
-| --- | --- | --- |
-| `name` | `String` | Input socket name. |
-| `default` | compile-time `Float` | Socket default value. |
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `name` | `String` | required | Input socket name. |
+| `default` | compile-time `Float` | `0.0` | Socket default value. |
 
 Returns: `Float`.
+
+```python
+radius = input_float('Radius', default=2.0)
+geo_1 = cube(size=radius)
+output('Geometry', geo_1)
+```
 
 ### `input_int(name, default=0)`
 
 Creates an Int input socket.
 
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `name` | `String` | required | Input socket name. |
+| `default` | compile-time `Int` | `0` | Socket default value. Numeric constants are converted to integer defaults. |
+
 Returns: `Int`.
+
+```python
+count = input_int('Count', default=32)
+geo = points(count)
+output('Geometry', geo)
+```
 
 ### `input_bool(name, default=False)`
 
 Creates a Bool input socket.
 
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `name` | `String` | required | Input socket name. |
+| `default` | compile-time `Bool` | `False` | Socket default value. |
+
 Returns: `Bool`.
+
+```python
+center = input_bool('Center', default=True)
+vec_1 = vector(1, 0, 0)
+vec_2 = vector(0, 0, 0)
+pos = select(center, vec_1, vec_2)
+output('Position', pos)
+```
 
 ### `input_vector(name, default=vector(0, 0, 0))`
 
 Creates a Vector input socket.
 
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `name` | `String` | required | Input socket name. |
+| `default` | compile-time `Vector` or 3-number tuple/list | `vector(0, 0, 0)` | Socket default value. |
+
 Returns: `Vector`.
+
+```python
+vec_1 = vector(0, 0, 2)
+offset = input_vector('Offset', default=vec_1)
+geo_2 = cube()
+geo_3 = transform(geo_2, translation=offset)
+output('Geometry', geo_3)
+```
 
 ## Field inputs
 
+Field built-ins read Blender Geometry Nodes context fields. They take no arguments and do not accept keywords.
+
+| Function | Returns | Description |
+| --- | --- | --- |
+| `position()` | `Vector` | Current element position field. |
+| `normal()` | `Vector` | Current element normal field. |
+| `index()` | `Int` | Current element index field. |
+| `id()` | `Int` | Current element ID field. |
+
 ### `position()`
 
-Returns the current element position field.
+Returns the current element position field. Use it when a formula should be relative to the existing point or vertex position.
 
-Returns: `Vector`.
+```python
+pts = points(32)
+base_position = position()
+offset = vector(0, 0, 1)
+new_position = base_position + offset
+pts = set_position(pts, new_position)
+output('Geometry', pts)
+```
 
 ### `normal()`
 
-Returns the current element normal field.
+Returns the current element normal field. Use it for displacement or orientation formulas that depend on surface direction.
 
-Returns: `Vector`.
+```python
+geo = cube(size=2.0)
+surface_normal = normal()
+displacement = surface_normal * 0.25
+base_position = position()
+new_position = base_position + displacement
+geo = set_position(geo, new_position)
+output('Geometry', geo)
+```
 
 ### `index()`
 
-Returns the current element index field.
+Returns the current element index field. Use it for per-element spacing, alternating patterns, and procedural ordering.
 
-Returns: `Int`.
+```python
+pts = points(32)
+i = index()
+x = i * 0.1
+z = sin(i * 0.25)
+pos = vector(x, 0, z)
+pts = set_position(pts, pos)
+output('Geometry', pts)
+```
 
 ### `id()`
 
-Returns the current element ID field.
+Returns the current element ID field. Use it as a stable per-element random seed when available.
 
-Returns: `Int`.
+```python
+pts = points(64)
+element_id = id()
+offset = random_value(-0.5, 0.5, seed=12, id=element_id)
+base_position = position()
+delta = vector(0, 0, offset)
+new_position = base_position + delta
+pts = set_position(pts, new_position)
+output('Geometry', pts)
+```
+
+## Scalar math
+
+Scalar math built-ins compile to Blender Math, Clamp, Mix, Switch, Map Range, Noise Texture, or Random Value nodes.
+
+### Unary functions
+
+| Function | Signature | Returns | Description |
+| --- | --- | --- | --- |
+| `sin` | `sin(value)` | `Float` | Sine. |
+| `cos` | `cos(value)` | `Float` | Cosine. |
+| `tan` | `tan(value)` | `Float` | Tangent. |
+| `asin` | `asin(value)` | `Float` | Arcsine. |
+| `acos` | `acos(value)` | `Float` | Arccosine. |
+| `atan` | `atan(value)` | `Float` | Arctangent. |
+| `sqrt` | `sqrt(value)` | `Float` | Square root. |
+| `abs` | `abs(value)` | `Float` | Absolute value. |
+| `floor` | `floor(value)` | `Float` | Floor. |
+| `ceil` | `ceil(value)` | `Float` | Ceiling. |
+| `round` | `round(value)` | `Float` | Rounded value. |
+| `fract` | `fract(value)` | `Float` | Fractional component. |
+| `radians` | `radians(value)` | `Float` | Degrees to radians. |
+| `degrees` | `degrees(value)` | `Float` | Radians to degrees. |
+| `exp` | `exp(value)` | `Float` | Exponential. |
+| `ln` | `ln(value)` | `Float` | Natural logarithm. |
+
+```python
+count = input_int('Count', default=64)
+pts = points(count)
+value_1 = index()
+value_2 = sin(value_1 * 0.25)
+wave = value_2 * 0.5
+value_3 = index()
+vec_4 = vector(value_3 * 0.1, 0, wave)
+pts = set_position(pts, vec_4)
+output('Geometry', pts)
+```
+
+### Binary functions
+
+| Function | Signature | Returns | Description |
+| --- | --- | --- | --- |
+| `min` | `min(a, b)` | `Float` | Minimum. |
+| `max` | `max(a, b)` | `Float` | Maximum. |
+| `pow` | `pow(a, b)` | `Float` | Power. |
+| `log` | `log(a, b)` | `Float` | Logarithm with explicit base. |
+| `atan2` | `atan2(a, b)` | `Float` | Two-argument arctangent. |
+| `mod` | `mod(a, b)` | `Float` | Modulo. |
+
+These functions also accept keyword arguments using the listed parameter names.
+
+```python
+size = input_float('Size', default=2.0)
+clamped = max(size, 0.1)
+value_1 = pow(clamped, 2.0)
+geo_2 = cube(size=value_1)
+output('Geometry', geo_2)
+```
+
+### `clamp(value, min, max)`
+
+Constrains a value between lower and upper bounds.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `value` | `Float` | Input value. |
+| `min` | `Float` | Lower bound. |
+| `max` | `Float` | Upper bound. |
+
+Returns: `Float`.
+
+```python
+height = input_float('Height', default=3.0)
+value_1 = clamp(height, 0.0, 2.0)
+output('Height', value_1)
+```
+
+### `mix(a, b, factor)`
+
+Interpolates between two compatible values. `factor=0` selects `a`; `factor=1` selects `b`.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `a` | `Float` or `Vector` | Start value. |
+| `b` | same as `a` | End value. |
+| `factor` | `Float` | Interpolation factor. |
+
+Returns: same type as `a`.
+
+```python
+t = input_float('Factor', default=0.5)
+vec_1 = vector(1, 1, 1)
+vec_2 = vector(2, 2, 0.5)
+scale = mix(vec_1, vec_2, t)
+geo_3 = cube()
+geo_4 = transform(geo_3, scale=scale)
+output('Geometry', geo_4)
+```
+
+### `select(cond, false, true)`
+
+Chooses between two values with a boolean condition. The second argument is the value used when `cond` is false; the third argument is the value used when `cond` is true.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `cond` | `Bool` | Selection condition. |
+| `false` | `Float`, `Int`, `Bool`, `Vector`, or `Geometry` | Value for false condition. |
+| `true` | same as `false` | Value for true condition. |
+
+Returns: same type as `false` and `true`.
+
+```python
+large = input_bool('Large', default=False)
+size = select(large, 1.0, 3.0)
+geo_1 = cube(size=size)
+output('Geometry', geo_1)
+```
+
+### `map_range(value, from_min, from_max, to_min, to_max)`
+
+Maps a value from one numeric range into another.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `value` | `Float` | Input value. |
+| `from_min` | `Float` | Source range lower bound. |
+| `from_max` | `Float` | Source range upper bound. |
+| `to_min` | `Float` | Target range lower bound. |
+| `to_max` | `Float` | Target range upper bound. |
+
+Returns: `Float`.
+
+```python
+count = input_int('Count', default=32)
+pts = points(count)
+value_1 = index()
+z = map_range(value_1, 0.0, count - 1.0, 0.0, 3.0)
+value_2 = index()
+vec_3 = vector(value_2 * 0.1, 0, z)
+pts = set_position(pts, vec_3)
+output('Geometry', pts)
+```
+
+### `noise(vector=position(), scale=..., detail=..., roughness=..., lacunarity=..., distortion=..., normalize=...)`
+
+Creates a 3D Noise Texture node and returns its Factor output.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `vector` | `Vector` | `position()` | Noise coordinate. At most one positional argument is accepted. |
+| `scale` | numeric | Blender default | Noise scale input. |
+| `detail` | numeric | Blender default | Noise detail input. |
+| `roughness` | numeric | Blender default | Noise roughness input. |
+| `lacunarity` | numeric | Blender default | Noise lacunarity input. |
+| `distortion` | numeric | Blender default | Noise distortion input. |
+| `normalize` | compile-time `Bool` | Blender default | Sets the Blender node `normalize` property when provided. |
+
+Returns: `Float`.
+
+```python
+pts = points(128)
+value_1 = index()
+coord = vector(value_1 * 0.08, 0, 0)
+z = noise(coord, scale=6.0, detail=8.0, roughness=0.55)
+value_2 = index()
+vec_3 = vector(value_2 * 0.05, 0, z)
+pts = set_position(pts, vec_3)
+output('Geometry', pts)
+```
+
+### `random_value()`
+### `random_value(min, max, seed=..., id=...)`
+
+Creates a Random Value node. With no positional arguments it returns a float in the default `0..1` range. With `min` and `max`, both bounds must be numeric or both must be vectors.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `min` | `Float` or `Vector` | `0.0` | Lower bound. Required when `max` is provided. |
+| `max` | same as `min` | `1.0` | Upper bound. Required when `min` is provided. |
+| `seed` | `Int` or compile-time numeric constant | Blender default | Random seed. |
+| `id` | `Int` | Blender default | Per-element random ID. |
+
+Returns: `Float` for numeric bounds, `Vector` for vector bounds.
+
+```python
+pts = points(100)
+vec_1 = vector(-2, -2, 0)
+vec_2 = vector(2, 2, 1)
+value_3 = index()
+pos = random_value(vec_1, vec_2, seed=12, id=value_3)
+pts = set_position(pts, pos)
+output('Geometry', pts)
+```
+
+## Vector construction and vector math
+
+### `vector(x, y, z)`
+
+Creates a `Vector` from three numeric components. Positional arguments and `x=`, `y=`, `z=` keywords are supported.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `x` | `Float` | X component. |
+| `y` | `Float` | Y component. |
+| `z` | `Float` | Z component. |
+
+Returns: `Vector`.
+
+```python
+height = input_float('Height', default=2.0)
+offset = vector(x=0.0, y=0.0, z=height)
+geo_1 = cube()
+geo_2 = transform(geo_1, translation=offset)
+output('Geometry', geo_2)
+```
+
+Vector components can be read with `.x`, `.y`, and `.z`.
+
+```python
+vec_1 = vector(1, 2, 3)
+v = input_vector('Vector', default=vec_1)
+vec_2 = vector(v.x, v.y, 0)
+value_3 = length(vec_2)
+output('Length XY', value_3)
+```
+
+### Vector functions
+
+| Function | Signature | Returns | Description |
+| --- | --- | --- | --- |
+| `length` | `length(v)` | `Float` | Vector length. |
+| `distance` | `distance(a, b)` | `Float` | Distance between two vectors. |
+| `dot` | `dot(a, b)` | `Float` | Dot product. |
+| `normalize` | `normalize(v)` | `Vector` | Normalized vector. |
+| `cross` | `cross(a, b)` | `Vector` | Cross product. |
+| `reflect` | `reflect(a, b)` | `Vector` | Reflection vector. |
+| `project` | `project(a, b)` | `Vector` | Projection vector. |
+
+```python
+vec_1 = vector(1, 1, 0)
+n = normalize(vec_1)
+vec_2 = vector(0, 0, 1)
+side = cross(n, vec_2)
+pos = n + side * 0.5
+output('Position', pos)
+```
 
 ## Geometry
 
@@ -99,752 +602,349 @@ Returns: `Int`.
 
 Creates point geometry with `count` points.
 
-Parameters:
-
-| Name | Type | Description |
+| Parameter | Type | Description |
 | --- | --- | --- |
-| `count` | `Int` | Number of points. |
+| `count` | `Int` | Number of points. Compile-time constants and runtime Int values are supported. |
 
 Returns: `Geometry`.
 
+```python
+count = input_int('Count', default=32)
+pts = points(count)
+value_1 = index()
+vec_2 = vector(value_1 * 0.1, 0, 0)
+pts = set_position(pts, vec_2)
+output('Geometry', pts)
+```
+
 ### `grid(width, height)`
 
-Creates a planar mesh grid on the XY plane.
+Creates a planar mesh grid on the XY plane and stores the generated UV field for `grid_uv()` in the current script scope.
 
-Parameters:
-
-| Name | Type | Description |
+| Parameter | Type | Description |
 | --- | --- | --- |
 | `width` | `Int` | Number of vertices in X. |
 | `height` | `Int` | Number of vertices in Y. |
 
 Returns: `Geometry`.
 
+```python
+geo = grid(16, 16)
+uv = grid_uv()
+vec_1 = vector(uv.x, uv.y, 0)
+value_2 = noise(vec_1)
+vec_3 = vector(uv.x * 2.0, uv.y * 2.0, value_2)
+geo = set_position(geo, vec_3)
+output('Geometry', geo)
+```
+
 ### `grid_uv()`
 
-Returns the UV coordinates produced by the most recent `grid(width, height)` call in the current script scope.
+Returns the UV coordinates produced by the most recent `grid(width, height)` call in the current script scope. `grid_uv()` requires a preceding `grid(...)` call.
 
 Returns: `Vector` with `.x` and `.y` in the `0..1` range.
 
-### `set_position(geometry, position, selection=True)`
-
-Sets positions on a geometry.
-
-Parameters:
-
-| Name | Type | Description |
-| --- | --- | --- |
-| `geometry` | `Geometry` | Input geometry. |
-| `position` | `Vector` | New position field. |
-| `selection` | `Bool` | Optional field mask. |
-
-Returns: `Geometry`.
-
-
-### Point layouts
-
-Reusable point-layout helpers are function-library entries. Import them from `functions` before use. `from functions import *` is also available for exploratory scripts, but explicit imports are preferred in examples and reusable code. These helpers operate on point-domain geometry; `grid(width, height)` remains the planar mesh grid primitive and is not changed by `grid_points(...)`.
-
-Angles are radians. Use `radians(...)` when authoring degree values.
-
 ```python
-from functions import layout_grid, grid_points, layout_circle
-
-pts = points(6)
-pts = layout_grid(pts, count=vector(3, 2, 1), spacing=vector(1.0, 2.0, 3.0))
-grid = grid_points(count=vector(5, 4, 1), spacing=vector(1.0, 1.0, 0.0))
-pts = layout_circle(pts, count=6, radius=2.0)
-output("Geometry", join(pts, grid))
+geo = grid(8, 8)
+uv = grid_uv()
+value_1 = sin(uv.x * tau)
+value_2 = cos(uv.y * tau)
+height = value_1 * value_2
+value_3 = position()
+vec_4 = vector(0, 0, height)
+geo = set_position(geo, value_3 + vec_4)
+output('Geometry', geo)
 ```
 
-#### `layout_grid(geometry, count=vector(1, 1, 1), spacing=vector(1, 1, 1), centered=False)`
+### `set_position(geometry, position, selection=True)`
 
-Places existing points in a 3D lattice. `count` is a `Vector` interpreted as `(count_x, count_y, count_z)`. `spacing` is a `Vector`, so scalar spacing should be written explicitly as `vector(s, s, s)` or another vector appropriate for the layout. When `centered=True`, positions are shifted by half of the layout extent.
+Sets point positions on geometry.
 
-Returns: `Geometry`.
-
-#### `grid_points(count=vector(1, 1, 1), spacing=vector(1, 1, 1), centered=False)`
-
-Creates points and places them with `layout_grid(...)`. Zero count components produce zero points. Negative count components are clamped to zero for the generated point count.
-
-Returns: `Geometry`.
-
-#### `layout_circle(geometry, count=16, radius=1.0, start_angle=0.0, end_angle=tau, include_endpoint=False)`
-
-Places existing points on an XY circle or arc. The imported function uses the explicit `count` input; it does not derive count from the input geometry. Full circles default to `include_endpoint=False` so the first and last point are not duplicated at the same location.
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `geometry` | `Geometry` | required | Input geometry. |
+| `position` | `Vector` | required | New position field. |
+| `selection` | `Bool` | `True` | Optional field mask. |
 
 Returns: `Geometry`.
 
-#### `layout_spiral(geometry, count=16, radius=1.0, turns=1.0, height=0.0, start_radius=0.0, start_angle=0.0)`
-
-Places existing points on a simple radial spiral in the XY plane with optional Z height. The imported function uses the explicit `count` input; it does not derive count from the input geometry. For geometries with more than one point, the last point reaches the final radius and height.
-
-Returns: `Geometry`.
-
-#### `spiral_points(count=16, radius=1.0, turns=1.0, height=0.0, start_radius=0.0, start_angle=0.0)`
-
-Creates points and places them with `layout_spiral(...)`.
-
-Returns: `Geometry`.
-
-#### `layout_random(geometry, min=vector(-1, -1, -1), max=vector(1, 1, 1), seed=0)`
-
-Places existing points using `random_value(...)` with the current point `index()` as the random ID, so points receive stable per-index values for a given seed. Bounds are `Vector` values. This is uniform random placement, not Poisson or blue-noise sampling.
-
-Returns: `Geometry`.
-
-#### `random_points(count=16, min=vector(-1, -1, -1), max=vector(1, 1, 1), seed=0)`
-
-Creates points and places them with `layout_random(...)`.
-
-Returns: `Geometry`.
+```python
+pts = points(32)
+value_1 = index()
+value_2 = mod(value_1, 2)
+mask = value_2 == 0
+value_3 = index()
+value_4 = index()
+value_5 = sin(value_4 * 0.4)
+pos = vector(value_3 * 0.1, 0, value_5)
+pts = set_position(pts, pos, selection=mask)
+output('Geometry', pts)
+```
 
 ### `store_named_attribute(geometry, name, value, selection=True, domain="POINT", type=None)`
 
 Stores a named attribute on geometry.
 
-Parameters:
-
-| Name | Type | Description |
-| --- | --- | --- |
-| `geometry` | `Geometry` | Input geometry. |
-| `name` | `String` | Attribute name. |
-| `value` | `Float`, `Int`, `Bool`, or `Vector` | Attribute value field. |
-| `selection` | `Bool` | Optional field mask. |
-| `domain` | `String` | Attribute domain, such as `"POINT"`, `"EDGE"`, `"FACE"`, `"CORNER"`, or `"INSTANCE"`. |
-| `type` | `String` | Optional data type override, such as `"FLOAT"`, `"INT"`, `"BOOLEAN"`, `"VECTOR"`, or `"COLOR"`. |
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `geometry` | `Geometry` | required | Input geometry. |
+| `name` | `String` | required | Attribute name. |
+| `value` | `Float`, `Int`, `Bool`, or `Vector` | required | Attribute value field. Arrays are rejected. |
+| `selection` | `Bool` | `True` | Optional field mask. |
+| `domain` | `String` | `"POINT"` | Attribute domain, for example `"POINT"`, `"EDGE"`, `"FACE"`, `"CORNER"`, or `"INSTANCE"`. |
+| `type` | `String` or `None` | `None` | Optional Blender data type override, for example `"FLOAT"`, `"INT"`, `"BOOLEAN"`, `"VECTOR"`, or `"COLOR"`. |
 
 Returns: `Geometry`.
+
+```python
+pts = points(64)
+value_1 = index()
+vec_2 = vector(value_1 * 0.1, 0, 0)
+height = noise(vec_2, scale=4.0)
+value_3 = index()
+vec_4 = vector(value_3 * 0.05, 0, height)
+pts = set_position(pts, vec_4)
+pts = store_named_attribute(pts, 'height', height, domain='POINT', type='FLOAT')
+output('Geometry', pts)
+```
 
 ### `set_material(geometry, material_name)`
 
 Assigns a material by name. The material is created when it does not exist.
 
-Parameters:
-
-| Name | Type | Description |
+| Parameter | Type | Description |
 | --- | --- | --- |
 | `geometry` | `Geometry` | Input geometry. |
 | `material_name` | `String` | Compile-time Blender material name. |
 
 Returns: `Geometry`.
 
+```python
+geo = cube(size=2.0)
+geo = set_material(geo, 'NodeForge Material')
+output('Geometry', geo)
+```
+
 ### `cube(size=1.0)`
 
 Creates a cube mesh.
 
-Parameters:
-
-| Name | Type | Description |
-| --- | --- | --- |
-| `size` | `Float` | Cube side length. |
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `size` | `Float`, `Int`, or `Vector` | `1.0` | Cube side length or per-axis size. Positional and `size=` forms are supported. |
 
 Returns: `Geometry`.
-
-### `join(*geometry)`
-
-Joins multiple geometries.
-
-Forms:
 
 ```python
-join(geo_a, geo_b, geo_c)
-join([geo_a, geo_b, geo_c])
+size = input_float('Size', default=1.0)
+geo_1 = cube(size=size)
+output('Geometry', geo_1)
 ```
 
+### `join(geometry, ...)`
+### `join([geometry_a, geometry_b, ...])`
+
+Joins multiple geometry values. Arguments can be separate geometry values, arrays of geometry values, or one literal list/tuple of geometry values.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `geometry` | one or more `Geometry` values | Geometry values to join. At least one geometry is required. |
+
 Returns: `Geometry`.
+
+```python
+geo_1 = cube(size=0.4)
+vec_2 = vector(-1, 0, 0)
+geo_3 = transform(geo_1, translation=vec_2)
+geo_4 = cube(size=0.4)
+vec_5 = vector(1, 0, 0)
+geo_6 = transform(geo_4, translation=vec_5)
+geo_7 = points(8)
+parts = [geo_3, geo_6, geo_7]
+geo_8 = join(parts)
+output('Geometry', geo_8)
+```
 
 ### `transform(geometry, translation=None, scale=None, rotation=None)`
 
-Transforms geometry.
+Transforms geometry. `translation`, `scale`, and `rotation` can be supplied by keyword. The first two transform options can also be supplied as positional arguments after `geometry`.
 
-Parameters:
-
-| Name | Type | Description |
-| --- | --- | --- |
-| `geometry` | `Geometry` | Input geometry. |
-| `translation` | `Vector` | Translation. |
-| `scale` | `Vector` or `Float` | Scale. |
-| `rotation` | `Vector` | Euler rotation. |
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `geometry` | `Geometry` | required | Input geometry. |
+| `translation` | `Vector` | no transform | Translation vector. |
+| `scale` | `Float`, `Int`, or `Vector` | no transform | Scale value. Use `vector(x, y, z)` for non-uniform scale. |
+| `rotation` | `Vector` | no transform | Euler rotation in radians. |
 
 Returns: `Geometry`.
+
+```python
+geo = cube(size=1.0)
+vec_1 = vector(0, 0, 1)
+vec_2 = vector(2, 1, 0.5)
+geo = transform(geo, translation=vec_1, scale=vec_2)
+output('Geometry', geo)
+```
 
 ### `polyline(points)`
 
-Creates a polyline from a compile-time list of vector points.
+Creates curve geometry from a compile-time list of vector points.
 
-Parameters:
-
-| Name | Type | Description |
+| Parameter | Type | Description |
 | --- | --- | --- |
-| `points` | compile-time list of `Vector` constants | Polyline vertices. |
+| `points` | compile-time list of vectors | Ordered points for the polyline. |
 
 Returns: `Geometry`.
+
+```python
+vec_1 = vector(-1, 0, 0)
+vec_2 = vector(0, 1, 0)
+vec_3 = vector(1, 0, 0)
+shape = polyline([vec_1, vec_2, vec_3])
+output('Geometry', shape)
+```
 
 ## Instancing
 
 ### `instance_on_points(instance, points, scale=None, rotation=None, realize=True)`
 
-Instances geometry on points.
+Instances one geometry value on point geometry.
 
-Parameters:
-
-| Name | Type | Description |
-| --- | --- | --- |
-| `instance` | `Geometry` | Geometry to instance. |
-| `points` | `Geometry` | Point geometry. |
-| `scale` | `Vector` or `Float` | Instance scale. |
-| `rotation` | `Vector` | Instance rotation. |
-| `realize` | compile-time `Bool` | Realize instances before returning. |
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `instance` | `Geometry` | required | Geometry to instance. |
+| `points` | `Geometry` | required | Point geometry receiving the instances. |
+| `scale` | value accepted by the underlying instance helper | Blender default | Optional instance scale. |
+| `rotation` | value accepted by the underlying instance helper | Blender default | Optional instance rotation. |
+| `realize` | compile-time `Bool` | `True` | When true, realizes instances before returning. |
 
 Returns: `Geometry`.
+
+```python
+pts = points(12)
+value_1 = index()
+vec_2 = vector(value_1 * 0.3, 0, 0)
+pts = set_position(pts, vec_2)
+geo_3 = cube(size=0.15)
+vec_4 = vector(1, 1, 1)
+geo = instance_on_points(geo_3, pts, scale=vec_4, realize=True)
+output('Geometry', geo)
+```
 
 ### `realize_instances(geometry)`
 
-Realizes instances in geometry.
+Realizes instances on geometry.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `geometry` | `Geometry` | Geometry containing instances. |
 
 Returns: `Geometry`.
 
+```python
+pts = points(6)
+geo_1 = cube(size=0.2)
+instanced = instance_on_points(geo_1, pts, realize=False)
+geo_2 = realize_instances(instanced)
+output('Geometry', geo_2)
+```
+
+## Raw Blender node construction
+
+### `node(bl_idname, props={}, inputs={}, output=..., typ=...)`
+### `node(bl_idname, props={}, inputs={}, outputs={...})`
+
+Creates a Blender node directly. Use this for Blender node types that are not exposed through a dedicated NodeForge built-in.
+
+`bl_idname`, `props` keys and values, input socket names, output socket names, and type tokens are compile-time declarations. Runtime values are allowed inside `inputs={...}` and are linked to the corresponding Blender input socket.
+
+Single-output mode requires both `output=` and `typ=`. Multi-output mode uses `outputs={"Socket": TypeToken, ...}` and returns a result object whose outputs can be accessed with attribute syntax or item syntax.
+
+Supported type tokens: `Float`, `Int`, `Bool`, `Vector`, `Geometry`.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `bl_idname` | `String` | required | Blender node type identifier, for example `"ShaderNodeMath"`. |
+| `props` | literal dict | `{}` | Blender node properties to assign before linking inputs. Custom properties are not supported. |
+| `inputs` | literal dict | `{}` | Maps enabled input socket names to literal defaults, runtime values, or a literal list for multi-input fanout. |
+| `output` | `String` | required in single-output mode | Enabled output socket name to return. |
+| `typ` | type token | required in single-output mode | NodeForge type of `output`. |
+| `outputs` | literal dict of `String: type token` | required in multi-output mode | Enabled output sockets to expose. |
+
+Returns: a `Value` in single-output mode; a multi-output result in `outputs=` mode.
+
+```python
+value = input_float('Value', default=0.25)
+rounded = node('ShaderNodeMath', props={'operation': 'ROUND'}, inputs={'Value': value}, output='Value', typ=Float)
+output('Rounded', rounded)
+```
+
+```python
+value_1 = position()
+separate = node('ShaderNodeSeparateXYZ', inputs={'Vector': value_1}, outputs={'X': Float, 'Y': Float, 'Z': Float})
+height = separate.Z
+output('Height', height)
+```
+
 ## Runtime loops
 
-### `range(count)`
+Runtime loops compile to Blender Repeat Zones.
 
-Compile-time loop form for static Python-style loops.
+### `for i in range(steps): geometry = expression`
 
-Use inside:
+Updates one existing `Geometry` variable inside a Repeat Zone. The loop body must contain one assignment to a geometry variable.
+
+| Part | Type | Description |
+| --- | --- | --- |
+| `steps` | `Int` | Repeat count. |
+| body assignment | `Geometry` | New value for the existing geometry variable. |
 
 ```python
+steps = input_int('Steps', default=3)
+geo = cube(size=1.0)
 for i in range(steps):
-    ...
+    vec_1 = vector(0.5, 0.5, 0.5)
+    vec_2 = vector(1, 0, 0)
+    geo_3 = transform(geo, scale=vec_1, translation=vec_2)
+    geo = join(geo, geo_3)
+output('Geometry', geo)
 ```
 
-`steps` must evaluate at compile time.
+### `for i in runtime_range(steps): ...`
 
-### `runtime_range(count)`
+Updates existing scalar, boolean, integer, or vector variables inside a Repeat Zone. The body supports assignments and nested `if` blocks with assignments. It must update at least one existing variable. Geometry state is not supported in `runtime_range`; use `range(...)` for geometry repeat loops.
 
-Runtime loop form that compiles to a Geometry Nodes Repeat Zone.
-
-Use inside:
-
-```python
-for i in runtime_range(max_iter):
-    ...
-```
-
-`count` can be a runtime `Int` socket.
-
-## Scalar math
-
-Unary functions:
-
-```text
-sin cos tan asin acos atan sqrt abs floor ceil round fract radians degrees exp ln
-```
-
-Signature:
-
-```python
-fn(value)
-```
-
-Returns: `Float`.
-
-Binary functions:
-
-```text
-min max pow log atan2 mod
-```
-
-Signature:
-
-```python
-fn(a, b)
-```
-
-Returns: `Float`.
-
-### `clamp(value, min, max)`
-
-Clamps a numeric value.
-
-Returns: `Float`.
-
-### `mix(a, b, factor)`
-
-Interpolates between `a` and `b`.
-
-Returns: type compatible with inputs.
-
-### `select(cond, false, true)`
-
-Selects between two values using a boolean condition.
-
-Parameters:
-
-| Name | Type | Description |
+| Part | Type | Description |
 | --- | --- | --- |
-| `cond` | `Bool` | Selection condition. |
-| `false` | any compatible socket type | Value when `cond` is false. |
-| `true` | any compatible socket type | Value when `cond` is true. |
-
-Returns: selected value type.
-
-### `map_range(value, from_min, from_max, to_min, to_max)`
-
-Maps a value from one numeric range to another.
-
-Returns: `Float`.
-
-### `noise(vector=position(), scale=..., detail=..., roughness=..., lacunarity=..., distortion=..., normalize=...)`
-
-Creates a 3D noise texture field and returns its factor output.
-
-Parameters:
-
-| Name | Type | Description |
-| --- | --- | --- |
-| `vector` | `Vector` | Sampling coordinate. Defaults to `position()`. |
-| `scale` | `Float` | Noise scale. |
-| `detail` | `Float` | Noise detail. |
-| `roughness` | `Float` | Noise roughness. |
-| `lacunarity` | `Float` | Noise lacunarity. |
-| `distortion` | `Float` | Noise distortion. |
-| `normalize` | compile-time `Bool` | Sets the Blender Noise Texture normalize option. |
-
-Returns: `Float`.
-
-### `random_value()` / `random_value(min, max, seed=..., id=...)`
-
-Creates a random value field.
-
-Parameters:
-
-| Name | Type | Description |
-| --- | --- | --- |
-| `min` | `Float` or `Vector` | Minimum value. |
-| `max` | `Float` or `Vector` | Maximum value. |
-| `seed` | `Int` | Seed. |
-| `id` | `Int` | ID field. |
-
-Returns: `Float` or `Vector`.
-
-## Vector
-
-### `vector(x, y, z)`
-
-Combines three numeric components into a vector.
-
-Returns: `Vector`.
-
-Vector functions that return `Float`:
-
-```text
-length(v)
-distance(a, b)
-dot(a, b)
-```
-
-Vector functions that return `Vector`:
-
-```text
-normalize(v)
-cross(a, b)
-reflect(v, normal)
-project(v, normal)
-```
-
-Derived scalar and vector helpers such as `smoothstep(...)`, `sign(...)`, `rotate2d(...)`, and `angle_between(...)` are function-library entries. Import them from `functions` before use.
-
-## Embedded L-systems
-
-L-system constructors are global DSL calls resolved by the embedded systems registry, not ordinary built-ins in `builtins/registry.py`. They use the reserved `ls_` prefix and return normal `Geometry` through `ls_system(...)`. The L-system constructor set is `ls_system`, `ls_axiom`, `ls_rule`, `ls_iterations`, `ls_angle`, `ls_step`, `ls_param`, `ls_marker`, and `ls_points`.
-
-See [L-systems](LSYSTEMS.md) for constructor reference, symbol rules, backend selection, generated-resource ownership, limits, and examples.
-
-## Raw Blender node layer
-
-Use `node(...)` when NodeForge does not yet have a normal wrapper for a Blender Geometry Node.
-
-`node(...)` creates a Blender node by its `bl_idname`, sets node properties, connects inputs, and returns normal typed NodeForge values. You still work with NodeForge types such as `Float`, `Vector`, `Bool`, and `Geometry`; raw Blender objects are not exposed to the script.
-
-Use Blender's Python node identifier as the first argument:
+| `steps` | `Int` | Repeat count. |
+| state variables | `Float`, `Int`, `Bool`, or `Vector` | Existing variables assigned inside the loop. |
 
 ```python
-value = node(
-    "FunctionNodeCompare",
-    props={"data_type": "FLOAT", "operation": "GREATER_THAN"},
-    inputs={"A": position().z, "B": 0.5},
-    output="Result",
-    typ=Bool,
-)
+n = input_int('N', default=8)
+a = 0
+b = 1
+for i in runtime_range(n):
+    next = a + b
+    a = b
+    b = next
+output('Value', a)
 ```
 
-Use the returned value like any other NodeForge value:
+## Arrays and unrolled loops
+
+Script arrays are authoring-time collections of compiled values. They are useful for building a fixed list of geometry parts and then passing the list to `join(...)`.
 
 ```python
-geo = delete_geometry(input_geometry("Geometry"), value)
-output("Geometry", geo)
+parts = []
+vec_1 = vector(-1, 0, 0)
+vec_2 = vector(0, 0, 0)
+vec_3 = vector(1, 0, 0)
+for offset in [vec_1, vec_2, vec_3]:
+    geo_4 = cube(size=0.25)
+    geo_5 = transform(geo_4, translation=offset)
+    parts.append(geo_5)
+geo_6 = join(parts)
+output('Geometry', geo_6)
 ```
 
-The identifier is the Blender node type name, for example:
-
-```text
-FunctionNodeCompare
-ShaderNodeSeparateXYZ
-GeometryNodeJoinGeometry
-```
-
-### Single-output nodes
-
-Use `output=` and `typ=` when you need one output socket from the Blender node.
-
-```python
-is_high = node(
-    "FunctionNodeCompare",
-    props={
-        "data_type": "FLOAT",
-        "operation": "GREATER_THAN",
-    },
-    inputs={
-        "A": position().z,
-        "B": 0.5,
-    },
-    output="Result",
-    typ=Bool,
-)
-
-output("is_high", is_high)
-```
-
-This creates a `FunctionNodeCompare`, sets its Blender properties, links `position().z` into socket `A`, assigns `0.5` as the default value of socket `B`, and returns the `Result` socket as a NodeForge `Bool`.
-
-### Multi-output nodes
-
-Use `outputs={...}` when one Blender node has several outputs that you want to use later.
-
-```python
-parts = node(
-    "ShaderNodeSeparateXYZ",
-    inputs={"Vector": position()},
-    outputs={
-        "X": Float,
-        "Y": Float,
-        "Z": Float,
-    },
-)
-
-x = parts.X
-z = parts["Z"]
-
-output("x_plus_z", x + z)
-```
-
-A multi-output `node(...)` returns a `NodeResult`. The `NodeResult` itself is not a geometry, float, vector, or boolean value. Select one declared socket first:
-
-```python
-parts.X
-parts["Socket Name"]
-```
-
-Use bracket access when the socket name contains spaces or punctuation:
-
-```python
-sphere = node(
-    "GeometryNodeMeshUVSphere",
-    inputs={"Segments": 16, "Rings": 8, "Radius": 1.0},
-    outputs={
-        "Mesh": Geometry,
-        "UV Map": Vector,
-    },
-)
-
-uv = sphere["UV Map"]
-```
-
-### Connecting raw nodes to normal DSL calls
-
-Raw node outputs are normal NodeForge values after you select a socket. They can be passed into higher-level DSL calls.
-
-```python
-parts = node(
-    "ShaderNodeSeparateXYZ",
-    inputs={"Vector": position()},
-    outputs={
-        "X": Float,
-        "Y": Float,
-        "Z": Float,
-    },
-)
-
-height_offset = node(
-    "ShaderNodeMapRange",
-    props={"data_type": "FLOAT", "clamp": True},
-    inputs={
-        "Value": parts.X,
-        "From Min": -1.0,
-        "From Max": 1.0,
-        "To Min": -0.4,
-        "To Max": 0.8,
-    },
-    output="Result",
-    typ=Float,
-)
-
-geo = node(
-    "GeometryNodeSetPosition",
-    inputs={
-        "Geometry": grid(20, 20),
-        "Selection": True,
-        "Offset": vector(0.0, 0.0, height_offset),
-    },
-    output="Geometry",
-    typ=Geometry,
-)
-
-output("Geometry", geo)
-```
-
-The important flow is:
-
-```text
-position()
-  -> ShaderNodeSeparateXYZ.Vector
-  -> parts.X
-  -> ShaderNodeMapRange.Value
-  -> height_offset
-  -> vector(0, 0, height_offset)
-  -> GeometryNodeSetPosition.Offset
-```
-
-### Multi-input sockets
-
-Use a literal list only for Blender multi-input sockets, such as `GeometryNodeJoinGeometry.Geometry`.
-
-```python
-a = transform(cube(0.4), translation=vector(-1.0, 0.0, 0.0))
-b = transform(cube(0.4), translation=vector(0.0, 0.0, 0.0))
-c = transform(cube(0.4), translation=vector(1.0, 0.0, 0.0))
-
-geo = node(
-    "GeometryNodeJoinGeometry",
-    inputs={
-        "Geometry": [a, b, c],
-    },
-    output="Geometry",
-    typ=Geometry,
-)
-
-output("Geometry", geo)
-```
-
-A list in `inputs={...}` means “create several links into the same multi-input socket”. It is not vector syntax.
-
-Use `vector(...)` or a numeric 3-tuple for vector values:
-
-```python
-vector(1.0, 2.0, 3.0)
-(1.0, 2.0, 3.0)
-```
-
-### Field values must be used in field-aware sockets
-
-A raw node can create a field value, but the field only has a visible effect when it is connected to a node socket that evaluates fields.
-
-This works because `GeometryNodeSetPosition.Offset` is field-aware:
-
-```python
-rand_z = node(
-    "FunctionNodeRandomValue",
-    props={"data_type": "FLOAT"},
-    inputs={
-        "Min": 0.0,
-        "Max": 1.5,
-        "ID": index(),
-        "Seed": 19,
-    },
-    output="Value",
-    typ=Float,
-)
-
-geo = node(
-    "GeometryNodeSetPosition",
-    inputs={
-        "Geometry": grid(20, 20),
-        "Selection": True,
-        "Offset": vector(0.0, 0.0, rand_z),
-    },
-    output="Geometry",
-    typ=Geometry,
-)
-
-output("Geometry", geo)
-```
-
-Use geometry-level sockets for whole-geometry operations, and field-aware sockets for per-point, per-face, or per-instance variation.
-
-For example, `GeometryNodeSwitch` with `input_type="GEOMETRY"` selects one complete geometry branch. It does not switch individual points inside one mesh. For per-point switching, switch a `Float`, `Vector`, or `Bool`, then feed that result into a field-aware socket:
-
-```python
-parts = node(
-    "ShaderNodeSeparateXYZ",
-    inputs={"Vector": position()},
-    outputs={
-        "X": Float,
-        "Y": Float,
-        "Z": Float,
-    },
-)
-
-right_side = node(
-    "FunctionNodeCompare",
-    props={"data_type": "FLOAT", "operation": "GREATER_THAN"},
-    inputs={"A": parts.X, "B": 0.0},
-    output="Result",
-    typ=Bool,
-)
-
-offset = node(
-    "GeometryNodeSwitch",
-    props={"input_type": "VECTOR"},
-    inputs={
-        "Switch": right_side,
-        "False": vector(0.0, 0.0, -0.4),
-        "True": vector(0.0, 0.0, 0.8),
-    },
-    output="Output",
-    typ=Vector,
-)
-
-geo = node(
-    "GeometryNodeSetPosition",
-    inputs={
-        "Geometry": grid(20, 20),
-        "Selection": True,
-        "Offset": offset,
-    },
-    output="Geometry",
-    typ=Geometry,
-)
-
-output("Geometry", geo)
-```
-
-### Arguments
-
-| Argument    | Required           | Description                                                                                                                                                                                |
-| ----------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `bl_idname` | yes                | Blender node identifier, such as `"GeometryNodeSetPosition"` or `"ShaderNodeSeparateXYZ"`. Must be a non-empty compile-time string.                                                             |
-| `props`     | no                 | Literal dictionary of Blender node properties to assign before sockets are resolved. Use this for settings that change available sockets, such as compare type, switch type, or node mode. |
-| `inputs`    | no                 | Literal dictionary mapping exact compile-time input socket names to NodeForge values, literal defaults, or multi-input fanout lists.                                                                    |
-| `output`    | single-output mode | Exact output socket name to return.                                                                                                                                                        |
-| `typ`       | single-output mode | NodeForge type token for the selected output socket.                                                                                                                                       |
-| `outputs`   | multi-output mode  | Literal dictionary mapping compile-time output socket names to NodeForge type tokens.                                                                                                                   |
-
-Use either:
-
-```python
-output="Socket Name", typ=Float
-```
-
-or:
-
-```python
-outputs={"A": Float, "B": Vector}
-```
-
-Do not combine the two forms.
-
-
-Raw node `bl_idname`, `props` keys, `inputs` keys, `output`, and `outputs` keys use the same compile-time `String` rules as other DSL string arguments. F-strings are resolved before duplicate-key checks and exact Blender socket/property validation.
-
-### Supported socket types
-
-Raw node declarations support these NodeForge type tokens:
-
-```text
-Float
-Int
-Bool
-Vector
-Geometry
-```
-
-The declared type must match the Blender socket family. For example, a Blender geometry socket must be declared as `Geometry`, and a Blender boolean socket must be declared as `Bool`.
-
-Integer values may be linked into Blender float sockets. Other mismatches are rejected.
-
-These names are reserved for `node(...)` type declarations. Do not use them as variable names.
-
-### Socket names are exact
-
-`node(...)` resolves sockets by exact enabled Blender socket name.
-
-This means spelling, spaces, and property-dependent socket layouts matter:
-
-```python
-# Correct when the Blender output socket is named "UV Map":
-uv = sphere["UV Map"]
-
-# Correct when the Blender input socket is named "Profile Curve":
-inputs={"Profile Curve": profile}
-```
-
-If a socket is missing, disabled, unsupported, or ambiguous, compilation fails with `CompileError`.
-
-### Properties are assigned before sockets are resolved
-
-Many Blender nodes expose different sockets depending on node properties. Put those settings in `props`.
-
-```python
-offset = node(
-    "GeometryNodeSwitch",
-    props={"input_type": "VECTOR"},
-    inputs={
-        "Switch": condition,
-        "False": vector(0.0, 0.0, -0.5),
-        "True": vector(0.0, 0.0, 0.5),
-    },
-    output="Output",
-    typ=Vector,
-)
-```
-
-Here `input_type="VECTOR"` must be assigned before NodeForge looks for the `False`, `True`, and `Output` sockets.
-
-### Literal defaults
-
-Input values can be:
-
-```python
-inputs={
-    "A": position().z,              # linked runtime value
-    "B": 0.5,                       # literal default
-    "Selection": True,              # literal default
-    "Offset": vector(0.0, 0.0, 1.0) # vector value
-}
-```
-
-Supported literal defaults are booleans, integers, floats, strings, and numeric 3-tuples. String defaults may use the same compile-time string expression rules as other `String` arguments and are accepted only for sockets that Blender exposes as supported default-value sockets.
-
-### Typical workflow
-
-1. Find the node in Blender's manual or Python API.
-2. Copy its `bl_idname`.
-3. Check the exact input and output socket names in Blender.
-4. Set property-dependent options in `props`.
-5. Declare every output socket you want to use with a NodeForge type token.
-6. Connect the returned value to normal NodeForge DSL calls.
-7. If the graph compiles but the result is visually unchanged, check whether a field value was connected to a field-aware socket.
-
-### Comparisons
-
-Use normal DSL comparison operators for common comparisons:
-
-```python
-high = position().z > 0.5
-left = position().x < 0.0
-mask = high and left
-output("mask", mask)
-```
-
-Use `node("FunctionNodeCompare", ...)` when you need direct Blender compare-node control.
+Arrays cannot be output directly and cannot be used as runtime values.
