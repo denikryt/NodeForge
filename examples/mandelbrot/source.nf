@@ -24,7 +24,7 @@ zy = 0
 escaped = False
 iteration = 0
 
-for i in runtime_range(max_iter):
+for i in range(max_iter):
     zx_next = zx * zx - zy * zy + cx
     zy_next = 2 * zx * zy + cy
     mag2 = zx_next * zx_next + zy_next * zy_next

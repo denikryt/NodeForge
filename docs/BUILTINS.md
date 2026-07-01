@@ -892,29 +892,9 @@ output('Height', height)
 
 ## Runtime loops
 
-Runtime loops compile to Blender Repeat Zones.
+Runtime loops compile to Blender Repeat Zones when `range(...)` updates existing state variables.
 
-### `for i in range(steps): geometry = expression`
-
-Updates one existing `Geometry` variable inside a Repeat Zone. The loop body must contain one assignment to a geometry variable.
-
-| Part | Type | Description |
-| --- | --- | --- |
-| `steps` | `Int` | Repeat count. |
-| body assignment | `Geometry` | New value for the existing geometry variable. |
-
-```python
-steps = input_int('Steps', default=3)
-geo = cube(size=1.0)
-for i in range(steps):
-    vec_1 = vector(0.5, 0.5, 0.5)
-    vec_2 = vector(1, 0, 0)
-    geo_3 = transform(geo, scale=vec_1, translation=vec_2)
-    geo = join(geo, geo_3)
-output('Geometry', geo)
-```
-
-### `for i in runtime_range(steps): ...`
+### `for i in range(steps): ...`
 
 Updates existing Geometry, Vector, Float, Int, and Bool variables inside one Repeat Zone. The body supports assignments and nested `if` blocks with assignments. It must update at least one existing variable. Assigned names that did not exist before the loop are iteration-local temporaries rather than Repeat Zone state items.
 
@@ -930,7 +910,7 @@ n = input_int('N', default=8)
 geo = cube(0.1)
 pos = vector(0, 0, 0)
 angle = input_float('Angle', default=45)
-for i in runtime_range(n):
+for i in range(n):
     next_pos = pos + vector(1, 0, 0)
     part = transform(cube(0.05), translation=next_pos)
     geo = join(geo, part)
@@ -940,6 +920,8 @@ output('Geometry', geo)
 output('Position', pos)
 output('Angle', angle)
 ```
+
+A `range(...)` loop without updated existing state remains a compile-time unrolled loop when its iterable is compile-time.
 
 ## Arrays and unrolled loops
 

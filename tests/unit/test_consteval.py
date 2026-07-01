@@ -153,7 +153,7 @@ output("x", 1)
     assert [stmt.targets[0].id for stmt in retained if isinstance(stmt, ast.Assign)] == ["COUNT", "COUNT"]
 
 
-def test_handle_stmt_invalidates_integer_candidate_for_preserved_runtime_range_state():
+def test_handle_stmt_invalidates_integer_candidate_for_preserved_runtime_state_range_state():
     from NodeForge.consteval import _handle_compile_time_stmt
 
     stmt = ast.parse("COUNT = 16").body[0]
@@ -166,14 +166,14 @@ def test_handle_stmt_invalidates_integer_candidate_for_preserved_runtime_range_s
     assert out == [stmt]
 
 
-def test_preprocess_preserves_mixed_runtime_range_state_initializers():
+def test_preprocess_preserves_mixed_runtime_state_range_initializers():
     retained, consts = _preprocess_source(
         """
 geo = cube(0.1)
 pos = vector(0, 0, 0)
 angle = 1
 flag = True
-for i in runtime_range(count):
+for i in range(count):
     geo = geo
     pos = pos
     angle = angle + 1

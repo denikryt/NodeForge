@@ -228,6 +228,17 @@ def _const_eval(expr, env):
 
 
 
+def _assigned_names_in_stmts(sub_stmts):
+    """Collect simple assignment targets from statements recursively."""
+    names = set()
+    for sub in sub_stmts:
+        if isinstance(sub, ast.Assign) and len(sub.targets) == 1 and isinstance(sub.targets[0], ast.Name):
+            names.add(sub.targets[0].id)
+        elif isinstance(sub, ast.If):
+            names |= _assigned_names_in_stmts(sub.body)
+            names |= _assigned_names_in_stmts(sub.orelse)
+    return names
+
 def _can_defer_range_error(expr, env):
     """Return True when a for iterable error should be handled by runtime lowering."""
     if not (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) and expr.func.id == "range"):
@@ -246,7 +257,7 @@ def _handle_compile_time_stmt(stmt, env, out_stmts, preserve_names=None):
         target = stmt.targets[0]
         if not isinstance(target, ast.Name):
             raise CompileError("Assignment target must be a simple name")
-        # Preserve initial values for runtime_range state variables; they must become GN values.
+        # Preserve initial values for runtime range state variables; they must become GN values.
         if target.id in preserve_names:
             env.pop(target.id, None)
             out_stmts.append(stmt)
@@ -309,6 +320,14 @@ def _handle_compile_time_stmt(stmt, env, out_stmts, preserve_names=None):
             _handle_compile_time_stmt(sub, env, out_stmts, preserve_names)
         return
     if isinstance(stmt, ast.For):
+        if (
+            isinstance(stmt.iter, ast.Call)
+            and isinstance(stmt.iter.func, ast.Name)
+            and stmt.iter.func.id == "range"
+            and (_assigned_names_in_stmts(stmt.body) & preserve_names)
+        ):
+            out_stmts.append(stmt)
+            return
         # Runtime for range(input) is preserved; compile-time for requires a const iterable.
         try:
             iterable = _const_eval(stmt.iter, env)
@@ -335,25 +354,14 @@ def _handle_compile_time_stmt(stmt, env, out_stmts, preserve_names=None):
         return
     out_stmts.append(stmt)
 
-def _runtime_range_state_names(stmts):
-    """Names initialized before runtime_range loops that must remain GN values."""
+def _runtime_state_range_names(stmts):
+    """Names initialized before stateful range(...) loops that must remain GN values."""
     preserve = set()
-
-    def assigned_names(sub_stmts):
-        """Collect simple assignment targets from runtime statements recursively."""
-        names = set()
-        for sub in sub_stmts:
-            if isinstance(sub, ast.Assign) and len(sub.targets) == 1 and isinstance(sub.targets[0], ast.Name):
-                names.add(sub.targets[0].id)
-            elif isinstance(sub, ast.If):
-                names |= assigned_names(sub.body)
-                names |= assigned_names(sub.orelse)
-        return names
 
     before = set()
     for stmt in stmts:
-        if isinstance(stmt, ast.For) and isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id == "runtime_range":
-            preserve |= (assigned_names(stmt.body) & before)
+        if isinstance(stmt, ast.For) and isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id == "range":
+            preserve |= (_assigned_names_in_stmts(stmt.body) & before)
         if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
             before.add(stmt.targets[0].id)
     return preserve
@@ -362,7 +370,7 @@ def _preprocess_compile_time(stmts):
     """Function `_preprocess_compile_time` used by the NodeForge addon."""
     env = {}
     out = []
-    preserve = _runtime_range_state_names(stmts)
+    preserve = _runtime_state_range_names(stmts)
     for stmt in stmts:
         _handle_compile_time_stmt(stmt, env, out, preserve)
     return out, env
@@ -371,7 +379,7 @@ def _infer_input_types(stmts):
     """Function `_infer_input_types` used by the NodeForge addon."""
     result = {}
     for stmt in stmts:
-        if isinstance(stmt, ast.For) and isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id in {"range", "runtime_range"}:
+        if isinstance(stmt, ast.For) and isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id == "range":
             for arg in stmt.iter.args:
                 if isinstance(arg, ast.Name):
                     result[arg.id] = TYPE_INT

@@ -1,7 +1,8 @@
 """Runtime loop built-ins for NodeForge DSL.
 
-`range(...)` and `runtime_range(...)` are parsed at statement level and compiled
-by runtime.py. This module exists so built-ins have a single catalog location.
+`range(...)` is parsed at statement level. It compiles to a Repeat Zone when
+its body updates existing runtime state, and to compile-time unroll when its
+iterable is a compile-time sequence and no runtime state is updated.
 """
 
-NAMES = {"range", "runtime_range"}
+NAMES = {"range"}
