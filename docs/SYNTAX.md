@@ -54,7 +54,7 @@ At top level, NodeForge accepts only these statement families:
 | Augmented assignment | `name += expression`, `name -= expression`, `name *= expression`, `name /= expression` where the operation is type-valid |
 | Expression statement | Only as the final output shorthand, or supported top-level side-effect calls |
 | Function definition | `def name(a, b): ... return value` |
-| `for` block | Compile-time unrolled loops and runtime Repeat Zone loops |
+| `for` block | Compile-time unrolled loops and `repeat_range(...)` loops |
 | `if` block | Compile-time branch selection or runtime switch-style branch merging |
 
 Top-level `return`, `while`, `try`, `class`, `with`, `del`, `global`, `nonlocal`, and regular `import ...` statements are not part of the DSL.
@@ -109,11 +109,11 @@ output('Geometry', geo)
 
 In this example, `width` is not assigned anywhere in the script. NodeForge creates a group input socket named `width` and exposes it as a runtime value. The default implicit input type is `Float`.
 
-A name used as the iteration count of `range(...)` is inferred as an `Int` input.
+A name used as the iteration count of `repeat_range(...)` is inferred as an `Int` input. `range(...)` requires compile-time integer arguments.
 
 ```python
 geo = cube(size=1.0)
-for i in range(steps):
+for i in repeat_range(steps):
     offset = vector(0.25, 0, 0)
     geo = transform(geo, translation=offset)
 output('Geometry', geo)
@@ -510,12 +510,12 @@ geo = cube(size=size)
 output('Geometry', geo)
 ```
 
-Inside a runtime `range(...)` Repeat Zone loop, an `if` block may omit `else`; unchanged state values are preserved when the condition is false.
+Inside `repeat_range(...)`, an `if` block may omit `else`; unchanged state values are preserved when the condition is false.
 
 ```python
 x = 0.0
 steps = input_int('Steps', default=5)
-for i in range(steps):
+for i in repeat_range(steps):
     if x < 3.0:
         x = x + 1.0
 output('X', x)
@@ -523,7 +523,7 @@ output('X', x)
 
 ## For loops
 
-NodeForge supports compile-time unrolled loops and runtime Repeat Zone loops.
+NodeForge supports three kinds of `for` loops.
 
 ### Compile-time unrolled loops
 
@@ -554,27 +554,35 @@ geo = join(items)
 output('Geometry', geo)
 ```
 
-### Runtime Repeat Zone loops
+### Runtime state repeat loops
 
-A `range(...)` loop compiles to one Blender Repeat Zone when its body assigns at least one pre-existing Geometry, Vector, Float, Int, or Bool variable. Every pre-existing variable assigned inside the body becomes a Repeat Zone state item. New variables assigned only inside the body are iteration-local temporaries.
+`repeat_range(steps)` creates one Blender Repeat Zone for existing Geometry, Vector, Float, Int, and Bool state variables. Every pre-existing variable assigned inside the body becomes a Repeat Zone state item. New variables assigned only inside the body are iteration-local temporaries.
+
+```python
+x = 0.0
+steps = input_int('Steps', default=5)
+for i in repeat_range(steps):
+    x = x + 1.0
+output('X', x)
+```
+
+Geometry state can be updated in the same loop as scalar or vector state.
 
 ```python
 geo = cube(size=1.0)
 pos = vector(0, 0, 0)
 steps = input_int('Steps', default=3)
-for i in range(steps):
-    next_pos = pos + vector(0.2, 0, 0)
-    geo = join(geo, line(pos, next_pos))
-    pos = next_pos
+for i in repeat_range(steps):
+    pos = pos + vector(0.2, 0, 0)
+    geo = transform(geo, translation=pos)
 output('Geometry', geo)
-output('Position', pos)
 ```
 
-The loop body supports assignments and nested `if` blocks with assignments. It must update at least one existing variable to become a Repeat Zone. State item order follows first assignment in the loop body, including nested branches. An `if` branch that omits a state assignment preserves that branch's incoming state value; changed state is merged with Switch nodes, including Geometry state.
-
-A `range(...)` loop without updated existing state remains a compile-time unrolled loop when its iterable is compile-time. This keeps fixed authoring loops and runtime state loops separated by the body shape rather than by a second loop function.
+The loop body supports assignments and nested `if` blocks with assignments. It must update at least one existing variable. State item order follows first assignment in the loop body, including nested branches. An `if` branch that omits a state assignment preserves that branch's incoming state value; changed state is merged with Switch nodes, including Geometry state.
 
 The loop index name cannot also be a state variable, and state names cannot collide with Repeat Zone system socket names such as `Iterations` or `Iteration`. These naming conflicts raise `CompileError` to avoid ambiguous socket wiring.
+
+Use `range(...)` for compile-time unrolled loops only. A `range(...)` loop with non-constant bounds raises `CompileError`; use `repeat_range(...)` when the repeat count is a runtime `Int`.
 
 ## Top-level side-effect calls
 

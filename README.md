@@ -60,7 +60,7 @@ NodeForge/
 ├── parsing.py               # Python AST parsing and source inspection
 ├── consteval.py             # Compile-time expression evaluation
 ├── statements.py            # Top-level statement compilation helpers
-├── runtime.py               # range / Repeat Zone state handling
+├── runtime.py               # repeat_range / Repeat Zone state handling
 ├── geometry.py              # Low-level Geometry Nodes construction helpers
 ├── nodes.py                 # Node creation and link utilities
 ├── values.py                # Typed socket wrappers

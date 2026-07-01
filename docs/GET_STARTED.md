@@ -132,7 +132,7 @@ What is happening:
 | `parts = []` / `parts.append(...)` | Collects Geometry values into a compile-time list. |
 | `join(parts)` | Combines the generated cubes into one Geometry output. |
 
-Use `range(...)` when the number of loop iterations is known during compilation. Use [runtime loops](BUILTINS.md#runtime-range) when the iteration count must be a runtime input.
+Use `range(...)` when the number of loop iterations is known during compilation. Use [`repeat_range(...)`](BUILTINS.md#for-i-in-repeat_rangesteps-) when the iteration count must be a runtime input or when you want a Blender Repeat Zone.
 
 ## Use the Library panel
 

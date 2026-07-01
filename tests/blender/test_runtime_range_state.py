@@ -11,14 +11,14 @@ def _repeat_output(group):
     return outputs[0]
 
 
-def test_state_range_mixed_geometry_vector_float_state_order():
+def test_repeat_range_mixed_geometry_vector_float_state_order():
     group = compile_group(
         """
 geo = cube(0.1)
 pos = vector(0, 0, 0)
 angle = input_float("Angle", default=45)
 count = input_int("Count", default=4)
-for i in range(count):
+for i in repeat_range(count):
     next_pos = pos + vector(1, 0, 0)
     piece = transform(cube(0.05), translation=next_pos)
     geo = join(geo, piece)
@@ -28,7 +28,7 @@ output("Geometry", geo)
 output("Position", pos)
 output("Angle", angle)
 """,
-        "NFTest_state_range_mixed_state",
+        "NFTest_repeat_range_mixed_state",
     )
 
     check(len(_nodes(group, "GeometryNodeRepeatInput")) == 1, "expected one Repeat Input")
@@ -40,13 +40,13 @@ output("Angle", angle)
     check("next_pos" not in names and "piece" not in names, "loop temporaries became repeat state items")
 
 
-def test_state_range_geometry_branch_merge_uses_geometry_switch():
+def test_repeat_range_geometry_branch_merge_uses_geometry_switch():
     group = compile_group(
         """
 geo = cube(0.1)
 flag = input_bool("Flag", default=True)
 count = input_int("Count", default=3)
-for i in range(count):
+for i in repeat_range(count):
     if flag:
         geo = transform(geo, translation=vector(1, 0, 0))
         flag = False
@@ -56,7 +56,7 @@ for i in range(count):
 output("Geometry", geo)
 output("Flag", flag)
 """,
-        "NFTest_state_range_geometry_branch",
+        "NFTest_repeat_range_geometry_branch",
     )
 
     switch_types = [getattr(node, "input_type", None) for node in _nodes(group, "GeometryNodeSwitch")]
@@ -64,25 +64,25 @@ output("Flag", flag)
     check("BOOLEAN" in switch_types, f"missing Boolean switch in {switch_types}")
 
 
-def test_state_range_existing_scalar_vector_bool_still_compile():
+def test_repeat_range_existing_scalar_vector_bool_still_compile():
     compile_group(
         """
 x = 0
-for i in range(5):
+for i in repeat_range(5):
     if x < 3:
         x = x + 1
     else:
         x = x
 output("x", x)
 """,
-        "NFTest_state_range_scalar_existing",
+        "NFTest_repeat_range_scalar_existing",
     )
     compile_group(
         """
 from functions import rotate_around_axis
 v = vector(1,0,0)
 flag = True
-for i in range(3):
+for i in repeat_range(3):
     if flag:
         v = rotate_around_axis(v, vector(0,0,1), 0.1)
         flag = False
@@ -92,29 +92,26 @@ for i in range(3):
 output("v", v)
 output("flag", flag)
 """,
-        "NFTest_state_range_vector_bool_existing",
+        "NFTest_repeat_range_vector_bool_existing",
     )
 
 
-def test_state_range_without_existing_state_uses_compile_time_unroll():
+def test_compile_time_range_with_existing_state_does_not_create_repeat_zone():
     group = compile_group(
         """
-items = []
-for i in range(4):
-    part = transform(cube(0.2), translation=vector(i, 0, 0))
-    items.append(part)
-geo = join(items)
+geo = cube(1)
+for i in range(3):
+    geo = transform(geo, translation=vector(0.1, 0, 0))
 output("Geometry", geo)
 """,
-        "NFTest_state_range_compile_time_unroll",
+        "NFTest_compile_time_range_existing_geometry_state",
     )
-
     check(len(_nodes(group, "GeometryNodeRepeatInput")) == 0, "compile-time range unexpectedly created Repeat Input")
     check(len(_nodes(group, "GeometryNodeRepeatOutput")) == 0, "compile-time range unexpectedly created Repeat Output")
 
 
-def test_legacy_range_geometry_repeat_still_compiles():
-    group = compile_group(
+def test_range_with_runtime_count_points_to_repeat_range():
+    expect_compile_error(
         """
 geo = cube(1)
 steps = input_int("Steps", default=3)
@@ -122,74 +119,72 @@ for i in range(steps):
     geo = transform(geo, translation=vector(0.1, 0, 0))
 output("Geometry", geo)
 """,
-        "NFTest_legacy_range_geometry_repeat",
+        "NFTest_range_runtime_count_error",
     )
-    check(len(_nodes(group, "GeometryNodeRepeatInput")) == 1, "legacy geometry loop lost Repeat Input")
-    check(len(_nodes(group, "GeometryNodeRepeatOutput")) == 1, "legacy geometry loop lost Repeat Output")
 
 
-def test_state_range_state_type_errors_are_controlled():
+def test_repeat_range_state_type_errors_are_controlled():
     expect_compile_error(
         """
 geo = cube(1)
-for i in range(3):
+for i in repeat_range(3):
     geo = 1
 output("Geometry", geo)
 """,
-        "NFTest_state_range_geometry_to_float_error",
+        "NFTest_repeat_range_geometry_to_float_error",
     )
     expect_compile_error(
         """
 x = 1
-for i in range(3):
+for i in repeat_range(3):
     x = cube(1)
 output("x", x)
 """,
-        "NFTest_state_range_float_to_geometry_error",
+        "NFTest_repeat_range_float_to_geometry_error",
     )
 
 
-def test_state_range_rejects_repeat_socket_name_collisions():
+def test_repeat_range_rejects_repeat_socket_name_collisions():
     expect_compile_error(
         """
 Iteration = 0
-for i in range(3):
+for i in repeat_range(3):
     Iteration = Iteration + 1
 output("Iteration", Iteration)
 """,
-        "NFTest_state_range_iteration_socket_collision",
+        "NFTest_repeat_range_iteration_socket_collision",
     )
     expect_compile_error(
         """
 Iterations = 0
-for i in range(3):
+for i in repeat_range(3):
     Iterations = Iterations + 1
 output("Iterations", Iterations)
 """,
-        "NFTest_state_range_iterations_socket_collision",
+        "NFTest_repeat_range_iterations_socket_collision",
     )
 
 
-def test_state_range_rejects_index_name_as_state():
+def test_repeat_range_rejects_index_name_as_state():
     expect_compile_error(
         """
 i = 0
-for i in range(3):
+for i in repeat_range(3):
     i = i + 1
 output("i", i)
 """,
-        "NFTest_state_range_index_state_collision",
+        "NFTest_repeat_range_index_state_collision",
     )
 
-def test_state_range_rejects_index_repeat_socket_name_collision():
+def test_repeat_range_rejects_index_repeat_socket_name_collision():
     expect_compile_error(
         """
 x = 0
-for Iteration in range(3):
+for Iteration in repeat_range(3):
     x = Iteration
 output("x", x)
 """,
-        "NFTest_state_range_index_iteration_socket_collision",
+        "NFTest_repeat_range_index_iteration_socket_collision",
     )
 
 
@@ -203,7 +198,7 @@ def test_repeat_state_assignment_allows_explicit_item_named_like_removed_default
     # The public DSL reserves Geometry as a type token. This lower-level probe
     # isolates the Repeat Zone invariant: a removable default item named
     # "Geometry" must not be treated as a permanent system socket collision.
-    group = bpy.data.node_groups.new("NFTest_state_range_lower_geometry_name", "GeometryNodeTree")
+    group = bpy.data.node_groups.new("NFTest_repeat_range_lower_geometry_name", "GeometryNodeTree")
     try:
         group_input = group.nodes.new("NodeGroupInput")
         comp = Compiler(group, group_input, consts={})

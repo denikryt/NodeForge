@@ -58,3 +58,18 @@ def test_compile_time_range_rejects_invalid_arguments_in_blender_path():
             'for i in range(0, 4, 0):\n    output("x", i)\n',
             "NFTest_compile_time_range_zero_step_rejected",
         )
+
+
+def test_compile_time_range_pure_arithmetic_is_folded_before_node_generation():
+    source = """
+x = 0
+for i in range(8):
+    x = x + i
+output("x", x)
+"""
+
+    group = compile_group(source, "NFTest_compile_time_range_pure_arithmetic_folded")
+
+    assert not [n for n in group.nodes if n.bl_idname == "GeometryNodeRepeatInput"]
+    assert not [n for n in group.nodes if n.bl_idname == "GeometryNodeRepeatOutput"]
+    assert not [n for n in group.nodes if n.bl_idname == "ShaderNodeMath"]

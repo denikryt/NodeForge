@@ -20,10 +20,7 @@ from .statements import (
 from .consteval import _const_eval
 from .compile_time import reject_compile_time_object
 from .runtime import (
-    _parse_runtime_for,
-    _parse_runtime_state_for,
-    _assigned_names_in_runtime_body,
-    _repeat_geometry_assignment,
+    _parse_repeat_range_for,
     _repeat_state_assignments,
 )
 
@@ -143,27 +140,19 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
             return
 
     if isinstance(stmt, ast.For):
-        if isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id == "range":
-            try:
-                iterations_expr, body = _parse_runtime_state_for(stmt)
-            except CompileError:
-                iterations_expr = None
-                body = None
-            if body is not None:
-                assigned_names = _assigned_names_in_runtime_body(body)
-                if any(name in comp.vars for name in assigned_names):
-                    iterations = _compile_iteration_count(ctx, iterations_expr, 240 + idx * 120, -260 - idx * 50)
-                    reject_compile_time_object(iterations, "runtime range iteration count")
-                    if iterations.typ != TYPE_INT:
-                        raise CompileError("range(n) expects an Int input or integer value")
-                    results = _repeat_state_assignments(group, comp, iterations, body, index_name=stmt.target.id, x=300 + idx * 160, y=-380 - idx * 70)
-                    if results:
-                        last_name = list(results.keys())[-1]
-                        ctx.auto_final_output = (last_name, results[last_name])
-                    return
-            iter_values = None
-        else:
-            iter_values = None
+        if isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id == "repeat_range":
+            iterations_expr, body = _parse_repeat_range_for(stmt)
+            iterations = _compile_iteration_count(ctx, iterations_expr, 240 + idx * 120, -260 - idx * 50)
+            reject_compile_time_object(iterations, "repeat_range iteration count")
+            if iterations.typ != TYPE_INT:
+                raise CompileError("repeat_range(n) expects an Int input or integer value")
+            results = _repeat_state_assignments(group, comp, iterations, body, index_name=stmt.target.id, x=300 + idx * 160, y=-380 - idx * 70)
+            if results:
+                last_name = list(results.keys())[-1]
+                ctx.auto_final_output = (last_name, results[last_name])
+            return
+
+        iter_values = None
         if isinstance(stmt.iter, ast.Name) and stmt.iter.id in comp.vars:
             iter_values = _as_array_iter_value(comp.vars[stmt.iter.id])
         if iter_values is None:
@@ -196,18 +185,9 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
                         comp.vars.pop(name, None)
             return
 
-        geom_name, iterations_expr, body_expr = _parse_runtime_for(stmt, comp.consts)
-        if geom_name not in comp.vars or not isinstance(comp.vars[geom_name], Value) or comp.vars[geom_name].typ != TYPE_GEOMETRY:
-            raise CompileError("runtime for requires an existing Geometry variable, e.g. geo = cube(1)")
-        iterations = _compile_iteration_count(ctx, iterations_expr, 240 + idx * 120, -260 - idx * 50)
-        reject_compile_time_object(iterations, "runtime loop iteration count")
-        if iterations.typ != TYPE_INT:
-            raise CompileError("range(steps) expects an Int input or integer constant")
-        geo = comp.vars[geom_name]
-        new_geo = _repeat_geometry_assignment(group, comp, geom_name, geo, iterations, body_expr, 300 + idx * 160, -380 - idx * 70)
-        comp.vars[geom_name] = new_geo
-        ctx.auto_final_output = (geom_name, new_geo)
-        return
+        if isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id == "range":
+            raise CompileError("range(...) requires compile-time integer arguments; use repeat_range(...) for Repeat Zone loops")
+        raise CompileError("for loop requires a compile-time iterable, an array, or repeat_range(...)")
 
     if isinstance(stmt, ast.If):
         try:

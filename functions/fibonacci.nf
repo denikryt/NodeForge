@@ -17,7 +17,7 @@ n = input_int("N", default=8)
 a = 0
 b = 1
 
-for i in range(n):
+for i in repeat_range(n):
     next = a + b
     a = b
     b = next

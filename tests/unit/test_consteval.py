@@ -90,12 +90,7 @@ output("count", MAX_SEGMENTS)
     assert consts["BASE_SEGMENTS"] == 8
     assert consts["EXTRA_SEGMENTS"] == 4
     assert consts["MAX_SEGMENTS"] == 12
-    assert [stmt.targets[0].id for stmt in retained if isinstance(stmt, ast.Assign)] == [
-        "BASE_SEGMENTS",
-        "EXTRA_SEGMENTS",
-        "MAX_SEGMENTS",
-        "parts",
-    ]
+    assert [stmt.targets[0].id for stmt in retained if isinstance(stmt, ast.Assign)] == ["parts"]
 
 
 @pytest.mark.parametrize(
@@ -150,10 +145,10 @@ output("x", 1)
     )
 
     assert "COUNT" not in consts
-    assert [stmt.targets[0].id for stmt in retained if isinstance(stmt, ast.Assign)] == ["COUNT", "COUNT"]
+    assert [stmt.targets[0].id for stmt in retained if isinstance(stmt, ast.Assign)] == ["COUNT"]
 
 
-def test_handle_stmt_invalidates_integer_candidate_for_preserved_runtime_state_range_state():
+def test_handle_stmt_invalidates_integer_candidate_for_preserved_repeat_range_state():
     from NodeForge.consteval import _handle_compile_time_stmt
 
     stmt = ast.parse("COUNT = 16").body[0]
@@ -166,14 +161,14 @@ def test_handle_stmt_invalidates_integer_candidate_for_preserved_runtime_state_r
     assert out == [stmt]
 
 
-def test_preprocess_preserves_mixed_runtime_state_range_initializers():
+def test_preprocess_preserves_mixed_repeat_range_state_initializers():
     retained, consts = _preprocess_source(
         """
 geo = cube(0.1)
 pos = vector(0, 0, 0)
 angle = 1
 flag = True
-for i in range(count):
+for i in repeat_range(count):
     geo = geo
     pos = pos
     angle = angle + 1
