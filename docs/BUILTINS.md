@@ -61,8 +61,12 @@ Creates a compile-time list of integers. Use it mainly for unrolled `for` loops 
 Returns: compile-time `List[Int]`.
 
 ```python
+BASE_COUNT = 4
+EXTRA_COUNT = 2
+COUNT = BASE_COUNT + EXTRA_COUNT
+
 items = []
-for i in range(4):
+for i in range(COUNT):
     offset = vector(i * 1.25, 0, 0)
     geo = cube(size=1.0)
     moved = transform(geo, translation=offset)

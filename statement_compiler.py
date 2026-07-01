@@ -159,7 +159,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
             iter_values = _as_array_iter_value(comp.vars[stmt.iter.id])
         if iter_values is None:
             try:
-                raw_iter = _const_eval(stmt.iter, ctx.consts)
+                raw_iter = _const_eval(stmt.iter, comp.consts)
                 if isinstance(raw_iter, (list, tuple)):
                     iter_values = [comp._compile_const_value(v, 260 + idx * 120, -220 - idx * 50) for v in raw_iter]
             except CompileError:
@@ -187,7 +187,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
                         comp.vars.pop(name, None)
             return
 
-        geom_name, iterations_expr, body_expr = _parse_runtime_for(stmt, ctx.consts)
+        geom_name, iterations_expr, body_expr = _parse_runtime_for(stmt, comp.consts)
         if geom_name not in comp.vars or not isinstance(comp.vars[geom_name], Value) or comp.vars[geom_name].typ != TYPE_GEOMETRY:
             raise CompileError("runtime for requires an existing Geometry variable, e.g. geo = cube(1)")
         iterations = _compile_iteration_count(ctx, iterations_expr, 240 + idx * 120, -260 - idx * 50)
@@ -202,7 +202,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
 
     if isinstance(stmt, ast.If):
         try:
-            branch = stmt.body if bool(_const_eval(stmt.test, ctx.consts)) else stmt.orelse
+            branch = stmt.body if bool(_const_eval(stmt.test, comp.consts)) else stmt.orelse
             for sub in branch:
                 compile_statement(ctx, sub, idx, allow_final_expr=False)
             return
@@ -264,14 +264,14 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
             raise CompileError('store("attribute_name", value, selection=..., domain="POINT", type="FLOAT") expects 2 positional arguments')
         kws = _kw_dict(call)
         _check_no_extra_keywords(kws, {"selection", "domain", "type"})
-        attr_name = _literal_string(call.args[0], "store() attribute name", ctx.consts)
+        attr_name = _literal_string(call.args[0], "store() attribute name", comp.consts)
         value = comp.compile(call.args[1])
         reject_compile_time_object(value, "store() value")
         if isinstance(value, list):
             raise CompileError("store() value cannot be an array")
         selection = _selection_kw(comp, kws)
-        domain = _optional_string_kw(kws, "domain", "POINT", ctx.consts)
-        data_type_override = _optional_string_kw(kws, "type", None, ctx.consts)
+        domain = _optional_string_kw(kws, "domain", "POINT", comp.consts)
+        data_type_override = _optional_string_kw(kws, "type", None, comp.consts)
         ctx.geometry_socket = _store_named_attribute(group, ctx.geometry_socket, attr_name, value, selection, domain, data_type_override, 520 + idx * 130, -260 - idx * 60)
         ctx.auto_final_output = None
         return
@@ -299,7 +299,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
             if "value" not in kws:
                 raise CompileError('output(name="Name", value=value) expects value=...')
             if "name" in kws:
-                out_name = _unique_output_name(ctx.output_names, _literal_string(kws["name"], "output() name", ctx.consts))
+                out_name = _unique_output_name(ctx.output_names, _literal_string(kws["name"], "output() name", comp.consts))
             else:
                 out_name = _unique_output_name(ctx.output_names, "out")
             value_expr = kws["value"]
@@ -307,7 +307,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
             out_name = _unique_output_name(ctx.output_names, "out")
             value_expr = call.args[0]
         elif len(call.args) == 2:
-            out_name = _unique_output_name(ctx.output_names, _literal_string(call.args[0], "output() name", ctx.consts))
+            out_name = _unique_output_name(ctx.output_names, _literal_string(call.args[0], "output() name", comp.consts))
             value_expr = call.args[1]
         else:
             raise CompileError('output(value), output("Name", value), or output(name="Name", value=value) expected')

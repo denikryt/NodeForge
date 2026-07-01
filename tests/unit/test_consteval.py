@@ -65,3 +65,133 @@ def test_literal_string_and_input_discovery_use_compile_time_fstrings():
 
     retained = _parse_source('output(f"{runtime_name}", 1)')
     assert _collect_inputs(retained, consts={}) == ["runtime_name"]
+
+
+def _preprocess_source(source):
+    from NodeForge.consteval import _preprocess_compile_time
+    from NodeForge.parsing import _parse_source
+
+    return _preprocess_compile_time(_parse_source(source))
+
+
+def test_preprocess_preserves_integer_assignments_as_compile_time_range_candidates():
+    retained, consts = _preprocess_source(
+        """
+BASE_SEGMENTS = 8
+EXTRA_SEGMENTS = 4
+MAX_SEGMENTS = BASE_SEGMENTS + EXTRA_SEGMENTS
+parts = []
+for i in range(MAX_SEGMENTS):
+    parts.append(i)
+output("count", MAX_SEGMENTS)
+"""
+    )
+
+    assert consts["BASE_SEGMENTS"] == 8
+    assert consts["EXTRA_SEGMENTS"] == 4
+    assert consts["MAX_SEGMENTS"] == 12
+    assert [stmt.targets[0].id for stmt in retained if isinstance(stmt, ast.Assign)] == [
+        "BASE_SEGMENTS",
+        "EXTRA_SEGMENTS",
+        "MAX_SEGMENTS",
+        "parts",
+    ]
+
+
+@pytest.mark.parametrize(
+    "source, expected",
+    [
+        ("range(4)", [0, 1, 2, 3]),
+        ("range(1, 4)", [1, 2, 3]),
+        ("range(0, 6, 2)", [0, 2, 4]),
+        ("range(-2, 2)", [-2, -1, 0, 1]),
+        ("range(4, 0, -1)", [4, 3, 2, 1]),
+        ("range(+3)", [0, 1, 2]),
+    ],
+)
+def test_compile_time_range_accepts_integer_arguments_only(source, expected):
+    assert _eval_expr(source) == expected
+
+
+@pytest.mark.parametrize("source", ["range(2.5)", "range(True)"])
+def test_compile_time_range_rejects_non_integer_arguments(source):
+    with pytest.raises(CompileError, match=r"range\(\) arguments must be compile-time integers"):
+        _eval_expr(source)
+
+
+def test_compile_time_range_rejects_zero_step_with_compile_error():
+    with pytest.raises(CompileError, match=r"range\(\) step must not be zero"):
+        _eval_expr("range(0, 4, 0)")
+
+
+def test_preprocess_invalidates_integer_range_candidate_after_non_integer_reassignment():
+    retained, consts = _preprocess_source(
+        """
+MAX_SEGMENTS = 8
+MAX_SEGMENTS = input_int("Segments")
+parts = []
+for i in range(MAX_SEGMENTS):
+    parts.append(i)
+output("count", MAX_SEGMENTS)
+"""
+    )
+
+    assert "MAX_SEGMENTS" not in consts
+    assert any(isinstance(stmt, ast.For) for stmt in retained)
+
+
+def test_preprocess_invalidates_integer_range_candidate_after_empty_list_reassignment():
+    retained, consts = _preprocess_source(
+        """
+COUNT = 16
+COUNT = []
+output("x", 1)
+"""
+    )
+
+    assert "COUNT" not in consts
+    assert [stmt.targets[0].id for stmt in retained if isinstance(stmt, ast.Assign)] == ["COUNT", "COUNT"]
+
+
+def test_handle_stmt_invalidates_integer_candidate_for_preserved_runtime_range_state():
+    from NodeForge.consteval import _handle_compile_time_stmt
+
+    stmt = ast.parse("COUNT = 16").body[0]
+    env = {"COUNT": 8}
+    out = []
+
+    _handle_compile_time_stmt(stmt, env, out, preserve_names={"COUNT"})
+
+    assert "COUNT" not in env
+    assert out == [stmt]
+
+
+def test_preprocess_invalidates_integer_candidate_after_augmented_assignment():
+    retained, consts = _preprocess_source(
+        """
+COUNT = 16
+COUNT += 1
+output("x", 1)
+"""
+    )
+
+    assert "COUNT" not in consts
+    assert any(isinstance(stmt, ast.AugAssign) for stmt in retained)
+
+
+def test_preprocess_rejects_invalid_constant_range_before_runtime_fallback():
+    with pytest.raises(CompileError, match=r"range\(\) arguments must be compile-time integers"):
+        _preprocess_source('for i in range(2.5):\n    output("x", i)\n')
+
+    with pytest.raises(CompileError, match=r"range\(\) arguments must be compile-time integers"):
+        _preprocess_source('for i in range(True):\n    output("x", i)\n')
+
+    with pytest.raises(CompileError, match=r"range\(\) step must not be zero"):
+        _preprocess_source('for i in range(0, 4, 0):\n    output("x", i)\n')
+
+
+def test_preprocess_defers_range_with_runtime_name_to_statement_compiler():
+    retained, consts = _preprocess_source('COUNT = input_int("Count")\nfor i in range(COUNT):\n    output("x", i)\n')
+
+    assert "COUNT" not in consts
+    assert any(isinstance(stmt, ast.For) for stmt in retained)

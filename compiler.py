@@ -66,7 +66,7 @@ class Compiler:
         self.group = group
         self.group_input = group_input
         self.vars = {}
-        self.consts = consts or {}
+        self.consts = consts if consts is not None else {}
         self.local_functions = local_functions or {}
         self.local_group_cache = local_group_cache if local_group_cache is not None else {}
         self.backend_builtins = dict(backend_builtins or {})
@@ -256,7 +256,7 @@ def _build_group(source: str, name: str = "NodeForge Group", local_functions=Non
         ctx = GroupBuildContext(
             group=group,
             comp=comp,
-            consts=consts,
+            consts=comp.consts,
             geometry_mode=geometry_mode,
             geometry_socket=geometry_socket,
         )

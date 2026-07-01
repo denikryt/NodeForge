@@ -46,6 +46,22 @@ def _const_len(value):
     raise CompileError("len() expects a compile-time list/tuple/string")
 
 
+def _is_compile_time_int(value):
+    """Return True for integer compile-time range bounds, excluding booleans."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _const_range(args):
+    """Evaluate range() for compile-time integer arguments only."""
+    if len(args) not in {1, 2, 3}:
+        raise CompileError("range() expects 1-3 arguments")
+    if not all(_is_compile_time_int(arg) for arg in args):
+        raise CompileError("range() arguments must be compile-time integers")
+    if len(args) == 3 and args[2] == 0:
+        raise CompileError("range() step must not be zero")
+    return list(range(*args))
+
+
 def _is_num(v):
     """Return True for compile-time scalar numbers, excluding booleans."""
     return isinstance(v, (int, float)) and not isinstance(v, bool)
@@ -152,10 +168,14 @@ def _const_eval(expr, env):
         if isinstance(expr.op, ast.USub):
             if vv is not None:
                 return ConstVector((-vv[0], -vv[1], -vv[2]))
+            if _is_compile_time_int(v):
+                return -v
             return -_as_float_const(v)
         if isinstance(expr.op, ast.UAdd):
             if vv is not None:
                 return vv
+            if _is_compile_time_int(v):
+                return v
             return _as_float_const(v)
         if isinstance(expr.op, ast.Not):
             return not bool(v)
@@ -189,10 +209,7 @@ def _const_eval(expr, env):
                 raise CompileError("compile-time vector(x,y,z) expects 3 arguments")
             return ConstVector((_as_float_const(args[0]), _as_float_const(args[1]), _as_float_const(args[2])))
         if name == "range":
-            if len(args) == 1: return list(range(int(args[0])))
-            if len(args) == 2: return list(range(int(args[0]), int(args[1])))
-            if len(args) == 3: return list(range(int(args[0]), int(args[1]), int(args[2])))
-            raise CompileError("range() expects 1-3 arguments")
+            return _const_range(args)
         if name == "count_zero":
             return sum(1 for a in args if a == 0)
         if name == "len":
@@ -209,6 +226,19 @@ def _const_eval(expr, env):
             return _ALLOWED_MATH_FUNCS[name](args[0])
     raise CompileError(f"Unsupported compile-time expression: {type(expr).__name__}")
 
+
+
+def _can_defer_range_error(expr, env):
+    """Return True when a for iterable error should be handled by runtime lowering."""
+    if not (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) and expr.func.id == "range"):
+        return True
+    for arg in expr.args:
+        try:
+            _const_eval(arg, env)
+        except CompileError:
+            return True
+    return False
+
 def _handle_compile_time_stmt(stmt, env, out_stmts, preserve_names=None):
     """Function `_handle_compile_time_stmt` used by the NodeForge addon."""
     preserve_names = preserve_names or set()
@@ -218,11 +248,13 @@ def _handle_compile_time_stmt(stmt, env, out_stmts, preserve_names=None):
             raise CompileError("Assignment target must be a simple name")
         # Preserve initial values for runtime_range state variables; they must become GN values.
         if target.id in preserve_names:
+            env.pop(target.id, None)
             out_stmts.append(stmt)
             return
         # Empty lists are script-level runtime arrays: keep them for the compiler
         # so later `items.append(dynamic_value)` can collect node Values.
         if isinstance(stmt.value, ast.List) and not stmt.value.elts:
+            env.pop(target.id, None)
             out_stmts.append(stmt)
             return
         # Treat non-empty fully-constant assignments as compile-time only.
@@ -232,8 +264,22 @@ def _handle_compile_time_stmt(stmt, env, out_stmts, preserve_names=None):
             if isinstance(stmt.value, (ast.List, ast.Tuple)) or isinstance(val, (list, tuple, ConstVector, str, bool)):
                 env[target.id] = val
                 return
+            if isinstance(val, int) and not isinstance(val, bool):
+                env[target.id] = val
+            else:
+                env.pop(target.id, None)
         except CompileError:
-            pass
+            env.pop(target.id, None)
+        out_stmts.append(stmt)
+        return
+    if isinstance(stmt, ast.AugAssign):
+        if isinstance(stmt.target, ast.Name):
+            env.pop(stmt.target.id, None)
+        out_stmts.append(stmt)
+        return
+    if isinstance(stmt, ast.AnnAssign):
+        if isinstance(stmt.target, ast.Name):
+            env.pop(stmt.target.id, None)
         out_stmts.append(stmt)
         return
     if isinstance(stmt, ast.Expr):
@@ -267,6 +313,8 @@ def _handle_compile_time_stmt(stmt, env, out_stmts, preserve_names=None):
         try:
             iterable = _const_eval(stmt.iter, env)
         except CompileError:
+            if not _can_defer_range_error(stmt.iter, env):
+                raise
             out_stmts.append(stmt)
             return
         # Keep loops with array append for the main compiler; it can unroll them
@@ -329,4 +377,4 @@ def _infer_input_types(stmts):
                     result[arg.id] = TYPE_INT
     return result
 
-__all__ = ['ConstVector', '_is_const_vector', '_as_float_const', '_const_eval', '_handle_compile_time_stmt', '_preprocess_compile_time', '_infer_input_types']
+__all__ = ['ConstVector', '_is_const_vector', '_as_float_const', '_is_compile_time_int', '_const_range', '_const_eval', '_handle_compile_time_stmt', '_preprocess_compile_time', '_infer_input_types']
