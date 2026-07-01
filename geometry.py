@@ -134,14 +134,86 @@ def _cube_geometry(group, size, x=0, y=0):
         raise CompileError("cube(size) expects Float/Int or Vector size")
     return Value(node.outputs[0], TYPE_GEOMETRY)
 
+def _empty_geometry(group, x=0, y=0):
+    """Create a valid Geometry value with zero elements.
+
+    Empty geometry intentionally uses the same Mesh Line point-source contract as
+    points(count), with Count fixed to 0 and no offset. This creates an ordinary
+    Geometry socket without depending on implicit no-input join behavior.
+    """
+    node = _new_node(group, "GeometryNodeMeshLine", x, y)
+    node.inputs[0].default_value = 0
+    try:
+        _set_vector_socket_default(node.inputs[2], (0, 0, 0))
+        _set_vector_socket_default(node.inputs[3], (0, 0, 0))
+    except Exception:
+        pass
+    return Value(node.outputs[0], TYPE_GEOMETRY)
+
+
+def _set_vector_socket_value(group, socket, value, x=0, y=0, label="value", *, link_const=False):
+    """Write or link a Vector into a Blender node socket.
+
+    Some Geometry Nodes field inputs, notably Set Position's Position socket in
+    Blender 5.x, ignore an unlinked socket default during modifier evaluation.
+    `link_const=True` materializes compile-time vectors as a Combine XYZ node so
+    those sockets receive an explicit field value while ordinary value sockets can
+    still keep compact defaults.
+    """
+    if _is_const_vector_like(value):
+        if link_const:
+            vector_value = _combine_xyz_mixed(group, list(value), x, y)
+            group.links.new(vector_value.socket, socket)
+        else:
+            _set_vector_socket_default(socket, value)
+        return
+    if isinstance(value, Value) and value.typ == TYPE_VECTOR:
+        group.links.new(value.socket, socket)
+        return
+    raise CompileError(f"{label} expects Vector")
+
+
+def _socket_by_name_or_index(node, name, index):
+    """Return a node input by stable name, falling back to Blender's index order."""
+    socket = node.inputs.get(name) if hasattr(node.inputs, "get") else None
+    return socket if socket is not None else node.inputs[index]
+
+
+def _point_geometry(group, position, x=0, y=0):
+    """Create one point and set its position from a const or runtime Vector."""
+    geo = _points_geometry(group, 1, x, y)
+    node = _new_node(group, "GeometryNodeSetPosition", x + 220, y)
+    group.links.new(geo.socket, node.inputs[0])
+    _set_vector_socket_value(group, node.inputs[2], position, x, y, "point() position", link_const=True)
+    return Value(node.outputs[0], TYPE_GEOMETRY)
+
+
+def _line_geometry(group, start, end, x=0, y=0):
+    """Create a Curve Primitive Line from const or runtime Vector endpoints."""
+    node = _new_node(group, "GeometryNodeCurvePrimitiveLine", x, y)
+    if hasattr(node, "mode"):
+        try:
+            node.mode = "POINTS"
+        except Exception:
+            pass
+    start_socket = _socket_by_name_or_index(node, "Start", 0)
+    end_socket = _socket_by_name_or_index(node, "End", 1)
+    _set_vector_socket_value(group, start_socket, start, x - 180, y, "line() start")
+    _set_vector_socket_value(group, end_socket, end, x - 180, y - 60, "line() end")
+    return Value(node.outputs[0], TYPE_GEOMETRY)
+
+
 def _join_geometry(group, geos, x=0, y=0):
-    """Function `_join_geometry` used by the NodeForge addon."""
+    """Join Geometry values, using empty_geometry as the identity for empty lists."""
+    if len(geos) == 0:
+        return _empty_geometry(group, x, y)
+    for geo in geos:
+        if not isinstance(geo, Value) or geo.typ != TYPE_GEOMETRY:
+            raise CompileError("join() expects Geometry arguments")
     if len(geos) == 1:
         return geos[0]
     node = _new_node(group, "GeometryNodeJoinGeometry", x, y)
     for geo in geos:
-        if geo.typ != TYPE_GEOMETRY:
-            raise CompileError("join() expects Geometry arguments")
         group.links.new(geo.socket, node.inputs[0])
     return Value(node.outputs[0], TYPE_GEOMETRY)
 

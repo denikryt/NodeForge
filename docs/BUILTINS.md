@@ -729,6 +729,56 @@ geo = set_material(geo, 'NodeForge Material')
 output('Geometry', geo)
 ```
 
+
+### `empty_geometry()`
+
+Creates a valid Geometry value with zero elements. Use it as the neutral starting value for generated geometry collections, optional branches, and repeat-loop accumulators.
+
+Returns: `Geometry`.
+
+```python
+geo = empty_geometry()
+count = input_int('Count', default=3)
+for i in repeat_range(count):
+    part = transform(cube(0.25), translation=vector(i, 0, 0))
+    geo = join(geo, part)
+output('Geometry', geo)
+```
+
+### `point(position)`
+
+Creates one point and sets its position. `position` can be a literal vector expression or a runtime `Vector` value.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `position` | `Vector` | Point position. |
+
+Returns: `Geometry`.
+
+```python
+pos = input_vector('Position', default=(0, 0, 1))
+geo = point(pos)
+output('Geometry', geo)
+```
+
+### `line(start, end)`
+
+Creates a curve line segment between two endpoints. `start` and `end` can be literal vector expressions or runtime `Vector` values.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `start` | `Vector` | Start endpoint. |
+| `end` | `Vector` | End endpoint. |
+
+Returns: `Geometry`.
+
+```python
+start = input_vector('Start', default=(0, 0, 0))
+end = input_vector('End', default=(1, 0, 0))
+geo = line(start, end)
+output('Geometry', geo)
+```
+
 ### `cube(size=1.0)`
 
 Creates a cube mesh.
@@ -748,11 +798,11 @@ output('Geometry', geo_1)
 ### `join(geometry, ...)`
 ### `join([geometry_a, geometry_b, ...])`
 
-Joins multiple geometry values. Arguments can be separate geometry values, arrays of geometry values, or one literal list/tuple of geometry values.
+Joins multiple geometry values. Arguments can be separate geometry values, arrays of geometry values, or one literal list/tuple of geometry values. A supplied empty array such as `join([])` returns `empty_geometry()`. A call with no arguments is still invalid.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
-| `geometry` | one or more `Geometry` values | Geometry values to join. At least one geometry is required. |
+| `geometry` | `Geometry` values or an array of `Geometry` values | Geometry values to join. A supplied array may be empty. |
 
 Returns: `Geometry`.
 
@@ -767,6 +817,9 @@ geo_7 = points(8)
 parts = [geo_3, geo_6, geo_7]
 geo_8 = join(parts)
 output('Geometry', geo_8)
+
+empty_parts = []
+empty = join(empty_parts)
 ```
 
 ### `transform(geometry, translation=None, scale=None, rotation=None)`

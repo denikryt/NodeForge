@@ -8,8 +8,11 @@ from ..consteval import _const_eval
 from ..parsing import _literal_string
 from ..compile_time import reject_compile_time_object
 from ..geometry import (
+    _empty_geometry,
     _points_geometry,
     _set_position_geometry,
+    _point_geometry,
+    _line_geometry,
     _cube_geometry,
     _join_geometry,
     _transform_geometry,
@@ -19,7 +22,21 @@ from ..geometry import (
     _set_material_geometry,
 )
 
-NAMES = {"points", "grid", "grid_uv", "set_position", "store_named_attribute", "set_material", "cube", "join", "transform", "polyline"}
+NAMES = {
+    "empty_geometry",
+    "points",
+    "point",
+    "line",
+    "grid",
+    "grid_uv",
+    "set_position",
+    "store_named_attribute",
+    "set_material",
+    "cube",
+    "join",
+    "transform",
+    "polyline",
+}
 
 
 def compile_call(comp, expr, depth=0):
@@ -28,6 +45,31 @@ def compile_call(comp, expr, depth=0):
     x = depth * 240
     y = -depth * 90
     kws = _kw_dict(expr)
+
+
+    if name == "empty_geometry":
+        if kws:
+            raise CompileError("empty_geometry() does not support keyword arguments")
+        if expr.args:
+            raise CompileError("empty_geometry() expects no arguments")
+        return _empty_geometry(comp.group, x, y)
+
+    if name == "point":
+        if kws:
+            raise CompileError("point() does not support keyword arguments")
+        if len(expr.args) != 1:
+            raise CompileError("point(position) expects one Vector argument")
+        position = _const_or_compile(comp, expr.args[0])
+        return _point_geometry(comp.group, position, x, y)
+
+    if name == "line":
+        if kws:
+            raise CompileError("line() does not support keyword arguments")
+        if len(expr.args) != 2:
+            raise CompileError("line(start, end) expects two Vector arguments")
+        start = _const_or_compile(comp, expr.args[0])
+        end = _const_or_compile(comp, expr.args[1])
+        return _line_geometry(comp.group, start, end, x, y)
 
     if name == "points":
         if kws:
@@ -128,8 +170,6 @@ def compile_call(comp, expr, depth=0):
                     geos.extend(val)
                 else:
                     geos.append(val)
-        if not geos:
-            raise CompileError("join() expects at least one Geometry")
         return _join_geometry(comp.group, geos, x, y)
 
     if name == "transform":
