@@ -135,13 +135,14 @@ def _assigned_names_in_runtime_body(stmts):
     return names
 
 
-def _repeat_scalar_assignments(group, comp, iterations, body_stmts, index_name=None, x=0, y=0):
-    """Compile runtime_range loop with scalar/vector state and conditional updates.
+def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=None, x=0, y=0):
+    """Compile a runtime_range loop with type-generic Repeat Zone state.
 
     Existing variables assigned anywhere in the loop body become Repeat Zone state.
     Assignments to new names are iteration-local temporaries. An if block without an
     else conditionally updates state variables and preserves their previous values
-    when the condition is false.
+    when the condition is false. Geometry, Vector, Float, Int, and Bool states share
+    the same Repeat Zone lifecycle and branch-merge path.
     """
     reject_compile_time_object(iterations, "runtime_range iteration count")
     if iterations.typ != TYPE_INT:
@@ -155,16 +156,34 @@ def _repeat_scalar_assignments(group, comp, iterations, body_stmts, index_name=N
     if not state_names:
         raise CompileError("runtime_range loop must update at least one existing variable")
 
+    supported_state_types = {TYPE_GEOMETRY, TYPE_VECTOR, TYPE_FLOAT, TYPE_INT, TYPE_BOOL}
     for name in state_names:
-        reject_compile_time_object(comp.vars[name], "runtime_range state")
-        if comp.vars[name].typ == TYPE_GEOMETRY:
-            raise CompileError("runtime_range is for scalar/vector state; use for i in range(...) for Geometry")
+        value = comp.vars[name]
+        reject_compile_time_object(value, "runtime_range state")
+        if isinstance(value, list) or not isinstance(value, Value):
+            raise CompileError("runtime_range state must be a node value")
+        if value.typ not in supported_state_types:
+            raise CompileError(f"runtime_range state {name!r} has unsupported type {value.typ}")
+
+    if index_name in state_names:
+        raise CompileError("runtime_range loop index name cannot also be a state variable")
 
     ri = _new_node(group, "GeometryNodeRepeatInput", x, y)
     ro = _new_node(group, "GeometryNodeRepeatOutput", x + 1120, y)
     if not ri.pair_with_output(ro):
         raise CompileError("Could not pair Repeat Zone nodes")
+
     _remove_default_repeat_items(ro)
+
+    system_socket_names = {"Iterations", "Iteration"}
+    for sockets in (ri.inputs, ri.outputs, ro.inputs, ro.outputs):
+        for socket in sockets:
+            system_socket_names.add(socket.name)
+    if index_name in system_socket_names:
+        raise CompileError(f"runtime_range loop index name {index_name!r} conflicts with Repeat Zone socket name")
+    for name in state_names:
+        if name in system_socket_names:
+            raise CompileError(f"runtime_range state name {name!r} conflicts with Repeat Zone socket name")
 
     for name in state_names:
         ro.repeat_items.new(_repeat_item_type_for_value(comp.vars[name]), name)
@@ -277,5 +296,5 @@ def _repeat_scalar_assignments(group, comp, iterations, body_stmts, index_name=N
 
 __all__ = [
     '_parse_runtime_for', '_parse_runtime_range_for',
-    '_repeat_geometry_assignment', '_repeat_scalar_assignments'
+    '_repeat_geometry_assignment', '_repeat_state_assignments'
 ]

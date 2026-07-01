@@ -23,7 +23,7 @@ from .runtime import (
     _parse_runtime_for,
     _parse_runtime_range_for,
     _repeat_geometry_assignment,
-    _repeat_scalar_assignments,
+    _repeat_state_assignments,
 )
 
 
@@ -148,7 +148,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
             reject_compile_time_object(iterations, "runtime_range iteration count")
             if iterations.typ != TYPE_INT:
                 raise CompileError("runtime_range(n) expects an Int input or integer value")
-            results = _repeat_scalar_assignments(group, comp, iterations, body, index_name=stmt.target.id, x=300 + idx * 160, y=-380 - idx * 70)
+            results = _repeat_state_assignments(group, comp, iterations, body, index_name=stmt.target.id, x=300 + idx * 160, y=-380 - idx * 70)
             if results:
                 last_name = list(results.keys())[-1]
                 ctx.auto_final_output = (last_name, results[last_name])

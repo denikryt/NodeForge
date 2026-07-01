@@ -916,22 +916,29 @@ output('Geometry', geo)
 
 ### `for i in runtime_range(steps): ...`
 
-Updates existing scalar, boolean, integer, or vector variables inside a Repeat Zone. The body supports assignments and nested `if` blocks with assignments. It must update at least one existing variable. Geometry state is not supported in `runtime_range`; use `range(...)` for geometry repeat loops.
+Updates existing Geometry, Vector, Float, Int, and Bool variables inside one Repeat Zone. The body supports assignments and nested `if` blocks with assignments. It must update at least one existing variable. Assigned names that did not exist before the loop are iteration-local temporaries rather than Repeat Zone state items.
+
+State item order follows first assignment in the loop body, including nested branches. Conditional branches preserve omitted state values and merge changed state through Switch nodes. The loop index name cannot also be state, and state names cannot collide with Repeat Zone system socket names such as `Iterations` or `Iteration`.
 
 | Part | Type | Description |
 | --- | --- | --- |
 | `steps` | `Int` | Repeat count. |
-| state variables | `Float`, `Int`, `Bool`, or `Vector` | Existing variables assigned inside the loop. |
+| state variables | `Geometry`, `Vector`, `Float`, `Int`, or `Bool` | Existing variables assigned inside the loop. |
 
 ```python
 n = input_int('N', default=8)
-a = 0
-b = 1
+geo = cube(0.1)
+pos = vector(0, 0, 0)
+angle = input_float('Angle', default=45)
 for i in runtime_range(n):
-    next = a + b
-    a = b
-    b = next
-output('Value', a)
+    next_pos = pos + vector(1, 0, 0)
+    part = transform(cube(0.05), translation=next_pos)
+    geo = join(geo, part)
+    pos = next_pos
+    angle = -angle
+output('Geometry', geo)
+output('Position', pos)
+output('Angle', angle)
 ```
 
 ## Arrays and unrolled loops

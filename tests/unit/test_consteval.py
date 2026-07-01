@@ -166,6 +166,36 @@ def test_handle_stmt_invalidates_integer_candidate_for_preserved_runtime_range_s
     assert out == [stmt]
 
 
+def test_preprocess_preserves_mixed_runtime_range_state_initializers():
+    retained, consts = _preprocess_source(
+        """
+geo = cube(0.1)
+pos = vector(0, 0, 0)
+angle = 1
+flag = True
+for i in runtime_range(count):
+    geo = geo
+    pos = pos
+    angle = angle + 1
+    flag = flag
+output("Geometry", geo)
+"""
+    )
+
+    retained_assigns = [stmt.targets[0].id for stmt in retained if isinstance(stmt, ast.Assign)]
+    assert "geo" in retained_assigns
+    assert "pos" in retained_assigns
+    assert "angle" in retained_assigns
+    assert "flag" in retained_assigns
+    assert any(isinstance(stmt, ast.For) for stmt in retained)
+    assert "count" not in consts
+
+    from NodeForge.consteval import _infer_input_types
+    from NodeForge.constants import TYPE_INT
+
+    assert _infer_input_types(retained).get("count") == TYPE_INT
+
+
 def test_preprocess_invalidates_integer_candidate_after_augmented_assignment():
     retained, consts = _preprocess_source(
         """

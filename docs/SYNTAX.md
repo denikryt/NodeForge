@@ -556,7 +556,9 @@ output('Geometry', geo)
 
 ### Runtime geometry repeat loops
 
-A loop of this form creates a Blender Repeat Zone for a Geometry value:
+`runtime_range(...)` is the preferred Repeat Zone form for existing state variables, including Geometry state. The legacy `range(...)` Geometry form remains accepted for compatibility.
+
+A legacy loop of this form creates a Blender Repeat Zone for one Geometry value:
 
 ```python
 geo = cube(size=1.0)
@@ -567,11 +569,11 @@ for i in range(steps):
 output('Geometry', geo)
 ```
 
-The runtime geometry loop must look like `for i in range(steps):` and its body currently supports one assignment to an existing Geometry variable.
+The legacy runtime geometry loop must look like `for i in range(steps):` and its body currently supports one assignment to an existing Geometry variable. Use `runtime_range(...)` for loops that update multiple state variables.
 
-### Runtime scalar/vector repeat loops
+### Runtime state repeat loops
 
-`runtime_range(steps)` creates a Repeat Zone for existing scalar, boolean, integer, or vector state variables.
+`runtime_range(steps)` creates one Repeat Zone for existing Geometry, Vector, Float, Int, and Bool state variables. Every pre-existing variable assigned inside the body becomes a Repeat Zone state item. New variables assigned only inside the body are iteration-local temporaries.
 
 ```python
 x = 0.0
@@ -581,7 +583,9 @@ for i in runtime_range(steps):
 output('X', x)
 ```
 
-The loop body supports assignments and nested `if` blocks with assignments. It must update at least one existing variable. Geometry state is not supported in `runtime_range(...)`; use the runtime geometry loop form for Geometry values.
+The loop body supports assignments and nested `if` blocks with assignments. It must update at least one existing variable. State item order follows first assignment in the loop body, including nested branches. An `if` branch that omits a state assignment preserves that branch's incoming state value; changed state is merged with Switch nodes, including Geometry state.
+
+The loop index name cannot also be a state variable, and state names cannot collide with Repeat Zone system socket names such as `Iterations` or `Iteration`. These naming conflicts raise `CompileError` to avoid ambiguous socket wiring.
 
 ## Top-level side-effect calls
 
