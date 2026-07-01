@@ -85,10 +85,11 @@ def _compile_mix_spec(group, args, x, y):
 
 
 def _compile_select_spec(group, args, x, y):
-    """Compile select(cond, false, true)."""
+    """Compile select(cond, true, false) while preserving Switch socket order."""
     if len(args) != 3:
-        raise CompileError("select(cond, false, true) expects 3 arguments")
-    return _switch(group, args[0], args[1], args[2], x, y)
+        raise CompileError("select(cond, true, false) expects 3 arguments")
+    cond, true_val, false_val = args
+    return _switch(group, cond, false_val, true_val, x, y)
 
 
 def _compile_map_range_spec(group, args, x, y):
@@ -290,7 +291,7 @@ _SPECS = {
     "ln": MathBuiltinSpec("ln", ("value",), _compile_ln_spec),
     "clamp": MathBuiltinSpec("clamp", ("value", "min", "max"), _compile_clamp_spec),
     "mix": MathBuiltinSpec("mix", ("a", "b", "factor"), _compile_mix_spec),
-    "select": MathBuiltinSpec("select", ("cond", "false", "true"), _compile_select_spec),
+    "select": MathBuiltinSpec("select", ("cond", "true", "false"), _compile_select_spec),
     "map_range": MathBuiltinSpec("map_range", ("value", "from_min", "from_max", "to_min", "to_max"), _compile_map_range_spec),
 }
 _CUSTOM_NAMES = {"noise", "random_value"}

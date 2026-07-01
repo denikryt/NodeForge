@@ -47,6 +47,83 @@ class LibraryBinding:
     canonical_name: str
 
 
+class LocalHelperBuildTransaction:
+    """Own local-function helper side effects for one outer parent build attempt."""
+
+    def __init__(self):
+        self.created_groups = []
+        self.updated_groups = []
+        self._updated_by_name = {}
+        self._closed = False
+
+    def register_created(self, group, resource_transaction):
+        """Track a newly created helper group and its generated-resource transaction."""
+        if self._closed:
+            return
+        self.created_groups.append((group, resource_transaction))
+
+    def register_updated(self, group, backup, resource_transaction, old_manifest, new_manifest):
+        """Track a pre-existing helper update with rollback and deferred cleanup state."""
+        if self._closed:
+            _remove_node_group_if_live(backup)
+            return
+        key = getattr(group, "name", None)
+        if key in self._updated_by_name:
+            self._updated_by_name[key]["transactions"].append((resource_transaction, old_manifest, new_manifest))
+            _remove_node_group_if_live(backup)
+            return
+        record = {
+            "group": group,
+            "backup": backup,
+            "transactions": [(resource_transaction, old_manifest, new_manifest)],
+        }
+        self._updated_by_name[key] = record
+        self.updated_groups.append(record)
+
+    def rollback(self):
+        """Restore all helper node groups and generated IDs touched by the attempt."""
+        if self._closed:
+            return
+        self._closed = True
+        for record in reversed(self.updated_groups):
+            group = record["group"]
+            backup = record["backup"]
+            try:
+                if group is not None and backup is not None and bpy.data.node_groups.get(group.name) is group:
+                    _copy_group_contents(backup, group)
+            except Exception:
+                pass
+            for tx, _old_manifest, _new_manifest in reversed(record["transactions"]):
+                try:
+                    tx.rollback()
+                except Exception:
+                    pass
+            _remove_node_group_if_live(backup)
+        for group, tx in reversed(self.created_groups):
+            try:
+                tx.rollback()
+            except Exception:
+                pass
+            _remove_node_group_if_live(group)
+
+    def commit(self):
+        """Commit helper generated resources and perform deferred old-resource cleanup."""
+        if self._closed:
+            return
+        self._closed = True
+        for record in self.updated_groups:
+            for tx, old_manifest, new_manifest in record["transactions"]:
+                tx.mark_committed()
+                if old_manifest is not None:
+                    generated_resources.cleanup_previous_after_commit(
+                        old_manifest,
+                        new_manifest or generated_resources.build_manifest(old_manifest["owner_group_uuid"], []),
+                    )
+            _remove_node_group_if_live(record["backup"])
+        for _group, tx in self.created_groups:
+            tx.mark_committed()
+
+
 class Compiler:
     """Compilation context for one Geometry Nodes group build."""
 
@@ -61,6 +138,9 @@ class Compiler:
         compile_group_callback=None,
         generated_resource_transaction=None,
         imported_library_functions=None,
+        helper_namespace=None,
+        local_helper_transaction=None,
+        reserved_name_labels=None,
     ):
         """Initialize state shared by expression, statement, and call compilers."""
         self.group = group
@@ -73,6 +153,9 @@ class Compiler:
         self.compile_group_callback = compile_group_callback or _make_group
         self.generated_resource_transaction = generated_resource_transaction
         self.imported_library_functions = dict(imported_library_functions or {})
+        self.helper_namespace = helper_namespace or getattr(group, "name", "Group")
+        self.local_helper_transaction = local_helper_transaction
+        self.reserved_name_labels = dict(reserved_name_labels or {})
         self.depth = 0
 
     def compile(self, expr):
@@ -171,7 +254,115 @@ def _validate_import_bindings(import_pairs, body_stmts, local_function_defs, bac
     return imported
 
 
-def _build_group(source: str, name: str = "NodeForge Group", local_functions=None, backend_builtins=None, generated_resource_transaction=None, imported_library_functions=None):
+def _registered_name_labels(local_function_defs, backend_names, imported_library_functions):
+    """Return active DSL-owned names and human-readable reservation labels."""
+    labels = {}
+
+    def add(names, label):
+        for name in names:
+            labels.setdefault(name, label)
+
+    add(builtin_registry.BUILTIN_NAMES, "DSL builtin")
+    add({"output", "store"}, "reserved helper")
+    add(_ALLOWED_CONSTS, "compile-time constant")
+    add(systems_registry.NAMES, "embedded-system constructor")
+    add(backend_names, "backend helper")
+    add(TYPE_TOKEN_NAMES, "type token")
+    add(imported_library_functions, "imported function")
+    add(local_function_defs, "local function")
+    return labels
+
+
+def _format_reserved_label(label):
+    """Format a reservation label for diagnostics."""
+    if label == "DSL builtin":
+        return "reserved by DSL builtin"
+    if label == "imported function":
+        return "already registered as imported function"
+    if label == "local function":
+        return "already registered as local function"
+    if label == "type token":
+        return "reserved by type token"
+    return f"reserved by {label}"
+
+
+def _allows_existing_top_level_shadow(label):
+    """Return True for legacy top-level names that remain value-rebindable."""
+    return label in {"DSL builtin", "compile-time constant"}
+
+
+def _check_registered_binding(name, labels, *, context="assign", allow_existing_shadow=False):
+    """Reject binding to a name that is already owned by non-shadowable DSL behavior."""
+    label = labels.get(name)
+    if label is None:
+        return
+    if allow_existing_shadow and _allows_existing_top_level_shadow(label):
+        return
+    if context == "parameter":
+        raise CompileError(f"Local function parameter {name} is {_format_reserved_label(label)}")
+    raise CompileError(f"Cannot assign to {name}: name is {_format_reserved_label(label)}")
+
+
+def _validate_registered_name_bindings(stmts, labels, *, top_level_function_names=None):
+    """Validate raw AST binding sites before compile-time preprocessing can erase them."""
+    top_level_function_names = set(top_level_function_names or ())
+
+    def check_target(target, *, allow_existing_shadow=False):
+        if isinstance(target, ast.Name):
+            _check_registered_binding(target.id, labels, allow_existing_shadow=allow_existing_shadow)
+            return
+        if isinstance(target, (ast.Tuple, ast.List)):
+            for item in target.elts:
+                check_target(item, allow_existing_shadow=allow_existing_shadow)
+
+    def visit(stmt, *, top_level=False, in_local_function=False):
+        allow_existing_shadow = not in_local_function
+        if isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                check_target(target, allow_existing_shadow=allow_existing_shadow)
+            return
+        if isinstance(stmt, ast.AugAssign):
+            check_target(stmt.target, allow_existing_shadow=allow_existing_shadow)
+            return
+        if isinstance(stmt, ast.For):
+            check_target(stmt.target, allow_existing_shadow=allow_existing_shadow)
+            for sub in stmt.body:
+                visit(sub, in_local_function=in_local_function)
+            for sub in stmt.orelse:
+                visit(sub, in_local_function=in_local_function)
+            return
+        if isinstance(stmt, ast.If):
+            for sub in stmt.body:
+                visit(sub, in_local_function=in_local_function)
+            for sub in stmt.orelse:
+                visit(sub, in_local_function=in_local_function)
+            return
+        if isinstance(stmt, ast.FunctionDef):
+            if not (top_level and stmt.name in top_level_function_names and labels.get(stmt.name) == "local function"):
+                _check_registered_binding(stmt.name, labels)
+            for arg in list(stmt.args.posonlyargs) + list(stmt.args.args) + list(stmt.args.kwonlyargs):
+                _check_registered_binding(arg.arg, labels, context="parameter")
+            if stmt.args.vararg is not None:
+                _check_registered_binding(stmt.args.vararg.arg, labels, context="parameter")
+            if stmt.args.kwarg is not None:
+                _check_registered_binding(stmt.args.kwarg.arg, labels, context="parameter")
+            for sub in stmt.body:
+                visit(sub, in_local_function=True)
+
+    for stmt in stmts:
+        visit(stmt, top_level=True)
+
+
+def _build_group(
+    source: str,
+    name: str = "NodeForge Group",
+    local_functions=None,
+    backend_builtins=None,
+    generated_resource_transaction=None,
+    imported_library_functions=None,
+    helper_namespace=None,
+    local_helper_transaction=None,
+):
     """Compile NodeForge source into a fresh GeometryNodeTree."""
     raw_stmts = _parse_source(source)
     raw_body_stmts, import_pairs = _extract_function_imports(raw_stmts)
@@ -202,6 +393,16 @@ def _build_group(source: str, name: str = "NodeForge Group", local_functions=Non
         local_function_defs,
         backend_names,
         inherited_imports=imported_library_functions,
+    )
+    reserved_name_labels = _registered_name_labels(
+        local_function_defs,
+        backend_names,
+        own_imported_library_functions,
+    )
+    _validate_registered_name_bindings(
+        raw_body_stmts,
+        reserved_name_labels,
+        top_level_function_names=local_function_defs,
     )
 
     stmts, consts = _preprocess_compile_time(body_stmts)
@@ -241,6 +442,9 @@ def _build_group(source: str, name: str = "NodeForge Group", local_functions=Non
             compile_group_callback=_make_group,
             generated_resource_transaction=generated_resource_transaction,
             imported_library_functions=own_imported_library_functions,
+            helper_namespace=helper_namespace or name,
+            local_helper_transaction=local_helper_transaction,
+            reserved_name_labels=reserved_name_labels,
         )
 
         for socket in group_input.outputs:
@@ -287,6 +491,8 @@ def _build_group(source: str, name: str = "NodeForge Group", local_functions=Non
 
         return group
     except Exception:
+        if local_helper_transaction is not None:
+            local_helper_transaction.rollback()
         if generated_resource_transaction is not None:
             generated_resource_transaction.rollback()
         try:
@@ -461,7 +667,18 @@ def _remove_node_group_if_live(group):
         pass
 
 
-def _compile_fresh_with_cleanup(source, name, *, local_functions=None, backend_builtins=None, owner_group=None, imported_library_functions=None):
+def _compile_fresh_with_cleanup(
+    source,
+    name,
+    *,
+    local_functions=None,
+    backend_builtins=None,
+    owner_group=None,
+    imported_library_functions=None,
+    helper_namespace=None,
+    local_helper_transaction=None,
+    defer_generated_resource_commit=False,
+):
     """Compile a fresh group and clean temporary resources on failure."""
     if owner_group is not None:
         tx = generated_resources.create_transaction(owner_group)
@@ -476,10 +693,13 @@ def _compile_fresh_with_cleanup(source, name, *, local_functions=None, backend_b
             backend_builtins=backend_builtins,
             generated_resource_transaction=tx,
             imported_library_functions=imported_library_functions,
+            helper_namespace=helper_namespace or name,
+            local_helper_transaction=local_helper_transaction,
         )
         if tx.resources:
             generated_resources.write_group_manifest(group, tx.manifest())
-        tx.mark_committed()
+        if not defer_generated_resource_commit:
+            tx.mark_committed()
         return group, tx
     except Exception:
         tx.rollback()
@@ -487,9 +707,19 @@ def _compile_fresh_with_cleanup(source, name, *, local_functions=None, backend_b
         raise
 
 
-def _make_group(source: str, name: str = "NodeForge Group", existing_group=None, local_functions=None, backend_builtins=None, imported_library_functions=None):
+def _make_group(
+    source: str,
+    name: str = "NodeForge Group",
+    existing_group=None,
+    local_functions=None,
+    backend_builtins=None,
+    imported_library_functions=None,
+    helper_namespace=None,
+    local_helper_transaction=None,
+):
     """Compile NodeForge source into a GeometryNodeTree."""
     if existing_group is None:
+        top_level_helper_tx = local_helper_transaction or LocalHelperBuildTransaction()
         group, tx = _compile_fresh_with_cleanup(
             source,
             name,
@@ -497,7 +727,14 @@ def _make_group(source: str, name: str = "NodeForge Group", existing_group=None,
             backend_builtins=backend_builtins,
             owner_group=None,
             imported_library_functions=imported_library_functions,
+            helper_namespace=helper_namespace or name,
+            local_helper_transaction=top_level_helper_tx,
+            defer_generated_resource_commit=local_helper_transaction is not None,
         )
+        if local_helper_transaction is not None:
+            local_helper_transaction.register_created(group, tx)
+        else:
+            top_level_helper_tx.commit()
         return group
     if getattr(existing_group, "bl_idname", None) != "GeometryNodeTree":
         raise CompileError("Selected node group is not a GeometryNodeTree")
@@ -508,15 +745,29 @@ def _make_group(source: str, name: str = "NodeForge Group", existing_group=None,
         local_functions=local_functions,
         backend_builtins=backend_builtins,
         imported_library_functions=imported_library_functions,
+        helper_namespace=helper_namespace or getattr(existing_group, "name", name),
+        local_helper_transaction=local_helper_transaction,
     )
 
 
-def _update_existing_group_transactional(existing_group, source, name, *, local_functions=None, backend_builtins=None, imported_library_functions=None):
+def _update_existing_group_transactional(
+    existing_group,
+    source,
+    name,
+    *,
+    local_functions=None,
+    backend_builtins=None,
+    imported_library_functions=None,
+    helper_namespace=None,
+    local_helper_transaction=None,
+):
     """Compile into a replacement group, then cut over with rollback on cutover failure."""
     old_manifest = generated_resources.read_group_manifest(existing_group)
     owner_uuid = old_manifest["owner_group_uuid"] if old_manifest is not None else __import__("uuid").uuid4().hex
     replacement = None
     backup = None
+    owns_helper_tx = local_helper_transaction is None
+    build_helper_tx = local_helper_transaction or LocalHelperBuildTransaction()
     tx = generated_resources.GeneratedResourceTransaction(owner_group_uuid=owner_uuid)
     try:
         replacement = _build_group(
@@ -526,6 +777,8 @@ def _update_existing_group_transactional(existing_group, source, name, *, local_
             backend_builtins=backend_builtins,
             generated_resource_transaction=tx,
             imported_library_functions=imported_library_functions,
+            helper_namespace=helper_namespace or getattr(existing_group, "name", name),
+            local_helper_transaction=build_helper_tx,
         )
         new_manifest = tx.manifest(empty=not bool(tx.resources)) if (old_manifest is not None or tx.resources) else None
         if new_manifest is not None:
@@ -543,11 +796,18 @@ def _update_existing_group_transactional(existing_group, source, name, *, local_
                 _copy_group_contents(backup, existing_group)
             finally:
                 raise
-        tx.mark_committed()
-        if old_manifest is not None:
-            generated_resources.cleanup_previous_after_commit(old_manifest, new_manifest or generated_resources.build_manifest(owner_uuid, []))
+        if local_helper_transaction is not None:
+            local_helper_transaction.register_updated(existing_group, backup, tx, old_manifest, new_manifest)
+            backup = None
+        else:
+            build_helper_tx.commit()
+            tx.mark_committed()
+            if old_manifest is not None:
+                generated_resources.cleanup_previous_after_commit(old_manifest, new_manifest or generated_resources.build_manifest(owner_uuid, []))
         return existing_group
     except Exception:
+        if owns_helper_tx:
+            build_helper_tx.rollback()
         tx.rollback()
         raise
     finally:

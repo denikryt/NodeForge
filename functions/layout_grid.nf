@@ -13,7 +13,7 @@ z_index = floor(index() / (cx * cy))
 pos = vector(x_index, y_index, z_index) * spacing
 
 extent = vector(cx - 1.0, cy - 1.0, cz - 1.0) * spacing * 0.5
-pos = select(centered, pos, pos - extent)
+pos = select(centered, pos - extent, pos)
 
 geometry = set_position(geometry, pos)
 output("Geometry", geometry)

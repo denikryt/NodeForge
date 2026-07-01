@@ -452,21 +452,21 @@ geo_4 = transform(geo_3, scale=scale)
 output('Geometry', geo_4)
 ```
 
-### `select(cond, false, true)`
+### `select(cond, true, false)`
 
-Chooses between two values with a boolean condition. The second argument is the value used when `cond` is false; the third argument is the value used when `cond` is true.
+Chooses between two values with a boolean condition. The second argument is the value used when `cond` is true; the third argument is the value used when `cond` is false.
 
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `cond` | `Bool` | Selection condition. |
-| `false` | `Float`, `Int`, `Bool`, `Vector`, or `Geometry` | Value for false condition. |
-| `true` | same as `false` | Value for true condition. |
+| `true` | `Float`, `Int`, `Bool`, `Vector`, or `Geometry` | Value for true condition. |
+| `false` | same as `true` | Value for false condition. |
 
-Returns: same type as `false` and `true`.
+Returns: same type as `true` and `false`.
 
 ```python
 large = input_bool('Large', default=False)
-size = select(large, 1.0, 3.0)
+size = select(large, 3.0, 1.0)
 geo_1 = cube(size=size)
 output('Geometry', geo_1)
 ```

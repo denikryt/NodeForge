@@ -469,7 +469,10 @@ Local function restrictions:
 | Return | A `return value` statement is required. |
 | Nested functions | Nested `def` statements are not supported. |
 | Argument values | Runtime `Float`, `Int`, `Bool`, `Vector`, and `Geometry` values are supported. Compile-time numeric, boolean, and vector constants are supported. Arrays are not supported as local function arguments. |
+| Captures | Free names from the enclosing script scope are captured as hidden inputs when they are runtime values or supported compile-time literals. |
 | Calls | Positional and keyword calls are supported using the local parameter names. |
+
+A registered DSL name has one meaning in a source file. Built-ins, imported functions, system constructors, type tokens, local function names, and backend helper names cannot be rebound as variables, local-function parameters, assignment targets, or captured values. Use registered names only in their supported callable or type-token positions.
 
 ```python
 def lift(geo, amount):

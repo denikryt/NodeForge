@@ -6,7 +6,7 @@ end_angle = input_float("End Angle", default=tau)
 include_endpoint = input_bool("Include Endpoint", default=False)
 
 count_value = count * 1.0
-raw_denominator = select(include_endpoint, count_value, count_value - 1.0)
+raw_denominator = select(include_endpoint, count_value - 1.0, count_value)
 denominator = max(raw_denominator, 1.0)
 
 t = index() / denominator

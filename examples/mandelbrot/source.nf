@@ -35,7 +35,7 @@ for i in repeat_range(max_iter):
         iteration = i
         escaped = mag2 > 4
 
-value = select(escaped, 0, iteration / max_iter)
+value = select(escaped, iteration / max_iter, 0)
 color = vector(value, value * value, 1 - value)
 
 geo = set_position(

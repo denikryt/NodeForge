@@ -66,6 +66,36 @@ def _target_names(target):
     raise CompileError("array for target must be a simple name or tuple of names")
 
 
+def _reserved_binding_label(comp, name):
+    """Return the active registered-name label for a binding target, if any."""
+    return getattr(comp, "reserved_name_labels", {}).get(name)
+
+
+def _format_reserved_binding_label(label):
+    """Return diagnostic text for a registered-name binding violation."""
+    if label == "DSL builtin":
+        return "reserved by DSL builtin"
+    if label == "imported function":
+        return "already registered as imported function"
+    if label == "local function":
+        return "already registered as local function"
+    if label == "type token":
+        return "reserved by type token"
+    return f"reserved by {label}"
+
+
+def _allows_existing_top_level_shadow(label):
+    """Return True for legacy top-level names that remain value-rebindable."""
+    return label in {"DSL builtin", "compile-time constant"}
+
+
+def _check_runtime_binding(comp, name):
+    """Defensively reject rebinding of non-shadowable registered DSL names."""
+    label = _reserved_binding_label(comp, name)
+    if label is not None and not _allows_existing_top_level_shadow(label):
+        raise CompileError(f"Cannot assign to {name}: name is {_format_reserved_binding_label(label)}")
+
+
 def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
     """Compile one top-level statement into the active geometry node group."""
     comp = ctx.comp
@@ -76,6 +106,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
         if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
             raise CompileError("Only simple assignments like name = value are supported")
         target = stmt.targets[0].id
+        _check_runtime_binding(comp, target)
         try:
             comp.consts[target] = _const_eval(stmt.value, comp.consts)
         except CompileError:
@@ -103,6 +134,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
         if not isinstance(stmt.target, ast.Name):
             raise CompileError("Only simple augmented assignments like name += value are supported")
         target = stmt.target.id
+        _check_runtime_binding(comp, target)
         if target not in comp.vars:
             raise CompileError(f"Unknown name for augmented assignment: {target}")
         bin_expr = ast.BinOp(left=ast.Name(id=target, ctx=ast.Load()), op=stmt.op, right=stmt.value)
@@ -141,6 +173,8 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
 
     if isinstance(stmt, ast.For):
         if isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id == "repeat_range":
+            for target_name in _target_names(stmt.target):
+                _check_runtime_binding(comp, target_name)
             iterations_expr, body = _parse_repeat_range_for(stmt)
             iterations = _compile_iteration_count(ctx, iterations_expr, 240 + idx * 120, -260 - idx * 50)
             reject_compile_time_object(iterations, "repeat_range iteration count")
@@ -164,6 +198,8 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
                 iter_values = None
         if iter_values is not None:
             target_names = _target_names(stmt.target)
+            for target_name in target_names:
+                _check_runtime_binding(comp, target_name)
             old_values = {name: comp.vars.get(name) for name in target_names}
             had_old = {name: name in comp.vars for name in target_names}
             try:

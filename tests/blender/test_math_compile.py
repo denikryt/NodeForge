@@ -17,7 +17,7 @@ def test_math_compile_and_blender_enum_contracts():
     base = len(positional_lines)
     for index, name in enumerate(sorted(_FLOAT_FUNCS_2)):
         positional_lines.append(f'p{base + index} = {name}(0.75, 0.25)')
-    positional_lines.extend(['ln_v = ln(2)', 'clamp_v = clamp(2, 0, 1)', 'mix_v = mix(0, 1, 0.5)', 'select_v = select(True, 0, 1)', 'map_range_v = map_range(0.5, 0, 1, -1, 1)', 'noise_v = noise(vector(0,0,0), scale=1, detail=2, roughness=0.5)', 'random_v = random_value(0, 1, seed=3)', "output('v', clamp_v)"])
+    positional_lines.extend(['ln_v = ln(2)', 'clamp_v = clamp(2, 0, 1)', 'mix_v = mix(0, 1, 0.5)', 'select_v = select(True, 1, 0)', 'map_range_v = map_range(0.5, 0, 1, -1, 1)', 'noise_v = noise(vector(0,0,0), scale=1, detail=2, roughness=0.5)', 'random_v = random_value(0, 1, seed=3)', "output('v', clamp_v)"])
     compile_group('\n'.join(positional_lines), 'NFTest_math_all_positional')
     keyword_lines = []
     for index, name in enumerate(sorted(math._SPECS)):

@@ -127,7 +127,7 @@ def _boolean_math(group, operation, args, x=0, y=0):
 def _switch(group, cond, false_val, true_val, x=0, y=0):
     """Function `_switch` used by the NodeForge addon."""
     if cond.typ != TYPE_BOOL:
-        raise CompileError("select(cond, false, true): cond must be Bool")
+        raise CompileError("select(cond, true, false): cond must be Bool")
     if false_val.typ != true_val.typ:
         raise CompileError("select() true/false values must have same type")
     node = _new_node(group, "GeometryNodeSwitch", x, y)

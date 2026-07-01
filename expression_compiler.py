@@ -31,12 +31,15 @@ def compile_expr(comp, expr, depth=0):
     if isinstance(expr, ast.Name):
         if expr.id in TYPE_TOKEN_NAMES:
             raise CompileError(f"Type token {expr.id} may only be used in node(...) type declarations")
-        if expr.id in _ALLOWED_CONSTS:
-            return _value(comp.group, _ALLOWED_CONSTS[expr.id], x, y)
         if expr.id in comp.vars:
             return comp.vars[expr.id]
         if expr.id in comp.consts:
             return comp._compile_const_value(comp.consts[expr.id], x, y)
+        if expr.id in _ALLOWED_CONSTS:
+            return _value(comp.group, _ALLOWED_CONSTS[expr.id], x, y)
+        label = getattr(comp, "reserved_name_labels", {}).get(expr.id)
+        if label in {"DSL builtin", "imported function", "local function", "backend helper", "embedded-system constructor", "reserved helper"}:
+            raise CompileError(f"Name {expr.id} is registered as {label} and cannot be used as a value")
         raise CompileError(f"Unknown name: {expr.id}")
 
     if isinstance(expr, ast.Attribute):
