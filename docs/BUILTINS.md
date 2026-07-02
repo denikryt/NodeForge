@@ -745,6 +745,41 @@ for i in repeat_range(count):
 output('Geometry', geo)
 ```
 
+
+### `geometry_builder()`
+
+Creates a script-local Geometry accumulator for procedural construction. The builder is a compiler object, not a Geometry value. Add Geometry values with `add(...)` or `extend(...)`, then read `builder.geometry` when a Geometry snapshot is needed.
+
+Supported operations:
+
+| Operation | Description |
+| --- | --- |
+| `builder.add(geometry)` | Append one Geometry value. |
+| `builder.extend([geometry_a, geometry_b])` | Append an array of Geometry values in order. |
+| `builder.geometry` | Return the accumulated Geometry at that source position. |
+
+A new builder with no additions returns the same empty Geometry value as `empty_geometry()`. Builder objects cannot be output, aliased, captured by local functions, or passed to built-ins; use `builder.geometry` whenever a normal Geometry value is required.
+
+```python
+builder = geometry_builder()
+for size in [0.5, 1.0, 1.5]:
+    builder.add(cube(size))
+output('Geometry', builder.geometry)
+```
+
+Inside `repeat_range(...)`, builder mutations become Repeat Zone Geometry state updates. The same builder can combine compile-time additions, runtime-loop additions, and post-loop additions.
+
+```python
+builder = geometry_builder()
+pos = vector(0, 0, 0)
+steps = input_int('Steps', default=4)
+for i in repeat_range(steps):
+    next_pos = pos + vector(1, 0, 0)
+    builder.add(line(pos, next_pos))
+    pos = next_pos
+output('Geometry', builder.geometry)
+```
+
 ### `point(position)`
 
 Creates one point and sets its position. `position` can be a literal vector expression or a runtime `Vector` value.
@@ -949,7 +984,7 @@ Runtime loops compile to Blender Repeat Zones. Use `repeat_range(...)` when the 
 
 ### `for i in repeat_range(steps): ...`
 
-Updates existing Geometry, Vector, Float, Int, and Bool variables inside one Repeat Zone. The body supports assignments and nested `if` blocks with assignments. It must update at least one existing variable. Assigned names that did not exist before the loop are iteration-local temporaries rather than Repeat Zone state items.
+Updates existing Geometry, Vector, Float, Int, and Bool variables inside one Repeat Zone. The body supports assignments, `geometry_builder` method statements, and nested `if` blocks. It must update at least one existing variable or builder state. Assigned names that did not exist before the loop are iteration-local temporaries rather than Repeat Zone state items.
 
 State item order follows first assignment in the loop body, including nested branches. Conditional branches preserve omitted state values and merge changed state through Switch nodes. The loop index name cannot also be state, and state names cannot collide with Repeat Zone system socket names such as `Iterations` or `Iteration`.
 

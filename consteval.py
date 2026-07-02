@@ -239,6 +239,27 @@ def _can_defer_range_error(expr, env):
             return True
     return False
 
+
+def _contains_builder_method_stmt(stmts):
+    """Return True if a statement list contains geometry_builder mutation syntax."""
+    for stmt in stmts:
+        if isinstance(stmt, ast.Expr):
+            call = stmt.value
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr in {"add", "extend"}
+                and isinstance(call.func.value, ast.Name)
+            ):
+                return True
+        if isinstance(stmt, ast.If):
+            if _contains_builder_method_stmt(stmt.body) or _contains_builder_method_stmt(stmt.orelse):
+                return True
+        if isinstance(stmt, ast.For):
+            if _contains_builder_method_stmt(stmt.body) or _contains_builder_method_stmt(stmt.orelse):
+                return True
+    return False
+
 def _handle_compile_time_stmt(stmt, env, out_stmts, preserve_names=None):
     """Function `_handle_compile_time_stmt` used by the NodeForge addon."""
     preserve_names = preserve_names or set()
@@ -315,8 +336,12 @@ def _handle_compile_time_stmt(stmt, env, out_stmts, preserve_names=None):
                 raise
             out_stmts.append(stmt)
             return
-        # Keep loops with array append for the main compiler; it can unroll them
-        # while preserving dynamic node Values inside the array.
+        # Keep loops with array append or geometry_builder mutation for the main
+        # compiler; it can unroll them while preserving dynamic node Values and
+        # compiler-owned mutable objects with the loop target bound.
+        if _contains_builder_method_stmt(stmt.body):
+            out_stmts.append(stmt)
+            return
         for sub in stmt.body:
             if isinstance(sub, ast.Expr) and isinstance(sub.value, ast.Call) and isinstance(sub.value.func, ast.Attribute) and sub.value.func.attr == "append":
                 out_stmts.append(stmt)

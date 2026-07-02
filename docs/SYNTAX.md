@@ -303,6 +303,41 @@ Supported compile-time math calls include `sin`, `cos`, `tan`, `asin`, `acos`, `
 
 `pi`, `tau`, and `e` are lowercase. Uppercase `PI` is not a built-in constant.
 
+
+## Geometry builder accumulation
+
+`geometry_builder()` provides builder-style syntax for accumulating Geometry without manually maintaining an `empty_geometry()` plus repeated `join(...)` state variable. The builder itself is script-local compiler state. Use `.geometry` to get a normal Geometry value.
+
+```python
+builder = geometry_builder()
+builder.add(cube(size=1.0))
+builder.extend([cube(size=0.5), cube(size=0.25)])
+output('Geometry', builder.geometry)
+```
+
+Compile-time loops over fixed lists are unrolled as builder method statements.
+
+```python
+builder = geometry_builder()
+for size in [0.5, 1.0, 1.5]:
+    builder.add(cube(size))
+output('Geometry', builder.geometry)
+```
+
+Inside `repeat_range(...)`, each `add(...)` or element of `extend(...)` updates a Geometry Repeat Zone state item owned by the builder binding. Reading `builder.geometry` inside the loop returns the current state at that source position.
+
+```python
+builder = geometry_builder()
+steps = input_int('Steps', default=3)
+for i in repeat_range(steps):
+    builder.add(cube(0.1))
+    snapshot = builder.geometry
+    builder.add(snapshot)
+output('Geometry', builder.geometry)
+```
+
+Builder objects cannot be aliased, inserted into arrays, passed to built-ins, captured by local functions, or output directly. Use `builder.geometry` at value boundaries.
+
 ## Lists, tuples, and arrays
 
 Lists and tuples are script-level collections, not Geometry Nodes socket values. They are useful for collecting several runtime values before passing them to a built-in that accepts an array, such as `join(array)`.
@@ -559,7 +594,7 @@ output('Geometry', geo)
 
 ### Runtime state repeat loops
 
-`repeat_range(steps)` creates one Blender Repeat Zone for existing Geometry, Vector, Float, Int, and Bool state variables. Every pre-existing variable assigned inside the body becomes a Repeat Zone state item. New variables assigned only inside the body are iteration-local temporaries.
+`repeat_range(steps)` creates one Blender Repeat Zone for existing Geometry, Vector, Float, Int, Bool state variables, and `geometry_builder` accumulators mutated in the body. Every pre-existing variable assigned inside the body becomes a Repeat Zone state item. New variables assigned only inside the body are iteration-local temporaries.
 
 ```python
 x = 0.0
@@ -581,7 +616,7 @@ for i in repeat_range(steps):
 output('Geometry', geo)
 ```
 
-The loop body supports assignments and nested `if` blocks with assignments. It must update at least one existing variable. State item order follows first assignment in the loop body, including nested branches. An `if` branch that omits a state assignment preserves that branch's incoming state value; changed state is merged with Switch nodes, including Geometry state.
+The loop body supports assignments, `geometry_builder` method statements, and nested `if` blocks. It must update at least one existing variable or builder. State item order follows first assignment or builder mutation in the loop body, including nested branches. An `if` branch that omits a state assignment or builder mutation preserves that branch's incoming state value; changed state is merged with Switch nodes, including Geometry state.
 
 The loop index name cannot also be a state variable, and state names cannot collide with Repeat Zone system socket names such as `Iterations` or `Iteration`. These naming conflicts raise `CompileError` to avoid ambiguous socket wiring.
 

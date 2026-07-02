@@ -9,6 +9,7 @@ from .nodes import *
 from .consteval import _const_eval
 from .builtins import registry as builtin_registry
 from .compile_time import reject_compile_time_object
+from .geometry_builder import GeometryBuilder
 from .systems import registry as systems_registry
 from . import local_functions
 from . import library_calls
@@ -44,6 +45,10 @@ def compile_expr(comp, expr, depth=0):
 
     if isinstance(expr, ast.Attribute):
         base = compile_expr(comp, expr.value, depth + 1)
+        if isinstance(base, GeometryBuilder):
+            if expr.attr == "geometry":
+                return base.geometry_value(comp, x, y)
+            raise CompileError("geometry_builder supports only .geometry")
         if isinstance(base, NodeResult):
             return base.get_output(expr.attr)
         if expr.attr in {"x", "y", "z"}:
@@ -140,7 +145,9 @@ def compile_expr(comp, expr, depth=0):
         return _switch(comp.group, cond, false_val, true_val, x, y)
 
     if isinstance(expr, (ast.List, ast.Tuple)):
-        return [compile_expr(comp, e, depth + 1) for e in expr.elts]
+        values = [compile_expr(comp, e, depth + 1) for e in expr.elts]
+        reject_compile_time_object(values, "array literal")
+        return values
 
     if isinstance(expr, ast.Subscript):
         base = compile_expr(comp, expr.value, depth + 1)

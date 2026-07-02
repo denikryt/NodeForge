@@ -26,7 +26,7 @@ ACCEPTED_CORE_CALLABLES = {
     "pow", "mod", "clamp", "mix", "select", "map_range",
     "length", "distance", "dot", "normalize", "cross", "reflect", "project",
     "noise", "random_value",
-    "empty_geometry", "points", "point", "line", "grid", "grid_uv",
+    "empty_geometry", "geometry_builder", "points", "point", "line", "grid", "grid_uv",
     "set_position", "store_named_attribute", "set_material",
     "cube", "polyline", "join", "transform",
     "instance_on_points", "realize_instances",

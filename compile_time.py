@@ -38,6 +38,9 @@ def reject_compile_time_object(value, context: str):
     can otherwise smuggle L-system parts into generic runtime consumers.
     """
     if isinstance(value, CompileTimeObject):
+        usage_error = getattr(value, "usage_error", None)
+        if callable(usage_error):
+            raise CompileError(usage_error(context))
         raise CompileError(f"{type(value).__name__} is compile-time only and cannot be used in {context}")
     if isinstance(value, list):
         for item in value:

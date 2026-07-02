@@ -16,3 +16,5 @@
 | `run_library_checks()` | `tests/blender/test_library_functions.py` |
 | `run_update_checks()` | `tests/blender/test_update_group.py` |
 | `run_mandelbrot_eval_check()` | `tests/blender/test_mandelbrot_eval.py` |
+
+| Geometry builder DSL accumulation and Repeat Zone state | `tests/blender/test_geometry_builder.py`, `tests/unit/test_math_specs.py` |

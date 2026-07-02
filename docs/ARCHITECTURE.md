@@ -28,6 +28,8 @@ Key files:
 
 The compiler core provides infrastructure. Domain-specific algorithms belong in `functions/`.
 
+The compiler core may also own compile-time-only DSL objects when public syntax needs compiler-managed state rather than ordinary socket values. `geometry_builder()` is one such object: the frontend owns its script-local accumulator, escape diagnostics, and Repeat Zone state lowering while the generated graph still uses ordinary Geometry sockets and Join Geometry nodes.
+
 ## DSL built-ins
 
 Built-ins are the primitive vocabulary of the DSL. They live under `builtins/` and are registered through `builtins/registry.py`.

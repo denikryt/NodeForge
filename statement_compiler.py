@@ -19,6 +19,7 @@ from .statements import (
 )
 from .consteval import _const_eval
 from .compile_time import reject_compile_time_object
+from .geometry_builder import GeometryBuilder, validate_geometry_builder_constructor
 from .runtime import (
     _parse_repeat_range_for,
     _repeat_state_assignments,
@@ -96,6 +97,48 @@ def _check_runtime_binding(comp, name):
         raise CompileError(f"Cannot assign to {name}: name is {_format_reserved_binding_label(label)}")
 
 
+def _is_geometry_builder_constructor(expr):
+    """Return True for a direct geometry_builder(...) constructor call."""
+    return isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) and expr.func.id == "geometry_builder"
+
+
+def _builder_method_call(comp, stmt):
+    """Return (builder, method, call) for a supported builder method statement."""
+    if not isinstance(stmt, ast.Expr):
+        return None
+    call = stmt.value
+    if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)):
+        return None
+    if not isinstance(call.func.value, ast.Name):
+        return None
+    receiver = call.func.value.id
+    value = comp.vars.get(receiver)
+    if isinstance(value, GeometryBuilder):
+        return value, call.func.attr, call
+    return None
+
+
+def _compile_builder_method(comp, builder, method, call, x=0, y=0):
+    """Compile one compile-time builder mutation statement."""
+    if method == "add":
+        if len(call.args) != 1 or call.keywords:
+            raise CompileError("builder.add(...) expects one positional Geometry argument")
+        value = comp.compile(call.args[0])
+        reject_compile_time_object(value, "builder.add(...) argument")
+        builder.add_value(comp, value, x, y)
+        return
+    if method == "extend":
+        if len(call.args) != 1 or call.keywords:
+            raise CompileError("builder.extend(...) expects one positional array argument")
+        values = comp.compile(call.args[0])
+        reject_compile_time_object(values, "builder.extend(...) argument")
+        if not isinstance(values, list):
+            raise CompileError("builder.extend(...) expects an array of Geometry values")
+        builder.extend_values(comp, values, x, y)
+        return
+    raise CompileError("geometry_builder supports only add(), extend(), and .geometry")
+
+
 def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
     """Compile one top-level statement into the active geometry node group."""
     comp = ctx.comp
@@ -107,6 +150,14 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
             raise CompileError("Only simple assignments like name = value are supported")
         target = stmt.targets[0].id
         _check_runtime_binding(comp, target)
+        if isinstance(comp.vars.get(target), GeometryBuilder) and not _is_geometry_builder_constructor(stmt.value):
+            raise CompileError("Cannot assign over geometry_builder binding")
+        if _is_geometry_builder_constructor(stmt.value):
+            validate_geometry_builder_constructor(stmt.value)
+            comp.consts.pop(target, None)
+            comp.vars[target] = GeometryBuilder(binding_name=target)
+            ctx.auto_final_output = None
+            return
         try:
             comp.consts[target] = _const_eval(stmt.value, comp.consts)
         except CompileError:
@@ -114,10 +165,14 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
         if isinstance(stmt.value, (ast.List, ast.Tuple)):
             if isinstance(stmt.value, ast.List) and not stmt.value.elts:
                 comp.consts.pop(target, None)
-            comp.vars[target] = [comp.compile(e) for e in stmt.value.elts]
+            values = [comp.compile(e) for e in stmt.value.elts]
+            reject_compile_time_object(values, "array literal")
+            comp.vars[target] = values
             ctx.auto_final_output = None
             return
         value = comp.compile(stmt.value)
+        if isinstance(value, GeometryBuilder):
+            reject_compile_time_object(value, "assignment")
         comp.vars[target] = value
         if isinstance(value, list):
             ctx.auto_final_output = None
@@ -150,6 +205,12 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
 
     if isinstance(stmt, ast.Expr):
         expr = stmt.value
+        builder_call = _builder_method_call(comp, stmt)
+        if builder_call is not None:
+            builder, method, method_call = builder_call
+            _compile_builder_method(comp, builder, method, method_call, 360 + idx * 120, -120 - idx * 50)
+            ctx.auto_final_output = None
+            return
         if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute) and expr.func.attr == "append":
             if not isinstance(expr.func.value, ast.Name) or len(expr.args) != 1:
                 raise CompileError("append must look like items.append(value)")
@@ -157,7 +218,9 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
             arr = comp.vars.get(list_name)
             if not isinstance(arr, list):
                 raise CompileError(f"{list_name} is not an array")
-            arr.append(comp.compile(expr.args[0]))
+            value = comp.compile(expr.args[0])
+            reject_compile_time_object(value, "array append")
+            arr.append(value)
             comp.consts.pop(list_name, None)
             ctx.auto_final_output = None
             return
@@ -236,6 +299,15 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
         if not stmt.orelse:
             raise CompileError("runtime if currently requires an else branch")
 
+        def _contains_builder_method(stmts):
+            for sub in stmts:
+                if _builder_method_call(comp, sub) is not None:
+                    return True
+                if isinstance(sub, ast.If) and _contains_builder_method(list(sub.body) + list(sub.orelse)):
+                    return True
+            return False
+        if _contains_builder_method(list(stmt.body) + list(stmt.orelse)):
+            raise CompileError("geometry_builder mutations inside runtime if are supported only inside repeat_range(...)")
         cond = comp.compile(stmt.test)
         reject_compile_time_object(cond, "runtime if condition")
         base_vars = dict(comp.vars)
