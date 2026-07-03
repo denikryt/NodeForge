@@ -625,6 +625,8 @@ def _copy_group_contents(src_group, dst_group):
         else:
             _copy_node_properties(src_node, dst_node)
         node_map[src_node.name] = dst_node
+    _sync_repeat_zone_dynamic_items(src_group, node_map)
+
     for src_link in src_group.links:
         from_node = node_map.get(src_link.from_node.name)
         to_node = node_map.get(src_link.to_node.name)
@@ -658,6 +660,58 @@ def _copy_group_contents(src_group, dst_group):
         pass
     _copy_custom_properties(src_group, dst_group, strict=True)
 
+
+
+
+def _sync_repeat_zone_dynamic_items(src_group, node_map):
+    """Recreate Repeat Zone pairings/items after node copy and before links.
+
+    Blender Repeat Zone state sockets are not ordinary writable node
+    properties. A freshly created GeometryNodeRepeatInput/Output pair only has
+    system/default sockets, so links to copied state sockets such as
+    ``instance_points`` fail unless the output node's repeat_items collection is
+    rebuilt before link restoration.
+    """
+    for src_input in src_group.nodes:
+        if getattr(src_input, "bl_idname", None) != "GeometryNodeRepeatInput":
+            continue
+        src_output = getattr(src_input, "paired_output", None)
+        if src_output is None:
+            continue
+        dst_input = node_map.get(src_input.name)
+        dst_output = node_map.get(src_output.name)
+        if dst_input is None or dst_output is None:
+            continue
+        try:
+            dst_input.pair_with_output(dst_output)
+        except Exception:
+            pass
+    for src_output in src_group.nodes:
+        if getattr(src_output, "bl_idname", None) != "GeometryNodeRepeatOutput":
+            continue
+        dst_output = node_map.get(src_output.name)
+        if dst_output is None or not hasattr(src_output, "repeat_items") or not hasattr(dst_output, "repeat_items"):
+            continue
+        try:
+            for item in list(dst_output.repeat_items):
+                dst_output.repeat_items.remove(item)
+        except Exception:
+            pass
+        for item in list(src_output.repeat_items):
+            try:
+                dst_output.repeat_items.new(item.socket_type, item.name)
+            except Exception:
+                # Keep cutover failure transactional; link restoration below will
+                # raise if the required socket was not recreated.
+                pass
+        try:
+            dst_output.active_index = getattr(src_output, "active_index", dst_output.active_index)
+        except Exception:
+            pass
+        try:
+            dst_output.inspection_index = getattr(src_output, "inspection_index", dst_output.inspection_index)
+        except Exception:
+            pass
 
 def _remove_node_group_if_live(group):
     try:
