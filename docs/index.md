@@ -6,3 +6,4 @@
 - [DSL Built-ins Reference](BUILTINS.md)
 - [L-systems](LSYSTEMS.md)
 - [Testing](TESTING.md)
+- [Geometry Nodes coverage](GEOMETRY_NODES_COVERAGE.md)
