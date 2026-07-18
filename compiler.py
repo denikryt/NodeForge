@@ -31,7 +31,7 @@ from .library import library_entry_names, materialize_library_entry_group
 from .statements import _unique_output_name
 from .compile_time import reject_compile_time_object
 from .systems import registry as systems_registry
-from .systems.lsystem import resources as generated_resources
+from . import generated_resources
 from . import expression_compiler
 from .builtins import registry as builtin_registry
 
@@ -222,7 +222,7 @@ def _validate_import_bindings(import_pairs, body_stmts, local_function_defs, bac
     """Validate and return source-local namespace-aware catalog bindings."""
     imported: dict[str, LibraryBinding] = {}
     local_bindings = _binding_names(body_stmts)
-    reserved_names = set(builtin_registry.BUILTIN_NAMES) | {"output", "store"} | set(_ALLOWED_CONSTS) | set(systems_registry.NAMES) | set(backend_names) | set(TYPE_TOKEN_NAMES)
+    reserved_names = set(builtin_registry.BUILTIN_NAMES) | {"output", "store"} | set(_ALLOWED_CONSTS) | set(systems_registry.constructor_names()) | set(backend_names) | set(TYPE_TOKEN_NAMES)
 
     def validate_pair(namespace, canonical_name, exposed_name, *, inherited=False):
         names = library_entry_names(namespace)
@@ -265,7 +265,7 @@ def _registered_name_labels(local_function_defs, backend_names, imported_library
     add(builtin_registry.BUILTIN_NAMES, "DSL builtin")
     add({"output", "store"}, "reserved helper")
     add(_ALLOWED_CONSTS, "compile-time constant")
-    add(systems_registry.NAMES, "embedded-system constructor")
+    add(systems_registry.constructor_names(), "embedded-system constructor")
     add(backend_names, "backend helper")
     add(TYPE_TOKEN_NAMES, "type token")
     add(imported_library_functions, "imported function")
@@ -406,7 +406,7 @@ def _build_group(
     )
 
     stmts, consts = _preprocess_compile_time(body_stmts)
-    callable_names = set(own_imported_library_functions) | set(local_function_defs) | backend_names | systems_registry.NAMES
+    callable_names = set(own_imported_library_functions) | set(local_function_defs) | backend_names | set(systems_registry.constructor_names())
     input_names = sorted(set(_collect_inputs(stmts, extra_builtin_names=callable_names, consts=consts)) - set(consts.keys()))
     input_types = _infer_input_types(stmts)
     group = bpy.data.node_groups.new(name, "GeometryNodeTree")

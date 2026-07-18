@@ -22,7 +22,7 @@ Key files:
 | `values.py` | Typed socket values passed through the compiler. |
 | `compile_time.py` | Base protocol and guards for compile-time-only compiler objects. |
 | `systems/registry.py` | Embedded subsystem constructor dispatch and reserved-name policy. |
-| `systems/lsystem/` | L-system constructors, validation, expansion, analysis, turtle interpretation, static baked generated-data backend, branch-free vectorized runtime backend, and branch-aware vectorized runtime backend. |
+| `packages/nodeforge.lsystem/systems/lsystem/` | L-system package source implementation. Runtime constructors come from installed package state, not a hardcoded system registry. |
 | `interface.py` | Node group input/output sockets and defaults. |
 | `library.py` | Function discovery, function-group materialization, and group-node calls. |
 

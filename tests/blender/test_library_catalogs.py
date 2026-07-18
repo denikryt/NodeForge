@@ -43,25 +43,25 @@ def test_catalog_discovery_and_example_imports():
 
 def test_local_recursive_catalog_duplicate_and_save_contracts():
     local = library.ensure_local_catalog_dir()
-    flat = local / 'stage19_local_probe.nf'
-    nested = local / 'math' / 'stage19_nested_probe.nf'
-    ignored_native_folder = local / 'stage19_native_probe'
-    unsupported_source_layout = local / 'stage19_source_layout_probe'
-    duplicate_flat = local / 'stage19_duplicate_probe.nf'
-    duplicate_nested = local / 'math' / 'stage19_duplicate_probe.nf'
-    cross_folder = local / 'math' / 'stage19_cross_folder_duplicate.nf'
-    saved = local / 'stage19_saved_text_probe.nf'
-    nested_saved = local / 'math' / 'stage19_nested_saved_probe.nf'
+    flat = local / 'local_local_probe.nf'
+    nested = local / 'math' / 'local_nested_probe.nf'
+    ignored_native_folder = local / 'local_native_probe'
+    unsupported_source_layout = local / 'local_source_layout_probe'
+    duplicate_flat = local / 'local_duplicate_probe.nf'
+    duplicate_nested = local / 'math' / 'local_duplicate_probe.nf'
+    cross_folder = local / 'math' / 'local_cross_folder_duplicate.nf'
+    saved = local / 'local_saved_text_probe.nf'
+    nested_saved = local / 'math' / 'local_nested_saved_probe.nf'
     try:
         _write(flat, 'x = input_float("X", default=1.0)\noutput("x", x)\n')
         _write(nested, 'x = input_float("X", default=1.0)\noutput("x", x)\n')
         _write(ignored_native_folder / 'function.py', 'raise AssertionError("local function.py executed")\n')
         _write(ignored_native_folder / 'backend.py', 'raise AssertionError("local backend.py executed")\n')
 
-        compile_group('from local import stage19_local_probe\nx = stage19_local_probe(3)\noutput("x", x)', 'NFTest_local_flat_import')
-        compile_group('from local import stage19_nested_probe\nx = stage19_nested_probe(3)\noutput("x", x)', 'NFTest_local_nested_import')
-        expect_compile_error('from local import stage19_native_probe\nx = stage19_native_probe(3)\noutput("x", x)', 'NFTest_local_native_files_ignored')
-        expect_compile_error('from local.math import stage19_nested_probe\nx = 1\noutput("x", x)', 'NFTest_local_nested_import_rejected')
+        compile_group('from local import local_local_probe\nx = local_local_probe(3)\noutput("x", x)', 'NFTest_local_flat_import')
+        compile_group('from local import local_nested_probe\nx = local_nested_probe(3)\noutput("x", x)', 'NFTest_local_nested_import')
+        expect_compile_error('from local import local_native_probe\nx = local_native_probe(3)\noutput("x", x)', 'NFTest_local_native_files_ignored')
+        expect_compile_error('from local.math import local_nested_probe\nx = 1\noutput("x", x)', 'NFTest_local_nested_import_rejected')
         expect_compile_error('import local.math\nx = 1\noutput("x", x)', 'NFTest_local_nested_plain_import_rejected')
 
         _write(duplicate_flat, 'x = input_float("X")\noutput("x", x)\n')
@@ -75,21 +75,21 @@ def test_local_recursive_catalog_duplicate_and_save_contracts():
         duplicate_flat.unlink(missing_ok=True)
         _cleanup(duplicate_nested)
 
-        path = library.save_local_source('stage19_saved_text_probe', 'x = input_float("X")\noutput("x", x)\n')
+        path = library.save_local_source('local_saved_text_probe', 'x = input_float("X")\noutput("x", x)\n')
         check(path == saved and saved.exists(), 'flat local save failed')
         try:
-            library.save_local_source('stage19_saved_text_probe', 'x = 2\noutput("x", x)\n', overwrite=False)
+            library.save_local_source('local_saved_text_probe', 'x = 2\noutput("x", x)\n', overwrite=False)
         except CompileError:
             pass
         else:
             raise AssertionError('duplicate local save was accepted')
-        library.save_local_source('stage19_saved_text_probe', 'x = 2\noutput("x", x)\n', overwrite=True)
+        library.save_local_source('local_saved_text_probe', 'x = 2\noutput("x", x)\n', overwrite=True)
         check(saved.read_text(encoding='utf-8').startswith('x = 2'), 'overwrite did not replace exact flat file')
 
         library.create_local_folder('math')
-        library.save_local_source('stage19_nested_saved_probe', 'x = input_float("X")\noutput("x", x)\n', folder_path='math')
+        library.save_local_source('local_nested_saved_probe', 'x = input_float("X")\noutput("x", x)\n', folder_path='math')
         check(nested_saved.exists(), 'nested local save failed')
-        compile_group('from local import stage19_nested_saved_probe\nx = stage19_nested_saved_probe(1)\noutput("x", x)', 'NFTest_local_nested_saved_import')
+        compile_group('from local import local_nested_saved_probe\nx = local_nested_saved_probe(1)\noutput("x", x)', 'NFTest_local_nested_saved_import')
 
         _write(unsupported_source_layout / 'source.nf', 'x = input_float("X")\noutput("x", x)\n')
         try:
@@ -102,7 +102,7 @@ def test_local_recursive_catalog_duplicate_and_save_contracts():
 
         _write(cross_folder, 'x = input_float("X")\noutput("x", x)\n')
         try:
-            library.save_local_source('stage19_cross_folder_duplicate', 'x = 2\noutput("x", x)\n')
+            library.save_local_source('local_cross_folder_duplicate', 'x = 2\noutput("x", x)\n')
         except CompileError:
             pass
         else:
@@ -125,26 +125,28 @@ def test_local_recursive_catalog_duplicate_and_save_contracts():
 
 def test_new_catalog_materialized_group_ownership_metadata():
     local = library.ensure_local_catalog_dir()
-    source = local / 'stage19_collision_probe.nf'
+    source = local / 'local_collision_probe.nf'
     user_group = None
     example_collision = None
     try:
         _write(source, 'x = input_float("X", default=1.0)\noutput("x", x)\n')
-        user_group = bpy.data.node_groups.new('NodeForge.local.stage19_collision_probe', 'GeometryNodeTree')
-        expect_compile_error('from local import stage19_collision_probe\nx = stage19_collision_probe(1)\noutput("x", x)', 'NFTest_local_ownership_collision')
-        check(bpy.data.node_groups.get('NodeForge.local.stage19_collision_probe') is user_group, 'ownership collision mutated user group')
+        user_group = bpy.data.node_groups.new('NodeForge.local.local_collision_probe', 'GeometryNodeTree')
+        expect_compile_error('from local import local_collision_probe\nx = local_collision_probe(1)\noutput("x", x)', 'NFTest_local_ownership_collision')
+        check(bpy.data.node_groups.get('NodeForge.local.local_collision_probe') is user_group, 'ownership collision mutated user group')
         bpy.data.node_groups.remove(user_group, do_unlink=True)
         user_group = None
-        group = compile_group('from local import stage19_collision_probe\nx = stage19_collision_probe(1)\noutput("x", x)', 'NFTest_local_owned_group_created')
-        backing = bpy.data.node_groups.get('NodeForge.local.stage19_collision_probe')
+        group = compile_group('from local import local_collision_probe\nx = local_collision_probe(1)\noutput("x", x)', 'NFTest_local_owned_group_created')
+        backing = bpy.data.node_groups.get('NodeForge.local.local_collision_probe')
         check(backing is not None, 'local backing group not created')
         check(backing.get('nodeforge_library_namespace') == 'local', 'local backing namespace metadata missing')
-        check(backing.get('nodeforge_library_name') == 'stage19_collision_probe', 'local backing name metadata missing')
+        check(backing.get('nodeforge_library_name') == 'local_collision_probe', 'local backing name metadata missing')
 
-        existing_example = bpy.data.node_groups.get('NodeForge.example.dragon_curve')
+        record = library.find_library_entry_record('examples', 'dragon_curve')
+        example_group_name = library._group_name_for_record(record)
+        existing_example = bpy.data.node_groups.get(example_group_name)
         if existing_example is not None:
             bpy.data.node_groups.remove(existing_example, do_unlink=True)
-        example_collision = bpy.data.node_groups.new('NodeForge.example.dragon_curve', 'GeometryNodeTree')
+        example_collision = bpy.data.node_groups.new(example_group_name, 'GeometryNodeTree')
         example_collision['nodeforge_library_namespace'] = 'local'
         example_collision['nodeforge_library_name'] = 'dragon_curve'
         expect_compile_error('from examples import dragon_curve\ngeo = dragon_curve(angle=90, step=0.04)\noutput("Geometry", geo)', 'NFTest_example_ownership_collision')

@@ -216,7 +216,7 @@ A stage must not leave a migrated helper callable both globally and by import af
 ## Durable state and generated resources
 
 
-Stage 5 also moves derived math/vector helpers (`smoothstep`, `sign`, `rotate2d`, and related helpers) to `functions/*.nf` and removes obsolete aliases/wrappers such as `lerp`, `frac`, and `greater_than`. These names are not core globals; scripts import the migrated helpers explicitly from `functions` or use core alternatives such as `mix`, `fract`, and comparison operators.
+The helper migration also moves derived math/vector helpers (`smoothstep`, `sign`, `rotate2d`, and related helpers) to `functions/*.nf` and removes obsolete aliases/wrappers such as `lerp`, `frac`, and `greater_than`. These names are not core globals; scripts import the migrated helpers explicitly from `functions` or use core alternatives such as `mix`, `fract`, and comparison operators.
 
 Function materialization creates Blender node groups and stores source/signature metadata on generated groups. Import/discovery changes must preserve existing group update and reuse behavior.
 

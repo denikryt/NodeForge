@@ -6,6 +6,6 @@ NAMES = set()
 
 
 def compile_call(comp, expr, depth=0):
-    """Reject layout built-in dispatch after Stage 4 helper migration."""
+    """Reject layout built-in dispatch after layout helper migration."""
     name = getattr(getattr(expr, "func", None), "id", "<unknown>")
     raise CompileError(f"Unsupported layout builtin: {name}")

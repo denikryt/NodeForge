@@ -19,8 +19,8 @@ import NodeForge
 from NodeForge import compiler, library
 from NodeForge.constants import _FLOAT_FUNCS_1, _FLOAT_FUNCS_2
 from NodeForge.errors import CompileError
-from NodeForge.systems.lsystem import resources as generated_resources
-from NodeForge.builtins import fields, geometry, instancing, io, math, vector, registry
+from NodeForge import generated_resources
+from NodeForge.builtins import fields, geometry, instancing, io, vector, registry
 from NodeForge.systems import registry as systems_registry
 from NodeForge.systems.lsystem import backends as lsystem_backends
 from NodeForge.systems.lsystem.analysis import analyze as analyze_lsystem

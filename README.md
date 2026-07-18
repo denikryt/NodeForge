@@ -82,3 +82,8 @@ NodeForge/
 - [`docs/BUILTINS.md`](docs/BUILTINS.md) — reference for DSL built-ins.
 - [`docs/LSYSTEMS.md`](docs/LSYSTEMS.md) — reference for embedded L-system constructors, limits, and examples.
 - [`docs/TESTING.md`](docs/TESTING.md) — commands for running unit tests, Blender tests, and optional L-system benchmarks.
+
+
+## NodeForge packages
+
+NodeForge supports installable package/library directories and zip archives. Packages contain `nodeforge_package.json` plus declared `functions`, `examples`, and/or `systems` roots. Installed packages extend the existing `functions` and `examples` catalogs and unqualified system constructor namespace. See `docs/PACKAGES.md` for the package format and safety rules.

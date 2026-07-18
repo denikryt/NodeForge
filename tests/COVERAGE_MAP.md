@@ -6,7 +6,7 @@
 | `run_startup_shutdown_checks()` | `tests/blender/test_addon_lifecycle.py` |
 | `run_compile_fixtures()` | `tests/blender/test_compile_fixtures.py` |
 | `run_math_table_dispatch_checks()` | `tests/unit/test_math_specs.py`, `tests/blender/test_math_compile.py` |
-| Stage 5 compile-time helper surface (`sign` consteval removal) | `tests/unit/test_consteval.py` |
+| Compile-time helper surface (`sign` consteval removal) | `tests/unit/test_consteval.py` |
 | `run_lsystem_syntax_and_guard_checks()` | `tests/unit/lsystem/test_validation.py`, `tests/unit/lsystem/test_modules.py`, `tests/blender/lsystem/test_syntax_contracts.py`, `tests/blender/lsystem/test_validation_errors.py`, `tests/blender/lsystem/test_parametric_modules.py` |
 | `run_lsystem_static_ownership_checks()` | `tests/blender/lsystem/test_static_baked_backend.py`, `tests/blender/lsystem/test_resource_lifecycle.py`, `tests/blender/lsystem/test_backend_transitions.py` |
 | `run_lsystem_branch_free_runtime_checks()` | `tests/unit/lsystem/test_runtime_tables_branch_free.py`, `tests/blender/lsystem/test_runtime_branch_free_backend.py`, `tests/blender/lsystem/test_runtime_branch_free_eval.py`, `tests/blender/lsystem/test_backend_transitions.py` |

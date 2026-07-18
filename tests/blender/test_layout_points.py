@@ -132,8 +132,8 @@ MIGRATED_LAYOUT_NAMES = {
 }
 
 
-def test_layout_builtin_names_removed_after_stage4():
-    check(layout.NAMES == set(), f"layout.NAMES should be empty after Stage 4: {sorted(layout.NAMES)}")
+def test_layout_builtin_names_removed_after_layout_migration():
+    check(layout.NAMES == set(), f"layout.NAMES should be empty after layout helper migration: {sorted(layout.NAMES)}")
     check(MIGRATED_LAYOUT_NAMES.isdisjoint(registry.CALLABLE_BUILTIN_NAMES), "migrated layout helpers should not be global built-ins")
     check("circle_points" not in layout.NAMES, "circle_points should not remain a layout built-in")
     check("circle_points" not in registry.CALLABLE_BUILTIN_NAMES, "circle_points should not remain globally callable")

@@ -18,6 +18,7 @@ from .interface import _set_socket_default
 from .nodes import _new_node
 from .values import Value
 from .systems import registry as systems_registry
+from . import packages
 
 _SOURCE_EXTENSIONS = (".nf", ".nodeforge")
 _PACKAGE_SOURCE_NAME = "source.nf"
@@ -52,6 +53,9 @@ class LibraryEntryRecord:
     source_path: Path | None = None
     module_path: Path | None = None
     folder_path: str = ""
+    package_id: str = ""
+    package_name: str = ""
+    package_version: str = ""
 
     def as_dict(self) -> dict[str, str]:
         """Return a UI/test-friendly dictionary representation."""
@@ -61,6 +65,9 @@ class LibraryEntryRecord:
             "kind": self.kind,
             "path": str(self.path),
             "folder_path": self.folder_path,
+            "package_id": self.package_id,
+            "package_name": self.package_name,
+            "package_version": self.package_version,
         }
 
 
@@ -161,12 +168,17 @@ def apply_function_group_display_name(group, function_name: str):
 
 
 def _safe_group_name(name: str) -> str:
-    """Create the legacy reusable group name for functions catalog entries."""
+    """Create the legacy reusable group name for standard function entries."""
     return display_name_for_function(name)
 
 
+def _safe_package_component(value: str) -> str:
+    """Return a stable datablock-name component for package-qualified groups."""
+    return re.sub(r"[^A-Za-z0-9_]+", "_", value or "package").strip("_") or "package"
+
+
 def _group_name(namespace: str, name: str) -> str:
-    """Return the generated GeometryNodeTree name for a catalog entry."""
+    """Return the legacy generated GeometryNodeTree name for compatibility paths."""
     if namespace == "functions":
         return _safe_group_name(name)
     if namespace == "examples":
@@ -174,6 +186,19 @@ def _group_name(namespace: str, name: str) -> str:
     if namespace == "local":
         return f"NodeForge.local.{name}"
     return f"NodeForge.{namespace}.{name}"
+
+
+def _group_name_for_record(record: "LibraryEntryRecord") -> str:
+    """Return the package-aware GeometryNodeTree name for a catalog record."""
+    if record.namespace == "local" or not record.package_id:
+        return _group_name(record.namespace, record.name)
+    # Keep the existing standard-library function names as the compatibility surface.
+    if record.namespace == "functions" and record.package_id == "nodeforge.standard":
+        return _safe_group_name(record.name)
+    if record.namespace == "examples" and record.package_id == "nodeforge.standard":
+        return f"NodeForge.example.{record.name}"
+    package_part = _safe_package_component(record.package_id)
+    return f"NodeForge.package.{package_part}.{record.namespace}.{record.name}"
 
 
 def _immediate_source_path(root: Path, name: str) -> Path | None:
@@ -223,66 +248,78 @@ def _record_kind_for_paths(source_path: Path | None, module_path: Path | None) -
 def _candidate_records(namespace: str) -> list[LibraryEntryRecord]:
     """Return raw discovered records before duplicate-name reduction."""
     catalog = _catalog(namespace)
-    root = catalog_dir(namespace)
+    roots: list[tuple[Path, str, str, str]] = []
     if namespace == "local":
+        root = catalog_dir(namespace)
         ensure_local_catalog_dir()
-    if not root.exists():
-        return []
-
+        roots.append((root, "", "", ""))
+    else:
+        roots.extend(
+            (root.path, root.package_id, root.package_name, root.package_version)
+            for root in packages.library_roots(namespace)
+        )
     records: list[LibraryEntryRecord] = []
-    if namespace == "local":
-        for path in sorted(root.rglob("*"), key=lambda p: str(p.relative_to(root)).lower()):
-            try:
-                rel_parts = path.relative_to(root).parts
-            except ValueError:
-                continue
-            if any(part.startswith("_") or part.startswith(".") for part in rel_parts):
-                continue
-            if path.is_file() and path.name == _PACKAGE_SOURCE_NAME:
-                raise CompileError(f"Unsupported local source layout: {path.relative_to(root)}")
-            if path.is_file() and path.suffix in _SOURCE_EXTENSIONS and _is_public_function_name(path.stem):
-                records.append(
-                    LibraryEntryRecord(
-                        namespace=namespace,
-                        name=path.stem,
-                        kind="script",
-                        path=path,
-                        source_path=path,
-                        folder_path=_relative_folder_for_path(root, path, path.stem),
-                    )
-                )
-        return records
-
-    for path in sorted(root.iterdir(), key=lambda p: p.name.lower()):
-        if path.name == "__init__.py" or path.name.startswith("__"):
+    for root, package_id, package_name, package_version in roots:
+        if not root.exists():
             continue
-        if path.is_file():
-            if path.suffix in _SOURCE_EXTENSIONS and _is_public_function_name(path.stem):
-                records.append(
-                    LibraryEntryRecord(
-                        namespace=namespace,
-                        name=path.stem,
-                        kind="script",
-                        path=path,
-                        source_path=path,
+        if namespace == "local":
+            for path in sorted(root.rglob("*"), key=lambda p: str(p.relative_to(root)).lower()):
+                try:
+                    rel_parts = path.relative_to(root).parts
+                except ValueError:
+                    continue
+                if any(part.startswith("_") or part.startswith(".") for part in rel_parts):
+                    continue
+                if path.is_file() and path.name == _PACKAGE_SOURCE_NAME:
+                    raise CompileError(f"Unsupported local source layout: {path.relative_to(root)}")
+                if path.is_file() and path.suffix in _SOURCE_EXTENSIONS and _is_public_function_name(path.stem):
+                    records.append(
+                        LibraryEntryRecord(
+                            namespace=namespace,
+                            name=path.stem,
+                            kind="script",
+                            path=path,
+                            source_path=path,
+                            folder_path=_relative_folder_for_path(root, path, path.stem),
+                        )
                     )
-                )
-        elif path.is_dir() and _is_public_function_name(path.name):
-            source_path = _immediate_source_path(root, path.name)
-            module_path = _immediate_module_path(root, path.name, catalog.native_module_file if catalog.allow_native else None)
-            if source_path is not None or module_path is not None:
-                records.append(
-                    LibraryEntryRecord(
-                        namespace=namespace,
-                        name=path.name,
-                        kind=_record_kind_for_paths(source_path, module_path),
-                        path=source_path or module_path or path,
-                        source_path=source_path,
-                        module_path=module_path,
-                    )
-                )
-    return records
+            continue
 
+        for path in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+            if path.name == "__init__.py" or path.name.startswith("__"):
+                continue
+            if path.is_file():
+                if path.suffix in _SOURCE_EXTENSIONS and _is_public_function_name(path.stem):
+                    records.append(
+                        LibraryEntryRecord(
+                            namespace=namespace,
+                            name=path.stem,
+                            kind="script",
+                            path=path,
+                            source_path=path,
+                            package_id=package_id,
+                            package_name=package_name,
+                            package_version=package_version,
+                        )
+                    )
+            elif path.is_dir() and _is_public_function_name(path.name):
+                source_path = _immediate_source_path(root, path.name)
+                module_path = _immediate_module_path(root, path.name, catalog.native_module_file if catalog.allow_native else None)
+                if source_path is not None or module_path is not None:
+                    records.append(
+                        LibraryEntryRecord(
+                            namespace=namespace,
+                            name=path.name,
+                            kind=_record_kind_for_paths(source_path, module_path),
+                            path=source_path or module_path or path,
+                            source_path=source_path,
+                            module_path=module_path,
+                            package_id=package_id,
+                            package_name=package_name,
+                            package_version=package_version,
+                        )
+                    )
+    return records
 
 def _unique_records(namespace: str) -> dict[str, LibraryEntryRecord]:
     """Return one unique record per public name or fail on duplicate layouts."""
@@ -342,12 +379,20 @@ def _module_path_for_entry(namespace: str, name: str) -> Path | None:
 def _load_entry_module(namespace: str, name: str):
     """Load a trusted native helper module for a catalog entry."""
     catalog = _catalog(namespace)
-    path = _module_path_for_entry(namespace, name)
+    record = find_library_entry_record(namespace, name)
+    path = record.module_path if record is not None else None
     if path is None or not catalog.allow_native or catalog.native_module_file is None:
         raise CompileError(f"Unknown native {namespace} library entry: {name}")
     package = __package__ or "NodeForge"
     module_stem = Path(catalog.native_module_file).stem
-    module_name = f"{package}.{catalog.dirname}.{name}.{module_stem}"
+    if record.package_id:
+        safe_package_id = "".join(ch if ch.isalnum() else "_" for ch in record.package_id)
+        digest = str(abs(hash(str(path.parent.resolve()))))
+        base_pkg = f"{package}._package_modules.{safe_package_id}.{namespace}.{name}_{digest}"
+        _ensure_synthetic_package(base_pkg, path.parent)
+        module_name = f"{base_pkg}.{module_stem}"
+    else:
+        module_name = f"{package}.{catalog.dirname}.{name}.{module_stem}"
     existing = sys.modules.get(module_name)
     if existing is not None and getattr(existing, "__file__", None) == str(path):
         return existing
@@ -359,6 +404,23 @@ def _load_entry_module(namespace: str, name: str):
     spec.loader.exec_module(module)
     return module
 
+
+def _ensure_synthetic_package(base_pkg: str, root: Path) -> None:
+    """Create a private package namespace whose __path__ supports relative imports."""
+    import types
+
+    parts = base_pkg.split(".")
+    for index in range(1, len(parts) + 1):
+        name = ".".join(parts[:index])
+        module = sys.modules.get(name)
+        if module is None:
+            module = types.ModuleType(name)
+            module.__package__ = name
+            module.__path__ = []
+            sys.modules[name] = module
+        if index == len(parts):
+            module.__path__ = [str(root)]
+            module.__package__ = name
 
 def has_module_library_entry(namespace: str, name: str) -> bool:
     """Return True if a trusted native module exists for a catalog entry."""
@@ -445,16 +507,35 @@ def _backend_signature_for_record(record: LibraryEntryRecord | None) -> str:
     return str(record.module_path.stat().st_mtime_ns)
 
 
-def _assert_owned_materialized_group(existing, namespace: str, name: str) -> None:
-    """Reject name-only reuse for new catalog-generated datablocks."""
-    if namespace == "functions":
+def _assert_owned_materialized_group(existing, record: LibraryEntryRecord, group_name: str) -> None:
+    """Reject cross-package reuse for catalog-generated datablocks."""
+    # Legacy standard functions predate package metadata and keep their clean names.
+    if record.namespace == "functions" and record.package_id == "nodeforge.standard":
         return
     try:
-        owned = existing.get("nodeforge_library_namespace") == namespace and existing.get("nodeforge_library_name") == name
+        owned = existing.get("nodeforge_library_namespace") == record.namespace and existing.get("nodeforge_library_name") == record.name
+        if record.package_id:
+            owned = (
+                owned
+                and existing.get("nodeforge_package_id") == record.package_id
+                and existing.get("nodeforge_package_version") == record.package_version
+            )
     except Exception:
         owned = False
     if not owned:
-        raise CompileError(f"{namespace} library group name collision: {getattr(existing, 'name', _group_name(namespace, name))}")
+        raise CompileError(f"{record.namespace} library group name collision: {getattr(existing, 'name', group_name)}")
+
+
+def _write_package_metadata(group, record: LibraryEntryRecord) -> None:
+    """Record package ownership metadata on materialized library groups."""
+    group["nodeforge_library_namespace"] = record.namespace
+    group["nodeforge_library_name"] = record.name
+    group["nodeforge_function_kind"] = record.kind
+    group["nodeforge_backend_signature"] = _backend_signature_for_record(record)
+    if record.package_id:
+        group["nodeforge_package_id"] = record.package_id
+        group["nodeforge_package_name"] = record.package_name
+        group["nodeforge_package_version"] = record.package_version
 
 
 def get_or_create_library_entry_group(namespace: str, name: str, compile_group_callback):
@@ -465,10 +546,10 @@ def get_or_create_library_entry_group(namespace: str, name: str, compile_group_c
     source = load_library_entry_source(namespace, name)
     backend_builtins = backend_builtins_for_entry(namespace, name)
     backend_signature = _backend_signature_for_record(record)
-    group_name = _group_name(namespace, name)
+    group_name = _group_name_for_record(record)
     existing = bpy.data.node_groups.get(group_name)
     if existing is not None and getattr(existing, "bl_idname", None) == "GeometryNodeTree":
-        _assert_owned_materialized_group(existing, namespace, name)
+        _assert_owned_materialized_group(existing, record, group_name)
         try:
             if existing.get("nodeforge_library_source") == source and existing.get("nodeforge_backend_signature") == backend_signature:
                 return existing
@@ -478,11 +559,8 @@ def get_or_create_library_entry_group(namespace: str, name: str, compile_group_c
     else:
         group = compile_group_callback(source, group_name, backend_builtins=backend_builtins)
     try:
-        group["nodeforge_library_namespace"] = namespace
-        group["nodeforge_library_name"] = name
+        _write_package_metadata(group, record)
         group["nodeforge_library_source"] = source
-        group["nodeforge_function_kind"] = _record_kind(namespace, name)
-        group["nodeforge_backend_signature"] = backend_signature
     except Exception:
         pass
     return group
@@ -523,10 +601,7 @@ def materialize_library_entry_group(namespace: str, name: str, compile_group_cal
         if materialize is not None:
             group = materialize(compile_group_callback)
             try:
-                group["nodeforge_library_namespace"] = namespace
-                group["nodeforge_library_name"] = name
-                group["nodeforge_function_kind"] = record.kind
-                group["nodeforge_backend_signature"] = _backend_signature_for_record(record)
+                _write_package_metadata(group, record)
             except Exception:
                 pass
             return apply_function_group_display_name(group, name) if namespace == "functions" else group

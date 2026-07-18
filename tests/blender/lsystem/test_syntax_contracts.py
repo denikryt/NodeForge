@@ -1,5 +1,11 @@
 from helpers import *
 
+import json
+import tempfile
+from pathlib import Path
+
+from NodeForge import packages
+
 
 
 
@@ -18,35 +24,57 @@ def test_lsystem_syntax_and_guard_contracts():
     for name, source in error_sources.items():
         expect_compile_error(source, 'NFTest_lsystem_error_' + name)
     expect_compile_error('output("x", 1)', 'NFTest_lsystem_reserved_backend_helper', backend_builtins={'ls_rule': lambda comp, expr, depth=0: None})
-    library_collision_dir = ROOT / 'functions' / 'ls_step'
-    library_collision_dir.mkdir(exist_ok=True)
-    (library_collision_dir / 'source.nf').write_text('output("x", 1)\n', encoding='utf-8')
-    try:
-        expect_compile_error('output("x", 1)', 'NFTest_lsystem_reserved_library_function')
-    finally:
-        (library_collision_dir / 'source.nf').unlink(missing_ok=True)
-        library_collision_dir.rmdir()
-    native_collision_dir = ROOT / 'functions' / 'ls_step'
-    native_collision_dir.mkdir(exist_ok=True)
-    (native_collision_dir / 'function.py').write_text('import bpy\n\ndef materialize_group(compile_group_callback):\n    return bpy.data.node_groups.new("NFTest_bad_ls_step", "GeometryNodeTree")\n', encoding='utf-8')
-    try:
-        for action_name, action in {'library_function_names': library.library_function_names, 'has_library_function': lambda: library.has_library_function('ls_step'), 'library_function_records': library.library_function_records, 'get_or_create_library_group': lambda: library.get_or_create_library_group('ls_step', compiler._make_group), 'materialize_library_function_group': lambda: library.materialize_library_function_group('ls_step', compiler._make_group)}.items():
-            try:
-                action()
-            except CompileError:
-                pass
-            except AttributeError as exc:
-                raise AssertionError(f'{action_name} raised uncontrolled AttributeError: {exc}') from exc
-            else:
-                raise AssertionError(f'{action_name} accepted reserved native library function')
-    finally:
-        (native_collision_dir / 'function.py').unlink(missing_ok=True)
-        pycache = native_collision_dir / '__pycache__'
-        if pycache.exists():
-            for child in pycache.iterdir():
-                child.unlink()
-            pycache.rmdir()
-        native_collision_dir.rmdir()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / 'vendor.lsystem_collision'
+        functions = root / 'functions'
+        functions.mkdir(parents=True)
+        manifest = {
+            "schema_version": 1,
+            "id": "vendor.lsystem_collision",
+            "name": "L-system Collision Probe",
+            "version": "1.0.0",
+            "author": "Tests",
+            "description": "Collision probe.",
+            "nodeforge_min_version": "0.49.47",
+            "nodeforge_max_version": None,
+            "contents": {"functions": "functions"},
+            "permissions": {"python": False},
+        }
+        (root / 'nodeforge_package.json').write_text(json.dumps(manifest), encoding='utf-8')
+        (functions / 'ls_step.nf').write_text('output("x", 1)\n', encoding='utf-8')
+        try:
+            packages.install_package_directory(root, allow_python=False)
+        except packages.PackageError:
+            pass
+        else:
+            raise AssertionError('package function colliding with L-system constructor was accepted')
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / 'vendor.lsystem_native_collision'
+        functions = root / 'functions'
+        native = functions / 'ls_step'
+        native.mkdir(parents=True)
+        manifest = {
+            "schema_version": 1,
+            "id": "vendor.lsystem_native_collision",
+            "name": "L-system Native Collision Probe",
+            "version": "1.0.0",
+            "author": "Tests",
+            "description": "Native collision probe.",
+            "nodeforge_min_version": "0.49.47",
+            "nodeforge_max_version": None,
+            "contents": {"functions": "functions"},
+            "permissions": {"python": True},
+        }
+        (root / 'nodeforge_package.json').write_text(json.dumps(manifest), encoding='utf-8')
+        (native / 'function.py').write_text('import bpy\n\ndef materialize_group(compile_group_callback):\n    return bpy.data.node_groups.new("NFTest_bad_ls_step", "GeometryNodeTree")\n', encoding='utf-8')
+        try:
+            packages.install_package_directory(root, allow_python=True)
+        except packages.PackageError:
+            pass
+        else:
+            raise AssertionError('native package function colliding with L-system constructor was accepted')
+
     compile_group('from examples import koch_curve\ngeo = koch_curve(angle=60, step=0.08)\noutput("Geometry", geo)', 'NFTest_lsystem_koch_example_import')
     compile_group('from examples import dragon_curve\ngeo = dragon_curve(angle=90, step=0.04)\noutput("Geometry", geo)', 'NFTest_lsystem_dragon_example_import')
     expect_compile_error('geo = apply_mandelbrot_material(ls_axiom("F"), "x")\noutput("Geometry", geo)', 'NFTest_lsystem_backend_helper_guard', backend_builtins=library.backend_builtins_for_entry('examples', 'mandelbrot'))

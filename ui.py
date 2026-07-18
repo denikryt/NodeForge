@@ -20,7 +20,8 @@ from .compiler import (
     create_library_function_group,
 )
 from .library import library_entry_records, library_function_records, apply_function_node_display_name, create_local_folder, save_local_source
-from .systems.lsystem import resources as generated_resources
+from . import packages
+from . import generated_resources
 
 def _source_from_props(props):
     """Return source code from the selected Blender Text datablock only."""
@@ -87,6 +88,25 @@ class NODEFORGE_FunctionItem(PropertyGroup):
     kind: StringProperty(name="Kind", default="")
     path: StringProperty(name="Path", default="")
     folder_path: StringProperty(name="Folder", default="")
+    package_id: StringProperty(name="Package ID", default="")
+    package_name: StringProperty(name="Package", default="")
+
+
+
+
+class NODEFORGE_PackageItem(PropertyGroup):
+    """One installed NodeForge package row shown in the UI."""
+
+    id: StringProperty(name="ID", default="")
+    package_id: StringProperty(name="Package ID", default="")
+    name: StringProperty(name="Name", default="")
+    version: StringProperty(name="Version", default="")
+    origin: StringProperty(name="Origin", default="")
+    status: StringProperty(name="Status", default="active")
+    path: StringProperty(name="Path", default="")
+    python_required: BoolProperty(name="Python Required", default=False)
+    python_allowed: BoolProperty(name="Python Allowed", default=False)
+    invalid_reason: StringProperty(name="Invalid Reason", default="")
 
 
 class NODEFORGE_UL_function_library(UIList):
@@ -97,6 +117,78 @@ class NODEFORGE_UL_function_library(UIList):
         row = layout.row(align=True)
         label = item.name if not getattr(item, "folder_path", "") else f"{item.folder_path}/{item.name}"
         row.label(text=label, icon='NODETREE')
+        if getattr(item, "package_id", ""):
+            row.label(text=item.package_id)
+
+
+
+
+class NODEFORGE_UL_packages(UIList):
+    """Draw installed NodeForge packages."""
+
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        """Draw one installed package or invalid package diagnostic."""
+        row = layout.row(align=True)
+        label = item.id or item.package_id or item.name
+        if item.version:
+            label = f"{label} {item.version}"
+        icon_name = 'ERROR' if item.invalid_reason else 'PACKAGE'
+        row.label(text=label, icon=icon_name)
+        if item.origin:
+            row.label(text=item.origin)
+
+
+
+
+def _refresh_package_items(props):
+    """Reload active and invalid package records into the Scene collection."""
+    old_index = getattr(props, "package_index", 0)
+    old_id = ""
+    if 0 <= old_index < len(props.package_items):
+        old_id = props.package_items[old_index].package_id
+    props.package_items.clear()
+    for record in packages.active_package_records(include_invalid=True):
+        item = props.package_items.add()
+        if isinstance(record, packages.PackageDiagnostic):
+            item.id = record.package_id
+            item.package_id = record.package_id
+            item.name = record.name or record.package_id
+            item.version = record.version
+            item.origin = record.origin
+            item.status = "python blocked" if record.python_required and not record.python_allowed else "invalid"
+            item.path = record.path
+            item.python_required = record.python_required
+            item.python_allowed = record.python_allowed
+            item.invalid_reason = record.message
+            continue
+        manifest = record.manifest
+        item.id = manifest.package_id
+        item.package_id = manifest.package_id
+        item.name = manifest.name
+        item.version = manifest.version
+        item.origin = str(record.state_record.get("origin") or manifest.origin)
+        item.status = "installed"
+        item.path = str(manifest.root)
+        item.python_required = record.python_required
+        item.python_allowed = bool(record.state_record.get("allow_python", False))
+        item.invalid_reason = ""
+    props.package_index = 0
+    if old_id:
+        for index, item in enumerate(props.package_items):
+            if item.package_id == old_id:
+                props.package_index = index
+                break
+    return len(props.package_items)
+
+
+def _selected_package_item(props):
+    """Return the selected installed package row, or None."""
+    if props is None:
+        return None
+    index = getattr(props, "package_index", 0)
+    if 0 <= index < len(props.package_items):
+        return props.package_items[index]
+    return None
 
 
 def _items_for_namespace(props, namespace: str):
@@ -125,6 +217,9 @@ def _refresh_catalog_items(props, namespace: str):
         item.kind = record.get("kind", "")
         item.path = record.get("path", "")
         item.folder_path = record.get("folder_path", "")
+        if hasattr(item, "package_id"):
+            item.package_id = record.get("package_id", "")
+            item.package_name = record.get("package_name", "")
     setattr(props, index_prop, 0)
     if old_name:
         for index, item in enumerate(items):
@@ -167,6 +262,10 @@ class GNSCRIPT_MVP_Properties(PropertyGroup):
     example_index: IntProperty(name="Example", default=0)
     local_items: CollectionProperty(type=NODEFORGE_FunctionItem)
     local_index: IntProperty(name="Local", default=0)
+    package_items: CollectionProperty(type=NODEFORGE_PackageItem)
+    package_index: IntProperty(name="Package", default=0)
+    package_archive_path: StringProperty(name="Package Archive", default="", subtype="FILE_PATH")
+    package_allow_python: BoolProperty(name="Allow executable Python", default=False)
     local_script_name: StringProperty(name="Script Name", default="")
     local_folder_path: StringProperty(name="Folder", default="")
     local_overwrite: BoolProperty(name="Overwrite", default=False)
@@ -309,6 +408,134 @@ class NODEFORGE_OT_refresh_function_library(Operator):
         return {'FINISHED'}
 
 
+
+
+class NODEFORGE_OT_refresh_packages(Operator):
+    """Refresh the installed NodeForge package list."""
+
+    bl_idname = "nodeforge.refresh_packages"
+    bl_label = "Refresh Packages"
+    bl_description = "Reload installed NodeForge package records"
+    bl_options = {'REGISTER'}
+
+    def execute(self, context):
+        """Reload package rows into the N-panel list."""
+        props = getattr(context.scene, "gn_script_mvp", None)
+        if props is None:
+            self.report({'ERROR'}, "NodeForge properties are not available")
+            return {'CANCELLED'}
+        try:
+            count = _refresh_package_items(props)
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Found {count} package item(s)")
+        return {'FINISHED'}
+
+
+class NODEFORGE_OT_import_package(Operator):
+    """Install or replace a NodeForge package archive."""
+
+    bl_idname = "nodeforge.import_package"
+    bl_label = "Import NodeForge Package"
+    bl_description = "Install a NodeForge package zip archive"
+    bl_options = {'REGISTER'}
+
+    filepath: StringProperty(name="Package Archive", subtype="FILE_PATH", default="")
+    allow_python: BoolProperty(name="Allow executable Python", default=False)
+    replace: BoolProperty(name="Replace existing package", default=False)
+
+    def invoke(self, context, event):
+        """Open Blender's file selector for zip package import."""
+        props = getattr(context.scene, "gn_script_mvp", None)
+        if props is not None:
+            self.filepath = props.package_archive_path
+            self.allow_python = props.package_allow_python
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
+    def execute(self, context):
+        """Install the selected package archive and refresh package/catalog UI."""
+        props = getattr(context.scene, "gn_script_mvp", None)
+        try:
+            manifest = packages.install_package_zip(self.filepath, allow_python=self.allow_python, replace=self.replace)
+            if props is not None:
+                props.package_archive_path = self.filepath
+                props.package_allow_python = self.allow_python
+                _refresh_package_items(props)
+                _refresh_catalog_items(props, "functions")
+                _refresh_catalog_items(props, "examples")
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Installed package: {manifest.package_id}")
+        return {'FINISHED'}
+
+
+class NODEFORGE_OT_uninstall_package(Operator):
+    """Uninstall the selected NodeForge package."""
+
+    bl_idname = "nodeforge.uninstall_package"
+    bl_label = "Uninstall Package"
+    bl_description = "Remove the selected package from future NodeForge library resolution"
+    bl_options = {'REGISTER'}
+
+    package_id: StringProperty(name="Package ID", default="")
+
+    def execute(self, context):
+        """Remove active package state and refresh package/catalog UI."""
+        props = getattr(context.scene, "gn_script_mvp", None)
+        item = _selected_package_item(props)
+        package_id = self.package_id or (item.package_id if item is not None else "")
+        if not package_id:
+            self.report({'ERROR'}, "Select a package to uninstall")
+            return {'CANCELLED'}
+        try:
+            packages.uninstall_package(package_id)
+            if props is not None:
+                _refresh_package_items(props)
+                _refresh_catalog_items(props, "functions")
+                _refresh_catalog_items(props, "examples")
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Uninstalled package: {package_id}")
+        return {'FINISHED'}
+
+
+class NODEFORGE_OT_install_package_source(Operator):
+    """Install a NodeForge-provided package source by package ID."""
+
+    bl_idname = "nodeforge.install_package_source"
+    bl_label = "Install Package Source"
+    bl_description = "Install a NodeForge package source into the normal inventory"
+    bl_options = {'REGISTER'}
+
+    package_id: StringProperty(name="Package ID", default="nodeforge.standard")
+
+    def execute(self, context):
+        """Install or repair the requested source and refresh package/catalog UI."""
+        props = getattr(context.scene, "gn_script_mvp", None)
+        try:
+            packages.install_package_source(self.package_id)
+            if props is not None:
+                _refresh_package_items(props)
+                _refresh_catalog_items(props, "functions")
+                _refresh_catalog_items(props, "examples")
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Installed package source: {self.package_id}")
+        return {'FINISHED'}
+
+
+class NODEFORGE_OT_reinstall_shipped_package(NODEFORGE_OT_install_package_source):
+    """Compatibility alias for installing a NodeForge-provided package source."""
+
+    bl_idname = "nodeforge.reinstall_shipped_package"
+    bl_label = "Reinstall Shipped Package"
+    bl_description = "Install a NodeForge package source into the normal inventory"
+
 class NODEFORGE_OT_create_function_group(Operator):
     """Insert the selected catalog entry into the active Geometry Nodes editor."""
     bl_idname = "nodeforge.create_function_group"
@@ -363,6 +590,8 @@ class NODEFORGE_OT_create_local_folder(Operator):
     bl_options = {'REGISTER'}
 
     folder_path: StringProperty(name="Folder", default="")
+    package_id: StringProperty(name="Package ID", default="")
+    package_name: StringProperty(name="Package", default="")
 
     def invoke(self, context, event):
         """Open Blender's normal operator-property dialog."""
@@ -423,6 +652,8 @@ class NODEFORGE_OT_save_to_local(Operator):
     )
     name: StringProperty(name="Script Name", default="")
     folder_path: StringProperty(name="Folder", default="")
+    package_id: StringProperty(name="Package ID", default="")
+    package_name: StringProperty(name="Package", default="")
     overwrite: BoolProperty(name="Overwrite", default=False)
 
     def invoke(self, context, event):
@@ -533,6 +764,8 @@ class NODEFORGE_PT_library(Panel):
         self.layout.label(text="Save, browse, and add catalog node groups.", icon='ASSET_MANAGER')
 
 
+
+
 class NODEFORGE_PT_library_local(Panel):
     """Collapsible Local catalog panel."""
     bl_label = "Local"
@@ -591,6 +824,43 @@ class NODEFORGE_PT_library_examples(Panel):
         _draw_library_catalog_panel(self.layout, context, "examples", "example_items", "example_index", rows=3)
 
 
+
+class NODEFORGE_PT_library_packages(Panel):
+    """Collapsible installed packages panel."""
+
+    bl_label = "Packages"
+    bl_space_type = 'NODE_EDITOR'
+    bl_region_type = 'UI'
+    bl_category = "NodeForge"
+    bl_parent_id = "NODEFORGE_PT_library"
+    bl_order = 3
+    bl_options = {'DEFAULT_CLOSED'}
+
+    @classmethod
+    def poll(cls, context):
+        return GNSCRIPT_MVP_PT_panel.poll(context)
+
+    def draw(self, context):
+        props = getattr(context.scene, "gn_script_mvp", None)
+        layout = self.layout
+        if props is None:
+            layout.label(text="NodeForge properties unavailable", icon='ERROR')
+            return
+        row = layout.row(align=True)
+        row.operator(NODEFORGE_OT_refresh_packages.bl_idname, text="Refresh", icon='FILE_REFRESH')
+        row.operator(NODEFORGE_OT_import_package.bl_idname, text="Import", icon='IMPORT')
+        layout.template_list(NODEFORGE_UL_packages.__name__, "", props, "package_items", props, "package_index", rows=3)
+        selected = _selected_package_item(props)
+        row = layout.row(align=True)
+        op = row.operator(NODEFORGE_OT_uninstall_package.bl_idname, text="Uninstall", icon='TRASH')
+        op.package_id = selected.package_id if selected is not None else ""
+        row = layout.row(align=True)
+        op = row.operator(NODEFORGE_OT_install_package_source.bl_idname, text="Install Standard Source")
+        op.package_id = "nodeforge.standard"
+        op = row.operator(NODEFORGE_OT_install_package_source.bl_idname, text="Install L-System Source")
+        op.package_id = "nodeforge.lsystem"
+
+
 def menu_func(self, context):
     """Function `menu_func` used by the NodeForge addon."""
     space = getattr(context, "space_data", None)
@@ -605,17 +875,25 @@ classes = (
     NODEFORGE_OT_reload_addon,
     NODEFORGE_AddonPreferences,
     NODEFORGE_FunctionItem,
+    NODEFORGE_PackageItem,
     GNSCRIPT_MVP_Properties,
     NODEFORGE_UL_function_library,
+    NODEFORGE_UL_packages,
     GNSCRIPT_MVP_OT_compile_expression,
     GNSCRIPT_MVP_OT_update_selected_group,
     GNSCRIPT_MVP_OT_load_selected_group_source,
     NODEFORGE_OT_refresh_function_library,
+    NODEFORGE_OT_refresh_packages,
+    NODEFORGE_OT_import_package,
+    NODEFORGE_OT_uninstall_package,
+    NODEFORGE_OT_install_package_source,
+    NODEFORGE_OT_reinstall_shipped_package,
     NODEFORGE_OT_create_function_group,
     NODEFORGE_OT_create_local_folder,
     NODEFORGE_OT_save_to_local,
     GNSCRIPT_MVP_PT_panel,
     NODEFORGE_PT_library,
+    NODEFORGE_PT_library_packages,
     NODEFORGE_PT_library_local,
     NODEFORGE_PT_library_functions,
     NODEFORGE_PT_library_examples,
@@ -623,6 +901,7 @@ classes = (
 
 def register():
     """Function `register` used by the NodeForge addon."""
+    packages.ensure_seeded_packages()
     generated_resources.cleanup_restart_orphans_deferred()
     for cls in classes:
         bpy.utils.register_class(cls)

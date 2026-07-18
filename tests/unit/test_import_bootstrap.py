@@ -37,7 +37,6 @@ def test_pure_imports_work_with_package_parent_on_pythonpath():
         "import NodeForge.systems.lsystem.expander\n"
         "import NodeForge.systems.lsystem.analysis\n"
         "import NodeForge.systems.lsystem.runtime_tables\n"
-        "import NodeForge.builtins.math\n"
         "print('NODEFORGE_PURE_IMPORTS_OK')\n"
     )
     result = subprocess.run(
