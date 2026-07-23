@@ -25,27 +25,6 @@ output(f"{prefix}{out_suffix}", a)
     check("input_suffix" not in _socket_names(group, "INPUT"), "f-string suffix became implicit input")
 
     compile_group('''
-left = "[-F[+F]-F]"
-right = "[+F+F+F]"
-rule = f"F{left}FFF{right}FFF"
-param_name = "Growth"
-marker_name = "Tip"
-marker_param = "size"
-geo = ls_system(
-    ls_axiom(f"F{marker_name}({marker_param})"),
-    ls_rule("F", rule),
-    ls_param(f"{param_name}", 1.0),
-    ls_param(f"{marker_param}", 0.2),
-    ls_marker(f"{marker_name}", f"{marker_param}"),
-    ls_iterations(1),
-    ls_angle(60),
-    ls_step(0.1),
-)
-pts = ls_points(geo, marker=f"{marker_name}")
-output("Geometry", join(geo, pts))
-''', "NFTest_compile_time_fstring_lsystem")
-
-    compile_group('''
 domain_name = "FACE"
 kind = "COLOR"
 geo = grid(4, 3)
@@ -121,9 +100,6 @@ def test_compile_time_fstrings_reject_runtime_or_non_string_interpolation():
     bad_sources = [
         'x = input_float("Name")\noutput(f"{x}", 1)',
         'count = 1\noutput(f"{count}", 1)',
-        'part = "F"\ngeo = ls_system(ls_axiom("F"), ls_rule("F", f"{part}{1}"), ls_iterations(1), ls_angle(60), ls_step(1))\noutput("Geometry", geo)',
-        'part = ls_axiom("F")\ngeo = ls_system(ls_axiom("F"), ls_rule("F", f"{part}"), ls_iterations(1), ls_angle(60), ls_step(1))\noutput("Geometry", geo)',
-        'part = "F"\ngeo = ls_system(ls_axiom("F"), ls_rule("F", f"{part!r}"), ls_iterations(1), ls_angle(60), ls_step(1))\noutput("Geometry", geo)',
         'domain_name = input_float("D")\ngeo = grid(4, 3)\nuv = grid_uv()\nstore("c", uv.x, domain=f"{domain_name}")\noutput("Geometry", geo)',
         'kind = input_float("T")\ngeo = grid(4, 3)\nuv = grid_uv()\ngeo = store_named_attribute(geo, "c", uv.x, type=f"{kind}")\noutput("Geometry", geo)',
         'x = input_float("Attr")\nfrom examples import mandelbrot\ngeo = mandelbrot()\ngeo = apply_mandelbrot_material(geo, f"{x}")\noutput("Geometry", geo)',

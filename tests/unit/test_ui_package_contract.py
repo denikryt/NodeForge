@@ -43,5 +43,4 @@ def test_ui_has_no_special_preinstalled_package_controls():
     assert "NODEFORGE_OT_install_package_source" not in source
     assert "NODEFORGE_OT_reinstall_shipped_package" not in source
     assert "Install Math Source" not in source
-    assert "Install L-System Source" not in source
     assert "ensure_seeded_packages" not in source

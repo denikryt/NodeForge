@@ -174,44 +174,6 @@ output("bad", bad)
     check(not leaked, f'newly created nested local helpers leaked after failed parent build: {leaked}')
 
 
-def test_stage18_existing_helper_and_resources_restore_after_failed_parent_update():
-    group = compile_group('''
-def make():
-    return ls_system(ls_axiom("F"), ls_iterations(1), ls_angle(90), ls_step(0.1))
-
-geo = make()
-output("Geometry", geo)
-''', 'NFTest_stage18_resource_restore')
-    helper = _single_local_helper('NodeForge.local.NFTest_stage18_resource_restore.make.')
-    old_source = helper.get('nodeforge_local_function_source')
-    old_manifest, old_refs = _manifest_refs(helper)
-    old_keys = {(ref.kind, ref.name, ref.owner_group_uuid, ref.generation_uuid) for ref in old_refs}
-    live_before = _owned_generated_id_keys()
-
-    try:
-        compiler.update_expression_group(group, '''
-def make():
-    return ls_system(ls_axiom("FF"), ls_iterations(1), ls_angle(90), ls_step(0.2))
-
-geo = make()
-bad = definitely_missing_function()
-output("Geometry", geo)
-''')
-    except CompileError:
-        pass
-    else:
-        raise AssertionError('failed parent update with modified helper did not raise')
-
-    restored = _single_local_helper('NodeForge.local.NFTest_stage18_resource_restore.make.')
-    check(restored is helper, 'failed parent update replaced the committed helper datablock')
-    check(restored.get('nodeforge_local_function_source') == old_source, 'helper source metadata was not restored')
-    restored_manifest, restored_refs = _manifest_refs(restored)
-    restored_keys = {(ref.kind, ref.name, ref.owner_group_uuid, ref.generation_uuid) for ref in restored_refs}
-    check(restored_manifest == old_manifest, 'helper generated-resource manifest was not restored')
-    check(restored_keys == old_keys, 'helper generated-resource refs changed after failed parent update')
-    live_after = _owned_generated_id_keys()
-    check(old_keys <= live_after, 'old helper generated resources were deleted by failed parent update')
-    check(live_after == live_before, 'failed parent update leaked generated resources')
 
 
 def test_stage18_local_helper_namespace_is_collision_safe_for_sanitized_names():

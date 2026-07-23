@@ -26,7 +26,6 @@ Built-ins are the primitive operations of the DSL. They live in `builtins/` and 
 
 Built-ins cover input sockets, scalar math, vector math, field inputs, geometry primitives, attributes, materials, instancing, and runtime loops. They form the compiler-level vocabulary used by scripts and library functions.
 
-Embedded systems such as L-systems live under `systems/` and use reserved constructor names such as `ls_system(...)`. See [`docs/LSYSTEMS.md`](docs/LSYSTEMS.md) for L-system syntax, backend selection, limits, generated-resource behavior, and examples.
 
 ### Script library catalogs
 
@@ -34,7 +33,7 @@ NodeForge has three explicit script-library catalogs. Reusable helpers live in `
 
 ```python
 from functions import sierpinski_carpet
-from examples import koch_curve as kc
+from examples import mandelbrot as mb
 from local import my_custom_script
 ```
 
@@ -68,7 +67,7 @@ NodeForge/
 ├── interface.py             # Node group interface sockets and defaults
 ├── library.py               # Catalog discovery, local saves, materialization
 ├── builtins/                # DSL primitive registry and category modules
-├── systems/                 # Embedded subsystems such as L-systems
+├── systems/                 # Registry for systems supplied by installed packages
 ├── functions/               # Reusable NodeForge functions
 ├── examples/                # Bundled demo/showcase scripts
 ├── local/                   # User-owned local scripts; .nf files are not packaged
@@ -80,8 +79,7 @@ NodeForge/
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — responsibility boundaries between DSL core, built-ins, function library, and Python backends.
 - [`docs/WRITING_FUNCTIONS.md`](docs/WRITING_FUNCTIONS.md) — guide for adding functions under `functions/`.
 - [`docs/BUILTINS.md`](docs/BUILTINS.md) — reference for DSL built-ins.
-- [`docs/LSYSTEMS.md`](docs/LSYSTEMS.md) — reference for embedded L-system constructors, limits, and examples.
-- [`docs/TESTING.md`](docs/TESTING.md) — commands for running unit tests, Blender tests, and optional L-system benchmarks.
+- [`docs/TESTING.md`](docs/TESTING.md) — commands for running unit and Blender tests.
 
 
 ## NodeForge packages

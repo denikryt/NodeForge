@@ -22,7 +22,6 @@ def package_inventory(tmp_path):
     packages.set_packages_dir_for_tests(tmp_path)
     project_root = Path(__file__).resolve().parents[3]
     packages.install_package_directory(project_root / "nodeforge.math", allow_python=True)
-    packages.install_package_directory(project_root / "nodeforge.lsystem", allow_python=True)
     systems_registry.invalidate_cache()
     yield tmp_path
     packages.set_packages_dir_for_tests(None)
@@ -64,49 +63,13 @@ def _write_manifest(
 def test_explicitly_installed_packages_use_unified_inventory(package_inventory):
     manifests = {m.package_id: m for m in packages.active_package_manifests()}
 
-    assert set(manifests) == {"nodeforge.math", "nodeforge.lsystem"}
+    assert set(manifests) == {"nodeforge.math"}
     state = packages.load_package_state()
-    assert set(state["packages"]) == {"nodeforge.math", "nodeforge.lsystem"}
+    assert set(state["packages"]) == {"nodeforge.math"}
     assert packages.library_roots("functions")[0].package_id == "nodeforge.math"
-    assert {root.package_id for root in packages.library_roots("examples")} == {"nodeforge.math", "nodeforge.lsystem"}
+    assert {root.package_id for root in packages.library_roots("examples")} == {"nodeforge.math"}
 
 
-def test_math_and_lsystem_constructors_are_package_backed(package_inventory):
-    names = set(systems_registry.constructor_names())
-
-    assert {"sin", "sqrt", "clamp", "map_range", "noise", "random_value"} <= names
-    assert {"ls_system", "ls_param", "ls_marker", "ls_points"} <= names
-    assert "sin" not in __import__("NodeForge.builtins.registry", fromlist=["CALLABLE_BUILTIN_NAMES"]).CALLABLE_BUILTIN_NAMES
-
-
-def test_system_registry_constructor_names_contract_returns_tuple(package_inventory):
-    names = systems_registry.constructor_names()
-
-    assert isinstance(names, tuple)
-    assert names == tuple(sorted(names))
-    assert "ls_system" in names
-
-
-def test_system_registry_exposes_local_function_contract_api(package_inventory):
-    owner = systems_registry.constructor_owner("ls_system")
-
-    assert owner is not None
-    assert owner.package_id == "nodeforge.lsystem"
-    assert callable(systems_registry.get_handler("ls_system"))
-    systems_registry.clear_cache()
-    assert systems_registry.constructor_owner("ls_system").package_id == "nodeforge.lsystem"
-
-    assert systems_registry.constructor_owner("does_not_exist") is None
-    with pytest.raises(CompileError, match="Unsupported system constructor"):
-        systems_registry.get_handler("does_not_exist")
-
-
-def test_uninstall_removes_future_availability_without_disable_state(package_inventory):
-    packages.uninstall_package("nodeforge.lsystem")
-
-    assert "nodeforge.lsystem" not in packages.load_package_state()["packages"]
-    assert "ls_system" not in systems_registry.constructor_names()
-    assert "nodeforge.lsystem" not in {root.package_id for root in packages.library_roots("examples")}
 
 
 
@@ -331,12 +294,6 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
     assert group_b["nodeforge_package_id"] == "vendor.b"
     assert group_b["nodeforge_package_version"] == "1.0.0"
     assert group_a["nodeforge_package_id"] == "vendor.a"
-
-
-def test_production_code_does_not_import_old_lsystem_as_canonical_runtime():
-    for rel in ("compiler.py", "ui.py"):
-        source = (Path(__file__).resolve().parents[2] / rel).read_text(encoding="utf-8")
-        assert ".systems.lsystem" not in source
 
 
 

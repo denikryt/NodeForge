@@ -20,26 +20,11 @@ def _cleanup(path):
 
 def test_catalog_discovery_and_example_imports():
     check(library.has_library_entry('functions', 'layout_circle'), 'layout_circle missing from functions')
-    check(not library.has_library_entry('functions', 'dragon_curve'), 'dragon_curve still exposed from functions')
-    check(library.has_library_entry('examples', 'dragon_curve'), 'dragon_curve missing from examples')
-    check(library.has_library_entry('examples', 'koch_curve'), 'koch_curve missing from examples')
     check(library.has_library_entry('examples', 'mandelbrot'), 'mandelbrot missing from examples')
-    check(not library.has_native_compile_call('examples', 'dragon_curve'), 'dragon_curve kept native compile_call')
-    check(not library.has_native_compile_call('examples', 'koch_curve'), 'koch_curve kept native compile_call')
     check(bool(library.backend_builtins_for_entry('examples', 'mandelbrot')), 'mandelbrot backend helpers missing')
 
-    for name in ('dragon_curve', 'koch_curve'):
-        source = library.load_library_entry_source('examples', name)
-        check(f'from examples import {name}' not in source, f'{name} self-imports from examples')
-        check(f'from functions import {name}' not in source, f'{name} imports stale functions entry')
-
     compile_group('from functions import layout_circle\ngeo = points(8)\ngeo = layout_circle(geo, count=8)\noutput("Geometry", geo)', 'NFTest_catalog_function_import')
-    compile_group('from examples import dragon_curve\ngeo = dragon_curve(angle=90, step=0.04)\noutput("Geometry", geo)', 'NFTest_catalog_dragon_import')
-    compile_group('from examples import koch_curve\ngeo = koch_curve(angle=60, step=0.08)\noutput("Geometry", geo)', 'NFTest_catalog_koch_import')
     compile_group('from examples import *\ngeo = mandelbrot(resolution=12, max_iter=8)\noutput("Geometry", geo)', 'NFTest_catalog_example_star_import')
-    expect_compile_error('from functions import dragon_curve\ngeo = dragon_curve(angle=90)\noutput("Geometry", geo)', 'NFTest_catalog_old_dragon_import_fails')
-    expect_compile_error('geo = dragon_curve(angle=90)\noutput("Geometry", geo)', 'NFTest_catalog_unimported_dragon_fails')
-
 
 def test_local_recursive_catalog_duplicate_and_save_contracts():
     local = library.ensure_local_catalog_dir()
@@ -141,15 +126,15 @@ def test_new_catalog_materialized_group_ownership_metadata():
         check(backing.get('nodeforge_library_namespace') == 'local', 'local backing namespace metadata missing')
         check(backing.get('nodeforge_library_name') == 'local_collision_probe', 'local backing name metadata missing')
 
-        record = library.find_library_entry_record('examples', 'dragon_curve')
+        record = library.find_library_entry_record('examples', 'mandelbrot')
         example_group_name = library._group_name_for_record(record)
         existing_example = bpy.data.node_groups.get(example_group_name)
         if existing_example is not None:
             bpy.data.node_groups.remove(existing_example, do_unlink=True)
         example_collision = bpy.data.node_groups.new(example_group_name, 'GeometryNodeTree')
         example_collision['nodeforge_library_namespace'] = 'local'
-        example_collision['nodeforge_library_name'] = 'dragon_curve'
-        expect_compile_error('from examples import dragon_curve\ngeo = dragon_curve(angle=90, step=0.04)\noutput("Geometry", geo)', 'NFTest_example_ownership_collision')
+        example_collision['nodeforge_library_name'] = 'mandelbrot'
+        expect_compile_error('from examples import mandelbrot\ngeo = mandelbrot(resolution=12, max_iter=8)\noutput("Geometry", geo)', 'NFTest_example_ownership_collision')
     finally:
         source.unlink(missing_ok=True)
         for group in (user_group, example_collision):

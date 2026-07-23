@@ -249,6 +249,8 @@ def _candidate_records(namespace: str) -> list[LibraryEntryRecord]:
         ensure_local_catalog_dir()
         roots.append((root, "", "", ""))
     else:
+        if namespace == "examples":
+            roots.append((catalog_dir(namespace), "", "", ""))
         roots.extend(
             (root.path, root.package_id, root.package_name, root.package_version)
             for root in packages.library_roots(namespace)

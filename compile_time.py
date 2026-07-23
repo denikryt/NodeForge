@@ -35,7 +35,7 @@ def reject_compile_time_object(value, context: str):
     """Raise a controlled error if *value* is compile-time-only.
 
     Lists are checked recursively because arrays are script-level containers that
-    can otherwise smuggle L-system parts into generic runtime consumers.
+    can otherwise carry compile-time-only objects into runtime consumers.
     """
     if isinstance(value, CompileTimeObject):
         usage_error = getattr(value, "usage_error", None)

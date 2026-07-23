@@ -228,7 +228,6 @@ def test_raw_node_error_fixtures_are_controlled_compile_errors():
         'output("x", Bool)',
         'r = node("ShaderNodeSeparateXYZ", outputs={"X": Float})\noutput("x", r)',
         'r = node("ShaderNodeSeparateXYZ", outputs={"X": Float})\ny = r + 1\noutput("y", y)',
-        'part = ls_axiom("F")\nx = node("FunctionNodeCompare", inputs={"A": part}, output="Result", typ=Bool)\noutput("x", x)',
         'x = equal(True, False)\noutput("x", x)',
     ]
     for index, source in enumerate(bad_sources):
