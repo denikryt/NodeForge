@@ -503,39 +503,6 @@ class NODEFORGE_OT_uninstall_package(Operator):
         return {'FINISHED'}
 
 
-class NODEFORGE_OT_install_package_source(Operator):
-    """Install a NodeForge-provided package source by package ID."""
-
-    bl_idname = "nodeforge.install_package_source"
-    bl_label = "Install Package Source"
-    bl_description = "Install a NodeForge package source into the normal inventory"
-    bl_options = {'REGISTER'}
-
-    package_id: StringProperty(name="Package ID", default="nodeforge.standard")
-
-    def execute(self, context):
-        """Install or repair the requested source and refresh package/catalog UI."""
-        props = getattr(context.scene, "gn_script_mvp", None)
-        try:
-            packages.install_package_source(self.package_id)
-            if props is not None:
-                _refresh_package_items(props)
-                _refresh_catalog_items(props, "functions")
-                _refresh_catalog_items(props, "examples")
-        except Exception as exc:
-            self.report({'ERROR'}, str(exc))
-            return {'CANCELLED'}
-        self.report({'INFO'}, f"Installed package source: {self.package_id}")
-        return {'FINISHED'}
-
-
-class NODEFORGE_OT_reinstall_shipped_package(NODEFORGE_OT_install_package_source):
-    """Compatibility alias for installing a NodeForge-provided package source."""
-
-    bl_idname = "nodeforge.reinstall_shipped_package"
-    bl_label = "Reinstall Shipped Package"
-    bl_description = "Install a NodeForge package source into the normal inventory"
-
 class NODEFORGE_OT_create_function_group(Operator):
     """Insert the selected catalog entry into the active Geometry Nodes editor."""
     bl_idname = "nodeforge.create_function_group"
@@ -854,11 +821,6 @@ class NODEFORGE_PT_library_packages(Panel):
         row = layout.row(align=True)
         op = row.operator(NODEFORGE_OT_uninstall_package.bl_idname, text="Uninstall", icon='TRASH')
         op.package_id = selected.package_id if selected is not None else ""
-        row = layout.row(align=True)
-        op = row.operator(NODEFORGE_OT_install_package_source.bl_idname, text="Install Standard Source")
-        op.package_id = "nodeforge.standard"
-        op = row.operator(NODEFORGE_OT_install_package_source.bl_idname, text="Install L-System Source")
-        op.package_id = "nodeforge.lsystem"
 
 
 def menu_func(self, context):
@@ -886,8 +848,6 @@ classes = (
     NODEFORGE_OT_refresh_packages,
     NODEFORGE_OT_import_package,
     NODEFORGE_OT_uninstall_package,
-    NODEFORGE_OT_install_package_source,
-    NODEFORGE_OT_reinstall_shipped_package,
     NODEFORGE_OT_create_function_group,
     NODEFORGE_OT_create_local_folder,
     NODEFORGE_OT_save_to_local,
@@ -901,7 +861,6 @@ classes = (
 
 def register():
     """Function `register` used by the NodeForge addon."""
-    packages.ensure_seeded_packages()
     generated_resources.cleanup_restart_orphans_deferred()
     for cls in classes:
         bpy.utils.register_class(cls)

@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 
 from NodeForge.constants import _FLOAT_FUNCS_1, _FLOAT_FUNCS_2
 from NodeForge import packages
@@ -10,11 +11,11 @@ from NodeForge.systems import registry as systems_registry
 pytestmark = pytest.mark.unit
 
 
-STANDARD_MATH_NAMES = set(_FLOAT_FUNCS_1) | set(_FLOAT_FUNCS_2) | {
+MATH_LIBRARY_NAMES = set(_FLOAT_FUNCS_1) | set(_FLOAT_FUNCS_2) | {
     "ln", "clamp", "mix", "select", "map_range", "noise", "random_value",
 }
 
-STANDARD_MATH_PARAM_ORDER = {
+MATH_LIBRARY_PARAM_ORDER = {
     **{name: ("value",) for name in _FLOAT_FUNCS_1},
     **{name: ("a", "b") for name in _FLOAT_FUNCS_2},
     "ln": ("value",),
@@ -50,24 +51,26 @@ ACCEPTED_CORE_CALLABLES = {
 @pytest.fixture(autouse=True)
 def package_inventory(tmp_path):
     packages.set_packages_dir_for_tests(tmp_path)
+    project_root = Path(__file__).resolve().parents[3]
+    packages.install_package_directory(project_root / "nodeforge.math", allow_python=True)
     systems_registry.clear_cache()
     yield
     packages.set_packages_dir_for_tests(None)
     systems_registry.clear_cache()
 
 
-def test_standard_math_names_are_owned_by_standard_package():
+def test_math_library_names_are_owned_by_math_package():
     names = set(systems_registry.constructor_names())
 
-    assert STANDARD_MATH_NAMES <= names
+    assert MATH_LIBRARY_NAMES <= names
     for name in ["sin", "sqrt", "clamp", "map_range", "noise", "random_value"]:
         owner = systems_registry.constructor_owner(name)
         assert owner is not None
-        assert owner.package_id == "nodeforge.standard"
-        assert owner.system_id == "standard"
+        assert owner.package_id == "nodeforge.math"
+        assert owner.system_id == "math"
 
 
-def test_standard_package_handlers_are_package_local():
+def test_math_package_handlers_are_package_local():
     owner = systems_registry.constructor_owner("sin")
     assert owner is not None
 
@@ -75,16 +78,16 @@ def test_standard_package_handlers_are_package_local():
     assert "NodeForge.builtins.math" not in system_source
     assert "from .constructors import HANDLERS" in system_source
 
-    handlers = {name: systems_registry.get_handler(name) for name in STANDARD_MATH_NAMES}
-    assert set(handlers) == STANDARD_MATH_NAMES
+    handlers = {name: systems_registry.get_handler(name) for name in MATH_LIBRARY_NAMES}
+    assert set(handlers) == MATH_LIBRARY_NAMES
     assert {handler.__module__ for handler in handlers.values()} == {
         handler.__module__ for handler in handlers.values()
     }
-    assert all("nodeforge_standard" in handler.__module__ for handler in handlers.values())
+    assert all("nodeforge_math" in handler.__module__ for handler in handlers.values())
 
 
-def test_standard_package_constructor_set_matches_current_math_tables():
-    expected = STANDARD_MATH_NAMES
+def test_math_package_constructor_set_matches_current_math_tables():
+    expected = MATH_LIBRARY_NAMES
     constructors_path = systems_registry.constructor_owner("sin").root / "constructors.py"
     text = constructors_path.read_text(encoding="utf-8")
 
@@ -105,8 +108,8 @@ def test_node_wrapper_names_are_removed_from_public_surface():
     assert node_wrappers.NAMES == set()
 
 
-def test_standard_math_names_are_absent_from_callable_builtins():
-    removed = MIGRATED_DSL_FUNCTIONS | REMOVED_GLOBALS | STANDARD_MATH_NAMES
+def test_math_library_names_are_absent_from_callable_builtins():
+    removed = MIGRATED_DSL_FUNCTIONS | REMOVED_GLOBALS | MATH_LIBRARY_NAMES
     assert removed.isdisjoint(registry.CALLABLE_BUILTIN_NAMES)
     assert registry.CALLABLE_BUILTIN_NAMES <= ACCEPTED_CORE_CALLABLES
 
@@ -116,8 +119,8 @@ def test_consteval_compile_time_surface_keeps_allowed_constant_math_names():
     assert {"sin", "cos", "sqrt", "ln", "abs"}.issubset(_ALLOWED_MATH_FUNCS)
 
 
-@pytest.mark.parametrize("name, params", sorted(STANDARD_MATH_PARAM_ORDER.items()))
-def test_standard_math_keyword_param_contract(name, params):
+@pytest.mark.parametrize("name, params", sorted(MATH_LIBRARY_PARAM_ORDER.items()))
+def test_math_library_keyword_param_contract(name, params):
     assert name in systems_registry.constructor_names()
     assert isinstance(params, tuple)
     assert all(isinstance(param, str) and param for param in params)

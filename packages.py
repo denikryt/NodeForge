@@ -8,7 +8,6 @@ user package inventory.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -26,12 +25,10 @@ from .errors import CompileError
 MANIFEST_NAME = "nodeforge_package.json"
 STATE_SCHEMA_VERSION = 1
 PACKAGE_SCHEMA_VERSION = 1
-SHIPPED_PACKAGE_IDS = ("nodeforge.standard", "nodeforge.lsystem")
 _PACKAGE_ID_RE = re.compile(r"^[a-z][a-z0-9]*(?:\.[a-z0-9_]+)+$")
 _PUBLIC_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _INSTALL_TOKEN_RE = re.compile(r"^install_[A-Za-z0-9_\-]+$")
 _TEST_PACKAGES_DIR: Path | None = None
-_SEEDING_PACKAGES = False
 
 
 def _current_nodeforge_version() -> tuple[int, ...]:
@@ -183,11 +180,6 @@ def set_packages_dir_for_tests(path: Path | None) -> None:
     _TEST_PACKAGES_DIR = Path(path).resolve() if path is not None else None
 
 
-def package_seed_sources_dir() -> Path:
-    """Return the NodeForge-shipped package source directory."""
-    return Path(__file__).resolve().parent / "packages"
-
-
 def packages_dir() -> Path:
     """Return the user package inventory directory, creating it when possible."""
     if _TEST_PACKAGES_DIR is not None:
@@ -216,7 +208,7 @@ def state_path() -> Path:
 
 
 def _default_state() -> dict[str, Any]:
-    return {"schema_version": STATE_SCHEMA_VERSION, "seed_sources": {}, "packages": {}}
+    return {"schema_version": STATE_SCHEMA_VERSION, "packages": {}}
 
 
 def load_package_state() -> dict[str, Any]:
@@ -234,8 +226,7 @@ def load_package_state() -> dict[str, Any]:
         raise PackageError("Unsupported package state schema_version")
     if not isinstance(data.get("packages"), dict):
         data["packages"] = {}
-    if not isinstance(data.get("seed_sources"), dict):
-        data["seed_sources"] = {}
+    data.pop("seed_sources", None)
     return data
 
 
@@ -272,89 +263,6 @@ def _fsync_directory(path: Path) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
-
-
-def ensure_seeded_packages() -> None:
-    """Seed or refresh active NodeForge-shipped package sources in the normal inventory."""
-    global _SEEDING_PACKAGES
-    if _SEEDING_PACKAGES:
-        return
-    _SEEDING_PACKAGES = True
-    try:
-        state = load_package_state()
-        changed = False
-        for package_id in SHIPPED_PACKAGE_IDS:
-            source = package_seed_sources_dir() / package_id
-            if not source.exists():
-                continue
-            source_marker = _seed_source_marker(source)
-            seeded = _seed_source_matches(state["seed_sources"].get(package_id), source_marker)
-            active = package_id in state["packages"]
-            if seeded or (not active and package_id in state["seed_sources"]):
-                # A matching active source needs no work. A previously seeded but
-                # currently absent source was intentionally uninstalled by the user.
-                continue
-            manifest = validate_package_root(source, origin="nodeforge_shipped_source")
-            if manifest.package_id != package_id:
-                raise PackageError(f"Shipped source {source} declares {manifest.package_id!r}, expected {package_id!r}")
-            validate_package_system_declarations(manifest)
-            _validate_no_package_name_collisions(manifest, ignore_package_id=package_id if active else None)
-            record = _install_validated_directory(source, manifest, allow_python=True, origin="nodeforge_shipped")
-            state = load_package_state()
-            old_record = state.setdefault("packages", {}).get(package_id)
-            state["packages"][package_id] = record
-            state.setdefault("seed_sources", {})[package_id] = source_marker
-            save_package_state(state)
-            if old_record:
-                _delete_old_install_dir_best_effort(package_id, old_record)
-            changed = True
-        if changed:
-            invalidate_caches()
-    finally:
-        _SEEDING_PACKAGES = False
-
-
-def _seed_source_marker(source: Path) -> dict[str, str]:
-    """Return product-semantic metadata for the current shipped package source."""
-    manifest = validate_package_root(source, origin="nodeforge_shipped_source")
-    return {"source_version": manifest.version, "fingerprint": _package_source_fingerprint(source)}
-
-
-def _seed_source_matches(value: Any, marker: dict[str, str]) -> bool:
-    """Return True when an existing seed marker matches the current source."""
-    return isinstance(value, dict) and value.get("source_version") == marker["source_version"] and value.get("fingerprint") == marker["fingerprint"]
-
-
-def _package_source_fingerprint(source: Path) -> str:
-    """Hash the shipped source tree so active seeded packages can refresh after add-on updates."""
-    digest = hashlib.sha256()
-    for path in sorted(source.rglob("*"), key=lambda p: p.relative_to(source).as_posix().casefold()):
-        rel = path.relative_to(source)
-        if any(part == "__pycache__" for part in rel.parts) or path.suffix in {".pyc", ".pyo"}:
-            continue
-        digest.update(rel.as_posix().encode("utf-8"))
-        if path.is_file():
-            digest.update(b"\0file\0")
-            digest.update(path.read_bytes())
-        elif path.is_dir():
-            digest.update(b"\0dir\0")
-    return digest.hexdigest()
-
-
-def install_package_source(package_id: str) -> None:
-    """Install or repair one NodeForge-provided package source as a normal package."""
-    if package_id not in SHIPPED_PACKAGE_IDS:
-        raise PackageError(f"Unknown package source: {package_id}")
-    source = package_seed_sources_dir() / package_id
-    install_package_directory(source, allow_python=True, replace=True, origin="nodeforge_shipped")
-    state = load_package_state()
-    state.setdefault("seed_sources", {})[package_id] = _seed_source_marker(source)
-    save_package_state(state)
-
-
-def reinstall_shipped_package(package_id: str) -> None:
-    """Compatibility wrapper for installing a NodeForge-provided package source."""
-    install_package_source(package_id)
 
 
 def invalidate_caches() -> None:
@@ -516,7 +424,6 @@ def _validate_not_core_callable_name(name: str, package_id: str) -> None:
 
 def active_package_records(include_invalid: bool = False) -> list[ActivePackage | PackageDiagnostic]:
     """Return validated active package records from the unified inventory."""
-    ensure_seeded_packages()
     state = load_package_state()
     records: list[ActivePackage | PackageDiagnostic] = []
     for package_id, record in sorted(state.get("packages", {}).items()):
@@ -721,18 +628,29 @@ def install_package_zip(zip_path: Path, *, allow_python: bool, replace: bool = F
 
 
 def uninstall_package(package_id: str) -> None:
-    """Remove a validated package from future discovery and best-effort delete its files."""
-    ensure_seeded_packages()
+    """Remove a package record and safely delete files only when its pointer validates.
+
+    Invalid package records must remain removable from the inventory. Their file
+    paths are treated as untrusted and are not deleted unless full active-record
+    validation succeeds.
+    """
     state = load_package_state()
     packages = state.setdefault("packages", {})
     record = packages.get(package_id)
     if record is None:
         raise PackageError(f"Package {package_id!r} is not installed")
-    active = _active_package_from_state(package_id, record)
+
+    install_root = None
+    try:
+        install_root = _active_package_from_state(package_id, record).manifest.root
+    except Exception:
+        pass
+
     packages.pop(package_id)
     save_package_state(state)
     invalidate_caches()
-    _delete_validated_install_dir_best_effort(active.manifest.root)
+    if install_root is not None:
+        _delete_validated_install_dir_best_effort(install_root)
 
 
 def _delete_old_install_dir_best_effort(package_id: str, record: Any) -> None:
@@ -964,13 +882,9 @@ __all__ = [
     "SystemPackageRecord",
     "PackageDiagnostic",
     "set_packages_dir_for_tests",
-    "package_seed_sources_dir",
     "packages_dir",
     "load_package_state",
     "save_package_state",
-    "ensure_seeded_packages",
-    "install_package_source",
-    "reinstall_shipped_package",
     "validate_package_root",
     "package_requires_python",
     "validate_package_system_declarations",

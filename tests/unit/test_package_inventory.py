@@ -18,8 +18,11 @@ from NodeForge.systems import registry as systems_registry
 
 @pytest.fixture(autouse=True)
 def package_inventory(tmp_path):
-    """Use an isolated package inventory for every test."""
+    """Use an isolated inventory with packages installed explicitly by the test setup."""
     packages.set_packages_dir_for_tests(tmp_path)
+    project_root = Path(__file__).resolve().parents[3]
+    packages.install_package_directory(project_root / "nodeforge.math", allow_python=True)
+    packages.install_package_directory(project_root / "nodeforge.lsystem", allow_python=True)
     systems_registry.invalidate_cache()
     yield tmp_path
     packages.set_packages_dir_for_tests(None)
@@ -58,17 +61,17 @@ def _write_manifest(
     )
 
 
-def test_seeded_packages_use_unified_inventory(package_inventory):
+def test_explicitly_installed_packages_use_unified_inventory(package_inventory):
     manifests = {m.package_id: m for m in packages.active_package_manifests()}
 
-    assert set(manifests) == {"nodeforge.standard", "nodeforge.lsystem"}
+    assert set(manifests) == {"nodeforge.math", "nodeforge.lsystem"}
     state = packages.load_package_state()
-    assert set(state["packages"]) == {"nodeforge.standard", "nodeforge.lsystem"}
-    assert packages.library_roots("functions")[0].package_id == "nodeforge.standard"
-    assert {root.package_id for root in packages.library_roots("examples")} == {"nodeforge.standard", "nodeforge.lsystem"}
+    assert set(state["packages"]) == {"nodeforge.math", "nodeforge.lsystem"}
+    assert packages.library_roots("functions")[0].package_id == "nodeforge.math"
+    assert {root.package_id for root in packages.library_roots("examples")} == {"nodeforge.math", "nodeforge.lsystem"}
 
 
-def test_standard_and_lsystem_constructors_are_package_backed(package_inventory):
+def test_math_and_lsystem_constructors_are_package_backed(package_inventory):
     names = set(systems_registry.constructor_names())
 
     assert {"sin", "sqrt", "clamp", "map_range", "noise", "random_value"} <= names
@@ -127,11 +130,10 @@ def test_uninstall_validates_state_pointer_before_deleting_files(package_invento
     state["packages"]["vendor.a"]["installed_path"] = b_path
     packages.save_package_state(state)
 
-    with pytest.raises(packages.PackageError, match="installed_path|Manifest id"):
-        packages.uninstall_package("vendor.a")
+    packages.uninstall_package("vendor.a")
 
     after = packages.load_package_state()
-    assert "vendor.a" in after["packages"]
+    assert "vendor.a" not in after["packages"]
     assert "vendor.b" in after["packages"]
     assert b_dir.exists()
 
@@ -276,7 +278,7 @@ def test_malformed_manifest_versions_are_rejected(package_inventory, tmp_path):
         packages.install_package_directory(source, allow_python=False)
 
 
-def test_nonstandard_package_materialization_does_not_reuse_uninstalled_group(package_inventory, tmp_path, monkeypatch):
+def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(package_inventory, tmp_path, monkeypatch):
     class FakeGroup(dict):
         def __init__(self, name):
             super().__init__()
@@ -770,80 +772,45 @@ def test_invalid_package_diagnostic_exposes_python_consent_fields(package_invent
     assert diag.version == "1.0.0"
 
 
-def test_uninstall_and_reinstall_standard_package_removes_and_restores_math_callables(package_inventory):
+
+def test_uninstall_math_package_removes_math_callables(package_inventory):
     assert "sin" in systems_registry.constructor_names()
-    assert systems_registry.constructor_owner("sin").package_id == "nodeforge.standard"
+    assert systems_registry.constructor_owner("sin").package_id == "nodeforge.math"
 
-    packages.uninstall_package("nodeforge.standard")
+    packages.uninstall_package("nodeforge.math")
 
-    assert "nodeforge.standard" not in packages.load_package_state()["packages"]
+    assert "nodeforge.math" not in packages.load_package_state()["packages"]
     assert "sin" not in systems_registry.constructor_names()
     with pytest.raises(CompileError, match="Unsupported system constructor"):
         systems_registry.get_handler("sin")
 
-    packages.install_package_source("nodeforge.standard")
 
-    assert "sin" in systems_registry.constructor_names()
-    assert systems_registry.constructor_owner("sin").package_id == "nodeforge.standard"
-    assert callable(systems_registry.get_handler("sin"))
+def test_inventory_does_not_auto_install_packages(tmp_path):
+    packages.set_packages_dir_for_tests(tmp_path / "empty")
+    systems_registry.invalidate_cache()
 
-
-def test_install_package_source_repairs_seed_source(package_inventory):
-    packages.uninstall_package("nodeforge.standard")
-
-    assert "nodeforge.standard" not in packages.load_package_state()["packages"]
-    packages.install_package_source("nodeforge.standard")
-
-    record = packages.load_package_state()["packages"]["nodeforge.standard"]
-    assert record["origin"] == "nodeforge_shipped"
-    assert "nodeforge.standard" in {m.package_id for m in packages.active_package_manifests()}
+    assert packages.active_package_manifests() == []
+    assert packages.load_package_state()["packages"] == {}
+    assert systems_registry.constructor_names() == ()
 
 
-def test_active_seeded_package_source_refreshes_when_source_changes(package_inventory, tmp_path, monkeypatch):
-    sources = tmp_path / "sources"
-    standard = sources / "nodeforge.standard"
-    (standard / "functions").mkdir(parents=True)
-    (standard / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
-    _write_manifest(standard, package_id="nodeforge.standard", contents={"functions": "functions"})
+def test_uninstall_removes_invalid_record_without_deleting_untrusted_target(package_inventory, tmp_path):
+    source = tmp_path / "invalid_source"
+    (source / "functions").mkdir(parents=True)
+    (source / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
+    _write_manifest(source, package_id="vendor.invalid")
+    packages.install_package_directory(source, allow_python=False)
 
-    lsystem = sources / "nodeforge.lsystem"
-    (lsystem / "examples").mkdir(parents=True)
-    (lsystem / "examples" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
-    _write_manifest(lsystem, package_id="nodeforge.lsystem", contents={"examples": "examples"})
+    other = tmp_path / "must_survive"
+    other.mkdir()
+    marker = other / "marker.txt"
+    marker.write_text("keep", encoding="utf-8")
 
-    monkeypatch.setattr(packages, "package_seed_sources_dir", lambda: sources)
-    packages.ensure_seeded_packages()
     state = packages.load_package_state()
-    first_path = state["packages"]["nodeforge.standard"]["installed_path"]
+    state["packages"]["vendor.invalid"]["installed_path"] = "../must_survive"
+    packages.save_package_state(state)
 
-    (standard / "functions" / "demo.nf").write_text("output(value=2)\n", encoding="utf-8")
-    packages.ensure_seeded_packages()
-    state = packages.load_package_state()
+    packages.uninstall_package("vendor.invalid")
 
-    assert state["packages"]["nodeforge.standard"]["installed_path"] != first_path
-    active_root = packages.packages_dir() / state["packages"]["nodeforge.standard"]["installed_path"]
-    assert (active_root / "functions" / "demo.nf").read_text(encoding="utf-8") == "output(value=2)\n"
-    assert isinstance(state["seed_sources"]["nodeforge.standard"], dict)
-    assert "fingerprint" in state["seed_sources"]["nodeforge.standard"]
-
-
-def test_uninstalled_seeded_package_is_not_reinstalled_by_source_refresh(package_inventory, tmp_path, monkeypatch):
-    sources = tmp_path / "sources"
-    standard = sources / "nodeforge.standard"
-    (standard / "functions").mkdir(parents=True)
-    (standard / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
-    _write_manifest(standard, package_id="nodeforge.standard", contents={"functions": "functions"})
-
-    lsystem = sources / "nodeforge.lsystem"
-    (lsystem / "examples").mkdir(parents=True)
-    (lsystem / "examples" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
-    _write_manifest(lsystem, package_id="nodeforge.lsystem", contents={"examples": "examples"})
-
-    monkeypatch.setattr(packages, "package_seed_sources_dir", lambda: sources)
-    packages.ensure_seeded_packages()
-    packages.uninstall_package("nodeforge.standard")
-    (standard / "functions" / "demo.nf").write_text("output(value=2)\n", encoding="utf-8")
-
-    packages.ensure_seeded_packages()
-
-    assert "nodeforge.standard" not in packages.load_package_state()["packages"]
+    assert "vendor.invalid" not in packages.load_package_state()["packages"]
+    assert marker.read_text(encoding="utf-8") == "keep"

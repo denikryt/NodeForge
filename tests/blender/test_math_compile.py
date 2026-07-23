@@ -1,8 +1,8 @@
 from helpers import *
 
 
-STANDARD_MATH_NAMES = set(_FLOAT_FUNCS_1) | set(_FLOAT_FUNCS_2) | {'ln', 'clamp', 'mix', 'select', 'map_range', 'noise', 'random_value'}
-STANDARD_MATH_PARAM_ORDER = {
+MATH_LIBRARY_NAMES = set(_FLOAT_FUNCS_1) | set(_FLOAT_FUNCS_2) | {'ln', 'clamp', 'mix', 'select', 'map_range', 'noise', 'random_value'}
+MATH_LIBRARY_PARAM_ORDER = {
     **{name: ('value',) for name in _FLOAT_FUNCS_1},
     **{name: ('a', 'b') for name in _FLOAT_FUNCS_2},
     'ln': ('value',),
@@ -15,8 +15,8 @@ STANDARD_MATH_PARAM_ORDER = {
 
 def test_math_compile_and_blender_enum_contracts():
     names = set(systems_registry.constructor_names())
-    check(STANDARD_MATH_NAMES <= names, 'standard math names missing from package-backed constructor registry')
-    check(systems_registry.constructor_owner('sin').package_id == 'nodeforge.standard', 'sin is not owned by nodeforge.standard')
+    check(MATH_LIBRARY_NAMES <= names, 'Math library names missing from package-backed constructor registry')
+    check(systems_registry.constructor_owner('sin').package_id == 'nodeforge.math', 'sin is not owned by nodeforge.math')
     check(callable(systems_registry.get_handler('sin')), 'sin handler is not callable')
     math_ops = {item.identifier for item in bpy.types.ShaderNodeMath.bl_rna.properties['operation'].enum_items}
     invalid_ops = sorted((set(_FLOAT_FUNCS_1.values()) | set(_FLOAT_FUNCS_2.values())) - math_ops)
@@ -30,8 +30,8 @@ def test_math_compile_and_blender_enum_contracts():
     positional_lines.extend(['ln_v = ln(2)', 'clamp_v = clamp(2, 0, 1)', 'mix_v = mix(0, 1, 0.5)', 'select_v = select(True, 1, 0)', 'map_range_v = map_range(0.5, 0, 1, -1, 1)', 'noise_v = noise(vector(0,0,0), scale=1, detail=2, roughness=0.5)', 'random_v = random_value(0, 1, seed=3)', "output('v', clamp_v)"])
     compile_group('\n'.join(positional_lines), 'NFTest_math_all_positional')
     keyword_lines = []
-    for index, name in enumerate(sorted(STANDARD_MATH_PARAM_ORDER)):
-        keyword_lines.append(f'k{index} = {_math_keyword_expr(name, STANDARD_MATH_PARAM_ORDER[name])}')
+    for index, name in enumerate(sorted(MATH_LIBRARY_PARAM_ORDER)):
+        keyword_lines.append(f'k{index} = {_math_keyword_expr(name, MATH_LIBRARY_PARAM_ORDER[name])}')
     keyword_lines.append("output('v', k0)")
     compile_group('\n'.join(keyword_lines), 'NFTest_math_all_keywords')
     compile_group("from functions import smoothstep\nx = smoothstep(edge0=0, edge1=1)\noutput('x', x)", 'NFTest_library_function_keyword_defaults')

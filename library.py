@@ -168,7 +168,7 @@ def apply_function_group_display_name(group, function_name: str):
 
 
 def _safe_group_name(name: str) -> str:
-    """Create the legacy reusable group name for standard function entries."""
+    """Create the reusable group name for a function entry."""
     return display_name_for_function(name)
 
 
@@ -178,7 +178,7 @@ def _safe_package_component(value: str) -> str:
 
 
 def _group_name(namespace: str, name: str) -> str:
-    """Return the legacy generated GeometryNodeTree name for compatibility paths."""
+    """Return the generated GeometryNodeTree name for an unowned catalog entry."""
     if namespace == "functions":
         return _safe_group_name(name)
     if namespace == "examples":
@@ -192,11 +192,6 @@ def _group_name_for_record(record: "LibraryEntryRecord") -> str:
     """Return the package-aware GeometryNodeTree name for a catalog record."""
     if record.namespace == "local" or not record.package_id:
         return _group_name(record.namespace, record.name)
-    # Keep the existing standard-library function names as the compatibility surface.
-    if record.namespace == "functions" and record.package_id == "nodeforge.standard":
-        return _safe_group_name(record.name)
-    if record.namespace == "examples" and record.package_id == "nodeforge.standard":
-        return f"NodeForge.example.{record.name}"
     package_part = _safe_package_component(record.package_id)
     return f"NodeForge.package.{package_part}.{record.namespace}.{record.name}"
 
@@ -509,9 +504,6 @@ def _backend_signature_for_record(record: LibraryEntryRecord | None) -> str:
 
 def _assert_owned_materialized_group(existing, record: LibraryEntryRecord, group_name: str) -> None:
     """Reject cross-package reuse for catalog-generated datablocks."""
-    # Legacy standard functions predate package metadata and keep their clean names.
-    if record.namespace == "functions" and record.package_id == "nodeforge.standard":
-        return
     try:
         owned = existing.get("nodeforge_library_namespace") == record.namespace and existing.get("nodeforge_library_name") == record.name
         if record.package_id:

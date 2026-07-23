@@ -36,10 +36,12 @@ def test_package_refresh_populates_invalid_reason_and_python_flags():
     assert "item.status = \"python blocked\"" in source
 
 
-def test_install_package_source_operator_is_registered():
+
+def test_ui_has_no_special_preinstalled_package_controls():
     source = _ui_source()
 
-    assert "class NODEFORGE_OT_install_package_source" in source
-    assert 'bl_idname = "nodeforge.install_package_source"' in source
-    assert "packages.install_package_source(self.package_id)" in source
-    assert "NODEFORGE_OT_install_package_source," in source
+    assert "NODEFORGE_OT_install_package_source" not in source
+    assert "NODEFORGE_OT_reinstall_shipped_package" not in source
+    assert "Install Math Source" not in source
+    assert "Install L-System Source" not in source
+    assert "ensure_seeded_packages" not in source

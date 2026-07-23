@@ -28,6 +28,7 @@ def _write_package_manifest(root: Path, package_id: str, *, contents=None, pytho
 def test_packaged_library_functions_and_helper_scoping():
     flat_probe = ROOT / 'functions' / 'flat_legacy_probe.py'
     flat_source = ROOT / 'functions' / 'library_flat_probe.nf'
+    flat_probe.parent.mkdir(parents=True, exist_ok=True)
     flat_probe.write_text("def compile_call(comp, expr, depth=0):\n    raise AssertionError('legacy flat layout loaded')\n", encoding='utf-8')
     flat_source.write_text('value = input_float("Value", default=2.0)\noutput("Value", value)\n', encoding='utf-8')
     try:

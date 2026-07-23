@@ -8,7 +8,7 @@ def test_import_and_registry_checks():
         __import__('NodeForge.' + modname)
     expected_lsystem = {'ls_system', 'ls_axiom', 'ls_rule', 'ls_iterations', 'ls_angle', 'ls_step', 'ls_param', 'ls_marker', 'ls_points'}
     check(expected_lsystem.issubset(systems_registry.constructor_names()), 'systems registry names drifted')
-    check({'sin', 'sqrt', 'clamp', 'map_range', 'noise', 'random_value'}.issubset(systems_registry.constructor_names()), 'standard callable package names missing')
+    check({'sin', 'sqrt', 'clamp', 'map_range', 'noise', 'random_value'}.issubset(systems_registry.constructor_names()), 'Math callable package names missing')
     for module in (io, vector, geometry, fields, instancing):
         missing = sorted((name for name in module.NAMES if not registry.has_callable_builtin(name)))
         check(not missing, f'registry missing {module.__name__}: {missing}')
