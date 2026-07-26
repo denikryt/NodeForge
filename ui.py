@@ -813,6 +813,7 @@ class NODEFORGE_PT_library_packages(Panel):
         if props is None:
             layout.label(text="NodeForge properties unavailable", icon='ERROR')
             return
+        layout.prop(props, "package_allow_python", text="Allow executable Python")
         row = layout.row(align=True)
         row.operator(NODEFORGE_OT_refresh_packages.bl_idname, text="Refresh", icon='FILE_REFRESH')
         row.operator(NODEFORGE_OT_import_package.bl_idname, text="Import", icon='IMPORT')

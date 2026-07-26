@@ -2,7 +2,7 @@
 
 from ..constants import TYPE_GEOMETRY
 from ..errors import CompileError
-from ..statements import _kw_dict, _check_no_extra_keywords
+from ..statements import _kw_dict, _check_no_extra_keywords, _selection_kw
 from ..consteval import _const_eval
 from ..geometry import _instance_on_points, _realize_instances
 from ..compile_time import reject_compile_time_object
@@ -18,7 +18,7 @@ def compile_call(comp, expr, depth=0):
     kws = _kw_dict(expr)
 
     if name == "instance_on_points":
-        _check_no_extra_keywords(kws, {"scale", "rotation", "realize"})
+        _check_no_extra_keywords(kws, {"selection", "scale", "rotation", "realize"})
         if len(expr.args) != 2:
             raise CompileError("instance_on_points(instance, points, ...) expects two Geometry arguments")
         instance = comp.compile(expr.args[0])
@@ -27,6 +27,7 @@ def compile_call(comp, expr, depth=0):
         reject_compile_time_object(points_geo, "instance_on_points() points")
         if instance.typ != TYPE_GEOMETRY or points_geo.typ != TYPE_GEOMETRY:
             raise CompileError("instance_on_points(instance, points, ...) expects two Geometry arguments")
+        selection = _selection_kw(comp, kws)
         scale = _const_or_compile(comp, kws["scale"]) if "scale" in kws else None
         rotation = _const_or_compile(comp, kws["rotation"]) if "rotation" in kws else None
         realize = True
@@ -35,7 +36,7 @@ def compile_call(comp, expr, depth=0):
                 realize = bool(_const_eval(kws["realize"], comp.consts))
             except CompileError:
                 raise CompileError("instance_on_points realize= must be a compile-time bool")
-        return _instance_on_points(comp.group, instance, points_geo, scale=scale, rotation=rotation, realize=realize, x=x, y=y)
+        return _instance_on_points(comp.group, instance, points_geo, selection=selection, scale=scale, rotation=rotation, realize=realize, x=x, y=y)
 
     if name == "realize_instances":
         if kws:

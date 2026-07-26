@@ -570,7 +570,7 @@ def _random_points_geometry(group, count, min_vec, max_vec, seed=None, random_va
     return _layout_random_geometry(group, pts, min_vec, max_vec, seed, random_value_helper, x, y)
 
 
-def _instance_on_points(group, instance, points, scale=None, rotation=None, realize=True, x=0, y=0):
+def _instance_on_points(group, instance, points, selection=None, scale=None, rotation=None, realize=True, x=0, y=0):
     """Place instance geometry on point geometry and optionally realize instances."""
     if instance.typ != TYPE_GEOMETRY:
         raise CompileError("instance_on_points(instance, points) first argument must be Geometry")
@@ -578,6 +578,10 @@ def _instance_on_points(group, instance, points, scale=None, rotation=None, real
         raise CompileError("instance_on_points(instance, points) second argument must be Geometry")
     node = _new_node(group, "GeometryNodeInstanceOnPoints", x, y)
     group.links.new(points.socket, node.inputs[0])
+    if selection is not None:
+        if selection.typ != TYPE_BOOL:
+            raise CompileError("instance_on_points selection= expects Bool")
+        group.links.new(selection.socket, node.inputs[1])
     group.links.new(instance.socket, node.inputs[2])
     if scale is not None:
         if _is_const_number(scale):
