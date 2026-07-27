@@ -1,6 +1,6 @@
 """Adapters for calls into NodeForge library catalog entries."""
 
-from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR
+from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR, TYPE_MATERIAL
 from .consteval import _is_const_vector
 from .errors import CompileError
 from .values import Value

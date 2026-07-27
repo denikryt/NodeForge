@@ -12,7 +12,7 @@ from pathlib import Path
 
 import bpy
 
-from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR
+from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR, TYPE_MATERIAL
 from .errors import CompileError
 from .interface import _set_socket_default
 from .nodes import _new_node
@@ -465,6 +465,8 @@ def _socket_type_to_value_type(socket) -> str:
     bl_idname = getattr(socket, "bl_idname", "")
     if bl_idname == "NodeSocketGeometry":
         return TYPE_GEOMETRY
+    if bl_idname == "NodeSocketMaterial":
+        return TYPE_MATERIAL
     if bl_idname == "NodeSocketVector":
         return TYPE_VECTOR
     if bl_idname == "NodeSocketBool":

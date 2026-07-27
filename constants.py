@@ -8,7 +8,7 @@ TYPE_VECTOR = "VECTOR"
 TYPE_BOOL = "BOOL"
 TYPE_GEOMETRY = "GEOMETRY"
 TYPE_INT = "INT"
-TYPE_TOKEN_NAMES = {"Float", "Int", "Bool", "Vector", "Geometry"}
+TYPE_MATERIAL = "MATERIAL"
 
 TYPE_TOKEN_NAMES = {
     "Float": TYPE_FLOAT,
@@ -16,6 +16,7 @@ TYPE_TOKEN_NAMES = {
     "Bool": TYPE_BOOL,
     "Vector": TYPE_VECTOR,
     "Geometry": TYPE_GEOMETRY,
+    "Material": TYPE_MATERIAL,
 }
 
 _ALLOWED_CONSTS = {"pi": math.pi, "tau": math.tau, "e": math.e}

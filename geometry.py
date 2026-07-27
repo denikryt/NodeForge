@@ -70,18 +70,25 @@ def _store_named_attribute_geometry(group, geo, attr_name, value, selection=None
     return Value(socket, TYPE_GEOMETRY)
 
 
-def _set_material_geometry(group, geo, material_name, x=0, y=0):
-    """Assign a named Blender material to geometry, creating it when needed."""
+def _set_material_geometry(group, geo, material, x=0, y=0):
+    """Assign a runtime Material value or named Blender material to geometry."""
     if geo.typ != TYPE_GEOMETRY:
         raise CompileError("set_material() first argument must be Geometry")
-    import bpy
-    mat = bpy.data.materials.get(material_name)
-    if mat is None:
-        mat = bpy.data.materials.new(material_name)
     node = _new_node(group, "GeometryNodeSetMaterial", x, y)
     group.links.new(geo.socket, node.inputs[0])
     node.inputs[1].default_value = True
-    node.inputs[2].default_value = mat
+    if isinstance(material, Value):
+        if material.typ != TYPE_MATERIAL:
+            raise CompileError("set_material() second argument must be Material or a compile-time material name")
+        group.links.new(material.socket, node.inputs[2])
+    elif isinstance(material, str):
+        import bpy
+        mat = bpy.data.materials.get(material)
+        if mat is None:
+            mat = bpy.data.materials.new(material)
+        node.inputs[2].default_value = mat
+    else:
+        raise CompileError("set_material() second argument must be Material or a compile-time material name")
     return Value(node.outputs[0], TYPE_GEOMETRY)
 
 

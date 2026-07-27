@@ -1,7 +1,7 @@
 """Geometry built-ins for NodeForge DSL."""
 
 import ast
-from ..constants import TYPE_GEOMETRY
+from ..constants import TYPE_GEOMETRY, TYPE_MATERIAL
 from ..errors import CompileError
 from ..statements import _kw_dict, _check_no_extra_keywords, _selection_kw, _optional_string_kw
 from ..consteval import _const_eval
@@ -136,11 +136,17 @@ def compile_call(comp, expr, depth=0):
         if kws:
             raise CompileError("set_material() does not support keyword arguments")
         if len(expr.args) != 2:
-            raise CompileError('set_material(geometry, "MaterialName") expects Geometry and a compile-time material name')
+            raise CompileError('set_material(geometry, material) expects Geometry and Material or a compile-time material name')
         geo = comp.compile(expr.args[0])
         reject_compile_time_object(geo, "set_material() geometry")
-        material_name = _literal_string(expr.args[1], "set_material() material name", comp.consts)
-        return _set_material_geometry(comp.group, geo, material_name, x, y)
+        try:
+            material = _literal_string(expr.args[1], "set_material() material name", comp.consts)
+        except CompileError:
+            material = comp.compile(expr.args[1])
+            reject_compile_time_object(material, "set_material() material")
+            if getattr(material, "typ", None) != TYPE_MATERIAL:
+                raise CompileError("set_material() second argument must be Material or a compile-time material name")
+        return _set_material_geometry(comp.group, geo, material, x, y)
 
     if name == "cube":
         _check_no_extra_keywords(kws, {"size"})

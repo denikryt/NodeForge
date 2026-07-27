@@ -1,12 +1,12 @@
 """Input/output related built-ins for NodeForge DSL."""
 
-from ..constants import TYPE_GEOMETRY, TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR
+from ..constants import TYPE_GEOMETRY, TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR, TYPE_MATERIAL
 from ..errors import CompileError
 from ..statements import _kw_dict, _check_no_extra_keywords
 from ..parsing import _literal_string
 from ..consteval import _const_eval, _as_float_const, _is_const_vector
 
-NAMES = {"input_geometry", "input_float", "input_int", "input_bool", "input_vector"}
+NAMES = {"input_geometry", "input_float", "input_int", "input_bool", "input_vector", "input_material"}
 
 
 def compile_call(comp, expr, depth=0):
@@ -18,10 +18,11 @@ def compile_call(comp, expr, depth=0):
         raise CompileError(f'{name}(name, ...) expects exactly one name argument')
     input_name = _literal_string(expr.args[0], f"{name}() name", comp.consts)
 
-    if name == "input_geometry":
+    if name in {"input_geometry", "input_material"}:
         if kws:
-            raise CompileError("input_geometry(name) does not support default=")
-        return comp._create_input_socket_value(input_name, TYPE_GEOMETRY, None)
+            raise CompileError(f"{name}(name) does not support default=")
+        typ = TYPE_GEOMETRY if name == "input_geometry" else TYPE_MATERIAL
+        return comp._create_input_socket_value(input_name, typ, None)
 
     default_expr = kws.get("default", None)
     if name == "input_float":

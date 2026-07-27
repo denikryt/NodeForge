@@ -39,6 +39,8 @@ def input_call_for_type(param_name, typ):
     """Return source code that recreates a local function parameter as an input."""
     if typ == TYPE_GEOMETRY:
         return f'{param_name} = input_geometry({param_name!r})'
+    if typ == TYPE_MATERIAL:
+        return f'{param_name} = input_material({param_name!r})'
     if typ == TYPE_VECTOR:
         return f'{param_name} = input_vector({param_name!r})'
     if typ == TYPE_BOOL:

@@ -13,6 +13,7 @@ from ..constants import (
     TYPE_FLOAT,
     TYPE_GEOMETRY,
     TYPE_INT,
+    TYPE_MATERIAL,
     TYPE_TOKEN_NAMES,
     TYPE_VECTOR,
 )
@@ -35,7 +36,7 @@ INPUT_LITERAL = "literal_default"
 INPUT_SINGLE_LINK = "single_link"
 INPUT_MULTI_LINK = "multi_link"
 
-_SUPPORTED_TYPES = {TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR, TYPE_GEOMETRY}
+_SUPPORTED_TYPES = {TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR, TYPE_GEOMETRY, TYPE_MATERIAL}
 
 
 def compile_call(comp, expr, depth=0):
@@ -233,6 +234,8 @@ def _socket_runtime_type(socket):
         return TYPE_VECTOR
     if bl_idname.startswith("NodeSocketGeometry"):
         return TYPE_GEOMETRY
+    if bl_idname.startswith("NodeSocketMaterial"):
+        return TYPE_MATERIAL
     return None
 
 
