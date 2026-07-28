@@ -85,3 +85,34 @@ NodeForge/
 ## NodeForge packages
 
 NodeForge supports installable package/library directories and zip archives. Packages contain `nodeforge_package.json` plus declared `functions`, `examples`, and/or `systems` roots. Installed packages extend the existing `functions` and `examples` catalogs and unqualified system constructor namespace. See `docs/PACKAGES.md` for the package format and safety rules.
+
+## Material inputs
+
+Use `input_material()` to expose a Material socket on the generated node group. The material can be selected in the Geometry Nodes modifier or connected from another node group.
+
+```python
+grass_material = input_material("Grass Material")
+geo = set_material(cube(1.0), grass_material)
+output("Geometry", geo)
+```
+
+`set_material()` accepts either a runtime `Material` value or a compile-time material name:
+
+```python
+geo = set_material(geo, "Grass")
+```
+
+The `Material` type token is supported by local functions, library function group sockets, and compatible raw node inputs and outputs.
+
+
+### Object inputs
+
+Create an Object socket with `input_object(name)`. Configure the lazy Object Info reader before accessing object data:
+
+```python
+source = input_object("Source")
+source.info(transform_space="RELATIVE", as_instance=False)
+output("Geometry", source.geometry)
+```
+
+`source.geometry`, `source.location`, `source.rotation`, and `source.scale` share one lazily created Object Info node. `source.info()` accepts `transform_space="ORIGINAL"|"RELATIVE"` and `as_instance=True|False`; the defaults are `ORIGINAL` and `True`. Configure it before the first property access. Object values remain Object sockets when passed to raw nodes, local functions, and installed library functions.

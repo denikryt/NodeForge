@@ -1,27 +1,34 @@
 """Input/output related built-ins for NodeForge DSL."""
 
-from ..constants import TYPE_GEOMETRY, TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR, TYPE_MATERIAL
+from ..constants import TYPE_GEOMETRY, TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR, TYPE_MATERIAL, TYPE_OBJECT
 from ..errors import CompileError
 from ..statements import _kw_dict, _check_no_extra_keywords
 from ..parsing import _literal_string
 from ..consteval import _const_eval, _as_float_const, _is_const_vector
 
-NAMES = {"input_geometry", "input_float", "input_int", "input_bool", "input_vector", "input_material"}
+NAMES = {"input_geometry", "input_float", "input_int", "input_bool", "input_vector", "input_material", "input_object"}
 
 
 def compile_call(comp, expr, depth=0):
     """Compile input socket built-ins and apply compile-time defaults."""
     name = expr.func.id
     kws = _kw_dict(expr)
-    _check_no_extra_keywords(kws, {"default"})
+    allowed_keywords = {
+        "input_geometry": set(),
+        "input_material": set(),
+        "input_object": set(),
+        "input_float": {"default"},
+        "input_int": {"default"},
+        "input_bool": {"default"},
+        "input_vector": {"default"},
+    }
+    _check_no_extra_keywords(kws, allowed_keywords[name])
     if len(expr.args) != 1:
         raise CompileError(f'{name}(name, ...) expects exactly one name argument')
     input_name = _literal_string(expr.args[0], f"{name}() name", comp.consts)
 
-    if name in {"input_geometry", "input_material"}:
-        if kws:
-            raise CompileError(f"{name}(name) does not support default=")
-        typ = TYPE_GEOMETRY if name == "input_geometry" else TYPE_MATERIAL
+    if name in {"input_geometry", "input_material", "input_object"}:
+        typ = {"input_geometry": TYPE_GEOMETRY, "input_material": TYPE_MATERIAL, "input_object": TYPE_OBJECT}[name]
         return comp._create_input_socket_value(input_name, typ, None)
 
     default_expr = kws.get("default", None)

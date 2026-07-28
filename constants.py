@@ -9,6 +9,7 @@ TYPE_BOOL = "BOOL"
 TYPE_GEOMETRY = "GEOMETRY"
 TYPE_INT = "INT"
 TYPE_MATERIAL = "MATERIAL"
+TYPE_OBJECT = "OBJECT"
 
 TYPE_TOKEN_NAMES = {
     "Float": TYPE_FLOAT,
@@ -17,6 +18,7 @@ TYPE_TOKEN_NAMES = {
     "Vector": TYPE_VECTOR,
     "Geometry": TYPE_GEOMETRY,
     "Material": TYPE_MATERIAL,
+    "Object": TYPE_OBJECT,
 }
 
 _ALLOWED_CONSTS = {"pi": math.pi, "tau": math.tau, "e": math.e}

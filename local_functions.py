@@ -41,6 +41,8 @@ def input_call_for_type(param_name, typ):
         return f'{param_name} = input_geometry({param_name!r})'
     if typ == TYPE_MATERIAL:
         return f'{param_name} = input_material({param_name!r})'
+    if typ == TYPE_OBJECT:
+        return f'{param_name} = input_object({param_name!r})'
     if typ == TYPE_VECTOR:
         return f'{param_name} = input_vector({param_name!r})'
     if typ == TYPE_BOOL:

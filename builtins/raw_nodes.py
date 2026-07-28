@@ -14,12 +14,13 @@ from ..constants import (
     TYPE_GEOMETRY,
     TYPE_INT,
     TYPE_MATERIAL,
+    TYPE_OBJECT,
     TYPE_TOKEN_NAMES,
     TYPE_VECTOR,
 )
 from ..errors import CompileError
 from ..nodes import _new_node, _is_number_type
-from ..values import NodeResult, Value
+from ..values import NodeResult, Value, make_value
 from ..statements import _kw_dict
 
 NAMES = {"node"}
@@ -36,7 +37,7 @@ INPUT_LITERAL = "literal_default"
 INPUT_SINGLE_LINK = "single_link"
 INPUT_MULTI_LINK = "multi_link"
 
-_SUPPORTED_TYPES = {TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR, TYPE_GEOMETRY, TYPE_MATERIAL}
+_SUPPORTED_TYPES = {TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR, TYPE_GEOMETRY, TYPE_MATERIAL, TYPE_OBJECT}
 
 
 def compile_call(comp, expr, depth=0):
@@ -206,14 +207,14 @@ def build_raw_node(
         for socket_name, out_typ in outputs.items():
             socket = resolve_socket(node.outputs, socket_name, direction="output", context=context)
             _validate_runtime_socket_type(socket, out_typ, direction="output", context=context, socket_name=socket_name)
-            values[socket_name] = Value(socket, out_typ)
+            values[socket_name] = make_value(socket, out_typ)
         _write_raw_metadata(node, bl_idname, props, input_contracts, tuple(outputs.keys()), RAW_MULTI_MODE)
         return NodeResult(values)
 
     out_socket = resolve_socket(node.outputs, output, direction="output", context=context)
     _validate_runtime_socket_type(out_socket, typ, direction="output", context=context, socket_name=output)
     _write_raw_metadata(node, bl_idname, props, input_contracts, (output,), RAW_SINGLE_MODE)
-    return Value(out_socket, typ)
+    return make_value(out_socket, typ)
 
 
 def _validate_public_type(typ, context):
@@ -236,6 +237,8 @@ def _socket_runtime_type(socket):
         return TYPE_GEOMETRY
     if bl_idname.startswith("NodeSocketMaterial"):
         return TYPE_MATERIAL
+    if bl_idname.startswith("NodeSocketObject"):
+        return TYPE_OBJECT
     return None
 
 

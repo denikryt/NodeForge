@@ -211,6 +211,10 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
             _compile_builder_method(comp, builder, method, method_call, 360 + idx * 120, -120 - idx * 50)
             ctx.auto_final_output = None
             return
+        if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute) and expr.func.attr == "info":
+            comp.compile(expr)
+            ctx.auto_final_output = None
+            return
         if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute) and expr.func.attr == "append":
             if not isinstance(expr.func.value, ast.Name) or len(expr.args) != 1:
                 raise CompileError("append must look like items.append(value)")

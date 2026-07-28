@@ -12,11 +12,11 @@ from pathlib import Path
 
 import bpy
 
-from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR, TYPE_MATERIAL
+from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR, TYPE_MATERIAL, TYPE_OBJECT
 from .errors import CompileError
 from .interface import _set_socket_default
 from .nodes import _new_node
-from .values import Value
+from .values import Value, make_value
 from .systems import registry as systems_registry
 from . import packages
 
@@ -467,6 +467,8 @@ def _socket_type_to_value_type(socket) -> str:
         return TYPE_GEOMETRY
     if bl_idname == "NodeSocketMaterial":
         return TYPE_MATERIAL
+    if bl_idname == "NodeSocketObject":
+        return TYPE_OBJECT
     if bl_idname == "NodeSocketVector":
         return TYPE_VECTOR
     if bl_idname == "NodeSocketBool":
@@ -583,7 +585,7 @@ def make_library_call_node(group, function_group, compiled_args, const_args, x=0
     outputs = _output_sockets(node)
     if len(outputs) != 1:
         raise CompileError(f"Library function {function_group.name} must have exactly one output for expression calls")
-    return Value(outputs[0], _socket_type_to_value_type(outputs[0]))
+    return make_value(outputs[0], _socket_type_to_value_type(outputs[0]))
 
 
 def materialize_library_entry_group(namespace: str, name: str, compile_group_callback):

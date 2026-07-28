@@ -12,3 +12,8 @@
 | `run_mandelbrot_eval_check()` | `tests/blender/test_mandelbrot_eval.py` |
 
 | Geometry builder DSL accumulation and Repeat Zone state | `tests/blender/test_geometry_builder.py`, `tests/unit/test_math_specs.py` |
+
+## Object sockets
+
+- `tests/unit/test_object_type.py`: Object token, builtin registration, local-function source, raw-node type token.
+- `tests/blender/test_object_inputs.py`: Object interface sockets, lazy Object Info configuration/cache, keyword isolation, and configuration lock.

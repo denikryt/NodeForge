@@ -2,7 +2,7 @@
 
 from NodeForge.errors import CompileError
 
-from .helpers import check, compile_group
+from helpers import check, compile_group
 
 
 def _instance_node(group):

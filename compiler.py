@@ -7,7 +7,7 @@ import bpy
 
 from .constants import TYPE_FLOAT, TYPE_INT, TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
 from .errors import CompileError
-from .values import Value
+from .values import Value, make_value
 from .nodes import (
     _new_node,
     _value,
@@ -202,7 +202,7 @@ class Compiler:
         socket = next((s for s in self.group_input.outputs if s.name == name), None)
         if socket is None:
             raise CompileError(f'Internal error: input socket "{name}" was not created')
-        val = Value(socket, typ)
+        val = make_value(socket, typ)
         self.vars[name] = val
         return val
 
@@ -449,7 +449,7 @@ def _build_group(
 
         for socket in group_input.outputs:
             if socket.name in input_names:
-                comp.vars[socket.name] = Value(socket, input_types.get(socket.name, TYPE_FLOAT))
+                comp.vars[socket.name] = make_value(socket, input_types.get(socket.name, TYPE_FLOAT))
 
         geometry_socket = None
         if geometry_mode:

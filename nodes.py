@@ -15,6 +15,7 @@ def _socket_type_for(typ):
         TYPE_GEOMETRY: "NodeSocketGeometry",
         TYPE_INT: "NodeSocketInt",
         TYPE_MATERIAL: "NodeSocketMaterial",
+        TYPE_OBJECT: "NodeSocketObject",
     }[typ]
 
 def _new_node(group, bl_idname, x=0, y=0):

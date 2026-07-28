@@ -4,7 +4,7 @@ import ast
 
 from .constants import *
 from .errors import CompileError
-from .values import Value, NodeResult
+from .values import Value, ObjectValue, NodeResult
 from .nodes import *
 from .consteval import _const_eval
 from .builtins import registry as builtin_registry
@@ -51,6 +51,8 @@ def compile_expr(comp, expr, depth=0):
             raise CompileError("geometry_builder supports only .geometry")
         if isinstance(base, NodeResult):
             return base.get_output(expr.attr)
+        if isinstance(base, ObjectValue):
+            return base.resolve_property(expr.attr, comp, x=x, y=y)
         if expr.attr in {"x", "y", "z"}:
             reject_compile_time_object(base, f".{expr.attr} attribute access")
             return _separate_xyz(comp.group, base, expr.attr, x, y)
@@ -176,6 +178,38 @@ def compile_expr(comp, expr, depth=0):
         raise CompileError("indexing is supported for arrays and Vector values only")
 
     if isinstance(expr, ast.Call):
+        if isinstance(expr.func, ast.Attribute):
+            if expr.func.attr != "info":
+                raise CompileError("Object values support only the .info() method")
+            receiver = compile_expr(comp, expr.func.value, depth + 1)
+            if not isinstance(receiver, ObjectValue):
+                raise CompileError(".info() can only be used on Object values")
+            if expr.args:
+                raise CompileError("Object.info() accepts only keyword arguments")
+            if any(kw.arg is None for kw in expr.keywords):
+                raise CompileError("Object.info() does not support **kwargs")
+            kws = {kw.arg: kw.value for kw in expr.keywords}
+            extra = set(kws) - {"transform_space", "as_instance"}
+            if extra:
+                raise CompileError("Object.info() accepts only transform_space= and as_instance=")
+            options = {}
+            if "transform_space" in kws:
+                try:
+                    value = _const_eval(kws["transform_space"], comp.consts)
+                except CompileError as exc:
+                    raise CompileError("Object.info() transform_space must be 'ORIGINAL' or 'RELATIVE'") from exc
+                if value not in {"ORIGINAL", "RELATIVE"}:
+                    raise CompileError("Object.info() transform_space must be 'ORIGINAL' or 'RELATIVE'")
+                options["transform_space"] = value
+            if "as_instance" in kws:
+                try:
+                    value = _const_eval(kws["as_instance"], comp.consts)
+                except CompileError as exc:
+                    raise CompileError("Object.info() as_instance must be a compile-time Bool") from exc
+                if not isinstance(value, bool):
+                    raise CompileError("Object.info() as_instance must be a compile-time Bool")
+                options["as_instance"] = value
+            return receiver.configure_info(**options)
         if not isinstance(expr.func, ast.Name):
             raise CompileError("Only simple function calls are supported")
         name = expr.func.id
