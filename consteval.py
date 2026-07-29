@@ -266,7 +266,13 @@ def _handle_compile_time_stmt(stmt, env, out_stmts, preserve_names=None):
     if isinstance(stmt, ast.Assign):
         target = stmt.targets[0]
         if not isinstance(target, ast.Name):
-            raise CompileError("Assignment target must be a simple name")
+            # Runtime tuple unpacking is validated and lowered atomically by the
+            # statement compiler. It cannot be folded as one compile-time value.
+            for nested in ast.walk(target):
+                if isinstance(nested, ast.Name):
+                    env.pop(nested.id, None)
+            out_stmts.append(stmt)
+            return
         # Preserve initial values for repeat_range state variables; they must become GN values.
         if target.id in preserve_names:
             env.pop(target.id, None)

@@ -51,6 +51,37 @@ def make_value(socket, typ):
     return Value(socket, typ)
 
 
+class TupleValue:
+    """Fixed compiler-side tuple of ordinary runtime socket values."""
+
+    def __init__(self, values):
+        items = tuple(values)
+        if not items or not all(isinstance(value, Value) for value in items):
+            raise CompileError("TupleValue requires one or more runtime socket values")
+        self.values = items
+
+    def __len__(self):
+        """Return the fixed number of tuple elements."""
+        return len(self.values)
+
+    def get_item(self, index):
+        """Return one element using Python tuple index semantics."""
+        if not isinstance(index, int) or isinstance(index, bool):
+            raise CompileError("tuple result indexing requires a compile-time integer index")
+        try:
+            return self.values[index]
+        except IndexError as exc:
+            raise CompileError(f"tuple result index {index} is out of range for {len(self.values)} values") from exc
+
+
+def reject_tuple_value(value, context):
+    """Reject a multi-output tuple where one runtime socket value is required."""
+    if isinstance(value, TupleValue):
+        raise CompileError(
+            f"{context} received a tuple of {len(value)} values; unpack it or select an element by a compile-time index"
+        )
+
+
 class NodeResult(CompileTimeObject):
     """Compile-time-only container for declared raw node outputs."""
 
@@ -70,4 +101,4 @@ class NodeResult(CompileTimeObject):
         return self._outputs[name]
 
 
-__all__ = ["Value", "ObjectValue", "NodeResult", "make_value"]
+__all__ = ["Value", "ObjectValue", "TupleValue", "NodeResult", "make_value", "reject_tuple_value"]

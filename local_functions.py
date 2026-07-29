@@ -1,14 +1,22 @@
 """Compilation helpers for script-local DSL functions."""
 
 import ast
+import json
 import re
+from dataclasses import dataclass
 import bpy
 
 from .constants import *
 from .errors import CompileError
-from .library import make_library_call_node
+from .library import (
+    _new_node, _input_sockets, _output_sockets,
+    _normalized_socket_name, _set_socket_default, _socket_type_to_value_type,
+    apply_function_node_display_name,
+)
 from .consteval import _is_const_vector
 from .compile_time import reject_compile_time_object
+from .values import TupleValue, make_value, reject_tuple_value
+from .library_calls import _argument_type_matches
 
 LOCAL_HELPER_KIND_PROP = "nodeforge_generated_kind"
 LOCAL_HELPER_KIND = "local_function_helper"
@@ -16,6 +24,7 @@ LOCAL_HELPER_NAMESPACE_PROP = "nodeforge_local_function_namespace"
 LOCAL_HELPER_NAME_PROP = "nodeforge_local_function_name"
 LOCAL_HELPER_SIGNATURE_PROP = "nodeforge_local_function_signature"
 LOCAL_HELPER_SOURCE_PROP = "nodeforge_local_function_source"
+LOCAL_HELPER_RETURN_PROP = "nodeforge_local_function_return_shape"
 
 
 def value_type_for_const(value):
@@ -37,40 +46,96 @@ def value_type_for_const(value):
 
 def input_call_for_type(param_name, typ):
     """Return source code that recreates a local function parameter as an input."""
-    if typ == TYPE_GEOMETRY:
-        return f'{param_name} = input_geometry({param_name!r})'
-    if typ == TYPE_MATERIAL:
-        return f'{param_name} = input_material({param_name!r})'
-    if typ == TYPE_OBJECT:
-        return f'{param_name} = input_object({param_name!r})'
-    if typ == TYPE_VECTOR:
-        return f'{param_name} = input_vector({param_name!r})'
-    if typ == TYPE_BOOL:
-        return f'{param_name} = input_bool({param_name!r})'
-    if typ == TYPE_INT:
-        return f'{param_name} = input_int({param_name!r})'
-    return f'{param_name} = input_float({param_name!r})'
+    constructors = {
+        TYPE_GEOMETRY: "input_geometry", TYPE_MATERIAL: "input_material",
+        TYPE_OBJECT: "input_object", TYPE_VECTOR: "input_vector",
+        TYPE_BOOL: "input_bool", TYPE_INT: "input_int", TYPE_FLOAT: "input_float",
+    }
+    constructor = constructors.get(typ)
+    if constructor is None:
+        raise CompileError(f"Local function input type {typ!r} has no supported input constructor")
+    return f"{param_name} = {constructor}({param_name!r})"
 
 
-def local_function_source(fn, param_types, hidden_captures=()):
+@dataclass(frozen=True)
+class LocalReturnElement:
+    """One ordered local-function return socket descriptor."""
+    index: int
+    socket_name: str
+    key: str
+    expression: ast.expr
+
+
+@dataclass(frozen=True)
+class LocalReturnShape:
+    """Fixed scalar or tuple return contract for a local function."""
+    elements: tuple
+
+    @property
+    def is_tuple(self):
+        """Return whether the source used tuple-return syntax."""
+        return len(self.elements) > 1
+
+
+def _display_name(name):
+    """Convert a Python binding name to the project socket display convention."""
+    return " ".join(part.capitalize() for part in name.split("_")) or "Value"
+
+
+def analyze_local_return_shape(fn):
+    """Validate and describe the single supported top-level return contract."""
+    returns = [stmt for stmt in fn.body if isinstance(stmt, ast.Return)]
+    nested_returns = [node for stmt in fn.body for node in ast.walk(stmt) if isinstance(node, ast.Return)]
+    if len(returns) != 1 or len(nested_returns) != 1 or fn.body[-1] is not returns[0]:
+        raise CompileError(f"Local function {fn.name}() must have exactly one final top-level return")
+    value = returns[0].value
+    if value is None:
+        raise CompileError(f"Local function {fn.name}() return must produce at least one value")
+    if isinstance(value, ast.List):
+        raise CompileError(f"Local function {fn.name}() cannot return a list; use a flat tuple return")
+    exprs = list(value.elts) if isinstance(value, ast.Tuple) else [value]
+    if not exprs:
+        raise CompileError(f"Local function {fn.name}() cannot return an empty tuple")
+    if any(isinstance(item, ast.Starred) for item in exprs):
+        raise CompileError(f"Local function {fn.name}() does not support starred return elements")
+    if any(isinstance(item, (ast.Tuple, ast.List)) for item in exprs):
+        raise CompileError(f"Local function {fn.name}() does not support nested tuple returns")
+    used = {}
+    elements = []
+    for index, expr in enumerate(exprs):
+        base = _display_name(expr.id) if isinstance(expr, ast.Name) else f"Value {index + 1}"
+        count = used.get(base, 0) + 1
+        used[base] = count
+        socket_name = base if count == 1 else f"{base} {count}"
+        elements.append(LocalReturnElement(index, socket_name, f"return:{index}", expr))
+    if len(elements) == 1:
+        elements[0] = LocalReturnElement(0, "Value", "return:0", elements[0].expression)
+    return LocalReturnShape(tuple(elements))
+
+
+def resolve_local_parameter_annotation(annotation):
+    """Resolve one simple local-function parameter annotation to a type token."""
+    if annotation is None:
+        return None
+    if not isinstance(annotation, ast.Name) or annotation.id not in TYPE_TOKEN_NAMES:
+        rendered = ast.unparse(annotation)
+        raise CompileError(f"Unsupported local function parameter annotation: {rendered}")
+    return TYPE_TOKEN_NAMES[annotation.id]
+
+
+def local_function_source(fn, param_types, hidden_captures=(), return_shape=None):
     """Lower a script-local function definition into a temporary group source."""
-    lines = []
-    for arg in fn.args.args:
-        name = arg.arg
-        lines.append(input_call_for_type(name, param_types[name]))
-    for name in hidden_captures:
-        lines.append(input_call_for_type(name, param_types[name]))
+    shape = return_shape or analyze_local_return_shape(fn)
+    lines = [input_call_for_type(arg.arg, param_types[arg.arg]) for arg in fn.args.args]
+    lines.extend(input_call_for_type(name, param_types[name]) for name in hidden_captures)
     if fn.args.vararg or fn.args.kwarg or fn.args.kwonlyargs or fn.args.defaults:
         raise CompileError("Local functions currently support only plain positional parameters without defaults")
-    for stmt in fn.body:
-        if isinstance(stmt, ast.Return):
-            lines.append(f'output("Value", {ast.unparse(stmt.value)})')
-        elif isinstance(stmt, ast.FunctionDef):
+    for stmt in fn.body[:-1]:
+        if isinstance(stmt, ast.FunctionDef):
             raise CompileError("Nested function definitions are not supported")
-        else:
-            lines.append(ast.unparse(stmt))
-    if not any(isinstance(stmt, ast.Return) for stmt in fn.body):
-        raise CompileError(f"Local function {fn.name} must end with return ...")
+        lines.append(ast.unparse(stmt))
+    for element in shape.elements:
+        lines.append(f"output({element.socket_name!r}, {ast.unparse(element.expression)})")
     return "\n".join(lines)
 
 
@@ -161,7 +226,7 @@ class _FreeNameVisitor(ast.NodeVisitor):
             self.visit(kw.value)
 
     def visit_Name(self, node):
-        if isinstance(node.ctx, ast.Load):
+        if isinstance(node.ctx, ast.Load) and node.id not in TYPE_TOKEN_NAMES:
             self._add(node.id)
 
     def visit_FunctionDef(self, node):
@@ -231,6 +296,7 @@ def _resolve_direct_capture(comp, fn, capture_name):
     if capture_name in comp.vars:
         value = comp.vars[capture_name]
         reject_compile_time_object(value, f"local function {fn.name}() capture {capture_name}")
+        reject_tuple_value(value, f"local function {fn.name}() capture {capture_name}")
         if isinstance(value, list):
             raise CompileError(f"Local function {fn.name}() cannot capture {capture_name}: arrays are not supported")
         return (capture_name, value, True, value.typ)
@@ -282,7 +348,7 @@ def _analyze_captures(comp, fn, _stack=()):
     return tuple(captures)
 
 
-def _helper_metadata_matches(group, *, namespace, function_name, signature):
+def _helper_metadata_matches(group, *, namespace, function_name, signature, return_shape=None):
     """Return True when an existing group is an owned matching local-function helper."""
     try:
         return (
@@ -290,18 +356,53 @@ def _helper_metadata_matches(group, *, namespace, function_name, signature):
             and group.get(LOCAL_HELPER_NAMESPACE_PROP) == namespace
             and group.get(LOCAL_HELPER_NAME_PROP) == function_name
             and group.get(LOCAL_HELPER_SIGNATURE_PROP) == signature
+            and (return_shape is None or group.get(LOCAL_HELPER_RETURN_PROP) == _serialize_return_shape(return_shape))
         )
     except Exception:
         return False
 
 
-def _write_helper_metadata(group, *, namespace, function_name, signature, source):
+def _serialize_return_shape(shape, types=None):
+    """Serialize ordered local return metadata for Blender custom properties."""
+    payload = [{"key": e.key, "name": e.socket_name} for e in shape.elements]
+    if types is not None:
+        for item, typ in zip(payload, types):
+            item["type"] = typ
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True)
+
+
+def _write_helper_metadata(group, *, namespace, function_name, signature, source, return_shape, return_types):
     """Persist local-helper ownership metadata used by future reuse checks."""
     group[LOCAL_HELPER_KIND_PROP] = LOCAL_HELPER_KIND
     group[LOCAL_HELPER_NAMESPACE_PROP] = namespace
     group[LOCAL_HELPER_NAME_PROP] = function_name
     group[LOCAL_HELPER_SIGNATURE_PROP] = signature
     group[LOCAL_HELPER_SOURCE_PROP] = source
+    group[LOCAL_HELPER_RETURN_PROP] = _serialize_return_shape(return_shape, return_types)
+
+
+def make_local_function_call_node(group, function_group, compiled_args, const_args, return_shape, x=0, y=0):
+    """Create a local helper call and reconstruct its scalar or tuple result."""
+    node = _new_node(group, "GeometryNodeGroup", x, y)
+    node.node_tree = function_group
+    apply_function_node_display_name(node, function_group)
+    normalized_inputs = {_normalized_socket_name(s.name): s for s in _input_sockets(node)}
+    for raw_name, value in const_args.items():
+        socket = normalized_inputs.get(_normalized_socket_name(raw_name))
+        if socket is None:
+            raise CompileError(f"Function {function_group.name} has no input named {raw_name!r}")
+        _set_socket_default(socket, value)
+    for raw_name, value in compiled_args.items():
+        reject_tuple_value(value, f"local function {function_group.name}() argument")
+        socket = normalized_inputs.get(_normalized_socket_name(raw_name))
+        if socket is None:
+            raise CompileError(f"Function {function_group.name} has no input named {raw_name!r}")
+        group.links.new(value.socket, socket)
+    outputs = _output_sockets(node)
+    if len(outputs) != len(return_shape.elements):
+        raise CompileError(f"Local function {function_group.name} expected {len(return_shape.elements)} outputs, got {len(outputs)}")
+    values = tuple(make_value(socket, _socket_type_to_value_type(socket)) for socket in outputs)
+    return values[0] if len(values) == 1 else TupleValue(values)
 
 
 def compile_backend_builtin_call(comp, expr, depth=0):
@@ -318,6 +419,8 @@ def compile_local_function_call(comp, expr, depth=0):
     name = expr.func.id
     fn = comp.local_functions[name]
     params = [a.arg for a in fn.args.args]
+    declared_types = {a.arg: resolve_local_parameter_annotation(a.annotation) for a in fn.args.args}
+    return_shape = analyze_local_return_shape(fn)
     if fn.args.vararg or fn.args.kwarg or fn.args.kwonlyargs or fn.args.defaults:
         raise CompileError("Local functions currently support only plain positional parameters without defaults")
     if len(expr.args) > len(params):
@@ -332,13 +435,24 @@ def compile_local_function_call(comp, expr, depth=0):
         value, is_dynamic = comp._const_or_compile_arg(arg_expr, depth + 1)
         if is_dynamic:
             reject_compile_time_object(value, "script-local function argument")
+            reject_tuple_value(value, "script-local function argument")
             if isinstance(value, list):
                 raise CompileError("Local function arguments cannot be arrays")
             compiled_args[param] = value
             param_types[param] = value.typ
+            declared = declared_types[param]
+            if declared is not None and not _argument_type_matches(declared, value.typ):
+                raise CompileError(f"{name}() parameter {param!r} expects {declared}, got {value.typ}")
+            if declared is not None:
+                param_types[param] = declared
         else:
             const_args[param] = value
             param_types[param] = value_type_for_const(value)
+            declared = declared_types[param]
+            if declared is not None and not _argument_type_matches(declared, param_types[param]):
+                raise CompileError(f"{name}() parameter {param!r} expects {declared}, got {param_types[param]}")
+            if declared is not None:
+                param_types[param] = declared
         used.add(param)
 
     for kw in expr.keywords:
@@ -351,13 +465,24 @@ def compile_local_function_call(comp, expr, depth=0):
         value, is_dynamic = comp._const_or_compile_arg(kw.value, depth + 1)
         if is_dynamic:
             reject_compile_time_object(value, "script-local function argument")
+            reject_tuple_value(value, "script-local function argument")
             if isinstance(value, list):
                 raise CompileError("Local function arguments cannot be arrays")
             compiled_args[kw.arg] = value
             param_types[kw.arg] = value.typ
+            declared = declared_types[kw.arg]
+            if declared is not None and not _argument_type_matches(declared, value.typ):
+                raise CompileError(f"{name}() parameter {kw.arg!r} expects {declared}, got {value.typ}")
+            if declared is not None:
+                param_types[kw.arg] = declared
         else:
             const_args[kw.arg] = value
             param_types[kw.arg] = value_type_for_const(value)
+            declared = declared_types[kw.arg]
+            if declared is not None and not _argument_type_matches(declared, param_types[kw.arg]):
+                raise CompileError(f"{name}() parameter {kw.arg!r} expects {declared}, got {param_types[kw.arg]}")
+            if declared is not None:
+                param_types[kw.arg] = declared
         used.add(kw.arg)
 
     missing = [p for p in params if p not in used]
@@ -378,7 +503,7 @@ def compile_local_function_call(comp, expr, depth=0):
     logical_namespace = _logical_namespace(getattr(comp, "helper_namespace", None) or getattr(comp.group, "name", "Group"))
     namespace_fragment = _helper_namespace_fragment(logical_namespace)
     group_name = f"NodeForge.local.{namespace_fragment}.{name}.{signature}"
-    source = local_function_source(fn, param_types, hidden_captures=hidden_capture_names)
+    source = local_function_source(fn, param_types, hidden_captures=hidden_capture_names, return_shape=return_shape)
     cache_key = (name, signature, source)
     function_group = comp.local_group_cache.get(cache_key)
     if function_group is None or getattr(function_group, "name", None) not in bpy.data.node_groups:
@@ -389,6 +514,7 @@ def compile_local_function_call(comp, expr, depth=0):
                 namespace=logical_namespace,
                 function_name=name,
                 signature=signature,
+                return_shape=None,
             ):
                 raise CompileError(f"Local function helper group name collision: {group_name}")
             function_group = comp.compile_group_callback(
@@ -424,16 +550,20 @@ def compile_local_function_call(comp, expr, depth=0):
             function_name=name,
             signature=signature,
             source=source,
+            return_shape=return_shape,
+            return_types=[_socket_type_to_value_type(s) for s in function_group.interface.items_tree if getattr(s, "in_out", None) == "OUTPUT"],
         )
         comp.local_group_cache[cache_key] = function_group
     x = depth * 240
     y = -depth * 90
-    return make_library_call_node(comp.group, function_group, compiled_args, const_args, x=x, y=y)
+    return make_local_function_call_node(comp.group, function_group, compiled_args, const_args, return_shape, x=x, y=y)
 
 
 __all__ = [
     "value_type_for_const",
     "input_call_for_type",
+    "LocalReturnElement", "LocalReturnShape", "analyze_local_return_shape",
+    "resolve_local_parameter_annotation", "make_local_function_call_node",
     "local_function_source",
     "compile_backend_builtin_call",
     "compile_local_function_call",

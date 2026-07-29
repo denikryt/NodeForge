@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 from .constants import *
 from .errors import CompileError
-from .values import Value
+from .values import Value, TupleValue, reject_tuple_value
 from .nodes import _int_value, _switch
 from .parsing import _literal_string, _is_top_level_call
 from .statements import (
@@ -146,9 +146,34 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
     call = _is_top_level_call(stmt)
 
     if isinstance(stmt, ast.Assign):
-        if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
+        if len(stmt.targets) != 1:
+            raise CompileError("Assignment supports one name or one flat unpacking target")
+        assignment_target = stmt.targets[0]
+        if isinstance(assignment_target, (ast.Tuple, ast.List)):
+            if any(isinstance(item, ast.Starred) for item in assignment_target.elts):
+                raise CompileError("Starred tuple unpacking is not supported")
+            if not assignment_target.elts or not all(isinstance(item, ast.Name) for item in assignment_target.elts):
+                raise CompileError("Tuple unpacking target must be a flat sequence of names")
+            names = [item.id for item in assignment_target.elts]
+            if len(set(names)) != len(names):
+                raise CompileError("Tuple unpacking target names must be unique")
+            for name in names:
+                _check_runtime_binding(comp, name)
+                if isinstance(comp.vars.get(name), GeometryBuilder):
+                    raise CompileError("Cannot assign over geometry_builder binding")
+            value = comp.compile(stmt.value)
+            if not isinstance(value, TupleValue):
+                raise CompileError(f"Cannot unpack scalar result into {len(names)} names")
+            if len(value) != len(names):
+                raise CompileError(f"Tuple unpacking expected {len(names)} values, got {len(value)}")
+            for name, item in zip(names, value.values):
+                comp.consts.pop(name, None)
+                comp.vars[name] = item
+            ctx.auto_final_output = None
+            return
+        if not isinstance(assignment_target, ast.Name):
             raise CompileError("Only simple assignments like name = value are supported")
-        target = stmt.targets[0].id
+        target = assignment_target.id
         _check_runtime_binding(comp, target)
         if isinstance(comp.vars.get(target), GeometryBuilder) and not _is_geometry_builder_constructor(stmt.value):
             raise CompileError("Cannot assign over geometry_builder binding")
@@ -174,7 +199,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
         if isinstance(value, GeometryBuilder):
             reject_compile_time_object(value, "assignment")
         comp.vars[target] = value
-        if isinstance(value, list):
+        if isinstance(value, (list, TupleValue)):
             ctx.auto_final_output = None
         else:
             try:
@@ -224,6 +249,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
                 raise CompileError(f"{list_name} is not an array")
             value = comp.compile(expr.args[0])
             reject_compile_time_object(value, "array append")
+            reject_tuple_value(value, "array append")
             arr.append(value)
             comp.consts.pop(list_name, None)
             ctx.auto_final_output = None
@@ -233,6 +259,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
                 raise CompileError("Only assignments, array append, for/if blocks, store(), set_position() and output() may appear before the final expression")
             value = comp.compile(expr)
             reject_compile_time_object(value, "final expression")
+            reject_tuple_value(value, "final expression")
             if isinstance(value, list):
                 raise CompileError("A final expression cannot be an array; use join(array) or index it")
             ctx.auto_final_output = ("out", value)
@@ -245,6 +272,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
             iterations_expr, body = _parse_repeat_range_for(stmt)
             iterations = _compile_iteration_count(ctx, iterations_expr, 240 + idx * 120, -260 - idx * 50)
             reject_compile_time_object(iterations, "repeat_range iteration count")
+            reject_tuple_value(iterations, "repeat_range iteration count")
             if iterations.typ != TYPE_INT:
                 raise CompileError("repeat_range(n) expects an Int input or integer value")
             results = _repeat_state_assignments(group, comp, iterations, body, index_name=stmt.target.id, x=300 + idx * 160, y=-380 - idx * 70)
@@ -345,7 +373,9 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
             if isinstance(true_val, list) or isinstance(false_val, list):
                 raise CompileError("runtime if cannot assign arrays")
             reject_compile_time_object(true_val, "runtime if branch merge")
+            reject_tuple_value(true_val, "runtime if branch merge")
             reject_compile_time_object(false_val, "runtime if branch merge")
+            reject_tuple_value(false_val, "runtime if branch merge")
             if not isinstance(true_val, Value) or not isinstance(false_val, Value):
                 raise CompileError("runtime if branches must assign node values")
             if true_val.typ != false_val.typ:
@@ -368,6 +398,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
         attr_name = _literal_string(call.args[0], "store() attribute name", comp.consts)
         value = comp.compile(call.args[1])
         reject_compile_time_object(value, "store() value")
+        reject_tuple_value(value, "store() value")
         if isinstance(value, list):
             raise CompileError("store() value cannot be an array")
         selection = _selection_kw(comp, kws)
@@ -386,6 +417,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
         _check_no_extra_keywords(kws, {"selection"})
         pos = comp.compile(call.args[0])
         reject_compile_time_object(pos, "set_position() position")
+        reject_tuple_value(pos, "set_position() position")
         selection = _selection_kw(comp, kws)
         ctx.geometry_socket = _set_position_node(group, ctx.geometry_socket, pos, selection, 520 + idx * 130, -40 - idx * 60)
         ctx.auto_final_output = None
@@ -414,6 +446,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
             raise CompileError('output(value), output("Name", value), or output(name="Name", value=value) expected')
         value = comp.compile(value_expr)
         reject_compile_time_object(value, "output() value")
+        reject_tuple_value(value, "output() value")
         if isinstance(value, list):
             raise CompileError("output() cannot output an array directly; use join(array) or index it")
         ctx.explicit_outputs.append((out_name, value))

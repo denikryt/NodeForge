@@ -4,7 +4,7 @@ import ast
 
 from .constants import *
 from .errors import CompileError
-from .values import Value, ObjectValue, NodeResult
+from .values import Value, ObjectValue, TupleValue, NodeResult, reject_tuple_value
 from .nodes import *
 from .consteval import _const_eval
 from .builtins import registry as builtin_registry
@@ -62,7 +62,9 @@ def compile_expr(comp, expr, depth=0):
         left = compile_expr(comp, expr.left, depth + 1)
         right = compile_expr(comp, expr.right, depth + 1)
         reject_compile_time_object(left, "binary expression")
+        reject_tuple_value(left, "binary expression")
         reject_compile_time_object(right, "binary expression")
+        reject_tuple_value(right, "binary expression")
         op_type = type(expr.op)
         if op_type not in _BIN_OPS:
             raise CompileError(f"Unsupported binary operator: {op_type.__name__}")
@@ -85,6 +87,7 @@ def compile_expr(comp, expr, depth=0):
     if isinstance(expr, ast.UnaryOp):
         val = compile_expr(comp, expr.operand, depth + 1)
         reject_compile_time_object(val, "unary expression")
+        reject_tuple_value(val, "unary expression")
         if isinstance(expr.op, ast.UAdd):
             return val
         if isinstance(expr.op, ast.USub):
@@ -109,9 +112,11 @@ def compile_expr(comp, expr, depth=0):
             raise CompileError("Unsupported boolean operator")
         current = compile_expr(comp, expr.values[0], depth + 1)
         reject_compile_time_object(current, "boolean expression")
+        reject_tuple_value(current, "boolean expression")
         for nxt_expr in expr.values[1:]:
             nxt = compile_expr(comp, nxt_expr, depth + 1)
             reject_compile_time_object(nxt, "boolean expression")
+            reject_tuple_value(nxt, "boolean expression")
             current = _boolean_math(comp.group, op, [current, nxt], x, y)
         return current
 
@@ -124,7 +129,9 @@ def compile_expr(comp, expr, depth=0):
             left = compile_expr(comp, left_expr, depth + 1)
             right = compile_expr(comp, right_expr, depth + 1)
             reject_compile_time_object(left, "comparison")
+            reject_tuple_value(left, "comparison")
             reject_compile_time_object(right, "comparison")
+            reject_tuple_value(right, "comparison")
             op = _COMPARE_OPS.get(type(op_node))
             if not op:
                 raise CompileError("Unsupported comparison operator")
@@ -140,8 +147,11 @@ def compile_expr(comp, expr, depth=0):
         true_val = compile_expr(comp, expr.body, depth + 1)
         false_val = compile_expr(comp, expr.orelse, depth + 1)
         reject_compile_time_object(cond, "if-expression condition")
+        reject_tuple_value(cond, "if-expression condition")
         reject_compile_time_object(true_val, "if-expression result")
+        reject_tuple_value(true_val, "if-expression result")
         reject_compile_time_object(false_val, "if-expression result")
+        reject_tuple_value(false_val, "if-expression result")
         if isinstance(true_val, list) or isinstance(false_val, list):
             raise CompileError("if-expression cannot return arrays")
         return _switch(comp.group, cond, false_val, true_val, x, y)
@@ -161,6 +171,14 @@ def compile_expr(comp, expr, depth=0):
             if not isinstance(key, str) or not key:
                 raise CompileError("raw node output lookup requires a non-empty string key")
             return base.get_output(key)
+        if isinstance(base, TupleValue):
+            try:
+                index = _const_eval(expr.slice, comp.consts)
+            except CompileError as exc:
+                raise CompileError("tuple result indexing requires a compile-time integer index") from exc
+            if not isinstance(index, int) or isinstance(index, bool):
+                raise CompileError("tuple result indexing requires a compile-time integer index")
+            return base.get_item(index)
         try:
             idx = int(_const_eval(expr.slice, comp.consts))
         except CompileError as exc:

@@ -100,8 +100,8 @@ def _parse_source(source: str):
                 if isinstance(nested, (ast.Import, ast.ImportFrom)):
                     raise CompileError("Import statements are only supported at top level")
         if isinstance(stmt, ast.Assign):
-            if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
-                raise CompileError("Assignment target must be a simple name, e.g. out = sin(x)")
+            if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], (ast.Name, ast.Tuple, ast.List)):
+                raise CompileError("Assignment supports one name or one flat unpacking target")
         elif isinstance(stmt, ast.ImportFrom):
             if stmt.level != 0 or stmt.module not in {"functions", "examples", "local"}:
                 raise CompileError("Only 'from functions/examples/local import name' imports are supported")
@@ -150,11 +150,17 @@ def _assigned_names(stmts):
     """
     names = set()
 
+    def add_target(target):
+        if isinstance(target, ast.Name):
+            names.add(target.id)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for element in target.elts:
+                add_target(element)
+
     def visit_stmt(stmt):
         if isinstance(stmt, ast.Assign):
             for target in stmt.targets:
-                if isinstance(target, ast.Name):
-                    names.add(target.id)
+                add_target(target)
             return
         if isinstance(stmt, ast.AugAssign):
             if isinstance(stmt.target, ast.Name):

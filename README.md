@@ -116,3 +116,22 @@ output("Geometry", source.geometry)
 ```
 
 `source.geometry`, `source.location`, `source.rotation`, and `source.scale` share one lazily created Object Info node. `source.info()` accepts `transform_space="ORIGINAL"|"RELATIVE"` and `as_instance=True|False`; the defaults are `ORIGINAL` and `True`. Configure it before the first property access. Object values remain Object sockets when passed to raw nodes, local functions, and installed library functions.
+
+## Local function return values
+
+A script-local function may return one runtime value or a fixed flat tuple of runtime values. A tuple return creates one output socket per element on the reusable helper group.
+
+```python
+def split_values(value: Float):
+    doubled = value * 2
+    tripled = value * 3
+    return doubled, tripled
+
+first, second = split_values(input_float("Value"))
+result = split_values(input_float("Other Value"))
+last = result[-1]
+```
+
+Tuple results are compiler-side containers. Store them in one variable, unpack them into a flat tuple or list target, or select an element with a compile-time integer index. Arithmetic, `output()`, runtime indexing, nested tuples, starred unpacking, tuple parameters, and list returns require selecting or unpacking an individual value first.
+
+Local-function positional parameters accept simple NodeForge type annotations: `Float`, `Int`, `Bool`, `Vector`, `Geometry`, `Material`, and `Object`. An annotation constrains the helper input socket type; unannotated parameters retain call-site type inference.

@@ -17,3 +17,8 @@
 
 - `tests/unit/test_object_type.py`: Object token, builtin registration, local-function source, raw-node type token.
 - `tests/blender/test_object_inputs.py`: Object interface sockets, lazy Object Info configuration/cache, keyword isolation, and configuration lock.
+
+## Local function multiple returns
+
+- `tests/unit/test_local_function_return_shapes.py`: fixed return-shape analysis, output naming, annotation resolution, generated helper source, and `TupleValue` indexing.
+- `tests/blender/test_local_function_multi_return.py`: helper interfaces, one-node call materialization, unpacking, indexing, diagnostics, annotations, and scalar/library regressions.

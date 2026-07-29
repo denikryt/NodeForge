@@ -3,7 +3,7 @@
 import ast
 from .constants import *
 from .errors import CompileError
-from .values import Value
+from .values import TupleValue, Value
 from .compile_time import reject_compile_time_object
 from .nodes import _new_node, _switch
 from .geometry import _join_geometry
@@ -13,6 +13,21 @@ from .geometry_builder import GeometryBuilder
 def _is_range_call(stmt, name):
     """Return whether a for-loop iterates over a named one-argument range call."""
     return isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id == name
+
+
+
+def _flat_assignment_target_names(target):
+    """Return flat assignment names accepted inside repeat_range, or None."""
+    if isinstance(target, ast.Name):
+        return (target.id,)
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names = []
+        for item in target.elts:
+            if not isinstance(item, ast.Name):
+                return None
+            names.append(item.id)
+        return tuple(names)
+    return None
 
 
 def _parse_repeat_range_for(stmt):
@@ -26,8 +41,10 @@ def _parse_repeat_range_for(stmt):
 
     def validate(sub):
         """Validate statements accepted inside repeat_range loop bodies."""
-        if isinstance(sub, ast.Assign) and len(sub.targets) == 1 and isinstance(sub.targets[0], ast.Name):
-            return
+        if isinstance(sub, ast.Assign) and len(sub.targets) == 1:
+            names = _flat_assignment_target_names(sub.targets[0])
+            if names is not None and len(names) == len(set(names)):
+                return
         if isinstance(sub, ast.Expr):
             call = sub.value
             if (
@@ -208,9 +225,12 @@ def _runtime_state_descriptors(comp, stmts):
         order += 1
 
     def visit(sub):
-        if isinstance(sub, ast.Assign) and len(sub.targets) == 1 and isinstance(sub.targets[0], ast.Name):
-            add_ordinary(sub.targets[0].id)
-            return
+        if isinstance(sub, ast.Assign) and len(sub.targets) == 1:
+            names = _flat_assignment_target_names(sub.targets[0])
+            if names is not None:
+                for name in names:
+                    add_ordinary(name)
+                return
         info = _builder_method_info(comp, sub)
         if info is not None:
             add_builder(info[0])
@@ -292,17 +312,41 @@ def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=No
             raise CompileError(f"repeat_range state {desc.display_name!r} changed type from {desc.old_type} to {val.typ}")
 
     def compile_assign(sub, active_frame):
-        target = sub.targets[0].id
+        target_node = sub.targets[0]
+        names = _flat_assignment_target_names(target_node)
+        if names is None:
+            raise CompileError("repeat_range assignment target must be a name or flat sequence of names")
+        if len(names) != len(set(names)):
+            raise CompileError("Tuple unpacking target names must be unique")
+
         set_active_frame(active_frame)
         val = comp.compile(sub.value)
         reject_compile_time_object(val, "repeat_range assignment")
-        if isinstance(val, list):
-            raise CompileError("repeat_range assignments cannot assign arrays")
-        desc = descriptor_by_name.get(target)
-        if desc is not None:
-            compatible_or_raise(desc, val)
-            desc.current_set(active_frame, val)
-        comp.vars[target] = val
+        if isinstance(target_node, ast.Name):
+            values = (val,)
+        else:
+            if not isinstance(val, TupleValue):
+                raise CompileError("Cannot unpack scalar result inside repeat_range")
+            if len(names) != len(val):
+                raise CompileError(f"Tuple unpacking expected {len(names)} values, got {len(val)}")
+            values = val.values
+
+        for item in values:
+            reject_compile_time_object(item, "repeat_range assignment")
+            if isinstance(item, list):
+                raise CompileError("repeat_range assignments cannot assign arrays")
+
+        for name, item in zip(names, values):
+            desc = descriptor_by_name.get(name)
+            if desc is not None:
+                compatible_or_raise(desc, item)
+
+        for name, item in zip(names, values):
+            desc = descriptor_by_name.get(name)
+            if desc is not None:
+                desc.current_set(active_frame, item)
+            comp.vars[name] = item
+            comp.consts.pop(name, None)
 
     def compile_builder_method(sub, active_frame):
         info = _builder_method_info(comp, sub)
@@ -403,7 +447,7 @@ def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=No
         set_active_frame(active_frame)
 
     def compile_runtime_stmt(sub, active_frame, depth=0):
-        if isinstance(sub, ast.Assign) and len(sub.targets) == 1 and isinstance(sub.targets[0], ast.Name):
+        if isinstance(sub, ast.Assign) and len(sub.targets) == 1 and _flat_assignment_target_names(sub.targets[0]) is not None:
             compile_assign(sub, active_frame)
             return
         if _builder_method_info(comp, sub) is not None:
