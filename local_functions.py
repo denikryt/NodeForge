@@ -1,6 +1,7 @@
 """Compilation helpers for script-local DSL functions."""
 
 import ast
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -11,7 +12,7 @@ from .errors import CompileError
 from .library import (
     _new_node, _input_sockets, _output_sockets,
     _normalized_socket_name, _set_socket_default, _socket_type_to_value_type,
-    apply_function_node_display_name,
+    apply_function_node_display_name, display_name_for_function,
 )
 from .consteval import _is_const_vector
 from .compile_time import reject_compile_time_object
@@ -159,6 +160,36 @@ def _helper_namespace_fragment(namespace):
         else:
             encoded.append(f"_u{ord(char):06X}_")
     return "".join(encoded) or "Group"
+
+
+def _local_helper_group_name(namespace, function_name, signature):
+    """Return the readable Blender datablock name for a local helper.
+
+    Helper identity is stored in metadata, not encoded in the datablock name.
+    Blender may append a numeric suffix when several helpers share the same
+    function name; reuse remains deterministic because lookup uses metadata.
+    """
+    parts = [part for part in re.split(r"[_\s]+", function_name or "") if part]
+    return " ".join(part[:1].upper() + part[1:] for part in parts) or "Function"
+
+
+def _find_local_helper(*, namespace, function_name, signature):
+    """Return the unique helper matching the exact metadata identity."""
+    matches = [
+        group for group in bpy.data.node_groups
+        if _helper_metadata_matches(
+            group,
+            namespace=namespace,
+            function_name=function_name,
+            signature=signature,
+            return_shape=None,
+        )
+    ]
+    if len(matches) > 1:
+        raise CompileError(
+            f"Multiple local function helpers match {function_name}() with signature {signature}"
+        )
+    return matches[0] if matches else None
 
 
 def _reserved_capture_label(comp, name):
@@ -501,22 +532,17 @@ def compile_local_function_call(comp, expr, depth=0):
     signature_names = tuple(params) + hidden_capture_names
     signature = ",".join(f"{param}:{param_types[param]}" for param in signature_names)
     logical_namespace = _logical_namespace(getattr(comp, "helper_namespace", None) or getattr(comp.group, "name", "Group"))
-    namespace_fragment = _helper_namespace_fragment(logical_namespace)
-    group_name = f"NodeForge.local.{namespace_fragment}.{name}.{signature}"
+    group_name = _local_helper_group_name(logical_namespace, name, signature)
     source = local_function_source(fn, param_types, hidden_captures=hidden_capture_names, return_shape=return_shape)
     cache_key = (name, signature, source)
     function_group = comp.local_group_cache.get(cache_key)
     if function_group is None or getattr(function_group, "name", None) not in bpy.data.node_groups:
-        existing = bpy.data.node_groups.get(group_name)
+        existing = _find_local_helper(
+            namespace=logical_namespace,
+            function_name=name,
+            signature=signature,
+        )
         if existing is not None:
-            if getattr(existing, "bl_idname", None) != "GeometryNodeTree" or not _helper_metadata_matches(
-                existing,
-                namespace=logical_namespace,
-                function_name=name,
-                signature=signature,
-                return_shape=None,
-            ):
-                raise CompileError(f"Local function helper group name collision: {group_name}")
             function_group = comp.compile_group_callback(
                 source,
                 group_name,
@@ -537,13 +563,6 @@ def compile_local_function_call(comp, expr, depth=0):
                 helper_namespace=getattr(comp, "helper_namespace", None),
                 local_helper_transaction=getattr(comp, "local_helper_transaction", None),
             )
-        if getattr(function_group, "name", None) != group_name:
-            try:
-                if existing is None and function_group is not None and bpy.data.node_groups.get(function_group.name) is function_group:
-                    bpy.data.node_groups.remove(function_group, do_unlink=True)
-            except Exception:
-                pass
-            raise CompileError(f"Local function helper group name collision: {group_name}")
         _write_helper_metadata(
             function_group,
             namespace=logical_namespace,
@@ -553,6 +572,7 @@ def compile_local_function_call(comp, expr, depth=0):
             return_shape=return_shape,
             return_types=[_socket_type_to_value_type(s) for s in function_group.interface.items_tree if getattr(s, "in_out", None) == "OUTPUT"],
         )
+        function_group.name = group_name
         comp.local_group_cache[cache_key] = function_group
     x = depth * 240
     y = -depth * 90

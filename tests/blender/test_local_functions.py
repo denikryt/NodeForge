@@ -2,6 +2,17 @@ from helpers import *
 
 
 def _local_helper_names(prefix):
+    """Return helpers selected by the legacy namespace/function prefix used by these tests."""
+    if prefix.startswith("NodeForge.local."):
+        payload = prefix[len("NodeForge.local."):].rstrip(".")
+        if "." in payload:
+            namespace, function_name = payload.rsplit(".", 1)
+            return sorted(
+                g.name for g in bpy.data.node_groups
+                if g.get("nodeforge_generated_kind") == "local_function_helper"
+                and g.get("nodeforge_local_function_namespace") == namespace
+                and (not function_name or g.get("nodeforge_local_function_name") == function_name)
+            )
     return sorted(g.name for g in bpy.data.node_groups if g.name.startswith(prefix))
 
 
@@ -138,19 +149,23 @@ output("y", y)
     check(not replacement_helpers, f'replacement-namespaced helpers leaked: {replacement_helpers}')
 
 
-def test_local_function_local_helper_name_collision_rejects_non_geometry_datablock():
-    collision_name = 'NodeForge.local.NFTest_local_function_collision.f.x:FLOAT'
-    collision = bpy.data.node_groups.new(collision_name, 'ShaderNodeTree')
+def test_local_function_local_helper_readable_name_ignores_unrelated_datablock():
+    collision = bpy.data.node_groups.new("F", "ShaderNodeTree")
     try:
-        expect_compile_error('''
+        group = compile_group("""
 def f(x):
     return x + 1.0
 
 y = f(1.0)
 output("y", y)
-''', 'NFTest_local_function_collision')
-        suffixed = [g.name for g in bpy.data.node_groups if g.name.startswith(collision_name + '.')]
-        check(not suffixed, f'auto-suffixed helper was created: {suffixed}')
+""", "NFTest_local_function_collision")
+        helper = next(
+            g for g in bpy.data.node_groups
+            if g.get("nodeforge_local_function_namespace") == "NFTest_local_function_collision"
+            and g.get("nodeforge_local_function_name") == "f"
+        )
+        check(helper.name.startswith("F"), f"helper did not use readable name: {helper.name}")
+        check(getattr(group, "bl_idname", None) == "GeometryNodeTree", "parent group did not compile")
     finally:
         if bpy.data.node_groups.get(collision.name) is collision:
             bpy.data.node_groups.remove(collision, do_unlink=True)
@@ -194,10 +209,43 @@ output("y", y)
     group_one = compile_group(source_one, 'NFTest_local_function_A.B')
     group_two = compile_group(source_two, 'NFTest_local_function_A_B')
 
-    helpers = [g for g in bpy.data.node_groups if g.name.startswith('NodeForge.local.NFTest_local_function_A') and '.f.' in g.name]
+    helpers = [g for g in bpy.data.node_groups if g.get('nodeforge_local_function_name') == 'f' and g.get('nodeforge_local_function_namespace') in {'NFTest_local_function_A.B', 'NFTest_local_function_A_B'}]
     helper_names = sorted(g.name for g in helpers)
     check(len(helper_names) == 2, f'expected distinct helper groups for colliding namespaces, got {helper_names}')
     namespaces = sorted(g.get('nodeforge_local_function_namespace') for g in helpers)
     check(namespaces == ['NFTest_local_function_A.B', 'NFTest_local_function_A_B'], f'raw helper namespaces were not distinct: {namespaces}')
     check(getattr(group_one, 'bl_idname', None) == 'GeometryNodeTree', 'first parent group did not compile')
     check(getattr(group_two, 'bl_idname', None) == 'GeometryNodeTree', 'second parent group did not compile')
+
+
+def test_local_function_legacy_helper_name_is_reused_and_renamed_readably():
+    group = compile_group('''
+def finalize_terrain(value):
+    return value + 1.0
+
+result = finalize_terrain(1.0)
+output("Result", result)
+''', 'NFTest_local_function_legacy_readable_name')
+    helper = next(
+        g for g in bpy.data.node_groups
+        if g.get('nodeforge_local_function_namespace') == 'NFTest_local_function_legacy_readable_name'
+        and g.get('nodeforge_local_function_name') == 'finalize_terrain'
+    )
+    helper.name = 'NodeForge.local.NFTest_local_function_legacy_readable_name.finalize_terrain.value:FLOAT'
+    helper_identity = helper.as_pointer()
+
+    compiler.update_expression_group(group, '''
+def finalize_terrain(value):
+    return value + 2.0
+
+result = finalize_terrain(1.0)
+output("Result", result)
+''')
+
+    updated = next(
+        g for g in bpy.data.node_groups
+        if g.get('nodeforge_local_function_namespace') == 'NFTest_local_function_legacy_readable_name'
+        and g.get('nodeforge_local_function_name') == 'finalize_terrain'
+    )
+    check(updated.as_pointer() == helper_identity, 'legacy helper datablock identity changed during update')
+    check(updated.name == 'Finalize Terrain', f'legacy helper was not renamed readably: {updated.name}')

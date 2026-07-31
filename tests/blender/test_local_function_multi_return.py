@@ -1,5 +1,6 @@
 """Blender integration coverage for local-function multiple returns."""
 
+import bpy
 import pytest
 
 from NodeForge.errors import CompileError
@@ -203,3 +204,90 @@ output("Integer", int_value)
     )
     call = _group_nodes(group)[0]
     assert [socket.type for socket in call.outputs] == ["VALUE", "INT"]
+
+
+def test_long_multi_output_helper_name_compiles_without_blender_truncation_collision():
+    group = compile_group(
+        '''
+iterations = input_int("Iterations", default=1)
+geometry = input_geometry("Geometry")
+builder = geometry_builder()
+
+def mix_biomes(
+    world_position: Vector,
+    plains_height: Float,
+    plains_depth: Int,
+    mountains_height: Float,
+    mountains_depth: Int,
+    highlands_height: Float,
+    highlands_depth: Int,
+    distribution_seed: Int,
+    biome_scale: Float,
+    transition_width: Float,
+):
+    terrain_height = plains_height + mountains_height + highlands_height
+    terrain_depth = plains_depth + mountains_depth + highlands_depth
+    return terrain_height, terrain_depth, biome_scale, transition_width
+
+for i in repeat_range(iterations):
+    height, depth, scale, width = mix_biomes(
+        vector(0.0, 0.0, 0.0),
+        1.0,
+        2,
+        3.0,
+        4,
+        5.0,
+        6,
+        7,
+        0.01,
+        0.2,
+    )
+    moved = set_position(geometry, vector(height, depth, scale + width))
+    builder.add(moved)
+output("Geometry", builder.geometry)
+''',
+        "NodeForge Group",
+    )
+    calls = [
+        node
+        for node in _group_nodes(group)
+        if node.node_tree and node.node_tree.get("nodeforge_local_function_name") == "mix_biomes"
+    ]
+    assert len(calls) == 1
+    helper = calls[0].node_tree
+    assert len(helper.name) <= 255
+    assert helper.name == "Mix Biomes"
+    assert calls[0].label == "Mix Biomes"
+    assert len(calls[0].inputs) == 10
+    assert len(calls[0].outputs) == 4
+    matching = [
+        candidate
+        for candidate in bpy.data.node_groups
+        if candidate.get("nodeforge_local_function_name") == "mix_biomes"
+        and candidate.get("nodeforge_local_function_namespace") == "NodeForge Group"
+    ]
+    assert matching == [helper]
+    assert not any(candidate.name.startswith(helper.name + ".") for candidate in bpy.data.node_groups)
+
+
+def test_local_function_call_nodes_use_readable_function_labels():
+    group = compile_group(
+        '''
+value = input_float("Value")
+def generate_chunk(value: Float):
+    return value + 1.0
+first = generate_chunk(value)
+second = generate_chunk(first)
+output("Value", second)
+''',
+        "ReadableLocalFunctionTitles",
+    )
+    calls = [
+        node
+        for node in _group_nodes(group)
+        if node.node_tree and node.node_tree.get("nodeforge_local_function_name") == "generate_chunk"
+    ]
+    assert len(calls) == 2
+    assert {node.label for node in calls} == {"Generate Chunk"}
+    assert len({node.name for node in calls}) == 2
+    assert {node.node_tree.name for node in calls} == {"Generate Chunk"}

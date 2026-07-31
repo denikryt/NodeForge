@@ -117,6 +117,10 @@ output("Geometry", source.geometry)
 
 `source.geometry`, `source.location`, `source.rotation`, and `source.scale` share one lazily created Object Info node. `source.info()` accepts `transform_space="ORIGINAL"|"RELATIVE"` and `as_instance=True|False`; the defaults are `ORIGINAL` and `True`. Configure it before the first property access. Object values remain Object sockets when passed to raw nodes, local functions, and installed library functions.
 
+## Local function node titles
+
+Local-function call nodes and their backing helper node groups use the function identifier as a short readable title. For example, `mix_biomes()` is shown as **Mix Biomes** and `generate_chunk()` as **Generate Chunk**. Helper identity and reuse are determined by ownership metadata for the namespace, function name, parameter signature, source, and return shape, not by the Blender datablock name.
+
 ## Local function return values
 
 A script-local function may return one runtime value or a fixed flat tuple of runtime values. A tuple return creates one output socket per element on the reusable helper group.

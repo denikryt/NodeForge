@@ -124,7 +124,14 @@ def display_name_for_function(name: str) -> str:
 
 
 def display_name_for_group(group) -> str:
-    """Return a clean title for a generated library node group."""
+    """Return a clean title for a generated function node group."""
+    try:
+        local_name = group.get("nodeforge_local_function_name")
+    except Exception:
+        local_name = None
+    if local_name:
+        parts = [part for part in re.split(r"[_\s]+", str(local_name)) if part]
+        return " ".join(part[:1].upper() + part[1:] for part in parts) or "Function"
     for key in ("nodeforge_library_name", "nodeforge_function_module"):
         try:
             value = group.get(key)
