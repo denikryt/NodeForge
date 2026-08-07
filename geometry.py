@@ -5,6 +5,7 @@ from .errors import CompileError
 from .values import Value
 from .nodes import _new_node, _value, _combine_xyz, _combine_xyz_mixed, _separate_xyz, _is_number_type, _vector_math, _compare, _switch, _math
 from .consteval import _is_const_vector, _as_float_const
+from .statements import _attribute_domain
 
 
 
@@ -616,4 +617,40 @@ def _instance_on_points(group, instance, points, selection=None, scale=None, rot
     return out
 
 
-__all__ = ['_as_number_value', '_set_int_like_socket', '_set_float_like_socket', '_grid_geometry', '_store_named_attribute_geometry', '_set_material_geometry', '_set_vector_socket_default', '_set_rotation_socket_default', '_euler_to_rotation', '_is_const_number', '_is_const_vector_like', '_cube_geometry', '_join_geometry', '_normalize_points', '_polyline_geometry', '_transform_geometry', '_realize_instances', '_points_geometry', '_set_position_geometry', '_layout_grid_geometry', '_grid_points_geometry', '_geometry_point_count', '_layout_circle_geometry', '_circle_points_geometry', '_layout_spiral_geometry', '_spiral_points_geometry', '_layout_random_geometry', '_random_points_geometry', '_instance_on_points']
+__all__ = ['_as_number_value', '_set_int_like_socket', '_set_float_like_socket', '_grid_geometry', '_store_named_attribute_geometry', '_set_material_geometry', '_set_vector_socket_default', '_set_rotation_socket_default', '_euler_to_rotation', '_is_const_number', '_is_const_vector_like', '_cube_geometry', '_join_geometry', '_normalize_points', '_polyline_geometry', '_transform_geometry', '_realize_instances', '_points_geometry', '_set_position_geometry', '_layout_grid_geometry', '_grid_points_geometry', '_geometry_point_count', '_layout_circle_geometry', '_circle_points_geometry', '_layout_spiral_geometry', '_spiral_points_geometry', '_layout_random_geometry', '_random_points_geometry', '_instance_on_points', '_capture_attribute_geometry']
+
+
+def _capture_attribute_geometry(group, geometry, value, selection=None, domain="POINT", data_type=None, x=0, y=0):
+    """Capture a field on geometry and return (geometry, anonymous attribute field)."""
+    if not isinstance(geometry, Value) or geometry.typ != TYPE_GEOMETRY:
+        raise CompileError("capture_attribute() expects Geometry")
+    if not isinstance(value, Value):
+        raise CompileError("capture_attribute() value must be a runtime field")
+    value_type_to_socket_type = {
+        TYPE_FLOAT: "FLOAT",
+        TYPE_INT: "INT",
+        TYPE_BOOL: "BOOLEAN",
+        TYPE_VECTOR: "VECTOR",
+    }
+    socket_type_to_value_type = {
+        "FLOAT": TYPE_FLOAT,
+        "INT": TYPE_INT,
+        "BOOLEAN": TYPE_BOOL,
+        "VECTOR": TYPE_VECTOR,
+    }
+    socket_type = (data_type.upper() if data_type else value_type_to_socket_type.get(value.typ))
+    if socket_type not in socket_type_to_value_type:
+        raise CompileError("capture_attribute() supports Float, Int, Bool and Vector values")
+    domain = _attribute_domain(domain, "capture_attribute()")
+    if selection is not None and (not isinstance(selection, Value) or selection.typ != TYPE_BOOL):
+        raise CompileError("capture_attribute() selection= must be a Bool expression")
+    node = _new_node(group, "GeometryNodeCaptureAttribute", x, y)
+    node.domain = domain
+    node.capture_items.new(socket_type, "Value")
+    group.links.new(geometry.socket, node.inputs["Geometry"])
+    if selection is None:
+        node.inputs["Selection"].default_value = True
+    else:
+        group.links.new(selection.socket, node.inputs["Selection"])
+    group.links.new(value.socket, node.inputs["Value"])
+    return Value(node.outputs["Geometry"], TYPE_GEOMETRY), Value(node.outputs["Value"], socket_type_to_value_type[socket_type])

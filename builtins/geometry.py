@@ -20,6 +20,7 @@ from ..geometry import (
     _grid_geometry,
     _store_named_attribute_geometry,
     _set_material_geometry,
+    _capture_attribute_geometry,
 )
 
 NAMES = {
@@ -31,6 +32,7 @@ NAMES = {
     "grid_uv",
     "set_position",
     "store_named_attribute",
+    "capture_attribute",
     "set_material",
     "cube",
     "join",
@@ -115,6 +117,21 @@ def compile_call(comp, expr, depth=0):
         reject_compile_time_object(pos, "set_position() position")
         reject_compile_time_object(selection, "set_position() selection")
         return _set_position_geometry(comp.group, geo, pos, selection, x, y)
+
+    if name == "capture_attribute":
+        _check_no_extra_keywords(kws, {"selection", "domain", "type"})
+        if len(expr.args) != 2:
+            raise CompileError('capture_attribute(geometry, value, selection=..., domain="POINT", type=...) expects 2 positional arguments')
+        geo = comp.compile(expr.args[0])
+        value = comp.compile(expr.args[1])
+        reject_compile_time_object(geo, "capture_attribute() geometry")
+        reject_compile_time_object(value, "capture_attribute() value")
+        selection = _selection_kw(comp, kws)
+        domain = _optional_string_kw(kws, "domain", "POINT", comp.consts)
+        data_type_override = _optional_string_kw(kws, "type", None, comp.consts)
+        from ..values import TupleValue
+        captured_geo, captured_value = _capture_attribute_geometry(comp.group, geo, value, selection, domain, data_type_override, x, y)
+        return TupleValue((captured_geo, captured_value))
 
     if name == "store_named_attribute":
         _check_no_extra_keywords(kws, {"selection", "domain", "type"})

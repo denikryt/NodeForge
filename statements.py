@@ -29,6 +29,13 @@ def _attribute_data_type(typ):
         TYPE_BOOL: "BOOLEAN",
     }.get(typ)
 
+def _attribute_domain(domain, context):
+    """Return a validated Geometry Nodes attribute domain token."""
+    normalized = (domain or "POINT").upper()
+    if normalized not in _ALLOWED_DOMAINS:
+        raise CompileError(f"Unsupported {context} domain. Use POINT, EDGE, FACE, CORNER, CURVE or INSTANCE")
+    return normalized
+
 def _kw_dict(call):
     """Function `_kw_dict` used by the NodeForge addon."""
     result = {}
@@ -72,9 +79,7 @@ def _store_named_attribute(group, geometry_socket, attr_name, value, selection=N
         data_type = _attribute_data_type(value.typ)
     if data_type is None:
         raise CompileError("store(name, value) supports Float, Int, Vector and Bool values")
-    domain = (domain or "POINT").upper()
-    if domain not in _ALLOWED_DOMAINS:
-        raise CompileError("Unsupported store() domain. Use POINT, EDGE, FACE, CORNER, CURVE or INSTANCE")
+    domain = _attribute_domain(domain, "store()")
     node = _new_node(group, "GeometryNodeStoreNamedAttribute", x, y)
     node.data_type = data_type
     try:
@@ -111,4 +116,4 @@ def _unique_output_name(existing, requested):
     existing.add(name)
     return name
 
-__all__ = ['_attribute_data_type', '_kw_dict', '_optional_string_kw', '_selection_kw', '_check_no_extra_keywords', '_store_named_attribute', '_set_position_node', '_unique_output_name']
+__all__ = ['_attribute_data_type', '_attribute_domain', '_kw_dict', '_optional_string_kw', '_selection_kw', '_check_no_extra_keywords', '_store_named_attribute', '_set_position_node', '_unique_output_name']

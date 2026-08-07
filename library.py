@@ -469,7 +469,7 @@ def compile_module_library_entry_call(comp, expr, depth=0, namespace="functions"
 
 def _socket_type_to_value_type(socket) -> str:
     """Map a Blender group socket to a NodeForge semantic type."""
-    bl_idname = getattr(socket, "bl_idname", "")
+    bl_idname = getattr(socket, "bl_idname", "") or getattr(socket, "socket_type", "") or getattr(socket, "bl_socket_idname", "")
     if bl_idname == "NodeSocketGeometry":
         return TYPE_GEOMETRY
     if bl_idname == "NodeSocketMaterial":
@@ -492,12 +492,12 @@ def _normalized_socket_name(name: str) -> str:
 
 def _input_sockets(node):
     """Return real, non-hidden input sockets for a group node."""
-    return [s for s in node.inputs if getattr(s, "enabled", True) and not getattr(s, "hide", False)]
+    return [s for s in node.inputs if not getattr(s, "is_output", False) and getattr(s, "enabled", True) and not getattr(s, "hide", False)]
 
 
 def _output_sockets(node):
     """Return real, non-hidden output sockets for a group node."""
-    return [s for s in node.outputs if getattr(s, "enabled", True) and not getattr(s, "hide", False)]
+    return [s for s in node.outputs if getattr(s, "is_output", True) and getattr(s, "enabled", True) and not getattr(s, "hide", False)]
 
 
 def _record_kind(namespace: str, name: str) -> str:

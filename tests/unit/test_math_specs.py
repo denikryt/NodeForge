@@ -41,7 +41,7 @@ ACCEPTED_CORE_CALLABLES = {
     "vector",
     "length", "distance", "dot", "normalize", "cross", "reflect", "project",
     "empty_geometry", "geometry_builder", "points", "point", "line", "grid", "grid_uv",
-    "set_position", "store_named_attribute", "set_material",
+    "set_position", "store_named_attribute", "capture_attribute", "set_material",
     "cube", "polyline", "join", "transform",
     "instance_on_points", "realize_instances",
     "node",

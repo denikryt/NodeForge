@@ -429,9 +429,30 @@ def make_local_function_call_node(group, function_group, compiled_args, const_ar
         if socket is None:
             raise CompileError(f"Function {function_group.name} has no input named {raw_name!r}")
         group.links.new(value.socket, socket)
-    outputs = _output_sockets(node)
-    if len(outputs) != len(return_shape.elements):
-        raise CompileError(f"Local function {function_group.name} expected {len(return_shape.elements)} outputs, got {len(outputs)}")
+    interface_output_types = {}
+    for interface_item in function_group.interface.items_tree:
+        if getattr(interface_item, "in_out", None) != "OUTPUT":
+            continue
+        interface_output_types[_normalized_socket_name(interface_item.name)] = _socket_type_to_value_type(interface_item)
+
+    outputs = []
+    for element in return_shape.elements:
+        key = _normalized_socket_name(element.socket_name)
+        expected_type = interface_output_types.get(key)
+        matches = []
+        for candidate in node.outputs:
+            if not getattr(candidate, "is_output", True):
+                continue
+            if _normalized_socket_name(candidate.name) != key:
+                continue
+            candidate_type = _socket_type_to_value_type(candidate)
+            if expected_type is None or candidate_type == expected_type:
+                matches.append(candidate)
+        if not matches:
+            raise CompileError(
+                f"Local function {function_group.name} has no output named {element.socket_name!r} with the declared type"
+            )
+        outputs.append(matches[-1])
     values = tuple(make_value(socket, _socket_type_to_value_type(socket)) for socket in outputs)
     return values[0] if len(values) == 1 else TupleValue(values)
 

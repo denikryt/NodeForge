@@ -288,6 +288,11 @@ def resolve_socket(sockets, socket_name, *, direction, context):
     matches = []
     enabled_names = []
     for socket in sockets:
+        actual_is_output = bool(getattr(socket, "is_output", direction == "output"))
+        if direction == "output" and not actual_is_output:
+            continue
+        if direction == "input" and actual_is_output:
+            continue
         try:
             enabled = bool(getattr(socket, "enabled", True))
         except Exception:
