@@ -16,7 +16,7 @@ from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECT
 from .errors import CompileError
 from .interface import _set_socket_default
 from .nodes import _new_node
-from .values import Value, make_value
+from .values import Value, TupleValue, make_value
 from .systems import registry as systems_registry
 from . import packages
 
@@ -590,9 +590,10 @@ def make_library_call_node(group, function_group, compiled_args, const_args, x=0
         group.links.new(value.socket, socket)
 
     outputs = _output_sockets(node)
-    if len(outputs) != 1:
-        raise CompileError(f"Library function {function_group.name} must have exactly one output for expression calls")
-    return make_value(outputs[0], _socket_type_to_value_type(outputs[0]))
+    if not outputs:
+        raise CompileError(f"Library function {function_group.name} has no outputs")
+    values = tuple(make_value(socket, _socket_type_to_value_type(socket)) for socket in outputs)
+    return values[0] if len(values) == 1 else TupleValue(values)
 
 
 def materialize_library_entry_group(namespace: str, name: str, compile_group_callback):

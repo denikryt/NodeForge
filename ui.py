@@ -4,7 +4,8 @@ import bpy
 import sys
 import importlib
 import addon_utils
-from bpy.types import Operator, Panel, PropertyGroup, UIList, AddonPreferences
+from pathlib import Path
+from bpy.types import Operator, Panel, PropertyGroup, UIList, AddonPreferences, OperatorFileListElement
 from bpy.props import StringProperty, PointerProperty, CollectionProperty, IntProperty, BoolProperty, EnumProperty
 
 from .compiler import (
@@ -549,6 +550,73 @@ class NODEFORGE_OT_create_function_group(Operator):
         return {'FINISHED'}
 
 
+class NODEFORGE_OT_import_local_scripts(Operator):
+    """Import one or more .nf files into the persistent Local catalog."""
+
+    bl_idname = "nodeforge.import_local_scripts"
+    bl_label = "Import Local Scripts"
+    bl_description = "Import one or more .nf scripts into the persistent NodeForge Local catalog"
+    bl_options = {'REGISTER'}
+
+    directory: StringProperty(subtype="DIR_PATH", default="")
+    files: CollectionProperty(type=OperatorFileListElement)
+    filter_glob: StringProperty(default="*.nf", options={'HIDDEN'})
+    folder_path: StringProperty(name="Local Folder", default="")
+    replace_existing: BoolProperty(name="Replace Existing", default=False)
+
+    def invoke(self, context, event):
+        props = getattr(context.scene, "gn_script_mvp", None)
+        if props is not None:
+            self.folder_path = props.local_folder_path
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
+    def execute(self, context):
+        props = getattr(context.scene, "gn_script_mvp", None)
+        selected = [Path(self.directory) / item.name for item in self.files]
+        if not selected:
+            self.report({'ERROR'}, "Select at least one .nf file")
+            return {'CANCELLED'}
+
+        try:
+            prepared = []
+            seen_names = set()
+            for path in selected:
+                if path.suffix.lower() != ".nf":
+                    raise ValueError(f"Not a NodeForge .nf script: {path.name}")
+                name = path.stem
+                # save_local_source performs authoritative public-name validation.
+                if name in seen_names:
+                    raise ValueError(f"Duplicate script name in selection: {name!r}")
+                seen_names.add(name)
+                source = path.read_text(encoding="utf-8")
+                if not source.strip():
+                    raise ValueError(f"Local script is empty: {path.name}")
+                existing = next((r for r in library_entry_records("local") if r.get("name") == name), None)
+                if existing is not None and not self.replace_existing:
+                    raise ValueError(f"Local script {name!r} already exists")
+                prepared.append((name, source, existing is not None))
+
+            imported = []
+            for name, source, exists in prepared:
+                imported.append(save_local_source(
+                    name,
+                    source,
+                    folder_path=self.folder_path,
+                    overwrite=bool(exists),
+                ))
+
+            if props is not None:
+                props.local_folder_path = self.folder_path
+                _refresh_catalog_items(props, "local")
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+
+        self.report({'INFO'}, f"Imported {len(imported)} local script(s)")
+        return {'FINISHED'}
+
+
 class NODEFORGE_OT_create_local_folder(Operator):
     """Create a validated folder under the user-owned local catalog."""
     bl_idname = "nodeforge.create_local_folder"
@@ -752,6 +820,7 @@ class NODEFORGE_PT_library_local(Panel):
         row = layout.row(align=True)
         row.operator(NODEFORGE_OT_create_local_folder.bl_idname, text="New Folder", icon='NEWFOLDER')
         row.operator(NODEFORGE_OT_save_to_local.bl_idname, text="Save to Local", icon='FILE_TICK')
+        row.operator(NODEFORGE_OT_import_local_scripts.bl_idname, text="Import", icon='IMPORT')
         _draw_library_catalog_panel(layout, context, "local", "local_items", "local_index", rows=3)
 
 
@@ -850,6 +919,7 @@ classes = (
     NODEFORGE_OT_import_package,
     NODEFORGE_OT_uninstall_package,
     NODEFORGE_OT_create_function_group,
+    NODEFORGE_OT_import_local_scripts,
     NODEFORGE_OT_create_local_folder,
     NODEFORGE_OT_save_to_local,
     GNSCRIPT_MVP_PT_panel,
