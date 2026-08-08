@@ -626,6 +626,7 @@ def _copy_group_contents(src_group, dst_group):
             _copy_node_properties(src_node, dst_node)
         node_map[src_node.name] = dst_node
     _sync_repeat_zone_dynamic_items(src_group, node_map)
+    _sync_capture_attribute_dynamic_items(src_group, node_map)
 
     for src_link in src_group.links:
         from_node = node_map.get(src_link.from_node.name)
@@ -661,6 +662,33 @@ def _copy_group_contents(src_group, dst_group):
     _copy_custom_properties(src_group, dst_group, strict=True)
 
 
+
+
+def _sync_capture_attribute_dynamic_items(src_group, node_map):
+    """Recreate Capture Attribute items before restoring copied links.
+
+    Capture items define dynamic input/output sockets and are not copied by
+    ordinary RNA property assignment. Rebuild them on the destination node so
+    anonymous-attribute links survive transactional group cutover.
+    """
+    for src_node in src_group.nodes:
+        if getattr(src_node, "bl_idname", None) != "GeometryNodeCaptureAttribute":
+            continue
+        dst_node = node_map.get(src_node.name)
+        if dst_node is None or not hasattr(src_node, "capture_items") or not hasattr(dst_node, "capture_items"):
+            continue
+        try:
+            for item in list(dst_node.capture_items):
+                dst_node.capture_items.remove(item)
+        except Exception:
+            pass
+        for item in list(src_node.capture_items):
+            try:
+                dst_node.capture_items.new(item.data_type, item.name)
+            except Exception:
+                # Link restoration below remains the transactional correctness
+                # boundary if Blender cannot recreate a required socket.
+                pass
 
 
 def _sync_repeat_zone_dynamic_items(src_group, node_map):
