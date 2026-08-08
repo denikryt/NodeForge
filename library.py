@@ -660,6 +660,26 @@ def create_local_folder(folder_path: str) -> Path:
     return target
 
 
+def delete_local_source(name: str) -> Path:
+    """Delete one validated user-owned script from the persistent local catalog."""
+    public_name = sanitize_library_entry_name(name)
+    record = find_library_entry_record("local", public_name)
+    if record is None or record.source_path is None:
+        raise CompileError(f"Local script {public_name!r} does not exist")
+
+    root = ensure_local_catalog_dir().resolve()
+    target = record.source_path.resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise CompileError("Local delete path escapes local catalog") from exc
+    if target.suffix not in _SOURCE_EXTENSIONS or not target.is_file():
+        raise CompileError(f"Local script {public_name!r} is not a deletable source file")
+
+    target.unlink()
+    return target
+
+
 def save_local_source(name: str, source: str, *, folder_path: str = "", overwrite: bool = False) -> Path:
     """Persist a DSL source file inside local/ with duplicate-safe semantics."""
     public_name = sanitize_library_entry_name(name)

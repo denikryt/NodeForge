@@ -3,6 +3,7 @@
 import bpy
 import sys
 import importlib
+import traceback
 import addon_utils
 from pathlib import Path
 from bpy.types import Operator, Panel, PropertyGroup, UIList, AddonPreferences, OperatorFileListElement
@@ -20,7 +21,7 @@ from .compiler import (
     create_library_catalog_group,
     create_library_function_group,
 )
-from .library import library_entry_records, library_function_records, apply_function_node_display_name, create_local_folder, save_local_source
+from .library import library_entry_records, library_function_records, apply_function_node_display_name, create_local_folder, save_local_source, delete_local_source
 from . import packages
 from . import generated_resources
 
@@ -302,6 +303,7 @@ class GNSCRIPT_MVP_OT_compile_expression(Operator):
         try:
             group = create_expression_group(source)
         except Exception as exc:
+            traceback.print_exc()
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
 
@@ -343,6 +345,7 @@ class GNSCRIPT_MVP_OT_update_selected_group(Operator):
         try:
             update_expression_group(node.node_tree, source)
         except Exception as exc:
+            traceback.print_exc()
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
         node.node_tree.name = old_name
@@ -617,6 +620,47 @@ class NODEFORGE_OT_import_local_scripts(Operator):
         return {'FINISHED'}
 
 
+class NODEFORGE_OT_delete_local_script(Operator):
+    """Delete the selected persistent Local script after confirmation."""
+    bl_idname = "nodeforge.delete_local_script"
+    bl_label = "Delete Local Script"
+    bl_description = "Delete the selected script from the persistent NodeForge Local catalog"
+    bl_options = {'REGISTER'}
+
+    script_name: StringProperty(name="Script", default="")
+
+    @classmethod
+    def poll(cls, context):
+        props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
+        return _selected_catalog_item(props, "local") is not None
+
+    def invoke(self, context, event):
+        props = getattr(context.scene, "gn_script_mvp", None)
+        item = _selected_catalog_item(props, "local")
+        if item is None:
+            self.report({'ERROR'}, "Select a Local script to delete")
+            return {'CANCELLED'}
+        self.script_name = item.name
+        return context.window_manager.invoke_confirm(self, event)
+
+    def execute(self, context):
+        props = getattr(context.scene, "gn_script_mvp", None)
+        item = _selected_catalog_item(props, "local")
+        name = self.script_name or (item.name if item is not None else "")
+        if not name:
+            self.report({'ERROR'}, "Select a Local script to delete")
+            return {'CANCELLED'}
+        try:
+            path = delete_local_source(name)
+            if props is not None:
+                _refresh_catalog_items(props, "local")
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Deleted local script: {path.name}")
+        return {'FINISHED'}
+
+
 class NODEFORGE_OT_create_local_folder(Operator):
     """Create a validated folder under the user-owned local catalog."""
     bl_idname = "nodeforge.create_local_folder"
@@ -822,6 +866,9 @@ class NODEFORGE_PT_library_local(Panel):
         row.operator(NODEFORGE_OT_save_to_local.bl_idname, text="Save to Local", icon='FILE_TICK')
         row.operator(NODEFORGE_OT_import_local_scripts.bl_idname, text="Import", icon='IMPORT')
         _draw_library_catalog_panel(layout, context, "local", "local_items", "local_index", rows=3)
+        row = layout.row(align=True)
+        row.enabled = _selected_catalog_item(context.scene.gn_script_mvp, "local") is not None
+        row.operator(NODEFORGE_OT_delete_local_script.bl_idname, text="Delete Selected", icon='TRASH')
 
 
 class NODEFORGE_PT_library_functions(Panel):
@@ -920,6 +967,7 @@ classes = (
     NODEFORGE_OT_uninstall_package,
     NODEFORGE_OT_create_function_group,
     NODEFORGE_OT_import_local_scripts,
+    NODEFORGE_OT_delete_local_script,
     NODEFORGE_OT_create_local_folder,
     NODEFORGE_OT_save_to_local,
     GNSCRIPT_MVP_PT_panel,
