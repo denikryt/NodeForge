@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import importlib.util
 import os
 import re
@@ -71,6 +72,144 @@ class LibraryEntryRecord:
             "package_name": self.package_name,
             "package_version": self.package_version,
         }
+
+
+
+
+_LOCAL_SOURCES_REGISTRY_VERSION = 1
+
+
+def _local_sources_registry_path() -> Path:
+    """Return the user-owned registry file for externally linked Local source folders."""
+    root = Path(bpy.utils.user_resource("DATAFILES", path="nodeforge", create=True))
+    root.mkdir(parents=True, exist_ok=True)
+    return root / "local_sources.json"
+
+
+def _canonical_path(path: Path | str) -> Path:
+    """Return a normalized absolute filesystem path without requiring it to exist."""
+    return Path(path).expanduser().resolve(strict=False)
+
+
+def _path_key(path: Path | str) -> str:
+    """Return a platform-normalized key used to compare configured source roots."""
+    return os.path.normcase(str(_canonical_path(path)))
+
+
+def _paths_overlap(first: Path | str, second: Path | str) -> bool:
+    """Return True when two canonical directories are equal or one contains the other."""
+    a = _canonical_path(first)
+    b = _canonical_path(second)
+    try:
+        a.relative_to(b)
+        return True
+    except ValueError:
+        pass
+    try:
+        b.relative_to(a)
+        return True
+    except ValueError:
+        return False
+
+
+def _read_local_source_registry() -> list[dict[str, str]]:
+    """Load linked Local source roots from the user-owned registry."""
+    path = _local_sources_registry_path()
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError) as exc:
+        raise CompileError(f"Could not read Local source registry: {exc}") from exc
+    if not isinstance(payload, dict) or payload.get("version") != _LOCAL_SOURCES_REGISTRY_VERSION:
+        raise CompileError("Unsupported Local source registry format")
+    roots = payload.get("roots", [])
+    if not isinstance(roots, list):
+        raise CompileError("Invalid Local source registry roots")
+    result = []
+    for item in roots:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+            raise CompileError("Invalid Local source registry entry")
+        result.append({"path": item["path"], "label": str(item.get("label") or "")})
+    return result
+
+
+def _write_local_source_registry(roots: list[dict[str, str]]) -> None:
+    """Atomically persist linked Local source roots outside the installed add-on."""
+    path = _local_sources_registry_path()
+    payload = {"version": _LOCAL_SOURCES_REGISTRY_VERSION, "roots": roots}
+    fd, temp_name = tempfile.mkstemp(prefix="local_sources.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+        os.replace(temp_name, path)
+    except Exception:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise
+
+
+def local_source_roots(*, include_missing: bool = False) -> list[dict[str, object]]:
+    """Return the managed Local root followed by configured external source roots."""
+    managed = _canonical_path(_default_local_catalog_dir())
+    records: list[dict[str, object]] = [{
+        "path": managed,
+        "label": "Managed",
+        "managed": True,
+        "exists": managed.is_dir(),
+    }]
+    seen = {_path_key(managed)}
+    for item in _read_local_source_registry():
+        path = _canonical_path(item["path"])
+        key = _path_key(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        exists = path.is_dir()
+        if exists or include_missing:
+            records.append({
+                "path": path,
+                "label": item.get("label") or path.name or str(path),
+                "managed": False,
+                "exists": exists,
+            })
+    return records
+
+
+def link_local_source_folder(path: str, *, label: str = "") -> Path:
+    """Register an existing external directory as a read-only Local source root."""
+    target = _canonical_path(path)
+    if not target.is_dir():
+        raise CompileError(f"Local source folder does not exist: {target}")
+    managed = _canonical_path(_default_local_catalog_dir())
+    if _path_key(target) == _path_key(managed):
+        return managed
+    if _paths_overlap(target, managed):
+        raise CompileError("Linked Local source folders may not overlap the managed Local catalog")
+    roots = _read_local_source_registry()
+    target_key = _path_key(target)
+    if any(_path_key(item["path"]) == target_key for item in roots):
+        raise CompileError(f"Local source folder is already linked: {target}")
+    if any(_paths_overlap(target, item["path"]) for item in roots):
+        raise CompileError("Linked Local source folders may not overlap each other")
+    roots.append({"path": str(target), "label": (label or target.name or str(target)).strip()})
+    _write_local_source_registry(roots)
+    return target
+
+
+def unlink_local_source_folder(path: str) -> Path:
+    """Remove one external Local source root registration without deleting source files."""
+    target = _canonical_path(path)
+    target_key = _path_key(target)
+    roots = _read_local_source_registry()
+    kept = [item for item in roots if _path_key(item["path"]) != target_key]
+    if len(kept) == len(roots):
+        raise CompileError(f"Local source folder is not linked: {target}")
+    _write_local_source_registry(kept)
+    return target
 
 
 def _package_root() -> Path:
@@ -298,9 +437,8 @@ def _candidate_records(namespace: str) -> list[LibraryEntryRecord]:
     catalog = _catalog(namespace)
     roots: list[tuple[Path, str, str, str]] = []
     if namespace == "local":
-        root = catalog_dir(namespace)
         ensure_local_catalog_dir()
-        roots.append((root, "", "", ""))
+        roots.extend((record["path"], "", "", "") for record in local_source_roots())
     else:
         if namespace == "examples":
             roots.append((catalog_dir(namespace), "", "", ""))
@@ -370,6 +508,58 @@ def _candidate_records(namespace: str) -> list[LibraryEntryRecord]:
                         )
                     )
     return records
+
+def local_browser_records() -> list[dict[str, object]]:
+    """Return Local source roots, folders, and scripts for the sidebar browser."""
+    rows: list[dict[str, object]] = []
+    script_by_path = {
+        _path_key(record.path): record
+        for record in _candidate_records("local")
+    }
+    for root_record in local_source_roots(include_missing=True):
+        root = root_record["path"]
+        label = str(root_record["label"])
+        managed = bool(root_record["managed"])
+        exists = bool(root_record["exists"])
+        if not managed:
+            rows.append({
+                "name": label,
+                "kind": "source_root" if exists else "missing_source_root",
+                "path": str(root),
+                "folder_path": "",
+                "root_path": str(root),
+                "source_label": label,
+                "managed": False,
+            })
+        if not exists:
+            continue
+        paths = sorted(root.rglob("*"), key=lambda p: str(p.relative_to(root)).lower())
+        for path in paths:
+            rel_parts = path.relative_to(root).parts
+            if any(part.startswith("_") or part.startswith(".") for part in rel_parts):
+                continue
+            if path.is_dir():
+                rows.append({
+                    "name": path.name,
+                    "kind": "folder",
+                    "path": str(path),
+                    "folder_path": "/".join(rel_parts),
+                    "root_path": str(root),
+                    "source_label": label,
+                    "managed": managed,
+                })
+                continue
+            record = script_by_path.get(_path_key(path))
+            if record is None:
+                continue
+            rows.append({
+                **record.as_dict(),
+                "root_path": str(root),
+                "source_label": label,
+                "managed": managed,
+            })
+    return rows
+
 
 def _unique_records(namespace: str) -> dict[str, LibraryEntryRecord]:
     """Return one unique record per public name or fail on duplicate layouts."""
@@ -722,7 +912,7 @@ def delete_local_source(name: str) -> Path:
     try:
         target.relative_to(root)
     except ValueError as exc:
-        raise CompileError("Local delete path escapes local catalog") from exc
+        raise CompileError("Linked Local scripts are read-only; unlink the source folder instead") from exc
     if target.suffix not in _SOURCE_EXTENSIONS or not target.is_file():
         raise CompileError(f"Local script {public_name!r} is not a deletable source file")
 
@@ -862,6 +1052,10 @@ __all__ = [
     "backend_builtins_for_entry",
     "compile_module_library_entry_call",
     "ensure_local_catalog_dir",
+    "local_source_roots",
+    "link_local_source_folder",
+    "unlink_local_source_folder",
+    "local_browser_records",
     "sanitize_library_entry_name",
     "sanitize_local_folder_path",
     "create_local_folder",

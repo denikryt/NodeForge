@@ -46,7 +46,7 @@ output("Length", stem_length)
 
 ### Script library catalogs
 
-NodeForge has three explicit script-library catalogs. Reusable helpers live in `functions/`, bundled demonstrations live in `examples/`, and user-owned scripts saved from Blender live in `local/`. Catalog entries are callable only after a source-local import.
+NodeForge has three explicit script-library catalogs. Reusable helpers live in `functions/`, bundled demonstrations live in `examples/`, and user-owned scripts are exposed through the Local catalog. The managed Local catalog lives in Blender user data; additional external source folders can be linked by path. Catalog entries are callable only after a source-local import.
 
 ```python
 from functions import sierpinski_carpet
@@ -56,13 +56,17 @@ from local import my_custom_script
 
 `from functions import *`, `from examples import *`, and `from local import *` expand only the selected catalog for the current source file. They do not mutate the global DSL built-in namespace.
 
-`local/` may contain folders for organization, for example `local/math/noise.nf`, but import names remain flat: use `from local import noise`, not `from local.math import noise`.
+Managed and linked Local source roots may contain folders for organization, for example `math/noise.nf`, but import names remain flat: use `from local import noise`, not `from local.math import noise`.
 
 Compiled Local dependencies are materialized as content-addressed snapshots. Replacing a Local `.nf` source creates new backing groups for new compilations when that source or any transitive Local dependency changed. Existing generated node groups keep references to the older snapshots, so compiling a newer script does not rewrite their Local dependencies in place. Use **Update Selected NodeGroup** when an existing generated group should intentionally move to the current Local source versions.
 
+The managed Local catalog is stored in Blender's user data directory rather than inside the installed NodeForge add-on. The Local panel also supports **Link Folder** for external source trees. A linked folder is registered by path and scanned directly, so editing or replacing `.nf` files in the external project is visible on the next Local refresh or compilation without re-importing them. Linked folders are read-only from NodeForge: **Unlink Source** removes only the registration and never deletes external files.
+
+**New Folder**, **Save**, and **Copy Files** target the managed Local catalog. Set **Managed Destination** directly or select a managed folder row and use **Use Selected**. Folder rows are shown even when they contain no scripts. Folder paths organize the UI only; Local import names remain flat.
+
 ### Python backend helpers
 
-Reusable function packages may use `functions/<name>/function.py`. Example packages may use `examples/<name>/backend.py` only as a private implementation detail behind `source.nf`. User-owned `local/` scripts are DSL-only and do not load `function.py` or `backend.py`.
+Reusable function packages may use `functions/<name>/function.py`. Example packages may use `examples/<name>/backend.py` only as a private implementation detail behind `source.nf`. User-owned Local scripts are DSL-only and do not load `function.py` or `backend.py`.
 
 Package-local backend helpers can expose `BACKEND_BUILTINS`. These helpers are visible while compiling that package's `source.nf` and stay scoped to that package.
 
@@ -89,7 +93,7 @@ NodeForge/
 ├── systems/                 # Registry for systems supplied by installed packages
 ├── functions/               # Reusable NodeForge functions
 ├── examples/                # Bundled demo/showcase scripts
-├── local/                   # User-owned local scripts; .nf files are not packaged
+├── local/                   # Compatibility placeholder; user Local sources live outside the add-on
 └── docs/                    # Architecture and authoring documentation
 ```
 

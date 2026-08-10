@@ -61,3 +61,6 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 
 - Made Local `.nf` dependencies content-addressed snapshots so compiling newer Local sources no longer mutates backing groups used by existing generated nodes; transitive Local source changes produce new snapshots while explicit selected-group updates remain intentional.
 
+## 0.49.66
+
+- Added persistent external Local source folders that are read directly from disk without copying, plus visible Local folder rows and an explicit managed destination for copy/save operations.

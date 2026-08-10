@@ -21,7 +21,18 @@ from .compiler import (
     create_library_catalog_group,
     create_library_function_group,
 )
-from .library import library_entry_records, library_function_records, apply_function_node_display_name, create_local_folder, save_local_source, delete_local_source
+from .library import (
+    library_entry_records,
+    library_function_records,
+    local_browser_records,
+    local_source_roots,
+    link_local_source_folder,
+    unlink_local_source_folder,
+    apply_function_node_display_name,
+    create_local_folder,
+    save_local_source,
+    delete_local_source,
+)
 from . import packages
 from . import generated_resources
 
@@ -92,6 +103,9 @@ class NODEFORGE_FunctionItem(PropertyGroup):
     folder_path: StringProperty(name="Folder", default="")
     package_id: StringProperty(name="Package ID", default="")
     package_name: StringProperty(name="Package", default="")
+    root_path: StringProperty(name="Source Root", default="")
+    source_label: StringProperty(name="Source", default="")
+    managed: BoolProperty(name="Managed", default=False)
 
 
 
@@ -117,7 +131,20 @@ class NODEFORGE_UL_function_library(UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
         """Draw one discovered function entry."""
         row = layout.row(align=True)
-        label = item.name if not getattr(item, "folder_path", "") else f"{item.folder_path}/{item.name}"
+        kind = getattr(item, "kind", "")
+        folder_path = getattr(item, "folder_path", "")
+        source_label = getattr(item, "source_label", "")
+        if kind in {"source_root", "missing_source_root"}:
+            icon_name = 'ERROR' if kind == "missing_source_root" else 'LINKED'
+            row.label(text=f"{item.name}", icon=icon_name)
+            return
+        if kind == "folder":
+            prefix = f"{source_label}: " if source_label and source_label != "Managed" else ""
+            row.label(text=f"{prefix}{folder_path or item.name}", icon='FILE_FOLDER')
+            return
+        label = item.name if not folder_path else f"{folder_path}/{item.name}"
+        if source_label and source_label != "Managed":
+            label = f"{source_label}: {label}"
         row.label(text=label, icon='NODETREE')
         if getattr(item, "package_id", ""):
             row.label(text=item.package_id)
@@ -209,10 +236,14 @@ def _refresh_catalog_items(props, namespace: str):
     items, index_prop = _items_for_namespace(props, namespace)
     old_index = getattr(props, index_prop)
     old_name = ""
+    old_path = ""
+    old_kind = ""
     if 0 <= old_index < len(items):
         old_name = items[old_index].name
+        old_path = getattr(items[old_index], "path", "")
+        old_kind = getattr(items[old_index], "kind", "")
     items.clear()
-    records = library_entry_records(namespace)
+    records = local_browser_records() if namespace == "local" else library_entry_records(namespace)
     for record in records:
         item = items.add()
         item.name = record.get("name", "")
@@ -222,10 +253,18 @@ def _refresh_catalog_items(props, namespace: str):
         if hasattr(item, "package_id"):
             item.package_id = record.get("package_id", "")
             item.package_name = record.get("package_name", "")
+        if hasattr(item, "root_path"):
+            item.root_path = str(record.get("root_path", ""))
+            item.source_label = str(record.get("source_label", ""))
+            item.managed = bool(record.get("managed", False))
     setattr(props, index_prop, 0)
     if old_name:
         for index, item in enumerate(items):
-            if item.name == old_name:
+            if namespace == "local":
+                if item.name == old_name and item.path == old_path and item.kind == old_kind:
+                    setattr(props, index_prop, index)
+                    break
+            elif item.name == old_name:
                 setattr(props, index_prop, index)
                 break
     return len(records)
@@ -528,6 +567,9 @@ class NODEFORGE_OT_create_function_group(Operator):
         if item is None:
             self.report({'ERROR'}, f"Select a {self.namespace} entry from the list")
             return {'CANCELLED'}
+        if self.namespace == "local" and getattr(item, "kind", "") != "script":
+            self.report({'ERROR'}, "Select a Local script, not a folder")
+            return {'CANCELLED'}
 
         tree = _active_gn_tree(context)
         if tree is None:
@@ -550,6 +592,90 @@ class NODEFORGE_OT_create_function_group(Operator):
             other.select = False
         node.select = True
         self.report({'INFO'}, f"Added library node group: {group.name}")
+        return {'FINISHED'}
+
+
+class NODEFORGE_OT_link_local_folder(Operator):
+    """Link an external folder as a live, read-only Local source root."""
+
+    bl_idname = "nodeforge.link_local_folder"
+    bl_label = "Link Local Folder"
+    bl_description = "Use .nf scripts directly from an external folder without copying them into NodeForge"
+    bl_options = {'REGISTER'}
+
+    directory: StringProperty(name="Folder", subtype="DIR_PATH", default="")
+
+    def invoke(self, context, event):
+        """Open Blender's native directory selector."""
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
+    def execute(self, context):
+        """Register the selected directory and refresh the Local browser."""
+        props = getattr(context.scene, "gn_script_mvp", None)
+        try:
+            path = link_local_source_folder(self.directory)
+            if props is not None:
+                _refresh_catalog_items(props, "local")
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Linked Local source folder: {path}")
+        return {'FINISHED'}
+
+
+class NODEFORGE_OT_unlink_local_folder(Operator):
+    """Remove an external Local source-root registration without deleting files."""
+
+    bl_idname = "nodeforge.unlink_local_folder"
+    bl_label = "Unlink Local Folder"
+    bl_description = "Stop using the selected external Local source folder without deleting files on disk"
+    bl_options = {'REGISTER'}
+
+    root_path: StringProperty(name="Source Root", default="")
+
+    @classmethod
+    def poll(cls, context):
+        props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
+        item = _selected_catalog_item(props, "local")
+        return item is not None and not bool(getattr(item, "managed", False)) and bool(getattr(item, "root_path", ""))
+
+    def execute(self, context):
+        """Unregister the selected external source root and refresh Local."""
+        props = getattr(context.scene, "gn_script_mvp", None)
+        item = _selected_catalog_item(props, "local")
+        root_path = self.root_path or (getattr(item, "root_path", "") if item is not None else "")
+        try:
+            path = unlink_local_source_folder(root_path)
+            if props is not None:
+                _refresh_catalog_items(props, "local")
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Unlinked Local source folder: {path}")
+        return {'FINISHED'}
+
+
+class NODEFORGE_OT_use_selected_local_folder(Operator):
+    """Use the selected managed Local folder as the destination for copy/save operations."""
+
+    bl_idname = "nodeforge.use_selected_local_folder"
+    bl_label = "Use Selected Folder"
+    bl_description = "Set the selected managed Local folder as the destination for Import and Save to Local"
+    bl_options = {'REGISTER'}
+
+    @classmethod
+    def poll(cls, context):
+        props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
+        item = _selected_catalog_item(props, "local")
+        return item is not None and getattr(item, "kind", "") == "folder" and bool(getattr(item, "managed", False))
+
+    def execute(self, context):
+        """Copy the selected managed folder path into the Local destination field."""
+        props = context.scene.gn_script_mvp
+        item = _selected_catalog_item(props, "local")
+        props.local_folder_path = getattr(item, "folder_path", "")
+        self.report({'INFO'}, f"Local destination: {props.local_folder_path or '/'}")
         return {'FINISHED'}
 
 
@@ -632,7 +758,8 @@ class NODEFORGE_OT_delete_local_script(Operator):
     @classmethod
     def poll(cls, context):
         props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
-        return _selected_catalog_item(props, "local") is not None
+        item = _selected_catalog_item(props, "local")
+        return item is not None and getattr(item, "kind", "") == "script" and bool(getattr(item, "managed", False))
 
     def invoke(self, context, event):
         props = getattr(context.scene, "gn_script_mvp", None)
@@ -861,14 +988,23 @@ class NODEFORGE_PT_library_local(Panel):
 
     def draw(self, context):
         layout = self.layout
+        props = context.scene.gn_script_mvp
+        layout.prop(props, "local_folder_path", text="Managed Destination")
         row = layout.row(align=True)
         row.operator(NODEFORGE_OT_create_local_folder.bl_idname, text="New Folder", icon='NEWFOLDER')
-        row.operator(NODEFORGE_OT_save_to_local.bl_idname, text="Save to Local", icon='FILE_TICK')
-        row.operator(NODEFORGE_OT_import_local_scripts.bl_idname, text="Import", icon='IMPORT')
-        _draw_library_catalog_panel(layout, context, "local", "local_items", "local_index", rows=3)
+        row.operator(NODEFORGE_OT_use_selected_local_folder.bl_idname, text="Use Selected", icon='EYEDROPPER')
         row = layout.row(align=True)
-        row.enabled = _selected_catalog_item(context.scene.gn_script_mvp, "local") is not None
-        row.operator(NODEFORGE_OT_delete_local_script.bl_idname, text="Delete Selected", icon='TRASH')
+        row.operator(NODEFORGE_OT_save_to_local.bl_idname, text="Save", icon='FILE_TICK')
+        row.operator(NODEFORGE_OT_import_local_scripts.bl_idname, text="Copy Files", icon='IMPORT')
+        row.operator(NODEFORGE_OT_link_local_folder.bl_idname, text="Link Folder", icon='LINKED')
+        _draw_library_catalog_panel(layout, context, "local", "local_items", "local_index", rows=6)
+        selected = _selected_catalog_item(props, "local")
+        row = layout.row(align=True)
+        delete = row.operator(NODEFORGE_OT_delete_local_script.bl_idname, text="Delete Managed", icon='TRASH')
+        row.enabled = selected is not None and getattr(selected, "kind", "") == "script" and bool(getattr(selected, "managed", False))
+        row = layout.row(align=True)
+        row.enabled = selected is not None and not bool(getattr(selected, "managed", False)) and bool(getattr(selected, "root_path", ""))
+        row.operator(NODEFORGE_OT_unlink_local_folder.bl_idname, text="Unlink Source", icon='UNLINKED')
 
 
 class NODEFORGE_PT_library_functions(Panel):
@@ -966,6 +1102,9 @@ classes = (
     NODEFORGE_OT_import_package,
     NODEFORGE_OT_uninstall_package,
     NODEFORGE_OT_create_function_group,
+    NODEFORGE_OT_link_local_folder,
+    NODEFORGE_OT_unlink_local_folder,
+    NODEFORGE_OT_use_selected_local_folder,
     NODEFORGE_OT_import_local_scripts,
     NODEFORGE_OT_delete_local_script,
     NODEFORGE_OT_create_local_folder,
