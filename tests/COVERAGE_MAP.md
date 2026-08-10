@@ -32,3 +32,7 @@
 
 - `tests/blender/test_interface_panels.py`: root-only `panel()` syntax, native Blender panel hierarchy, implicit-input membership, resolved-socket alias identity, foreign-socket ownership rejection, real `GeometryNodeGroup` exposure, and generic nested-panel interface copying.
 - `tests/blender/test_update_group.py`: transactional panel cutover, socket reorder/default propagation, visible value and external-link restoration, temporary-group cleanup, and rollback after destructive reset.
+
+## Local dependency snapshots
+
+- `tests/blender/test_library_catalogs.py`: content-addressed Local backing groups, same-source snapshot reuse, transitive Local dependency invalidation, ownership collisions, and preservation of existing generated node dependencies when Local source files are replaced.

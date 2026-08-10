@@ -115,13 +115,15 @@ def test_new_catalog_materialized_group_ownership_metadata():
     example_collision = None
     try:
         _write(source, 'x = input_float("X", default=1.0)\noutput("x", x)\n')
-        user_group = bpy.data.node_groups.new('NodeForge.local.local_collision_probe', 'GeometryNodeTree')
+        record = library.find_library_entry_record('local', 'local_collision_probe')
+        local_group_name = library._group_name_for_record(record)
+        user_group = bpy.data.node_groups.new(local_group_name, 'GeometryNodeTree')
         expect_compile_error('from local import local_collision_probe\nx = local_collision_probe(1)\noutput("x", x)', 'NFTest_local_ownership_collision')
-        check(bpy.data.node_groups.get('NodeForge.local.local_collision_probe') is user_group, 'ownership collision mutated user group')
+        check(bpy.data.node_groups.get(local_group_name) is user_group, 'ownership collision mutated user group')
         bpy.data.node_groups.remove(user_group, do_unlink=True)
         user_group = None
         group = compile_group('from local import local_collision_probe\nx = local_collision_probe(1)\noutput("x", x)', 'NFTest_local_owned_group_created')
-        backing = bpy.data.node_groups.get('NodeForge.local.local_collision_probe')
+        backing = bpy.data.node_groups.get(local_group_name)
         check(backing is not None, 'local backing group not created')
         check(backing.get('nodeforge_library_namespace') == 'local', 'local backing namespace metadata missing')
         check(backing.get('nodeforge_library_name') == 'local_collision_probe', 'local backing name metadata missing')
@@ -184,3 +186,60 @@ def test_save_to_local_source_selection_does_not_fallback(monkeypatch):
         pass
     else:
         raise AssertionError('SELECTED_GROUP source_kind fell back to Text datablock')
+
+
+def test_local_materialization_snapshots_transitive_source_versions():
+    local = library.ensure_local_catalog_dir()
+    leaf = local / 'local_snapshot_leaf.nf'
+    parent = local / 'local_snapshot_parent.nf'
+    root_source = (
+        'from local import local_snapshot_parent\n'
+        'x = local_snapshot_parent(2.0)\n'
+        'output("x", x)\n'
+    )
+    try:
+        _write(leaf, 'x = input_float("X")\noutput("x", x * 2.0)\n')
+        _write(parent, 'from local import local_snapshot_leaf\nx = input_float("X")\ny = local_snapshot_leaf(x)\noutput("y", y)\n')
+
+        first = compile_group(root_source, 'NFTest_local_snapshot_first')
+        first_parent_node = next(
+            node for node in first.nodes
+            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_snapshot_parent'
+        )
+        first_parent = first_parent_node.node_tree
+        first_leaf_node = next(
+            node for node in first_parent.nodes
+            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_snapshot_leaf'
+        )
+        first_leaf = first_leaf_node.node_tree
+        first_parent_name = first_parent.name
+        first_leaf_name = first_leaf.name
+
+        same = compile_group(root_source, 'NFTest_local_snapshot_same_source')
+        same_parent = next(
+            node.node_tree for node in same.nodes
+            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_snapshot_parent'
+        )
+        check(same_parent is first_parent, 'unchanged Local source did not reuse its immutable snapshot')
+
+        _write(leaf, 'x = input_float("X")\noutput("x", x * 3.0)\n')
+        second = compile_group(root_source, 'NFTest_local_snapshot_second')
+        second_parent = next(
+            node.node_tree for node in second.nodes
+            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_snapshot_parent'
+        )
+        second_leaf = next(
+            node.node_tree for node in second_parent.nodes
+            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_snapshot_leaf'
+        )
+
+        check(first_parent is first_parent_node.node_tree, 'first root parent dependency changed in place')
+        check(first_parent.name == first_parent_name, 'first parent snapshot was renamed or replaced')
+        check(first_leaf.name == first_leaf_name, 'first leaf snapshot was renamed or replaced')
+        check(second_parent is not first_parent, 'transitive Local source change reused mutable parent group')
+        check(second_leaf is not first_leaf, 'changed Local source reused mutable leaf group')
+        check(first_parent.get('nodeforge_local_snapshot_digest') != second_parent.get('nodeforge_local_snapshot_digest'), 'parent closure digest did not change')
+        check(first_leaf.get('nodeforge_local_snapshot_digest') != second_leaf.get('nodeforge_local_snapshot_digest'), 'leaf source digest did not change')
+    finally:
+        leaf.unlink(missing_ok=True)
+        parent.unlink(missing_ok=True)

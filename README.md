@@ -58,6 +58,8 @@ from local import my_custom_script
 
 `local/` may contain folders for organization, for example `local/math/noise.nf`, but import names remain flat: use `from local import noise`, not `from local.math import noise`.
 
+Compiled Local dependencies are materialized as content-addressed snapshots. Replacing a Local `.nf` source creates new backing groups for new compilations when that source or any transitive Local dependency changed. Existing generated node groups keep references to the older snapshots, so compiling a newer script does not rewrite their Local dependencies in place. Use **Update Selected NodeGroup** when an existing generated group should intentionally move to the current Local source versions.
+
 ### Python backend helpers
 
 Reusable function packages may use `functions/<name>/function.py`. Example packages may use `examples/<name>/backend.py` only as a private implementation detail behind `source.nf`. User-owned `local/` scripts are DSL-only and do not load `function.py` or `backend.py`.

@@ -56,3 +56,8 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.49.64
 
 - Added the `panel()` DSL declaration for grouping node-group inputs into native Blender interface panels, including collapsed panels, root-only validation, identity-safe membership checks, and hierarchy-preserving transactional updates.
+
+## 0.49.65
+
+- Made Local `.nf` dependencies content-addressed snapshots so compiling newer Local sources no longer mutates backing groups used by existing generated nodes; transitive Local source changes produce new snapshots while explicit selected-group updates remain intentional.
+
