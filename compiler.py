@@ -156,6 +156,9 @@ class Compiler:
         self.helper_namespace = helper_namespace or getattr(group, "name", "Group")
         self.local_helper_transaction = local_helper_transaction
         self.reserved_name_labels = dict(reserved_name_labels or {})
+        self._interface_inputs_by_identifier = {}
+        self._interface_inputs_by_socket_pointer = {}
+        self._panel_input_memberships = {}
         self.depth = 0
 
     def compile(self, expr):
@@ -165,6 +168,53 @@ class Compiler:
             return expression_compiler.compile_expr(self, expr, self.depth)
         finally:
             self.depth -= 1
+
+    @staticmethod
+    def _rna_pointer(value):
+        """Return stable in-process identity for one Blender RNA wrapper."""
+        try:
+            return int(value.as_pointer())
+        except Exception:
+            return id(value)
+
+    def _register_interface_input(self, socket, iface_item):
+        """Associate one output of this compiler's Group Input with its interface item."""
+        if socket is None or iface_item is None:
+            raise CompileError("Internal error: cannot register a missing group input socket")
+        owner = getattr(socket, "node", None)
+        if self._rna_pointer(owner) != self._rna_pointer(self.group_input):
+            raise CompileError("Internal error: interface input socket is owned by another node")
+        identifier = getattr(socket, "identifier", None)
+        if identifier:
+            self._interface_inputs_by_identifier[identifier] = iface_item
+        self._interface_inputs_by_socket_pointer[self._rna_pointer(socket)] = iface_item
+
+    def interface_input_for_value(self, value):
+        """Resolve a Value only when it is an output of this compiler's exact Group Input."""
+        if not isinstance(value, Value):
+            return None
+        socket = getattr(value, "socket", None)
+        if socket is None:
+            return None
+        owner = getattr(socket, "node", None)
+        if self._rna_pointer(owner) != self._rna_pointer(self.group_input):
+            return None
+        identifier = getattr(socket, "identifier", None)
+        if identifier:
+            iface_item = self._interface_inputs_by_identifier.get(identifier)
+            if iface_item is not None:
+                return iface_item
+        return self._interface_inputs_by_socket_pointer.get(self._rna_pointer(socket))
+
+    def interface_input_identity_for_value(self, value):
+        """Return current-group panel membership identity after proving socket ownership."""
+        iface_item = self.interface_input_for_value(value)
+        if iface_item is None:
+            return None
+        identifier = getattr(iface_item, "identifier", None)
+        if identifier:
+            return ("identifier", identifier)
+        return ("interface", self._rna_pointer(iface_item))
 
     def _compile_const_value(self, value, x=0, y=0):
         """Turn a compile-time constant into a node Value or script-level array."""
@@ -202,6 +252,7 @@ class Compiler:
         socket = next((s for s in self.group_input.outputs if s.name == name), None)
         if socket is None:
             raise CompileError(f'Internal error: input socket "{name}" was not created')
+        self._register_interface_input(socket, iface)
         val = make_value(socket, typ)
         self.vars[name] = val
         return val
@@ -222,7 +273,7 @@ def _validate_import_bindings(import_pairs, body_stmts, local_function_defs, bac
     """Validate and return source-local namespace-aware catalog bindings."""
     imported: dict[str, LibraryBinding] = {}
     local_bindings = _binding_names(body_stmts)
-    reserved_names = set(builtin_registry.BUILTIN_NAMES) | {"output", "store"} | set(_ALLOWED_CONSTS) | set(systems_registry.constructor_names()) | set(backend_names) | set(TYPE_TOKEN_NAMES)
+    reserved_names = set(builtin_registry.BUILTIN_NAMES) | {"output", "store", "panel"} | set(_ALLOWED_CONSTS) | set(systems_registry.constructor_names()) | set(backend_names) | set(TYPE_TOKEN_NAMES)
 
     def validate_pair(namespace, canonical_name, exposed_name, *, inherited=False):
         names = library_entry_names(namespace)
@@ -263,7 +314,7 @@ def _registered_name_labels(local_function_defs, backend_names, imported_library
             labels.setdefault(name, label)
 
     add(builtin_registry.BUILTIN_NAMES, "DSL builtin")
-    add({"output", "store"}, "reserved helper")
+    add({"output", "store", "panel"}, "reserved helper")
     add(_ALLOWED_CONSTS, "compile-time constant")
     add(systems_registry.constructor_names(), "embedded-system constructor")
     add(backend_names, "backend helper")
@@ -353,6 +404,19 @@ def _validate_registered_name_bindings(stmts, labels, *, top_level_function_name
         visit(stmt, top_level=True)
 
 
+def _validate_interface_directive_placement(stmts):
+    """Allow panel() only as a direct expression in the immediate group body."""
+
+    def is_panel_call(node):
+        return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "panel"
+
+    for stmt in stmts:
+        direct_call = stmt.value if isinstance(stmt, ast.Expr) and is_panel_call(stmt.value) else None
+        for node in ast.walk(stmt):
+            if is_panel_call(node) and node is not direct_call:
+                raise CompileError("panel() is a top-level interface declaration")
+
+
 def _build_group(
     source: str,
     name: str = "NodeForge Group",
@@ -404,6 +468,7 @@ def _build_group(
         reserved_name_labels,
         top_level_function_names=local_function_defs,
     )
+    _validate_interface_directive_placement(raw_body_stmts)
 
     stmts, consts = _preprocess_compile_time(body_stmts)
     callable_names = set(own_imported_library_functions) | set(local_function_defs) | backend_names | set(systems_registry.constructor_names())
@@ -447,8 +512,27 @@ def _build_group(
             reserved_name_labels=reserved_name_labels,
         )
 
+        implicit_iface_by_identifier = {
+            getattr(item, "identifier", None): item
+            for item in group.interface.items_tree
+            if getattr(item, "item_type", None) == "SOCKET" and getattr(item, "in_out", None) == "INPUT"
+        }
         for socket in group_input.outputs:
             if socket.name in input_names:
+                iface_item = implicit_iface_by_identifier.get(getattr(socket, "identifier", None))
+                if iface_item is None:
+                    iface_item = next(
+                        (
+                            item for item in group.interface.items_tree
+                            if getattr(item, "item_type", None) == "SOCKET"
+                            and getattr(item, "in_out", None) == "INPUT"
+                            and getattr(item, "name", None) == socket.name
+                        ),
+                        None,
+                    )
+                if iface_item is None:
+                    raise CompileError(f'Internal error: implicit input socket "{socket.name}" has no interface item')
+                comp._register_interface_input(socket, iface_item)
                 comp.vars[socket.name] = make_value(socket, input_types.get(socket.name, TYPE_FLOAT))
 
         geometry_socket = None
@@ -588,23 +672,52 @@ def _copy_node_properties(src_node, dst_node):
 
 
 def _copy_interface(src_group, dst_group):
-    """Copy flat socket interface from one GeometryNodeTree to another."""
-    for item in getattr(src_group.interface, "items_tree", []):
-        if getattr(item, "item_type", None) != "SOCKET":
-            continue
+    """Copy sockets and native panel hierarchy between Geometry Node interfaces."""
+
+    def item_pointer(item):
         try:
-            sock = dst_group.interface.new_socket(
-                name=item.name,
-                in_out=item.in_out,
-                socket_type=item.socket_type,
-            )
+            return int(item.as_pointer())
         except Exception:
-            sock = dst_group.interface.new_socket(
+            return id(item)
+
+    copied_items = {}
+    child_positions = {}
+    for item in getattr(src_group.interface, "items_tree", []):
+        item_type = getattr(item, "item_type", None)
+        src_parent = getattr(item, "parent", None)
+        dst_parent = copied_items.get(item_pointer(src_parent)) if src_parent is not None else None
+        parent_key = item_pointer(dst_parent) if dst_parent is not None else None
+        position = child_positions.get(parent_key, 0)
+
+        if item_type == "PANEL":
+            copied = dst_group.interface.new_panel(
                 name=item.name,
-                in_out=item.in_out,
-                socket_type=getattr(item, "bl_socket_idname", "NodeSocketFloat"),
+                description=getattr(item, "description", "") or "",
+                default_closed=bool(getattr(item, "default_closed", False)),
             )
-        _copy_socket_default(item, sock)
+            if dst_parent is not None:
+                dst_group.interface.move_to_parent(copied, dst_parent, position)
+        elif item_type == "SOCKET":
+            kwargs = {
+                "name": item.name,
+                "description": getattr(item, "description", "") or "",
+                "in_out": item.in_out,
+            }
+            try:
+                copied = dst_group.interface.new_socket(socket_type=item.socket_type, **kwargs)
+            except Exception:
+                copied = dst_group.interface.new_socket(
+                    socket_type=getattr(item, "bl_socket_idname", "NodeSocketFloat"),
+                    **kwargs,
+                )
+            if dst_parent is not None:
+                dst_group.interface.move_to_parent(copied, dst_parent, position)
+            _copy_socket_default(item, copied)
+        else:
+            continue
+
+        copied_items[item_pointer(item)] = copied
+        child_positions[parent_key] = position + 1
 
 
 def _copy_group_contents(src_group, dst_group):

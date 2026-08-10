@@ -19,6 +19,7 @@ from .statements import (
 )
 from .consteval import _const_eval
 from .compile_time import reject_compile_time_object
+from .interface import _create_interface_panel
 from .geometry_builder import GeometryBuilder, validate_geometry_builder_constructor
 from .runtime import (
     _parse_repeat_range_for,
@@ -139,11 +140,76 @@ def _compile_builder_method(comp, builder, method, call, x=0, y=0):
     raise CompileError("geometry_builder supports only add(), extend(), and .geometry")
 
 
-def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
-    """Compile one top-level statement into the active geometry node group."""
+def _compile_panel_statement(ctx, call):
+    """Validate and lower one root-level panel() interface declaration."""
+    comp = ctx.comp
+    if len(call.args) != 1:
+        raise CompileError("panel() expects exactly one positional list or tuple of group inputs")
+    members_expr = call.args[0]
+    if not isinstance(members_expr, (ast.List, ast.Tuple)):
+        raise CompileError("panel() first argument must be a list or tuple of input variable names")
+    if not members_expr.elts:
+        raise CompileError("panel() requires at least one input")
+    if not all(isinstance(member, ast.Name) for member in members_expr.elts):
+        raise CompileError("panel() items must be simple input variable names")
+
+    kws = _kw_dict(call)
+    _check_no_extra_keywords(kws, {"name", "collapsed"})
+    if "name" not in kws:
+        raise CompileError("panel() requires name=")
+    panel_name = _literal_string(kws["name"], "panel() name", comp.consts)
+    collapsed = False
+    if "collapsed" in kws:
+        try:
+            collapsed = _const_eval(kws["collapsed"], comp.consts)
+        except CompileError as exc:
+            raise CompileError("panel() collapsed= must be a compile-time bool") from exc
+        if not isinstance(collapsed, bool):
+            raise CompileError("panel() collapsed= must be a compile-time bool")
+
+    resolved = []
+    identities = []
+    seen = set()
+    for member in members_expr.elts:
+        name = member.id
+        value = comp.vars.get(name)
+        iface_item = comp.interface_input_for_value(value) if value is not None else None
+        identity = comp.interface_input_identity_for_value(value) if value is not None else None
+        if iface_item is None or identity is None:
+            raise CompileError(f"panel() item {name} is not a group input")
+        if identity in seen:
+            raise CompileError(f"panel() duplicate input: {name}")
+        seen.add(identity)
+        existing_panel = comp._panel_input_memberships.get(identity)
+        if existing_panel is not None:
+            raise CompileError(f'panel() item {name} already belongs to panel "{existing_panel}"')
+        resolved.append(iface_item)
+        identities.append(identity)
+
+    _create_interface_panel(ctx.group, resolved, panel_name, collapsed=collapsed)
+    for identity in identities:
+        comp._panel_input_memberships[identity] = panel_name
+    ctx.auto_final_output = None
+
+
+def compile_statement(
+    ctx,
+    stmt,
+    idx=0,
+    allow_final_expr=False,
+    *,
+    allow_interface_directives=False,
+):
+    """Compile one statement, optionally allowing root-only interface directives."""
     comp = ctx.comp
     group = ctx.group
     call = _is_top_level_call(stmt)
+
+    if call and call.func.id == "panel":
+        if not allow_interface_directives:
+            raise CompileError("panel() is a top-level interface declaration")
+        _compile_panel_statement(ctx, call)
+        return
 
     if isinstance(stmt, ast.Assign):
         if len(stmt.targets) != 1:
@@ -307,7 +373,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
                         for name, val in zip(target_names, item):
                             comp.vars[name] = val
                     for sub in stmt.body:
-                        compile_statement(ctx, sub, idx, allow_final_expr=False)
+                        compile_statement(ctx, sub, idx, allow_final_expr=False, allow_interface_directives=False)
             finally:
                 for name in target_names:
                     if had_old[name]:
@@ -324,7 +390,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
         try:
             branch = stmt.body if bool(_const_eval(stmt.test, comp.consts)) else stmt.orelse
             for sub in branch:
-                compile_statement(ctx, sub, idx, allow_final_expr=False)
+                compile_statement(ctx, sub, idx, allow_final_expr=False, allow_interface_directives=False)
             return
         except CompileError:
             pass
@@ -350,7 +416,7 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
             comp.vars.clear(); comp.vars.update(base_vars)
             ctx.auto_final_output = saved_auto
             for sub in branch_stmts:
-                compile_statement(ctx, sub, idx, allow_final_expr=False)
+                compile_statement(ctx, sub, idx, allow_final_expr=False, allow_interface_directives=False)
             branch_vars = dict(comp.vars)
             changed = {
                 name for name, value in branch_vars.items()
@@ -459,7 +525,13 @@ def compile_statement(ctx, stmt, idx=0, allow_final_expr=False):
 def compile_statements(ctx, stmts):
     """Compile all top-level statements in order."""
     for idx, stmt in enumerate(stmts):
-        compile_statement(ctx, stmt, idx, allow_final_expr=(idx == len(stmts) - 1))
+        compile_statement(
+            ctx,
+            stmt,
+            idx,
+            allow_final_expr=(idx == len(stmts) - 1),
+            allow_interface_directives=True,
+        )
     return ctx
 
 

@@ -26,6 +26,23 @@ Built-ins are the primitive operations of the DSL. They live in `builtins/` and 
 
 Built-ins cover input sockets, scalar math, vector math, field inputs, geometry primitives, attributes, materials, instancing, and runtime loops. They form the compiler-level vocabulary used by scripts and library functions.
 
+### Interface panels
+
+Use the top-level `panel()` declaration to organize existing group inputs into native Blender interface panels. Members are simple variable names that already resolve to inputs of the current node group. The list order is the socket order inside the panel, and `collapsed=True` makes the native Blender panel closed by default.
+
+```python
+stem_length = input_float("Stem Length", default=0.5)
+stem_radius = input_float("Stem Radius", default=0.05)
+branch_angle = input_float("Branch Angle", default=48.0)
+
+panel([stem_length, stem_radius], name="Stem")
+panel([branch_angle], name="Branching", collapsed=True)
+
+output("Length", stem_length)
+```
+
+`panel()` is an interface declaration and is written directly in the group body. Each input can belong to one panel. Inputs omitted from all `panel()` declarations remain at the root of the group interface. The initial DSL surface creates root-level panels; native nested panels are still preserved when NodeForge updates an existing Blender interface.
+
 
 ### Script library catalogs
 

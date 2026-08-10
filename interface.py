@@ -1,6 +1,7 @@
 """Group interface socket defaults and default-value persistence helpers."""
 
 from .storage import INPUT_DEFAULTS_PROP
+from .errors import CompileError
 
 
 
@@ -98,4 +99,42 @@ def _get_group_input_defaults(group):
     data = _idprop_to_plain(data)
     return data if isinstance(data, dict) else {}
 
-__all__ = ['_json_safe_default', '_set_socket_default', '_set_interface_socket_default', '_record_group_input_default', '_idprop_to_plain', '_get_group_input_defaults']
+
+def _is_root_interface_item(item):
+    """Return whether a Blender interface item is attached to the implicit root panel."""
+    parent = getattr(item, "parent", None)
+    if parent is None:
+        return True
+    # Blender 5.x exposes the root as an unnamed synthetic panel rather than None.
+    return getattr(parent, "name", "") == ""
+
+
+def _create_interface_panel(group, sockets, name, *, collapsed=False):
+    """Create one root native interface panel and move validated input sockets into it."""
+    sockets = list(sockets)
+    if not sockets:
+        raise CompileError("panel() requires at least one input")
+    if not isinstance(name, str) or not name:
+        raise CompileError("panel() name must be a non-empty string")
+
+    for item in getattr(group.interface, "items_tree", []):
+        if (
+            getattr(item, "item_type", None) == "PANEL"
+            and _is_root_interface_item(item)
+            and getattr(item, "name", None) == name
+        ):
+            raise CompileError(f'panel() duplicate panel name: {name}')
+
+    for socket in sockets:
+        if getattr(socket, "item_type", None) != "SOCKET" or getattr(socket, "in_out", None) != "INPUT":
+            raise CompileError("panel() can contain only group input sockets")
+        if not _is_root_interface_item(socket):
+            raise CompileError(f'panel() input {getattr(socket, "name", "<unnamed>")} already belongs to a panel')
+
+    panel = group.interface.new_panel(name=name, description="", default_closed=bool(collapsed))
+    for index, socket in enumerate(sockets):
+        group.interface.move_to_parent(socket, panel, index)
+    return panel
+
+
+__all__ = ['_json_safe_default', '_set_socket_default', '_set_interface_socket_default', '_record_group_input_default', '_idprop_to_plain', '_get_group_input_defaults', '_create_interface_panel']

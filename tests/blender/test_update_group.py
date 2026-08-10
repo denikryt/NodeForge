@@ -47,3 +47,86 @@ output("instance_points", instance_points)
     repeat_socket_names = [socket.name for socket in repeat_outputs[0].inputs]
     check('instance_points' in repeat_socket_names, f'Repeat Output inputs missing dynamic state socket: {repeat_socket_names}')
     print('UPDATE_REPEAT_DYNAMIC_SOCKET_LINK_OK')
+
+
+def _panel_snapshot(group):
+    """Return panel hierarchy/order state for transactional update assertions."""
+    result = []
+    for item in group.interface.items_tree:
+        if getattr(item, "item_type", None) != "PANEL" or not getattr(item, "name", ""):
+            continue
+        parent_name = getattr(getattr(item, "parent", None), "name", "") or ""
+        children = [
+            child.name
+            for child in group.interface.items_tree
+            if (getattr(getattr(child, "parent", None), "name", "") or "") == item.name
+        ]
+        result.append((item.name, parent_name, bool(item.default_closed), children))
+    return result
+
+
+def test_update_group_preserves_panel_hierarchy_values_links_and_rollback():
+    source_before = '''
+radius = input_float("Radius", default=0.1)
+segments = input_int("Segments", default=8)
+panel([radius, segments], name="Stem")
+output("Radius", radius)
+'''
+    source_after = '''
+radius = input_float("Radius", default=0.2)
+segments = input_int("Segments", default=12)
+panel([segments, radius], name="Stem", collapsed=True)
+output("Radius", radius)
+'''
+    group = compile_group(source_before, "NFTest_update_panels")
+
+    wrapper = bpy.data.node_groups.new("NFTest_update_panels_wrapper", "GeometryNodeTree")
+    wrapper.interface.new_socket(name="External Segments", in_out="INPUT", socket_type="NodeSocketInt")
+    wrapper.interface.new_socket(name="Result", in_out="OUTPUT", socket_type="NodeSocketFloat")
+    wrapper_input = wrapper.nodes.new("NodeGroupInput")
+    wrapper_output = wrapper.nodes.new("NodeGroupOutput")
+    group_node = wrapper.nodes.new("GeometryNodeGroup")
+    group_node.node_tree = group
+    wrapper.links.new(wrapper_input.outputs["External Segments"], group_node.inputs["Segments"])
+    wrapper.links.new(group_node.outputs["Radius"], wrapper_output.inputs["Result"])
+    group_node.inputs["Radius"].default_value = 0.33
+
+    external_state = compiler._capture_node_external_state(wrapper, group_node)
+    compiler.update_expression_group(group, source_after)
+    compiler._restore_node_external_state(wrapper, group_node, external_state)
+
+    snapshot = _panel_snapshot(group)
+    check(snapshot == [("Stem", "", True, ["Segments", "Radius"])], f"panel cutover mismatch: {snapshot}")
+    check(abs(float(group_node.inputs["Radius"].default_value) - 0.33) < 1e-6, "Radius user override was not preserved")
+    check(int(group_node.inputs["Segments"].default_value) == 12, "new Segments script default did not reach group node")
+    incoming = [link for link in wrapper.links if link.to_node == group_node and link.to_socket.name == "Segments"]
+    check(len(incoming) == 1 and incoming[0].from_socket.name == "External Segments", "Segments external link was not restored")
+    leaked = [
+        g.name for g in bpy.data.node_groups
+        if g.name.startswith("NodeForge.replacement.") or g.name.startswith("NodeForge.rollback.") or g.name.startswith("NodeForge.preflight.")
+    ]
+    check(not leaked, f"panel update leaked temporary groups: {leaked}")
+
+    stable_snapshot = _panel_snapshot(group)
+    compiler._TEST_CUTOVER_FAIL_AFTER_RESET = True
+    try:
+        compiler.update_expression_group(
+            group,
+            '''
+radius = input_float("Radius", default=0.4)
+segments = input_int("Segments", default=16)
+panel([radius, segments], name="Changed")
+output("Radius", radius)
+''',
+        )
+    except RuntimeError as exc:
+        check("Injected NodeForge cutover failure" in str(exc), f"unexpected injected failure: {exc}")
+    else:
+        raise AssertionError("injected panel cutover failure did not raise")
+
+    check(_panel_snapshot(group) == stable_snapshot, "rollback did not restore panel hierarchy")
+    leaked = [
+        g.name for g in bpy.data.node_groups
+        if g.name.startswith("NodeForge.replacement.") or g.name.startswith("NodeForge.rollback.") or g.name.startswith("NodeForge.preflight.")
+    ]
+    check(not leaked, f"panel rollback leaked temporary groups: {leaked}")

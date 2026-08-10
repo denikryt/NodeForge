@@ -247,7 +247,7 @@ def _binding_names(stmts):
 
 def _builtin_names():
     from .builtins import registry as builtin_registry
-    return set(builtin_registry.BUILTIN_NAMES) | {"output", "store"}
+    return set(builtin_registry.BUILTIN_NAMES) | {"output", "store", "panel"}
 
 
 
