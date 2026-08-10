@@ -64,3 +64,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.49.66
 
 - Added persistent external Local source folders that are read directly from disk without copying, plus visible Local folder rows and an explicit managed destination for copy/save operations.
+
+## 0.49.67
+
+- Replaced hash-named Local dependency snapshots with fresh Blender-managed datablocks using native `.001`, `.002`, and later suffixes for each new compile, while preserving the existing explicit node-group update behavior.

@@ -63,7 +63,14 @@ def compile_library_function_call(comp, expr, depth=0, function_name=None, names
         return compile_module_library_entry_call(comp, expr, depth, namespace=namespace, entry_name=name)
     x = depth * 240
     y = -depth * 90
-    function_group = get_or_create_library_entry_group(namespace, name, comp.compile_group_callback)
+    cache_key = ("catalog", namespace, name)
+    function_group = comp.local_group_cache.get(cache_key) if namespace == "local" else None
+    if function_group is None:
+        function_group = get_or_create_library_entry_group(namespace, name, comp.compile_group_callback)
+        if namespace == "local":
+            # Reuse one freshly materialized Local dependency within this group
+            # build while keeping separate outer compilations fully independent.
+            comp.local_group_cache[cache_key] = function_group
 
     probe = comp.group.nodes.new("GeometryNodeGroup")
     probe.location = (x, y)

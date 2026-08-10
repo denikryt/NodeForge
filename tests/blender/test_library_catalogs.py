@@ -118,8 +118,17 @@ def test_new_catalog_materialized_group_ownership_metadata():
         record = library.find_library_entry_record('local', 'local_collision_probe')
         local_group_name = library._group_name_for_record(record)
         user_group = bpy.data.node_groups.new(local_group_name, 'GeometryNodeTree')
-        expect_compile_error('from local import local_collision_probe\nx = local_collision_probe(1)\noutput("x", x)', 'NFTest_local_ownership_collision')
-        check(bpy.data.node_groups.get(local_group_name) is user_group, 'ownership collision mutated user group')
+        collision_root = compile_group(
+            'from local import local_collision_probe\nx = local_collision_probe(1)\noutput("x", x)',
+            'NFTest_local_ownership_collision',
+        )
+        collision_backing = next(
+            node.node_tree for node in collision_root.nodes
+            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_collision_probe'
+        )
+        check(bpy.data.node_groups.get(local_group_name) is user_group, 'Blender suffix allocation mutated the pre-existing user group')
+        check(collision_backing is not user_group, 'Local compile reused a foreign group with the logical base name')
+        check(collision_backing.name.startswith(local_group_name + '.'), f'Local collision did not receive a Blender suffix: {collision_backing.name}')
         bpy.data.node_groups.remove(user_group, do_unlink=True)
         user_group = None
         group = compile_group('from local import local_collision_probe\nx = local_collision_probe(1)\noutput("x", x)', 'NFTest_local_owned_group_created')
@@ -188,58 +197,124 @@ def test_save_to_local_source_selection_does_not_fallback(monkeypatch):
         raise AssertionError('SELECTED_GROUP source_kind fell back to Text datablock')
 
 
-def test_local_materialization_snapshots_transitive_source_versions():
+def test_local_materialization_uses_fresh_blender_suffixed_groups_per_compile():
     local = library.ensure_local_catalog_dir()
-    leaf = local / 'local_snapshot_leaf.nf'
-    parent = local / 'local_snapshot_parent.nf'
+    leaf = local / 'local_suffix_leaf.nf'
+    parent = local / 'local_suffix_parent.nf'
     root_source = (
-        'from local import local_snapshot_parent\n'
-        'x = local_snapshot_parent(2.0)\n'
+        'from local import local_suffix_parent\n'
+        'x = local_suffix_parent(2.0)\n'
+        'y = local_suffix_parent(3.0)\n'
         'output("x", x)\n'
+        'output("y", y)\n'
     )
     try:
         _write(leaf, 'x = input_float("X")\noutput("x", x * 2.0)\n')
-        _write(parent, 'from local import local_snapshot_leaf\nx = input_float("X")\ny = local_snapshot_leaf(x)\noutput("y", y)\n')
+        _write(parent, 'from local import local_suffix_leaf\nx = input_float("X")\ny = local_suffix_leaf(x)\noutput("y", y)\n')
 
-        first = compile_group(root_source, 'NFTest_local_snapshot_first')
-        first_parent_node = next(
+        first = compile_group(root_source, 'NFTest_local_suffix_first')
+        first_parent_nodes = [
             node for node in first.nodes
-            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_snapshot_parent'
+            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_suffix_parent'
+        ]
+        check(len(first_parent_nodes) == 2, 'expected two calls to the Local parent')
+        first_parent = first_parent_nodes[0].node_tree
+        check(all(node.node_tree is first_parent for node in first_parent_nodes), 'same Local entry was materialized twice within one build')
+        first_leaf = next(
+            node.node_tree for node in first_parent.nodes
+            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_suffix_leaf'
         )
-        first_parent = first_parent_node.node_tree
-        first_leaf_node = next(
-            node for node in first_parent.nodes
-            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_snapshot_leaf'
-        )
-        first_leaf = first_leaf_node.node_tree
-        first_parent_name = first_parent.name
-        first_leaf_name = first_leaf.name
 
-        same = compile_group(root_source, 'NFTest_local_snapshot_same_source')
-        same_parent = next(
-            node.node_tree for node in same.nodes
-            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_snapshot_parent'
-        )
-        check(same_parent is first_parent, 'unchanged Local source did not reuse its immutable snapshot')
-
-        _write(leaf, 'x = input_float("X")\noutput("x", x * 3.0)\n')
-        second = compile_group(root_source, 'NFTest_local_snapshot_second')
+        second = compile_group(root_source, 'NFTest_local_suffix_second')
         second_parent = next(
             node.node_tree for node in second.nodes
-            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_snapshot_parent'
+            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_suffix_parent'
         )
         second_leaf = next(
             node.node_tree for node in second_parent.nodes
-            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_snapshot_leaf'
+            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_suffix_leaf'
         )
 
-        check(first_parent is first_parent_node.node_tree, 'first root parent dependency changed in place')
-        check(first_parent.name == first_parent_name, 'first parent snapshot was renamed or replaced')
-        check(first_leaf.name == first_leaf_name, 'first leaf snapshot was renamed or replaced')
-        check(second_parent is not first_parent, 'transitive Local source change reused mutable parent group')
-        check(second_leaf is not first_leaf, 'changed Local source reused mutable leaf group')
-        check(first_parent.get('nodeforge_local_snapshot_digest') != second_parent.get('nodeforge_local_snapshot_digest'), 'parent closure digest did not change')
-        check(first_leaf.get('nodeforge_local_snapshot_digest') != second_leaf.get('nodeforge_local_snapshot_digest'), 'leaf source digest did not change')
+        check(second_parent is not first_parent, 'new outer compile reused an older Local parent group')
+        check(second_leaf is not first_leaf, 'new outer compile reused an older Local leaf group')
+        check(first_parent.name == 'NodeForge.local.local_suffix_parent', f'unexpected first Local base name: {first_parent.name}')
+        check(second_parent.name.startswith('NodeForge.local.local_suffix_parent.'), f'Blender suffix was not assigned: {second_parent.name}')
+        check(first_leaf.name == 'NodeForge.local.local_suffix_leaf', f'unexpected first Local leaf base name: {first_leaf.name}')
+        check(second_leaf.name.startswith('NodeForge.local.local_suffix_leaf.'), f'Blender suffix was not assigned to leaf: {second_leaf.name}')
+
+        _write(leaf, 'x = input_float("X")\noutput("x", x * 3.0)\n')
+        third = compile_group(root_source, 'NFTest_local_suffix_third')
+        third_parent = next(
+            node.node_tree for node in third.nodes
+            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_suffix_parent'
+        )
+        third_leaf = next(
+            node.node_tree for node in third_parent.nodes
+            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_suffix_leaf'
+        )
+        check(third_parent is not second_parent, 'new compile after dependency edit reused previous Local parent')
+        check(third_leaf is not second_leaf, 'new compile after dependency edit reused previous Local leaf')
+        check(first_parent_nodes[0].node_tree is first_parent, 'older generated group dependency changed in place')
     finally:
         leaf.unlink(missing_ok=True)
         parent.unlink(missing_ok=True)
+
+
+def test_update_expression_group_keeps_selected_group_identity_with_fresh_local_dependencies():
+    local = library.ensure_local_catalog_dir()
+    helper = local / 'local_update_identity_probe.nf'
+    root_source = (
+        'from local import local_update_identity_probe\n'
+        'x = local_update_identity_probe(2.0)\n'
+        'output("x", x)\n'
+    )
+    try:
+        _write(helper, 'x = input_float("X")\noutput("x", x * 2.0)\n')
+        group = compile_group(root_source, 'NFTest_local_update_identity')
+        group_pointer = group.as_pointer()
+        group_name = group.name
+        first_backing = next(
+            node.node_tree for node in group.nodes
+            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_update_identity_probe'
+        )
+
+        _write(helper, 'x = input_float("X")\noutput("x", x * 3.0)\n')
+        compiler.update_expression_group(group, root_source)
+        second_backing = next(
+            node.node_tree for node in group.nodes
+            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_update_identity_probe'
+        )
+
+        check(group.as_pointer() == group_pointer, 'Update Selected semantics replaced the selected group datablock')
+        check(group.name == group_name, 'Update Selected semantics changed the selected group name')
+        check(second_backing is not first_backing, 'updated selected group did not move to a fresh current Local dependency')
+    finally:
+        helper.unlink(missing_ok=True)
+
+
+def test_local_logical_name_collision_uses_blender_suffix_without_mutating_foreign_group():
+    local = library.ensure_local_catalog_dir()
+    source = local / 'local_suffix_collision_probe.nf'
+    foreign = None
+    try:
+        _write(source, 'x = input_float("X", default=1.0)\noutput("x", x)\n')
+        record = library.find_library_entry_record('local', 'local_suffix_collision_probe')
+        base_name = library._group_name_for_record(record)
+        foreign = bpy.data.node_groups.new(base_name, 'GeometryNodeTree')
+        root = compile_group(
+            'from local import local_suffix_collision_probe\n'
+            'x = local_suffix_collision_probe(1)\n'
+            'output("x", x)\n',
+            'NFTest_local_suffix_collision',
+        )
+        backing = next(
+            node.node_tree for node in root.nodes
+            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_suffix_collision_probe'
+        )
+        check(bpy.data.node_groups.get(base_name) is foreign, 'fresh Local compile mutated the foreign base-name group')
+        check(backing is not foreign, 'fresh Local compile reused the foreign base-name group')
+        check(backing.name.startswith(base_name + '.'), f'Blender did not suffix the fresh Local group: {backing.name}')
+    finally:
+        source.unlink(missing_ok=True)
+        if foreign is not None and bpy.data.node_groups.get(foreign.name) is foreign:
+            bpy.data.node_groups.remove(foreign, do_unlink=True)

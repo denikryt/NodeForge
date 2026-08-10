@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import importlib.util
 import os
@@ -16,7 +15,6 @@ import bpy
 
 from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR, TYPE_MATERIAL, TYPE_OBJECT
 from .errors import CompileError
-from .parsing import _parse_source, _extract_function_imports
 from .interface import _set_socket_default
 from .nodes import _new_node
 from .values import Value, TupleValue, make_value
@@ -336,52 +334,10 @@ def _group_name(namespace: str, name: str) -> str:
     return f"NodeForge.{namespace}.{name}"
 
 
-def _local_source_closure_digest(name: str, *, _memo=None, _stack=()) -> str:
-    """Return a stable digest for one Local source and its transitive Local imports."""
-    memo = {} if _memo is None else _memo
-    if name in memo:
-        return memo[name]
-    if name in _stack:
-        # Cyclic Local imports are not a supported execution model, but retaining a
-        # deterministic marker here keeps snapshot naming finite so the normal
-        # compiler can produce the authoritative cycle/error behavior later.
-        return hashlib.sha256(("cycle:" + name).encode("utf-8")).hexdigest()
-
-    source = load_library_entry_source("local", name)
-    raw_stmts = _parse_source(source)
-    _body, imports = _extract_function_imports(raw_stmts)
-    dependency_names = []
-    for request in imports:
-        if request.module != "local":
-            continue
-        if request.is_star:
-            dependency_names.extend(sorted(library_entry_names("local"), key=str.lower))
-        elif request.canonical_name is not None:
-            dependency_names.append(request.canonical_name)
-
-    digest = hashlib.sha256()
-    digest.update(b"NodeForge.local.snapshot.v1\0")
-    digest.update(name.encode("utf-8"))
-    digest.update(b"\0")
-    digest.update(source.encode("utf-8"))
-    next_stack = tuple(_stack) + (name,)
-    for dependency_name in dependency_names:
-        digest.update(b"\0dep\0")
-        digest.update(dependency_name.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(_local_source_closure_digest(dependency_name, _memo=memo, _stack=next_stack).encode("ascii"))
-    result = digest.hexdigest()
-    memo[name] = result
-    return result
-
-
 def _group_name_for_record(record: "LibraryEntryRecord") -> str:
-    """Return the package-aware GeometryNodeTree name for a catalog record."""
+    """Return the package-aware GeometryNodeTree base name for a catalog record."""
     if record.namespace == "local":
-        snapshot = _local_source_closure_digest(record.name)[:12]
-        # Put the digest before the user-controlled name so Blender name truncation
-        # cannot erase the version identity for long Local script names.
-        return f"NodeForge.local.{snapshot}.{record.name}"
+        return _group_name("local", record.name)
     if not record.package_id:
         return _group_name(record.namespace, record.name)
     package_part = _safe_package_component(record.package_id)
@@ -772,8 +728,6 @@ def _write_package_metadata(group, record: LibraryEntryRecord) -> None:
     group["nodeforge_library_namespace"] = record.namespace
     group["nodeforge_library_name"] = record.name
     group["nodeforge_function_kind"] = record.kind
-    if record.namespace == "local":
-        group["nodeforge_local_snapshot_digest"] = _local_source_closure_digest(record.name)
     group["nodeforge_backend_signature"] = _backend_signature_for_record(record)
     if record.package_id:
         group["nodeforge_package_id"] = record.package_id
@@ -790,19 +744,24 @@ def get_or_create_library_entry_group(namespace: str, name: str, compile_group_c
     backend_builtins = backend_builtins_for_entry(namespace, name)
     backend_signature = _backend_signature_for_record(record)
     group_name = _group_name_for_record(record)
-    existing = bpy.data.node_groups.get(group_name)
-    if existing is not None and getattr(existing, "bl_idname", None) == "GeometryNodeTree":
-        _assert_owned_materialized_group(existing, record, group_name)
-        try:
-            if existing.get("nodeforge_library_source") == source and existing.get("nodeforge_backend_signature") == backend_signature:
-                return existing
-        except Exception:
-            pass
-        if namespace == "local":
-            raise CompileError(f"Local snapshot group collision: {group_name}")
-        group = compile_group_callback(source, group_name, existing_group=existing, backend_builtins=backend_builtins)
-    else:
+    if namespace == "local":
+        # Local sources are immutable per outer compilation. Always ask Blender
+        # for a fresh datablock with the logical base name; Blender assigns the
+        # usual .001/.002 suffix when that name is already present. This keeps
+        # older generated groups pinned to their original Local dependencies.
         group = compile_group_callback(source, group_name, backend_builtins=backend_builtins)
+    else:
+        existing = bpy.data.node_groups.get(group_name)
+        if existing is not None and getattr(existing, "bl_idname", None) == "GeometryNodeTree":
+            _assert_owned_materialized_group(existing, record, group_name)
+            try:
+                if existing.get("nodeforge_library_source") == source and existing.get("nodeforge_backend_signature") == backend_signature:
+                    return existing
+            except Exception:
+                pass
+            group = compile_group_callback(source, group_name, existing_group=existing, backend_builtins=backend_builtins)
+        else:
+            group = compile_group_callback(source, group_name, backend_builtins=backend_builtins)
     try:
         _write_package_metadata(group, record)
         group["nodeforge_library_source"] = source

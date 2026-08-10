@@ -34,7 +34,6 @@ def test_linked_local_folder_is_live_and_does_not_copy_sources():
                 node.node_tree for node in first.nodes
                 if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'linked_live_probe'
             )
-            first_digest = first_backing.get('nodeforge_local_snapshot_digest')
 
             _write(source, 'x = input_float("X")\noutput("x", x * 3.0)\n')
             second = compile_group(
@@ -48,7 +47,6 @@ def test_linked_local_folder_is_live_and_does_not_copy_sources():
                 if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'linked_live_probe'
             )
             check(second_backing is not first_backing, 'changed linked source reused the old snapshot')
-            check(second_backing.get('nodeforge_local_snapshot_digest') != first_digest, 'linked source edit did not change snapshot digest')
         finally:
             library.unlink_local_source_folder(str(root))
 

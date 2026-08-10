@@ -507,7 +507,7 @@ def _build_group(
             compile_group_callback=_make_group,
             generated_resource_transaction=generated_resource_transaction,
             imported_library_functions=own_imported_library_functions,
-            helper_namespace=helper_namespace or name,
+            helper_namespace=helper_namespace or group.name,
             local_helper_transaction=local_helper_transaction,
             reserved_name_labels=reserved_name_labels,
         )
@@ -888,7 +888,7 @@ def _compile_fresh_with_cleanup(
             backend_builtins=backend_builtins,
             generated_resource_transaction=tx,
             imported_library_functions=imported_library_functions,
-            helper_namespace=helper_namespace or name,
+            helper_namespace=helper_namespace,
             local_helper_transaction=local_helper_transaction,
         )
         if tx.resources:
@@ -922,7 +922,7 @@ def _make_group(
             backend_builtins=backend_builtins,
             owner_group=None,
             imported_library_functions=imported_library_functions,
-            helper_namespace=helper_namespace or name,
+            helper_namespace=helper_namespace,
             local_helper_transaction=top_level_helper_tx,
             defer_generated_resource_commit=local_helper_transaction is not None,
         )
