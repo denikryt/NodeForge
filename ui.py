@@ -27,7 +27,8 @@ from .library import (
     local_browser_records,
     local_source_roots,
     link_local_source_folder,
-    unlink_local_source_folder,
+    link_local_source_file,
+    ensure_local_catalog_dir,
     apply_function_node_display_name,
     create_local_folder,
     save_local_source,
@@ -129,23 +130,25 @@ class NODEFORGE_UL_function_library(UIList):
     """Draw available function-library entries in the N-panel."""
 
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
-        """Draw one discovered function entry."""
+        """Draw one catalog entry, using clickable folders for the Local browser."""
         row = layout.row(align=True)
         kind = getattr(item, "kind", "")
-        folder_path = getattr(item, "folder_path", "")
-        source_label = getattr(item, "source_label", "")
-        if kind in {"source_root", "missing_source_root"}:
-            icon_name = 'ERROR' if kind == "missing_source_root" else 'LINKED'
-            row.label(text=f"{item.name}", icon=icon_name)
+        if kind in {"folder", "linked_folder"}:
+            op = row.operator(
+                "nodeforge.open_local_folder",
+                text=item.name,
+                icon='FILE_FOLDER',
+                emboss=False,
+            )
+            op.path = item.path
             return
-        if kind == "folder":
-            prefix = f"{source_label}: " if source_label and source_label != "Managed" else ""
-            row.label(text=f"{prefix}{folder_path or item.name}", icon='FILE_FOLDER')
+        if kind in {"missing_linked_folder", "missing_linked_script"}:
+            row.label(text=item.name, icon='ERROR')
             return
-        label = item.name if not folder_path else f"{folder_path}/{item.name}"
-        if source_label and source_label != "Managed":
-            label = f"{source_label}: {label}"
-        row.label(text=label, icon='NODETREE')
+        if kind == "linked_script":
+            row.label(text=item.name, icon='LINKED')
+            return
+        row.label(text=item.name, icon='NODETREE')
         if getattr(item, "package_id", ""):
             row.label(text=item.package_id)
 
@@ -243,7 +246,7 @@ def _refresh_catalog_items(props, namespace: str):
         old_path = getattr(items[old_index], "path", "")
         old_kind = getattr(items[old_index], "kind", "")
     items.clear()
-    records = local_browser_records() if namespace == "local" else library_entry_records(namespace)
+    records = local_browser_records(getattr(props, "local_browser_path", "")) if namespace == "local" else library_entry_records(namespace)
     for record in records:
         item = items.add()
         item.name = record.get("name", "")
@@ -307,18 +310,9 @@ class GNSCRIPT_MVP_Properties(PropertyGroup):
     package_index: IntProperty(name="Package", default=0)
     package_archive_path: StringProperty(name="Package Archive", default="", subtype="FILE_PATH")
     package_allow_python: BoolProperty(name="Allow executable Python", default=False)
+    local_browser_path: StringProperty(name="Local Browser Path", default="", options={'HIDDEN'})
     local_script_name: StringProperty(name="Script Name", default="")
-    local_folder_path: StringProperty(name="Folder", default="")
     local_overwrite: BoolProperty(name="Overwrite", default=False)
-    local_source_kind: EnumProperty(
-        name="Source",
-        description="Source to save into the local catalog",
-        items=(
-            ("TEXT", "Text Block", "Save the selected Blender Text datablock"),
-            ("SELECTED_GROUP", "Selected Group", "Save the embedded source from the selected generated Node Group"),
-        ),
-        default="TEXT",
-    )
 
 class GNSCRIPT_MVP_OT_compile_expression(Operator):
     """Class `GNSCRIPT_MVP_OT_compile_expression` used by the NodeForge addon."""
@@ -567,7 +561,7 @@ class NODEFORGE_OT_create_function_group(Operator):
         if item is None:
             self.report({'ERROR'}, f"Select a {self.namespace} entry from the list")
             return {'CANCELLED'}
-        if self.namespace == "local" and getattr(item, "kind", "") != "script":
+        if self.namespace == "local" and getattr(item, "kind", "") not in {"script", "linked_script"}:
             self.report({'ERROR'}, "Select a Local script, not a folder")
             return {'CANCELLED'}
 
@@ -595,300 +589,200 @@ class NODEFORGE_OT_create_function_group(Operator):
         return {'FINISHED'}
 
 
-class NODEFORGE_OT_link_local_folder(Operator):
-    """Link an external folder as a live, read-only Local source root."""
+def _managed_local_browser_directory(props) -> Path | None:
+    """Return the current managed Local directory, or None inside an external source."""
+    root = ensure_local_catalog_dir().resolve()
+    raw = getattr(props, "local_browser_path", "") if props is not None else ""
+    if not raw:
+        return root
+    current = Path(raw).expanduser().resolve(strict=False)
+    try:
+        current.relative_to(root)
+    except ValueError:
+        return None
+    return current if current.is_dir() else root
 
-    bl_idname = "nodeforge.link_local_folder"
-    bl_label = "Link Local Folder"
-    bl_description = "Use .nf scripts directly from an external folder without copying them into NodeForge"
-    bl_options = {'REGISTER'}
 
-    directory: StringProperty(name="Folder", subtype="DIR_PATH", default="")
+def _local_browser_source_root(path: Path) -> Path | None:
+    """Return the configured Local source root containing *path*."""
+    resolved = path.expanduser().resolve(strict=False)
+    for record in local_source_roots(include_missing=True):
+        root = Path(record["path"]).resolve(strict=False)
+        try:
+            resolved.relative_to(root)
+            return root
+        except ValueError:
+            continue
+    return None
 
-    def invoke(self, context, event):
-        """Open Blender's native directory selector."""
-        context.window_manager.fileselect_add(self)
-        return {'RUNNING_MODAL'}
+
+class NODEFORGE_OT_open_local_folder(Operator):
+    """Navigate the Local mini file browser into one visible folder."""
+
+    bl_idname = "nodeforge.open_local_folder"
+    bl_label = "Open Local Folder"
+    bl_options = {'INTERNAL'}
+
+    path: StringProperty(name="Folder", subtype="DIR_PATH", default="")
 
     def execute(self, context):
-        """Register the selected directory and refresh the Local browser."""
         props = getattr(context.scene, "gn_script_mvp", None)
-        try:
-            path = link_local_source_folder(self.directory)
-            if props is not None:
-                _refresh_catalog_items(props, "local")
-        except Exception as exc:
-            self.report({'ERROR'}, str(exc))
+        target = Path(self.path).expanduser().resolve(strict=False)
+        if props is None or not target.is_dir() or _local_browser_source_root(target) is None:
+            self.report({'ERROR'}, "Local folder is unavailable")
             return {'CANCELLED'}
-        self.report({'INFO'}, f"Linked Local source folder: {path}")
+        props.local_browser_path = str(target)
+        _refresh_catalog_items(props, "local")
         return {'FINISHED'}
 
 
-class NODEFORGE_OT_unlink_local_folder(Operator):
-    """Remove an external Local source-root registration without deleting files."""
+class NODEFORGE_OT_local_browser_back(Operator):
+    """Navigate the Local mini file browser to its parent directory."""
 
-    bl_idname = "nodeforge.unlink_local_folder"
-    bl_label = "Unlink Local Folder"
-    bl_description = "Stop using the selected external Local source folder without deleting files on disk"
-    bl_options = {'REGISTER'}
-
-    root_path: StringProperty(name="Source Root", default="")
+    bl_idname = "nodeforge.local_browser_back"
+    bl_label = "Back"
+    bl_options = {'INTERNAL'}
 
     @classmethod
     def poll(cls, context):
         props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
-        item = _selected_catalog_item(props, "local")
-        return item is not None and not bool(getattr(item, "managed", False)) and bool(getattr(item, "root_path", ""))
+        return props is not None and bool(getattr(props, "local_browser_path", ""))
 
     def execute(self, context):
-        """Unregister the selected external source root and refresh Local."""
-        props = getattr(context.scene, "gn_script_mvp", None)
-        item = _selected_catalog_item(props, "local")
-        root_path = self.root_path or (getattr(item, "root_path", "") if item is not None else "")
-        try:
-            path = unlink_local_source_folder(root_path)
-            if props is not None:
-                _refresh_catalog_items(props, "local")
-        except Exception as exc:
-            self.report({'ERROR'}, str(exc))
-            return {'CANCELLED'}
-        self.report({'INFO'}, f"Unlinked Local source folder: {path}")
-        return {'FINISHED'}
-
-
-class NODEFORGE_OT_use_selected_local_folder(Operator):
-    """Use the selected managed Local folder as the destination for copy/save operations."""
-
-    bl_idname = "nodeforge.use_selected_local_folder"
-    bl_label = "Use Selected Folder"
-    bl_description = "Set the selected managed Local folder as the destination for Import and Save to Local"
-    bl_options = {'REGISTER'}
-
-    @classmethod
-    def poll(cls, context):
-        props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
-        item = _selected_catalog_item(props, "local")
-        return item is not None and getattr(item, "kind", "") == "folder" and bool(getattr(item, "managed", False))
-
-    def execute(self, context):
-        """Copy the selected managed folder path into the Local destination field."""
         props = context.scene.gn_script_mvp
-        item = _selected_catalog_item(props, "local")
-        props.local_folder_path = getattr(item, "folder_path", "")
-        self.report({'INFO'}, f"Local destination: {props.local_folder_path or '/'}")
+        current = Path(props.local_browser_path).expanduser().resolve(strict=False)
+        root = _local_browser_source_root(current)
+        if root is None or current == root:
+            props.local_browser_path = ""
+        else:
+            parent = current.parent
+            props.local_browser_path = "" if parent == ensure_local_catalog_dir().resolve() else str(parent)
+        _refresh_catalog_items(props, "local")
         return {'FINISHED'}
 
 
-class NODEFORGE_OT_import_local_scripts(Operator):
-    """Import one or more .nf files into the persistent Local catalog."""
+class NODEFORGE_OT_import_local(Operator):
+    """Link selected external .nf files or one external folder into Local."""
 
-    bl_idname = "nodeforge.import_local_scripts"
-    bl_label = "Import Local Scripts"
-    bl_description = "Import one or more .nf scripts into the persistent NodeForge Local catalog"
+    bl_idname = "nodeforge.import_local"
+    bl_label = "Import"
+    bl_description = "Use external .nf files or a folder directly from disk without copying them"
     bl_options = {'REGISTER'}
 
     directory: StringProperty(subtype="DIR_PATH", default="")
     files: CollectionProperty(type=OperatorFileListElement)
     filter_glob: StringProperty(default="*.nf", options={'HIDDEN'})
-    folder_path: StringProperty(name="Local Folder", default="")
-    replace_existing: BoolProperty(name="Replace Existing", default=False)
 
     def invoke(self, context, event):
-        props = getattr(context.scene, "gn_script_mvp", None)
-        if props is not None:
-            self.folder_path = props.local_folder_path
         context.window_manager.fileselect_add(self)
         return {'RUNNING_MODAL'}
 
     def execute(self, context):
         props = getattr(context.scene, "gn_script_mvp", None)
-        selected = [Path(self.directory) / item.name for item in self.files]
-        if not selected:
-            self.report({'ERROR'}, "Select at least one .nf file")
-            return {'CANCELLED'}
-
+        selected = [Path(self.directory) / item.name for item in self.files if item.name]
         try:
-            prepared = []
-            seen_names = set()
-            for path in selected:
-                if path.suffix.lower() != ".nf":
-                    raise ValueError(f"Not a NodeForge .nf script: {path.name}")
-                name = path.stem
-                # save_local_source performs authoritative public-name validation.
-                if name in seen_names:
-                    raise ValueError(f"Duplicate script name in selection: {name!r}")
-                seen_names.add(name)
-                source = path.read_text(encoding="utf-8")
-                if not source.strip():
-                    raise ValueError(f"Local script is empty: {path.name}")
-                existing = next((r for r in library_entry_records("local") if r.get("name") == name), None)
-                if existing is not None and not self.replace_existing:
-                    raise ValueError(f"Local script {name!r} already exists")
-                prepared.append((name, source, existing is not None))
-
-            imported = []
-            for name, source, exists in prepared:
-                imported.append(save_local_source(
-                    name,
-                    source,
-                    folder_path=self.folder_path,
-                    overwrite=bool(exists),
-                ))
-
+            if selected:
+                for path in selected:
+                    link_local_source_file(str(path))
+                message = f"Imported {len(selected)} Local file(s)"
+            else:
+                folder = Path(self.directory).expanduser()
+                if not folder.is_dir():
+                    raise ValueError("Select .nf files or a folder")
+                link_local_source_folder(str(folder))
+                message = f"Imported Local folder: {folder.name}"
             if props is not None:
-                props.local_folder_path = self.folder_path
+                props.local_browser_path = ""
                 _refresh_catalog_items(props, "local")
         except Exception as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
-
-        self.report({'INFO'}, f"Imported {len(imported)} local script(s)")
-        return {'FINISHED'}
-
-
-class NODEFORGE_OT_delete_local_script(Operator):
-    """Delete the selected persistent Local script after confirmation."""
-    bl_idname = "nodeforge.delete_local_script"
-    bl_label = "Delete Local Script"
-    bl_description = "Delete the selected script from the persistent NodeForge Local catalog"
-    bl_options = {'REGISTER'}
-
-    script_name: StringProperty(name="Script", default="")
-
-    @classmethod
-    def poll(cls, context):
-        props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
-        item = _selected_catalog_item(props, "local")
-        return item is not None and getattr(item, "kind", "") == "script" and bool(getattr(item, "managed", False))
-
-    def invoke(self, context, event):
-        props = getattr(context.scene, "gn_script_mvp", None)
-        item = _selected_catalog_item(props, "local")
-        if item is None:
-            self.report({'ERROR'}, "Select a Local script to delete")
-            return {'CANCELLED'}
-        self.script_name = item.name
-        return context.window_manager.invoke_confirm(self, event)
-
-    def execute(self, context):
-        props = getattr(context.scene, "gn_script_mvp", None)
-        item = _selected_catalog_item(props, "local")
-        name = self.script_name or (item.name if item is not None else "")
-        if not name:
-            self.report({'ERROR'}, "Select a Local script to delete")
-            return {'CANCELLED'}
-        try:
-            path = delete_local_source(name)
-            if props is not None:
-                _refresh_catalog_items(props, "local")
-        except Exception as exc:
-            self.report({'ERROR'}, str(exc))
-            return {'CANCELLED'}
-        self.report({'INFO'}, f"Deleted local script: {path.name}")
+        self.report({'INFO'}, message)
         return {'FINISHED'}
 
 
 class NODEFORGE_OT_create_local_folder(Operator):
-    """Create a validated folder under the user-owned local catalog."""
+    """Create one folder inside the current managed Local directory."""
+
     bl_idname = "nodeforge.create_local_folder"
-    bl_label = "New Local Folder"
-    bl_description = "Create a folder inside the persistent NodeForge local catalog for organizing local scripts"
+    bl_label = "New Folder"
+    bl_description = "Create a folder in the current Local directory"
     bl_options = {'REGISTER'}
 
-    folder_path: StringProperty(name="Folder", default="")
-    package_id: StringProperty(name="Package ID", default="")
-    package_name: StringProperty(name="Package", default="")
+    folder_name: StringProperty(name="Name", default="")
+
+    @classmethod
+    def poll(cls, context):
+        props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
+        return _managed_local_browser_directory(props) is not None
 
     def invoke(self, context, event):
-        """Open Blender's normal operator-property dialog."""
-        props = getattr(context.scene, "gn_script_mvp", None)
-        if props is not None and not self.folder_path:
-            self.folder_path = props.local_folder_path
         return context.window_manager.invoke_props_dialog(self)
 
     def execute(self, context):
-        """Create the folder and refresh the Local list."""
-        props = getattr(context.scene, "gn_script_mvp", None)
+        props = context.scene.gn_script_mvp
+        current = _managed_local_browser_directory(props)
+        if current is None:
+            self.report({'ERROR'}, "External Local folders are read-only")
+            return {'CANCELLED'}
+        root = ensure_local_catalog_dir().resolve()
         try:
-            create_local_folder(self.folder_path)
-            if props is not None:
-                props.local_folder_path = self.folder_path
-                _refresh_catalog_items(props, "local")
+            rel_parent = current.relative_to(root)
+            folder_path = str(rel_parent / self.folder_name) if rel_parent.parts else self.folder_name
+            created = create_local_folder(folder_path)
+            _refresh_catalog_items(props, "local")
         except Exception as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
-        self.report({'INFO'}, f"Created local folder: {self.folder_path}")
+        self.report({'INFO'}, f"Created folder: {created.name}")
         return {'FINISHED'}
-
-
-def _source_for_local_save(context, source_kind):
-    """Return source from exactly the user-selected local-save source kind."""
-    props = getattr(context.scene, "gn_script_mvp", None)
-    if source_kind == "TEXT":
-        source = _source_from_props(props)
-        if not source:
-            raise ValueError("Select a Blender Text datablock to save")
-        return source
-    if source_kind == "SELECTED_GROUP":
-        node = _selected_group_node(context)
-        if node is None:
-            raise ValueError("Select exactly one generated Node Group to save")
-        source = _extract_group_source(node.node_tree)
-        if not source:
-            raise ValueError("Selected Node Group has no embedded NodeForge source")
-        return source
-    raise ValueError(f"Unknown local save source kind: {source_kind}")
 
 
 class NODEFORGE_OT_save_to_local(Operator):
-    """Save a Text datablock or selected NodeForge group source into the persistent local catalog."""
+    """Save the selected Blender Text script into the current managed Local directory."""
+
     bl_idname = "nodeforge.save_to_local"
-    bl_label = "Save to Local"
-    bl_description = "Save the selected Text script or selected NodeForge node group source into the persistent NodeForge local catalog"
+    bl_label = "Save"
+    bl_description = "Save the selected Blender Text script in the current Local directory"
     bl_options = {'REGISTER'}
 
-    source_kind: EnumProperty(
-        name="Source",
-        description="Choose the source to save into the persistent local catalog",
-        items=(
-            ("TEXT", "Text Block", "Save the selected Blender Text datablock"),
-            ("SELECTED_GROUP", "Selected Group", "Save the embedded source from the selected generated Node Group"),
-        ),
-        default="TEXT",
-    )
-    name: StringProperty(name="Script Name", default="")
-    folder_path: StringProperty(name="Folder", default="")
-    package_id: StringProperty(name="Package ID", default="")
-    package_name: StringProperty(name="Package", default="")
+    script_name: StringProperty(name="Name", default="")
     overwrite: BoolProperty(name="Overwrite", default=False)
 
+    @classmethod
+    def poll(cls, context):
+        props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
+        return props is not None and props.text_block is not None and _managed_local_browser_directory(props) is not None
+
     def invoke(self, context, event):
-        """Open Blender's normal operator-property dialog."""
-        props = getattr(context.scene, "gn_script_mvp", None)
-        if props is not None:
-            self.name = self.name or props.local_script_name
-            self.folder_path = self.folder_path or props.local_folder_path
-            self.overwrite = bool(props.local_overwrite)
-            self.source_kind = props.local_source_kind
+        props = context.scene.gn_script_mvp
+        if not self.script_name and props.text_block is not None:
+            text_name = Path(props.text_block.name).name
+            self.script_name = Path(text_name).stem if text_name.lower().endswith(".nf") else text_name
+        self.overwrite = bool(getattr(props, "local_overwrite", False))
         return context.window_manager.invoke_props_dialog(self)
 
     def execute(self, context):
-        """Write the source to a validated local file and refresh Local."""
-        props = getattr(context.scene, "gn_script_mvp", None)
+        props = context.scene.gn_script_mvp
+        current = _managed_local_browser_directory(props)
+        if current is None:
+            self.report({'ERROR'}, "External Local folders are read-only")
+            return {'CANCELLED'}
+        source = _source_from_props(props)
+        root = ensure_local_catalog_dir().resolve()
         try:
-            source = _source_for_local_save(context, self.source_kind)
-            path = save_local_source(self.name, source, folder_path=self.folder_path, overwrite=self.overwrite)
-            if props is not None:
-                props.local_script_name = self.name
-                props.local_folder_path = self.folder_path
-                props.local_overwrite = self.overwrite
-                props.local_source_kind = self.source_kind
-                _refresh_catalog_items(props, "local")
+            rel = current.relative_to(root)
+            folder_path = str(rel).replace("\\", "/") if rel.parts else ""
+            path = save_local_source(self.script_name, source, folder_path=folder_path, overwrite=self.overwrite)
+            props.local_script_name = self.script_name
+            props.local_overwrite = self.overwrite
+            _refresh_catalog_items(props, "local")
         except Exception as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
-        self.report({'INFO'}, f"Saved local script: {path.name}")
+        self.report({'INFO'}, f"Saved Local script: {path.name}")
         return {'FINISHED'}
+
 
 def _draw_library_catalog_panel(layout, context, namespace: str, collection_name: str, index_name: str, rows: int):
     """Draw one collapsible library catalog panel body."""
@@ -989,22 +883,16 @@ class NODEFORGE_PT_library_local(Panel):
     def draw(self, context):
         layout = self.layout
         props = context.scene.gn_script_mvp
-        layout.prop(props, "local_folder_path", text="Managed Destination")
+        nav = layout.row(align=True)
+        back = nav.operator(NODEFORGE_OT_local_browser_back.bl_idname, text="", icon='BACK')
+        nav.enabled = bool(props.local_browser_path)
+        current = Path(props.local_browser_path).name if props.local_browser_path else "Local"
+        nav.label(text=current, icon='FILE_FOLDER')
         row = layout.row(align=True)
         row.operator(NODEFORGE_OT_create_local_folder.bl_idname, text="New Folder", icon='NEWFOLDER')
-        row.operator(NODEFORGE_OT_use_selected_local_folder.bl_idname, text="Use Selected", icon='EYEDROPPER')
-        row = layout.row(align=True)
         row.operator(NODEFORGE_OT_save_to_local.bl_idname, text="Save", icon='FILE_TICK')
-        row.operator(NODEFORGE_OT_import_local_scripts.bl_idname, text="Copy Files", icon='IMPORT')
-        row.operator(NODEFORGE_OT_link_local_folder.bl_idname, text="Link Folder", icon='LINKED')
-        _draw_library_catalog_panel(layout, context, "local", "local_items", "local_index", rows=6)
-        selected = _selected_catalog_item(props, "local")
-        row = layout.row(align=True)
-        delete = row.operator(NODEFORGE_OT_delete_local_script.bl_idname, text="Delete Managed", icon='TRASH')
-        row.enabled = selected is not None and getattr(selected, "kind", "") == "script" and bool(getattr(selected, "managed", False))
-        row = layout.row(align=True)
-        row.enabled = selected is not None and not bool(getattr(selected, "managed", False)) and bool(getattr(selected, "root_path", ""))
-        row.operator(NODEFORGE_OT_unlink_local_folder.bl_idname, text="Unlink Source", icon='UNLINKED')
+        row.operator(NODEFORGE_OT_import_local.bl_idname, text="Import", icon='IMPORT')
+        _draw_library_catalog_panel(layout, context, "local", "local_items", "local_index", rows=7)
 
 
 class NODEFORGE_PT_library_functions(Panel):
@@ -1102,11 +990,9 @@ classes = (
     NODEFORGE_OT_import_package,
     NODEFORGE_OT_uninstall_package,
     NODEFORGE_OT_create_function_group,
-    NODEFORGE_OT_link_local_folder,
-    NODEFORGE_OT_unlink_local_folder,
-    NODEFORGE_OT_use_selected_local_folder,
-    NODEFORGE_OT_import_local_scripts,
-    NODEFORGE_OT_delete_local_script,
+    NODEFORGE_OT_open_local_folder,
+    NODEFORGE_OT_local_browser_back,
+    NODEFORGE_OT_import_local,
     NODEFORGE_OT_create_local_folder,
     NODEFORGE_OT_save_to_local,
     GNSCRIPT_MVP_PT_panel,

@@ -153,48 +153,15 @@ def test_new_catalog_materialized_group_ownership_metadata():
                 bpy.data.node_groups.remove(group, do_unlink=True)
 
 
-def test_save_to_local_source_selection_is_explicit(monkeypatch):
+def test_local_save_ui_uses_selected_text_source_only():
     from types import SimpleNamespace
     from NodeForge import ui
 
     text_source = 'x = input_float("Text", default=1.0)\noutput("x", x)\n'
-    group_source = 'x = input_float("Group", default=2.0)\noutput("x", x)\n'
     text = SimpleNamespace(as_string=lambda: text_source)
     props = SimpleNamespace(text_block=text)
-    context = SimpleNamespace(scene=SimpleNamespace(gn_script_mvp=props))
-    group = {"gn_script_mvp_source": group_source}
-    node = SimpleNamespace(node_tree=group)
-    monkeypatch.setattr(ui, '_selected_group_node', lambda context: node)
-
-    check(ui._source_for_local_save(context, 'TEXT') == text_source, 'TEXT source_kind did not use Text datablock')
-    check(ui._source_for_local_save(context, 'SELECTED_GROUP') == group_source, 'SELECTED_GROUP source_kind did not use selected group')
-
-
-def test_save_to_local_source_selection_does_not_fallback(monkeypatch):
-    from types import SimpleNamespace
-    from NodeForge import ui
-
-    props = SimpleNamespace(text_block=None)
-    context = SimpleNamespace(scene=SimpleNamespace(gn_script_mvp=props))
-    group = {"gn_script_mvp_source": 'x = input_float("Group")\noutput("x", x)\n'}
-    node = SimpleNamespace(node_tree=group)
-    monkeypatch.setattr(ui, '_selected_group_node', lambda context: node)
-
-    try:
-        ui._source_for_local_save(context, 'TEXT')
-    except ValueError:
-        pass
-    else:
-        raise AssertionError('TEXT source_kind fell back to selected group')
-
-    props.text_block = SimpleNamespace(as_string=lambda: 'x = input_float("Text")\noutput("x", x)\n')
-    monkeypatch.setattr(ui, '_selected_group_node', lambda context: None)
-    try:
-        ui._source_for_local_save(context, 'SELECTED_GROUP')
-    except ValueError:
-        pass
-    else:
-        raise AssertionError('SELECTED_GROUP source_kind fell back to Text datablock')
+    check(ui._source_from_props(props) == text_source, 'Local Save did not use the selected Text datablock')
+    check(ui._source_from_props(SimpleNamespace(text_block=None)) == '', 'Local Save source unexpectedly fell back without a Text datablock')
 
 
 def test_local_materialization_uses_fresh_blender_suffixed_groups_per_compile():

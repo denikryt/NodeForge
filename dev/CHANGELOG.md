@@ -68,3 +68,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.49.67
 
 - Replaced hash-named Local dependency snapshots with fresh Blender-managed datablocks using native `.001`, `.002`, and later suffixes for each new compile, while preserving the existing explicit node-group update behavior.
+
+## 0.49.68
+
+- Reworked the Local UI into a minimal folder browser with navigable directories, current-folder Save/New Folder behavior, and file-or-folder imports that reference external `.nf` sources directly instead of copying them.

@@ -128,7 +128,10 @@ def _read_local_source_registry() -> list[dict[str, str]]:
     for item in roots:
         if not isinstance(item, dict) or not isinstance(item.get("path"), str):
             raise CompileError("Invalid Local source registry entry")
-        result.append({"path": item["path"], "label": str(item.get("label") or "")})
+        kind = str(item.get("kind") or "folder")
+        if kind not in {"folder", "file"}:
+            raise CompileError("Invalid Local source registry entry kind")
+        result.append({"path": item["path"], "label": str(item.get("label") or ""), "kind": kind})
     return result
 
 
@@ -161,6 +164,8 @@ def local_source_roots(*, include_missing: bool = False) -> list[dict[str, objec
     }]
     seen = {_path_key(managed)}
     for item in _read_local_source_registry():
+        if item.get("kind", "folder") != "folder":
+            continue
         path = _canonical_path(item["path"])
         key = _path_key(path)
         if key in seen:
@@ -193,7 +198,56 @@ def link_local_source_folder(path: str, *, label: str = "") -> Path:
         raise CompileError(f"Local source folder is already linked: {target}")
     if any(_paths_overlap(target, item["path"]) for item in roots):
         raise CompileError("Linked Local source folders may not overlap each other")
-    roots.append({"path": str(target), "label": (label or target.name or str(target)).strip()})
+    roots.append({"path": str(target), "label": (label or target.name or str(target)).strip(), "kind": "folder"})
+    _write_local_source_registry(roots)
+    return target
+
+
+def local_source_files(*, include_missing: bool = False) -> list[dict[str, object]]:
+    """Return individually linked external Local source files."""
+    records: list[dict[str, object]] = []
+    for item in _read_local_source_registry():
+        if item.get("kind", "folder") != "file":
+            continue
+        path = _canonical_path(item["path"])
+        exists = path.is_file()
+        if exists or include_missing:
+            records.append({
+                "path": path,
+                "label": item.get("label") or path.name or str(path),
+                "managed": False,
+                "exists": exists,
+            })
+    return records
+
+
+def link_local_source_file(path: str) -> Path:
+    """Register one external .nf file as a live Local source without copying it."""
+    target = _canonical_path(path)
+    if not target.is_file() or target.suffix.lower() not in _SOURCE_EXTENSIONS:
+        raise CompileError(f"Local source file must be an existing .nf script: {target}")
+    _validate_public_entry_name(target.stem, "Local script")
+    managed = _canonical_path(_default_local_catalog_dir())
+    try:
+        target.relative_to(managed)
+    except ValueError:
+        pass
+    else:
+        return target
+    roots = _read_local_source_registry()
+    target_key = _path_key(target)
+    if any(_path_key(item["path"]) == target_key for item in roots):
+        return target
+    for item in roots:
+        if item.get("kind", "folder") != "folder":
+            continue
+        folder = _canonical_path(item["path"])
+        try:
+            target.relative_to(folder)
+            return target
+        except ValueError:
+            pass
+    roots.append({"path": str(target), "label": target.name, "kind": "file"})
     _write_local_source_registry(roots)
     return target
 
@@ -463,57 +517,119 @@ def _candidate_records(namespace: str) -> list[LibraryEntryRecord]:
                             package_version=package_version,
                         )
                     )
+    if namespace == "local":
+        for linked in local_source_files():
+            path = linked["path"]
+            if path.suffix in _SOURCE_EXTENSIONS and _is_public_function_name(path.stem):
+                records.append(LibraryEntryRecord(
+                    namespace="local",
+                    name=path.stem,
+                    kind="script",
+                    path=path,
+                    source_path=path,
+                    folder_path="",
+                ))
     return records
 
-def local_browser_records() -> list[dict[str, object]]:
-    """Return Local source roots, folders, and scripts for the sidebar browser."""
+def local_browser_records(current_path: str = "") -> list[dict[str, object]]:
+    """Return direct children for the Local mini file browser's current directory."""
+    managed_root = _canonical_path(ensure_local_catalog_dir())
+    linked_folders = local_source_roots()[1:]
+    linked_files = local_source_files()
+
+    location = _canonical_path(current_path) if current_path else None
+    if location is None:
+        directory = managed_root
+        managed = True
+        source_root = managed_root
+        source_label = "Local"
+    else:
+        allowed = None
+        try:
+            location.relative_to(managed_root)
+            allowed = (managed_root, True, "Local")
+        except ValueError:
+            for entry in linked_folders:
+                root = _canonical_path(entry["path"])
+                try:
+                    location.relative_to(root)
+                    allowed = (root, False, str(entry["label"]))
+                    break
+                except ValueError:
+                    continue
+        if allowed is None or not location.is_dir():
+            directory = managed_root
+            managed = True
+            source_root = managed_root
+            source_label = "Local"
+            location = None
+        else:
+            source_root, managed, source_label = allowed
+            directory = location
+
+    script_by_path = {_path_key(record.path): record for record in _candidate_records("local")}
     rows: list[dict[str, object]] = []
-    script_by_path = {
-        _path_key(record.path): record
-        for record in _candidate_records("local")
-    }
-    for root_record in local_source_roots(include_missing=True):
-        root = root_record["path"]
-        label = str(root_record["label"])
-        managed = bool(root_record["managed"])
-        exists = bool(root_record["exists"])
-        if not managed:
-            rows.append({
-                "name": label,
-                "kind": "source_root" if exists else "missing_source_root",
-                "path": str(root),
-                "folder_path": "",
-                "root_path": str(root),
-                "source_label": label,
-                "managed": False,
-            })
-        if not exists:
+    for path in sorted(directory.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+        if path.name.startswith("_") or path.name.startswith("."):
             continue
-        paths = sorted(root.rglob("*"), key=lambda p: str(p.relative_to(root)).lower())
-        for path in paths:
-            rel_parts = path.relative_to(root).parts
-            if any(part.startswith("_") or part.startswith(".") for part in rel_parts):
-                continue
-            if path.is_dir():
-                rows.append({
-                    "name": path.name,
-                    "kind": "folder",
-                    "path": str(path),
-                    "folder_path": "/".join(rel_parts),
-                    "root_path": str(root),
-                    "source_label": label,
-                    "managed": managed,
-                })
-                continue
-            record = script_by_path.get(_path_key(path))
-            if record is None:
-                continue
+        if path.is_dir():
+            try:
+                rel = path.relative_to(source_root)
+            except ValueError:
+                rel = Path(path.name)
             rows.append({
-                **record.as_dict(),
-                "root_path": str(root),
-                "source_label": label,
+                "name": path.name,
+                "kind": "folder",
+                "path": str(path),
+                "folder_path": str(rel).replace(os.sep, "/"),
+                "root_path": str(source_root),
+                "source_label": source_label,
                 "managed": managed,
             })
+            continue
+        record = script_by_path.get(_path_key(path))
+        if record is None:
+            continue
+        rows.append({
+            **record.as_dict(),
+            "root_path": str(source_root),
+            "source_label": source_label,
+            "managed": managed,
+        })
+
+    if location is None:
+        for entry in linked_folders:
+            path = _canonical_path(entry["path"])
+            rows.append({
+                "name": str(entry["label"]),
+                "kind": "linked_folder" if entry["exists"] else "missing_linked_folder",
+                "path": str(path),
+                "folder_path": "",
+                "root_path": str(path),
+                "source_label": str(entry["label"]),
+                "managed": False,
+            })
+        for entry in linked_files:
+            path = _canonical_path(entry["path"])
+            record = script_by_path.get(_path_key(path))
+            if record is not None:
+                rows.append({
+                    **record.as_dict(),
+                    "kind": "linked_script",
+                    "root_path": str(path.parent),
+                    "source_label": "",
+                    "managed": False,
+                })
+            elif not entry["exists"]:
+                rows.append({
+                    "name": path.name,
+                    "kind": "missing_linked_script",
+                    "path": str(path),
+                    "folder_path": "",
+                    "root_path": str(path.parent),
+                    "source_label": "",
+                    "managed": False,
+                })
     return rows
 
 
@@ -1013,6 +1129,8 @@ __all__ = [
     "ensure_local_catalog_dir",
     "local_source_roots",
     "link_local_source_folder",
+    "link_local_source_file",
+    "local_source_files",
     "unlink_local_source_folder",
     "local_browser_records",
     "sanitize_library_entry_name",
