@@ -364,28 +364,52 @@ def _handle_compile_time_stmt(stmt, env, out_stmts, preserve_names=None):
         return
     out_stmts.append(stmt)
 
+def _is_repeat_range_for(stmt):
+    """Return True for the runtime repeat_range(...) for-loop shape."""
+    return (
+        isinstance(stmt, ast.For)
+        and isinstance(stmt.target, ast.Name)
+        and isinstance(stmt.iter, ast.Call)
+        and isinstance(stmt.iter.func, ast.Name)
+        and stmt.iter.func.id == "repeat_range"
+        and len(stmt.iter.args) == 1
+    )
+
+
+def _flat_assignment_names(target):
+    """Return simple names from a flat assignment target used by repeat state."""
+    if isinstance(target, ast.Name):
+        return (target.id,)
+    if isinstance(target, (ast.Tuple, ast.List)) and all(isinstance(item, ast.Name) for item in target.elts):
+        return tuple(item.id for item in target.elts)
+    return ()
+
+
 def _repeat_range_state_names(stmts):
     """Names initialized before repeat_range loops that must remain GN values."""
     preserve = set()
 
     def assigned_names(sub_stmts):
-        """Collect simple assignment targets from runtime statements recursively."""
+        """Collect repeat-visible assignment targets through valid nested control flow."""
         names = set()
         for sub in sub_stmts:
-            if isinstance(sub, ast.Assign) and len(sub.targets) == 1 and isinstance(sub.targets[0], ast.Name):
-                names.add(sub.targets[0].id)
+            if isinstance(sub, ast.Assign) and len(sub.targets) == 1:
+                names.update(_flat_assignment_names(sub.targets[0]))
             elif isinstance(sub, ast.If):
                 names |= assigned_names(sub.body)
                 names |= assigned_names(sub.orelse)
+            elif _is_repeat_range_for(sub):
+                names |= assigned_names(sub.body)
         return names
 
     before = set()
     for stmt in stmts:
-        if isinstance(stmt, ast.For) and isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id == "repeat_range":
+        if _is_repeat_range_for(stmt):
             preserve |= (assigned_names(stmt.body) & before)
-        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
-            before.add(stmt.targets[0].id)
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            before.update(_flat_assignment_names(stmt.targets[0]))
     return preserve
+
 
 def _preprocess_compile_time(stmts):
     """Function `_preprocess_compile_time` used by the NodeForge addon."""
@@ -396,14 +420,23 @@ def _preprocess_compile_time(stmts):
         _handle_compile_time_stmt(stmt, env, out, preserve)
     return out, env
 
+
 def _infer_input_types(stmts):
-    """Function `_infer_input_types` used by the NodeForge addon."""
+    """Infer implicit input types required by runtime repeat counts at any depth."""
     result = {}
-    for stmt in stmts:
-        if isinstance(stmt, ast.For) and isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id == "repeat_range":
-            for arg in stmt.iter.args:
+
+    def visit(sub_stmts):
+        for stmt in sub_stmts:
+            if _is_repeat_range_for(stmt):
+                arg = stmt.iter.args[0]
                 if isinstance(arg, ast.Name):
                     result[arg.id] = TYPE_INT
+                visit(stmt.body)
+            elif isinstance(stmt, ast.If):
+                visit(stmt.body)
+                visit(stmt.orelse)
+
+    visit(stmts)
     return result
 
 __all__ = ['ConstVector', '_is_const_vector', '_as_float_const', '_is_compile_time_int', '_const_range', '_const_eval', '_handle_compile_time_stmt', '_preprocess_compile_time', '_infer_input_types']

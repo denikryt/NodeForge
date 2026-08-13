@@ -67,8 +67,18 @@ class GeometryBuilder(CompileTimeObject):
         for value in checked:
             self.add_value(comp, value, x, y)
 
+    def _runtime_visible_value(self, comp):
+        """Return the nearest Repeat-owned Geometry value, or None outside runtime state."""
+        frame, descriptor = comp.runtime_frame_for_builder(self)
+        if descriptor is None:
+            return None
+        return descriptor.current_get(frame)
+
     def snapshot_for_runtime(self, comp, x=0, y=0):
-        """Materialize the entry Geometry used by a Repeat Zone state item."""
+        """Return the current Geometry used as a newly entered Repeat state value."""
+        runtime_value = self._runtime_visible_value(comp)
+        if runtime_value is not None:
+            return runtime_value
         return self.materialize(comp, x, y)
 
     def set_runtime_value(self, value):
@@ -79,12 +89,10 @@ class GeometryBuilder(CompileTimeObject):
         self.in_runtime_state = False
 
     def geometry_value(self, comp, x=0, y=0):
-        """Resolve `.geometry`, reading the active runtime frame when present."""
-        frame = getattr(comp, "runtime_state_frame", None)
-        if frame is not None:
-            descriptor = frame.descriptor_for_builder(self)
-            if descriptor is not None:
-                return descriptor.current_get(frame)
+        """Resolve `.geometry` from the nearest owning Repeat frame when present."""
+        runtime_value = self._runtime_visible_value(comp)
+        if runtime_value is not None:
+            return runtime_value
         return self.materialize(comp, x, y)
 
 

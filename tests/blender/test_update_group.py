@@ -130,3 +130,139 @@ output("Radius", radius)
         if g.name.startswith("NodeForge.replacement.") or g.name.startswith("NodeForge.rollback.") or g.name.startswith("NodeForge.preflight.")
     ]
     check(not leaked, f"panel rollback leaked temporary groups: {leaked}")
+
+
+
+def _nested_repeat_pairs(group):
+    """Return Repeat Input/Output pairs keyed by each output node."""
+    repeat_inputs = [node for node in group.nodes if node.bl_idname == "GeometryNodeRepeatInput"]
+    repeat_outputs = [node for node in group.nodes if node.bl_idname == "GeometryNodeRepeatOutput"]
+    pairs = []
+    for repeat_input in repeat_inputs:
+        paired_output = getattr(repeat_input, "paired_output", None)
+        check(paired_output is not None, f"Repeat Input {repeat_input.name!r} lost its paired_output")
+        check(paired_output in repeat_outputs, "Repeat Input paired_output is not a Repeat Output in the group")
+        pairs.append((repeat_input, paired_output))
+    check(len({output.as_pointer() for _, output in pairs}) == len(pairs), "multiple Repeat Inputs point at the same Repeat Output")
+    return repeat_inputs, repeat_outputs, pairs
+
+
+def _evaluate_group_geometry_vertices(group, name):
+    """Evaluate a Geometry-output group through a temporary Geometry Nodes modifier."""
+    mesh_data = bpy.data.meshes.new(name + "_BaseMesh")
+    obj = bpy.data.objects.new(name + "_Object", mesh_data)
+    bpy.context.collection.objects.link(obj)
+    modifier = obj.modifiers.new("NodeForge", "NODES")
+    modifier.node_group = group
+    try:
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        depsgraph.update()
+        evaluated = obj.evaluated_get(depsgraph)
+        mesh = evaluated.to_mesh()
+        try:
+            return [tuple(round(float(coord), 6) for coord in vertex.co) for vertex in mesh.vertices]
+        finally:
+            evaluated.to_mesh_clear()
+    finally:
+        bpy.data.objects.remove(obj, do_unlink=True)
+        if bpy.data.meshes.get(mesh_data.name) is mesh_data:
+            bpy.data.meshes.remove(mesh_data, do_unlink=True)
+
+
+def test_update_group_preserves_nested_repeat_pairings_dynamic_state_and_result():
+    """Transactional cutover must rebuild both nested Repeat pairs and their state sockets."""
+    source = """
+x = 0
+for i in repeat_range(2):
+    for j in repeat_range(3):
+        x = x + 1
+output("Geometry", point(vector(x, 0, 0)))
+"""
+    group = compile_group(source, "NFTest_update_nested_repeat")
+
+    wrapper = bpy.data.node_groups.new("NFTest_update_nested_repeat_wrapper", "GeometryNodeTree")
+    wrapper.interface.new_socket(name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    group_output = wrapper.nodes.new("NodeGroupOutput")
+    group_node = wrapper.nodes.new("GeometryNodeGroup")
+    group_node.node_tree = group
+    wrapper.links.new(group_node.outputs["Geometry"], group_output.inputs["Geometry"])
+
+    external_state = compiler._capture_node_external_state(wrapper, group_node)
+    compiler.update_expression_group(group, source)
+    compiler._restore_node_external_state(wrapper, group_node, external_state)
+
+    repeat_inputs, repeat_outputs, pairs = _nested_repeat_pairs(group)
+    check(len(repeat_inputs) == 2, f"expected two Repeat Inputs after nested cutover, got {len(repeat_inputs)}")
+    check(len(repeat_outputs) == 2, f"expected two Repeat Outputs after nested cutover, got {len(repeat_outputs)}")
+    check(len(pairs) == 2, f"expected two independent Repeat pairs after nested cutover, got {len(pairs)}")
+
+    for _, repeat_output in pairs:
+        item_names = [item.name for item in repeat_output.repeat_items]
+        input_names = [socket.name for socket in repeat_output.inputs]
+        output_names = [socket.name for socket in repeat_output.outputs]
+        check("x" in item_names, f"nested Repeat Output lost x dynamic item: {item_names}")
+        check("x" in input_names, f"nested Repeat Output lost x input socket: {input_names}")
+        check("x" in output_names, f"nested Repeat Output lost x output socket: {output_names}")
+
+    link_names = [(link.from_socket.name, link.to_socket.name) for link in wrapper.links]
+    check(("Geometry", "Geometry") in link_names, f"nested update lost external Geometry link: {link_names}")
+    check(
+        _evaluate_group_geometry_vertices(group, "NFTest_update_nested_repeat_eval") == [(6.0, 0.0, 0.0)],
+        "nested Repeat result changed after transactional cutover",
+    )
+
+
+def test_nested_repeat_save_reopen_preserves_pairings_dynamic_state_and_result(tmp_path):
+    """Nested Repeat pairings and dynamic sockets must survive .blend serialization and reload."""
+    source = """
+x = 0
+for i in repeat_range(2):
+    for j in repeat_range(3):
+        x = x + 1
+output("Geometry", point(vector(x, 0, 0)))
+"""
+    group_name = "NFTest_nested_repeat_persistence"
+    object_name = "NFTest_nested_repeat_persistence_object"
+    group = compile_group(source, group_name)
+
+    mesh_data = bpy.data.meshes.new(object_name + "_mesh")
+    obj = bpy.data.objects.new(object_name, mesh_data)
+    bpy.context.collection.objects.link(obj)
+    modifier = obj.modifiers.new("NodeForge", "NODES")
+    modifier.node_group = group
+
+    check(_evaluate_group_geometry_vertices(group, "NFTest_nested_repeat_pre_save_eval") == [(6.0, 0.0, 0.0)], "nested Repeat pre-save evaluation changed")
+    repeat_inputs, repeat_outputs, pairs = _nested_repeat_pairs(group)
+    check(len(repeat_inputs) == 2 and len(repeat_outputs) == 2 and len(pairs) == 2, "nested Repeat pairs missing before save")
+
+    filepath = str(tmp_path / "nested_repeat_persistence.blend")
+    result = bpy.ops.wm.save_as_mainfile(filepath=filepath)
+    check("FINISHED" in result, f"save_as_mainfile failed: {result}")
+    result = bpy.ops.wm.open_mainfile(filepath=filepath)
+    check("FINISHED" in result, f"open_mainfile failed: {result}")
+
+    reloaded_group = bpy.data.node_groups.get(group_name)
+    check(reloaded_group is not None, "nested Repeat group missing after reopen")
+    repeat_inputs, repeat_outputs, pairs = _nested_repeat_pairs(reloaded_group)
+    check(len(repeat_inputs) == 2, f"expected two Repeat Inputs after reopen, got {len(repeat_inputs)}")
+    check(len(repeat_outputs) == 2, f"expected two Repeat Outputs after reopen, got {len(repeat_outputs)}")
+    check(len(pairs) == 2, f"expected two independent Repeat pairs after reopen, got {len(pairs)}")
+    for _, repeat_output in pairs:
+        item_names = [item.name for item in repeat_output.repeat_items]
+        input_names = [socket.name for socket in repeat_output.inputs]
+        output_names = [socket.name for socket in repeat_output.outputs]
+        check("x" in item_names, f"nested Repeat dynamic item missing after reopen: {item_names}")
+        check("x" in input_names, f"nested Repeat input socket missing after reopen: {input_names}")
+        check("x" in output_names, f"nested Repeat output socket missing after reopen: {output_names}")
+
+    reloaded_obj = bpy.data.objects.get(object_name)
+    check(reloaded_obj is not None, "nested Repeat evaluation object missing after reopen")
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    depsgraph.update()
+    evaluated = reloaded_obj.evaluated_get(depsgraph)
+    mesh = evaluated.to_mesh()
+    try:
+        vertices = [tuple(round(float(coord), 6) for coord in vertex.co) for vertex in mesh.vertices]
+    finally:
+        evaluated.to_mesh_clear()
+    check(vertices == [(6.0, 0.0, 0.0)], f"nested Repeat result changed after reopen: {vertices}")

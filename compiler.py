@@ -159,7 +159,37 @@ class Compiler:
         self._interface_inputs_by_identifier = {}
         self._interface_inputs_by_socket_pointer = {}
         self._panel_input_memberships = {}
+        self._runtime_state_frames = []
         self.depth = 0
+
+    def push_runtime_frame(self, frame):
+        """Push one lexical Repeat Zone runtime-state frame."""
+        self._runtime_state_frames.append(frame)
+
+    def pop_runtime_frame(self, expected=None):
+        """Pop the innermost lexical Repeat frame and optionally verify ownership."""
+        if not self._runtime_state_frames:
+            raise CompileError("Internal error: runtime Repeat frame stack is empty")
+        frame = self._runtime_state_frames.pop()
+        if expected is not None and frame is not expected:
+            raise CompileError("Internal error: runtime Repeat frame stack ownership mismatch")
+        return frame
+
+    def replace_active_runtime_frame(self, frame):
+        """Replace the innermost Repeat frame without changing lexical stack depth."""
+        if not self._runtime_state_frames:
+            raise CompileError("Internal error: no active runtime Repeat frame to replace")
+        previous = self._runtime_state_frames[-1]
+        self._runtime_state_frames[-1] = frame
+        return previous
+
+    def runtime_frame_for_builder(self, builder):
+        """Return the nearest active Repeat frame and descriptor owning *builder*."""
+        for frame in reversed(self._runtime_state_frames):
+            descriptor = frame.descriptor_for_builder(builder)
+            if descriptor is not None:
+                return frame, descriptor
+        return None, None
 
     def compile(self, expr):
         """Compile one AST expression into this group's node tree."""

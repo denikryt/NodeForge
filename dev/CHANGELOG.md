@@ -72,3 +72,15 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.49.68
 
 - Reworked the Local UI into a minimal folder browser with navigable directories, current-folder Save/New Folder behavior, and file-or-folder imports that reference external `.nf` sources directly instead of copying them.
+
+## 0.49.69
+
+- Added nested `repeat_range()` support with nested Repeat Zone state propagation, runtime-frame scoping, GeometryBuilder state inheritance, and nested implicit Int count inference.
+
+## 0.49.70
+
+- Fixed nested `repeat_range()` lexical index restoration when an inner Repeat assigns the enclosing loop index, including runtime-`if` branch scopes.
+
+## 0.49.71
+
+- Added nested Repeat Zone transactional-update and save/reopen persistence regression coverage.

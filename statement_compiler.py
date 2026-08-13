@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from .constants import *
 from .errors import CompileError
 from .values import Value, TupleValue, reject_tuple_value
-from .nodes import _int_value, _switch
+from .nodes import _switch
 from .parsing import _literal_string, _is_top_level_call
 from .statements import (
     _kw_dict,
@@ -22,6 +22,7 @@ from .compile_time import reject_compile_time_object
 from .interface import _create_interface_panel
 from .geometry_builder import GeometryBuilder, validate_geometry_builder_constructor
 from .runtime import (
+    _compile_repeat_iteration_count,
     _parse_repeat_range_for,
     _repeat_state_assignments,
 )
@@ -39,17 +40,6 @@ class GroupBuildContext:
     explicit_outputs: list = field(default_factory=list)
     auto_final_output: object = None
     output_names: set = field(default_factory=set)
-
-
-def _compile_iteration_count(ctx, expr, x=0, y=0):
-    """Compile a repeat count while preserving integer constants as Int sockets."""
-    try:
-        value = _const_eval(expr, ctx.comp.consts)
-    except CompileError:
-        value = None
-    if isinstance(value, int) and not isinstance(value, bool):
-        return _int_value(ctx.group, value, x, y)
-    return ctx.comp.compile(expr)
 
 
 def _as_array_iter_value(value):
@@ -336,7 +326,7 @@ def compile_statement(
             for target_name in _target_names(stmt.target):
                 _check_runtime_binding(comp, target_name)
             iterations_expr, body = _parse_repeat_range_for(stmt)
-            iterations = _compile_iteration_count(ctx, iterations_expr, 240 + idx * 120, -260 - idx * 50)
+            iterations = _compile_repeat_iteration_count(group, comp, iterations_expr, 240 + idx * 120, -260 - idx * 50)
             reject_compile_time_object(iterations, "repeat_range iteration count")
             reject_tuple_value(iterations, "repeat_range iteration count")
             if iterations.typ != TYPE_INT:

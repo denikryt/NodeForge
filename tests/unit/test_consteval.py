@@ -220,3 +220,64 @@ def test_preprocess_defers_range_with_runtime_name_to_statement_compiler():
 
     assert "COUNT" not in consts
     assert any(isinstance(stmt, ast.For) for stmt in retained)
+
+
+def test_preprocess_preserves_state_mutated_only_inside_nested_repeat_range():
+    retained, consts = _preprocess_source(
+        """
+x = 0
+for i in repeat_range(2):
+    for j in repeat_range(3):
+        x = x + 1
+output("x", x)
+"""
+    )
+
+    retained_assigns = [
+        stmt.targets[0].id
+        for stmt in retained
+        if isinstance(stmt, ast.Assign) and isinstance(stmt.targets[0], ast.Name)
+    ]
+    assert "x" in retained_assigns
+    assert "x" not in consts
+
+
+def test_preprocess_preserves_nested_repeat_state_under_runtime_if():
+    retained, consts = _preprocess_source(
+        """
+x = 0
+for i in repeat_range(2):
+    for j in repeat_range(3):
+        if flag:
+            x = x + 1
+        else:
+            x = x
+output("x", x)
+"""
+    )
+
+    retained_assigns = [
+        stmt.targets[0].id
+        for stmt in retained
+        if isinstance(stmt, ast.Assign) and isinstance(stmt.targets[0], ast.Name)
+    ]
+    assert "x" in retained_assigns
+    assert "x" not in consts
+
+
+def test_infer_input_types_finds_implicit_nested_repeat_count():
+    from NodeForge.consteval import _infer_input_types
+    from NodeForge.constants import TYPE_INT
+    from NodeForge.parsing import _parse_source
+
+    stmts = _parse_source(
+        """
+x = 0
+for i in repeat_range(2):
+    for j in repeat_range(inner_count):
+        x = x + 1
+output("x", x)
+"""
+    )
+
+    assert _infer_input_types(stmts).get("inner_count") == TYPE_INT

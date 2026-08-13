@@ -5,9 +5,10 @@ from .constants import *
 from .errors import CompileError
 from .values import TupleValue, Value
 from .compile_time import reject_compile_time_object
-from .nodes import _new_node, _switch
+from .nodes import _int_value, _new_node, _switch
 from .geometry import _join_geometry
 from .geometry_builder import GeometryBuilder
+from .consteval import _const_eval
 
 
 def _is_range_call(stmt, name):
@@ -58,7 +59,10 @@ def _parse_repeat_range_for(stmt):
             for branch_sub in list(sub.body) + list(sub.orelse):
                 validate(branch_sub)
             return
-        raise CompileError("repeat_range body supports assignments, builder methods, and if blocks")
+        if isinstance(sub, ast.For):
+            _parse_repeat_range_for(sub)
+            return
+        raise CompileError("repeat_range body supports assignments, builder methods, if blocks, and nested repeat_range loops")
 
     for sub in stmt.body:
         validate(sub)
@@ -164,6 +168,10 @@ class BuilderStateDescriptor:
         frame.current_values[self] = value
 
     def commit_after_repeat(self, comp, value):
+        frame, descriptor = comp.runtime_frame_for_builder(self.builder)
+        if descriptor is not None:
+            descriptor.current_set(frame, value)
+            return
         self.builder.set_runtime_value(value)
 
     def repeat_socket_type(self):
@@ -239,12 +247,28 @@ def _runtime_state_descriptors(comp, stmts):
             for branch_sub in list(sub.body) + list(sub.orelse):
                 visit(branch_sub)
             return
-        raise CompileError("repeat_range body supports assignments, builder methods, and if blocks")
+        if isinstance(sub, ast.For):
+            _iterations_expr, nested_body = _parse_repeat_range_for(sub)
+            for nested_sub in nested_body:
+                visit(nested_sub)
+            return
+        raise CompileError("repeat_range body supports assignments, builder methods, if blocks, and nested repeat_range loops")
 
     for sub in stmts:
         visit(sub)
     descriptors.sort(key=lambda desc: desc.source_order_key)
     return descriptors
+
+
+def _compile_repeat_iteration_count(group, comp, expr, x=0, y=0):
+    """Compile a repeat count while preserving integer constants as Int sockets."""
+    try:
+        value = _const_eval(expr, comp.consts)
+    except CompileError:
+        value = None
+    if isinstance(value, int) and not isinstance(value, bool):
+        return _int_value(group, value, x, y)
+    return comp.compile(expr)
 
 
 def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=None, x=0, y=0):
@@ -293,11 +317,8 @@ def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=No
     frame = RuntimeStateFrame(descriptors)
 
     def set_active_frame(active_frame):
-        comp.runtime_state_frame = active_frame
-
-    def clear_active_frame():
-        if hasattr(comp, "runtime_state_frame"):
-            delattr(comp, "runtime_state_frame")
+        """Select a branch-local copy at the current Repeat nesting depth."""
+        comp.replace_active_runtime_frame(active_frame)
 
     def set_comp_state_from_frame(active_frame):
         for desc in descriptors:
@@ -401,14 +422,15 @@ def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=No
             comp.vars.update(base_vars)
             set_comp_state_from_frame(branch_frame)
             set_active_frame(branch_frame)
-            for branch_sub in branch:
-                compile_runtime_stmt(branch_sub, branch_frame, depth + 1)
-            out_vars = dict(comp.vars)
-            comp.vars.clear()
-            comp.vars.update(base_vars)
-            set_comp_state_from_frame(active_frame)
-            set_active_frame(active_frame)
-            return branch_frame, out_vars
+            try:
+                for branch_sub in branch:
+                    compile_runtime_stmt(branch_sub, branch_frame, depth + 1)
+                return branch_frame, dict(comp.vars)
+            finally:
+                comp.vars.clear()
+                comp.vars.update(base_vars)
+                set_comp_state_from_frame(active_frame)
+                set_active_frame(active_frame)
 
         true_frame, true_vars = run_branch(sub.body)
         if sub.orelse:
@@ -456,8 +478,52 @@ def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=No
         if isinstance(sub, ast.If):
             compile_if(sub, active_frame, depth)
             return
-        raise CompileError("repeat_range body supports assignments, builder methods, and if blocks")
+        if isinstance(sub, ast.For):
+            iterations_expr, nested_body = _parse_repeat_range_for(sub)
+            set_active_frame(active_frame)
 
+            # A nested Repeat may assign the enclosing loop-index name and carry
+            # it as ordinary inner state. That state is local to the inner loop:
+            # subsequent statements in this lexical Repeat must still see this
+            # Repeat's own Iteration socket. Preserve the exact branch-local
+            # binding because compile_runtime_stmt() is also used inside runtime
+            # if branch frames.
+            missing = object()
+            enclosing_index_value = comp.vars.get(index_name, missing) if index_name else missing
+            try:
+                nested_iterations = _compile_repeat_iteration_count(
+                    group, comp, iterations_expr, x + 300 + depth * 140, y - 360 - depth * 220
+                )
+                nested_results = _repeat_state_assignments(
+                    group,
+                    comp,
+                    nested_iterations,
+                    nested_body,
+                    index_name=sub.target.id,
+                    x=x + 360 + depth * 180,
+                    y=y - 500 - depth * 280,
+                )
+                # The recursive Repeat commits ordinary variables to comp.vars. Mirror
+                # every state shared with this enclosing Repeat into its current frame.
+                for desc in descriptors:
+                    value = nested_results.get(desc.display_name)
+                    if value is None:
+                        continue
+                    compatible_or_raise(desc, value)
+                    desc.current_set(active_frame, value)
+                    if isinstance(desc, OrdinaryStateDescriptor):
+                        comp.vars[desc.display_name] = value
+            finally:
+                if index_name:
+                    if enclosing_index_value is missing:
+                        comp.vars.pop(index_name, None)
+                    else:
+                        comp.vars[index_name] = enclosing_index_value
+                set_active_frame(active_frame)
+            return
+        raise CompileError("repeat_range body supports assignments, builder methods, if blocks, and nested repeat_range loops")
+
+    comp.push_runtime_frame(frame)
     try:
         for desc in descriptors:
             repeat_value = Value(_socket_by_name(ri.outputs, desc.display_name), desc.old_type)
@@ -466,7 +532,6 @@ def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=No
                 comp.vars[desc.display_name] = repeat_value
         if index_name:
             comp.vars[index_name] = Value(ri.outputs[0], TYPE_INT)
-        set_active_frame(frame)
         for sub in body_stmts:
             compile_runtime_stmt(sub, frame)
         for desc in descriptors:
@@ -474,7 +539,7 @@ def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=No
             compatible_or_raise(desc, val)
             group.links.new(val.socket, _socket_by_name(ro.inputs, desc.display_name))
     finally:
-        clear_active_frame()
+        comp.pop_runtime_frame(frame)
         comp.vars.clear()
         comp.vars.update(old_vars)
 
@@ -487,5 +552,5 @@ def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=No
     return result
 
 __all__ = [
-    '_parse_repeat_range_for', '_repeat_state_assignments'
+    '_compile_repeat_iteration_count', '_parse_repeat_range_for', '_repeat_state_assignments'
 ]

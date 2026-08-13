@@ -26,6 +26,24 @@ Built-ins are the primitive operations of the DSL. They live in `builtins/` and 
 
 Built-ins cover input sockets, scalar math, vector math, field inputs, geometry primitives, attributes, materials, instancing, and runtime loops. They form the compiler-level vocabulary used by scripts and library functions.
 
+### Runtime Repeat Zones
+
+Use `repeat_range()` when a loop count is a runtime Int value and the loop must execute inside Geometry Nodes. Nested `repeat_range()` loops lower to nested Blender Repeat Zones, and loop-carried state flows from the enclosing Repeat Zone into the inner zone and back out again.
+
+```python
+x = 0
+outer_count = input_int("Outer Count", default=2)
+inner_count = input_int("Inner Count", default=3)
+
+for i in repeat_range(outer_count):
+    for j in repeat_range(inner_count):
+        x = x + 1
+
+output("Count", x)
+```
+
+Each loop index is scoped to its own loop body. Existing scalar, vector, Boolean, Geometry, and `geometry_builder()` Repeat state can be carried through nested loops.
+
 ### Interface panels
 
 Use the top-level `panel()` declaration to organize existing group inputs into native Blender interface panels. Members are simple variable names that already resolve to inputs of the current node group. The list order is the socket order inside the panel, and `collapsed=True` makes the native Blender panel closed by default.

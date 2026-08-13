@@ -275,3 +275,44 @@ def test_geometry_builder_negative_usage_errors_are_controlled():
     ]
     for index, source in enumerate(cases):
         expect_compile_error(source, f"NFTest_geometry_builder_error_{index}")
+
+
+def test_geometry_builder_nested_repeat_uses_current_outer_snapshot():
+    group = compile_group(
+        """
+builder = geometry_builder()
+for i in repeat_range(2):
+    builder.add(point(vector(i * 10, 0, 0)))
+    for j in repeat_range(3):
+        builder.add(point(vector(i * 10 + j + 1, 0, 0)))
+output("Geometry", builder.geometry)
+""",
+        "NFTest_geometry_builder_nested_repeat_snapshot",
+    )
+
+    check(len(_nodes(group, "GeometryNodeRepeatInput")) == 2, "expected two Repeat Inputs for nested builder")
+    vertices, edges, polygons = _evaluated_mesh(group, "NFTest_geometry_builder_nested_repeat_snapshot_eval")
+    expected = [(0, 0, 0), (1, 0, 0), (2, 0, 0), (3, 0, 0), (10, 0, 0), (11, 0, 0), (12, 0, 0), (13, 0, 0)]
+    check(_same_positions(vertices, expected), f"nested builder lost current outer snapshot: {vertices}")
+    check(edges == [], f"nested builder should create no edges: {edges}")
+    check(polygons == [], f"nested builder should create no polygons: {polygons}")
+
+
+def test_geometry_builder_nested_repeat_geometry_read_uses_nearest_frame():
+    group = compile_group(
+        """
+builder = geometry_builder()
+for i in repeat_range(1):
+    builder.add(point(vector(0, 0, 0)))
+    for j in repeat_range(1):
+        snapshot = transform(builder.geometry, translation=vector(1, 0, 0))
+        builder.add(snapshot)
+output("Geometry", builder.geometry)
+""",
+        "NFTest_geometry_builder_nested_repeat_geometry_read",
+    )
+
+    vertices, edges, polygons = _evaluated_mesh(group, "NFTest_geometry_builder_nested_repeat_geometry_read_eval")
+    check(_same_positions(vertices, [(0, 0, 0), (1, 0, 0)]), f"nested builder.geometry read missed nearest frame: {vertices}")
+    check(edges == [], f"nested builder.geometry read should create no edges: {edges}")
+    check(polygons == [], f"nested builder.geometry read should create no polygons: {polygons}")

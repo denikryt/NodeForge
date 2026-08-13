@@ -213,3 +213,206 @@ def test_repeat_state_assignment_allows_explicit_item_named_like_removed_default
         check(names == ["Geometry"], f"unexpected repeat item names: {names}")
     finally:
         bpy.data.node_groups.remove(group, do_unlink=True)
+
+
+def _evaluated_vertices(group, name, input_values=None):
+    """Evaluate one Geometry output and return rounded vertex coordinates."""
+    mesh = bpy.data.meshes.new(name + "Mesh")
+    obj = bpy.data.objects.new(name + "Object", mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    modifier = obj.modifiers.new(name="NodeForge", type="NODES")
+    eval_group = group
+    wrapper = None
+    if input_values:
+        wrapper = bpy.data.node_groups.new(name + "Wrapper", "GeometryNodeTree")
+        wrapper.interface.new_socket(name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+        group_node = wrapper.nodes.new("GeometryNodeGroup")
+        group_node.node_tree = group
+        group_output = wrapper.nodes.new("NodeGroupOutput")
+        group_output.is_active_output = True
+        for socket_name, value in input_values.items():
+            int_node = wrapper.nodes.new("FunctionNodeInputInt")
+            int_node.integer = int(value)
+            wrapper.links.new(int_node.outputs["Integer"], group_node.inputs[socket_name])
+        wrapper.links.new(group_node.outputs["Geometry"], group_output.inputs["Geometry"])
+        eval_group = wrapper
+    modifier.node_group = eval_group
+    obj.update_tag()
+    bpy.context.view_layer.update()
+    evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+    evaluated_mesh = evaluated.to_mesh()
+    try:
+        return [tuple(round(float(coord), 4) for coord in vertex.co) for vertex in evaluated_mesh.vertices]
+    finally:
+        evaluated.to_mesh_clear()
+        bpy.data.objects.remove(obj, do_unlink=True)
+        bpy.data.meshes.remove(mesh, do_unlink=True)
+        if wrapper is not None:
+            bpy.data.node_groups.remove(wrapper, do_unlink=True)
+
+
+def test_nested_repeat_range_scalar_evaluation_and_zone_count():
+    group = compile_group(
+        """
+x = 0
+for i in repeat_range(2):
+    for j in repeat_range(3):
+        x = x + 1
+output("Geometry", point(vector(x, 0, 0)))
+output("x", x)
+""",
+        "NFTest_nested_repeat_scalar",
+    )
+
+    check(len(_nodes(group, "GeometryNodeRepeatInput")) == 2, "expected two nested Repeat Inputs")
+    repeat_outputs = _nodes(group, "GeometryNodeRepeatOutput")
+    check(len(repeat_outputs) == 2, "expected two nested Repeat Outputs")
+    check(all("x" in [item.name for item in output.repeat_items] for output in repeat_outputs), "x was not carried by both Repeat Zones")
+    check(_evaluated_vertices(group, "NFTest_nested_repeat_scalar_eval") == [(6.0, 0.0, 0.0)], "nested scalar result was not 6")
+
+
+def test_nested_repeat_range_geometry_state_propagates_across_outer_iterations():
+    group = compile_group(
+        """
+geo = point(vector(0, 0, 0))
+for i in repeat_range(2):
+    for j in repeat_range(3):
+        geo = transform(geo, translation=vector(1, 0, 0))
+output("Geometry", geo)
+""",
+        "NFTest_nested_repeat_geometry",
+    )
+
+    check(_evaluated_vertices(group, "NFTest_nested_repeat_geometry_eval") == [(6.0, 0.0, 0.0)], "inner Geometry state reset between outer iterations")
+
+
+def test_nested_repeat_range_indices_and_runtime_if_scoping():
+    group = compile_group(
+        """
+x = 0
+flag = input_bool("Flag", default=True)
+for i in repeat_range(2):
+    for j in repeat_range(3):
+        if flag:
+            x = x + i * 10 + j
+        else:
+            x = x
+    x = x + i
+output("Geometry", point(vector(x, 0, 0)))
+""",
+        "NFTest_nested_repeat_indices_if",
+    )
+
+    check(_evaluated_vertices(group, "NFTest_nested_repeat_indices_if_eval") == [(37.0, 0.0, 0.0)], "nested index/runtime-if result changed")
+
+    expect_compile_error(
+        """
+x = 0
+for i in repeat_range(2):
+    for j in repeat_range(3):
+        x = x + 1
+    x = x + j
+output("x", x)
+""",
+        "NFTest_nested_repeat_inner_index_escape",
+    )
+
+
+def test_nested_repeat_range_restores_enclosing_index_after_inner_assignment():
+    group = compile_group(
+        """
+x = 0
+for i in repeat_range(2):
+    for j in repeat_range(1):
+        i = i + 10
+    x = x + i
+output("Geometry", point(vector(x, 0, 0)))
+""",
+        "NFTest_nested_repeat_outer_index_restore",
+    )
+
+    check(
+        _evaluated_vertices(group, "NFTest_nested_repeat_outer_index_restore_eval") == [(1.0, 0.0, 0.0)],
+        "inner assignment leaked over the enclosing Repeat Iteration binding",
+    )
+
+
+def test_nested_repeat_range_restores_branch_local_enclosing_index():
+    group = compile_group(
+        """
+x = 0
+flag = input_bool("Flag", default=True)
+for i in repeat_range(2):
+    if flag:
+        for j in repeat_range(1):
+            i = i + 10
+        x = x + i
+    else:
+        x = x + i
+output("Geometry", point(vector(x, 0, 0)))
+""",
+        "NFTest_nested_repeat_branch_outer_index_restore",
+    )
+
+    check(
+        _evaluated_vertices(group, "NFTest_nested_repeat_branch_outer_index_restore_eval", {"Flag": 1}) == [(1.0, 0.0, 0.0)],
+        "inner assignment leaked over the branch-local enclosing Repeat Iteration binding",
+    )
+
+
+def test_nested_repeat_range_implicit_count_is_int_and_evaluates():
+    group = compile_group(
+        """
+x = 0
+for i in repeat_range(2):
+    for j in repeat_range(inner_count):
+        x = x + 1
+output("Geometry", point(vector(x, 0, 0)))
+""",
+        "NFTest_nested_repeat_implicit_count",
+    )
+
+    item = next(
+        item
+        for item in group.interface.items_tree
+        if getattr(item, "item_type", None) == "SOCKET" and item.name == "inner_count"
+    )
+    check(item.socket_type == "NodeSocketInt", f"nested implicit count inferred as {item.socket_type}")
+    check(
+        _evaluated_vertices(group, "NFTest_nested_repeat_implicit_eval", {"inner_count": 3}) == [(6.0, 0.0, 0.0)],
+        "nested implicit Int count did not evaluate correctly",
+    )
+
+
+def test_nested_repeat_range_controlled_diagnostics():
+    expect_compile_error(
+        """
+x = 0
+count = input_float("Count", default=3)
+for i in repeat_range(2):
+    for j in repeat_range(count):
+        x = x + 1
+output("x", x)
+""",
+        "NFTest_nested_repeat_float_count_error",
+    )
+    expect_compile_error(
+        """
+x = 0
+for i in repeat_range(2):
+    for Iteration in repeat_range(3):
+        x = x + 1
+output("x", x)
+""",
+        "NFTest_nested_repeat_index_socket_collision",
+    )
+    expect_compile_error(
+        """
+x = 0
+for i in repeat_range(2):
+    for j in repeat_range(3):
+        x = cube(1)
+output("x", x)
+""",
+        "NFTest_nested_repeat_state_type_error",
+    )
