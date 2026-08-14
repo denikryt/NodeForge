@@ -36,3 +36,10 @@
 ## Local dependency isolation
 
 - `tests/blender/test_library_catalogs.py`: fresh Blender-suffixed Local backing groups per outer compilation, per-build reuse for repeated calls, preservation of existing generated node dependencies, and unchanged selected-group update semantics.
+
+## Library-backed group reload
+
+- `tests/blender/test_library_catalogs.py`: current Local source resolution, dependency refresh with unchanged root source, root identity, missing-source failure, and compile rollback cleanup.
+- `tests/blender/test_update_group.py`: selected node-instance overrides, new defaults, incoming/outgoing links, and root identity across direct library reload.
+- `tests/blender/test_library_catalogs.py`: same-package version upgrades, rejection of cross-package takeover for the same catalog identity, and native-only reload exclusion.
+- `tests/unit/test_ui_library_panels_contract.py`: **Reload from Source** is exposed in the main selected-group panel and does not alter catalog panel actions.

@@ -84,3 +84,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.49.71
 
 - Added nested Repeat Zone transactional-update and save/reopen persistence regression coverage.
+
+## 0.49.72
+
+- Added **Reload from Source** for selected library-backed node groups, preserving root identity and selected-node state while rebuilding from the current catalog source.

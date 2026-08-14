@@ -27,7 +27,7 @@ from .storage import (
 )
 from .interface import _set_socket_default, _set_interface_socket_default, _record_group_input_default
 from .update import _apply_group_defaults_to_node, _capture_node_external_state, _restore_node_external_state
-from .library import library_entry_names, materialize_library_entry_group
+from .library import library_entry_names, materialize_library_entry_group, update_materialized_library_entry_group
 from .statements import _unique_output_name
 from .compile_time import reject_compile_time_object
 from .systems import registry as systems_registry
@@ -1055,6 +1055,11 @@ def create_library_function_group(name: str):
     return create_library_catalog_group("functions", name)
 
 
+def update_library_catalog_group(group, namespace: str, name: str):
+    """Reload a catalog-backed group in place from its current editable source."""
+    return update_materialized_library_entry_group(namespace, name, group, _make_group)
+
+
 def update_expression_group(group, source: str):
     """Rebuild an existing Geometry Nodes group from NodeForge source."""
     return _make_group(source, getattr(group, "name", "NodeForge Group"), existing_group=group)
@@ -1065,6 +1070,7 @@ __all__ = [
     "Compiler",
     "create_expression_group",
     "update_expression_group",
+    "update_library_catalog_group",
     "create_library_catalog_group",
     "create_library_function_group",
     "_apply_group_defaults_to_node",

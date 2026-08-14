@@ -55,3 +55,18 @@ def test_library_catalog_draw_does_not_refresh_scene_state():
     block = source[start:end]
     assert "_refresh_catalog_items(props, namespace)" not in block
     assert "Click Refresh to scan this catalog" in block
+
+
+def test_reload_from_source_is_main_panel_action_only():
+    """Reload belongs to the selected-group panel, not catalog browsing controls."""
+    source = UI_SOURCE.read_text(encoding="utf-8")
+    main_start = source.index("class GNSCRIPT_MVP_PT_panel(Panel):")
+    main_end = source.index("class NODEFORGE_PT_library(Panel):", main_start)
+    main_block = source[main_start:main_end]
+    assert 'text="Reload from Source"' in main_block
+    assert "NODEFORGE_OT_reload_selected_library_group.poll(context)" in main_block
+
+    catalog_start = source.index("def _draw_library_catalog_panel")
+    catalog_end = source.index("class GNSCRIPT_MVP_PT_panel", catalog_start)
+    catalog_block = source[catalog_start:catalog_end]
+    assert "NODEFORGE_OT_reload_selected_library_group" not in catalog_block

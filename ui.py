@@ -20,6 +20,7 @@ from .compiler import (
     _replace_text_contents,
     create_library_catalog_group,
     create_library_function_group,
+    update_library_catalog_group,
 )
 from .library import (
     library_entry_records,
@@ -33,6 +34,7 @@ from .library import (
     create_local_folder,
     save_local_source,
     delete_local_source,
+    resolve_reloadable_library_entry,
 )
 from . import packages
 from . import generated_resources
@@ -386,6 +388,54 @@ class GNSCRIPT_MVP_OT_update_selected_group(Operator):
         restored = _restore_node_external_state(tree, node, external_state) if tree is not None else 0
         self.report({'INFO'}, f"Updated node group: {old_name}; restored {restored} link(s)")
         return {'FINISHED'}
+
+
+class NODEFORGE_OT_reload_selected_library_group(Operator):
+    """Reload the selected library-backed group from its current catalog source."""
+    bl_idname = "nodeforge.reload_selected_library_group"
+    bl_label = "Reload from Source"
+    bl_description = "Rebuild the selected NodeForge library group from its current catalog source while preserving the group datablock and node state"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        """Enable only for a selected group with compatible reloadable provenance."""
+        node = _selected_group_node(context)
+        if node is None:
+            return False
+        try:
+            resolve_reloadable_library_entry(node.node_tree)
+        except Exception:
+            return False
+        return True
+
+    def execute(self, context):
+        """Reload the selected group in place and restore its external node state."""
+        node = _selected_group_node(context)
+        if node is None:
+            self.report({'ERROR'}, "Select exactly one reloadable NodeForge library group")
+            return {'CANCELLED'}
+        try:
+            record = resolve_reloadable_library_entry(node.node_tree)
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+
+        old_name = node.node_tree.name
+        tree = _active_gn_tree(context)
+        external_state = _capture_node_external_state(tree, node) if tree is not None else {"input_defaults": {}, "incoming": [], "outgoing": []}
+        try:
+            update_library_catalog_group(node.node_tree, record.namespace, record.name)
+        except Exception as exc:
+            traceback.print_exc()
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        node.node_tree.name = old_name
+        node.name = node.name or old_name
+        restored = _restore_node_external_state(tree, node, external_state) if tree is not None else 0
+        self.report({'INFO'}, f"Reloaded node group: {old_name}; restored {restored} link(s)")
+        return {'FINISHED'}
+
 
 class GNSCRIPT_MVP_OT_load_selected_group_source(Operator):
     """Class `GNSCRIPT_MVP_OT_load_selected_group_source` used by the NodeForge addon."""
@@ -840,6 +890,9 @@ class GNSCRIPT_MVP_PT_panel(Panel):
         row.enabled = selected_group is not None
         row.operator(GNSCRIPT_MVP_OT_update_selected_group.bl_idname, text="Update Selected NodeGroup")
         row = layout.row()
+        row.enabled = NODEFORGE_OT_reload_selected_library_group.poll(context)
+        row.operator(NODEFORGE_OT_reload_selected_library_group.bl_idname, text="Reload from Source", icon='FILE_REFRESH')
+        row = layout.row()
         row.enabled = selected_group is not None and bool(_extract_group_source(selected_group.node_tree))
         row.operator(GNSCRIPT_MVP_OT_load_selected_group_source.bl_idname, text="Load Script From Selected NodeGroup")
         if selected_group is None:
@@ -984,6 +1037,7 @@ classes = (
     NODEFORGE_UL_packages,
     GNSCRIPT_MVP_OT_compile_expression,
     GNSCRIPT_MVP_OT_update_selected_group,
+    NODEFORGE_OT_reload_selected_library_group,
     GNSCRIPT_MVP_OT_load_selected_group_source,
     NODEFORGE_OT_refresh_function_library,
     NODEFORGE_OT_refresh_packages,

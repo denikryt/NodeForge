@@ -266,3 +266,50 @@ output("Geometry", point(vector(x, 0, 0)))
     finally:
         evaluated.to_mesh_clear()
     check(vertices == [(6.0, 0.0, 0.0)], f"nested Repeat result changed after reopen: {vertices}")
+
+
+def test_library_reload_preserves_selected_instance_values_defaults_and_links():
+    """Library reload must preserve selected-node overrides/links like Text update does."""
+    local = library.ensure_local_catalog_dir()
+    source = local / "local_reload_state.nf"
+    group = wrapper = None
+    try:
+        source.write_text(
+            'radius = input_float("Radius", default=0.1)\nsegments = input_int("Segments", default=8)\noutput("Radius", radius)\n',
+            encoding="utf-8",
+        )
+        group = compiler.create_library_catalog_group("local", "local_reload_state")
+        pointer = group.as_pointer()
+        wrapper = bpy.data.node_groups.new("NFTest_library_reload_state_wrapper", "GeometryNodeTree")
+        wrapper.interface.new_socket(name="External Segments", in_out="INPUT", socket_type="NodeSocketInt")
+        wrapper.interface.new_socket(name="Result", in_out="OUTPUT", socket_type="NodeSocketFloat")
+        wrapper_input = wrapper.nodes.new("NodeGroupInput")
+        wrapper_output = wrapper.nodes.new("NodeGroupOutput")
+        group_node = wrapper.nodes.new("GeometryNodeGroup")
+        group_node.node_tree = group
+        wrapper.links.new(wrapper_input.outputs["External Segments"], group_node.inputs["Segments"])
+        wrapper.links.new(group_node.outputs["Radius"], wrapper_output.inputs["Result"])
+        group_node.inputs["Radius"].default_value = 0.33
+
+        source.write_text(
+            'radius = input_float("Radius", default=0.2)\nsegments = input_int("Segments", default=12)\noutput("Radius", radius)\n',
+            encoding="utf-8",
+        )
+        state = compiler._capture_node_external_state(wrapper, group_node)
+        compiler.update_library_catalog_group(group, "local", "local_reload_state")
+        restored = compiler._restore_node_external_state(wrapper, group_node, state)
+
+        check(group.as_pointer() == pointer, "library reload replaced the selected root group")
+        check(abs(float(group_node.inputs["Radius"].default_value) - 0.33) < 1e-6, "library reload lost user input override")
+        check(int(group_node.inputs["Segments"].default_value) == 12, "library reload did not apply new default to non-overridden input")
+        check(restored == 2, f"library reload restored unexpected link count: {restored}")
+        incoming = [link for link in wrapper.links if link.to_node == group_node and link.to_socket.name == "Segments"]
+        outgoing = [link for link in wrapper.links if link.from_node == group_node and link.from_socket.name == "Radius"]
+        check(len(incoming) == 1, "library reload lost incoming external link")
+        check(len(outgoing) == 1, "library reload lost outgoing external link")
+    finally:
+        source.unlink(missing_ok=True)
+        if wrapper is not None and bpy.data.node_groups.get(wrapper.name) is wrapper:
+            bpy.data.node_groups.remove(wrapper, do_unlink=True)
+        if group is not None and bpy.data.node_groups.get(group.name) is group:
+            bpy.data.node_groups.remove(group, do_unlink=True)

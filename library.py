@@ -823,6 +823,68 @@ def _backend_signature_for_record(record: LibraryEntryRecord | None) -> str:
     return str(record.module_path.stat().st_mtime_ns)
 
 
+def _group_catalog_provenance(group) -> tuple[str, str]:
+    """Return the catalog namespace/name stored on a materialized group."""
+    try:
+        namespace = str(group.get("nodeforge_library_namespace") or "")
+        name = str(group.get("nodeforge_library_name") or "")
+    except Exception as exc:
+        raise CompileError("Selected node group has no readable NodeForge library provenance") from exc
+    if not namespace or not name:
+        raise CompileError("Selected node group has no NodeForge library provenance")
+    return namespace, name
+
+
+def resolve_reloadable_library_entry(group, namespace: str | None = None, name: str | None = None) -> LibraryEntryRecord:
+    """Resolve the current editable catalog record compatible with an existing group.
+
+    Package version is intentionally not stable ownership for reloads: a group
+    may move to a newer installed version of the same package. Package identity
+    itself remains stable so an unrelated package cannot claim the datablock.
+    """
+    stored_namespace, stored_name = _group_catalog_provenance(group)
+    namespace = stored_namespace if namespace is None else namespace
+    name = stored_name if name is None else name
+    if namespace != stored_namespace or name != stored_name:
+        raise CompileError(
+            f"Selected node group belongs to {stored_namespace}/{stored_name}, not {namespace}/{name}"
+        )
+    record = find_library_entry_record(namespace, name)
+    if record is None:
+        raise CompileError(f"Current source for {namespace} library entry {name!r} is unavailable")
+    if record.source_path is None:
+        raise CompileError(f"{namespace} library entry {name!r} has no reloadable .nf source")
+
+    try:
+        stored_package_id = str(group.get("nodeforge_package_id") or "")
+    except Exception:
+        stored_package_id = ""
+    current_package_id = record.package_id or ""
+    if stored_package_id != current_package_id:
+        raise CompileError(
+            f"Current source for {namespace} library entry {name!r} belongs to a different package"
+        )
+    return record
+
+
+def update_materialized_library_entry_group(namespace: str, name: str, group, compile_group_callback):
+    """Recompile the current editable catalog source into an existing root group."""
+    record = resolve_reloadable_library_entry(group, namespace, name)
+    source = load_library_entry_source(namespace, name)
+    backend_builtins = backend_builtins_for_entry(namespace, name)
+    updated = compile_group_callback(
+        source,
+        getattr(group, "name", _group_name_for_record(record)),
+        existing_group=group,
+        backend_builtins=backend_builtins,
+    )
+    # Compilation/cutover is the mutation boundary. Provenance is stamped only
+    # after it succeeds so a failed rebuild keeps the original metadata intact.
+    _write_package_metadata(updated, record)
+    updated["nodeforge_library_source"] = source
+    return updated
+
+
 def _assert_owned_materialized_group(existing, record: LibraryEntryRecord, group_name: str) -> None:
     """Reject cross-package reuse for catalog-generated datablocks."""
     try:
@@ -1116,6 +1178,8 @@ __all__ = [
     "find_library_entry_record",
     "has_library_entry",
     "load_library_entry_source",
+    "resolve_reloadable_library_entry",
+    "update_materialized_library_entry_group",
     "materialize_library_entry_group",
     "get_or_create_library_entry_group",
     "make_library_call_node",
