@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import importlib.util
 import os
@@ -183,21 +184,25 @@ def local_source_roots(*, include_missing: bool = False) -> list[dict[str, objec
 
 
 def link_local_source_folder(path: str, *, label: str = "") -> Path:
-    """Register an existing external directory as a read-only Local source root."""
+    """Register one non-overlapping external directory as a read-only Local root."""
     target = _canonical_path(path)
     if not target.is_dir():
         raise CompileError(f"Local source folder does not exist: {target}")
     managed = _canonical_path(_default_local_catalog_dir())
-    if _path_key(target) == _path_key(managed):
-        return managed
     if _paths_overlap(target, managed):
-        raise CompileError("Linked Local source folders may not overlap the managed Local catalog")
+        raise CompileError("Imported Local folders may not overlap the managed Local catalog")
+
     roots = _read_local_source_registry()
     target_key = _path_key(target)
-    if any(_path_key(item["path"]) == target_key for item in roots):
-        raise CompileError(f"Local source folder is already linked: {target}")
-    if any(_paths_overlap(target, item["path"]) for item in roots):
-        raise CompileError("Linked Local source folders may not overlap each other")
+    for item in roots:
+        if item.get("kind", "folder") != "folder":
+            continue
+        existing = _canonical_path(item["path"])
+        if _path_key(existing) == target_key:
+            return target
+        if _paths_overlap(target, existing):
+            raise CompileError("Imported Local folders may not overlap each other")
+
     roots.append({"path": str(target), "label": (label or target.name or str(target)).strip(), "kind": "folder"})
     _write_local_source_registry(roots)
     return target
@@ -221,47 +226,30 @@ def local_source_files(*, include_missing: bool = False) -> list[dict[str, objec
     return records
 
 
-def link_local_source_file(path: str) -> Path:
-    """Register one external .nf file as a live Local source without copying it."""
-    target = _canonical_path(path)
-    if not target.is_file() or target.suffix.lower() not in _SOURCE_EXTENSIONS:
-        raise CompileError(f"Local source file must be an existing .nf script: {target}")
-    _validate_public_entry_name(target.stem, "Local script")
-    managed = _canonical_path(_default_local_catalog_dir())
-    try:
-        target.relative_to(managed)
-    except ValueError:
-        pass
-    else:
-        return target
-    roots = _read_local_source_registry()
-    target_key = _path_key(target)
-    if any(_path_key(item["path"]) == target_key for item in roots):
-        return target
-    for item in roots:
-        if item.get("kind", "folder") != "folder":
-            continue
-        folder = _canonical_path(item["path"])
-        try:
-            target.relative_to(folder)
-            return target
-        except ValueError:
-            pass
-    roots.append({"path": str(target), "label": target.name, "kind": "file"})
-    _write_local_source_registry(roots)
-    return target
-
-
-def unlink_local_source_folder(path: str) -> Path:
-    """Remove one external Local source root registration without deleting source files."""
+def _unlink_local_source_registration(path: str | Path, *, kind: str) -> Path:
+    """Remove one Local registry entry of *kind* without mutating its external path."""
     target = _canonical_path(path)
     target_key = _path_key(target)
     roots = _read_local_source_registry()
-    kept = [item for item in roots if _path_key(item["path"]) != target_key]
+    kept = [
+        item for item in roots
+        if not (_path_key(item["path"]) == target_key and item.get("kind", "folder") == kind)
+    ]
     if len(kept) == len(roots):
-        raise CompileError(f"Local source folder is not linked: {target}")
+        noun = "folder" if kind == "folder" else "file"
+        raise CompileError(f"Local source {noun} is not linked: {target}")
     _write_local_source_registry(kept)
     return target
+
+
+def unlink_local_source_folder(path: str | Path) -> Path:
+    """Remove one imported Local root registration without touching external files."""
+    return _unlink_local_source_registration(path, kind="folder")
+
+
+def unlink_local_source_file(path: str | Path) -> Path:
+    """Remove one legacy linked-file registration without touching the external file."""
+    return _unlink_local_source_registration(path, kind="file")
 
 
 def _package_root() -> Path:
@@ -534,8 +522,8 @@ def _candidate_records(namespace: str) -> list[LibraryEntryRecord]:
 def local_browser_records(current_path: str = "") -> list[dict[str, object]]:
     """Return direct children for the Local mini file browser's current directory."""
     managed_root = _canonical_path(ensure_local_catalog_dir())
-    linked_folders = local_source_roots()[1:]
-    linked_files = local_source_files()
+    linked_folders = local_source_roots(include_missing=True)[1:]
+    linked_files = local_source_files(include_missing=True)
 
     location = _canonical_path(current_path) if current_path else None
     if location is None:
@@ -1024,81 +1012,127 @@ def sanitize_local_folder_path(raw: str) -> tuple[str, ...]:
     return parts
 
 
-def create_local_folder(folder_path: str) -> Path:
-    """Create a validated user-owned folder under local/."""
-    parts = sanitize_local_folder_path(folder_path)
-    root = ensure_local_catalog_dir()
-    target = root.joinpath(*parts) if parts else root
+def _resolve_owned_local_path(path: Path | str, *, root: Path | None = None) -> Path:
+    """Resolve *path* and require its current filesystem topology to stay in managed Local."""
+    managed = _canonical_path(root or ensure_local_catalog_dir())
+    resolved = _canonical_path(path)
     try:
-        target.relative_to(root)
+        resolved.relative_to(managed)
     except ValueError as exc:
-        raise CompileError("Local folder path escapes local catalog") from exc
-    target.mkdir(parents=True, exist_ok=True)
+        raise CompileError("Local path resolves outside the managed Local catalog") from exc
+    return resolved
+
+
+def _managed_local_target(path: Path | str) -> Path:
+    """Return a concrete managed path after checking its resolved ownership."""
+    raw = Path(path).expanduser()
+    root = _canonical_path(ensure_local_catalog_dir())
+    candidate = raw if raw.is_absolute() else root / raw
+    candidate = candidate.absolute()
+    _resolve_owned_local_path(candidate, root=root)
+    return candidate
+
+
+def create_local_folder(folder_path: str) -> Path:
+    """Create a validated folder under the managed Local root without following escapes."""
+    parts = sanitize_local_folder_path(folder_path)
+    if not parts:
+        raise CompileError("Local folder path is empty")
+    root = _canonical_path(ensure_local_catalog_dir())
+    current = root
+    for part in parts:
+        candidate = current / part
+        resolved = _resolve_owned_local_path(candidate, root=root)
+        if candidate.exists() or candidate.is_symlink():
+            if not resolved.is_dir():
+                raise CompileError(f"Local folder path is not a directory: {candidate}")
+            current = resolved
+            continue
+        try:
+            candidate.mkdir()
+        except OSError as exc:
+            raise CompileError(f"Could not create Local folder {candidate.name!r}: {exc}") from exc
+        current = _resolve_owned_local_path(candidate, root=root)
+    return current
+
+
+def delete_local_source(path: str | Path) -> Path:
+    """Delete one concrete managed Local source file selected by filesystem path."""
+    target = _managed_local_target(path)
+    if target.suffix.lower() not in _SOURCE_EXTENSIONS:
+        raise CompileError(f"Local source is not a deletable script: {target}")
+    if not target.exists():
+        raise CompileError(f"Local source does not exist: {target}")
+    if not target.is_file():
+        raise CompileError(f"Local source is not a regular file: {target}")
+    try:
+        target.unlink()
+    except OSError as exc:
+        raise CompileError(f"Could not delete Local source {target.name!r}: {exc}") from exc
     return target
 
 
-def delete_local_source(name: str) -> Path:
-    """Delete one validated user-owned script from the persistent local catalog."""
-    public_name = sanitize_library_entry_name(name)
-    record = find_library_entry_record("local", public_name)
-    if record is None or record.source_path is None:
-        raise CompileError(f"Local script {public_name!r} does not exist")
-
-    root = ensure_local_catalog_dir().resolve()
-    target = record.source_path.resolve()
+def delete_local_folder(folder_path: str | Path) -> Path:
+    """Delete one empty managed Local directory without recursive traversal."""
+    root = _canonical_path(ensure_local_catalog_dir())
+    target = _managed_local_target(folder_path)
+    if target == root:
+        raise CompileError("The managed Local root cannot be deleted")
+    if not target.exists():
+        raise CompileError(f"Local folder does not exist: {target}")
+    if not target.is_dir():
+        raise CompileError(f"Local folder is not a directory: {target}")
     try:
-        target.relative_to(root)
-    except ValueError as exc:
-        raise CompileError("Linked Local scripts are read-only; unlink the source folder instead") from exc
-    if target.suffix not in _SOURCE_EXTENSIONS or not target.is_file():
-        raise CompileError(f"Local script {public_name!r} is not a deletable source file")
-
-    target.unlink()
+        target.rmdir()
+    except OSError as exc:
+        if exc.errno in {errno.ENOTEMPTY, errno.EEXIST}:
+            raise CompileError(f"Local folder is not empty: {target.name}") from exc
+        raise CompileError(f"Could not delete Local folder {target.name!r}: {exc}") from exc
     return target
 
 
 def save_local_source(name: str, source: str, *, folder_path: str = "", overwrite: bool = False) -> Path:
-    """Persist a DSL source file inside local/ with duplicate-safe semantics."""
+    """Persist one DSL source at an exact managed path without global name resolution."""
     public_name = sanitize_library_entry_name(name)
     if not (source or "").strip():
         raise CompileError("Local script source is empty")
     folder_parts = sanitize_local_folder_path(folder_path)
-    root = ensure_local_catalog_dir()
-    folder = root.joinpath(*folder_parts) if folder_parts else root
-    try:
-        folder.relative_to(root)
-    except ValueError as exc:
-        raise CompileError("Local save path escapes local catalog") from exc
-    folder.mkdir(parents=True, exist_ok=True)
-    target = folder / f"{public_name}.nf"
+    root = _canonical_path(ensure_local_catalog_dir())
+    folder = create_local_folder("/".join(folder_parts)) if folder_parts else root
+    folder = _resolve_owned_local_path(folder, root=root)
+    target_raw = folder / f"{public_name}.nf"
+    target = _resolve_owned_local_path(target_raw, root=root)
 
-    existing = find_library_entry_record("local", public_name)
     if not overwrite:
-        if existing is not None:
-            raise CompileError(f"Local script {public_name!r} already exists")
+        if target_raw.exists() or target_raw.is_symlink():
+            raise CompileError(f"Local script already exists at {target_raw}")
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        fd = os.open(str(target), flags, 0o644)
+        try:
+            fd = os.open(str(target_raw), flags, 0o644)
+        except FileExistsError as exc:
+            raise CompileError(f"Local script already exists at {target_raw}") from exc
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(source)
         except Exception:
             try:
-                target.unlink(missing_ok=True)
+                target_raw.unlink(missing_ok=True)
             finally:
                 raise
-        return target
+        return _resolve_owned_local_path(target_raw, root=root)
 
-    if existing is None:
-        raise CompileError(f"Local script {public_name!r} does not exist")
-    if existing.source_path != target or target.suffix != ".nf" or target.name != f"{public_name}.nf":
-        raise CompileError(f"Local script {public_name!r} exists through a different layout or folder")
+    if not target_raw.exists() or not target_raw.is_file():
+        raise CompileError(f"Local script does not exist at {target_raw}")
+    target = _resolve_owned_local_path(target_raw, root=root)
     tmp_path: Path | None = None
     try:
         fd, tmp_name = tempfile.mkstemp(prefix=f".{public_name}.", suffix=".tmp", dir=str(folder))
         tmp_path = Path(tmp_name)
+        _resolve_owned_local_path(tmp_path, root=root)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(source)
-        os.replace(str(tmp_path), str(target))
+        _resolve_owned_local_path(target_raw, root=root)
+        os.replace(str(tmp_path), str(target_raw))
         tmp_path = None
     finally:
         if tmp_path is not None:
@@ -1193,13 +1227,13 @@ __all__ = [
     "ensure_local_catalog_dir",
     "local_source_roots",
     "link_local_source_folder",
-    "link_local_source_file",
-    "local_source_files",
     "unlink_local_source_folder",
     "local_browser_records",
     "sanitize_library_entry_name",
     "sanitize_local_folder_path",
     "create_local_folder",
+    "delete_local_folder",
+    "delete_local_source",
     "save_local_source",
     "library_function_names",
     "library_function_records",

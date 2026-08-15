@@ -88,3 +88,18 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.49.72
 
 - Added **Reload from Source** for selected library-backed node groups, preserving root identity and selected-node state while rebuilding from the current catalog source.
+
+## 0.49.73
+
+- Simplified Local external sources to read-only imported folders with explicit **Remove from Local**, added managed file and empty-folder deletion, path-based managed mutations, imported-root overlap checks, and folder-only **Add Folder...** selection.
+
+## 0.49.74
+
+- Restored Local folder row selection by moving folder navigation to a separate arrow action, so managed folders and imported roots can be selected before Delete/Remove.
+## 0.49.75
+
+- Removed catalog/filesystem resolution from the NodeForge N-panel redraw path so selected-node UI state changes no longer rescan Local roots or package manifests.
+
+## 0.49.76
+
+- Preserved generated Blender resources when NodeForge is disabled or uninstalled so compiled Geometry Nodes setups continue evaluating without the add-on enabled.

@@ -6,7 +6,7 @@ import importlib
 import traceback
 import addon_utils
 from pathlib import Path
-from bpy.types import Operator, Panel, PropertyGroup, UIList, AddonPreferences, OperatorFileListElement
+from bpy.types import Operator, Panel, PropertyGroup, UIList, AddonPreferences
 from bpy.props import StringProperty, PointerProperty, CollectionProperty, IntProperty, BoolProperty, EnumProperty
 
 from .compiler import (
@@ -28,10 +28,12 @@ from .library import (
     local_browser_records,
     local_source_roots,
     link_local_source_folder,
-    link_local_source_file,
+    unlink_local_source_folder,
+    unlink_local_source_file,
     ensure_local_catalog_dir,
     apply_function_node_display_name,
     create_local_folder,
+    delete_local_folder,
     save_local_source,
     delete_local_source,
     resolve_reloadable_library_entry,
@@ -132,14 +134,15 @@ class NODEFORGE_UL_function_library(UIList):
     """Draw available function-library entries in the N-panel."""
 
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
-        """Draw one catalog entry, using clickable folders for the Local browser."""
+        """Draw one catalog entry while keeping Local folders selectable."""
         row = layout.row(align=True)
         kind = getattr(item, "kind", "")
         if kind in {"folder", "linked_folder"}:
+            row.label(text=item.name, icon='FILE_FOLDER')
             op = row.operator(
                 "nodeforge.open_local_folder",
-                text=item.name,
-                icon='FILE_FOLDER',
+                text="",
+                icon='FORWARD',
                 emboss=False,
             )
             op.path = item.path
@@ -399,15 +402,22 @@ class NODEFORGE_OT_reload_selected_library_group(Operator):
 
     @classmethod
     def poll(cls, context):
-        """Enable only for a selected group with compatible reloadable provenance."""
+        """Enable for a selected group that carries NodeForge library provenance.
+
+        Keep catalog/source resolution out of this UI hot path. Blender may call
+        operator polls repeatedly while redrawing the N-panel, so filesystem and
+        package validation belongs in :meth:`execute` after the user clicks Reload.
+        """
         node = _selected_group_node(context)
         if node is None:
             return False
+        group = node.node_tree
         try:
-            resolve_reloadable_library_entry(node.node_tree)
+            namespace = str(group.get("nodeforge_library_namespace") or "")
+            name = str(group.get("nodeforge_library_name") or "")
         except Exception:
             return False
-        return True
+        return bool(namespace and name)
 
     def execute(self, context):
         """Reload the selected group in place and restore its external node state."""
@@ -712,16 +722,14 @@ class NODEFORGE_OT_local_browser_back(Operator):
 
 
 class NODEFORGE_OT_import_local(Operator):
-    """Link selected external .nf files or one external folder into Local."""
+    """Add one external directory as a read-only Local source root."""
 
     bl_idname = "nodeforge.import_local"
-    bl_label = "Import"
-    bl_description = "Use external .nf files or a folder directly from disk without copying them"
+    bl_label = "Add Folder"
+    bl_description = "Add an external folder to Local without copying or modifying its contents"
     bl_options = {'REGISTER'}
 
     directory: StringProperty(subtype="DIR_PATH", default="")
-    files: CollectionProperty(type=OperatorFileListElement)
-    filter_glob: StringProperty(default="*.nf", options={'HIDDEN'})
 
     def invoke(self, context, event):
         context.window_manager.fileselect_add(self)
@@ -729,25 +737,101 @@ class NODEFORGE_OT_import_local(Operator):
 
     def execute(self, context):
         props = getattr(context.scene, "gn_script_mvp", None)
-        selected = [Path(self.directory) / item.name for item in self.files if item.name]
+        folder = Path(self.directory).expanduser()
         try:
-            if selected:
-                for path in selected:
-                    link_local_source_file(str(path))
-                message = f"Imported {len(selected)} Local file(s)"
-            else:
-                folder = Path(self.directory).expanduser()
-                if not folder.is_dir():
-                    raise ValueError("Select .nf files or a folder")
-                link_local_source_folder(str(folder))
-                message = f"Imported Local folder: {folder.name}"
+            if not folder.is_dir():
+                raise ValueError("Select an existing folder")
+            linked = link_local_source_folder(str(folder))
             if props is not None:
                 props.local_browser_path = ""
                 _refresh_catalog_items(props, "local")
         except Exception as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
-        self.report({'INFO'}, message)
+        self.report({'INFO'}, f"Added Local folder: {linked.name}")
+        return {'FINISHED'}
+
+
+class NODEFORGE_OT_delete_local_file(Operator):
+    """Delete the concrete managed Local source selected in the browser."""
+
+    bl_idname = "nodeforge.delete_local_file"
+    bl_label = "Delete File"
+    bl_description = "Delete the selected file from NodeForge-managed Local storage"
+    bl_options = {'REGISTER'}
+
+    path: StringProperty(name="Path", default="", options={'HIDDEN'})
+
+    def execute(self, context):
+        props = getattr(context.scene, "gn_script_mvp", None)
+        try:
+            deleted = delete_local_source(self.path)
+            if props is not None:
+                _refresh_catalog_items(props, "local")
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Deleted Local file: {deleted.name}")
+        return {'FINISHED'}
+
+
+class NODEFORGE_OT_delete_local_folder(Operator):
+    """Delete the concrete empty managed Local folder selected in the browser."""
+
+    bl_idname = "nodeforge.delete_local_folder"
+    bl_label = "Delete Folder"
+    bl_description = "Delete the selected empty folder from NodeForge-managed Local storage"
+    bl_options = {'REGISTER'}
+
+    path: StringProperty(name="Path", default="", options={'HIDDEN'})
+
+    def execute(self, context):
+        props = getattr(context.scene, "gn_script_mvp", None)
+        try:
+            deleted = delete_local_folder(self.path)
+            if props is not None:
+                _refresh_catalog_items(props, "local")
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Deleted Local folder: {deleted.name}")
+        return {'FINISHED'}
+
+
+class NODEFORGE_OT_remove_local_source(Operator):
+    """Remove one imported Local root or legacy linked file without touching disk."""
+
+    bl_idname = "nodeforge.remove_local_source"
+    bl_label = "Remove from Local"
+    bl_description = "Remove the selected external source registration without deleting external files"
+    bl_options = {'REGISTER'}
+
+    path: StringProperty(name="Path", default="", options={'HIDDEN'})
+    kind: StringProperty(name="Kind", default="folder", options={'HIDDEN'})
+
+    def execute(self, context):
+        props = getattr(context.scene, "gn_script_mvp", None)
+        try:
+            target = Path(self.path).expanduser().resolve(strict=False)
+            if self.kind == "file":
+                removed = unlink_local_source_file(target)
+            else:
+                removed = unlink_local_source_folder(target)
+            if props is not None:
+                current_raw = getattr(props, "local_browser_path", "")
+                if current_raw:
+                    current = Path(current_raw).expanduser().resolve(strict=False)
+                    try:
+                        current.relative_to(target)
+                    except ValueError:
+                        pass
+                    else:
+                        props.local_browser_path = ""
+                _refresh_catalog_items(props, "local")
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Removed from Local: {removed.name}")
         return {'FINISHED'}
 
 
@@ -834,6 +918,29 @@ class NODEFORGE_OT_save_to_local(Operator):
         return {'FINISHED'}
 
 
+def _draw_local_selected_action(layout, item) -> None:
+    """Draw the ownership-specific destructive action for one selected Local row."""
+    if item is None:
+        return
+    kind = getattr(item, "kind", "")
+    managed = bool(getattr(item, "managed", False))
+    path = getattr(item, "path", "")
+    if kind == "script" and managed:
+        op = layout.operator(NODEFORGE_OT_delete_local_file.bl_idname, text="Delete File", icon='TRASH')
+        op.path = path
+    elif kind == "folder" and managed:
+        op = layout.operator(NODEFORGE_OT_delete_local_folder.bl_idname, text="Delete Folder", icon='TRASH')
+        op.path = path
+    elif kind in {"linked_folder", "missing_linked_folder"}:
+        op = layout.operator(NODEFORGE_OT_remove_local_source.bl_idname, text="Remove from Local", icon='X')
+        op.path = path
+        op.kind = "folder"
+    elif kind in {"linked_script", "missing_linked_script"}:
+        op = layout.operator(NODEFORGE_OT_remove_local_source.bl_idname, text="Remove from Local", icon='X')
+        op.path = path
+        op.kind = "file"
+
+
 def _draw_library_catalog_panel(layout, context, namespace: str, collection_name: str, index_name: str, rows: int):
     """Draw one collapsible library catalog panel body."""
     props = context.scene.gn_script_mvp
@@ -857,6 +964,8 @@ def _draw_library_catalog_panel(layout, context, namespace: str, collection_name
     row.enabled = item is not None and _active_gn_tree(context) is not None
     op = row.operator(NODEFORGE_OT_create_function_group.bl_idname, text="Add Node Group", icon='NODETREE')
     op.namespace = namespace
+    if namespace == "local":
+        _draw_local_selected_action(layout, item)
     if _active_gn_tree(context) is None:
         layout.label(text="Open a Geometry Nodes editor to add", icon='INFO')
 
@@ -890,14 +999,14 @@ class GNSCRIPT_MVP_PT_panel(Panel):
         row.enabled = selected_group is not None
         row.operator(GNSCRIPT_MVP_OT_update_selected_group.bl_idname, text="Update Selected NodeGroup")
         row = layout.row()
-        row.enabled = NODEFORGE_OT_reload_selected_library_group.poll(context)
         row.operator(NODEFORGE_OT_reload_selected_library_group.bl_idname, text="Reload from Source", icon='FILE_REFRESH')
+        embedded_source = _extract_group_source(selected_group.node_tree) if selected_group is not None else ""
         row = layout.row()
-        row.enabled = selected_group is not None and bool(_extract_group_source(selected_group.node_tree))
+        row.enabled = bool(embedded_source)
         row.operator(GNSCRIPT_MVP_OT_load_selected_group_source.bl_idname, text="Load Script From Selected NodeGroup")
         if selected_group is None:
             layout.label(text="Select a Group node to update/load", icon='INFO')
-        elif not _extract_group_source(selected_group.node_tree):
+        elif not embedded_source:
             layout.label(text="Selected Group has no embedded NodeForge source", icon='INFO')
 
 
@@ -944,7 +1053,7 @@ class NODEFORGE_PT_library_local(Panel):
         row = layout.row(align=True)
         row.operator(NODEFORGE_OT_create_local_folder.bl_idname, text="New Folder", icon='NEWFOLDER')
         row.operator(NODEFORGE_OT_save_to_local.bl_idname, text="Save", icon='FILE_TICK')
-        row.operator(NODEFORGE_OT_import_local.bl_idname, text="Import", icon='IMPORT')
+        row.operator(NODEFORGE_OT_import_local.bl_idname, text="Add Folder...", icon='NEWFOLDER')
         _draw_library_catalog_panel(layout, context, "local", "local_items", "local_index", rows=7)
 
 
@@ -1047,6 +1156,9 @@ classes = (
     NODEFORGE_OT_open_local_folder,
     NODEFORGE_OT_local_browser_back,
     NODEFORGE_OT_import_local,
+    NODEFORGE_OT_delete_local_file,
+    NODEFORGE_OT_delete_local_folder,
+    NODEFORGE_OT_remove_local_source,
     NODEFORGE_OT_create_local_folder,
     NODEFORGE_OT_save_to_local,
     GNSCRIPT_MVP_PT_panel,
@@ -1066,11 +1178,7 @@ def register():
     bpy.types.NODE_MT_add.append(menu_func)
 
 def unregister():
-    """Function `unregister` used by the NodeForge addon."""
-    try:
-        generated_resources.cleanup_live_group_resources()
-    except Exception:
-        pass
+    """Unregister NodeForge UI and operators without mutating generated node-group data."""
     try:
         bpy.types.NODE_MT_add.remove(menu_func)
     except Exception:

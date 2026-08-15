@@ -446,7 +446,7 @@ def cleanup_restart_orphans() -> None:
 
 
 def cleanup_live_group_resources() -> None:
-    """Remove verified generated IDs listed by live group metadata, used on unregister."""
+    """Explicitly remove verified generated IDs listed by live group metadata."""
     for group in list(bpy.data.node_groups):
         if getattr(group, "bl_idname", None) != "GeometryNodeTree":
             continue

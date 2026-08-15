@@ -41,6 +41,7 @@ def test_local_recursive_catalog_duplicate_and_save_contracts():
     duplicate_flat = local / 'local_duplicate_probe.nf'
     duplicate_nested = local / 'math' / 'local_duplicate_probe.nf'
     cross_folder = local / 'math' / 'local_cross_folder_duplicate.nf'
+    cross_folder_root = local / 'local_cross_folder_duplicate.nf'
     saved = local / 'local_saved_text_probe.nf'
     nested_saved = local / 'math' / 'local_nested_saved_probe.nf'
     try:
@@ -92,12 +93,14 @@ def test_local_recursive_catalog_duplicate_and_save_contracts():
         _cleanup(unsupported_source_layout)
 
         _write(cross_folder, 'x = input_float("X")\noutput("x", x)\n')
+        library.save_local_source('local_cross_folder_duplicate', 'x = 2\noutput("x", x)\n')
+        check(cross_folder_root.exists(), 'path-addressed save was blocked by same-name managed source elsewhere')
         try:
-            library.save_local_source('local_cross_folder_duplicate', 'x = 2\noutput("x", x)\n')
+            library.find_library_entry_record('local', 'local_cross_folder_duplicate')
         except CompileError:
             pass
         else:
-            raise AssertionError('cross-folder logical duplicate save was accepted')
+            raise AssertionError('duplicate managed public names did not remain ambiguous at language resolution')
 
         for bad in ('../escape', '/abs', '_private', 'bad-name'):
             try:
@@ -107,7 +110,7 @@ def test_local_recursive_catalog_duplicate_and_save_contracts():
             else:
                 raise AssertionError(f'invalid local folder accepted: {bad}')
     finally:
-        for path in (flat, nested, ignored_native_folder, unsupported_source_layout, duplicate_flat, duplicate_nested, cross_folder, saved, nested_saved):
+        for path in (flat, nested, ignored_native_folder, unsupported_source_layout, duplicate_flat, duplicate_nested, cross_folder, cross_folder_root, saved, nested_saved):
             _cleanup(path)
         math = local / 'math'
         if math.exists() and not any(math.iterdir()):

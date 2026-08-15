@@ -64,9 +64,64 @@ def test_reload_from_source_is_main_panel_action_only():
     main_end = source.index("class NODEFORGE_PT_library(Panel):", main_start)
     main_block = source[main_start:main_end]
     assert 'text="Reload from Source"' in main_block
-    assert "NODEFORGE_OT_reload_selected_library_group.poll(context)" in main_block
+    assert "NODEFORGE_OT_reload_selected_library_group.poll(context)" not in main_block
 
     catalog_start = source.index("def _draw_library_catalog_panel")
     catalog_end = source.index("class GNSCRIPT_MVP_PT_panel", catalog_start)
     catalog_block = source[catalog_start:catalog_end]
     assert "NODEFORGE_OT_reload_selected_library_group" not in catalog_block
+
+
+
+def test_reload_poll_keeps_catalog_resolution_out_of_ui_hot_path():
+    """Reload poll should inspect provenance only; source resolution belongs to execute()."""
+    source = UI_SOURCE.read_text(encoding="utf-8")
+    start = source.index("class NODEFORGE_OT_reload_selected_library_group")
+    poll_start = source.index("def poll", start)
+    execute_start = source.index("def execute", poll_start)
+    poll_block = source[poll_start:execute_start]
+    execute_end = source.index("class ", execute_start)
+    execute_block = source[execute_start:execute_end]
+
+    assert "nodeforge_library_namespace" in poll_block
+    assert "nodeforge_library_name" in poll_block
+    assert "resolve_reloadable_library_entry" not in poll_block
+    assert "resolve_reloadable_library_entry" in execute_block
+
+
+def test_main_panel_extracts_embedded_source_once_per_draw():
+    """Selected-group redraw should avoid repeated source extraction work."""
+    source = UI_SOURCE.read_text(encoding="utf-8")
+    start = source.index("class GNSCRIPT_MVP_PT_panel(Panel):")
+    end = source.index("class NODEFORGE_PT_library(Panel):", start)
+    block = source[start:end]
+    assert block.count("_extract_group_source(") == 1
+
+def test_local_panel_uses_folder_only_import_and_explicit_selected_actions():
+    """Local panel should add external folders and expose ownership-specific actions."""
+    source = UI_SOURCE.read_text(encoding="utf-8")
+    start = source.index("class NODEFORGE_PT_library_local")
+    end = source.index("class NODEFORGE_PT_library_functions", start)
+    block = source[start:end]
+    assert 'text="Add Folder..."' in block
+    helper_start = source.index("def _draw_local_selected_action")
+    helper_end = source.index("def _draw_library_catalog_panel", helper_start)
+    helper = source[helper_start:helper_end]
+    assert 'text="Delete File"' in helper
+    assert 'text="Delete Folder"' in helper
+    assert 'text="Remove from Local"' in helper
+
+
+def test_local_folder_rows_remain_selectable_and_use_separate_open_action():
+    """Folder labels must not be operators so UIList selection remains available for removal."""
+    source = UI_SOURCE.read_text(encoding="utf-8")
+    start = source.index("class NODEFORGE_UL_function_library")
+    end = source.index("class NODEFORGE_UL_packages", start)
+    block = source[start:end]
+    assert "row.label(text=item.name, icon='FILE_FOLDER')" in block
+    open_start = block.index('"nodeforge.open_local_folder"')
+    open_end = block.index("op.path = item.path", open_start)
+    open_call = block[open_start:open_end]
+    assert 'text=""' in open_call
+    assert "icon='FORWARD'" in open_call
+    assert "text=item.name" not in open_call
