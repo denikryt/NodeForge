@@ -42,7 +42,9 @@ def value_type_for_const(value):
         return TYPE_INT
     if isinstance(value, float):
         return TYPE_FLOAT
-    raise CompileError("Local function constant arguments must be numbers, booleans or vectors")
+    if isinstance(value, str):
+        return TYPE_STRING
+    raise CompileError("Local function constant arguments must be numbers, booleans, strings or vectors")
 
 
 def input_call_for_type(param_name, typ):
@@ -51,6 +53,7 @@ def input_call_for_type(param_name, typ):
         TYPE_GEOMETRY: "input_geometry", TYPE_MATERIAL: "input_material",
         TYPE_OBJECT: "input_object", TYPE_VECTOR: "input_vector",
         TYPE_BOOL: "input_bool", TYPE_INT: "input_int", TYPE_FLOAT: "input_float",
+        TYPE_STRING: "input_string",
     }
     constructor = constructors.get(typ)
     if constructor is None:

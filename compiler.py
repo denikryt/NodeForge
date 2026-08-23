@@ -11,6 +11,7 @@ from .values import Value, make_value
 from .nodes import (
     _new_node,
     _value,
+    _string_value,
     _compare,
     _combine_xyz_mixed,
     _socket_type_for,
@@ -262,6 +263,8 @@ class Compiler:
             return _value(self.group, value, x, y)
         if isinstance(value, float):
             return _value(self.group, value, x, y)
+        if isinstance(value, str):
+            return _string_value(self.group, value, x, y)
         if isinstance(value, (list, tuple)):
             return [self._compile_const_value(v, x, y) for v in value]
         raise CompileError("Unsupported compile-time value in runtime expression")

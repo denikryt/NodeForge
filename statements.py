@@ -5,6 +5,7 @@ from .errors import CompileError
 from .nodes import _new_node
 from .parsing import _literal_string
 from .compile_time import reject_compile_time_object
+from .values import Value, reject_tuple_value
 
 _ALLOWED_STORE_TYPES = {
     "FLOAT": "FLOAT",
@@ -69,6 +70,20 @@ def _check_no_extra_keywords(kws, allowed):
     if extra:
         raise CompileError("Unsupported keyword argument(s): " + ", ".join(sorted(extra)))
 
+
+def _string_value_or_literal(comp, expr, context):
+    """Return a compile-time string or a runtime String value for a socket argument."""
+    try:
+        return _literal_string(expr, context, comp.consts)
+    except CompileError:
+        value = comp.compile(expr)
+        reject_compile_time_object(value, context)
+        reject_tuple_value(value, context)
+        if not isinstance(value, Value) or value.typ != TYPE_STRING:
+            actual = getattr(value, "typ", type(value).__name__)
+            raise CompileError(f"{context} must be a compile-time string or runtime String, got {actual}")
+        return value
+
 def _store_named_attribute(group, geometry_socket, attr_name, value, selection=None, domain="POINT", data_type_override=None, x=0, y=0):
     """Function `_store_named_attribute` used by the NodeForge addon."""
     if data_type_override:
@@ -87,7 +102,12 @@ def _store_named_attribute(group, geometry_socket, attr_name, value, selection=N
     except Exception:
         pass
     node.inputs[1].default_value = True
-    node.inputs[2].default_value = attr_name
+    if isinstance(attr_name, Value):
+        if attr_name.typ != TYPE_STRING:
+            raise CompileError("store() attribute name must be String")
+        group.links.new(attr_name.socket, node.inputs[2])
+    else:
+        node.inputs[2].default_value = attr_name
     group.links.new(geometry_socket, node.inputs[0])
     if selection is not None:
         group.links.new(selection.socket, node.inputs[1])
@@ -116,4 +136,4 @@ def _unique_output_name(existing, requested):
     existing.add(name)
     return name
 
-__all__ = ['_attribute_data_type', '_attribute_domain', '_kw_dict', '_optional_string_kw', '_selection_kw', '_check_no_extra_keywords', '_store_named_attribute', '_set_position_node', '_unique_output_name']
+__all__ = ['_attribute_data_type', '_attribute_domain', '_kw_dict', '_optional_string_kw', '_selection_kw', '_check_no_extra_keywords', '_string_value_or_literal', '_store_named_attribute', '_set_position_node', '_unique_output_name']

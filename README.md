@@ -149,6 +149,39 @@ geo = set_material(geo, "Grass")
 
 The `Material` type token is supported by local functions, library function group sockets, and compatible raw node inputs and outputs.
 
+## String inputs
+
+Use `input_string(name, default="")` to expose a runtime String socket. String values can be passed through local functions, installed library functions, compatible raw Blender node sockets, outputs, and runtime `if` expressions.
+
+```python
+attribute_name = input_string("Attribute", default="Weight_A")
+
+weight = node(
+    "GeometryNodeInputNamedAttribute",
+    props={"data_type": "FLOAT"},
+    inputs={"Name": attribute_name},
+    output="Attribute",
+    typ=Float,
+)
+
+geo = store_named_attribute(
+    geo,
+    attribute_name,
+    weight,
+    domain="POINT",
+    type="FLOAT",
+)
+```
+
+The statement form accepts the same runtime String name:
+
+```python
+attribute_name = input_string("Attribute", default="Weight_A")
+store(attribute_name, position().x, domain="POINT", type="FLOAT")
+```
+
+`String` is a runtime socket type. Configuration arguments such as `domain=`, `type=`, raw-node `props=`, node identifiers, and socket names remain compile-time values. String is not a supported stored attribute data type; `store()` and `store_named_attribute()` continue to store Float, Int, Vector, Color, or Bool values.
+
 
 ### Object inputs
 
@@ -183,4 +216,4 @@ last = result[-1]
 
 Tuple results are compiler-side containers. Store them in one variable, unpack them into a flat tuple or list target, or select an element with a compile-time integer index. Arithmetic, `output()`, runtime indexing, nested tuples, starred unpacking, tuple parameters, and list returns require selecting or unpacking an individual value first.
 
-Local-function positional parameters accept simple NodeForge type annotations: `Float`, `Int`, `Bool`, `Vector`, `Geometry`, `Material`, and `Object`. An annotation constrains the helper input socket type; unannotated parameters retain call-site type inference.
+Local-function positional parameters accept simple NodeForge type annotations: `Float`, `Int`, `Bool`, `Vector`, `Geometry`, `Material`, `Object`, and `String`. An annotation constrains the helper input socket type; unannotated parameters retain call-site type inference.

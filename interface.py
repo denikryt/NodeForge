@@ -32,6 +32,8 @@ def _set_socket_default(socket, value):
                 socket.default_value[0] = float(value[0])
                 socket.default_value[1] = float(value[1])
                 socket.default_value[2] = float(value[2])
+        elif isinstance(value, str):
+            socket.default_value = value
         elif isinstance(value, bool):
             socket.default_value = bool(value)
         elif isinstance(value, int):

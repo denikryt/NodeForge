@@ -27,7 +27,9 @@ def compile_expr(comp, expr, depth=0):
             return _compare(comp.group, "NOT_EQUAL", val, zero, x, y)
         if isinstance(expr.value, (int, float)):
             return _value(comp.group, expr.value, x, y)
-        raise CompileError("Only numeric and boolean constants are supported")
+        if isinstance(expr.value, str):
+            return _string_value(comp.group, expr.value, x, y)
+        raise CompileError("Only numeric, boolean and string constants are supported")
 
     if isinstance(expr, ast.Name):
         if expr.id in TYPE_TOKEN_NAMES:

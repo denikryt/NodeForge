@@ -16,6 +16,7 @@ def _socket_type_for(typ):
         TYPE_INT: "NodeSocketInt",
         TYPE_MATERIAL: "NodeSocketMaterial",
         TYPE_OBJECT: "NodeSocketObject",
+        TYPE_STRING: "NodeSocketString",
     }[typ]
 
 def _new_node(group, bl_idname, x=0, y=0):
@@ -38,6 +39,13 @@ def _value(group, value, x=0, y=0):
     node.label = str(value)
     node.outputs[0].default_value = float(value)
     return Value(node.outputs[0], TYPE_FLOAT)
+
+
+def _string_value(group, value, x=0, y=0):
+    """Create a runtime String value from a compile-time Python string."""
+    node = _new_node(group, "FunctionNodeInputString", x, y)
+    node.string = str(value)
+    return Value(node.outputs[0], TYPE_STRING)
 
 def _is_number_type(typ):
     """Function `_is_number_type` used by the NodeForge addon."""
@@ -133,7 +141,14 @@ def _switch(group, cond, false_val, true_val, x=0, y=0):
     if false_val.typ != true_val.typ:
         raise CompileError("select() true/false values must have same type")
     node = _new_node(group, "GeometryNodeSwitch", x, y)
-    node.input_type = {TYPE_FLOAT: "FLOAT", TYPE_INT: "INT", TYPE_VECTOR: "VECTOR", TYPE_BOOL: "BOOLEAN", TYPE_GEOMETRY: "GEOMETRY"}[false_val.typ]
+    node.input_type = {
+        TYPE_FLOAT: "FLOAT",
+        TYPE_INT: "INT",
+        TYPE_VECTOR: "VECTOR",
+        TYPE_BOOL: "BOOLEAN",
+        TYPE_GEOMETRY: "GEOMETRY",
+        TYPE_STRING: "STRING",
+    }[false_val.typ]
     group.links.new(cond.socket, node.inputs[0])
     group.links.new(false_val.socket, node.inputs[1])
     group.links.new(true_val.socket, node.inputs[2])
@@ -201,4 +216,4 @@ def _ensure_float(v):
     if v.typ != TYPE_FLOAT:
         raise CompileError("Expected Float")
 
-__all__ = ['_socket_type_for', '_new_node', '_value', '_int_value', '_is_number_type', '_math', '_vector_math', '_combine_xyz', '_combine_xyz_mixed', '_separate_xyz', '_compare', '_boolean_math', '_switch', '_mix', '_clamp', '_position', '_normal', '_index', '_id', '_map_range', '_ensure_float']
+__all__ = ['_socket_type_for', '_new_node', '_value', '_string_value', '_int_value', '_is_number_type', '_math', '_vector_math', '_combine_xyz', '_combine_xyz_mixed', '_separate_xyz', '_compare', '_boolean_math', '_switch', '_mix', '_clamp', '_position', '_normal', '_index', '_id', '_map_range', '_ensure_float']

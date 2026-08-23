@@ -12,6 +12,7 @@ from .statements import (
     _kw_dict,
     _optional_string_kw,
     _selection_kw,
+    _string_value_or_literal,
     _check_no_extra_keywords,
     _store_named_attribute,
     _set_position_node,
@@ -448,10 +449,10 @@ def compile_statement(
         if ctx.geometry_socket is None:
             raise CompileError("Internal error: store() requires geometry mode")
         if len(call.args) != 2:
-            raise CompileError('store("attribute_name", value, selection=..., domain="POINT", type="FLOAT") expects 2 positional arguments')
+            raise CompileError('store(attribute_name, value, selection=..., domain="POINT", type="FLOAT") expects 2 positional arguments')
         kws = _kw_dict(call)
         _check_no_extra_keywords(kws, {"selection", "domain", "type"})
-        attr_name = _literal_string(call.args[0], "store() attribute name", comp.consts)
+        attr_name = _string_value_or_literal(comp, call.args[0], "store() attribute name")
         value = comp.compile(call.args[1])
         reject_compile_time_object(value, "store() value")
         reject_tuple_value(value, "store() value")

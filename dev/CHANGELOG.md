@@ -103,3 +103,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.49.76
 
 - Preserved generated Blender resources when NodeForge is disabled or uninstalled so compiled Geometry Nodes setups continue evaluating without the add-on enabled.
+
+## 0.49.77
+
+- Added runtime `String` values with `input_string()`, String sockets across raw/local/library calls, and runtime String attribute names for `store_named_attribute()` and `store()`.

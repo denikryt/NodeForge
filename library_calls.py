@@ -1,6 +1,6 @@
 """Adapters for calls into NodeForge library catalog entries."""
 
-from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR, TYPE_MATERIAL, TYPE_OBJECT
+from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR, TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING
 from .consteval import _is_const_vector
 from .errors import CompileError
 from .values import Value
@@ -29,6 +29,8 @@ def _const_arg_type(value):
         return TYPE_INT
     if isinstance(value, float):
         return TYPE_FLOAT
+    if isinstance(value, str):
+        return TYPE_STRING
     return None
 
 

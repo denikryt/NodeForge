@@ -3,7 +3,7 @@
 import ast
 from ..constants import TYPE_GEOMETRY, TYPE_MATERIAL
 from ..errors import CompileError
-from ..statements import _kw_dict, _check_no_extra_keywords, _selection_kw, _optional_string_kw
+from ..statements import _kw_dict, _check_no_extra_keywords, _selection_kw, _optional_string_kw, _string_value_or_literal
 from ..consteval import _const_eval
 from ..parsing import _literal_string
 from ..compile_time import reject_compile_time_object
@@ -136,9 +136,9 @@ def compile_call(comp, expr, depth=0):
     if name == "store_named_attribute":
         _check_no_extra_keywords(kws, {"selection", "domain", "type"})
         if len(expr.args) != 3:
-            raise CompileError('store_named_attribute(geometry, "name", value, selection=..., domain="POINT", type=...) expects 3 positional arguments')
+            raise CompileError('store_named_attribute(geometry, name, value, selection=..., domain="POINT", type=...) expects 3 positional arguments')
         geo = comp.compile(expr.args[0])
-        attr_name = _literal_string(expr.args[1], "store_named_attribute() name", comp.consts)
+        attr_name = _string_value_or_literal(comp, expr.args[1], "store_named_attribute() name")
         value = comp.compile(expr.args[2])
         reject_compile_time_object(geo, "store_named_attribute() geometry")
         reject_compile_time_object(value, "store_named_attribute() value")

@@ -1,12 +1,12 @@
 """Input/output related built-ins for NodeForge DSL."""
 
-from ..constants import TYPE_GEOMETRY, TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR, TYPE_MATERIAL, TYPE_OBJECT
+from ..constants import TYPE_GEOMETRY, TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR, TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING
 from ..errors import CompileError
 from ..statements import _kw_dict, _check_no_extra_keywords
 from ..parsing import _literal_string
 from ..consteval import _const_eval, _as_float_const, _is_const_vector
 
-NAMES = {"input_geometry", "input_float", "input_int", "input_bool", "input_vector", "input_material", "input_object"}
+NAMES = {"input_geometry", "input_float", "input_int", "input_bool", "input_vector", "input_material", "input_object", "input_string"}
 
 
 def compile_call(comp, expr, depth=0):
@@ -21,6 +21,7 @@ def compile_call(comp, expr, depth=0):
         "input_int": {"default"},
         "input_bool": {"default"},
         "input_vector": {"default"},
+        "input_string": {"default"},
     }
     _check_no_extra_keywords(kws, allowed_keywords[name])
     if len(expr.args) != 1:
@@ -53,5 +54,13 @@ def compile_call(comp, expr, depth=0):
             else:
                 raise CompileError("input_vector default= must be vector(x,y,z) or a 3-number tuple/list")
         return comp._create_input_socket_value(input_name, TYPE_VECTOR, default)
+    if name == "input_string":
+        if default_expr is None:
+            default = ""
+        else:
+            default = _const_eval(default_expr, comp.consts)
+            if not isinstance(default, str):
+                raise CompileError("input_string default= must be a compile-time string")
+        return comp._create_input_socket_value(input_name, TYPE_STRING, default)
 
     raise CompileError(f"Unsupported io builtin: {name}")

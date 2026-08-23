@@ -48,3 +48,8 @@
 
 - `tests/blender/test_local_linked_sources.py`: imported-folder add/remove and missing-root cleanup, root-overlap rejection, legacy linked-file cleanup, path-addressed managed save/overwrite/delete under duplicate public names, empty-folder deletion, and symlink-escape preflight.
 - `tests/unit/test_local_linked_sources_contract.py`: folder-only Local import UI, explicit destructive action labels, path-addressed managed mutations, root overlap checks, and atomic registry publication contract.
+
+## Runtime String values
+
+- `tests/unit/test_string_type.py`: `String` type token, `input_string` registration, local-function source lowering, constant argument inference, and raw-node type-token parsing.
+- `tests/blender/test_string_inputs.py`: String interface/defaults, literal lowering, raw String sockets, runtime attribute names for `store_named_attribute()` and `store()`, String Switch lowering, local/library function calls, update default preservation, and compile-time configuration/type diagnostics.
