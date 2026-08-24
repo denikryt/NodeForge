@@ -36,7 +36,8 @@ REMOVED_GLOBALS = {
 }
 
 ACCEPTED_CORE_CALLABLES = {
-    "input_geometry", "input_float", "input_int", "input_bool", "input_vector", "input_material", "input_object", "input_string",
+    "input_geometry", "input_float", "input_int", "input_bool", "input_vector", "input_material", "input_object", "input_string", "input_bundle",
+    "bundle", "bundle_get", "bundle_set",
     "position", "normal", "index", "id",
     "vector",
     "length", "distance", "dot", "normalize", "cross", "reflect", "project",

@@ -2,7 +2,7 @@ import ast
 
 import pytest
 
-from NodeForge.constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING, TYPE_TOKEN_NAMES, TYPE_VECTOR
+from NodeForge.constants import TYPE_BOOL, TYPE_BUNDLE, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING, TYPE_TOKEN_NAMES, TYPE_VECTOR
 from NodeForge.errors import CompileError
 from NodeForge.parsing import _collect_inputs, _parse_source
 from NodeForge.values import NodeResult, Value
@@ -20,6 +20,7 @@ def test_type_token_names_are_authoritative_runtime_types():
         "Material": TYPE_MATERIAL,
         "Object": TYPE_OBJECT,
         "String": TYPE_STRING,
+        "Bundle": TYPE_BUNDLE,
     }
 
 

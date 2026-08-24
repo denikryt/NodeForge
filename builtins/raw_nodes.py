@@ -10,6 +10,7 @@ from ..compile_time import reject_compile_time_object
 from ..consteval import _const_eval, _is_const_vector
 from ..constants import (
     TYPE_BOOL,
+    TYPE_BUNDLE,
     TYPE_FLOAT,
     TYPE_GEOMETRY,
     TYPE_INT,
@@ -38,7 +39,7 @@ INPUT_LITERAL = "literal_default"
 INPUT_SINGLE_LINK = "single_link"
 INPUT_MULTI_LINK = "multi_link"
 
-_SUPPORTED_TYPES = {TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR, TYPE_GEOMETRY, TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING}
+_SUPPORTED_TYPES = {TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR, TYPE_GEOMETRY, TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING, TYPE_BUNDLE}
 
 
 def compile_call(comp, expr, depth=0):
@@ -242,6 +243,8 @@ def _socket_runtime_type(socket):
         return TYPE_OBJECT
     if bl_idname.startswith("NodeSocketString"):
         return TYPE_STRING
+    if bl_idname.startswith("NodeSocketBundle"):
+        return TYPE_BUNDLE
     return None
 
 

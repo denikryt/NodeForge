@@ -773,6 +773,7 @@ def _copy_group_contents(src_group, dst_group):
         node_map[src_node.name] = dst_node
     _sync_repeat_zone_dynamic_items(src_group, node_map)
     _sync_capture_attribute_dynamic_items(src_group, node_map)
+    _sync_bundle_dynamic_items(src_group, node_map)
 
     for src_link in src_group.links:
         from_node = node_map.get(src_link.from_node.name)
@@ -808,6 +809,57 @@ def _copy_group_contents(src_group, dst_group):
     _copy_custom_properties(src_group, dst_group, strict=True)
 
 
+
+
+def _sync_bundle_dynamic_items(src_group, node_map):
+    """Recreate Bundle node dynamic items before restoring copied links.
+
+    Combine/Separate Bundle item collections define their dynamic sockets and
+    are not recreated by generic RNA property copying. Rebuild the collection
+    first so transactional cutover can restore links by socket index/name. Any
+    failure is fatal: swallowing it could commit a group with a silently
+    truncated Bundle signature when an item happens to be unlinked.
+    """
+    for src_node in src_group.nodes:
+        if getattr(src_node, "bl_idname", None) not in {"NodeCombineBundle", "NodeSeparateBundle"}:
+            continue
+        dst_node = node_map.get(src_node.name)
+        if dst_node is None:
+            raise CompileError(f"Bundle cutover lost destination node {src_node.name!r}")
+        if not hasattr(src_node, "bundle_items") or not hasattr(dst_node, "bundle_items"):
+            raise CompileError(
+                f"Bundle node {src_node.name!r} does not expose bundle_items during transactional update"
+            )
+        try:
+            dst_node.bundle_items.clear()
+        except Exception:
+            try:
+                for item in list(dst_node.bundle_items):
+                    dst_node.bundle_items.remove(item)
+            except Exception as exc:
+                raise CompileError(
+                    f"Failed to reset Bundle items for node {src_node.name!r}: {exc}"
+                ) from exc
+
+        for src_item in list(src_node.bundle_items):
+            try:
+                dst_item = dst_node.bundle_items.new(src_item.socket_type, src_item.name)
+                if hasattr(src_item, "structure_type") and hasattr(dst_item, "structure_type"):
+                    dst_item.structure_type = src_item.structure_type
+            except Exception as exc:
+                raise CompileError(
+                    f"Failed to recreate Bundle item {src_item.name!r} on node {src_node.name!r}: {exc}"
+                ) from exc
+
+        for attr in ("active_index", "define_signature"):
+            if not hasattr(src_node, attr) or not hasattr(dst_node, attr):
+                continue
+            try:
+                setattr(dst_node, attr, getattr(src_node, attr))
+            except Exception as exc:
+                raise CompileError(
+                    f"Failed to restore Bundle property {attr!r} on node {src_node.name!r}: {exc}"
+                ) from exc
 
 
 def _sync_capture_attribute_dynamic_items(src_group, node_map):

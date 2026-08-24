@@ -183,6 +183,29 @@ store(attribute_name, position().x, domain="POINT", type="FLOAT")
 `String` is a runtime socket type. Configuration arguments such as `domain=`, `type=`, raw-node `props=`, node identifiers, and socket names remain compile-time values. String is not a supported stored attribute data type; `store()` and `store_named_attribute()` continue to store Float, Int, Vector, Color, or Bool values.
 
 
+## Bundle values
+
+Use `Bundle` when several heterogeneous runtime values should travel through one Geometry Nodes socket. `bundle(...)` creates a Blender Combine Bundle node, `bundle_get(...)` reads one path, and `bundle_set(...)` writes or replaces one path.
+
+```python
+state = bundle(
+    name=input_string("Name", default="leaf_tip"),
+    translation=input_vector("Translation"),
+    enabled=input_bool("Enabled"),
+)
+
+translation = bundle_get(state, "translation", typ=Vector)
+state = bundle_set(state, "translation", translation * 2.0)
+output("State", state)
+```
+
+Use `input_bundle("State")` to expose a Bundle group input. Bundle values may cross local-function and installed library-function boundaries, may be nested inside another Bundle, and may be used as native Switch or Repeat Zone state where Blender provides Bundle sockets.
+
+`bundle_get()` requires an explicit `typ=` token because an opaque Bundle input does not carry a compiler-side schema. The path may be a string literal or a runtime `String` value. `bundle_set()` infers the stored item type from its runtime value.
+
+NodeForge arrays/lists remain compile-time containers used to generate graph structure. They may contain Bundle values, but an array is not itself a Bundle item. Bundle is a Blender runtime socket value carried through node links.
+
+
 ### Object inputs
 
 Create an Object socket with `input_object(name)`. Configure the lazy Object Info reader before accessing object data:
@@ -216,4 +239,4 @@ last = result[-1]
 
 Tuple results are compiler-side containers. Store them in one variable, unpack them into a flat tuple or list target, or select an element with a compile-time integer index. Arithmetic, `output()`, runtime indexing, nested tuples, starred unpacking, tuple parameters, and list returns require selecting or unpacking an individual value first.
 
-Local-function positional parameters accept simple NodeForge type annotations: `Float`, `Int`, `Bool`, `Vector`, `Geometry`, `Material`, `Object`, and `String`. An annotation constrains the helper input socket type; unannotated parameters retain call-site type inference.
+Local-function positional parameters accept simple NodeForge type annotations: `Float`, `Int`, `Bool`, `Vector`, `Geometry`, `Material`, `Object`, `String`, and `Bundle`. An annotation constrains the helper input socket type; unannotated parameters retain call-site type inference.

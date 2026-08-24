@@ -1,12 +1,12 @@
 """Input/output related built-ins for NodeForge DSL."""
 
-from ..constants import TYPE_GEOMETRY, TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR, TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING
+from ..constants import TYPE_GEOMETRY, TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR, TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING, TYPE_BUNDLE
 from ..errors import CompileError
 from ..statements import _kw_dict, _check_no_extra_keywords
 from ..parsing import _literal_string
 from ..consteval import _const_eval, _as_float_const, _is_const_vector
 
-NAMES = {"input_geometry", "input_float", "input_int", "input_bool", "input_vector", "input_material", "input_object", "input_string"}
+NAMES = {"input_geometry", "input_float", "input_int", "input_bool", "input_vector", "input_material", "input_object", "input_string", "input_bundle"}
 
 
 def compile_call(comp, expr, depth=0):
@@ -22,14 +22,15 @@ def compile_call(comp, expr, depth=0):
         "input_bool": {"default"},
         "input_vector": {"default"},
         "input_string": {"default"},
+        "input_bundle": set(),
     }
     _check_no_extra_keywords(kws, allowed_keywords[name])
     if len(expr.args) != 1:
         raise CompileError(f'{name}(name, ...) expects exactly one name argument')
     input_name = _literal_string(expr.args[0], f"{name}() name", comp.consts)
 
-    if name in {"input_geometry", "input_material", "input_object"}:
-        typ = {"input_geometry": TYPE_GEOMETRY, "input_material": TYPE_MATERIAL, "input_object": TYPE_OBJECT}[name]
+    if name in {"input_geometry", "input_material", "input_object", "input_bundle"}:
+        typ = {"input_geometry": TYPE_GEOMETRY, "input_material": TYPE_MATERIAL, "input_object": TYPE_OBJECT, "input_bundle": TYPE_BUNDLE}[name]
         return comp._create_input_socket_value(input_name, typ, None)
 
     default_expr = kws.get("default", None)

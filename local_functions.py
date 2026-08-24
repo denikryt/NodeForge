@@ -54,6 +54,7 @@ def input_call_for_type(param_name, typ):
         TYPE_OBJECT: "input_object", TYPE_VECTOR: "input_vector",
         TYPE_BOOL: "input_bool", TYPE_INT: "input_int", TYPE_FLOAT: "input_float",
         TYPE_STRING: "input_string",
+        TYPE_BUNDLE: "input_bundle",
     }
     constructor = constructors.get(typ)
     if constructor is None:

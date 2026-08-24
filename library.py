@@ -14,7 +14,7 @@ from pathlib import Path
 
 import bpy
 
-from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR, TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING
+from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR, TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING, TYPE_BUNDLE
 from .errors import CompileError
 from .interface import _set_socket_default
 from .nodes import _new_node
@@ -764,23 +764,23 @@ def compile_module_library_entry_call(comp, expr, depth=0, namespace="functions"
 
 
 def _socket_type_to_value_type(socket) -> str:
-    """Map a Blender group socket to a NodeForge semantic type."""
+    """Map a supported Blender group socket to a NodeForge semantic type."""
     bl_idname = getattr(socket, "bl_idname", "") or getattr(socket, "socket_type", "") or getattr(socket, "bl_socket_idname", "")
-    if bl_idname == "NodeSocketGeometry":
-        return TYPE_GEOMETRY
-    if bl_idname == "NodeSocketMaterial":
-        return TYPE_MATERIAL
-    if bl_idname == "NodeSocketObject":
-        return TYPE_OBJECT
-    if bl_idname == "NodeSocketVector":
-        return TYPE_VECTOR
-    if bl_idname == "NodeSocketBool":
-        return TYPE_BOOL
-    if bl_idname == "NodeSocketInt":
-        return TYPE_INT
-    if bl_idname == "NodeSocketString":
-        return TYPE_STRING
-    return TYPE_FLOAT
+    mappings = (
+        ("NodeSocketGeometry", TYPE_GEOMETRY),
+        ("NodeSocketMaterial", TYPE_MATERIAL),
+        ("NodeSocketObject", TYPE_OBJECT),
+        ("NodeSocketVector", TYPE_VECTOR),
+        ("NodeSocketBool", TYPE_BOOL),
+        ("NodeSocketInt", TYPE_INT),
+        ("NodeSocketString", TYPE_STRING),
+        ("NodeSocketBundle", TYPE_BUNDLE),
+        ("NodeSocketFloat", TYPE_FLOAT),
+    )
+    for prefix, typ in mappings:
+        if bl_idname.startswith(prefix):
+            return typ
+    raise CompileError(f"Unsupported Blender group socket type {bl_idname!r}")
 
 
 def _normalized_socket_name(name: str) -> str:

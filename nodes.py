@@ -17,6 +17,7 @@ def _socket_type_for(typ):
         TYPE_MATERIAL: "NodeSocketMaterial",
         TYPE_OBJECT: "NodeSocketObject",
         TYPE_STRING: "NodeSocketString",
+        TYPE_BUNDLE: "NodeSocketBundle",
     }[typ]
 
 def _new_node(group, bl_idname, x=0, y=0):
@@ -148,6 +149,7 @@ def _switch(group, cond, false_val, true_val, x=0, y=0):
         TYPE_BOOL: "BOOLEAN",
         TYPE_GEOMETRY: "GEOMETRY",
         TYPE_STRING: "STRING",
+        TYPE_BUNDLE: "BUNDLE",
     }[false_val.typ]
     group.links.new(cond.socket, node.inputs[0])
     group.links.new(false_val.socket, node.inputs[1])

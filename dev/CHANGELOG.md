@@ -107,3 +107,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.49.77
 
 - Added runtime `String` values with `input_string()`, String sockets across raw/local/library calls, and runtime String attribute names for `store_named_attribute()` and `store()`.
+
+## 0.49.78
+
+- Added first-class runtime `Bundle` values with `input_bundle()`, `bundle()`, `bundle_get()`, `bundle_set()`, Bundle sockets across raw/local/library calls, native Switch/Repeat state, and transactional dynamic-item preservation.

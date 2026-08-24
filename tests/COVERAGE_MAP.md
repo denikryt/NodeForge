@@ -53,3 +53,8 @@
 
 - `tests/unit/test_string_type.py`: `String` type token, `input_string` registration, local-function source lowering, constant argument inference, and raw-node type-token parsing.
 - `tests/blender/test_string_inputs.py`: String interface/defaults, literal lowering, raw String sockets, runtime attribute names for `store_named_attribute()` and `store()`, String Switch lowering, local/library function calls, update default preservation, and compile-time configuration/type diagnostics.
+
+## Runtime Bundle values
+
+- `tests/unit/test_bundle_type.py`: `Bundle` token, `input_bundle`, raw-node registration, local-function lowering, and runtime-only constant rules.
+- `tests/blender/test_bundle_runtime.py`: heterogeneous/nested Bundle construction, runtime paths, get/set evaluation, group panels, local/local-catalog/library boundaries, raw nodes, Bundle Switch and Repeat state, transactional dynamic-socket updates/rollback, and controlled diagnostics.

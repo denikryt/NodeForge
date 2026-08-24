@@ -79,6 +79,8 @@ def _repeat_item_type_for_value(value):
         return "BOOLEAN"
     if value.typ == TYPE_INT:
         return "INT"
+    if value.typ == TYPE_BUNDLE:
+        return "BUNDLE"
     return "FLOAT"
 
 
@@ -216,7 +218,7 @@ def _runtime_state_descriptors(comp, stmts):
             reject_compile_time_object(value, "repeat_range state")
             if isinstance(value, list) or not isinstance(value, Value):
                 raise CompileError("repeat_range state must be a node value")
-            if value.typ not in {TYPE_GEOMETRY, TYPE_VECTOR, TYPE_FLOAT, TYPE_INT, TYPE_BOOL}:
+            if value.typ not in {TYPE_GEOMETRY, TYPE_VECTOR, TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_BUNDLE}:
                 raise CompileError(f"repeat_range state {name!r} has unsupported type {value.typ}")
             desc = OrdinaryStateDescriptor(name, value, order)
             ordinary_by_name[name] = desc
