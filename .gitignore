@@ -7,3 +7,4 @@ local/**/*.nf
 local/**/*.nodeforge
 !local/.gitignore
 .pytest_cache/
+plans/
