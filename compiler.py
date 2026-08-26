@@ -27,7 +27,13 @@ from .storage import (
     INPUT_DEFAULTS_PROP,
 )
 from .interface import _set_socket_default, _set_interface_socket_default, _record_group_input_default
-from .update import _apply_group_defaults_to_node, _capture_node_external_state, _restore_node_external_state
+from .update import (
+    _apply_group_defaults_to_node,
+    _capture_node_external_state,
+    _restore_node_external_state,
+    _capture_group_external_state,
+    _restore_group_external_state,
+)
 from .library import library_entry_names, materialize_library_entry_group, update_materialized_library_entry_group
 from .statements import _unique_output_name
 from .compile_time import reject_compile_time_object
@@ -63,7 +69,7 @@ class LocalHelperBuildTransaction:
             return
         self.created_groups.append((group, resource_transaction))
 
-    def register_updated(self, group, backup, resource_transaction, old_manifest, new_manifest):
+    def register_updated(self, group, backup, external_state, resource_transaction, old_manifest, new_manifest):
         """Track a pre-existing helper update with rollback and deferred cleanup state."""
         if self._closed:
             _remove_node_group_if_live(backup)
@@ -76,6 +82,7 @@ class LocalHelperBuildTransaction:
         record = {
             "group": group,
             "backup": backup,
+            "external_state": external_state,
             "transactions": [(resource_transaction, old_manifest, new_manifest)],
         }
         self._updated_by_name[key] = record
@@ -86,26 +93,30 @@ class LocalHelperBuildTransaction:
         if self._closed:
             return
         self._closed = True
+        failures = []
         for record in reversed(self.updated_groups):
             group = record["group"]
             backup = record["backup"]
             try:
                 if group is not None and backup is not None and bpy.data.node_groups.get(group.name) is group:
                     _copy_group_contents(backup, group)
-            except Exception:
-                pass
+                    _restore_group_external_state(group, record["external_state"], strict=True)
+            except Exception as exc:
+                failures.append(exc)
             for tx, _old_manifest, _new_manifest in reversed(record["transactions"]):
                 try:
                     tx.rollback()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    failures.append(exc)
             _remove_node_group_if_live(backup)
         for group, tx in reversed(self.created_groups):
             try:
                 tx.rollback()
-            except Exception:
-                pass
+            except Exception as exc:
+                failures.append(exc)
             _remove_node_group_if_live(group)
+        if failures:
+            raise RuntimeError(f"Local helper rollback failed in {len(failures)} operation(s)") from failures[0]
 
     def commit(self):
         """Commit helper generated resources and perform deferred old-resource cleanup."""
@@ -1046,6 +1057,7 @@ def _update_existing_group_transactional(
     owner_uuid = old_manifest["owner_group_uuid"] if old_manifest is not None else __import__("uuid").uuid4().hex
     replacement = None
     backup = None
+    external_state = None
     owns_helper_tx = local_helper_transaction is None
     build_helper_tx = local_helper_transaction or LocalHelperBuildTransaction()
     tx = generated_resources.GeneratedResourceTransaction(owner_group_uuid=owner_uuid)
@@ -1065,19 +1077,30 @@ def _update_existing_group_transactional(
             generated_resources.write_group_manifest(replacement, new_manifest)
         backup = existing_group.copy()
         backup.name = "NodeForge.rollback." + name
+        external_state = _capture_group_external_state(existing_group)
         try:
             _copy_group_contents(replacement, existing_group)
             if new_manifest is not None:
                 generated_resources.write_group_manifest(existing_group, new_manifest)
             else:
                 generated_resources.clear_group_manifest(existing_group)
-        except Exception:
+            _restore_group_external_state(existing_group, external_state, strict=False)
+        except Exception as cutover_exc:
+            rollback_exc = None
             try:
                 _copy_group_contents(backup, existing_group)
-            finally:
-                raise
+                _restore_group_external_state(existing_group, external_state, strict=True)
+            except Exception as exc:
+                rollback_exc = exc
+            if rollback_exc is not None:
+                try:
+                    cutover_exc.add_note(f"NodeForge rollback restoration also failed: {rollback_exc}")
+                except Exception:
+                    pass
+                raise cutover_exc from rollback_exc
+            raise
         if local_helper_transaction is not None:
-            local_helper_transaction.register_updated(existing_group, backup, tx, old_manifest, new_manifest)
+            local_helper_transaction.register_updated(existing_group, backup, external_state, tx, old_manifest, new_manifest)
             backup = None
         else:
             build_helper_tx.commit()
@@ -1085,10 +1108,23 @@ def _update_existing_group_transactional(
             if old_manifest is not None:
                 generated_resources.cleanup_previous_after_commit(old_manifest, new_manifest or generated_resources.build_manifest(owner_uuid, []))
         return existing_group
-    except Exception:
+    except Exception as update_exc:
+        rollback_failures = []
         if owns_helper_tx:
-            build_helper_tx.rollback()
-        tx.rollback()
+            try:
+                build_helper_tx.rollback()
+            except Exception as exc:
+                rollback_failures.append(exc)
+        try:
+            tx.rollback()
+        except Exception as exc:
+            rollback_failures.append(exc)
+        if rollback_failures:
+            try:
+                update_exc.add_note(f"NodeForge transaction cleanup also failed: {rollback_failures[0]}")
+            except Exception:
+                pass
+            raise update_exc from rollback_failures[0]
         raise
     finally:
         _remove_node_group_if_live(replacement)
@@ -1131,6 +1167,8 @@ __all__ = [
     "_apply_group_defaults_to_node",
     "_capture_node_external_state",
     "_restore_node_external_state",
+    "_capture_group_external_state",
+    "_restore_group_external_state",
     "_extract_group_source",
     "_get_or_create_scratch_text",
     "_replace_text_contents",

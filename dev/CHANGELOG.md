@@ -111,3 +111,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.49.78
 
 - Added first-class runtime `Bundle` values with `input_bundle()`, `bundle()`, `bundle_get()`, `bundle_set()`, Bundle sockets across raw/local/library calls, native Switch/Repeat state, and transactional dynamic-item preservation.
+
+## 0.49.79
+
+- Preserved compatible input overrides and external links for every shared `GeometryNodeGroup` instance during in-place updates, including cross-instance links and strict rollback restoration.

@@ -13,8 +13,6 @@ from .compiler import (
     create_expression_group,
     update_expression_group,
     _apply_group_defaults_to_node,
-    _capture_node_external_state,
-    _restore_node_external_state,
     _extract_group_source,
     _get_or_create_scratch_text,
     _replace_text_contents,
@@ -378,8 +376,6 @@ class GNSCRIPT_MVP_OT_update_selected_group(Operator):
             self.report({'ERROR'}, "Select exactly one Geometry Node Group node to update")
             return {'CANCELLED'}
         old_name = node.node_tree.name
-        tree = _active_gn_tree(context)
-        external_state = _capture_node_external_state(tree, node) if tree is not None else {"input_defaults": {}, "incoming": [], "outgoing": []}
         try:
             update_expression_group(node.node_tree, source)
         except Exception as exc:
@@ -388,8 +384,7 @@ class GNSCRIPT_MVP_OT_update_selected_group(Operator):
             return {'CANCELLED'}
         node.node_tree.name = old_name
         node.name = node.name or old_name
-        restored = _restore_node_external_state(tree, node, external_state) if tree is not None else 0
-        self.report({'INFO'}, f"Updated node group: {old_name}; restored {restored} link(s)")
+        self.report({'INFO'}, f"Updated node group: {old_name}")
         return {'FINISHED'}
 
 
@@ -432,8 +427,6 @@ class NODEFORGE_OT_reload_selected_library_group(Operator):
             return {'CANCELLED'}
 
         old_name = node.node_tree.name
-        tree = _active_gn_tree(context)
-        external_state = _capture_node_external_state(tree, node) if tree is not None else {"input_defaults": {}, "incoming": [], "outgoing": []}
         try:
             update_library_catalog_group(node.node_tree, record.namespace, record.name)
         except Exception as exc:
@@ -442,8 +435,7 @@ class NODEFORGE_OT_reload_selected_library_group(Operator):
             return {'CANCELLED'}
         node.node_tree.name = old_name
         node.name = node.name or old_name
-        restored = _restore_node_external_state(tree, node, external_state) if tree is not None else 0
-        self.report({'INFO'}, f"Reloaded node group: {old_name}; restored {restored} link(s)")
+        self.report({'INFO'}, f"Reloaded node group: {old_name}")
         return {'FINISHED'}
 
 

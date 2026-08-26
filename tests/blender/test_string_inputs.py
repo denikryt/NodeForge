@@ -199,15 +199,11 @@ def test_string_default_update_preserves_override_and_applies_new_default():
     group_node.node_tree = group
     wrapper.links.new(group_node.outputs["Name"], group_output.inputs["Name"])
 
-    state = compiler._capture_node_external_state(wrapper, group_node)
     compiler.update_expression_group(group, after)
-    compiler._restore_node_external_state(wrapper, group_node, state)
     check(group_node.inputs["Name"].default_value == "B", "new String script default did not reach non-overridden instance")
 
     group_node.inputs["Name"].default_value = "User"
-    state = compiler._capture_node_external_state(wrapper, group_node)
     compiler.update_expression_group(group, before)
-    compiler._restore_node_external_state(wrapper, group_node, state)
     check(group_node.inputs["Name"].default_value == "User", "String user override was not preserved across update")
 
 
