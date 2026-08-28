@@ -119,3 +119,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.50.0
 
 - Added compiler-reserved `__unique__=True` for supported reusable function-group calls, with shallow per-occurrence local/imported group instances, persistent root owner IDs, metadata-based imported ownership, trace-derived editable-graph fingerprints, and generalized function-group transaction rollback.
+
+## 0.50.1
+
+- Fixed `__unique__` validation before compile-time folding, exact function-group savepoint/cache rollback across repeated mutations, Curve Mapping manual-state restoration, and readable legacy local-helper naming during transactional updates.

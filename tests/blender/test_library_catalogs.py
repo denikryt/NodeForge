@@ -154,7 +154,18 @@ def test_new_catalog_materialized_group_ownership_metadata():
         example_collision = bpy.data.node_groups.new(example_group_name, 'GeometryNodeTree')
         example_collision['nodeforge_library_namespace'] = 'local'
         example_collision['nodeforge_library_name'] = 'mandelbrot'
-        expect_compile_error('from examples import mandelbrot\ngeo = mandelbrot(resolution=12, max_iter=8)\noutput("Geometry", geo)', 'NFTest_example_ownership_collision')
+        example_root = compile_group(
+            'from examples import mandelbrot\ngeo = mandelbrot(resolution=12, max_iter=8)\noutput("Geometry", geo)',
+            'NFTest_example_ownership_collision',
+        )
+        example_backing = next(
+            node.node_tree for node in example_root.nodes
+            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_namespace') == 'examples'
+            and getattr(node.node_tree, 'get', lambda *args: None)('nodeforge_library_name') == 'mandelbrot'
+        )
+        check(bpy.data.node_groups.get(example_group_name) is example_collision, 'foreign preferred-name group was mutated or replaced')
+        check(example_backing is not example_collision, 'examples materialization adopted a foreign preferred-name group')
+        check(example_backing.name.startswith(example_group_name + '.'), f'owned example group did not accept Blender suffixing: {example_backing.name}')
     finally:
         source.unlink(missing_ok=True)
         for group in (user_group, example_collision):

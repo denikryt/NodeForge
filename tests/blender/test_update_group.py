@@ -357,6 +357,61 @@ def test_deferred_group_transaction_rollback_restores_first_external_snapshot():
 
 
 
+def test_function_group_savepoint_restores_immediate_state_after_second_update():
+    """Savepoint rollback restores the mutation immediately before the checkpoint."""
+    first = 'x = input_float("X", default=1.0)\noutput("X", x)'
+    second = 'x = input_float("X", default=2.0)\noutput("X", x)'
+    third = 'x = input_float("X", default=3.0)\noutput("X", x)'
+    group = compile_group(first, "NFTest_function_group_savepoint")
+    pointer = group.as_pointer()
+    transaction = compiler.FunctionGroupBuildTransaction()
+
+    compiler._make_group(second, group.name, existing_group=group, function_group_transaction=transaction)
+    check(len(transaction._updated_by_identity) == 1, "first update did not create one physical identity record")
+    check(len(transaction._mutation_journal) == 1, "first update did not create one mutation journal entry")
+    savepoint = transaction.savepoint()
+
+    original_name = group.name
+    group.name = original_name + "_renamed"
+    compiler._make_group(third, group.name, existing_group=group, function_group_transaction=transaction)
+    check(group.as_pointer() == pointer, "second update changed physical group identity")
+    check(len(transaction._updated_by_identity) == 1, "rename split one physical group into multiple transaction identities")
+    check(len(transaction._mutation_journal) == 2, "second update was not journaled separately")
+
+    transaction.rollback_to_savepoint(savepoint)
+    check(group.as_pointer() == pointer, "savepoint rollback replaced physical group")
+    defaults = [
+        item.default_value for item in group.interface.items_tree
+        if getattr(item, "name", None) == "X" and getattr(item, "in_out", None) == "INPUT"
+    ]
+    check(defaults and _close(defaults[0], 2.0), f"savepoint rollback did not restore immediate pre-savepoint state: {defaults}")
+    check(len(transaction._updated_by_identity) == 1, "savepoint rollback dropped the pre-savepoint identity record")
+    check(len(transaction._mutation_journal) == 1, "savepoint rollback kept the post-savepoint mutation")
+
+    transaction.rollback()
+    defaults = [
+        item.default_value for item in group.interface.items_tree
+        if getattr(item, "name", None) == "X" and getattr(item, "in_out", None) == "INPUT"
+    ]
+    check(defaults and _close(defaults[0], 1.0), f"full rollback did not restore outer-original state: {defaults}")
+
+
+def test_function_group_savepoint_restores_exact_cache_snapshot():
+    """Probe rollback restores overwritten, removed, and newly added cache entries."""
+    transaction = compiler.FunctionGroupBuildTransaction()
+    cache = {"existing": "before", "removed": "keep"}
+    transaction.register_cache(cache)
+    savepoint = transaction.savepoint()
+    cache["existing"] = "after"
+    cache.pop("removed")
+    cache["new"] = "probe-only"
+
+    transaction.rollback_to_savepoint(savepoint)
+
+    check(cache == {"existing": "before", "removed": "keep"}, f"savepoint cache snapshot was not restored exactly: {cache}")
+    transaction.rollback()
+
+
 def _nested_repeat_pairs(group):
     """Return Repeat Input/Output pairs keyed by each output node."""
     repeat_inputs = [node for node in group.nodes if node.bl_idname == "GeometryNodeRepeatInput"]

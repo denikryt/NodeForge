@@ -69,12 +69,19 @@ class LibraryBinding:
 
 
 class FunctionGroupBuildTransaction:
-    """Own nested function-group side effects for one outer build attempt."""
+    """Own nested function-group side effects for one outer build attempt.
+
+    Physical groups have one identity record for the transaction lifetime,
+    while every in-place mutation is journaled separately. Savepoints are
+    mutation-journal cursors so rolling back a probe restores the exact state at
+    that boundary even when the same group was already updated earlier.
+    """
 
     def __init__(self):
         self.created_groups = []
         self.updated_groups = []
         self._updated_by_identity = {}
+        self._mutation_journal = []
         self._cache_owners = []
         self._closed = False
 
@@ -91,9 +98,12 @@ class FunctionGroupBuildTransaction:
         if group is None:
             return False
         key = self._group_key(group)
-        return key in {self._group_key(item[0]) for item in self.created_groups if item[0] is not None} or key in {
-            self._group_key(record.get("backup")) for record in self.updated_groups if record.get("backup") is not None
-        }
+        if any(item[0] is not None and self._group_key(item[0]) == key for item in self.created_groups):
+            return True
+        return any(
+            event.get("backup") is not None and self._group_key(event["backup"]) == key
+            for event in self._mutation_journal
+        )
 
     def register_cache(self, cache):
         """Track a build-local materialization cache for savepoint rollback."""
@@ -107,119 +117,149 @@ class FunctionGroupBuildTransaction:
         self.created_groups.append((group, resource_transaction))
 
     def register_updated(self, group, backup, external_state, resource_transaction, old_manifest, new_manifest):
-        """Track a pre-existing helper update with rollback and deferred cleanup state."""
+        """Journal one in-place mutation of a pre-existing function group."""
         if self._closed:
             _remove_node_group_if_live(backup)
             return
         key = self._group_key(group)
-        if key in self._updated_by_identity:
-            self._updated_by_identity[key]["transactions"].append((resource_transaction, old_manifest, new_manifest))
-            _remove_node_group_if_live(backup)
-            return
-        record = {
+        identity_record = self._updated_by_identity.get(key)
+        if identity_record is None:
+            identity_record = {"group": group, "mutations": []}
+            self._updated_by_identity[key] = identity_record
+            self.updated_groups.append(identity_record)
+        event = {
             "group": group,
             "backup": backup,
             "external_state": external_state,
-            "transactions": [(resource_transaction, old_manifest, new_manifest)],
+            "resource_transaction": resource_transaction,
+            "old_manifest": old_manifest,
+            "new_manifest": new_manifest,
         }
-        self._updated_by_identity[key] = record
-        self.updated_groups.append(record)
+        identity_record["mutations"].append(event)
+        self._mutation_journal.append(event)
 
     def savepoint(self):
-        """Return a checkpoint object for rolling back probe-only side effects."""
-        cache_snapshots = [(cache, set(cache.keys())) for cache in self._cache_owners if hasattr(cache, "keys")]
+        """Return a checkpoint that restores exact mutation/cache boundary state."""
+        cache_snapshots = [
+            (cache, dict(cache))
+            for cache in self._cache_owners
+            if hasattr(cache, "keys") and hasattr(cache, "clear") and hasattr(cache, "update")
+        ]
         return {
             "created": len(self.created_groups),
-            "updated": len(self.updated_groups),
+            "mutations": len(self._mutation_journal),
             "cache_snapshots": cache_snapshots,
         }
 
+    @staticmethod
+    def _rollback_resource_transaction(tx, failures):
+        """Rollback one generated-resource transaction and collect failures."""
+        if tx is None:
+            return
+        try:
+            tx.rollback()
+        except Exception as exc:
+            failures.append(exc)
+
+    def _restore_mutation(self, event, failures):
+        """Restore one journaled group mutation from its immediate backup."""
+        group = event["group"]
+        backup = event["backup"]
+        try:
+            if group is not None and backup is not None and _node_group_is_live(group):
+                _copy_group_contents(backup, group)
+                _restore_group_external_state(group, event["external_state"], strict=True)
+        except Exception as exc:
+            failures.append(exc)
+        self._rollback_resource_transaction(event.get("resource_transaction"), failures)
+        _remove_node_group_if_live(backup)
+
+    def _drop_mutation_from_identity(self, event):
+        """Remove a rolled-back mutation and retire empty identity records."""
+        group = event.get("group")
+        key = self._group_key(group)
+        record = self._updated_by_identity.get(key)
+        if record is None:
+            return
+        mutations = record.get("mutations", [])
+        if event in mutations:
+            mutations.remove(event)
+        if mutations:
+            return
+        self._updated_by_identity.pop(key, None)
+        try:
+            self.updated_groups.remove(record)
+        except ValueError:
+            pass
+
     def rollback_to_savepoint(self, savepoint):
-        """Undo work registered after *savepoint* while keeping the transaction open."""
+        """Undo work after *savepoint* while preserving earlier accepted mutations."""
         if self._closed:
             return
         failures = []
-        for record in reversed(self.updated_groups[savepoint["updated"]:]):
-            group = record["group"]
-            backup = record["backup"]
-            try:
-                if group is not None and backup is not None and _node_group_is_live(group):
-                    _copy_group_contents(backup, group)
-                    _restore_group_external_state(group, record["external_state"], strict=True)
-            except Exception as exc:
-                failures.append(exc)
-            for tx, _old_manifest, _new_manifest in reversed(record["transactions"]):
-                try:
-                    tx.rollback()
-                except Exception as exc:
-                    failures.append(exc)
-            _remove_node_group_if_live(backup)
-            self._updated_by_identity.pop(self._group_key(group), None)
-        del self.updated_groups[savepoint["updated"]:]
-        for group, tx in reversed(self.created_groups[savepoint["created"]:]):
-            try:
-                tx.rollback()
-            except Exception as exc:
-                failures.append(exc)
+        cursor = int(savepoint["mutations"])
+        for event in reversed(self._mutation_journal[cursor:]):
+            self._restore_mutation(event, failures)
+            self._drop_mutation_from_identity(event)
+        del self._mutation_journal[cursor:]
+
+        created_cursor = int(savepoint["created"])
+        for group, tx in reversed(self.created_groups[created_cursor:]):
+            self._rollback_resource_transaction(tx, failures)
             _remove_node_group_if_live(group)
-        del self.created_groups[savepoint["created"]:]
-        for cache, keys in savepoint.get("cache_snapshots", []):
-            for key in list(cache.keys()):
-                if key not in keys:
-                    cache.pop(key, None)
+        del self.created_groups[created_cursor:]
+
+        for cache, snapshot in savepoint.get("cache_snapshots", []):
+            try:
+                cache.clear()
+                cache.update(snapshot)
+            except Exception as exc:
+                failures.append(exc)
         if failures:
             raise RuntimeError(f"Function-group savepoint rollback failed in {len(failures)} operation(s)") from failures[0]
 
     def rollback(self):
-        """Restore all helper node groups and generated IDs touched by the attempt."""
+        """Restore all function groups/resources to the outer-attempt state."""
         if self._closed:
             return
         self._closed = True
         failures = []
-        for record in reversed(self.updated_groups):
-            group = record["group"]
-            backup = record["backup"]
-            try:
-                if group is not None and backup is not None and bpy.data.node_groups.get(group.name) is group:
-                    _copy_group_contents(backup, group)
-                    _restore_group_external_state(group, record["external_state"], strict=True)
-            except Exception as exc:
-                failures.append(exc)
-            for tx, _old_manifest, _new_manifest in reversed(record["transactions"]):
-                try:
-                    if tx is not None:
-                        tx.rollback()
-                except Exception as exc:
-                    failures.append(exc)
-            _remove_node_group_if_live(backup)
+        for event in reversed(self._mutation_journal):
+            self._restore_mutation(event, failures)
         for group, tx in reversed(self.created_groups):
-            try:
-                if tx is not None:
-                    tx.rollback()
-            except Exception as exc:
-                failures.append(exc)
+            self._rollback_resource_transaction(tx, failures)
             _remove_node_group_if_live(group)
+        self._mutation_journal.clear()
+        self.updated_groups.clear()
+        self._updated_by_identity.clear()
+        self.created_groups.clear()
         if failures:
-            raise RuntimeError(f"Local helper rollback failed in {len(failures)} operation(s)") from failures[0]
+            raise RuntimeError(f"Function-group rollback failed in {len(failures)} operation(s)") from failures[0]
 
     def commit(self):
-        """Commit helper generated resources and perform deferred old-resource cleanup."""
+        """Commit generated resources and discard every mutation backup."""
         if self._closed:
             return
         self._closed = True
-        for record in self.updated_groups:
-            for tx, old_manifest, new_manifest in record["transactions"]:
-                if tx is not None:
-                    tx.mark_committed()
-                if old_manifest is not None:
-                    generated_resources.cleanup_previous_after_commit(
-                        old_manifest,
-                        new_manifest or generated_resources.build_manifest(old_manifest["owner_group_uuid"], []),
-                    )
-            _remove_node_group_if_live(record["backup"])
+        for event in self._mutation_journal:
+            tx = event.get("resource_transaction")
+            old_manifest = event.get("old_manifest")
+            new_manifest = event.get("new_manifest")
+            if tx is not None:
+                tx.mark_committed()
+            if old_manifest is not None:
+                generated_resources.cleanup_previous_after_commit(
+                    old_manifest,
+                    new_manifest or generated_resources.build_manifest(old_manifest["owner_group_uuid"], []),
+                )
+            _remove_node_group_if_live(event.get("backup"))
         for _group, tx in self.created_groups:
             if tx is not None:
                 tx.mark_committed()
+        self._mutation_journal.clear()
+        self.updated_groups.clear()
+        self._updated_by_identity.clear()
+        self.created_groups.clear()
 
 
 LocalHelperBuildTransaction = FunctionGroupBuildTransaction
@@ -827,6 +867,62 @@ def _copy_socket_default(src_socket, dst_socket):
         pass
 
 
+def _copy_curve_mapping(src_mapping, dst_mapping):
+    """Copy Blender CurveMapping state, including manually edited curve points."""
+    if src_mapping is None or dst_mapping is None:
+        return
+    try:
+        props = src_mapping.bl_rna.properties
+    except Exception:
+        props = []
+    for prop in props:
+        ident = getattr(prop, "identifier", "")
+        if not ident or ident in {"rna_type", "curves"} or getattr(prop, "is_readonly", False):
+            continue
+        try:
+            value = getattr(src_mapping, ident)
+            try:
+                setattr(dst_mapping, ident, value)
+            except Exception:
+                target = getattr(dst_mapping, ident)
+                for index, component in enumerate(value):
+                    target[index] = component
+        except Exception:
+            pass
+
+    for src_curve, dst_curve in zip(src_mapping.curves, dst_mapping.curves):
+        src_points = list(src_curve.points)
+        dst_points = dst_curve.points
+        # CurveMapping starts with two endpoint points. Remove any previous
+        # interior points, then restore endpoints and recreate source interiors.
+        try:
+            while len(dst_points) > 2:
+                dst_points.remove(dst_points[1])
+        except Exception:
+            pass
+        if not src_points or len(dst_points) < 2:
+            continue
+        endpoints = ((dst_points[0], src_points[0]), (dst_points[-1], src_points[-1]))
+        for dst_point, src_point in endpoints:
+            try:
+                dst_point.location = tuple(src_point.location)
+                dst_point.handle_type = src_point.handle_type
+                dst_point.select = bool(src_point.select)
+            except Exception:
+                pass
+        for src_point in src_points[1:-1]:
+            try:
+                point = dst_points.new(float(src_point.location[0]), float(src_point.location[1]))
+                point.handle_type = src_point.handle_type
+                point.select = bool(src_point.select)
+            except Exception:
+                pass
+    try:
+        dst_mapping.update()
+    except Exception:
+        pass
+
+
 def _copy_node_properties(src_node, dst_node):
     """Copy writable RNA/custom properties needed by NodeForge-generated nodes."""
     skip = {"rna_type", "type", "dimensions", "inputs", "outputs", "internal_links", "select", "width_hidden", "height"}
@@ -861,6 +957,15 @@ def _copy_node_properties(src_node, dst_node):
     for index, src_socket in enumerate(src_node.outputs):
         if index < len(dst_node.outputs):
             _copy_socket_default(src_socket, dst_node.outputs[index])
+
+
+def _sync_curve_mapping_state(src_group, node_map):
+    """Restore CurveMapping state after sockets and links have been rebuilt."""
+    for src_node in src_group.nodes:
+        dst_node = node_map.get(src_node.name)
+        if dst_node is None or not hasattr(src_node, "mapping") or not hasattr(dst_node, "mapping"):
+            continue
+        _copy_curve_mapping(src_node.mapping, dst_node.mapping)
 
 
 def _copy_interface(src_group, dst_group):
@@ -957,6 +1062,9 @@ def _copy_group_contents(src_group, dst_group):
     for dst_node in node_map.values():
         if _raw_nodes.is_raw_node(dst_node):
             _raw_nodes.validate_raw_node_after_cutover(dst_node, dst_group)
+    # CurveMapping can be reset by Blender while node sockets/topology are being
+    # reconstructed, so restore it only after the final links are in place.
+    _sync_curve_mapping_state(src_group, node_map)
     try:
         dst_group.color_tag = src_group.color_tag
     except Exception:

@@ -272,7 +272,7 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
 
     compiled = []
 
-    def compile_group(source, group_name, existing_group=None, backend_builtins=None):
+    def compile_group(source, group_name, existing_group=None, backend_builtins=None, **kwargs):
         group = existing_group or FakeGroup(group_name)
         group["compiled_source"] = source
         fake_bpy.data.node_groups[group_name] = group

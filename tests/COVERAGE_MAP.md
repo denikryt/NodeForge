@@ -32,6 +32,7 @@
 
 - `tests/unit/test_function_instances.py`: compiler-reserved `__unique__` extraction, strict compile-time Bool validation, canonical owner scopes, deterministic occurrence keys, root owner ID validation, and trace-derived fingerprint payload behavior.
 - `tests/blender/test_unique_function_groups.py`: focused Blender regressions for local and editable imported shared/unique ownership, shallow unique instances, metadata lookup independent of Blender names, root rename durability, dependency-change rebuilds, unsupported-call diagnostics, and physical transaction identity.
+- `tests/blender/test_function_root_identity.py`: isolated root rename/save/reopen persistence for root owner ID, local definition owner, unique instance key, helper identity, and manual Float Curve state across an unchanged post-reopen update.
 
 ## Native interface panels
 

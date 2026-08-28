@@ -667,6 +667,9 @@ def compile_local_function_call(comp, expr, depth=0, modifiers=None):
             instance_key=instance_key,
             fingerprint=fingerprint,
         )
+        # Datablock names are presentation only, but legacy helpers should migrate
+        # back to the current readable function title after successful materialization.
+        function_group.name = group_name
         function_cache[cache_key] = function_group
     frame = getattr(getattr(comp, "function_compilation_trace", None), "current", None)
     if frame is not None:

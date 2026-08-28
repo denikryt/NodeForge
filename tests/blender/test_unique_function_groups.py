@@ -112,7 +112,58 @@ output("Out", a + b)
 def test_unique_modifier_rejects_unsupported_calls():
     cases = (
         'x = sin(0.5, __unique__=False)\noutput("x", x)\n',
+        'x = sin(0.5, __unique__=True)\noutput("x", x)\n',
+        'x = vector(1, 2, 3, __unique__=True)\noutput("x", x)\n',
         'x = node("ShaderNodeValue", __unique__=True, output="Value", typ=Float)\noutput("x", x)\n',
     )
     for index, source in enumerate(cases):
         expect_compile_error(source, f"NFTest_unique_unsupported_{index}")
+
+
+def test_failed_parent_update_restores_unique_float_curve_manual_state():
+    """Outer rollback must restore CurveMapping edits on an updated unique helper."""
+    first = """
+def unique_curve_rollback_leaf(x):
+    factor = node("ShaderNodeFloatCurve", inputs={"Factor": 1.0, "Value": x}, output="Value", typ=Float)
+    return factor
+
+out = unique_curve_rollback_leaf(0.5, __unique__=True)
+output("Out", out)
+"""
+    changed_then_fail = """
+def unique_curve_rollback_leaf(x):
+    factor = node("ShaderNodeFloatCurve", inputs={"Factor": 1.0, "Value": x}, output="Value", typ=Float)
+    return factor + 0.25
+
+out = unique_curve_rollback_leaf(0.5, __unique__=True)
+broken = missing_unique_curve_rollback_dependency(out)
+output("Out", broken)
+"""
+    root = compile_group(first, "NFTest_unique_curve_rollback")
+    helper = _local_helpers("unique_curve_rollback_leaf")[0]
+    pointer = helper.as_pointer()
+    curve = next(node for node in helper.nodes if node.bl_idname == "ShaderNodeFloatCurve")
+    curve.mapping.curves[0].points[0].location[1] = 0.321
+    middle = curve.mapping.curves[0].points.new(0.5, 0.777)
+    middle.handle_type = "VECTOR"
+    curve.mapping.update()
+    helper["manual_probe"] = "keep"
+
+    try:
+        compiler.update_expression_group(root, changed_then_fail)
+    except Exception:
+        pass
+    else:
+        raise AssertionError("failed parent update did not raise")
+
+    helper_after = _local_helpers("unique_curve_rollback_leaf")[0]
+    check(helper_after.as_pointer() == pointer, "failed parent update replaced unique helper datablock")
+    check(helper_after.get("manual_probe") == "keep", "failed parent update lost helper custom manual state")
+    curve_after = next(node for node in helper_after.nodes if node.bl_idname == "ShaderNodeFloatCurve")
+    restored_points = list(curve_after.mapping.curves[0].points)
+    restored_y = float(restored_points[0].location[1])
+    check(abs(restored_y - 0.321) <= 1e-6, f"failed parent update lost Float Curve endpoint state: {restored_y}")
+    check(len(restored_points) == 3, f"failed parent update lost Float Curve point count: {len(restored_points)}")
+    restored_middle = min(restored_points, key=lambda point: abs(float(point.location[0]) - 0.5))
+    check(abs(float(restored_middle.location[1]) - 0.777) <= 1e-6, "failed parent update lost Float Curve interior point")
+    check(restored_middle.handle_type == "VECTOR", f"failed parent update lost Float Curve handle type: {restored_middle.handle_type}")

@@ -202,6 +202,12 @@ def _const_eval(expr, env):
         if isinstance(op, ast.Eq): return a == b
         if isinstance(op, ast.NotEq): return a != b
     if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name):
+        # Compile-time call folding only supports positional arguments. Keeping
+        # keyword-bearing calls intact is also required for compiler-reserved
+        # call modifiers such as __unique__, which are validated later by the
+        # normal expression-call dispatcher rather than being swallowed here.
+        if expr.keywords:
+            raise CompileError("compile-time calls do not support keyword arguments")
         name = expr.func.id
         args = [_const_eval(a, env) for a in expr.args]
         if name == "vector":
