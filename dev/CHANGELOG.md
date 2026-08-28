@@ -131,3 +131,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.50.3
 
 - Made the NodeForge core test suite self-contained by removing package-owned math/L-System/example/layout coverage, replacing package-manager dependencies with synthetic fixtures, and isolating Blender tests from user-installed package inventories.
+
+## 0.50.4
+
+- Converted the initial Semantic IR expression path to program-local typed values and ordered operations, with Blender lowering owning explicit IR-value materialization while preserving existing graph topology and placement.

@@ -3,6 +3,7 @@
 from helpers import *
 
 from NodeForge import expression_compiler
+from NodeForge.semantic_ir import IRBinary, IRCompare, IRConditional, IRVectorComponent
 
 
 def _nodes(group, bl_idname, operation=None):
@@ -25,9 +26,9 @@ def test_semantic_ir_route_materializes_representative_runtime_expressions(monke
     calls = []
     original = expression_compiler.lower_ir_expression
 
-    def wrapped(comp, ir, depth=0):
-        calls.append(type(ir).__name__)
-        return original(comp, ir, depth)
+    def wrapped(comp, program, base_depth=0):
+        calls.append((base_depth, tuple(type(operation).__name__ for operation in program.operations)))
+        return original(comp, program, base_depth)
 
     monkeypatch.setattr(expression_compiler, "lower_ir_expression", wrapped)
     group = compile_group(
@@ -49,16 +50,44 @@ output("Comparison", cmp)
     )
 
     check(calls, "supported expressions did not enter Blender Semantic IR lowering")
-    check("IRBinary" in calls, "representative arithmetic did not use Semantic IR")
-    check("IRVectorComponent" in calls, "Vector component did not use Semantic IR")
-    check("IRCompareChain" in calls, "comparison did not use Semantic IR")
-    check("IRConditional" in calls, "conditional did not use Semantic IR")
+    operation_names = {name for _, names in calls for name in names}
+    check("IRBinary" in operation_names, "representative arithmetic did not use value-based Semantic IR")
+    check("IRVectorComponent" in operation_names, "Vector component did not use value-based Semantic IR")
+    check("IRCompare" in operation_names, "comparison did not use value-based Semantic IR")
+    check("IRConditional" in operation_names, "conditional did not use value-based Semantic IR")
     check(_nodes(group, "ShaderNodeMath", "MULTIPLY"), "scalar multiply node missing")
     check(_nodes(group, "ShaderNodeVectorMath", "SCALE"), "Vector scale node missing")
     check(_nodes(group, "ShaderNodeSeparateXYZ"), "Separate XYZ node missing")
     check(_nodes(group, "FunctionNodeCompare"), "Compare node missing")
     check(_nodes(group, "GeometryNodeSwitch"), "Switch node missing")
 
+
+
+def test_semantic_ir_child_reached_through_legacy_parent_preserves_nonzero_base_depth(monkeypatch):
+    calls = []
+    original = expression_compiler.lower_ir_expression
+
+    def wrapped(comp, program, base_depth=0):
+        calls.append((base_depth, tuple(type(operation).__name__ for operation in program.operations)))
+        return original(comp, program, base_depth)
+
+    monkeypatch.setattr(expression_compiler, "lower_ir_expression", wrapped)
+    group = compile_group(
+        """
+a = input_float("A", default=2.0)
+items = [a * 2]
+result = items[0]
+output("Result", result)
+""",
+        "NFTest_semantic_ir_legacy_parent_depth",
+    )
+
+    nested_calls = [entry for entry in calls if entry[0] > 0 and "IRBinary" in entry[1]]
+    check(nested_calls, "IR-owned child under a legacy list parent did not enter with non-zero base depth")
+    multiplies = _nodes(group, "ShaderNodeMath", "MULTIPLY")
+    check(len(multiplies) == 1, f"expected one nested MULTIPLY, got {len(multiplies)}")
+    check(abs(float(multiplies[0].location.x) - 240.0) < 1e-6, "nested IR child x placement changed")
+    check(abs(float(multiplies[0].location.y) + 90.0) < 1e-6, "nested IR child y placement changed")
 
 def test_semantic_ir_unary_plus_preserves_socket_identity_and_adds_no_node():
     group = compile_group(

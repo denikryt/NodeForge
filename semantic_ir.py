@@ -1,4 +1,4 @@
-"""Blender-independent typed expression records for NodeForge semantic lowering."""
+"""Blender-independent value-based records for NodeForge semantic lowering."""
 
 from __future__ import annotations
 
@@ -7,97 +7,125 @@ from typing import TypeAlias
 
 
 @dataclass(frozen=True)
-class IRLiteral:
-    """Represent one scalar runtime literal with its resolved NodeForge type."""
+class IRValue:
+    """Identify one typed semantic value inside a single :class:`IRProgram`."""
 
-    value: object
+    id: int
     typ: str
+
+
+@dataclass(frozen=True)
+class IRLiteral:
+    """Produce one scalar runtime literal."""
+
+    result: IRValue
+    depth: int
+    value: object
 
 
 @dataclass(frozen=True)
 class IRBinding:
-    """Represent a reference to one existing runtime binding by name and type."""
+    """Produce one value from an existing runtime binding name."""
 
+    result: IRValue
+    depth: int
     name: str
-    typ: str
 
 
 @dataclass(frozen=True)
 class IRUnary:
-    """Represent one typed unary operation."""
+    """Produce one value from a typed unary operation."""
 
+    result: IRValue
+    depth: int
     op: str
-    operand: "IRExpr"
-    typ: str
+    operand: IRValue
 
 
 @dataclass(frozen=True)
 class IRBinary:
-    """Represent one typed binary operation."""
+    """Produce one value from a typed binary operation."""
 
+    result: IRValue
+    depth: int
     op: str
-    left: "IRExpr"
-    right: "IRExpr"
-    typ: str
+    left: IRValue
+    right: IRValue
 
 
 @dataclass(frozen=True)
-class IRBoolOp:
-    """Represent one typed Boolean and/or expression over ordered operands."""
+class IRBoolBinary:
+    """Produce one Bool value from two ordered Bool operands."""
 
+    result: IRValue
+    depth: int
     op: str
-    values: tuple["IRExpr", ...]
-    typ: str
+    left: IRValue
+    right: IRValue
 
 
 @dataclass(frozen=True)
-class IRCompareChain:
-    """Represent one ordered comparison chain and its resolved operations."""
+class IRCompare:
+    """Produce one Bool value from a typed comparison."""
 
-    values: tuple["IRExpr", ...]
-    ops: tuple[str, ...]
-    typ: str
+    result: IRValue
+    depth: int
+    op: str
+    left: IRValue
+    right: IRValue
 
 
 @dataclass(frozen=True)
 class IRConditional:
-    """Represent one typed conditional expression."""
+    """Produce one value by selecting between two same-typed values."""
 
-    condition: "IRExpr"
-    true_value: "IRExpr"
-    false_value: "IRExpr"
-    typ: str
+    result: IRValue
+    depth: int
+    condition: IRValue
+    true_value: IRValue
+    false_value: IRValue
 
 
 @dataclass(frozen=True)
 class IRVectorComponent:
-    """Represent one Vector component access."""
+    """Produce one Float value from a Vector component."""
 
-    value: "IRExpr"
+    result: IRValue
+    depth: int
+    value: IRValue
     component: str
-    typ: str
 
 
-IRExpr: TypeAlias = (
+IROperation: TypeAlias = (
     IRLiteral
     | IRBinding
     | IRUnary
     | IRBinary
-    | IRBoolOp
-    | IRCompareChain
+    | IRBoolBinary
+    | IRCompare
     | IRConditional
     | IRVectorComponent
 )
 
 
+@dataclass(frozen=True)
+class IRProgram:
+    """Store one ordered expression program and its final program-local result."""
+
+    operations: tuple[IROperation, ...]
+    result: IRValue
+
+
 __all__ = [
-    "IRExpr",
+    "IRValue",
+    "IROperation",
+    "IRProgram",
     "IRLiteral",
     "IRBinding",
     "IRUnary",
     "IRBinary",
-    "IRBoolOp",
-    "IRCompareChain",
+    "IRBoolBinary",
+    "IRCompare",
     "IRConditional",
     "IRVectorComponent",
 ]

@@ -20,6 +20,11 @@ from .blender_ir_lowering import lower_expression as lower_ir_expression
 
 def compile_expr(comp, expr, depth=0):
     """Compile one AST expression into the active node group context."""
+    # SEMANTIC_IR_VALUE_MIGRATION: comp.vars still stores legacy socket-bound Value
+    # objects while statement and call migration is incomplete. Export only name ->
+    # type into semantic lowering so Semantic IR stays backend-independent. Remove
+    # this bridge when runtime bindings use an explicitly owned compiler value
+    # reference and semantic typing no longer reads backend Value objects.
     runtime_binding_types = {
         name: value.typ
         for name, value in comp.vars.items()
