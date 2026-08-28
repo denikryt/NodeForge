@@ -14,12 +14,34 @@ from .systems import registry as systems_registry
 from . import local_functions
 from . import library_calls
 from .function_instances import extract_function_call_modifiers, unsupported_unique
+from .semantic_lowering import try_lower_expression
+from .blender_ir_lowering import lower_expression as lower_ir_expression
 
 
 def compile_expr(comp, expr, depth=0):
     """Compile one AST expression into the active node group context."""
-    x = depth * 240
-    y = -depth * 90
+    runtime_binding_types = {
+        name: value.typ
+        for name, value in comp.vars.items()
+        if isinstance(value, Value)
+    }
+    ir = try_lower_expression(
+        expr,
+        runtime_binding_types=runtime_binding_types,
+        consts=comp.consts,
+        reserved_name_labels=getattr(comp, "reserved_name_labels", {}),
+    )
+    # SEMANTIC_IR_MIGRATION: Expressions outside the current IR slice continue on
+    # the existing AST-to-Blender path while migration is incremental. The target
+    # architecture is for migrated expression families to lower through Semantic IR
+    # before Blender materialization. Remove this fallback only for an expression
+    # family after that family is covered end-to-end by IR and its duplicated AST
+    # lowering branch is removed in the same planned change set.
+    if ir is None:
+        x = depth * 240
+        y = -depth * 90
+    else:
+        return lower_ir_expression(comp, ir, depth)
 
     if isinstance(expr, ast.Constant):
         if isinstance(expr.value, bool):

@@ -20,3 +20,20 @@ def pytest_collection_modifyitems(items):
     for item in items:
         item.add_marker("blender")
 
+
+
+@pytest.fixture(autouse=True)
+def isolated_package_inventory(tmp_path):
+    """Run core Blender tests without relying on user-installed NodeForge packages."""
+    from NodeForge import packages
+    from NodeForge.systems import registry as systems_registry
+
+    packages.set_packages_dir_for_tests(tmp_path / "packages")
+    packages.invalidate_caches()
+    systems_registry.invalidate_cache()
+    try:
+        yield
+    finally:
+        packages.set_packages_dir_for_tests(None)
+        packages.invalidate_caches()
+        systems_registry.invalidate_cache()

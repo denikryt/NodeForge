@@ -86,14 +86,6 @@ output("x", sep.X)
 ''', "NFTest_compile_time_fstring_raw_multi")
 
 
-def test_compile_time_fstrings_work_for_package_local_backend_helper():
-    compiler._make_group('''
-from examples import mandelbrot
-geo = mandelbrot()
-attr = "mandelbrot_color"
-geo = apply_mandelbrot_material(geo, f"{attr}")
-output("Geometry", geo)
-''', "NFTest_compile_time_fstring_mandelbrot_backend", backend_builtins=library.backend_builtins_for_entry("examples", "mandelbrot"))
 
 
 def test_compile_time_fstrings_reject_runtime_or_non_string_interpolation():
@@ -102,14 +94,10 @@ def test_compile_time_fstrings_reject_runtime_or_non_string_interpolation():
         'count = 1\noutput(f"{count}", 1)',
         'domain_name = input_float("D")\ngeo = grid(4, 3)\nuv = grid_uv()\nstore("c", uv.x, domain=f"{domain_name}")\noutput("Geometry", geo)',
         'kind = input_float("T")\ngeo = grid(4, 3)\nuv = grid_uv()\ngeo = store_named_attribute(geo, "c", uv.x, type=f"{kind}")\noutput("Geometry", geo)',
-        'x = input_float("Attr")\nfrom examples import mandelbrot\ngeo = mandelbrot()\ngeo = apply_mandelbrot_material(geo, f"{x}")\noutput("Geometry", geo)',
         'socket = input_float("Socket")\nx = node("FunctionNodeCompare", inputs={f"{socket}": 1}, output="Result", typ=Bool)\noutput("x", x)',
     ]
     for index, source in enumerate(bad_sources):
-        kwargs = {}
-        if "apply_mandelbrot_material" in source:
-            kwargs["backend_builtins"] = library.backend_builtins_for_entry("examples", "mandelbrot")
-        expect_compile_error(source, f"NFTest_compile_time_fstring_error_{index}", **kwargs)
+        expect_compile_error(source, f"NFTest_compile_time_fstring_error_{index}")
 
 
 def test_raw_node_duplicate_keys_after_fstring_interpolation_are_rejected():

@@ -123,3 +123,11 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.50.1
 
 - Fixed `__unique__` validation before compile-time folding, exact function-group savepoint/cache rollback across repeated mutations, Curve Mapping manual-state restoration, and readable legacy local-helper naming during transactional updates.
+
+## 0.50.2
+
+- Added the first typed Semantic IR expression path, separating pure AST semantic lowering from Blender node materialization while preserving existing runtime behavior and fallback coverage.
+
+## 0.50.3
+
+- Made the NodeForge core test suite self-contained by removing package-owned math/L-System/example/layout coverage, replacing package-manager dependencies with synthetic fixtures, and isolating Blender tests from user-installed package inventories.

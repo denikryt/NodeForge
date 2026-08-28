@@ -20,8 +20,6 @@ from NodeForge.systems import registry as systems_registry
 def package_inventory(tmp_path):
     """Use an isolated inventory with packages installed explicitly by the test setup."""
     packages.set_packages_dir_for_tests(tmp_path)
-    project_root = Path(__file__).resolve().parents[3]
-    packages.install_package_directory(project_root / "nodeforge.math", allow_python=True)
     systems_registry.invalidate_cache()
     yield tmp_path
     packages.set_packages_dir_for_tests(None)
@@ -60,14 +58,21 @@ def _write_manifest(
     )
 
 
-def test_explicitly_installed_packages_use_unified_inventory(package_inventory):
-    manifests = {m.package_id: m for m in packages.active_package_manifests()}
+def test_explicitly_installed_packages_use_unified_inventory(package_inventory, tmp_path):
+    source = tmp_path / "vendor.inventory"
+    (source / "functions").mkdir(parents=True)
+    (source / "examples").mkdir()
+    (source / "functions" / "identity.nf").write_text('value = input_float("Value")\noutput("Value", value)\n', encoding="utf-8")
+    (source / "examples" / "demo.nf").write_text('output("Value", 1)\n', encoding="utf-8")
+    _write_manifest(source, package_id="vendor.inventory", contents={"functions": "functions", "examples": "examples"})
+    packages.install_package_directory(source, allow_python=False)
 
-    assert set(manifests) == {"nodeforge.math"}
+    manifests = {m.package_id: m for m in packages.active_package_manifests()}
+    assert set(manifests) == {"vendor.inventory"}
     state = packages.load_package_state()
-    assert set(state["packages"]) == {"nodeforge.math"}
-    assert packages.library_roots("functions")[0].package_id == "nodeforge.math"
-    assert {root.package_id for root in packages.library_roots("examples")} == {"nodeforge.math"}
+    assert set(state["packages"]) == {"vendor.inventory"}
+    assert packages.library_roots("functions")[0].package_id == "vendor.inventory"
+    assert {root.package_id for root in packages.library_roots("examples")} == {"vendor.inventory"}
 
 
 
@@ -583,29 +588,46 @@ def test_replace_rejects_core_builtin_constructor_collision_and_keeps_old_pointe
 
 
 def test_install_rejects_function_name_colliding_with_active_constructor(package_inventory, tmp_path):
+    owner = tmp_path / "active_constructor"
+    (owner / "systems" / "test").mkdir(parents=True)
+    _write_manifest(owner, package_id="vendor.constructorowner", contents={"systems": "systems"}, python=True)
+    (owner / "systems" / "test" / "system.py").write_text(
+        "CONSTRUCTORS = ['active_marker']\n"
+        "def load_handlers():\n"
+        "    return {'active_marker': lambda comp, expr, depth=0: None}\n",
+        encoding="utf-8",
+    )
+    packages.install_package_directory(owner, allow_python=True)
+
     source = tmp_path / "function_constructor_collision"
     (source / "functions").mkdir(parents=True)
-    (source / "functions" / "sin.nf").write_text("output(value=1)\n", encoding="utf-8")
+    (source / "functions" / "active_marker.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(source, package_id="vendor.funcconstructor", contents={"functions": "functions"})
 
-    with pytest.raises(packages.PackageError, match="Public name collision.*sin"):
+    with pytest.raises(packages.PackageError, match="Public name collision.*active_marker"):
         packages.install_package_directory(source, allow_python=False)
 
     assert "vendor.funcconstructor" not in packages.load_package_state()["packages"]
 
 
 def test_install_rejects_constructor_name_colliding_with_active_function(package_inventory, tmp_path):
+    owner = tmp_path / "active_function"
+    (owner / "functions").mkdir(parents=True)
+    (owner / "functions" / "active_function.nf").write_text("output(value=1)\n", encoding="utf-8")
+    _write_manifest(owner, package_id="vendor.functionowner", contents={"functions": "functions"})
+    packages.install_package_directory(owner, allow_python=False)
+
     source = tmp_path / "constructor_function_collision"
     (source / "systems" / "test").mkdir(parents=True)
     _write_manifest(source, package_id="vendor.constructorfunc", contents={"systems": "systems"}, python=True)
     (source / "systems" / "test" / "system.py").write_text(
-        "CONSTRUCTORS = ['smoothstep']\n"
+        "CONSTRUCTORS = ['active_function']\n"
         "def load_handlers():\n"
-        "    return {'smoothstep': lambda comp, expr, depth=0: None}\n",
+        "    return {'active_function': lambda comp, expr, depth=0: None}\n",
         encoding="utf-8",
     )
 
-    with pytest.raises(packages.PackageError, match="Public name collision.*smoothstep"):
+    with pytest.raises(packages.PackageError, match="Public name collision.*active_function"):
         packages.install_package_directory(source, allow_python=True)
 
     assert "vendor.constructorfunc" not in packages.load_package_state()["packages"]
@@ -643,9 +665,20 @@ def test_replace_rejects_cross_kind_collision_and_keeps_old_pointer(package_inve
     packages.install_package_directory(original, allow_python=False)
     old_pointer = packages.load_package_state()["packages"]["vendor.crossreplace"]["installed_path"]
 
+    owner = tmp_path / "active_cross_constructor"
+    (owner / "systems" / "test").mkdir(parents=True)
+    _write_manifest(owner, package_id="vendor.crossowner", contents={"systems": "systems"}, python=True)
+    (owner / "systems" / "test" / "system.py").write_text(
+        "CONSTRUCTORS = ['cross_marker']\n"
+        "def load_handlers():\n"
+        "    return {'cross_marker': lambda comp, expr, depth=0: None}\n",
+        encoding="utf-8",
+    )
+    packages.install_package_directory(owner, allow_python=True)
+
     replacement = tmp_path / "replacement_cross_kind"
     (replacement / "functions").mkdir(parents=True)
-    (replacement / "functions" / "sin.nf").write_text("output(value=2)\n", encoding="utf-8")
+    (replacement / "functions" / "cross_marker.nf").write_text("output(value=2)\n", encoding="utf-8")
     _write_manifest(
         replacement,
         package_id="vendor.crossreplace",
@@ -653,7 +686,7 @@ def test_replace_rejects_cross_kind_collision_and_keeps_old_pointer(package_inve
         version="2.0.0",
     )
 
-    with pytest.raises(packages.PackageError, match="Public name collision.*sin"):
+    with pytest.raises(packages.PackageError, match="Public name collision.*cross_marker"):
         packages.install_package_directory(replacement, allow_python=False, replace=True)
 
     state_record = packages.load_package_state()["packages"]["vendor.crossreplace"]
@@ -730,16 +763,6 @@ def test_invalid_package_diagnostic_exposes_python_consent_fields(package_invent
 
 
 
-def test_uninstall_math_package_removes_math_callables(package_inventory):
-    assert "sin" in systems_registry.constructor_names()
-    assert systems_registry.constructor_owner("sin").package_id == "nodeforge.math"
-
-    packages.uninstall_package("nodeforge.math")
-
-    assert "nodeforge.math" not in packages.load_package_state()["packages"]
-    assert "sin" not in systems_registry.constructor_names()
-    with pytest.raises(CompileError, match="Unsupported system constructor"):
-        systems_registry.get_handler("sin")
 
 
 def test_inventory_does_not_auto_install_packages(tmp_path):

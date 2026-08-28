@@ -79,22 +79,17 @@ output("y", y)
 def test_stage18_registered_names_rejected_before_compile_time_preprocessing():
     cases = (
         """
-def f(sin):
-    return sin
+def f(store):
+    return store
 x = f(1.0)
 output("x", x)
 """,
         """
 def f(x):
-    sin = x
-    return sin
+    store = x
+    return store
 y = f(1.0)
 output("y", y)
-""",
-        """
-from functions import scene
-scene = 1.0
-output("x", scene)
 """,
         """
 Float = 1.0
@@ -115,16 +110,6 @@ output("grid", grid)
     check(getattr(group, 'bl_idname', None) == 'GeometryNodeTree', 'legacy top-level builtin/constant shadowing did not compile')
 
 
-def test_stage18_registered_callable_name_is_not_captured_as_value():
-    expect_compile_error('''
-from functions import fibonacci
-
-def f(x):
-    return x + fibonacci
-
-y = f(1.0)
-output("y", y)
-''', 'NFTest_stage18_reserved_capture_import')
 
 
 def test_stage18_local_helper_namespace_is_stable_across_parent_update():

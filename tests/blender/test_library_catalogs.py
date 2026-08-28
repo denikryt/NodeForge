@@ -24,13 +24,6 @@ def _cleanup(path):
         path.rmdir()
 
 
-def test_catalog_discovery_and_example_imports():
-    check(library.has_library_entry('functions', 'layout_circle'), 'layout_circle missing from functions')
-    check(library.has_library_entry('examples', 'mandelbrot'), 'mandelbrot missing from examples')
-    check(bool(library.backend_builtins_for_entry('examples', 'mandelbrot')), 'mandelbrot backend helpers missing')
-
-    compile_group('from functions import layout_circle\ngeo = points(8)\ngeo = layout_circle(geo, count=8)\noutput("Geometry", geo)', 'NFTest_catalog_function_import')
-    compile_group('from examples import *\ngeo = mandelbrot(resolution=12, max_iter=8)\noutput("Geometry", geo)', 'NFTest_catalog_example_star_import')
 
 def test_local_recursive_catalog_duplicate_and_save_contracts():
     local = library.ensure_local_catalog_dir()
@@ -146,29 +139,9 @@ def test_new_catalog_materialized_group_ownership_metadata():
         check(backing.get('nodeforge_library_namespace') == 'local', 'local backing namespace metadata missing')
         check(backing.get('nodeforge_library_name') == 'local_collision_probe', 'local backing name metadata missing')
 
-        record = library.find_library_entry_record('examples', 'mandelbrot')
-        example_group_name = library._group_name_for_record(record)
-        existing_example = bpy.data.node_groups.get(example_group_name)
-        if existing_example is not None:
-            bpy.data.node_groups.remove(existing_example, do_unlink=True)
-        example_collision = bpy.data.node_groups.new(example_group_name, 'GeometryNodeTree')
-        example_collision['nodeforge_library_namespace'] = 'local'
-        example_collision['nodeforge_library_name'] = 'mandelbrot'
-        example_root = compile_group(
-            'from examples import mandelbrot\ngeo = mandelbrot(resolution=12, max_iter=8)\noutput("Geometry", geo)',
-            'NFTest_example_ownership_collision',
-        )
-        example_backing = next(
-            node.node_tree for node in example_root.nodes
-            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_namespace') == 'examples'
-            and getattr(node.node_tree, 'get', lambda *args: None)('nodeforge_library_name') == 'mandelbrot'
-        )
-        check(bpy.data.node_groups.get(example_group_name) is example_collision, 'foreign preferred-name group was mutated or replaced')
-        check(example_backing is not example_collision, 'examples materialization adopted a foreign preferred-name group')
-        check(example_backing.name.startswith(example_group_name + '.'), f'owned example group did not accept Blender suffixing: {example_backing.name}')
     finally:
         source.unlink(missing_ok=True)
-        for group in (user_group, example_collision):
+        for group in (user_group,):
             if group is not None and bpy.data.node_groups.get(group.name) is group:
                 bpy.data.node_groups.remove(group, do_unlink=True)
 

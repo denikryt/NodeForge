@@ -77,23 +77,6 @@ output("x", x)
 """,
         "NFTest_repeat_range_scalar_existing",
     )
-    compile_group(
-        """
-from functions import rotate_around_axis
-v = vector(1,0,0)
-flag = True
-for i in repeat_range(3):
-    if flag:
-        v = rotate_around_axis(v, vector(0,0,1), 0.1)
-        flag = False
-    else:
-        v = v
-        flag = flag
-output("v", v)
-output("flag", flag)
-""",
-        "NFTest_repeat_range_vector_bool_existing",
-    )
 
 
 def test_compile_time_range_with_existing_state_does_not_create_repeat_zone():
