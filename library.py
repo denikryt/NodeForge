@@ -21,6 +21,17 @@ from .nodes import _new_node
 from .values import Value, TupleValue, make_value
 from .systems import registry as systems_registry
 from . import packages
+from .function_instances import (
+    FUNCTION_DEFINITION_OWNER_PROP,
+    FUNCTION_INSTANCE_KEY_PROP,
+    CORE_PACKAGE_ID,
+    function_group_owner_scope,
+    library_callee_identity,
+    library_package_identity,
+    normalized_source,
+    stamp_function_metadata,
+    stored_fingerprint,
+)
 
 _SOURCE_EXTENSIONS = (".nf", ".nodeforge")
 _PACKAGE_SOURCE_NAME = "source.nf"
@@ -846,10 +857,10 @@ def resolve_reloadable_library_entry(group, namespace: str | None = None, name: 
         raise CompileError(f"{namespace} library entry {name!r} has no reloadable .nf source")
 
     try:
-        stored_package_id = str(group.get("nodeforge_package_id") or "")
+        stored_package_id = str(group.get("nodeforge_package_id") or CORE_PACKAGE_ID)
     except Exception:
-        stored_package_id = ""
-    current_package_id = record.package_id or ""
+        stored_package_id = CORE_PACKAGE_ID
+    current_package_id = library_package_identity(record.package_id)
     if stored_package_id != current_package_id:
         raise CompileError(
             f"Current source for {namespace} library entry {name!r} belongs to a different package"
@@ -867,6 +878,19 @@ def update_materialized_library_entry_group(namespace: str, name: str, group, co
         getattr(group, "name", _group_name_for_record(record)),
         existing_group=group,
         backend_builtins=backend_builtins,
+        function_group_owner_scope=function_group_owner_scope("LIBRARY", namespace, library_package_identity(record.package_id), name),
+        function_definition_owner=library_callee_identity(namespace, record.package_id, name),
+        function_compilation_inputs={
+            "kind": "library-root",
+            "namespace": namespace,
+            "package_id": library_package_identity(record.package_id),
+            "package_version": record.package_version or "",
+            "name": name,
+            "source": normalized_source(source),
+            "backend_signature": _backend_signature_for_record(record),
+        },
+        function_definition_identity=library_callee_identity(namespace, record.package_id, name),
+        preserve_if_equivalent=True,
     )
     # Compilation/cutover is the mutation boundary. Provenance is stamped only
     # after it succeeds so a failed rebuild keeps the original metadata intact.
@@ -897,13 +921,46 @@ def _write_package_metadata(group, record: LibraryEntryRecord) -> None:
     group["nodeforge_library_name"] = record.name
     group["nodeforge_function_kind"] = record.kind
     group["nodeforge_backend_signature"] = _backend_signature_for_record(record)
+    group["nodeforge_package_id"] = record.package_id or CORE_PACKAGE_ID
     if record.package_id:
-        group["nodeforge_package_id"] = record.package_id
         group["nodeforge_package_name"] = record.package_name
         group["nodeforge_package_version"] = record.package_version
 
 
-def get_or_create_library_entry_group(namespace: str, name: str, compile_group_callback):
+def _library_metadata_matches(group, record: LibraryEntryRecord, *, instance_key: str | None) -> bool:
+    """Return True when *group* is the exact metadata owner for *record*."""
+    try:
+        if group.get("nodeforge_library_namespace") != record.namespace:
+            return False
+        if group.get("nodeforge_library_name") != record.name:
+            return False
+        stored_package_id = str(group.get("nodeforge_package_id") or CORE_PACKAGE_ID)
+        if stored_package_id != library_package_identity(record.package_id):
+            return False
+        stored_key = str(group.get(FUNCTION_INSTANCE_KEY_PROP) or "")
+        wanted_key = str(instance_key or "")
+        return stored_key == wanted_key
+    except Exception:
+        return False
+
+
+def _find_owned_library_entry_group(record: LibraryEntryRecord, *, instance_key: str | None = None, transaction=None):
+    """Find the sole live imported function group by ownership metadata."""
+    matches = []
+    for group in bpy.data.node_groups:
+        if getattr(group, "bl_idname", None) != "GeometryNodeTree":
+            continue
+        if transaction is not None and hasattr(transaction, "owns_group") and transaction.owns_group(group):
+            continue
+        if _library_metadata_matches(group, record, instance_key=instance_key):
+            matches.append(group)
+    if len(matches) > 1:
+        mode = "unique" if instance_key else "shared"
+        raise CompileError(f"Multiple {mode} {record.namespace} library groups match {record.name!r}")
+    return matches[0] if matches else None
+
+
+def get_or_create_library_entry_group(namespace: str, name: str, compile_group_callback, *, instance_key=None, owner_scope=None, function_group_cache=None, function_group_transaction=None, function_compilation_trace=None):
     """Compile/update the node group that backs an editable catalog source."""
     record = find_library_entry_record(namespace, name)
     if record is None or record.source_path is None:
@@ -917,21 +974,79 @@ def get_or_create_library_entry_group(namespace: str, name: str, compile_group_c
         # for a fresh datablock with the logical base name; Blender assigns the
         # usual .001/.002 suffix when that name is already present. This keeps
         # older generated groups pinned to their original Local dependencies.
-        group = compile_group_callback(source, group_name, backend_builtins=backend_builtins)
+        local_owner = function_group_owner_scope("LIBRARY", "local", "", name)
+        group = compile_group_callback(
+            source,
+            group_name,
+            backend_builtins=backend_builtins,
+            function_group_cache=function_group_cache,
+            function_group_transaction=function_group_transaction,
+            function_group_owner_scope=local_owner,
+            function_definition_owner=local_owner,
+            function_compilation_trace=function_compilation_trace,
+        )
+        frame = getattr(function_compilation_trace, "current", None)
+        if frame is not None:
+            frame.mark_unproven("local catalog dependency")
     else:
-        existing = bpy.data.node_groups.get(group_name)
-        if existing is not None and getattr(existing, "bl_idname", None) == "GeometryNodeTree":
-            _assert_owned_materialized_group(existing, record, group_name)
-            try:
-                if existing.get("nodeforge_library_source") == source and existing.get("nodeforge_backend_signature") == backend_signature:
-                    return existing
-            except Exception:
-                pass
-            group = compile_group_callback(source, group_name, existing_group=existing, backend_builtins=backend_builtins)
+        cache_key = ("library", namespace, library_package_identity(record.package_id), name, instance_key or "SHARED")
+        if function_group_cache is not None and cache_key in function_group_cache:
+            return function_group_cache[cache_key]
+        definition_identity = library_callee_identity(namespace, record.package_id, name)
+        owner_scope = owner_scope or function_group_owner_scope("LIBRARY", namespace, library_package_identity(record.package_id), name, instance_key=instance_key)
+        own_inputs = {
+            "kind": "library",
+            "namespace": namespace,
+            "package_id": library_package_identity(record.package_id),
+            "package_version": record.package_version or "",
+            "name": name,
+            "source": normalized_source(source),
+            "backend_signature": backend_signature,
+        }
+        existing = _find_owned_library_entry_group(record, instance_key=instance_key, transaction=function_group_transaction)
+        if existing is not None:
+            group = compile_group_callback(
+                source,
+                group_name,
+                existing_group=existing,
+                backend_builtins=backend_builtins,
+                function_group_cache=function_group_cache,
+                function_group_transaction=function_group_transaction,
+                function_group_owner_scope=owner_scope,
+                function_definition_owner=definition_identity,
+                function_compilation_trace=function_compilation_trace,
+                function_compilation_inputs=own_inputs,
+                function_definition_identity=definition_identity,
+                function_instance_key=instance_key or "",
+                preserve_if_equivalent=True,
+            )
         else:
-            group = compile_group_callback(source, group_name, backend_builtins=backend_builtins)
+            group = compile_group_callback(
+                source,
+                group_name,
+                backend_builtins=backend_builtins,
+                function_group_cache=function_group_cache,
+                function_group_transaction=function_group_transaction,
+                function_group_owner_scope=owner_scope,
+                function_definition_owner=definition_identity,
+                function_compilation_trace=function_compilation_trace,
+                function_compilation_inputs=own_inputs,
+                function_definition_identity=definition_identity,
+                function_instance_key=instance_key or "",
+            )
+        if function_group_cache is not None:
+            function_group_cache[cache_key] = group
+        frame = getattr(function_compilation_trace, "current", None)
+        if frame is not None:
+            frame.record_child(owner_scope, stored_fingerprint(group))
     try:
         _write_package_metadata(group, record)
+        stamp_function_metadata(
+            group,
+            instance_key=instance_key or "",
+            definition_owner=library_callee_identity(namespace, record.package_id, name),
+            fingerprint=stored_fingerprint(group),
+        )
         group["nodeforge_library_source"] = source
     except Exception:
         pass

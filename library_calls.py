@@ -7,11 +7,20 @@ from .values import Value
 from .compile_time import reject_compile_time_object
 from .library import (
     has_native_compile_call,
+    find_library_entry_record,
     compile_module_library_entry_call,
     get_or_create_library_entry_group,
     make_library_call_node,
     _normalized_socket_name,
     _socket_type_to_value_type,
+)
+from .function_instances import (
+    FunctionCallModifiers,
+    FUNCTION_INSTANCE_KEY_PROP,
+    function_group_owner_scope,
+    library_callee_identity,
+    library_package_identity,
+    unsupported_unique,
 )
 
 
@@ -54,21 +63,54 @@ def _validate_argument_type(function_name, socket_name, expected_type, value):
         )
 
 
-def compile_library_function_call(comp, expr, depth=0, function_name=None, namespace="functions", binding=None):
+def _supports_unique_function_group(namespace: str, name: str) -> bool:
+    """Return whether an imported expression call has reusable editable groups."""
+    if namespace not in {"functions", "examples"}:
+        return False
+    record = find_library_entry_record(namespace, name)
+    return bool(record is not None and record.source_path is not None and not has_native_compile_call(namespace, name))
+
+
+def compile_library_function_call(comp, expr, depth=0, function_name=None, namespace="functions", binding=None, modifiers=None):
     """Compile a namespace-aware library call without owning discovery."""
+    modifiers = modifiers or FunctionCallModifiers()
     if binding is not None:
         namespace = binding.namespace
         name = binding.canonical_name
     else:
         name = function_name or expr.func.id
+    if modifiers.unique_was_explicit and not _supports_unique_function_group(namespace, name):
+        raise unsupported_unique(name)
     if has_native_compile_call(namespace, name):
         return compile_module_library_entry_call(comp, expr, depth, namespace=namespace, entry_name=name)
     x = depth * 240
     y = -depth * 90
+    record = find_library_entry_record(namespace, name)
+    instance_key = ""
+    owner_scope = None
+    if namespace in {"functions", "examples"} and record is not None:
+        callee_identity = library_callee_identity(namespace, record.package_id, name)
+        instance_key = comp.next_unique_function_instance_key(callee_identity) if modifiers.unique else ""
+        owner_scope = function_group_owner_scope(
+            "LIBRARY",
+            namespace,
+            library_package_identity(record.package_id),
+            name,
+            instance_key=instance_key,
+        )
     cache_key = ("catalog", namespace, name)
     function_group = comp.local_group_cache.get(cache_key) if namespace == "local" else None
     if function_group is None:
-        function_group = get_or_create_library_entry_group(namespace, name, comp.compile_group_callback)
+        function_group = get_or_create_library_entry_group(
+            namespace,
+            name,
+            comp.compile_group_callback,
+            instance_key=instance_key,
+            owner_scope=owner_scope,
+            function_group_cache=getattr(comp, "function_group_cache", None),
+            function_group_transaction=getattr(comp, "function_group_transaction", None),
+            function_compilation_trace=getattr(comp, "function_compilation_trace", None),
+        )
         if namespace == "local":
             # Reuse one freshly materialized Local dependency within this group
             # build while keeping separate outer compilations fully independent.
@@ -118,7 +160,16 @@ def compile_library_function_call(comp, expr, depth=0, function_name=None, names
             const_args[socket_name] = value
         used.add(key)
 
-    return make_library_call_node(comp.group, function_group, compiled_args, const_args, x=x, y=y)
+    result = make_library_call_node(comp.group, function_group, compiled_args, const_args, x=x, y=y)
+    if modifiers.unique:
+        for node in reversed(list(comp.group.nodes)):
+            if getattr(node, "bl_idname", None) == "GeometryNodeGroup" and getattr(node, "node_tree", None) is function_group:
+                try:
+                    node[FUNCTION_INSTANCE_KEY_PROP] = instance_key
+                except Exception:
+                    pass
+                break
+    return result
 
 
 __all__ = ["compile_library_function_call"]

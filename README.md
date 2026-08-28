@@ -94,6 +94,39 @@ Package-local backend helpers can expose `BACKEND_BUILTINS`. These helpers are v
 
 Use backend helpers for package-specific Blender API work such as constructing a custom shader material. Keep generic node operations in DSL built-ins.
 
+### Unique function-group instances
+
+Reusable group-materializing calls are shared by default. Add the compiler-reserved `__unique__=True` call modifier when one call occurrence needs its own direct backing `GeometryNodeTree` for editable Blender-node state such as a private Float Curve:
+
+```python
+def interpolation_control(name):
+    factor = node(
+        "ShaderNodeFloatCurve",
+        inputs={"Factor": 1.0, "Value": progress},
+        output="Value",
+        typ=Float,
+    )
+    return weighted_transform_state_mix(
+        start_shape_state=start_state,
+        end_shape_state=end_state,
+        attribute_name=name,
+        factor=factor,
+    )
+
+curvature = interpolation_control("curvature", __unique__=True)
+tip = interpolation_control("tip curvature", __unique__=True)
+```
+
+Omitting the modifier and passing `__unique__=False` both use the shared backing group. The exact `__unique__` keyword is consumed by the compiler before normal function arguments are bound; it must be a compile-time Bool. It is supported for script-local `def` calls and editable `.nf` calls imported from `functions` or `examples`.
+
+The uniqueness is shallow. Only the immediate function group for the marked call is private; ordinary nested reusable calls inside that group remain shared unless those nested calls also use `__unique__=True`.
+
+Unique instances keep a persistent owner identity in generated metadata. Root groups store an opaque `nodeforge_function_root_owner_id`, so renaming a root group or reopening a `.blend` does not change the occurrence keys of marked calls inside it. Blender datablock names such as `Helper`, `Helper.001`, and `Helper.002` are presentation names, not ownership identity.
+
+During update, NodeForge compiles a temporary replacement with the real compiler and compares its effective editable-graph fingerprint and interface contract with the existing group. If the fingerprint is unchanged, the existing unique group is left untouched and manual Blender-node state is preserved. If the marked function body or an actually used editable local/imported dependency changes, NodeForge rebuilds the same owned group in place and generated internals reset to the new source.
+
+`__unique__` is not supported for `local` catalog calls, native `compile_call()` entries, built-ins, embedded systems, package-local backend helpers, or raw `node()` calls. Python backend/native implementation freshness follows the existing loader behavior and is outside the preservation guarantee for this feature.
+
 ## Project layout
 
 ```text

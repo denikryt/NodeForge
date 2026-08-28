@@ -115,3 +115,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.49.79
 
 - Preserved compatible input overrides and external links for every shared `GeometryNodeGroup` instance during in-place updates, including cross-instance links and strict rollback restoration.
+
+## 0.50.0
+
+- Added compiler-reserved `__unique__=True` for supported reusable function-group calls, with shallow per-occurrence local/imported group instances, persistent root owner IDs, metadata-based imported ownership, trace-derived editable-graph fingerprints, and generalized function-group transaction rollback.

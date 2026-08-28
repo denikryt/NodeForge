@@ -13,6 +13,7 @@ from .geometry_builder import GeometryBuilder
 from .systems import registry as systems_registry
 from . import local_functions
 from . import library_calls
+from .function_instances import extract_function_call_modifiers, unsupported_unique
 
 
 def compile_expr(comp, expr, depth=0):
@@ -233,6 +234,7 @@ def compile_expr(comp, expr, depth=0):
         if not isinstance(expr.func, ast.Name):
             raise CompileError("Only simple function calls are supported")
         name = expr.func.id
+        expr, function_modifiers = extract_function_call_modifiers(comp, expr, name)
         is_imported_library_call = name in comp.imported_library_functions
         if (
             expr.keywords
@@ -246,17 +248,31 @@ def compile_expr(comp, expr, depth=0):
                 f"Keyword arguments are only supported for builtins, library functions, local functions or local backend helpers; {name} is not registered as one"
             )
         if builtin_registry.has_callable_builtin(name):
+            if function_modifiers.unique_was_explicit:
+                raise unsupported_unique(name)
             return builtin_registry.compile_call(comp, expr, depth)
         if systems_registry.has_system_constructor(name):
+            if function_modifiers.unique_was_explicit:
+                raise unsupported_unique(name)
             return systems_registry.compile_call(comp, expr, depth)
         if name in comp.local_functions:
-            return local_functions.compile_local_function_call(comp, expr, depth)
+            return local_functions.compile_local_function_call(comp, expr, depth, modifiers=function_modifiers)
         if name in comp.backend_builtins:
+            if function_modifiers.unique_was_explicit:
+                raise unsupported_unique(name)
             return local_functions.compile_backend_builtin_call(comp, expr, depth)
         if is_imported_library_call:
-            return library_calls.compile_library_function_call(comp, expr, depth, binding=comp.imported_library_functions[name])
+            return library_calls.compile_library_function_call(
+                comp,
+                expr,
+                depth,
+                binding=comp.imported_library_functions[name],
+                modifiers=function_modifiers,
+            )
         if name in {"output", "store"}:
             raise CompileError(f"{name}() is only supported as a top-level call")
+        if function_modifiers.unique_was_explicit:
+            raise unsupported_unique(name)
         raise CompileError(f"Unsupported function: {name}")
 
     raise CompileError(f"Unsupported expression element: {type(expr).__name__}")

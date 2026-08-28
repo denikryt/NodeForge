@@ -18,6 +18,15 @@ from .consteval import _is_const_vector
 from .compile_time import reject_compile_time_object
 from .values import TupleValue, make_value, reject_tuple_value
 from .library_calls import _argument_type_matches
+from .function_instances import (
+    FUNCTION_DEFINITION_OWNER_PROP,
+    FUNCTION_INSTANCE_KEY_PROP,
+    FunctionCallModifiers,
+    function_group_owner_scope,
+    local_callee_identity,
+    stamp_function_metadata,
+    stored_fingerprint,
+)
 
 LOCAL_HELPER_KIND_PROP = "nodeforge_generated_kind"
 LOCAL_HELPER_KIND = "local_function_helper"
@@ -177,18 +186,22 @@ def _local_helper_group_name(namespace, function_name, signature):
     return " ".join(part[:1].upper() + part[1:] for part in parts) or "Function"
 
 
-def _find_local_helper(*, namespace, function_name, signature):
+def _find_local_helper(*, namespace, function_name, signature, definition_owner=None, instance_key=None, transaction=None):
     """Return the unique helper matching the exact metadata identity."""
-    matches = [
-        group for group in bpy.data.node_groups
+    matches = []
+    for group in bpy.data.node_groups:
+        if transaction is not None and hasattr(transaction, "owns_group") and transaction.owns_group(group):
+            continue
         if _helper_metadata_matches(
             group,
             namespace=namespace,
             function_name=function_name,
             signature=signature,
             return_shape=None,
-        )
-    ]
+            definition_owner=definition_owner,
+            instance_key=instance_key,
+        ):
+            matches.append(group)
     if len(matches) > 1:
         raise CompileError(
             f"Multiple local function helpers match {function_name}() with signature {signature}"
@@ -383,15 +396,26 @@ def _analyze_captures(comp, fn, _stack=()):
     return tuple(captures)
 
 
-def _helper_metadata_matches(group, *, namespace, function_name, signature, return_shape=None):
+def _helper_metadata_matches(group, *, namespace, function_name, signature, return_shape=None, definition_owner=None, instance_key=None):
     """Return True when an existing group is an owned matching local-function helper."""
     try:
+        if group.get(LOCAL_HELPER_KIND_PROP) != LOCAL_HELPER_KIND:
+            return False
+        if group.get(LOCAL_HELPER_NAME_PROP) != function_name:
+            return False
+        if group.get(LOCAL_HELPER_SIGNATURE_PROP) != signature:
+            return False
+        if return_shape is not None and group.get(LOCAL_HELPER_RETURN_PROP) != _serialize_return_shape(return_shape):
+            return False
+        stored_owner = group.get(FUNCTION_DEFINITION_OWNER_PROP)
+        stored_key = str(group.get(FUNCTION_INSTANCE_KEY_PROP) or "")
+        wanted_key = str(instance_key or "")
+        if definition_owner is not None and stored_owner:
+            return stored_owner == definition_owner and stored_key == wanted_key
         return (
-            group.get(LOCAL_HELPER_KIND_PROP) == LOCAL_HELPER_KIND
+            not stored_owner
+            and not wanted_key
             and group.get(LOCAL_HELPER_NAMESPACE_PROP) == namespace
-            and group.get(LOCAL_HELPER_NAME_PROP) == function_name
-            and group.get(LOCAL_HELPER_SIGNATURE_PROP) == signature
-            and (return_shape is None or group.get(LOCAL_HELPER_RETURN_PROP) == _serialize_return_shape(return_shape))
         )
     except Exception:
         return False
@@ -406,7 +430,7 @@ def _serialize_return_shape(shape, types=None):
     return json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
 
-def _write_helper_metadata(group, *, namespace, function_name, signature, source, return_shape, return_types):
+def _write_helper_metadata(group, *, namespace, function_name, signature, source, return_shape, return_types, definition_owner=None, instance_key=None, fingerprint=None):
     """Persist local-helper ownership metadata used by future reuse checks."""
     group[LOCAL_HELPER_KIND_PROP] = LOCAL_HELPER_KIND
     group[LOCAL_HELPER_NAMESPACE_PROP] = namespace
@@ -414,6 +438,12 @@ def _write_helper_metadata(group, *, namespace, function_name, signature, source
     group[LOCAL_HELPER_SIGNATURE_PROP] = signature
     group[LOCAL_HELPER_SOURCE_PROP] = source
     group[LOCAL_HELPER_RETURN_PROP] = _serialize_return_shape(return_shape, return_types)
+    stamp_function_metadata(
+        group,
+        instance_key=instance_key,
+        definition_owner=definition_owner,
+        fingerprint=fingerprint,
+    )
 
 
 def make_local_function_call_node(group, function_group, compiled_args, const_args, return_shape, x=0, y=0):
@@ -470,10 +500,14 @@ def compile_backend_builtin_call(comp, expr, depth=0):
     return helper(comp, expr, depth)
 
 
-def compile_local_function_call(comp, expr, depth=0):
+def compile_local_function_call(comp, expr, depth=0, modifiers=None):
     """Compile a script-local function call as a cached node group."""
+    modifiers = modifiers or FunctionCallModifiers()
     name = expr.func.id
     fn = comp.local_functions[name]
+    for arg in list(fn.args.posonlyargs) + list(fn.args.args) + list(fn.args.kwonlyargs):
+        if arg.arg == "__unique__":
+            raise CompileError("Local function parameter __unique__ is reserved by the compiler")
     params = [a.arg for a in fn.args.args]
     declared_types = {a.arg: resolve_local_parameter_annotation(a.annotation) for a in fn.args.args}
     return_shape = analyze_local_return_shape(fn)
@@ -559,14 +593,29 @@ def compile_local_function_call(comp, expr, depth=0):
     logical_namespace = _logical_namespace(getattr(comp, "helper_namespace", None) or getattr(comp.group, "name", "Group"))
     group_name = _local_helper_group_name(logical_namespace, name, signature)
     source = local_function_source(fn, param_types, hidden_captures=hidden_capture_names, return_shape=return_shape)
-    cache_key = (name, signature, source)
-    function_group = comp.local_group_cache.get(cache_key)
+    definition_owner = getattr(comp, "function_definition_owner", None) or logical_namespace
+    callee_identity = local_callee_identity(definition_owner, name, signature)
+    instance_key = comp.next_unique_function_instance_key(callee_identity) if modifiers.unique else ""
+    owner_scope = function_group_owner_scope("LOCAL_DEF", definition_owner, name, signature, instance_key=instance_key)
+    cache_key = ("local-def", definition_owner, name, signature, instance_key or "SHARED")
+    function_cache = getattr(comp, "function_group_cache", comp.local_group_cache)
+    function_group = function_cache.get(cache_key)
     if function_group is None or getattr(function_group, "name", None) not in bpy.data.node_groups:
         existing = _find_local_helper(
             namespace=logical_namespace,
             function_name=name,
             signature=signature,
+            definition_owner=definition_owner,
+            instance_key=instance_key,
+            transaction=getattr(comp, "function_group_transaction", None),
         )
+        own_inputs = {
+            "kind": "local-def",
+            "definition_owner": definition_owner,
+            "name": name,
+            "signature": signature,
+            "source": source,
+        }
         if existing is not None:
             function_group = comp.compile_group_callback(
                 source,
@@ -577,6 +626,15 @@ def compile_local_function_call(comp, expr, depth=0):
                 imported_library_functions=comp.imported_library_functions,
                 helper_namespace=getattr(comp, "helper_namespace", None),
                 local_helper_transaction=getattr(comp, "local_helper_transaction", None),
+                function_group_cache=function_cache,
+                function_group_transaction=getattr(comp, "function_group_transaction", None),
+                function_group_owner_scope=owner_scope,
+                function_definition_owner=definition_owner,
+                function_compilation_trace=getattr(comp, "function_compilation_trace", None),
+                function_compilation_inputs=own_inputs,
+                function_definition_identity=callee_identity,
+                function_instance_key=instance_key,
+                preserve_if_equivalent=True,
             )
         else:
             function_group = comp.compile_group_callback(
@@ -587,7 +645,16 @@ def compile_local_function_call(comp, expr, depth=0):
                 imported_library_functions=comp.imported_library_functions,
                 helper_namespace=getattr(comp, "helper_namespace", None),
                 local_helper_transaction=getattr(comp, "local_helper_transaction", None),
+                function_group_cache=function_cache,
+                function_group_transaction=getattr(comp, "function_group_transaction", None),
+                function_group_owner_scope=owner_scope,
+                function_definition_owner=definition_owner,
+                function_compilation_trace=getattr(comp, "function_compilation_trace", None),
+                function_compilation_inputs=own_inputs,
+                function_definition_identity=callee_identity,
+                function_instance_key=instance_key,
             )
+        fingerprint = stored_fingerprint(function_group)
         _write_helper_metadata(
             function_group,
             namespace=logical_namespace,
@@ -596,12 +663,26 @@ def compile_local_function_call(comp, expr, depth=0):
             source=source,
             return_shape=return_shape,
             return_types=[_socket_type_to_value_type(s) for s in function_group.interface.items_tree if getattr(s, "in_out", None) == "OUTPUT"],
+            definition_owner=definition_owner,
+            instance_key=instance_key,
+            fingerprint=fingerprint,
         )
-        function_group.name = group_name
-        comp.local_group_cache[cache_key] = function_group
+        function_cache[cache_key] = function_group
+    frame = getattr(getattr(comp, "function_compilation_trace", None), "current", None)
+    if frame is not None:
+        frame.record_child(owner_scope, stored_fingerprint(function_group))
     x = depth * 240
     y = -depth * 90
-    return make_local_function_call_node(comp.group, function_group, compiled_args, const_args, return_shape, x=x, y=y)
+    result = make_local_function_call_node(comp.group, function_group, compiled_args, const_args, return_shape, x=x, y=y)
+    if modifiers.unique:
+        for node in reversed(list(comp.group.nodes)):
+            if getattr(node, "bl_idname", None) == "GeometryNodeGroup" and getattr(node, "node_tree", None) is function_group:
+                try:
+                    node[FUNCTION_INSTANCE_KEY_PROP] = instance_key
+                except Exception:
+                    pass
+                break
+    return result
 
 
 __all__ = [
