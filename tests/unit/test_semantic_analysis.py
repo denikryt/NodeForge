@@ -18,7 +18,8 @@ from NodeForge.constants import (
     TYPE_VECTOR,
 )
 from NodeForge.errors import CompileError
-from NodeForge.semantic_analysis import SemanticEnvironment, analyze_expression
+from NodeForge.compiler_identities import BindingId
+from NodeForge.semantic_analysis import RuntimeBindingSymbol, SemanticEnvironment, analyze_expression
 
 
 pytestmark = pytest.mark.unit
@@ -31,8 +32,12 @@ def _expr(source):
 
 def _env(*, bindings=None, legacy=(), scalars=None, unsupported=(), labels=None):
     """Construct the immutable semantic snapshot used by analyzer tests."""
+    runtime_bindings = {
+        name: RuntimeBindingSymbol(BindingId("test-owner", index), typ)
+        for index, (name, typ) in enumerate((bindings or {}).items())
+    }
     return SemanticEnvironment(
-        MappingProxyType(dict(bindings or {})),
+        MappingProxyType(runtime_bindings),
         frozenset(legacy),
         MappingProxyType(dict(scalars or {})),
         frozenset(unsupported),
@@ -48,7 +53,7 @@ def _analyze(source, **kwargs):
 def test_environment_mapping_and_set_contract_is_structurally_immutable():
     env = _env(bindings={"a": TYPE_FLOAT}, legacy={"legacy"}, scalars={"k": (TYPE_FLOAT, 1)}, unsupported={"v"}, labels={"f": "DSL builtin"})
     with pytest.raises(TypeError):
-        env.runtime_binding_types["b"] = TYPE_FLOAT
+        env.runtime_bindings["b"] = RuntimeBindingSymbol(BindingId("test-owner", 1), TYPE_FLOAT)
     with pytest.raises(TypeError):
         env.scalar_constants["x"] = (TYPE_FLOAT, 2)
     with pytest.raises(TypeError):
@@ -76,6 +81,7 @@ def test_reached_name_resolution_precedence_is_exact():
     )
     assert analysis.facts[analysis.root].typ == TYPE_VECTOR
     assert analysis.facts[analysis.root].resolved_name.kind == "runtime_binding"
+    assert analysis.facts[analysis.root].resolved_name.binding_id == BindingId("test-owner", 0)
 
     assert _analyze("x", legacy={"x"}, scalars={"x": (TYPE_FLOAT, 1)}) is None
     assert _analyze("pi", unsupported={"pi"}) is None

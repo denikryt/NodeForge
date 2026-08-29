@@ -19,6 +19,7 @@ from NodeForge.constants import (
     TYPE_VECTOR,
 )
 from NodeForge.errors import CompileError
+from NodeForge.compiler_identities import BindingId
 from NodeForge.semantic_ir import (
     IRBinary,
     IRBinding,
@@ -31,11 +32,20 @@ from NodeForge.semantic_ir import (
     IRValue,
     IRVectorComponent,
 )
-from NodeForge.semantic_analysis import SemanticEnvironment, analyze_expression
+from NodeForge.semantic_analysis import RuntimeBindingSymbol, SemanticEnvironment, analyze_expression
 from NodeForge.semantic_lowering import lower_analyzed_expression
 
 
 pytestmark = pytest.mark.unit
+
+_TEST_BINDING_LOCAL_IDS = {}
+
+
+def _test_binding_id(name):
+    """Return one stable test binding-slot identity across independent programs."""
+    local_id = _TEST_BINDING_LOCAL_IDS.setdefault(name, len(_TEST_BINDING_LOCAL_IDS))
+    return BindingId("test-owner", local_id)
+
 
 
 def _expr(source):
@@ -58,8 +68,12 @@ def _environment(*, bindings=None, consts=None, labels=None, legacy_names=()):
             scalar_constants[name] = (TYPE_STRING, value)
         else:
             unsupported_constants.add(name)
+    runtime_bindings = {
+        name: RuntimeBindingSymbol(_test_binding_id(name), typ)
+        for name, typ in (bindings or {}).items()
+    }
     return SemanticEnvironment(
-        MappingProxyType(dict(bindings or {})),
+        MappingProxyType(runtime_bindings),
         frozenset(legacy_names),
         MappingProxyType(scalar_constants),
         frozenset(unsupported_constants),
@@ -169,10 +183,27 @@ def test_literal_typing(source, value, typ):
     assert program.result == operation.result
 
 
+def test_ir_binding_shape_uses_canonical_slot_identity_only():
+    program = _lower("a + a", bindings={"a": TYPE_FLOAT})
+    bindings = _operations(program, IRBinding)
+    assert tuple(field.name for field in dataclasses.fields(IRBinding)) == ("result", "depth", "binding_id")
+    assert len(bindings) == 2
+    assert bindings[0].binding_id == bindings[1].binding_id == _test_binding_id("a")
+    assert bindings[0].result != bindings[1].result
+    assert not hasattr(bindings[0], "name")
+    assert not hasattr(bindings[0], "socket")
+
+
+def test_distinct_source_bindings_receive_distinct_canonical_slots():
+    program = _lower("a + b", bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT})
+    bindings = _operations(program, IRBinding)
+    assert bindings[0].binding_id != bindings[1].binding_id
+
+
 def test_runtime_binding_precedes_compile_time_constant():
     program = _lower("a", bindings={"a": TYPE_FLOAT}, consts={"a": 1})
     assert isinstance(program.operations[0], IRBinding)
-    assert program.operations[0].name == "a"
+    assert program.operations[0].binding_id == _test_binding_id("a")
     assert program.result.typ == TYPE_FLOAT
 
 
@@ -379,43 +410,58 @@ def _backend_context(backend, bindings=None, group=None):
         MappingProxyType(dict(bindings or {})),
     )
 
+
+def _backend_bindings(bindings):
+    """Map source-ordered test bindings to the BindingIds emitted by _environment()."""
+    return {
+        _test_binding_id(name): value
+        for name, value in bindings.items()
+    }
+
 def test_exact_semantic_migration_markers_are_present_at_source_decisions():
     root = Path(__file__).resolve().parents[2]
-    analysis = (root / "semantic_analysis.py").read_text(encoding="utf-8")
-    semantic = (root / "semantic_lowering.py").read_text(encoding="utf-8")
-    dispatcher = (root / "expression_compiler.py").read_text(encoding="utf-8")
-    backend = (root / "blender_ir_lowering.py").read_text(encoding="utf-8")
+    sources = {
+        name: (root / path).read_text(encoding="utf-8")
+        for name, path in {
+            "analysis": "semantic_analysis.py",
+            "semantic": "semantic_lowering.py",
+            "dispatcher": "expression_compiler.py",
+            "backend": "blender_ir_lowering.py",
+            "compiler": "compiler.py",
+            "local": "local_functions.py",
+            "library_calls": "library_calls.py",
+        }.items()
+    }
 
-    assert analysis.count("SEMANTIC_ANALYSIS_MIGRATION") == 1
-    assert semantic.count("SEMANTIC_RESOLUTION_MIGRATION") == 1
-    assert semantic.count("SEMANTIC_IR_VALUE_MIGRATION") == 1
-    assert dispatcher.count("SEMANTIC_IR_MIGRATION") == 1
-    assert dispatcher.count("SEMANTIC_IR_VALUE_MIGRATION") == 1
-    assert dispatcher.count("SEMANTIC_ANALYSIS_LEGACY_BINDING_MIGRATION") == 1
-    assert dispatcher.count("SEMANTIC_ANALYSIS_CONSTANT_SNAPSHOT_MIGRATION") == 1
-    assert backend.count("SEMANTIC_IR_VALUE_MIGRATION") == 2
+    assert sources["analysis"].count("SEMANTIC_ANALYSIS_MIGRATION") == 1
+    assert sources["semantic"].count("SEMANTIC_RESOLUTION_MIGRATION") == 0
+    assert sources["semantic"].count("SEMANTIC_IR_VALUE_MIGRATION") == 1
+    assert sources["dispatcher"].count("SEMANTIC_IR_MIGRATION") == 1
+    assert sources["dispatcher"].count("SEMANTIC_IR_VALUE_MIGRATION") == 1
+    assert sources["dispatcher"].count("SEMANTIC_ANALYSIS_LEGACY_BINDING_MIGRATION") == 1
+    assert sources["dispatcher"].count("SEMANTIC_ANALYSIS_CONSTANT_SNAPSHOT_MIGRATION") == 1
+    assert sources["backend"].count("SEMANTIC_IR_VALUE_MIGRATION") == 1
+    assert sources["compiler"].count("CANONICAL_BINDING_ID_MIGRATION") == 1
+    assert sources["compiler"].count("CANONICAL_CALL_ID_MIGRATION") == 1
+    assert sources["local"].count("CANONICAL_CALL_ID_MIGRATION") == 1
+    assert sources["library_calls"].count("CANONICAL_CALL_ID_MIGRATION") == 1
 
-    normalized = {name: "\n".join(line.lstrip() for line in source.splitlines()) for name, source in {"dispatcher": dispatcher, "semantic": semantic, "backend": backend, "analysis": analysis}.items()}
+    normalized = {name: "\n".join(line.lstrip() for line in source.splitlines()) for name, source in sources.items()}
     required_markers = (
+        (normalized["compiler"], "# CANONICAL_BINDING_ID_MIGRATION: comp.vars remains the legacy heterogeneous\n# source-name store while statement, loop, call, and compile-time binding migration\n# is incomplete. Project current Value entries into stable BindingId-based semantic\n# and backend snapshots here without changing comp.vars ownership. Remove this bridge\n# when runtime bindings are stored canonically by BindingId and source names exist\n# only in the frontend symbol table."),
+        (normalized["local"], "# CANONICAL_CALL_ID_MIGRATION: Local calls still reach this legacy AST compiler\n# before call semantics are represented in Semantic IR. Construct the canonical\n# FunctionId here from the already-resolved specialization contract. Remove this\n# bridge when semantic call resolution produces FunctionId/CallSiteId before\n# backend function-group materialization."),
+        (normalized["library_calls"], "# CANONICAL_CALL_ID_MIGRATION: Imported reusable calls still resolve through the\n# legacy AST/library dispatcher. Construct their canonical FunctionId at this\n# boundary without changing call behavior. Remove this bridge when semantic call\n# resolution owns imported callable identity before function-group materialization."),
+        (normalized["compiler"], "# CANONICAL_CALL_ID_MIGRATION: CallSiteId allocation remains limited to existing\n# __unique__ reusable-function calls so this behavior-preserving stage keeps the\n# current per-owner/per-callee occurrence sequence exact. Remove this compatibility\n# allocator when semantic call resolution assigns canonical call-site identities\n# before legacy call materialization."),
         (normalized["dispatcher"], "# SEMANTIC_IR_VALUE_MIGRATION: comp.vars still stores legacy socket-bound Value\n# objects while statement and call migration is incomplete. Snapshot those Values\n# only at the frontend/backend boundary: semantic analysis receives detached types,\n# while Blender lowering receives the backend Value map. Remove this bridge when\n# runtime bindings use canonical compiler-owned references and comp.vars no longer\n# owns backend sockets."),
         (normalized["dispatcher"], "# SEMANTIC_IR_MIGRATION: Expressions outside the current IR slice continue on\n# the existing AST-to-Blender path while migration is incremental. The target\n# architecture is for migrated expression families to lower through Semantic IR\n# before Blender materialization. Remove this fallback only for an expression\n# family after that family is covered end-to-end by IR and its duplicated AST\n# lowering branch is removed in the same planned change set."),
-        (normalized["dispatcher"], "# SEMANTIC_ANALYSIS_LEGACY_BINDING_MIGRATION: comp.vars also contains non-Value\n# compiler-side bindings such as GeometryBuilder, NodeResult, TupleValue, and\n# list-backed legacy values. Export only their names so semantic analysis keeps\n# comp.vars name precedence and returns unsupported instead of misdiagnosing an\n# existing legacy binding as unknown or falling through to consts. Remove this\n# bridge when every compiler binding has frontend-owned semantic metadata or its\n# expression semantics have been migrated into semantic analysis."),
-        (normalized["dispatcher"], "# SEMANTIC_ANALYSIS_CONSTANT_SNAPSHOT_MIGRATION: comp.consts is heterogeneous\n# mutable compiler storage. Export only scalar literal type/value facts plus the\n# names of known non-scalar constants so semantic analysis preserves lookup\n# precedence without receiving legacy list/tuple/ConstVector containers. Remove\n# this bridge when compile-time bindings have frontend-owned semantic metadata."),
-        (normalized["semantic"], "# SEMANTIC_RESOLUTION_MIGRATION: Runtime value resolution now happens before IR\n# emission, but IRBinding still stores the legacy source binding name because\n# compiler-wide binding identity has not been defined. Remove this bridge when\n# runtime bindings use canonical compiler-owned identities shared by semantic\n# resolution, IR, and backend materialization."),
-        (normalized["backend"], "# SEMANTIC_IR_VALUE_MIGRATION: IRBinding still carries a source-level name and\n# the Blender lowering context therefore resolves it through a temporary\n# source-name -> legacy Value map. Remove this bridge when runtime bindings use\n# canonical compiler-owned identities shared by Semantic IR and backend\n# materialization; the final backend context must be keyed by that identity."),
-        (normalized["backend"], "# SEMANTIC_IR_VALUE_MIGRATION: compile_expr() and downstream compiler consumers\n# still expect a socket-bound Value result. Keep Value at this backend return\n# boundary while statements, calls, runtime state, and interface wiring remain on\n# the legacy compiler value contract. Remove this bridge when those consumers use\n# compiler-owned runtime references and explicit Blender materialization is confined\n# to the backend boundary."),
         (normalized["semantic"], "# SEMANTIC_IR_VALUE_MIGRATION: Re-lower the shared middle source expression for\n# each comparison pair so this behavior-preserving stage emits distinct IR values\n# and preserves the current duplicated Geometry Nodes topology. Remove this rule\n# only in a dedicated topology-changing plan that defines IR value reuse and\n# updates the corresponding graph-shape contract tests."),
         (normalized["analysis"], "# SEMANTIC_ANALYSIS_MIGRATION: TYPE_OBJECT attribute semantics still belong to\n# the legacy ObjectValue.resolve_property() path. Keep Object property access\n# outside semantic analysis until its property resolution and result typing are\n# represented frontend-side. Remove this fallback when TYPE_OBJECT attribute\n# access is migrated end-to-end and ObjectValue is no longer the semantic owner."),
     )
     for source, marker in required_markers:
         assert marker in source
 
-    assert "TYPE_OBJECT attribute semantics still belong" not in semantic
-    assert "_COMPARE_OPS" not in semantic
-    assert "_validate_binary" not in semantic
-    assert "_validate_compare" not in semantic
-    assert "Lower each comparison pair independently to preserve" not in backend
-
+    assert "IRBinding still stores the legacy source binding name" not in sources["semantic"]
+    assert "source-name -> legacy Value map" not in sources["backend"]
 
 def test_blender_lowering_context_is_minimal_immutable_and_compiler_independent():
     from dataclasses import FrozenInstanceError, fields
@@ -423,20 +469,20 @@ def test_blender_lowering_context_is_minimal_immutable_and_compiler_independent(
     from NodeForge.values import Value
 
     value = Value(object(), TYPE_FLOAT)
-    source_bindings = {"a": value}
+    source_bindings = {_test_binding_id("a"): value}
     context = backend.BlenderIRLoweringContext(object(), source_bindings)
     assert tuple(field.name for field in fields(context)) == ("group", "runtime_bindings")
-    assert context.runtime_bindings["a"] is value
-    source_bindings["a"] = Value(object(), TYPE_VECTOR)
-    assert context.runtime_bindings["a"] is value
+    assert context.runtime_bindings[_test_binding_id("a")] is value
+    source_bindings[_test_binding_id("a")] = Value(object(), TYPE_VECTOR)
+    assert context.runtime_bindings[_test_binding_id("a")] is value
     with pytest.raises(TypeError):
-        context.runtime_bindings["b"] = value
+        context.runtime_bindings[_test_binding_id("b")] = value
     with pytest.raises(FrozenInstanceError):
         context.group = object()
 
     source = (Path(__file__).resolve().parents[2] / "blender_ir_lowering.py").read_text(encoding="utf-8")
     assert "comp." not in source
-    assert "from .compiler" not in source
+    assert "from .compiler import" not in source
     assert "import compiler" not in source
     assert "expression_compiler" not in source
     assert "semantic_analysis" not in source
@@ -450,8 +496,8 @@ def test_backend_materialization_state_is_per_lowering_call():
     first = Value(object(), TYPE_FLOAT)
     second = Value(object(), TYPE_FLOAT)
     program = _lower("a", bindings={"a": TYPE_FLOAT})
-    assert backend.lower_expression(_backend_context(backend, {"a": first}), program) is first
-    assert backend.lower_expression(_backend_context(backend, {"a": second}), program) is second
+    assert backend.lower_expression(_backend_context(backend, {_test_binding_id("a"): first}), program) is first
+    assert backend.lower_expression(_backend_context(backend, {_test_binding_id("a"): second}), program) is second
 
 
 def test_backend_binding_bridge_and_invariant_drift():
@@ -462,11 +508,11 @@ def test_backend_binding_bridge_and_invariant_drift():
     value = Value(socket, TYPE_FLOAT)
     from NodeForge import blender_ir_lowering as backend
 
-    context = _backend_context(backend, {"a": value}, group=None)
+    context = _backend_context(backend, {_test_binding_id("a"): value}, group=None)
     program = _lower("a", bindings={"a": TYPE_FLOAT})
     assert lower_expression(context, program) is value
 
-    drifted = _backend_context(backend, {"a": Value(socket, TYPE_VECTOR)}, group=None)
+    drifted = _backend_context(backend, {_test_binding_id("a"): Value(socket, TYPE_VECTOR)}, group=None)
     with pytest.raises(CompileError, match="changed type"):
         lower_expression(drifted, program)
     missing = _backend_context(backend, {}, group=None)
@@ -479,7 +525,7 @@ def test_backend_executes_program_order_and_applies_nonzero_base_depth(monkeypat
     from NodeForge.values import Value
 
     calls = []
-    context = _backend_context(backend, {"a": Value(object(), TYPE_FLOAT)})
+    context = _backend_context(backend, _backend_bindings({"a": Value(object(), TYPE_FLOAT)}))
 
     def fake_value(group, value, x=0, y=0):
         calls.append(("value", value, x, y))
@@ -518,7 +564,7 @@ def test_backend_unary_identity_and_current_node_policy_without_blender(monkeypa
         "v": Value(object(), TYPE_VECTOR),
         "flag": Value(object(), TYPE_BOOL),
     }
-    context = _backend_context(backend, bindings)
+    context = _backend_context(backend, _backend_bindings(bindings))
 
     def fake_value(group, value, x=0, y=0):
         calls.append(("value", value, x, y))
@@ -560,11 +606,11 @@ def test_backend_comparison_chain_executes_explicit_duplicate_operations(monkeyp
     from NodeForge.values import Value
 
     calls = []
-    context = _backend_context(backend, {
+    context = _backend_context(backend, _backend_bindings({
         "a": Value(object(), TYPE_FLOAT),
         "b": Value(object(), TYPE_FLOAT),
         "c": Value(object(), TYPE_FLOAT),
-    })
+    }))
 
     def fake_value(group, value, x=0, y=0):
         calls.append(("value", value, x, y))
@@ -599,7 +645,7 @@ def test_backend_result_type_drift_is_controlled_internal_error(monkeypatch):
     from NodeForge import blender_ir_lowering as backend
     from NodeForge.values import Value
 
-    context = _backend_context(backend, {"a": Value(object(), TYPE_FLOAT)})
+    context = _backend_context(backend, _backend_bindings({"a": Value(object(), TYPE_FLOAT)}))
 
     def fake_value(group, value, x=0, y=0):
         return Value(object(), TYPE_FLOAT)
@@ -619,12 +665,12 @@ def test_backend_vector_conditional_component_and_boolean_primitives_without_ble
     from NodeForge.values import Value
 
     calls = []
-    context = _backend_context(backend, {
+    context = _backend_context(backend, _backend_bindings({
         "v": Value(object(), TYPE_VECTOR),
         "a": Value(object(), TYPE_FLOAT),
         "flag": Value(object(), TYPE_BOOL),
         "other": Value(object(), TYPE_FLOAT),
-    })
+    }))
 
     def fake_value(group, value, x=0, y=0):
         calls.append(("value", value, x, y))

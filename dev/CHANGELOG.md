@@ -144,3 +144,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.50.6
 
 - Made Semantic IR Blender lowering use an explicit immutable backend context instead of the general compiler object, preserving existing expression behavior and Geometry Nodes realization.
+
+## 0.50.7
+
+- Added canonical compiler-owned `BindingId`, `FunctionId`, and `CallSiteId` identities across Semantic IR runtime bindings and reusable-function materialization while preserving existing graph topology, metadata strings, fingerprints, and unique instance keys.

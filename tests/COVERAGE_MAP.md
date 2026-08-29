@@ -33,7 +33,8 @@
 
 ## Unique function-group instances
 
-- `tests/unit/test_function_instances.py`: compiler-reserved `__unique__` extraction, strict compile-time Bool validation, canonical owner scopes, deterministic occurrence keys, root owner ID validation, and trace-derived fingerprint payload behavior.
+- `tests/unit/test_compiler_identities.py`: immutable `BindingId`/`FunctionId`/`CallSiteId` records, exact legacy stable serialization, core-package normalization, and hard-coded unique instance-key digest compatibility.
+- `tests/unit/test_function_instances.py`: compiler-reserved `__unique__` extraction, strict compile-time Bool validation, canonical owner scopes, root owner ID validation, and trace-derived fingerprint payload behavior.
 - `tests/blender/test_unique_function_groups.py`: focused Blender regressions for local and editable imported shared/unique ownership, shallow unique instances, metadata lookup independent of Blender names, root rename durability, dependency-change rebuilds, unsupported-call diagnostics, and physical transaction identity.
 - `tests/blender/test_function_root_identity.py`: isolated root rename/save/reopen persistence for root owner ID, local definition owner, unique instance key, helper identity, and manual Float Curve state across an unchanged post-reopen update.
 
@@ -70,6 +71,6 @@
 
 ## Semantic IR expression boundary
 
-- `tests/unit/test_semantic_ir.py`: Blender-independent IR records, literal/binding typing, name precedence, operator contracts, ordered mixed-tree ownership, explicit immutable `BlenderIRLoweringContext`, binding/materialization invariants, Object attribute fallback, conditional ownership, and migration-marker invariants.
+- `tests/unit/test_semantic_ir.py`: Blender-independent IR records, canonical `BindingId` runtime binding references, literal/binding typing, name precedence, operator contracts, ordered mixed-tree ownership, explicit immutable `BlenderIRLoweringContext`, binding/materialization invariants, Object attribute fallback, conditional ownership, and migration-marker invariants.
 - `tests/unit/test_semantic_backend_contract.py`: analyzer-derived finite operation/type matrix executed through the explicit lowering context and the real `nodes.py` realization helpers, plus commitment semantics proving backend failure after successful analysis propagates without legacy AST retry.
 - `tests/blender/test_semantic_ir_compile.py`: production IR routing, direct context lowering over real Blender RNA for analyzer-reachable backend signatures, representative graph materialization, unary topology/socket identity, comparison-chain pairwise materialization/layout, and fresh-build cleanup on semantic or partially materialized backend failure without legacy retry.

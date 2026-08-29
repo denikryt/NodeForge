@@ -5,6 +5,7 @@ from .consteval import _is_const_vector
 from .errors import CompileError
 from .values import Value
 from .compile_time import reject_compile_time_object
+from .compiler_identities import library_function_id, normalize_library_package_id
 from .library import (
     has_native_compile_call,
     find_library_entry_record,
@@ -18,8 +19,7 @@ from .function_instances import (
     FunctionCallModifiers,
     FUNCTION_INSTANCE_KEY_PROP,
     function_group_owner_scope,
-    library_callee_identity,
-    library_package_identity,
+    instance_key_for,
     unsupported_unique,
 )
 
@@ -88,16 +88,23 @@ def compile_library_function_call(comp, expr, depth=0, function_name=None, names
     record = find_library_entry_record(namespace, name)
     instance_key = ""
     owner_scope = None
-    if namespace in {"functions", "examples"} and record is not None:
-        callee_identity = library_callee_identity(namespace, record.package_id, name)
-        instance_key = comp.next_unique_function_instance_key(callee_identity) if modifiers.unique else ""
-        owner_scope = function_group_owner_scope(
-            "LIBRARY",
-            namespace,
-            library_package_identity(record.package_id),
-            name,
-            instance_key=instance_key,
-        )
+    function_id = None
+    if record is not None:
+        # CANONICAL_CALL_ID_MIGRATION: Imported reusable calls still resolve through the
+        # legacy AST/library dispatcher. Construct their canonical FunctionId at this
+        # boundary without changing call behavior. Remove this bridge when semantic call
+        # resolution owns imported callable identity before function-group materialization.
+        function_id = library_function_id(namespace, record.package_id, name)
+        if namespace in {"functions", "examples"}:
+            call_site = comp.next_unique_function_call_site(function_id) if modifiers.unique else None
+            instance_key = instance_key_for(call_site) if call_site is not None else ""
+            owner_scope = function_group_owner_scope(
+                "LIBRARY",
+                namespace,
+                normalize_library_package_id(record.package_id),
+                name,
+                instance_key=instance_key,
+            )
     cache_key = ("catalog", namespace, name)
     function_group = comp.local_group_cache.get(cache_key) if namespace == "local" else None
     if function_group is None:
@@ -107,6 +114,7 @@ def compile_library_function_call(comp, expr, depth=0, function_name=None, names
             comp.compile_group_callback,
             instance_key=instance_key,
             owner_scope=owner_scope,
+            function_id=function_id,
             function_group_cache=getattr(comp, "function_group_cache", None),
             function_group_transaction=getattr(comp, "function_group_transaction", None),
             function_compilation_trace=getattr(comp, "function_compilation_trace", None),

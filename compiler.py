@@ -2,12 +2,15 @@
 
 import ast
 from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Mapping
 import uuid
 
 import bpy
 
 from .constants import TYPE_FLOAT, TYPE_INT, TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
 from .errors import CompileError
+from .compiler_identities import BindingId, CallSiteId, FunctionId
 from .values import Value, make_value
 from .nodes import (
     _new_node,
@@ -46,7 +49,6 @@ from .function_instances import (
     FUNCTION_ROOT_OWNER_ID_PROP,
     FunctionCompilationTrace,
     function_group_owner_scope as make_function_group_owner_scope,
-    instance_key_for,
     interface_contract,
     new_root_owner_id,
     normalized_statements,
@@ -58,6 +60,7 @@ from .function_instances import (
 
 _TEST_CUTOVER_FAIL_AFTER_RESET = False
 from .statement_compiler import GroupBuildContext, compile_statements
+from .semantic_analysis import RuntimeBindingSymbol
 
 
 @dataclass(frozen=True)
@@ -66,6 +69,19 @@ class LibraryBinding:
 
     namespace: str
     canonical_name: str
+
+
+@dataclass(frozen=True)
+class RuntimeBindingSnapshot:
+    """Freeze coherent frontend/backend views of current runtime Value bindings."""
+
+    semantic_bindings: Mapping[str, RuntimeBindingSymbol]
+    backend_values: Mapping[BindingId, Value]
+
+    def __post_init__(self):
+        """Freeze both maps while retaining exact backend Value object identity."""
+        object.__setattr__(self, "semantic_bindings", MappingProxyType(dict(self.semantic_bindings)))
+        object.__setattr__(self, "backend_values", MappingProxyType(dict(self.backend_values)))
 
 
 class FunctionGroupBuildTransaction:
@@ -308,6 +324,8 @@ class Compiler:
         self.function_compilation_trace = function_compilation_trace or FunctionCompilationTrace()
         self.reserved_name_labels = dict(reserved_name_labels or {})
         self._function_occurrence_counts = {}
+        self._runtime_binding_ids = {}
+        self._next_runtime_binding_local_id = 0
         self._interface_inputs_by_identifier = {}
         self._interface_inputs_by_socket_pointer = {}
         self._panel_input_memberships = {}
@@ -398,12 +416,46 @@ class Compiler:
             return ("identifier", identifier)
         return ("interface", self._rna_pointer(iface_item))
 
-    def next_unique_function_instance_key(self, callee_identity: str) -> str:
-        """Allocate a deterministic occurrence key in the current physical owner."""
-        counter_key = (self.function_group_owner_scope, callee_identity)
+    def runtime_binding_id(self, name: str) -> BindingId:
+        """Return the stable compiler-local identity for one source binding slot."""
+        binding_id = self._runtime_binding_ids.get(name)
+        if binding_id is None:
+            binding_id = BindingId(self.function_group_owner_scope, self._next_runtime_binding_local_id)
+            self._next_runtime_binding_local_id += 1
+            self._runtime_binding_ids[name] = binding_id
+        return binding_id
+
+    def snapshot_runtime_bindings(self) -> RuntimeBindingSnapshot:
+        """Snapshot current runtime Values into coherent semantic/backend identity maps."""
+        semantic_bindings = {}
+        backend_values = {}
+        # CANONICAL_BINDING_ID_MIGRATION: comp.vars remains the legacy heterogeneous
+        # source-name store while statement, loop, call, and compile-time binding migration
+        # is incomplete. Project current Value entries into stable BindingId-based semantic
+        # and backend snapshots here without changing comp.vars ownership. Remove this bridge
+        # when runtime bindings are stored canonically by BindingId and source names exist
+        # only in the frontend symbol table.
+        for name, value in self.vars.items():
+            if not isinstance(value, Value):
+                continue
+            binding_id = self.runtime_binding_id(name)
+            semantic_bindings[name] = RuntimeBindingSymbol(binding_id, value.typ)
+            backend_values[binding_id] = value
+        return RuntimeBindingSnapshot(semantic_bindings, backend_values)
+
+    def next_unique_function_call_site(self, callee: FunctionId) -> CallSiteId:
+        """Allocate the next unique reusable-function occurrence in this owner."""
+        if not isinstance(callee, FunctionId):
+            raise TypeError("callee must be a FunctionId")
+        # CANONICAL_CALL_ID_MIGRATION: CallSiteId allocation remains limited to existing
+        # __unique__ reusable-function calls so this behavior-preserving stage keeps the
+        # current per-owner/per-callee occurrence sequence exact. Remove this compatibility
+        # allocator when semantic call resolution assigns canonical call-site identities
+        # before legacy call materialization.
+        counter_key = (self.function_group_owner_scope, callee)
         ordinal = self._function_occurrence_counts.get(counter_key, 0)
         self._function_occurrence_counts[counter_key] = ordinal + 1
-        return instance_key_for(self.function_group_owner_scope, callee_identity, ordinal)
+        return CallSiteId(self.function_group_owner_scope, callee, ordinal)
 
     def _compile_const_value(self, value, x=0, y=0):
         """Turn a compile-time constant into a node Value or script-level array."""
@@ -1569,6 +1621,7 @@ def update_expression_group(group, source: str):
 __all__ = [
     "CompileError",
     "Compiler",
+    "RuntimeBindingSnapshot",
     "FunctionGroupBuildTransaction",
     "LocalHelperBuildTransaction",
     "create_expression_group",

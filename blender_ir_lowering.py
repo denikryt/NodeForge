@@ -8,6 +8,7 @@ from typing import Mapping
 
 from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_INT, TYPE_VECTOR
 from .errors import CompileError
+from .compiler_identities import BindingId
 from .nodes import _boolean_math, _compare, _math, _separate_xyz, _string_value, _switch, _value, _vector_math
 from .semantic_ir import (
     IRBinary,
@@ -32,7 +33,7 @@ class BlenderIRLoweringContext:
     """
 
     group: object
-    runtime_bindings: Mapping[str, Value]
+    runtime_bindings: Mapping[BindingId, Value]
 
     def __post_init__(self):
         """Freeze the binding container while retaining exact backend Value identity."""
@@ -82,19 +83,14 @@ def _lower_literal(context, operation, materialized, x, y):
 
 def _lower_binding(context, operation, materialized):
     """Resolve one semantic runtime binding to its backend materialization."""
-    # SEMANTIC_IR_VALUE_MIGRATION: IRBinding still carries a source-level name and
-    # the Blender lowering context therefore resolves it through a temporary
-    # source-name -> legacy Value map. Remove this bridge when runtime bindings use
-    # canonical compiler-owned identities shared by Semantic IR and backend
-    # materialization; the final backend context must be keyed by that identity.
-    value = context.runtime_bindings.get(operation.name)
+    value = context.runtime_bindings.get(operation.binding_id)
     if not isinstance(value, Value):
         raise CompileError(
-            f"Internal error: Semantic IR binding {operation.name!r} is no longer a runtime Value"
+            f"Internal error: Semantic IR binding {operation.binding_id!r} is no longer a runtime Value"
         )
     if value.typ != operation.result.typ:
         raise CompileError(
-            f"Internal error: Semantic IR binding {operation.name!r} changed type "
+            f"Internal error: Semantic IR binding {operation.binding_id!r} changed type "
             f"from {operation.result.typ} to {value.typ}"
         )
     _store_result(materialized, operation.result, value)

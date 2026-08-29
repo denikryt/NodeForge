@@ -28,15 +28,7 @@ def compile_expr(comp, expr, depth=0):
     # while Blender lowering receives the backend Value map. Remove this bridge when
     # runtime bindings use canonical compiler-owned references and comp.vars no longer
     # owns backend sockets.
-    runtime_binding_values = MappingProxyType({
-        name: value
-        for name, value in comp.vars.items()
-        if isinstance(value, Value)
-    })
-    runtime_binding_types = MappingProxyType({
-        name: value.typ
-        for name, value in runtime_binding_values.items()
-    })
+    runtime_binding_snapshot = comp.snapshot_runtime_bindings()
     # SEMANTIC_ANALYSIS_LEGACY_BINDING_MIGRATION: comp.vars also contains non-Value
     # compiler-side bindings such as GeometryBuilder, NodeResult, TupleValue, and
     # list-backed legacy values. Export only their names so semantic analysis keeps
@@ -66,7 +58,7 @@ def compile_expr(comp, expr, depth=0):
         else:
             unsupported_constant_names.add(name)
     environment = SemanticEnvironment(
-        runtime_binding_types=runtime_binding_types,
+        runtime_bindings=runtime_binding_snapshot.semantic_bindings,
         legacy_binding_names=legacy_binding_names,
         scalar_constants=MappingProxyType(scalar_constants),
         unsupported_constant_names=frozenset(unsupported_constant_names),
@@ -86,7 +78,7 @@ def compile_expr(comp, expr, depth=0):
         ir = lower_analyzed_expression(expr, analysis)
         context = BlenderIRLoweringContext(
             group=comp.group,
-            runtime_bindings=runtime_binding_values,
+            runtime_bindings=runtime_binding_snapshot.backend_values,
         )
         return lower_ir_expression(context, ir, depth)
 

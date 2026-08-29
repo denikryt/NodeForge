@@ -20,7 +20,8 @@ from NodeForge.constants import (
     TYPE_VECTOR,
 )
 from NodeForge.errors import CompileError
-from NodeForge.semantic_analysis import SemanticEnvironment, analyze_expression
+from NodeForge.compiler_identities import BindingId
+from NodeForge.semantic_analysis import RuntimeBindingSymbol, SemanticEnvironment, analyze_expression
 from NodeForge.semantic_lowering import lower_analyzed_expression
 from NodeForge.values import Value
 
@@ -96,9 +97,13 @@ def _expr(source):
 
 
 def _environment(bindings):
-    """Build an immutable environment containing only runtime binding type facts."""
+    """Build an immutable environment containing canonical runtime binding facts."""
+    runtime_bindings = {
+        name: RuntimeBindingSymbol(BindingId("backend-contract", index), typ)
+        for index, (name, typ) in enumerate(bindings.items())
+    }
     return SemanticEnvironment(
-        MappingProxyType(dict(bindings)),
+        MappingProxyType(runtime_bindings),
         frozenset(),
         MappingProxyType({}),
         frozenset(),
@@ -125,8 +130,8 @@ def _materialize(source, bindings):
         return False
     group = _FakeGroup()
     runtime_bindings = MappingProxyType({
-        name: Value(_FakeSocket(), typ)
-        for name, typ in bindings.items()
+        BindingId("backend-contract", index): Value(_FakeSocket(), typ)
+        for index, (_, typ) in enumerate(bindings.items())
     })
     context = blender_ir_lowering.BlenderIRLoweringContext(group, runtime_bindings)
     result = blender_ir_lowering.lower_expression(context, program)
@@ -235,7 +240,16 @@ def test_successful_semantic_analysis_commits_to_ir_backend_without_legacy_retry
         monkeypatch.setattr(expression_compiler, "_value", legacy_value)
         monkeypatch.setattr(expression_compiler, "_math", legacy_math)
 
-        comp = SimpleNamespace(vars={}, consts={}, reserved_name_labels={}, group=object())
+        comp = SimpleNamespace(
+            vars={},
+            consts={},
+            reserved_name_labels={},
+            group=object(),
+            snapshot_runtime_bindings=lambda: SimpleNamespace(
+                semantic_bindings=MappingProxyType({}),
+                backend_values=MappingProxyType({}),
+            ),
+        )
         with pytest.raises(CompileError) as exc_info:
             expression_compiler.compile_expr(comp, expr)
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TypeAlias
 
+from .compiler_identities import BindingId
+
 
 @dataclass(frozen=True)
 class IRValue:
@@ -25,11 +27,11 @@ class IRLiteral:
 
 @dataclass(frozen=True)
 class IRBinding:
-    """Produce one value from an existing runtime binding name."""
+    """Produce one value from an existing canonical runtime binding slot."""
 
     result: IRValue
     depth: int
-    name: str
+    binding_id: BindingId
 
 
 @dataclass(frozen=True)

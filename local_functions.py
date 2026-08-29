@@ -18,12 +18,13 @@ from .consteval import _is_const_vector
 from .compile_time import reject_compile_time_object
 from .values import TupleValue, make_value, reject_tuple_value
 from .library_calls import _argument_type_matches
+from .compiler_identities import local_function_id
 from .function_instances import (
     FUNCTION_DEFINITION_OWNER_PROP,
     FUNCTION_INSTANCE_KEY_PROP,
     FunctionCallModifiers,
     function_group_owner_scope,
-    local_callee_identity,
+    instance_key_for,
     stamp_function_metadata,
     stored_fingerprint,
 )
@@ -594,10 +595,16 @@ def compile_local_function_call(comp, expr, depth=0, modifiers=None):
     group_name = _local_helper_group_name(logical_namespace, name, signature)
     source = local_function_source(fn, param_types, hidden_captures=hidden_capture_names, return_shape=return_shape)
     definition_owner = getattr(comp, "function_definition_owner", None) or logical_namespace
-    callee_identity = local_callee_identity(definition_owner, name, signature)
-    instance_key = comp.next_unique_function_instance_key(callee_identity) if modifiers.unique else ""
+    # CANONICAL_CALL_ID_MIGRATION: Local calls still reach this legacy AST compiler
+    # before call semantics are represented in Semantic IR. Construct the canonical
+    # FunctionId here from the already-resolved specialization contract. Remove this
+    # bridge when semantic call resolution produces FunctionId/CallSiteId before
+    # backend function-group materialization.
+    function_id = local_function_id(definition_owner, name, signature)
+    call_site = comp.next_unique_function_call_site(function_id) if modifiers.unique else None
+    instance_key = instance_key_for(call_site) if call_site is not None else ""
     owner_scope = function_group_owner_scope("LOCAL_DEF", definition_owner, name, signature, instance_key=instance_key)
-    cache_key = ("local-def", definition_owner, name, signature, instance_key or "SHARED")
+    cache_key = ("local-def", function_id, instance_key or "SHARED")
     function_cache = getattr(comp, "function_group_cache", comp.local_group_cache)
     function_group = function_cache.get(cache_key)
     if function_group is None or getattr(function_group, "name", None) not in bpy.data.node_groups:
@@ -632,7 +639,7 @@ def compile_local_function_call(comp, expr, depth=0, modifiers=None):
                 function_definition_owner=definition_owner,
                 function_compilation_trace=getattr(comp, "function_compilation_trace", None),
                 function_compilation_inputs=own_inputs,
-                function_definition_identity=callee_identity,
+                function_definition_identity=function_id.stable_key(),
                 function_instance_key=instance_key,
                 preserve_if_equivalent=True,
             )
@@ -651,7 +658,7 @@ def compile_local_function_call(comp, expr, depth=0, modifiers=None):
                 function_definition_owner=definition_owner,
                 function_compilation_trace=getattr(comp, "function_compilation_trace", None),
                 function_compilation_inputs=own_inputs,
-                function_definition_identity=callee_identity,
+                function_definition_identity=function_id.stable_key(),
                 function_instance_key=instance_key,
             )
         fingerprint = stored_fingerprint(function_group)

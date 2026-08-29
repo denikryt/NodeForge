@@ -9,9 +9,6 @@ from NodeForge.function_instances import (
     FunctionCompilationTrace,
     extract_function_call_modifiers,
     function_group_owner_scope,
-    instance_key_for,
-    library_callee_identity,
-    local_callee_identity,
     validate_root_owner_id,
 )
 
@@ -50,19 +47,6 @@ def test_unique_spelling_without_double_underscores_is_user_keyword():
     cleaned, modifiers = extract_function_call_modifiers(DummyCompiler(), _call("helper(unique=True)"), "helper")
     assert modifiers == FunctionCallModifiers()
     assert [kw.arg for kw in cleaned.keywords] == ["unique"]
-
-
-def test_owner_scope_and_occurrence_key_are_deterministic_and_owner_sensitive():
-    owner_a = function_group_owner_scope("ROOT", "root-a")
-    owner_b = function_group_owner_scope("ROOT", "root-b")
-    callee = local_callee_identity(owner_a, "helper", "x:FLOAT")
-    assert instance_key_for(owner_a, callee, 0) == instance_key_for(owner_a, callee, 0)
-    assert instance_key_for(owner_a, callee, 0) != instance_key_for(owner_a, callee, 1)
-    assert instance_key_for(owner_a, callee, 0) != instance_key_for(owner_b, callee, 0)
-
-
-def test_library_callee_identity_uses_core_sentinel_for_unpacked_entries():
-    assert library_callee_identity("functions", "", "helper") == library_callee_identity("functions", None, "helper")
 
 
 def test_trace_child_fingerprint_changes_parent_fingerprint():

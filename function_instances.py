@@ -16,6 +16,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 from .errors import CompileError
+from .compiler_identities import (
+    CallSiteId,
+    CORE_PACKAGE_ID,
+)
 
 FUNCTION_INSTANCE_KEY_PROP = "nodeforge_function_instance_key"
 FUNCTION_DEFINITION_OWNER_PROP = "nodeforge_function_definition_owner"
@@ -26,7 +30,6 @@ FUNCTION_ROOT_OWNER_ID_PROP = "nodeforge_function_root_owner_id"
 FINGERPRINT_SCHEMA = 1
 FUNCTION_COMPILER_VERSION = "0.50.0"
 SHARED_INSTANCE_KEY = "SHARED"
-CORE_PACKAGE_ID = "__nodeforge_core__"
 
 
 @dataclass(frozen=True)
@@ -116,42 +119,14 @@ def function_group_owner_scope(kind: str, *parts, instance_key: str | None = Non
     return _canonical_json(payload)
 
 
-def local_callee_identity(definition_owner: str, function_name: str, signature: str) -> str:
-    """Return the durable local-def callee identity used for occurrence keys."""
-
-    return _canonical_json({
-        "kind": "LOCAL_DEF",
-        "definition_owner": definition_owner,
-        "name": function_name,
-        "signature": signature,
-    })
-
-
-def library_package_identity(package_id: str | None) -> str:
-    """Normalize package identity for durable imported-function ownership."""
-
-    return str(package_id or CORE_PACKAGE_ID)
-
-
-def library_callee_identity(namespace: str, package_id: str | None, name: str) -> str:
-    """Return the durable imported-function callee identity used for occurrence keys."""
-
-    return _canonical_json({
-        "kind": "LIBRARY",
-        "namespace": namespace,
-        "package_id": library_package_identity(package_id),
-        "name": name,
-    })
-
-
-def instance_key_for(owner_scope: str, callee_identity: str, ordinal: int) -> str:
-    """Return a deterministic compact key for one marked occurrence."""
+def instance_key_for(call_site: CallSiteId) -> str:
+    """Return the existing deterministic compact key for one canonical call site."""
 
     return _digest_payload({
         "schema": 1,
-        "owner_scope": owner_scope,
-        "callee_identity": callee_identity,
-        "ordinal": int(ordinal),
+        "owner_scope": call_site.owner_scope,
+        "callee_identity": call_site.callee.stable_key(),
+        "ordinal": call_site.ordinal,
     })[:32]
 
 
@@ -312,9 +287,6 @@ __all__ = [
     "normalized_source",
     "normalized_statements",
     "function_group_owner_scope",
-    "local_callee_identity",
-    "library_package_identity",
-    "library_callee_identity",
     "instance_key_for",
     "new_root_owner_id",
     "validate_root_owner_id",

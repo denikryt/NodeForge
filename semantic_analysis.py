@@ -23,6 +23,7 @@ from .constants import (
     _COMPARE_OPS,
 )
 from .errors import CompileError
+from .compiler_identities import BindingId
 
 
 _RESERVED_VALUE_LABELS = {
@@ -45,10 +46,18 @@ _SWITCH_TYPES = {
 
 
 @dataclass(frozen=True)
+class RuntimeBindingSymbol:
+    """Frontend metadata for one resolved runtime binding slot."""
+
+    binding_id: BindingId
+    typ: str
+
+
+@dataclass(frozen=True)
 class SemanticEnvironment:
     """Immutable semantic metadata snapshot used by one expression analysis."""
 
-    runtime_binding_types: Mapping[str, str]
+    runtime_bindings: Mapping[str, RuntimeBindingSymbol]
     legacy_binding_names: AbstractSet[str]
     scalar_constants: Mapping[str, tuple[str, object]]
     unsupported_constant_names: AbstractSet[str]
@@ -63,6 +72,7 @@ class ResolvedName:
     typ: str
     name: str | None = None
     value: object | None = None
+    binding_id: BindingId | None = None
 
 
 @dataclass(frozen=True)
@@ -152,10 +162,15 @@ def analyze_expression(expr, environment):
         if isinstance(node, ast.Name):
             if node.id in TYPE_TOKEN_NAMES:
                 raise CompileError(f"Type token {node.id} may only be used in node(...) type declarations")
-            if node.id in environment.runtime_binding_types:
-                typ = environment.runtime_binding_types[node.id]
-                resolved = ResolvedName("runtime_binding", typ, name=node.id)
-                return record(node, ExpressionFact(typ, resolved_name=resolved))
+            if node.id in environment.runtime_bindings:
+                symbol = environment.runtime_bindings[node.id]
+                resolved = ResolvedName(
+                    "runtime_binding",
+                    symbol.typ,
+                    name=node.id,
+                    binding_id=symbol.binding_id,
+                )
+                return record(node, ExpressionFact(symbol.typ, resolved_name=resolved))
             if node.id in environment.legacy_binding_names:
                 return UNSUPPORTED
             if node.id in environment.scalar_constants:
@@ -293,6 +308,7 @@ def analyze_expression(expr, environment):
 
 
 __all__ = [
+    "RuntimeBindingSymbol",
     "SemanticEnvironment",
     "ResolvedName",
     "ExpressionFact",

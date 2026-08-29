@@ -1,5 +1,11 @@
 from helpers import *
 
+import json
+import tempfile
+from pathlib import Path
+
+from NodeForge import packages
+
 from NodeForge.function_instances import (
     FUNCTION_INSTANCE_KEY_PROP,
     FUNCTION_ROOT_OWNER_ID_PROP,
@@ -167,3 +173,106 @@ output("Out", broken)
     restored_middle = min(restored_points, key=lambda point: abs(float(point.location[0]) - 0.5))
     check(abs(float(restored_middle.location[1]) - 0.777) <= 1e-6, "failed parent update lost Float Curve interior point")
     check(restored_middle.handle_type == "VECTOR", f"failed parent update lost Float Curve handle type: {restored_middle.handle_type}")
+
+
+def test_shared_calls_do_not_consume_unique_ordinals_and_callees_are_independent():
+    """Preserve the legacy unique-only per-callee occurrence sequence."""
+    from NodeForge.compiler_identities import CallSiteId, local_function_id
+    from NodeForge.function_instances import function_group_owner_scope, instance_key_for
+
+    group = compile_group("""
+def ordinal_first(x):
+    return x + 1.0
+
+def ordinal_second(x):
+    return x + 2.0
+
+shared = ordinal_first(1.0)
+first_unique = ordinal_first(2.0, __unique__=True)
+second_unique = ordinal_second(3.0, __unique__=True)
+output("Out", shared + first_unique + second_unique)
+""", "NFTest_unique_ordinal_contract")
+
+    root_id = str(group.get(FUNCTION_ROOT_OWNER_ID_PROP) or "")
+    check(root_id, "root owner id is missing")
+    root_scope = function_group_owner_scope("ROOT", root_id)
+
+    first_id = local_function_id(root_scope, "ordinal_first", "x:FLOAT")
+    second_id = local_function_id(root_scope, "ordinal_second", "x:FLOAT")
+    first_expected = instance_key_for(CallSiteId(root_scope, first_id, 0))
+    second_expected = instance_key_for(CallSiteId(root_scope, second_id, 0))
+
+    first_keys = sorted(
+        str(helper.get(FUNCTION_INSTANCE_KEY_PROP) or "")
+        for helper in _local_helpers("ordinal_first")
+    )
+    second_keys = sorted(
+        str(helper.get(FUNCTION_INSTANCE_KEY_PROP) or "")
+        for helper in _local_helpers("ordinal_second")
+    )
+    check(first_keys == ["", first_expected], f"shared call changed first unique ordinal: {first_keys}")
+    check(second_keys == [second_expected], f"second callee did not start at ordinal zero: {second_keys}")
+
+
+def test_imported_unique_function_preserves_shared_and_occurrence_identity():
+    """Use canonical imported FunctionId without changing legacy unique keys."""
+    from NodeForge.compiler_identities import CallSiteId, library_function_id
+    from NodeForge.function_instances import function_group_owner_scope, instance_key_for
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "vendor.unique_identity"
+        functions = root / "functions"
+        functions.mkdir(parents=True)
+        manifest = {
+            "schema_version": 1,
+            "id": "vendor.unique_identity",
+            "name": "vendor.unique_identity",
+            "version": "1.0.0",
+            "author": "Tests",
+            "description": "Canonical imported identity regression fixture.",
+            "nodeforge_min_version": "0.50.0",
+            "nodeforge_max_version": None,
+            "contents": {"functions": "functions"},
+            "permissions": {"python": False},
+        }
+        (root / "nodeforge_package.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (functions / "import_unique_probe.nf").write_text(
+            'value = input_float("Value")\noutput("Value", value + 1.0)\n',
+            encoding="utf-8",
+        )
+        packages.install_package_directory(root, allow_python=False)
+        try:
+            source = """from functions import import_unique_probe
+shared = import_unique_probe(1.0)
+first = import_unique_probe(2.0, __unique__=True)
+second = import_unique_probe(3.0, __unique__=True)
+output("Out", shared + first + second)
+"""
+            original_materializer_identity_builder = library.library_function_id
+
+            def _unexpected_materializer_identity_reconstruction(*args, **kwargs):
+                raise AssertionError("materializer reconstructed an already-resolved imported FunctionId")
+
+            library.library_function_id = _unexpected_materializer_identity_reconstruction
+            try:
+                group = compile_group(source, "NFTest_imported_unique_identity")
+            finally:
+                library.library_function_id = original_materializer_identity_builder
+            root_id = str(group.get(FUNCTION_ROOT_OWNER_ID_PROP) or "")
+            check(root_id, "root owner id is missing for imported unique test")
+            root_scope = function_group_owner_scope("ROOT", root_id)
+            function_id = library_function_id("functions", "vendor.unique_identity", "import_unique_probe")
+            expected = [
+                "",
+                instance_key_for(CallSiteId(root_scope, function_id, 0)),
+                instance_key_for(CallSiteId(root_scope, function_id, 1)),
+            ]
+            actual = sorted(
+                str(candidate.get(FUNCTION_INSTANCE_KEY_PROP) or "")
+                for candidate in bpy.data.node_groups
+                if candidate.get("nodeforge_library_namespace") == "functions"
+                and candidate.get("nodeforge_library_name") == "import_unique_probe"
+            )
+            check(actual == sorted(expected), f"imported unique instance keys changed: {actual}")
+        finally:
+            packages.uninstall_package("vendor.unique_identity")

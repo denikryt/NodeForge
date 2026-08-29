@@ -16,6 +16,7 @@ import bpy
 
 from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR, TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING, TYPE_BUNDLE
 from .errors import CompileError
+from .compiler_identities import CORE_PACKAGE_ID, FunctionId, library_function_id, normalize_library_package_id
 from .interface import _set_socket_default
 from .nodes import _new_node
 from .values import Value, TupleValue, make_value
@@ -24,10 +25,7 @@ from . import packages
 from .function_instances import (
     FUNCTION_DEFINITION_OWNER_PROP,
     FUNCTION_INSTANCE_KEY_PROP,
-    CORE_PACKAGE_ID,
     function_group_owner_scope,
-    library_callee_identity,
-    library_package_identity,
     normalized_source,
     stamp_function_metadata,
     stored_fingerprint,
@@ -860,7 +858,7 @@ def resolve_reloadable_library_entry(group, namespace: str | None = None, name: 
         stored_package_id = str(group.get("nodeforge_package_id") or CORE_PACKAGE_ID)
     except Exception:
         stored_package_id = CORE_PACKAGE_ID
-    current_package_id = library_package_identity(record.package_id)
+    current_package_id = normalize_library_package_id(record.package_id)
     if stored_package_id != current_package_id:
         raise CompileError(
             f"Current source for {namespace} library entry {name!r} belongs to a different package"
@@ -873,23 +871,25 @@ def update_materialized_library_entry_group(namespace: str, name: str, group, co
     record = resolve_reloadable_library_entry(group, namespace, name)
     source = load_library_entry_source(namespace, name)
     backend_builtins = backend_builtins_for_entry(namespace, name)
+    function_id = library_function_id(namespace, record.package_id, name)
+    stable_function_id = function_id.stable_key()
     updated = compile_group_callback(
         source,
         getattr(group, "name", _group_name_for_record(record)),
         existing_group=group,
         backend_builtins=backend_builtins,
-        function_group_owner_scope=function_group_owner_scope("LIBRARY", namespace, library_package_identity(record.package_id), name),
-        function_definition_owner=library_callee_identity(namespace, record.package_id, name),
+        function_group_owner_scope=function_group_owner_scope("LIBRARY", namespace, normalize_library_package_id(record.package_id), name),
+        function_definition_owner=stable_function_id,
         function_compilation_inputs={
             "kind": "library-root",
             "namespace": namespace,
-            "package_id": library_package_identity(record.package_id),
+            "package_id": normalize_library_package_id(record.package_id),
             "package_version": record.package_version or "",
             "name": name,
             "source": normalized_source(source),
             "backend_signature": _backend_signature_for_record(record),
         },
-        function_definition_identity=library_callee_identity(namespace, record.package_id, name),
+        function_definition_identity=stable_function_id,
         preserve_if_equivalent=True,
     )
     # Compilation/cutover is the mutation boundary. Provenance is stamped only
@@ -935,7 +935,7 @@ def _library_metadata_matches(group, record: LibraryEntryRecord, *, instance_key
         if group.get("nodeforge_library_name") != record.name:
             return False
         stored_package_id = str(group.get("nodeforge_package_id") or CORE_PACKAGE_ID)
-        if stored_package_id != library_package_identity(record.package_id):
+        if stored_package_id != normalize_library_package_id(record.package_id):
             return False
         stored_key = str(group.get(FUNCTION_INSTANCE_KEY_PROP) or "")
         wanted_key = str(instance_key or "")
@@ -960,13 +960,24 @@ def _find_owned_library_entry_group(record: LibraryEntryRecord, *, instance_key:
     return matches[0] if matches else None
 
 
-def get_or_create_library_entry_group(namespace: str, name: str, compile_group_callback, *, instance_key=None, owner_scope=None, function_group_cache=None, function_group_transaction=None, function_compilation_trace=None):
+def get_or_create_library_entry_group(namespace: str, name: str, compile_group_callback, *, instance_key=None, owner_scope=None, function_id: FunctionId | None = None, function_group_cache=None, function_group_transaction=None, function_compilation_trace=None):
     """Compile/update the node group that backs an editable catalog source."""
     record = find_library_entry_record(namespace, name)
     if record is None or record.source_path is None:
         raise CompileError(f"{namespace} library entry {name!r} has no editable .nf source")
     source = load_library_entry_source(namespace, name)
     backend_builtins = backend_builtins_for_entry(namespace, name)
+    if function_id is None:
+        function_id = library_function_id(namespace, record.package_id, name)
+    elif (
+        not isinstance(function_id, FunctionId)
+        or function_id.namespace != record.namespace
+        or function_id.package_id != normalize_library_package_id(record.package_id)
+        or function_id.name != record.name
+        or function_id.definition_owner
+        or function_id.signature
+    ):
+        raise CompileError(f"Internal error: canonical FunctionId does not match {namespace} library entry {name!r}")
     backend_signature = _backend_signature_for_record(record)
     group_name = _group_name_for_record(record)
     if namespace == "local":
@@ -989,15 +1000,15 @@ def get_or_create_library_entry_group(namespace: str, name: str, compile_group_c
         if frame is not None:
             frame.mark_unproven("local catalog dependency")
     else:
-        cache_key = ("library", namespace, library_package_identity(record.package_id), name, instance_key or "SHARED")
+        cache_key = ("library", function_id, instance_key or "SHARED")
         if function_group_cache is not None and cache_key in function_group_cache:
             return function_group_cache[cache_key]
-        definition_identity = library_callee_identity(namespace, record.package_id, name)
-        owner_scope = owner_scope or function_group_owner_scope("LIBRARY", namespace, library_package_identity(record.package_id), name, instance_key=instance_key)
+        definition_identity = function_id.stable_key()
+        owner_scope = owner_scope or function_group_owner_scope("LIBRARY", namespace, normalize_library_package_id(record.package_id), name, instance_key=instance_key)
         own_inputs = {
             "kind": "library",
             "namespace": namespace,
-            "package_id": library_package_identity(record.package_id),
+            "package_id": normalize_library_package_id(record.package_id),
             "package_version": record.package_version or "",
             "name": name,
             "source": normalized_source(source),
@@ -1044,7 +1055,7 @@ def get_or_create_library_entry_group(namespace: str, name: str, compile_group_c
         stamp_function_metadata(
             group,
             instance_key=instance_key or "",
-            definition_owner=library_callee_identity(namespace, record.package_id, name),
+            definition_owner=function_id.stable_key(),
             fingerprint=stored_fingerprint(group),
         )
         group["nodeforge_library_source"] = source

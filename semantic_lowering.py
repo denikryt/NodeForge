@@ -71,13 +71,10 @@ def lower_analyzed_expression(expr, analysis):
             if resolved is None:
                 raise CompileError("Internal error: analyzed name has no resolution fact")
             if resolved.kind == "runtime_binding":
-                # SEMANTIC_RESOLUTION_MIGRATION: Runtime value resolution now happens before IR
-                # emission, but IRBinding still stores the legacy source binding name because
-                # compiler-wide binding identity has not been defined. Remove this bridge when
-                # runtime bindings use canonical compiler-owned identities shared by semantic
-                # resolution, IR, and backend materialization.
+                if resolved.binding_id is None:
+                    raise CompileError("Internal error: resolved runtime binding has no BindingId")
                 result = builder.new_value(node_fact.typ)
-                return builder.emit(IRBinding(result, depth, resolved.name))
+                return builder.emit(IRBinding(result, depth, resolved.binding_id))
             if resolved.kind in {"scalar_constant", "allowed_constant"}:
                 result = builder.new_value(node_fact.typ)
                 return builder.emit(IRLiteral(result, depth, node_fact.literal_value))

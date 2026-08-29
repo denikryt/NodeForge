@@ -12,8 +12,9 @@ from NodeForge.constants import (
     TYPE_OBJECT, TYPE_STRING, TYPE_VECTOR,
 )
 from NodeForge.errors import CompileError
+from NodeForge.compiler_identities import BindingId
 from NodeForge.nodes import _socket_type_for
-from NodeForge.semantic_analysis import SemanticEnvironment, analyze_expression
+from NodeForge.semantic_analysis import RuntimeBindingSymbol, SemanticEnvironment, analyze_expression
 from NodeForge.semantic_lowering import lower_analyzed_expression
 from NodeForge.semantic_ir import (
     IRBinary, IRBinding, IRBoolBinary, IRCompare, IRConditional, IRLiteral, IRUnary,
@@ -281,10 +282,23 @@ _CONTRACT_TYPES = (
     TYPE_BUNDLE,
 )
 
+_CONTRACT_BINDING_IDS = {}
+
+
+def _contract_binding_id(name):
+    """Return one stable binding identity shared by contract analysis/materialization."""
+    local_id = _CONTRACT_BINDING_IDS.setdefault(name, len(_CONTRACT_BINDING_IDS))
+    return BindingId("semantic-ir-contract", local_id)
+
+
 def _contract_environment(bindings):
     """Build one immutable runtime-only environment for backend contract discovery."""
+    runtime_bindings = {
+        name: RuntimeBindingSymbol(_contract_binding_id(name), typ)
+        for name, typ in bindings.items()
+    }
     return SemanticEnvironment(
-        MappingProxyType(dict(bindings)),
+        MappingProxyType(runtime_bindings),
         frozenset(),
         MappingProxyType({}),
         frozenset(),
@@ -385,7 +399,7 @@ def _lower_contract_program_on_real_blender(program, bindings, name):
         )
     group_input = group.nodes.new("NodeGroupInput")
     runtime_bindings = MappingProxyType({
-        binding_name: Value(group_input.outputs[binding_name], typ)
+        _contract_binding_id(binding_name): Value(group_input.outputs[binding_name], typ)
         for binding_name, typ in bindings.items()
     })
     context = BlenderIRLoweringContext(group, runtime_bindings)
@@ -422,9 +436,10 @@ def _check_binding_source(link, binding_name):
 
 
 def _binding_name_by_value(program):
-    """Map program-local binding value ids to their source binding names."""
+    """Map program-local binding value ids to test source labels for topology checks."""
+    names_by_id = {_contract_binding_id(name): name for name in _CONTRACT_BINDING_IDS}
     return {
-        operation.result.id: operation.name
+        operation.result.id: names_by_id[operation.binding_id]
         for operation in program.operations
         if isinstance(operation, IRBinding)
     }
@@ -674,7 +689,7 @@ output("Geometry", result)
     builder_envs = [env for env in environments if "builder" in env.legacy_binding_names]
     check(builder_envs, "GeometryBuilder name was not exported as a known legacy binding")
     for environment in builder_envs:
-        check("builder" not in environment.runtime_binding_types, "GeometryBuilder leaked into runtime types")
+        check("builder" not in environment.runtime_bindings, "GeometryBuilder leaked into runtime types")
         check(all(isinstance(name, str) for name in environment.legacy_binding_names), "legacy snapshot carried non-name values")
 
 
