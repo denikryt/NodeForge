@@ -75,7 +75,7 @@ def lower_analyzed_expression(expr, analysis):
                 # emission, but IRBinding still stores the legacy source binding name because
                 # compiler-wide binding identity has not been defined. Remove this bridge when
                 # runtime bindings use canonical compiler-owned identities shared by semantic
-                # analysis, IR, and Blender materialization.
+                # resolution, IR, and backend materialization.
                 result = builder.new_value(node_fact.typ)
                 return builder.emit(IRBinding(result, depth, resolved.name))
             if resolved.kind in {"scalar_constant", "allowed_constant"}:
@@ -118,7 +118,7 @@ def lower_analyzed_expression(expr, analysis):
             # each comparison pair so this behavior-preserving stage emits distinct IR values
             # and preserves the current duplicated Geometry Nodes topology. Remove this rule
             # only in a dedicated topology-changing plan that defines IR value reuse and
-            # updates the comparison-chain Blender regression contract.
+            # updates the corresponding graph-shape contract tests.
             for op, right_expr in zip(node_fact.compare_operations, node.comparators):
                 left = emit(left_expr, depth + 1)
                 right = emit(right_expr, depth + 1)

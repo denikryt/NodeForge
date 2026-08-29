@@ -1,7 +1,9 @@
 """Exhaustive semantic-to-NodeForge-backend contract before Blender RNA."""
 
 import ast
-from types import MappingProxyType
+import importlib
+import sys
+from types import MappingProxyType, ModuleType, SimpleNamespace
 
 import pytest
 
@@ -122,15 +124,12 @@ def _materialize(source, bindings):
     if program is None:
         return False
     group = _FakeGroup()
-    comp = type(
-        "Comp",
-        (),
-        {
-            "group": group,
-            "vars": {name: Value(_FakeSocket(), typ) for name, typ in bindings.items()},
-        },
-    )()
-    result = blender_ir_lowering.lower_expression(comp, program)
+    runtime_bindings = MappingProxyType({
+        name: Value(_FakeSocket(), typ)
+        for name, typ in bindings.items()
+    })
+    context = blender_ir_lowering.BlenderIRLoweringContext(group, runtime_bindings)
+    result = blender_ir_lowering.lower_expression(context, program)
     assert result.typ == program.result.typ
     return True
 
@@ -199,3 +198,51 @@ def test_all_analyzer_accepted_vector_components_reach_real_node_helpers():
 def test_migrated_literal_realizations_reach_real_node_helpers():
     for source in ("1", "1.5", "True", '"name"'):
         assert _materialize(source, {})
+
+
+
+def test_successful_semantic_analysis_commits_to_ir_backend_without_legacy_retry(monkeypatch):
+    """Propagate IR backend failure without retrying the legacy AST dispatcher."""
+    before_modules = set(sys.modules)
+    monkeypatch.setitem(sys.modules, "bpy", ModuleType("bpy"))
+    expression_compiler = importlib.import_module("NodeForge.expression_compiler")
+    try:
+        expr = ast.parse("1 + 2", mode="eval").body
+        original_analyze = expression_compiler.analyze_expression
+        analysis_calls = []
+        legacy_calls = []
+        backend_error = CompileError("controlled Semantic IR backend failure")
+
+        def checked_analyze(node, environment):
+            analysis = original_analyze(node, environment)
+            assert analysis is not None
+            analysis_calls.append(analysis)
+            return analysis
+
+        def fail_backend(context, program, base_depth=0):
+            raise backend_error
+
+        def legacy_value(*args, **kwargs):
+            legacy_calls.append("value")
+            raise AssertionError("legacy AST literal lowering ran after semantic success")
+
+        def legacy_math(*args, **kwargs):
+            legacy_calls.append("math")
+            raise AssertionError("legacy AST binary lowering ran after semantic success")
+
+        monkeypatch.setattr(expression_compiler, "analyze_expression", checked_analyze)
+        monkeypatch.setattr(expression_compiler, "lower_ir_expression", fail_backend)
+        monkeypatch.setattr(expression_compiler, "_value", legacy_value)
+        monkeypatch.setattr(expression_compiler, "_math", legacy_math)
+
+        comp = SimpleNamespace(vars={}, consts={}, reserved_name_labels={}, group=object())
+        with pytest.raises(CompileError) as exc_info:
+            expression_compiler.compile_expr(comp, expr)
+
+        assert exc_info.value is backend_error
+        assert len(analysis_calls) == 1
+        assert legacy_calls == []
+    finally:
+        for name in set(sys.modules) - before_modules:
+            if name == "bpy" or name.startswith("NodeForge."):
+                sys.modules.pop(name, None)

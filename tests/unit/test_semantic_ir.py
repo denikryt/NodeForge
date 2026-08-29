@@ -369,6 +369,16 @@ def test_ir_emitter_rejects_invalid_analysis_root_and_compare_fact_shape():
         lower_analyzed_expression(expr, malformed)
 
 
+
+def _backend_context(backend, bindings=None, group=None):
+    """Build an immutable explicit backend context for unit lowering tests."""
+    from types import MappingProxyType
+
+    return backend.BlenderIRLoweringContext(
+        object() if group is None else group,
+        MappingProxyType(dict(bindings or {})),
+    )
+
 def test_exact_semantic_migration_markers_are_present_at_source_decisions():
     root = Path(__file__).resolve().parents[2]
     analysis = (root / "semantic_analysis.py").read_text(encoding="utf-8")
@@ -385,11 +395,63 @@ def test_exact_semantic_migration_markers_are_present_at_source_decisions():
     assert dispatcher.count("SEMANTIC_ANALYSIS_CONSTANT_SNAPSHOT_MIGRATION") == 1
     assert backend.count("SEMANTIC_IR_VALUE_MIGRATION") == 2
 
+    normalized = {name: "\n".join(line.lstrip() for line in source.splitlines()) for name, source in {"dispatcher": dispatcher, "semantic": semantic, "backend": backend, "analysis": analysis}.items()}
+    required_markers = (
+        (normalized["dispatcher"], "# SEMANTIC_IR_VALUE_MIGRATION: comp.vars still stores legacy socket-bound Value\n# objects while statement and call migration is incomplete. Snapshot those Values\n# only at the frontend/backend boundary: semantic analysis receives detached types,\n# while Blender lowering receives the backend Value map. Remove this bridge when\n# runtime bindings use canonical compiler-owned references and comp.vars no longer\n# owns backend sockets."),
+        (normalized["dispatcher"], "# SEMANTIC_IR_MIGRATION: Expressions outside the current IR slice continue on\n# the existing AST-to-Blender path while migration is incremental. The target\n# architecture is for migrated expression families to lower through Semantic IR\n# before Blender materialization. Remove this fallback only for an expression\n# family after that family is covered end-to-end by IR and its duplicated AST\n# lowering branch is removed in the same planned change set."),
+        (normalized["dispatcher"], "# SEMANTIC_ANALYSIS_LEGACY_BINDING_MIGRATION: comp.vars also contains non-Value\n# compiler-side bindings such as GeometryBuilder, NodeResult, TupleValue, and\n# list-backed legacy values. Export only their names so semantic analysis keeps\n# comp.vars name precedence and returns unsupported instead of misdiagnosing an\n# existing legacy binding as unknown or falling through to consts. Remove this\n# bridge when every compiler binding has frontend-owned semantic metadata or its\n# expression semantics have been migrated into semantic analysis."),
+        (normalized["dispatcher"], "# SEMANTIC_ANALYSIS_CONSTANT_SNAPSHOT_MIGRATION: comp.consts is heterogeneous\n# mutable compiler storage. Export only scalar literal type/value facts plus the\n# names of known non-scalar constants so semantic analysis preserves lookup\n# precedence without receiving legacy list/tuple/ConstVector containers. Remove\n# this bridge when compile-time bindings have frontend-owned semantic metadata."),
+        (normalized["semantic"], "# SEMANTIC_RESOLUTION_MIGRATION: Runtime value resolution now happens before IR\n# emission, but IRBinding still stores the legacy source binding name because\n# compiler-wide binding identity has not been defined. Remove this bridge when\n# runtime bindings use canonical compiler-owned identities shared by semantic\n# resolution, IR, and backend materialization."),
+        (normalized["backend"], "# SEMANTIC_IR_VALUE_MIGRATION: IRBinding still carries a source-level name and\n# the Blender lowering context therefore resolves it through a temporary\n# source-name -> legacy Value map. Remove this bridge when runtime bindings use\n# canonical compiler-owned identities shared by Semantic IR and backend\n# materialization; the final backend context must be keyed by that identity."),
+        (normalized["backend"], "# SEMANTIC_IR_VALUE_MIGRATION: compile_expr() and downstream compiler consumers\n# still expect a socket-bound Value result. Keep Value at this backend return\n# boundary while statements, calls, runtime state, and interface wiring remain on\n# the legacy compiler value contract. Remove this bridge when those consumers use\n# compiler-owned runtime references and explicit Blender materialization is confined\n# to the backend boundary."),
+        (normalized["semantic"], "# SEMANTIC_IR_VALUE_MIGRATION: Re-lower the shared middle source expression for\n# each comparison pair so this behavior-preserving stage emits distinct IR values\n# and preserves the current duplicated Geometry Nodes topology. Remove this rule\n# only in a dedicated topology-changing plan that defines IR value reuse and\n# updates the corresponding graph-shape contract tests."),
+        (normalized["analysis"], "# SEMANTIC_ANALYSIS_MIGRATION: TYPE_OBJECT attribute semantics still belong to\n# the legacy ObjectValue.resolve_property() path. Keep Object property access\n# outside semantic analysis until its property resolution and result typing are\n# represented frontend-side. Remove this fallback when TYPE_OBJECT attribute\n# access is migrated end-to-end and ObjectValue is no longer the semantic owner."),
+    )
+    for source, marker in required_markers:
+        assert marker in source
+
     assert "TYPE_OBJECT attribute semantics still belong" not in semantic
     assert "_COMPARE_OPS" not in semantic
     assert "_validate_binary" not in semantic
     assert "_validate_compare" not in semantic
     assert "Lower each comparison pair independently to preserve" not in backend
+
+
+def test_blender_lowering_context_is_minimal_immutable_and_compiler_independent():
+    from dataclasses import FrozenInstanceError, fields
+    from NodeForge import blender_ir_lowering as backend
+    from NodeForge.values import Value
+
+    value = Value(object(), TYPE_FLOAT)
+    source_bindings = {"a": value}
+    context = backend.BlenderIRLoweringContext(object(), source_bindings)
+    assert tuple(field.name for field in fields(context)) == ("group", "runtime_bindings")
+    assert context.runtime_bindings["a"] is value
+    source_bindings["a"] = Value(object(), TYPE_VECTOR)
+    assert context.runtime_bindings["a"] is value
+    with pytest.raises(TypeError):
+        context.runtime_bindings["b"] = value
+    with pytest.raises(FrozenInstanceError):
+        context.group = object()
+
+    source = (Path(__file__).resolve().parents[2] / "blender_ir_lowering.py").read_text(encoding="utf-8")
+    assert "comp." not in source
+    assert "from .compiler" not in source
+    assert "import compiler" not in source
+    assert "expression_compiler" not in source
+    assert "semantic_analysis" not in source
+    assert "import ast" not in source
+
+
+def test_backend_materialization_state_is_per_lowering_call():
+    from NodeForge import blender_ir_lowering as backend
+    from NodeForge.values import Value
+
+    first = Value(object(), TYPE_FLOAT)
+    second = Value(object(), TYPE_FLOAT)
+    program = _lower("a", bindings={"a": TYPE_FLOAT})
+    assert backend.lower_expression(_backend_context(backend, {"a": first}), program) is first
+    assert backend.lower_expression(_backend_context(backend, {"a": second}), program) is second
 
 
 def test_backend_binding_bridge_and_invariant_drift():
@@ -398,14 +460,16 @@ def test_backend_binding_bridge_and_invariant_drift():
 
     socket = object()
     value = Value(socket, TYPE_FLOAT)
-    comp = type("Comp", (), {"vars": {"a": value}, "group": None})()
-    program = _lower("a", bindings={"a": TYPE_FLOAT})
-    assert lower_expression(comp, program) is value
+    from NodeForge import blender_ir_lowering as backend
 
-    drifted = type("Comp", (), {"vars": {"a": Value(socket, TYPE_VECTOR)}, "group": None})()
+    context = _backend_context(backend, {"a": value}, group=None)
+    program = _lower("a", bindings={"a": TYPE_FLOAT})
+    assert lower_expression(context, program) is value
+
+    drifted = _backend_context(backend, {"a": Value(socket, TYPE_VECTOR)}, group=None)
     with pytest.raises(CompileError, match="changed type"):
         lower_expression(drifted, program)
-    missing = type("Comp", (), {"vars": {}, "group": None})()
+    missing = _backend_context(backend, {}, group=None)
     with pytest.raises(CompileError, match="no longer a runtime Value"):
         lower_expression(missing, program)
 
@@ -415,7 +479,7 @@ def test_backend_executes_program_order_and_applies_nonzero_base_depth(monkeypat
     from NodeForge.values import Value
 
     calls = []
-    comp = type("Comp", (), {"group": object(), "vars": {"a": Value(object(), TYPE_FLOAT)}})()
+    context = _backend_context(backend, {"a": Value(object(), TYPE_FLOAT)})
 
     def fake_value(group, value, x=0, y=0):
         calls.append(("value", value, x, y))
@@ -428,7 +492,7 @@ def test_backend_executes_program_order_and_applies_nonzero_base_depth(monkeypat
     monkeypatch.setattr(backend, "_value", fake_value)
     monkeypatch.setattr(backend, "_math", fake_math)
 
-    result = backend.lower_expression(comp, _lower("a * 2", bindings={"a": TYPE_FLOAT}), base_depth=3)
+    result = backend.lower_expression(context, _lower("a * 2", bindings={"a": TYPE_FLOAT}), base_depth=3)
     assert result.typ == TYPE_FLOAT
     assert calls == [("value", 2, 960, -360), ("math", "MULTIPLY", 720, -270)]
 
@@ -439,9 +503,9 @@ def test_backend_missing_operand_is_controlled_internal_error():
     missing = IRValue(99, TYPE_FLOAT)
     result = IRValue(0, TYPE_FLOAT)
     program = IRProgram((IRUnary(result, 0, "+", missing),), result)
-    comp = type("Comp", (), {"group": object(), "vars": {}})()
+    context = _backend_context(backend)
     with pytest.raises(CompileError, match="used before materialization"):
-        backend.lower_expression(comp, program)
+        backend.lower_expression(context, program)
 
 
 def test_backend_unary_identity_and_current_node_policy_without_blender(monkeypatch):
@@ -449,18 +513,12 @@ def test_backend_unary_identity_and_current_node_policy_without_blender(monkeypa
     from NodeForge.values import Value
 
     calls = []
-    comp = type(
-        "Comp",
-        (),
-        {
-            "group": object(),
-            "vars": {
-                "a": Value(object(), TYPE_FLOAT),
-                "v": Value(object(), TYPE_VECTOR),
-                "flag": Value(object(), TYPE_BOOL),
-            },
-        },
-    )()
+    bindings = {
+        "a": Value(object(), TYPE_FLOAT),
+        "v": Value(object(), TYPE_VECTOR),
+        "flag": Value(object(), TYPE_BOOL),
+    }
+    context = _backend_context(backend, bindings)
 
     def fake_value(group, value, x=0, y=0):
         calls.append(("value", value, x, y))
@@ -483,13 +541,13 @@ def test_backend_unary_identity_and_current_node_policy_without_blender(monkeypa
     monkeypatch.setattr(backend, "_vector_math", fake_vector_math)
     monkeypatch.setattr(backend, "_boolean_math", fake_boolean_math)
 
-    plus = backend.lower_expression(comp, _lower("+a", bindings={"a": TYPE_FLOAT}), base_depth=1)
-    assert plus is comp.vars["a"]
+    plus = backend.lower_expression(context, _lower("+a", bindings={"a": TYPE_FLOAT}), base_depth=1)
+    assert plus is bindings["a"]
     assert calls == []
 
-    backend.lower_expression(comp, _lower("-a", bindings={"a": TYPE_FLOAT}), base_depth=1)
-    backend.lower_expression(comp, _lower("-v", bindings={"v": TYPE_VECTOR}), base_depth=1)
-    backend.lower_expression(comp, _lower("not flag", bindings={"flag": TYPE_BOOL}), base_depth=1)
+    backend.lower_expression(context, _lower("-a", bindings={"a": TYPE_FLOAT}), base_depth=1)
+    backend.lower_expression(context, _lower("-v", bindings={"v": TYPE_VECTOR}), base_depth=1)
+    backend.lower_expression(context, _lower("not flag", bindings={"flag": TYPE_BOOL}), base_depth=1)
     assert ("value", 0.0, 240, -130) in calls
     assert ("math", "SUBTRACT", 240, -90) in calls
     assert ("value", -1.0, 240, -130) in calls
@@ -502,18 +560,11 @@ def test_backend_comparison_chain_executes_explicit_duplicate_operations(monkeyp
     from NodeForge.values import Value
 
     calls = []
-    comp = type(
-        "Comp",
-        (),
-        {
-            "group": object(),
-            "vars": {
-                "a": Value(object(), TYPE_FLOAT),
-                "b": Value(object(), TYPE_FLOAT),
-                "c": Value(object(), TYPE_FLOAT),
-            },
-        },
-    )()
+    context = _backend_context(backend, {
+        "a": Value(object(), TYPE_FLOAT),
+        "b": Value(object(), TYPE_FLOAT),
+        "c": Value(object(), TYPE_FLOAT),
+    })
 
     def fake_value(group, value, x=0, y=0):
         calls.append(("value", value, x, y))
@@ -537,7 +588,7 @@ def test_backend_comparison_chain_executes_explicit_duplicate_operations(monkeyp
     monkeypatch.setattr(backend, "_boolean_math", fake_boolean_math)
 
     program = _lower("a < b * 2 < c", bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT, "c": TYPE_FLOAT})
-    result = backend.lower_expression(comp, program, base_depth=1)
+    result = backend.lower_expression(context, program, base_depth=1)
     assert result.typ == TYPE_BOOL
     assert calls.count(("math", "MULTIPLY", 480, -180)) == 2
     assert calls.count(("compare", "LESS_THAN", 240, -90)) == 2
@@ -548,7 +599,7 @@ def test_backend_result_type_drift_is_controlled_internal_error(monkeypatch):
     from NodeForge import blender_ir_lowering as backend
     from NodeForge.values import Value
 
-    comp = type("Comp", (), {"group": object(), "vars": {"a": Value(object(), TYPE_FLOAT)}})()
+    context = _backend_context(backend, {"a": Value(object(), TYPE_FLOAT)})
 
     def fake_value(group, value, x=0, y=0):
         return Value(object(), TYPE_FLOAT)
@@ -560,7 +611,7 @@ def test_backend_result_type_drift_is_controlled_internal_error(monkeypatch):
     monkeypatch.setattr(backend, "_math", fake_math)
 
     with pytest.raises(CompileError, match="expected type FLOAT, got VECTOR"):
-        backend.lower_expression(comp, _lower("a + 1", bindings={"a": TYPE_FLOAT}))
+        backend.lower_expression(context, _lower("a + 1", bindings={"a": TYPE_FLOAT}))
 
 
 def test_backend_vector_conditional_component_and_boolean_primitives_without_blender(monkeypatch):
@@ -568,19 +619,12 @@ def test_backend_vector_conditional_component_and_boolean_primitives_without_ble
     from NodeForge.values import Value
 
     calls = []
-    comp = type(
-        "Comp",
-        (),
-        {
-            "group": object(),
-            "vars": {
-                "v": Value(object(), TYPE_VECTOR),
-                "a": Value(object(), TYPE_FLOAT),
-                "flag": Value(object(), TYPE_BOOL),
-                "other": Value(object(), TYPE_FLOAT),
-            },
-        },
-    )()
+    context = _backend_context(backend, {
+        "v": Value(object(), TYPE_VECTOR),
+        "a": Value(object(), TYPE_FLOAT),
+        "flag": Value(object(), TYPE_BOOL),
+        "other": Value(object(), TYPE_FLOAT),
+    })
 
     def fake_value(group, value, x=0, y=0):
         calls.append(("value", value, x, y))
@@ -618,7 +662,7 @@ def test_backend_vector_conditional_component_and_boolean_primitives_without_ble
     monkeypatch.setattr(backend, "_switch", fake_switch)
     monkeypatch.setattr(backend, "_separate_xyz", fake_separate_xyz)
 
-    assert backend.lower_expression(comp, _lower("v / a", bindings={"v": TYPE_VECTOR, "a": TYPE_FLOAT})).typ == TYPE_VECTOR
+    assert backend.lower_expression(context, _lower("v / a", bindings={"v": TYPE_VECTOR, "a": TYPE_FLOAT})).typ == TYPE_VECTOR
     assert ("math", "DIVIDE", 0, 0) in calls
     assert ("vector_math", "SCALE", 0, 0) in calls
 
@@ -627,14 +671,14 @@ def test_backend_vector_conditional_component_and_boolean_primitives_without_ble
         "a if flag else other",
         bindings={"a": TYPE_FLOAT, "flag": TYPE_BOOL, "other": TYPE_FLOAT},
     )
-    assert backend.lower_expression(comp, conditional).typ == TYPE_FLOAT
+    assert backend.lower_expression(context, conditional).typ == TYPE_FLOAT
     assert calls == [("switch", 0, 0)]
 
     calls.clear()
-    assert backend.lower_expression(comp, _lower("v.z", bindings={"v": TYPE_VECTOR})).typ == TYPE_FLOAT
+    assert backend.lower_expression(context, _lower("v.z", bindings={"v": TYPE_VECTOR})).typ == TYPE_FLOAT
     assert calls == [("component", "z", 0, 0)]
 
     calls.clear()
     bool_program = _lower("flag and True", bindings={"flag": TYPE_BOOL})
-    assert backend.lower_expression(comp, bool_program).typ == TYPE_BOOL
+    assert backend.lower_expression(context, bool_program).typ == TYPE_BOOL
     assert calls[-1] == ("boolean_math", "AND", 0, 0)

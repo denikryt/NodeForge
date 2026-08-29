@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Mapping
+
 from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_INT, TYPE_VECTOR
 from .errors import CompileError
 from .nodes import _boolean_math, _compare, _math, _separate_xyz, _string_value, _switch, _value, _vector_math
@@ -16,6 +20,23 @@ from .semantic_ir import (
     IRVectorComponent,
 )
 from .values import Value
+
+
+@dataclass(frozen=True)
+class BlenderIRLoweringContext:
+    """Explicit Blender backend inputs for one Semantic IR lowering operation.
+
+    Source semantic analysis must not receive this context. It contains only the
+    target Geometry Nodes group and already-materialized runtime bindings needed
+    to realize a validated Semantic IR program in Blender.
+    """
+
+    group: object
+    runtime_bindings: Mapping[str, Value]
+
+    def __post_init__(self):
+        """Freeze the binding container while retaining exact backend Value identity."""
+        object.__setattr__(self, "runtime_bindings", MappingProxyType(dict(self.runtime_bindings)))
 
 
 def _position(depth):
@@ -46,138 +67,170 @@ def _store_result(materialized, result, value):
     materialized[result.id] = value
 
 
-def _execute_operation(comp, operation, materialized, base_depth):
-    """Execute one ordered IR operation against the Blender backend."""
-    effective_depth = base_depth + operation.depth
-    x, y = _position(effective_depth)
+def _lower_literal(context, operation, materialized, x, y):
+    """Materialize one literal operation with the existing Blender node topology."""
+    if operation.result.typ == TYPE_BOOL:
+        val = _value(context.group, 1.0 if operation.value else 0.0, x, y)
+        zero = _value(context.group, 0.0, x + 20, y - 40)
+        result = _compare(context.group, "NOT_EQUAL", val, zero, x, y)
+    elif operation.result.typ == TYPE_FLOAT:
+        result = _value(context.group, operation.value, x, y)
+    else:
+        result = _string_value(context.group, operation.value, x, y)
+    _store_result(materialized, operation.result, result)
 
-    if isinstance(operation, IRLiteral):
-        if operation.result.typ == TYPE_BOOL:
-            val = _value(comp.group, 1.0 if operation.value else 0.0, x, y)
-            zero = _value(comp.group, 0.0, x + 20, y - 40)
-            result = _compare(comp.group, "NOT_EQUAL", val, zero, x, y)
-        elif operation.result.typ == TYPE_FLOAT:
-            result = _value(comp.group, operation.value, x, y)
+
+def _lower_binding(context, operation, materialized):
+    """Resolve one semantic runtime binding to its backend materialization."""
+    # SEMANTIC_IR_VALUE_MIGRATION: IRBinding still carries a source-level name and
+    # the Blender lowering context therefore resolves it through a temporary
+    # source-name -> legacy Value map. Remove this bridge when runtime bindings use
+    # canonical compiler-owned identities shared by Semantic IR and backend
+    # materialization; the final backend context must be keyed by that identity.
+    value = context.runtime_bindings.get(operation.name)
+    if not isinstance(value, Value):
+        raise CompileError(
+            f"Internal error: Semantic IR binding {operation.name!r} is no longer a runtime Value"
+        )
+    if value.typ != operation.result.typ:
+        raise CompileError(
+            f"Internal error: Semantic IR binding {operation.name!r} changed type "
+            f"from {operation.result.typ} to {value.typ}"
+        )
+    _store_result(materialized, operation.result, value)
+
+
+def _lower_unary(context, operation, materialized, x, y):
+    """Materialize one typed unary IR operation."""
+    operand = _materialized_value(materialized, operation.operand)
+    if operation.op == "+":
+        result = operand
+    elif operation.op == "-":
+        if operation.operand.typ in {TYPE_FLOAT, TYPE_INT}:
+            zero = _value(context.group, 0.0, x, y - 40)
+            result = _math(context.group, "SUBTRACT", [zero, operand], x, y)
+        elif operation.operand.typ == TYPE_VECTOR:
+            minus_one = _value(context.group, -1.0, x, y - 40)
+            result = _vector_math(context.group, "SCALE", [operand, minus_one], TYPE_VECTOR, x, y)
         else:
-            result = _string_value(comp.group, operation.value, x, y)
-        _store_result(materialized, operation.result, result)
-        return
-
-    if isinstance(operation, IRBinding):
-        # SEMANTIC_IR_VALUE_MIGRATION: Runtime bindings outside the migrated IR boundary
-        # are still owned by comp.vars as socket-bound Value objects. Resolve an IR
-        # binding to that backend value only here, at Blender lowering. Remove this
-        # bridge when compiler runtime bindings use an explicitly owned compiler value
-        # reference and backend sockets come only from the materialization environment.
-        value = comp.vars.get(operation.name)
-        if not isinstance(value, Value):
             raise CompileError(
-                f"Internal error: Semantic IR binding {operation.name!r} is no longer a runtime Value"
+                f"Internal error: unsupported Semantic IR unary '-' operand {operation.operand.typ}"
             )
-        if value.typ != operation.result.typ:
-            raise CompileError(
-                f"Internal error: Semantic IR binding {operation.name!r} changed type "
-                f"from {operation.result.typ} to {value.typ}"
-            )
-        _store_result(materialized, operation.result, value)
-        return
+    elif operation.op == "not":
+        result = _boolean_math(context.group, "NOT", [operand], x, y)
+    else:
+        raise CompileError(f"Internal error: unsupported Semantic IR unary operation {operation.op!r}")
+    _store_result(materialized, operation.result, result)
 
-    if isinstance(operation, IRUnary):
-        operand = _materialized_value(materialized, operation.operand)
-        if operation.op == "+":
-            result = operand
-        elif operation.op == "-":
-            if operation.operand.typ in {TYPE_FLOAT, TYPE_INT}:
-                zero = _value(comp.group, 0.0, x, y - 40)
-                result = _math(comp.group, "SUBTRACT", [zero, operand], x, y)
-            elif operation.operand.typ == TYPE_VECTOR:
-                minus_one = _value(comp.group, -1.0, x, y - 40)
-                result = _vector_math(comp.group, "SCALE", [operand, minus_one], TYPE_VECTOR, x, y)
-            else:
-                raise CompileError(
-                    f"Internal error: unsupported Semantic IR unary '-' operand {operation.operand.typ}"
-                )
-        elif operation.op == "not":
-            result = _boolean_math(comp.group, "NOT", [operand], x, y)
-        else:
-            raise CompileError(f"Internal error: unsupported Semantic IR unary operation {operation.op!r}")
-        _store_result(materialized, operation.result, result)
-        return
 
-    if isinstance(operation, IRBinary):
-        left = _materialized_value(materialized, operation.left)
-        right = _materialized_value(materialized, operation.right)
-        if operation.left.typ in {TYPE_FLOAT, TYPE_INT} and operation.right.typ in {TYPE_FLOAT, TYPE_INT}:
-            result = _math(comp.group, operation.op, [left, right], x, y)
-        elif operation.op in {"ADD", "SUBTRACT"} and operation.left.typ == TYPE_VECTOR and operation.right.typ == TYPE_VECTOR:
-            result = _vector_math(comp.group, operation.op, [left, right], TYPE_VECTOR, x, y)
-        elif operation.op == "MULTIPLY":
-            if operation.left.typ == TYPE_VECTOR and operation.right.typ == TYPE_FLOAT:
-                result = _vector_math(comp.group, "SCALE", [left, right], TYPE_VECTOR, x, y)
-            elif operation.left.typ == TYPE_FLOAT and operation.right.typ == TYPE_VECTOR:
-                result = _vector_math(comp.group, "SCALE", [right, left], TYPE_VECTOR, x, y)
-            elif operation.left.typ == TYPE_VECTOR and operation.right.typ == TYPE_VECTOR:
-                result = _vector_math(comp.group, "MULTIPLY", [left, right], TYPE_VECTOR, x, y)
-            else:
-                raise CompileError(
-                    f"Internal error: unsupported Semantic IR binary lowering for "
-                    f"{operation.left.typ} {operation.op} {operation.right.typ}"
-                )
-        elif operation.op == "DIVIDE" and operation.left.typ == TYPE_VECTOR and operation.right.typ == TYPE_FLOAT:
-            inv = _math(comp.group, "DIVIDE", [_value(comp.group, 1.0, x, y - 40), right], x, y)
-            result = _vector_math(comp.group, "SCALE", [left, inv], TYPE_VECTOR, x, y)
+def _lower_binary(context, operation, materialized, x, y):
+    """Materialize one typed binary IR operation."""
+    left = _materialized_value(materialized, operation.left)
+    right = _materialized_value(materialized, operation.right)
+    if operation.left.typ in {TYPE_FLOAT, TYPE_INT} and operation.right.typ in {TYPE_FLOAT, TYPE_INT}:
+        result = _math(context.group, operation.op, [left, right], x, y)
+    elif operation.op in {"ADD", "SUBTRACT"} and operation.left.typ == TYPE_VECTOR and operation.right.typ == TYPE_VECTOR:
+        result = _vector_math(context.group, operation.op, [left, right], TYPE_VECTOR, x, y)
+    elif operation.op == "MULTIPLY":
+        if operation.left.typ == TYPE_VECTOR and operation.right.typ == TYPE_FLOAT:
+            result = _vector_math(context.group, "SCALE", [left, right], TYPE_VECTOR, x, y)
+        elif operation.left.typ == TYPE_FLOAT and operation.right.typ == TYPE_VECTOR:
+            result = _vector_math(context.group, "SCALE", [right, left], TYPE_VECTOR, x, y)
+        elif operation.left.typ == TYPE_VECTOR and operation.right.typ == TYPE_VECTOR:
+            result = _vector_math(context.group, "MULTIPLY", [left, right], TYPE_VECTOR, x, y)
         else:
             raise CompileError(
                 f"Internal error: unsupported Semantic IR binary lowering for "
                 f"{operation.left.typ} {operation.op} {operation.right.typ}"
             )
-        _store_result(materialized, operation.result, result)
-        return
+    elif operation.op == "DIVIDE" and operation.left.typ == TYPE_VECTOR and operation.right.typ == TYPE_FLOAT:
+        inv = _math(context.group, "DIVIDE", [_value(context.group, 1.0, x, y - 40), right], x, y)
+        result = _vector_math(context.group, "SCALE", [left, inv], TYPE_VECTOR, x, y)
+    else:
+        raise CompileError(
+            f"Internal error: unsupported Semantic IR binary lowering for "
+            f"{operation.left.typ} {operation.op} {operation.right.typ}"
+        )
+    _store_result(materialized, operation.result, result)
 
+
+def _lower_bool_binary(context, operation, materialized, x, y):
+    """Materialize one pairwise Boolean IR operation."""
+    left = _materialized_value(materialized, operation.left)
+    right = _materialized_value(materialized, operation.right)
+    result = _boolean_math(context.group, operation.op, [left, right], x, y)
+    _store_result(materialized, operation.result, result)
+
+
+def _lower_compare(context, operation, materialized, x, y):
+    """Materialize one typed comparison IR operation."""
+    left = _materialized_value(materialized, operation.left)
+    right = _materialized_value(materialized, operation.right)
+    result = _compare(context.group, operation.op, left, right, x, y)
+    _store_result(materialized, operation.result, result)
+
+
+def _lower_conditional(context, operation, materialized, x, y):
+    """Materialize one conditional IR operation with legacy socket ordering."""
+    condition = _materialized_value(materialized, operation.condition)
+    true_value = _materialized_value(materialized, operation.true_value)
+    false_value = _materialized_value(materialized, operation.false_value)
+    result = _switch(context.group, condition, false_value, true_value, x, y)
+    _store_result(materialized, operation.result, result)
+
+
+def _lower_vector_component(context, operation, materialized, x, y):
+    """Materialize one Vector component projection."""
+    value = _materialized_value(materialized, operation.value)
+    result = _separate_xyz(context.group, value, operation.component, x, y)
+    _store_result(materialized, operation.result, result)
+
+
+def _execute_operation(context, operation, materialized, base_depth):
+    """Dispatch one ordered IR operation to its Blender realization helper."""
+    effective_depth = base_depth + operation.depth
+    x, y = _position(effective_depth)
+
+    if isinstance(operation, IRLiteral):
+        _lower_literal(context, operation, materialized, x, y)
+        return
+    if isinstance(operation, IRBinding):
+        _lower_binding(context, operation, materialized)
+        return
+    if isinstance(operation, IRUnary):
+        _lower_unary(context, operation, materialized, x, y)
+        return
+    if isinstance(operation, IRBinary):
+        _lower_binary(context, operation, materialized, x, y)
+        return
     if isinstance(operation, IRBoolBinary):
-        left = _materialized_value(materialized, operation.left)
-        right = _materialized_value(materialized, operation.right)
-        result = _boolean_math(comp.group, operation.op, [left, right], x, y)
-        _store_result(materialized, operation.result, result)
+        _lower_bool_binary(context, operation, materialized, x, y)
         return
-
     if isinstance(operation, IRCompare):
-        left = _materialized_value(materialized, operation.left)
-        right = _materialized_value(materialized, operation.right)
-        result = _compare(comp.group, operation.op, left, right, x, y)
-        _store_result(materialized, operation.result, result)
+        _lower_compare(context, operation, materialized, x, y)
         return
-
     if isinstance(operation, IRConditional):
-        condition = _materialized_value(materialized, operation.condition)
-        true_value = _materialized_value(materialized, operation.true_value)
-        false_value = _materialized_value(materialized, operation.false_value)
-        result = _switch(comp.group, condition, false_value, true_value, x, y)
-        _store_result(materialized, operation.result, result)
+        _lower_conditional(context, operation, materialized, x, y)
         return
-
     if isinstance(operation, IRVectorComponent):
-        value = _materialized_value(materialized, operation.value)
-        result = _separate_xyz(comp.group, value, operation.component, x, y)
-        _store_result(materialized, operation.result, result)
+        _lower_vector_component(context, operation, materialized, x, y)
         return
-
     raise CompileError(f"Internal error: unsupported Semantic IR operation {type(operation).__name__}")
 
 
-def lower_expression(comp, program, base_depth=0):
-    """Execute one ordered Semantic IR program and return its legacy backend value."""
+def lower_expression(context, program, base_depth=0):
+    """Execute one ordered Semantic IR program through an explicit Blender context."""
     materialized = {}
     for operation in program.operations:
-        _execute_operation(comp, operation, materialized, base_depth)
+        _execute_operation(context, operation, materialized, base_depth)
 
     # SEMANTIC_IR_VALUE_MIGRATION: compile_expr() and downstream compiler consumers
-    # still expect a socket-bound Value result. Return the materialized backend value
-    # for the IR result until the compiler-facing expression contract uses an
-    # explicitly owned compiler runtime value/reference model. Remove this bridge
-    # when explicit Blender materialization happens only at a backend boundary.
-    # Program-local IRValue handles alone are not compiler-wide identity.
+    # still expect a socket-bound Value result. Keep Value at this backend return
+    # boundary while statements, calls, runtime state, and interface wiring remain on
+    # the legacy compiler value contract. Remove this bridge when those consumers use
+    # compiler-owned runtime references and explicit Blender materialization is confined
+    # to the backend boundary.
     return _materialized_value(materialized, program.result)
 
 
-__all__ = ["lower_expression"]
+__all__ = ["BlenderIRLoweringContext", "lower_expression"]

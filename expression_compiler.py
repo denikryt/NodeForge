@@ -17,20 +17,25 @@ from . import library_calls
 from .function_instances import extract_function_call_modifiers, unsupported_unique
 from .semantic_analysis import SemanticEnvironment, analyze_expression
 from .semantic_lowering import lower_analyzed_expression
-from .blender_ir_lowering import lower_expression as lower_ir_expression
+from .blender_ir_lowering import BlenderIRLoweringContext, lower_expression as lower_ir_expression
 
 
 def compile_expr(comp, expr, depth=0):
     """Compile one AST expression into the active node group context."""
     # SEMANTIC_IR_VALUE_MIGRATION: comp.vars still stores legacy socket-bound Value
-    # objects while statement and call migration is incomplete. Export only name ->
-    # type into semantic lowering so Semantic IR stays backend-independent. Remove
-    # this bridge when runtime bindings use an explicitly owned compiler value
-    # reference and semantic typing no longer reads backend Value objects.
-    runtime_binding_types = MappingProxyType({
-        name: value.typ
+    # objects while statement and call migration is incomplete. Snapshot those Values
+    # only at the frontend/backend boundary: semantic analysis receives detached types,
+    # while Blender lowering receives the backend Value map. Remove this bridge when
+    # runtime bindings use canonical compiler-owned references and comp.vars no longer
+    # owns backend sockets.
+    runtime_binding_values = MappingProxyType({
+        name: value
         for name, value in comp.vars.items()
         if isinstance(value, Value)
+    })
+    runtime_binding_types = MappingProxyType({
+        name: value.typ
+        for name, value in runtime_binding_values.items()
     })
     # SEMANTIC_ANALYSIS_LEGACY_BINDING_MIGRATION: comp.vars also contains non-Value
     # compiler-side bindings such as GeometryBuilder, NodeResult, TupleValue, and
@@ -79,7 +84,11 @@ def compile_expr(comp, expr, depth=0):
         y = -depth * 90
     else:
         ir = lower_analyzed_expression(expr, analysis)
-        return lower_ir_expression(comp, ir, depth)
+        context = BlenderIRLoweringContext(
+            group=comp.group,
+            runtime_bindings=runtime_binding_values,
+        )
+        return lower_ir_expression(context, ir, depth)
 
     if isinstance(expr, ast.Constant):
         if isinstance(expr.value, bool):

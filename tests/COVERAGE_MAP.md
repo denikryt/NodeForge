@@ -70,5 +70,6 @@
 
 ## Semantic IR expression boundary
 
-- `tests/unit/test_semantic_ir.py`: Blender-independent IR records, literal/binding typing, name precedence, operator contracts, ordered mixed-tree ownership, Object attribute fallback, conditional ownership, and migration-marker invariants.
-- `tests/blender/test_semantic_ir_compile.py`: production IR routing, representative graph materialization, unary topology/socket identity, comparison-chain pairwise materialization/layout, and fresh-build cleanup on semantic failure.
+- `tests/unit/test_semantic_ir.py`: Blender-independent IR records, literal/binding typing, name precedence, operator contracts, ordered mixed-tree ownership, explicit immutable `BlenderIRLoweringContext`, binding/materialization invariants, Object attribute fallback, conditional ownership, and migration-marker invariants.
+- `tests/unit/test_semantic_backend_contract.py`: analyzer-derived finite operation/type matrix executed through the explicit lowering context and the real `nodes.py` realization helpers, plus commitment semantics proving backend failure after successful analysis propagates without legacy AST retry.
+- `tests/blender/test_semantic_ir_compile.py`: production IR routing, direct context lowering over real Blender RNA for analyzer-reachable backend signatures, representative graph materialization, unary topology/socket identity, comparison-chain pairwise materialization/layout, and fresh-build cleanup on semantic or partially materialized backend failure without legacy retry.

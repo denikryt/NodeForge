@@ -140,3 +140,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 
 - Split the migrated expression frontend into explicit semantic resolution/type checking followed by Semantic IR emission, with immutable compiler-state snapshots and exhaustive NodeForge/Blender backend realization contracts while preserving existing DSL behavior and generated graph topology.
 - Fixed Bool comparisons on Blender 5.2 by realizing the existing Bool comparison semantics through `FunctionNodeCompare` Int inputs instead of the removed `BOOLEAN` compare data type.
+
+## 0.50.6
+
+- Made Semantic IR Blender lowering use an explicit immutable backend context instead of the general compiler object, preserving existing expression behavior and Geometry Nodes realization.

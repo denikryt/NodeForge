@@ -3,20 +3,23 @@
 from helpers import *
 
 import ast
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 
 from NodeForge import expression_compiler
+from NodeForge.blender_ir_lowering import BlenderIRLoweringContext, lower_expression as lower_ir_program
 from NodeForge.constants import (
     TYPE_BOOL, TYPE_BUNDLE, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_MATERIAL,
     TYPE_OBJECT, TYPE_STRING, TYPE_VECTOR,
 )
 from NodeForge.errors import CompileError
+from NodeForge.nodes import _socket_type_for
 from NodeForge.semantic_analysis import SemanticEnvironment, analyze_expression
 from NodeForge.semantic_lowering import lower_analyzed_expression
 from NodeForge.semantic_ir import (
     IRBinary, IRBinding, IRBoolBinary, IRCompare, IRConditional, IRLiteral, IRUnary,
     IRVectorComponent,
 )
+from NodeForge.values import Value
 
 
 def _nodes(group, bl_idname, operation=None):
@@ -222,6 +225,50 @@ def test_semantic_error_keeps_outer_fresh_build_cleanup_boundary():
     after = {_pointer(group) for group in bpy.data.node_groups}
     check(after == before, "semantic compile failure leaked a fresh node group")
 
+
+
+def test_semantic_backend_failure_does_not_retry_legacy_and_cleans_fresh_group(monkeypatch):
+    """Keep backend failure committed to IR while removing the partial fresh group."""
+    before = {_pointer(group) for group in bpy.data.node_groups}
+    backend_error = CompileError("controlled Semantic IR backend failure")
+    legacy_calls = []
+    backend_calls = []
+    original_analyze = expression_compiler.analyze_expression
+
+    def checked_analyze(expr, environment):
+        analysis = original_analyze(expr, environment)
+        if isinstance(expr, ast.BinOp):
+            check(analysis is not None, "backend-failure fixture did not pass semantic analysis")
+        return analysis
+
+    def fail_backend(context, program, base_depth=0):
+        backend_calls.append(program)
+        context.group.nodes.new("ShaderNodeValue")
+        raise backend_error
+
+    def legacy_math(*args, **kwargs):
+        legacy_calls.append("math")
+        raise AssertionError("legacy AST binary lowering ran after semantic backend failure")
+
+    monkeypatch.setattr(expression_compiler, "analyze_expression", checked_analyze)
+    monkeypatch.setattr(expression_compiler, "lower_ir_expression", fail_backend)
+    monkeypatch.setattr(expression_compiler, "_math", legacy_math)
+
+    try:
+        compiler.create_expression_group(
+            "a = input_float('A')\nresult = a + 1\noutput('Result', result)",
+            "NFTest_semantic_ir_backend_failure_cleanup",
+        )
+    except CompileError as exc:
+        check(exc is backend_error, "backend failure was replaced instead of propagated")
+    else:
+        raise AssertionError("controlled Semantic IR backend failure did not propagate")
+
+    after = {_pointer(group) for group in bpy.data.node_groups}
+    check(backend_calls, "supported expression did not commit to Semantic IR backend")
+    check(legacy_calls == [], "semantic backend failure retried the legacy AST dispatcher")
+    check(after == before, "semantic backend failure leaked a partially materialized fresh group")
+
 _CONTRACT_TYPES = (
     TYPE_FLOAT,
     TYPE_INT,
@@ -233,18 +280,6 @@ _CONTRACT_TYPES = (
     TYPE_STRING,
     TYPE_BUNDLE,
 )
-_INPUT_CALL_FOR_TYPE = {
-    TYPE_FLOAT: "input_float",
-    TYPE_INT: "input_int",
-    TYPE_VECTOR: "input_vector",
-    TYPE_BOOL: "input_bool",
-    TYPE_GEOMETRY: "input_geometry",
-    TYPE_MATERIAL: "input_material",
-    TYPE_OBJECT: "input_object",
-    TYPE_STRING: "input_string",
-    TYPE_BUNDLE: "input_bundle",
-}
-
 
 def _contract_environment(bindings):
     """Build one immutable runtime-only environment for backend contract discovery."""
@@ -339,14 +374,23 @@ def _all_contract_source_cases():
             yield f"a.{component}", {"a": typ}
 
 
-def _source_for_real_blender(expression, bindings):
-    """Wrap one contract expression in real DSL inputs and a group output."""
-    lines = []
-    for name, typ in bindings.items():
-        lines.append(f'{name} = {_INPUT_CALL_FOR_TYPE[typ]}({name!r})')
-    lines.append(f"result = {expression}")
-    lines.append('output("Result", result)')
-    return "\n".join(lines)
+def _lower_contract_program_on_real_blender(program, bindings, name):
+    """Lower one analyzer-owned program through the explicit context on real Blender RNA."""
+    group = bpy.data.node_groups.new(name, "GeometryNodeTree")
+    for binding_name, typ in bindings.items():
+        group.interface.new_socket(
+            name=binding_name,
+            in_out="INPUT",
+            socket_type=_socket_type_for(typ),
+        )
+    group_input = group.nodes.new("NodeGroupInput")
+    runtime_bindings = MappingProxyType({
+        binding_name: Value(group_input.outputs[binding_name], typ)
+        for binding_name, typ in bindings.items()
+    })
+    context = BlenderIRLoweringContext(group, runtime_bindings)
+    result = lower_ir_program(context, program)
+    return group, result
 
 
 def _link_to_socket(group, socket):
@@ -558,13 +602,13 @@ def _check_vector_component_realization(group, operation, result_link, binding_n
     )
 
 
-def _check_program_realization(group, program):
+def _check_program_realization(group, program, result):
     """Assert that the final analyzer-owned IR operation is realized exactly on Blender RNA."""
     semantic_operations = [operation for operation in program.operations if not isinstance(operation, IRBinding)]
     check(semantic_operations, "contract representative has no semantic operation")
     operation = semantic_operations[-1]
     check(operation.result.id == program.result.id, "contract representative final IR operation does not produce program result")
-    result_link = _result_link(group)
+    result_link = SimpleNamespace(from_node=result.socket.node, from_socket=result.socket)
     binding_names = _binding_name_by_value(program)
 
     if isinstance(operation, IRLiteral):
@@ -598,11 +642,13 @@ def test_semantic_backend_dispatch_signatures_realize_on_blender_rna():
 
     check(representatives, "semantic/backend contract produced no analyzer-accepted representatives")
     for index, (signature, (source, bindings, program)) in enumerate(representatives.items()):
-        group = compile_group(
-            _source_for_real_blender(source, bindings),
+        group, result = _lower_contract_program_on_real_blender(
+            program,
+            bindings,
             f"NFTest_semantic_backend_rna_{index}",
         )
-        _check_program_realization(group, program)
+        _check_program_realization(group, program, result)
+        bpy.data.node_groups.remove(group)
 
 
 
