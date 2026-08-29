@@ -1,6 +1,7 @@
 """AST expression lowering into Geometry Nodes."""
 
 import ast
+from types import MappingProxyType
 
 from .constants import *
 from .errors import CompileError
@@ -14,7 +15,8 @@ from .systems import registry as systems_registry
 from . import local_functions
 from . import library_calls
 from .function_instances import extract_function_call_modifiers, unsupported_unique
-from .semantic_lowering import try_lower_expression
+from .semantic_analysis import SemanticEnvironment, analyze_expression
+from .semantic_lowering import lower_analyzed_expression
 from .blender_ir_lowering import lower_expression as lower_ir_expression
 
 
@@ -25,27 +27,58 @@ def compile_expr(comp, expr, depth=0):
     # type into semantic lowering so Semantic IR stays backend-independent. Remove
     # this bridge when runtime bindings use an explicitly owned compiler value
     # reference and semantic typing no longer reads backend Value objects.
-    runtime_binding_types = {
+    runtime_binding_types = MappingProxyType({
         name: value.typ
         for name, value in comp.vars.items()
         if isinstance(value, Value)
-    }
-    ir = try_lower_expression(
-        expr,
-        runtime_binding_types=runtime_binding_types,
-        consts=comp.consts,
-        reserved_name_labels=getattr(comp, "reserved_name_labels", {}),
+    })
+    # SEMANTIC_ANALYSIS_LEGACY_BINDING_MIGRATION: comp.vars also contains non-Value
+    # compiler-side bindings such as GeometryBuilder, NodeResult, TupleValue, and
+    # list-backed legacy values. Export only their names so semantic analysis keeps
+    # comp.vars name precedence and returns unsupported instead of misdiagnosing an
+    # existing legacy binding as unknown or falling through to consts. Remove this
+    # bridge when every compiler binding has frontend-owned semantic metadata or its
+    # expression semantics have been migrated into semantic analysis.
+    legacy_binding_names = frozenset(
+        name
+        for name, value in comp.vars.items()
+        if not isinstance(value, Value)
     )
+    # SEMANTIC_ANALYSIS_CONSTANT_SNAPSHOT_MIGRATION: comp.consts is heterogeneous
+    # mutable compiler storage. Export only scalar literal type/value facts plus the
+    # names of known non-scalar constants so semantic analysis preserves lookup
+    # precedence without receiving legacy list/tuple/ConstVector containers. Remove
+    # this bridge when compile-time bindings have frontend-owned semantic metadata.
+    scalar_constants = {}
+    unsupported_constant_names = set()
+    for name, value in comp.consts.items():
+        if isinstance(value, bool):
+            scalar_constants[name] = (TYPE_BOOL, value)
+        elif isinstance(value, (int, float)):
+            scalar_constants[name] = (TYPE_FLOAT, value)
+        elif isinstance(value, str):
+            scalar_constants[name] = (TYPE_STRING, value)
+        else:
+            unsupported_constant_names.add(name)
+    environment = SemanticEnvironment(
+        runtime_binding_types=runtime_binding_types,
+        legacy_binding_names=legacy_binding_names,
+        scalar_constants=MappingProxyType(scalar_constants),
+        unsupported_constant_names=frozenset(unsupported_constant_names),
+        reserved_name_labels=MappingProxyType(dict(getattr(comp, "reserved_name_labels", {}))),
+    )
+    analysis = analyze_expression(expr, environment)
     # SEMANTIC_IR_MIGRATION: Expressions outside the current IR slice continue on
     # the existing AST-to-Blender path while migration is incremental. The target
     # architecture is for migrated expression families to lower through Semantic IR
     # before Blender materialization. Remove this fallback only for an expression
     # family after that family is covered end-to-end by IR and its duplicated AST
     # lowering branch is removed in the same planned change set.
-    if ir is None:
+    if analysis is None:
         x = depth * 240
         y = -depth * 90
     else:
+        ir = lower_analyzed_expression(expr, analysis)
         return lower_ir_expression(comp, ir, depth)
 
     if isinstance(expr, ast.Constant):

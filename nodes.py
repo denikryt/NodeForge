@@ -115,7 +115,7 @@ def _compare(group, operation, left, right, x=0, y=0):
     if _is_number_type(left.typ) and _is_number_type(right.typ):
         data_type = "FLOAT"
     elif left.typ == right.typ and left.typ in {TYPE_BOOL, TYPE_VECTOR}:
-        data_type = {TYPE_BOOL: "BOOLEAN", TYPE_VECTOR: "VECTOR"}[left.typ]
+        data_type = {TYPE_BOOL: "INT", TYPE_VECTOR: "VECTOR"}[left.typ]
     else:
         raise CompileError("Comparison inputs must both be numeric, both Bool, or both Vector")
     node = _new_node(group, "FunctionNodeCompare", x, y)

@@ -31,7 +31,8 @@ from NodeForge.semantic_ir import (
     IRValue,
     IRVectorComponent,
 )
-from NodeForge.semantic_lowering import try_lower_expression
+from NodeForge.semantic_analysis import SemanticEnvironment, analyze_expression
+from NodeForge.semantic_lowering import lower_analyzed_expression
 
 
 pytestmark = pytest.mark.unit
@@ -42,14 +43,38 @@ def _expr(source):
     return ast.parse(source, mode="eval").body
 
 
-def _lower(source, *, bindings=None, consts=None, labels=None):
-    """Lower one source expression with a small pure semantic environment."""
-    return try_lower_expression(
-        _expr(source),
-        runtime_binding_types=bindings or {},
-        consts=consts or {},
-        reserved_name_labels=labels or {},
+def _environment(*, bindings=None, consts=None, labels=None, legacy_names=()):
+    """Build one immutable semantic environment for pure IR tests."""
+    from types import MappingProxyType
+
+    scalar_constants = {}
+    unsupported_constants = set()
+    for name, value in (consts or {}).items():
+        if isinstance(value, bool):
+            scalar_constants[name] = (TYPE_BOOL, value)
+        elif isinstance(value, (int, float)):
+            scalar_constants[name] = (TYPE_FLOAT, value)
+        elif isinstance(value, str):
+            scalar_constants[name] = (TYPE_STRING, value)
+        else:
+            unsupported_constants.add(name)
+    return SemanticEnvironment(
+        MappingProxyType(dict(bindings or {})),
+        frozenset(legacy_names),
+        MappingProxyType(scalar_constants),
+        frozenset(unsupported_constants),
+        MappingProxyType(dict(labels or {})),
     )
+
+
+def _lower(source, *, bindings=None, consts=None, labels=None, legacy_names=()):
+    """Analyze and lower one source expression through the pure frontend stages."""
+    expr = _expr(source)
+    analysis = analyze_expression(
+        expr,
+        _environment(bindings=bindings, consts=consts, labels=labels, legacy_names=legacy_names),
+    )
+    return None if analysis is None else lower_analyzed_expression(expr, analysis)
 
 
 def _operations(program, operation_type):
@@ -158,8 +183,9 @@ def test_supported_scalar_const_and_allowed_const_lower_to_literals():
     assert pi.result.typ == TYPE_FLOAT
 
 
-def test_unknown_and_unrepresented_constant_names_are_unsupported():
-    assert _lower("unknown") is None
+def test_reached_unknown_name_is_error_and_unrepresented_constant_is_unsupported():
+    with pytest.raises(CompileError, match="Unknown name: unknown"):
+        _lower("unknown")
     assert _lower("v", consts={"v": (1, 2, 3)}) is None
 
 
@@ -311,54 +337,59 @@ def test_ir_operations_store_no_ast_or_backend_objects():
             assert field.name not in {"socket", "node", "group", "compiler", "comp"}
 
 
-def test_exact_semantic_ir_migration_markers_are_present_at_source_decisions():
+
+def test_ir_emitter_consumes_analyzed_operation_facts_without_renormalizing_ast():
+    from types import MappingProxyType
+    from NodeForge.semantic_analysis import ExpressionAnalysis, ExpressionFact
+
+    expr = _expr("a < b")
+    analysis = analyze_expression(expr, _environment(bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT}))
+    facts = dict(analysis.facts)
+    facts[expr] = ExpressionFact(TYPE_BOOL, compare_operations=("GREATER_THAN",))
+    rewritten = ExpressionAnalysis(expr, MappingProxyType(facts))
+    program = lower_analyzed_expression(expr, rewritten)
+    compare = _operations(program, IRCompare)[0]
+    assert compare.op == "GREATER_THAN"
+
+
+def test_ir_emitter_rejects_invalid_analysis_root_and_compare_fact_shape():
+    from types import MappingProxyType
+    from NodeForge.semantic_analysis import ExpressionAnalysis, ExpressionFact
+
+    expr = _expr("a < b")
+    other = _expr("a < b")
+    analysis = analyze_expression(expr, _environment(bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT}))
+    with pytest.raises(CompileError, match="invalid Semantic IR expression analysis"):
+        lower_analyzed_expression(other, analysis)
+
+    facts = dict(analysis.facts)
+    facts[expr] = ExpressionFact(TYPE_BOOL, compare_operations=())
+    malformed = ExpressionAnalysis(expr, MappingProxyType(facts))
+    with pytest.raises(CompileError, match="comparison semantic operation count mismatch"):
+        lower_analyzed_expression(expr, malformed)
+
+
+def test_exact_semantic_migration_markers_are_present_at_source_decisions():
     root = Path(__file__).resolve().parents[2]
+    analysis = (root / "semantic_analysis.py").read_text(encoding="utf-8")
     semantic = (root / "semantic_lowering.py").read_text(encoding="utf-8")
     dispatcher = (root / "expression_compiler.py").read_text(encoding="utf-8")
     backend = (root / "blender_ir_lowering.py").read_text(encoding="utf-8")
-    combined = semantic + dispatcher + backend
-    assert combined.count("SEMANTIC_IR_MIGRATION") == 2
-    assert combined.count("SEMANTIC_IR_VALUE_MIGRATION") == 4
-    assert "Lower each comparison pair independently to preserve" not in backend
 
-    old_object = '''# SEMANTIC_IR_MIGRATION: TYPE_OBJECT attribute semantics still belong to the
-            # existing ObjectValue.resolve_property() path. The target architecture is for
-            # Object property access to be represented and validated in Semantic IR. Remove
-            # this fallback when TYPE_OBJECT ast.Attribute lowering is migrated end-to-end
-            # and ObjectValue.resolve_property() is no longer the semantic owner.'''
-    old_fallback = '''# SEMANTIC_IR_MIGRATION: Expressions outside the current IR slice continue on
-    # the existing AST-to-Blender path while migration is incremental. The target
-    # architecture is for migrated expression families to lower through Semantic IR
-    # before Blender materialization. Remove this fallback only for an expression
-    # family after that family is covered end-to-end by IR and its duplicated AST
-    # lowering branch is removed in the same planned change set.'''
-    new_binding_snapshot = '''# SEMANTIC_IR_VALUE_MIGRATION: comp.vars still stores legacy socket-bound Value
-    # objects while statement and call migration is incomplete. Export only name ->
-    # type into semantic lowering so Semantic IR stays backend-independent. Remove
-    # this bridge when runtime bindings use an explicitly owned compiler value
-    # reference and semantic typing no longer reads backend Value objects.'''
-    new_binding_backend = '''# SEMANTIC_IR_VALUE_MIGRATION: Runtime bindings outside the migrated IR boundary
-        # are still owned by comp.vars as socket-bound Value objects. Resolve an IR
-        # binding to that backend value only here, at Blender lowering. Remove this
-        # bridge when compiler runtime bindings use an explicitly owned compiler value
-        # reference and backend sockets come only from the materialization environment.'''
-    new_result = '''# SEMANTIC_IR_VALUE_MIGRATION: compile_expr() and downstream compiler consumers
-    # still expect a socket-bound Value result. Return the materialized backend value
-    # for the IR result until the compiler-facing expression contract uses an
-    # explicitly owned compiler runtime value/reference model. Remove this bridge
-    # when explicit Blender materialization happens only at a backend boundary.
-    # Program-local IRValue handles alone are not compiler-wide identity.'''
-    new_compare = '''# SEMANTIC_IR_VALUE_MIGRATION: Re-lower the shared middle source expression for
-            # each comparison pair so this behavior-preserving stage emits distinct IR values
-            # and preserves the current duplicated Geometry Nodes topology. Remove this rule
-            # only in a dedicated topology-changing plan that defines IR value reuse and
-            # updates the comparison-chain Blender regression contract.'''
-    assert old_object in semantic
-    assert old_fallback in dispatcher
-    assert new_binding_snapshot in dispatcher
-    assert new_binding_backend in backend
-    assert new_result in backend
-    assert new_compare in semantic
+    assert analysis.count("SEMANTIC_ANALYSIS_MIGRATION") == 1
+    assert semantic.count("SEMANTIC_RESOLUTION_MIGRATION") == 1
+    assert semantic.count("SEMANTIC_IR_VALUE_MIGRATION") == 1
+    assert dispatcher.count("SEMANTIC_IR_MIGRATION") == 1
+    assert dispatcher.count("SEMANTIC_IR_VALUE_MIGRATION") == 1
+    assert dispatcher.count("SEMANTIC_ANALYSIS_LEGACY_BINDING_MIGRATION") == 1
+    assert dispatcher.count("SEMANTIC_ANALYSIS_CONSTANT_SNAPSHOT_MIGRATION") == 1
+    assert backend.count("SEMANTIC_IR_VALUE_MIGRATION") == 2
+
+    assert "TYPE_OBJECT attribute semantics still belong" not in semantic
+    assert "_COMPARE_OPS" not in semantic
+    assert "_validate_binary" not in semantic
+    assert "_validate_compare" not in semantic
+    assert "Lower each comparison pair independently to preserve" not in backend
 
 
 def test_backend_binding_bridge_and_invariant_drift():

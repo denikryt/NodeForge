@@ -2,8 +2,21 @@
 
 from helpers import *
 
+import ast
+from types import MappingProxyType
+
 from NodeForge import expression_compiler
-from NodeForge.semantic_ir import IRBinary, IRCompare, IRConditional, IRVectorComponent
+from NodeForge.constants import (
+    TYPE_BOOL, TYPE_BUNDLE, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_MATERIAL,
+    TYPE_OBJECT, TYPE_STRING, TYPE_VECTOR,
+)
+from NodeForge.errors import CompileError
+from NodeForge.semantic_analysis import SemanticEnvironment, analyze_expression
+from NodeForge.semantic_lowering import lower_analyzed_expression
+from NodeForge.semantic_ir import (
+    IRBinary, IRBinding, IRBoolBinary, IRCompare, IRConditional, IRLiteral, IRUnary,
+    IRVectorComponent,
+)
 
 
 def _nodes(group, bl_idname, operation=None):
@@ -208,3 +221,438 @@ def test_semantic_error_keeps_outer_fresh_build_cleanup_boundary():
         )
     after = {_pointer(group) for group in bpy.data.node_groups}
     check(after == before, "semantic compile failure leaked a fresh node group")
+
+_CONTRACT_TYPES = (
+    TYPE_FLOAT,
+    TYPE_INT,
+    TYPE_VECTOR,
+    TYPE_BOOL,
+    TYPE_GEOMETRY,
+    TYPE_MATERIAL,
+    TYPE_OBJECT,
+    TYPE_STRING,
+    TYPE_BUNDLE,
+)
+_INPUT_CALL_FOR_TYPE = {
+    TYPE_FLOAT: "input_float",
+    TYPE_INT: "input_int",
+    TYPE_VECTOR: "input_vector",
+    TYPE_BOOL: "input_bool",
+    TYPE_GEOMETRY: "input_geometry",
+    TYPE_MATERIAL: "input_material",
+    TYPE_OBJECT: "input_object",
+    TYPE_STRING: "input_string",
+    TYPE_BUNDLE: "input_bundle",
+}
+
+
+def _contract_environment(bindings):
+    """Build one immutable runtime-only environment for backend contract discovery."""
+    return SemanticEnvironment(
+        MappingProxyType(dict(bindings)),
+        frozenset(),
+        MappingProxyType({}),
+        frozenset(),
+        MappingProxyType({}),
+    )
+
+
+def _dispatch_operation_signature(operation):
+    """Return the test-only Semantic-IR input shape seen by backend dispatch."""
+    if isinstance(operation, IRLiteral):
+        return ("IRLiteral", operation.result.typ)
+    if isinstance(operation, IRUnary):
+        return ("IRUnary", operation.op, operation.operand.typ, operation.result.typ)
+    if isinstance(operation, IRBinary):
+        return (
+            "IRBinary", operation.op, operation.left.typ, operation.right.typ,
+            operation.result.typ,
+        )
+    if isinstance(operation, IRCompare):
+        return (
+            "IRCompare", operation.op, operation.left.typ, operation.right.typ,
+            operation.result.typ,
+        )
+    if isinstance(operation, IRBoolBinary):
+        return (
+            "IRBoolBinary", operation.op, operation.left.typ, operation.right.typ,
+            operation.result.typ,
+        )
+    if isinstance(operation, IRConditional):
+        return (
+            "IRConditional", operation.condition.typ, operation.true_value.typ,
+            operation.result.typ,
+        )
+    if isinstance(operation, IRVectorComponent):
+        return (
+            "IRVectorComponent", operation.value.typ, operation.component,
+            operation.result.typ,
+        )
+    if isinstance(operation, IRBinding):
+        return None
+    raise AssertionError(f"unexpected contract operation: {type(operation).__name__}")
+
+
+def _program_dispatch_signature(program):
+    """Return only IR fields that are inputs to migrated backend decision logic."""
+    result = []
+    for operation in program.operations:
+        signature = _dispatch_operation_signature(operation)
+        if signature is not None:
+            result.append(signature)
+    return tuple(result)
+
+
+def _accepted_contract_case(source, bindings):
+    """Return emitted IR for an analyzer-accepted source case, else ``None``."""
+    expr = ast.parse(source, mode="eval").body
+    try:
+        analysis = analyze_expression(expr, _contract_environment(bindings))
+    except CompileError:
+        return None
+    if analysis is None:
+        return None
+    return lower_analyzed_expression(expr, analysis)
+
+
+def _all_contract_source_cases():
+    """Yield finite migrated frontend domains without encoding validity."""
+    for source in ("1", "1.5", "True", '"name"'):
+        yield source, {}
+    for typ in _CONTRACT_TYPES:
+        for operator in ("+", "-", "not "):
+            yield f"{operator}a", {"a": typ}
+    for left_typ in _CONTRACT_TYPES:
+        for right_typ in _CONTRACT_TYPES:
+            for operator in ("+", "-", "*", "/", "and", "or", "<", "<=", ">", ">=", "==", "!="):
+                yield f"a {operator} b", {"a": left_typ, "b": right_typ}
+    for condition_typ in _CONTRACT_TYPES:
+        for true_typ in _CONTRACT_TYPES:
+            for false_typ in _CONTRACT_TYPES:
+                yield "a if flag else b", {
+                    "flag": condition_typ,
+                    "a": true_typ,
+                    "b": false_typ,
+                }
+    for typ in _CONTRACT_TYPES:
+        for component in ("x", "y", "z"):
+            yield f"a.{component}", {"a": typ}
+
+
+def _source_for_real_blender(expression, bindings):
+    """Wrap one contract expression in real DSL inputs and a group output."""
+    lines = []
+    for name, typ in bindings.items():
+        lines.append(f'{name} = {_INPUT_CALL_FOR_TYPE[typ]}({name!r})')
+    lines.append(f"result = {expression}")
+    lines.append('output("Result", result)')
+    return "\n".join(lines)
+
+
+def _link_to_socket(group, socket):
+    """Return the unique link targeting *socket* in one contract graph."""
+    links = [link for link in group.links if _pointer(link.to_socket) == _pointer(socket)]
+    check(len(links) == 1, f"expected one link to socket {socket.name!r}, got {len(links)}")
+    return links[0]
+
+
+def _result_link(group):
+    """Return the unique link feeding the contract group's ``Result`` output."""
+    outputs = _nodes(group, "NodeGroupOutput")
+    check(len(outputs) == 1, f"expected one Group Output, got {len(outputs)}")
+    result_inputs = [socket for socket in outputs[0].inputs if socket.name == "Result"]
+    check(len(result_inputs) == 1, "contract group has no unique Result output socket")
+    return _link_to_socket(group, result_inputs[0])
+
+
+def _check_binding_source(link, binding_name):
+    """Assert that one backend operand link comes from the expected group input."""
+    check(
+        getattr(link.from_node, "bl_idname", "") == "NodeGroupInput",
+        f"operand {binding_name!r} is not sourced from the Group Input",
+    )
+    check(
+        link.from_socket.name == binding_name,
+        f"operand expected {binding_name!r}, got source socket {link.from_socket.name!r}",
+    )
+
+
+def _binding_name_by_value(program):
+    """Map program-local binding value ids to their source binding names."""
+    return {
+        operation.result.id: operation.name
+        for operation in program.operations
+        if isinstance(operation, IRBinding)
+    }
+
+
+def _check_operand_source(group, socket, value, binding_names):
+    """Assert a backend operand socket is wired from the IR binding that produced *value*."""
+    name = binding_names.get(value.id)
+    check(name is not None, f"contract operand v{value.id} is not a direct runtime binding")
+    _check_binding_source(_link_to_socket(group, socket), name)
+
+
+def _expected_compare_data_type(left_type, right_type):
+    """Return the Blender Compare mode required by the existing semantic operand types."""
+    if left_type in {TYPE_FLOAT, TYPE_INT} and right_type in {TYPE_FLOAT, TYPE_INT}:
+        return "FLOAT"
+    if left_type == right_type == TYPE_BOOL:
+        return "INT"
+    if left_type == right_type == TYPE_VECTOR:
+        return "VECTOR"
+    raise AssertionError(f"unexpected analyzer-accepted comparison types: {left_type}, {right_type}")
+
+
+def _expected_switch_input_type(result_type):
+    """Return the Blender Switch mode corresponding to one Semantic IR result type."""
+    return {
+        TYPE_FLOAT: "FLOAT",
+        TYPE_INT: "INT",
+        TYPE_VECTOR: "VECTOR",
+        TYPE_BOOL: "BOOLEAN",
+        TYPE_GEOMETRY: "GEOMETRY",
+        TYPE_STRING: "STRING",
+        TYPE_BUNDLE: "BUNDLE",
+    }[result_type]
+
+
+def _check_literal_realization(group, operation, result_link):
+    """Validate the concrete Blender realization of one migrated runtime literal."""
+    node = result_link.from_node
+    if operation.result.typ == TYPE_FLOAT:
+        check(node.bl_idname == "ShaderNodeValue", "Float literal did not realize as ShaderNodeValue")
+        check(
+            abs(float(result_link.from_socket.default_value) - float(operation.value)) < 1e-8,
+            "Float literal value changed at the Blender boundary",
+        )
+        return
+    if operation.result.typ == TYPE_STRING:
+        check(node.bl_idname == "FunctionNodeInputString", "String literal did not realize as FunctionNodeInputString")
+        check(node.string == operation.value, "String literal value changed at the Blender boundary")
+        return
+    if operation.result.typ == TYPE_BOOL:
+        check(node.bl_idname == "FunctionNodeCompare", "Bool literal did not realize through Compare")
+        check(node.operation == "NOT_EQUAL", "Bool literal Compare operation changed")
+        check(node.data_type == "FLOAT", "Bool literal Compare data_type changed")
+        inputs = [_link_to_socket(group, node.inputs[index]) for index in (0, 1)]
+        values = [float(link.from_socket.default_value) for link in inputs]
+        expected = [1.0 if operation.value else 0.0, 0.0]
+        check(values == expected, f"Bool literal helper values changed: {values!r} != {expected!r}")
+        return
+    raise AssertionError(f"unexpected literal type {operation.result.typ}")
+
+
+def _check_unary_realization(group, operation, result_link, binding_names):
+    """Validate operation, output and operand wiring for one unary IR operation."""
+    node = result_link.from_node
+    if operation.op == "+":
+        _check_binding_source(result_link, binding_names[operation.operand.id])
+        return
+    if operation.op == "not":
+        check(node.bl_idname == "FunctionNodeBooleanMath", "not did not realize as Boolean Math")
+        check(node.operation == "NOT", "Boolean NOT operation enum changed")
+        _check_operand_source(group, node.inputs[0], operation.operand, binding_names)
+        return
+    check(operation.op == "-", f"unexpected unary op {operation.op!r}")
+    if operation.operand.typ in {TYPE_FLOAT, TYPE_INT}:
+        check(node.bl_idname == "ShaderNodeMath", "numeric unary - did not realize as Math")
+        check(node.operation == "SUBTRACT", "numeric unary - operation enum changed")
+        zero_link = _link_to_socket(group, node.inputs[0])
+        check(zero_link.from_node.bl_idname == "ShaderNodeValue", "numeric unary - lost its zero helper")
+        check(abs(float(zero_link.from_socket.default_value)) < 1e-8, "numeric unary - zero helper changed")
+        _check_operand_source(group, node.inputs[1], operation.operand, binding_names)
+        return
+    check(operation.operand.typ == TYPE_VECTOR, "unexpected analyzer-accepted unary - type")
+    check(node.bl_idname == "ShaderNodeVectorMath", "Vector unary - did not realize as Vector Math")
+    check(node.operation == "SCALE", "Vector unary - operation enum changed")
+    _check_operand_source(group, node.inputs[0], operation.operand, binding_names)
+    scale_link = _link_to_socket(group, node.inputs[3])
+    check(scale_link.from_node.bl_idname == "ShaderNodeValue", "Vector unary - lost its scale helper")
+    check(abs(float(scale_link.from_socket.default_value) + 1.0) < 1e-8, "Vector unary - scale helper changed")
+
+
+def _check_binary_realization(group, operation, result_link, binding_names):
+    """Validate exact backend operation and operand ordering for one binary IR operation."""
+    node = result_link.from_node
+    left_type = operation.left.typ
+    right_type = operation.right.typ
+    if left_type in {TYPE_FLOAT, TYPE_INT} and right_type in {TYPE_FLOAT, TYPE_INT}:
+        check(node.bl_idname == "ShaderNodeMath", "numeric binary op did not realize as Math")
+        check(node.operation == operation.op, "numeric Math operation enum differs from Semantic IR")
+        _check_operand_source(group, node.inputs[0], operation.left, binding_names)
+        _check_operand_source(group, node.inputs[1], operation.right, binding_names)
+        return
+    check(operation.result.typ == TYPE_VECTOR, "non-numeric IRBinary produced an unexpected type")
+    check(node.bl_idname == "ShaderNodeVectorMath", "Vector binary op did not realize as Vector Math")
+    if operation.op in {"ADD", "SUBTRACT"} or (operation.op == "MULTIPLY" and left_type == right_type == TYPE_VECTOR):
+        check(node.operation == operation.op, "Vector Math operation enum differs from Semantic IR")
+        _check_operand_source(group, node.inputs[0], operation.left, binding_names)
+        _check_operand_source(group, node.inputs[1], operation.right, binding_names)
+        return
+    if operation.op == "MULTIPLY":
+        check(node.operation == "SCALE", "scalar/Vector multiplication did not realize as SCALE")
+        if left_type == TYPE_VECTOR:
+            vector_value, scalar_value = operation.left, operation.right
+        else:
+            check(right_type == TYPE_VECTOR, "unexpected analyzer-accepted MULTIPLY shape")
+            vector_value, scalar_value = operation.right, operation.left
+        _check_operand_source(group, node.inputs[0], vector_value, binding_names)
+        _check_operand_source(group, node.inputs[3], scalar_value, binding_names)
+        return
+    check(operation.op == "DIVIDE" and left_type == TYPE_VECTOR and right_type == TYPE_FLOAT, "unexpected Vector binary realization")
+    check(node.operation == "SCALE", "Vector / Float final node is not SCALE")
+    _check_operand_source(group, node.inputs[0], operation.left, binding_names)
+    reciprocal_link = _link_to_socket(group, node.inputs[3])
+    reciprocal = reciprocal_link.from_node
+    check(reciprocal.bl_idname == "ShaderNodeMath", "Vector / Float reciprocal did not use Math")
+    check(reciprocal.operation == "DIVIDE", "Vector / Float reciprocal operation changed")
+    one_link = _link_to_socket(group, reciprocal.inputs[0])
+    check(one_link.from_node.bl_idname == "ShaderNodeValue", "Vector / Float reciprocal lost its 1.0 helper")
+    check(abs(float(one_link.from_socket.default_value) - 1.0) < 1e-8, "Vector / Float reciprocal helper changed")
+    _check_operand_source(group, reciprocal.inputs[1], operation.right, binding_names)
+
+
+def _check_compare_realization(group, operation, result_link, binding_names):
+    """Validate Compare operation, type mode and ordered operand wiring."""
+    node = result_link.from_node
+    check(node.bl_idname == "FunctionNodeCompare", "IRCompare did not realize as FunctionNodeCompare")
+    check(node.operation == operation.op, "Compare operation enum differs from Semantic IR")
+    check(
+        node.data_type == _expected_compare_data_type(operation.left.typ, operation.right.typ),
+        "Compare data_type does not match Semantic IR operand types",
+    )
+    _check_operand_source(group, node.inputs[0], operation.left, binding_names)
+    _check_operand_source(group, node.inputs[1], operation.right, binding_names)
+
+
+def _check_bool_binary_realization(group, operation, result_link, binding_names):
+    """Validate Boolean operation and operand wiring from the complete IR signature."""
+    node = result_link.from_node
+    check(operation.left.typ == operation.right.typ == operation.result.typ == TYPE_BOOL, "invalid IRBoolBinary types")
+    check(node.bl_idname == "FunctionNodeBooleanMath", "IRBoolBinary did not realize as Boolean Math")
+    check(node.operation == operation.op, "Boolean Math operation enum differs from Semantic IR")
+    _check_operand_source(group, node.inputs[0], operation.left, binding_names)
+    _check_operand_source(group, node.inputs[1], operation.right, binding_names)
+
+
+def _check_conditional_realization(group, operation, result_link, binding_names):
+    """Validate Switch mode plus condition/false/true socket ordering."""
+    node = result_link.from_node
+    check(node.bl_idname == "GeometryNodeSwitch", "IRConditional did not realize as GeometryNodeSwitch")
+    check(node.input_type == _expected_switch_input_type(operation.result.typ), "Switch input_type differs from Semantic IR result type")
+    _check_operand_source(group, node.inputs[0], operation.condition, binding_names)
+    _check_operand_source(group, node.inputs[1], operation.false_value, binding_names)
+    _check_operand_source(group, node.inputs[2], operation.true_value, binding_names)
+
+
+def _check_vector_component_realization(group, operation, result_link, binding_names):
+    """Validate Separate XYZ input and the exact component output selected by lowering."""
+    node = result_link.from_node
+    check(node.bl_idname == "ShaderNodeSeparateXYZ", "IRVectorComponent did not realize as Separate XYZ")
+    _check_operand_source(group, node.inputs[0], operation.value, binding_names)
+    expected_index = {"x": 0, "y": 1, "z": 2}[operation.component]
+    check(
+        _pointer(result_link.from_socket) == _pointer(node.outputs[expected_index]),
+        f"Separate XYZ selected the wrong output for .{operation.component}",
+    )
+
+
+def _check_program_realization(group, program):
+    """Assert that the final analyzer-owned IR operation is realized exactly on Blender RNA."""
+    semantic_operations = [operation for operation in program.operations if not isinstance(operation, IRBinding)]
+    check(semantic_operations, "contract representative has no semantic operation")
+    operation = semantic_operations[-1]
+    check(operation.result.id == program.result.id, "contract representative final IR operation does not produce program result")
+    result_link = _result_link(group)
+    binding_names = _binding_name_by_value(program)
+
+    if isinstance(operation, IRLiteral):
+        _check_literal_realization(group, operation, result_link)
+    elif isinstance(operation, IRUnary):
+        _check_unary_realization(group, operation, result_link, binding_names)
+    elif isinstance(operation, IRBinary):
+        _check_binary_realization(group, operation, result_link, binding_names)
+    elif isinstance(operation, IRCompare):
+        _check_compare_realization(group, operation, result_link, binding_names)
+    elif isinstance(operation, IRBoolBinary):
+        _check_bool_binary_realization(group, operation, result_link, binding_names)
+    elif isinstance(operation, IRConditional):
+        _check_conditional_realization(group, operation, result_link, binding_names)
+    elif isinstance(operation, IRVectorComponent):
+        _check_vector_component_realization(group, operation, result_link, binding_names)
+    else:
+        raise AssertionError(f"unexpected final contract operation: {type(operation).__name__}")
+
+
+def test_semantic_backend_dispatch_signatures_realize_on_blender_rna():
+    representatives = {}
+    for source, bindings in _all_contract_source_cases():
+        program = _accepted_contract_case(source, bindings)
+        if program is None:
+            continue
+        representatives.setdefault(
+            _program_dispatch_signature(program),
+            (source, bindings, program),
+        )
+
+    check(representatives, "semantic/backend contract produced no analyzer-accepted representatives")
+    for index, (signature, (source, bindings, program)) in enumerate(representatives.items()):
+        group = compile_group(
+            _source_for_real_blender(source, bindings),
+            f"NFTest_semantic_backend_rna_{index}",
+        )
+        _check_program_realization(group, program)
+
+
+
+def test_semantic_environment_preserves_legacy_geometry_builder_binding(monkeypatch):
+    environments = []
+    original = expression_compiler.analyze_expression
+
+    def wrapped(expr, environment):
+        environments.append(environment)
+        return original(expr, environment)
+
+    monkeypatch.setattr(expression_compiler, "analyze_expression", wrapped)
+    group = compile_group(
+        """
+builder = geometry_builder()
+builder.add(cube(1.0))
+result = builder.geometry
+output("Geometry", result)
+""",
+        "NFTest_semantic_legacy_builder_binding",
+    )
+    check(_nodes(group, "GeometryNodeMeshCube"), "GeometryBuilder legacy expression behavior changed")
+    builder_envs = [env for env in environments if "builder" in env.legacy_binding_names]
+    check(builder_envs, "GeometryBuilder name was not exported as a known legacy binding")
+    for environment in builder_envs:
+        check("builder" not in environment.runtime_binding_types, "GeometryBuilder leaked into runtime types")
+        check(all(isinstance(name, str) for name in environment.legacy_binding_names), "legacy snapshot carried non-name values")
+
+
+def test_semantic_environment_exports_constant_metadata_without_legacy_containers():
+    from NodeForge.compiler import Compiler
+
+    group = bpy.data.node_groups.new("NFTest_semantic_constant_snapshot", "GeometryNodeTree")
+    comp = Compiler(group, None, consts={"pi": [1.0, 2.0, 3.0], "scalar": 2.5})
+    captured = {}
+    original = expression_compiler.analyze_expression
+
+    def wrapped(expr, environment):
+        captured["environment"] = environment
+        return original(expr, environment)
+
+    expression_compiler.analyze_expression = wrapped
+    try:
+        result = expression_compiler.compile_expr(comp, ast.parse("pi", mode="eval").body)
+        check(getattr(result, "typ", None) == TYPE_VECTOR, "non-scalar const did not remain on legacy constant path")
+    finally:
+        expression_compiler.analyze_expression = original
+        bpy.data.node_groups.remove(group)
+
+    environment = captured["environment"]
+    check("pi" in environment.unsupported_constant_names, "non-scalar const name was not preserved")
+    check("pi" not in environment.scalar_constants, "non-scalar const leaked into scalar metadata")
+    check(environment.scalar_constants["scalar"] == (TYPE_FLOAT, 2.5), "scalar const metadata changed")
