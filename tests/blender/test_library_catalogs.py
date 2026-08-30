@@ -415,9 +415,21 @@ def test_library_reload_allows_same_package_upgrade_and_rejects_package_takeover
             _make_reload_package(v1, package_id="vendor.reload", version="1.0.0", value=1.0)
             packages.install_package_directory(v1, allow_python=False)
             group = compiler.create_library_catalog_group("functions", "reload_value")
+            from NodeForge.compiler_identities import library_function_id
+            from NodeForge.function_instances import (
+                FUNCTION_DEFINITION_OWNER_PROP,
+                FUNCTION_INSTANCE_KEY_PROP,
+            )
+
             pointer = group.as_pointer()
+            direct_function_id = library_function_id("functions", "vendor.reload", "reload_value")
             check(group.get("nodeforge_package_id") == "vendor.reload", "initial package id metadata missing")
             check(group.get("nodeforge_package_version") == "1.0.0", "initial package version metadata missing")
+            check(str(group.get(FUNCTION_INSTANCE_KEY_PROP) or "") == "", "direct catalog materialization was not shared")
+            check(
+                group.get(FUNCTION_DEFINITION_OWNER_PROP) == direct_function_id.stable_key(),
+                "direct catalog materialization definition identity changed",
+            )
 
             v2 = tmp / "v2"
             _make_reload_package(v2, package_id="vendor.reload", version="2.0.0", value=2.0)

@@ -5,7 +5,8 @@ from .consteval import _is_const_vector
 from .errors import CompileError
 from .values import Value
 from .compile_time import reject_compile_time_object
-from .compiler_identities import library_function_id, normalize_library_package_id
+from .compiler_identities import library_function_id
+from .semantic_ir import IRFunctionMaterializationMode
 from .library import (
     has_native_compile_call,
     find_library_entry_record,
@@ -18,8 +19,7 @@ from .library import (
 from .function_instances import (
     FunctionCallModifiers,
     FUNCTION_INSTANCE_KEY_PROP,
-    function_group_owner_scope,
-    instance_key_for,
+    instance_key_for_materialization,
     unsupported_unique,
 )
 
@@ -86,9 +86,7 @@ def compile_library_function_call(comp, expr, depth=0, function_name=None, names
     x = depth * 240
     y = -depth * 90
     record = find_library_entry_record(namespace, name)
-    instance_key = ""
-    owner_scope = None
-    function_id = None
+    materialization = None
     if record is not None:
         # CANONICAL_CALL_ID_MIGRATION: Imported reusable calls still resolve through the
         # legacy AST/library dispatcher. Construct their canonical FunctionId at this
@@ -96,25 +94,21 @@ def compile_library_function_call(comp, expr, depth=0, function_name=None, names
         # resolution owns imported callable identity before function-group materialization.
         function_id = library_function_id(namespace, record.package_id, name)
         if namespace in {"functions", "examples"}:
-            call_site = comp.next_unique_function_call_site(function_id) if modifiers.unique else None
-            instance_key = instance_key_for(call_site) if call_site is not None else ""
-            owner_scope = function_group_owner_scope(
-                "LIBRARY",
-                namespace,
-                normalize_library_package_id(record.package_id),
-                name,
-                instance_key=instance_key,
-            )
+            materialization = comp.resolve_reusable_function_materialization(function_id, modifiers)
+    instance_key = instance_key_for_materialization(materialization) if materialization is not None else ""
     cache_key = ("catalog", namespace, name)
+    # REUSABLE_CALL_IR_MIGRATION: Local catalog entries keep their existing materialization
+    # semantics in this behavior-preserving stage because the current namespace="local"
+    # path does not assign durable per-occurrence instance keys/owner scopes for __unique__.
+    # Remove this exclusion only after Local catalog shared/unique ownership is explicitly
+    # specified, compatibility-tested, and migrated as its own semantic contract.
     function_group = comp.local_group_cache.get(cache_key) if namespace == "local" else None
     if function_group is None:
         function_group = get_or_create_library_entry_group(
             namespace,
             name,
             comp.compile_group_callback,
-            instance_key=instance_key,
-            owner_scope=owner_scope,
-            function_id=function_id,
+            materialization=materialization,
             function_group_cache=getattr(comp, "function_group_cache", None),
             function_group_transaction=getattr(comp, "function_group_transaction", None),
             function_compilation_trace=getattr(comp, "function_compilation_trace", None),
@@ -124,6 +118,11 @@ def compile_library_function_call(comp, expr, depth=0, function_name=None, names
             # build while keeping separate outer compilations fully independent.
             comp.local_group_cache[cache_key] = function_group
 
+    # REUSABLE_CALL_IR_MIGRATION: Imported callable identity/materialization policy is
+    # compiler-owned, but argument names/types are still discovered from the materialized
+    # Blender node-group interface. Keep this probe behavior unchanged in this stage.
+    # Remove it when imported functions expose a Blender-independent callable signature
+    # that semantic analysis can validate before function-group materialization.
     probe = comp.group.nodes.new("GeometryNodeGroup")
     probe.location = (x, y)
     probe.node_tree = function_group
@@ -169,7 +168,7 @@ def compile_library_function_call(comp, expr, depth=0, function_name=None, names
         used.add(key)
 
     result = make_library_call_node(comp.group, function_group, compiled_args, const_args, x=x, y=y)
-    if modifiers.unique:
+    if materialization is not None and materialization.mode is IRFunctionMaterializationMode.UNIQUE:
         for node in reversed(list(comp.group.nodes)):
             if getattr(node, "bl_idname", None) == "GeometryNodeGroup" and getattr(node, "node_tree", None) is function_group:
                 try:

@@ -19,9 +19,11 @@ from NodeForge.constants import (
     TYPE_VECTOR,
 )
 from NodeForge.errors import CompileError
-from NodeForge.compiler_identities import BindingId
+from NodeForge.compiler_identities import BindingId, CallSiteId, local_function_id
 from NodeForge.semantic_ir import (
     IRBinary,
+    IRFunctionMaterialization,
+    IRFunctionMaterializationMode,
     IRBinding,
     IRBoolBinary,
     IRCompare,
@@ -99,6 +101,40 @@ def _operations(program, operation_type):
 def _producer_map(program):
     """Map program-local result IDs to the operations that produce them."""
     return {operation.result.id: operation for operation in program.operations}
+
+
+def test_function_materialization_ir_is_immutable_hashable_and_blender_independent():
+    """Reusable-call materialization semantics stay typed and backend-independent."""
+    function_id = local_function_id("owner", "helper", "x:FLOAT")
+    call_site = CallSiteId("owner", function_id, 0)
+    shared = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.SHARED)
+    unique = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.UNIQUE, call_site)
+
+    assert shared == IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.SHARED)
+    assert len({unique, IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.UNIQUE, call_site)}) == 1
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        shared.call_site = call_site
+
+    field_names = {field.name for field in dataclasses.fields(IRFunctionMaterialization)}
+    assert field_names == {"callee", "mode", "call_site"}
+
+
+def test_function_materialization_ir_enforces_shared_unique_invariants():
+    """Shared calls are callsite-less and unique calls target their exact callee."""
+    first = local_function_id("owner", "first", "x:FLOAT")
+    second = local_function_id("owner", "second", "x:FLOAT")
+    first_site = CallSiteId("owner", first, 0)
+
+    assert IRFunctionMaterialization(first, IRFunctionMaterializationMode.SHARED).call_site is None
+    assert IRFunctionMaterialization(first, IRFunctionMaterializationMode.UNIQUE, first_site).call_site == first_site
+    with pytest.raises(ValueError):
+        IRFunctionMaterialization(first, IRFunctionMaterializationMode.SHARED, first_site)
+    with pytest.raises(ValueError):
+        IRFunctionMaterialization(first, IRFunctionMaterializationMode.UNIQUE)
+    with pytest.raises(ValueError):
+        IRFunctionMaterialization(second, IRFunctionMaterializationMode.UNIQUE, first_site)
+    with pytest.raises(TypeError):
+        IRFunctionMaterialization("first", IRFunctionMaterializationMode.SHARED)
 
 
 def test_semantic_modules_are_blender_independent_and_ir_is_immutable():
@@ -430,6 +466,7 @@ def test_exact_semantic_migration_markers_are_present_at_source_decisions():
             "compiler": "compiler.py",
             "local": "local_functions.py",
             "library_calls": "library_calls.py",
+            "library": "library.py",
         }.items()
     }
 
@@ -442,16 +479,23 @@ def test_exact_semantic_migration_markers_are_present_at_source_decisions():
     assert sources["dispatcher"].count("SEMANTIC_ANALYSIS_CONSTANT_SNAPSHOT_MIGRATION") == 1
     assert sources["backend"].count("SEMANTIC_IR_VALUE_MIGRATION") == 1
     assert sources["compiler"].count("CANONICAL_BINDING_ID_MIGRATION") == 1
-    assert sources["compiler"].count("CANONICAL_CALL_ID_MIGRATION") == 1
+    assert sources["compiler"].count("CANONICAL_CALL_ID_MIGRATION") == 0
     assert sources["local"].count("CANONICAL_CALL_ID_MIGRATION") == 1
     assert sources["library_calls"].count("CANONICAL_CALL_ID_MIGRATION") == 1
+    assert sources["compiler"].count("REUSABLE_CALL_IR_MIGRATION") == 1
+    assert sources["local"].count("REUSABLE_CALL_IR_MIGRATION") == 1
+    assert sources["library_calls"].count("REUSABLE_CALL_IR_MIGRATION") == 2
+    assert sources["library"].count("REUSABLE_CALL_IR_MIGRATION") == 0
 
     normalized = {name: "\n".join(line.lstrip() for line in source.splitlines()) for name, source in sources.items()}
     required_markers = (
         (normalized["compiler"], "# CANONICAL_BINDING_ID_MIGRATION: comp.vars remains the legacy heterogeneous\n# source-name store while statement, loop, call, and compile-time binding migration\n# is incomplete. Project current Value entries into stable BindingId-based semantic\n# and backend snapshots here without changing comp.vars ownership. Remove this bridge\n# when runtime bindings are stored canonically by BindingId and source names exist\n# only in the frontend symbol table."),
         (normalized["local"], "# CANONICAL_CALL_ID_MIGRATION: Local calls still reach this legacy AST compiler\n# before call semantics are represented in Semantic IR. Construct the canonical\n# FunctionId here from the already-resolved specialization contract. Remove this\n# bridge when semantic call resolution produces FunctionId/CallSiteId before\n# backend function-group materialization."),
         (normalized["library_calls"], "# CANONICAL_CALL_ID_MIGRATION: Imported reusable calls still resolve through the\n# legacy AST/library dispatcher. Construct their canonical FunctionId at this\n# boundary without changing call behavior. Remove this bridge when semantic call\n# resolution owns imported callable identity before function-group materialization."),
-        (normalized["compiler"], "# CANONICAL_CALL_ID_MIGRATION: CallSiteId allocation remains limited to existing\n# __unique__ reusable-function calls so this behavior-preserving stage keeps the\n# current per-owner/per-callee occurrence sequence exact. Remove this compatibility\n# allocator when semantic call resolution assigns canonical call-site identities\n# before legacy call materialization."),
+        (normalized["compiler"], "# REUSABLE_CALL_IR_MIGRATION: Unique materialization is now represented explicitly\n# by IRFunctionMaterialization, but its CallSiteId ordinal is still allocated when\n# the legacy AST call path reaches reusable-call preparation. Preserve the current\n# unique-only per-owner/per-callee sequence here. Remove this allocator bridge when\n# reusable calls are emitted by semantic lowering before backend/materialization."),
+        (normalized["local"], "# REUSABLE_CALL_IR_MIGRATION: This stage moves shared/unique materialization policy\n# into compiler-owned IR only. Local call argument evaluation, specialization-type\n# discovery, captures, and return realization still use the legacy Value/socket path.\n# Remove this boundary when reusable call arguments/results have Blender-independent\n# semantic types/IR values and local FunctionId is resolved before materialization."),
+        (normalized["library_calls"], "# REUSABLE_CALL_IR_MIGRATION: Imported callable identity/materialization policy is\n# compiler-owned, but argument names/types are still discovered from the materialized\n# Blender node-group interface. Keep this probe behavior unchanged in this stage.\n# Remove it when imported functions expose a Blender-independent callable signature\n# that semantic analysis can validate before function-group materialization."),
+        (normalized["library_calls"], "# REUSABLE_CALL_IR_MIGRATION: Local catalog entries keep their existing materialization\n# semantics in this behavior-preserving stage because the current namespace=\"local\"\n# path does not assign durable per-occurrence instance keys/owner scopes for __unique__.\n# Remove this exclusion only after Local catalog shared/unique ownership is explicitly\n# specified, compatibility-tested, and migrated as its own semantic contract."),
         (normalized["dispatcher"], "# SEMANTIC_IR_VALUE_MIGRATION: comp.vars still stores legacy socket-bound Value\n# objects while statement and call migration is incomplete. Snapshot those Values\n# only at the frontend/backend boundary: semantic analysis receives detached types,\n# while Blender lowering receives the backend Value map. Remove this bridge when\n# runtime bindings use canonical compiler-owned references and comp.vars no longer\n# owns backend sockets."),
         (normalized["dispatcher"], "# SEMANTIC_IR_MIGRATION: Expressions outside the current IR slice continue on\n# the existing AST-to-Blender path while migration is incremental. The target\n# architecture is for migrated expression families to lower through Semantic IR\n# before Blender materialization. Remove this fallback only for an expression\n# family after that family is covered end-to-end by IR and its duplicated AST\n# lowering branch is removed in the same planned change set."),
         (normalized["semantic"], "# SEMANTIC_IR_VALUE_MIGRATION: Re-lower the shared middle source expression for\n# each comparison pair so this behavior-preserving stage emits distinct IR values\n# and preserves the current duplicated Geometry Nodes topology. Remove this rule\n# only in a dedicated topology-changing plan that defines IR value reuse and\n# updates the corresponding graph-shape contract tests."),
@@ -462,6 +506,14 @@ def test_exact_semantic_migration_markers_are_present_at_source_decisions():
 
     assert "IRBinding still stores the legacy source binding name" not in sources["semantic"]
     assert "source-name -> legacy Value map" not in sources["backend"]
+
+    assert "next_unique_function_call_site" not in sources["compiler"]
+    local_after_materialization = sources["local"].split("materialization = comp.resolve_reusable_function_materialization", 1)[1]
+    imported_after_materialization = sources["library_calls"].split("materialization = comp.resolve_reusable_function_materialization", 1)[1]
+    assert "modifiers.unique" not in local_after_materialization
+    assert "modifiers.unique" not in imported_after_materialization
+    assert "instance_key_for_materialization(materialization)" in local_after_materialization
+    assert "instance_key_for_materialization(materialization)" in imported_after_materialization
 
 def test_blender_lowering_context_is_minimal_immutable_and_compiler_independent():
     from dataclasses import FrozenInstanceError, fields

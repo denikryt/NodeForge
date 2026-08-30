@@ -148,3 +148,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.50.7
 
 - Added canonical compiler-owned `BindingId`, `FunctionId`, and `CallSiteId` identities across Semantic IR runtime bindings and reusable-function materialization while preserving existing graph topology, metadata strings, fingerprints, and unique instance keys.
+
+## 0.50.8
+
+- Moved reusable-function shared/unique materialization policy into immutable Semantic IR while preserving existing `CallSiteId` instance keys, ownership/freshness metadata, direct catalog-definition materialization, and Geometry Nodes behavior.

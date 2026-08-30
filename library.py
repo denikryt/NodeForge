@@ -16,7 +16,8 @@ import bpy
 
 from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR, TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING, TYPE_BUNDLE
 from .errors import CompileError
-from .compiler_identities import CORE_PACKAGE_ID, FunctionId, library_function_id, normalize_library_package_id
+from .compiler_identities import CORE_PACKAGE_ID, library_function_id, normalize_library_package_id
+from .semantic_ir import IRFunctionMaterialization
 from .interface import _set_socket_default
 from .nodes import _new_node
 from .values import Value, TupleValue, make_value
@@ -26,6 +27,7 @@ from .function_instances import (
     FUNCTION_DEFINITION_OWNER_PROP,
     FUNCTION_INSTANCE_KEY_PROP,
     function_group_owner_scope,
+    instance_key_for_materialization,
     normalized_source,
     stamp_function_metadata,
     stored_fingerprint,
@@ -960,24 +962,60 @@ def _find_owned_library_entry_group(record: LibraryEntryRecord, *, instance_key:
     return matches[0] if matches else None
 
 
-def get_or_create_library_entry_group(namespace: str, name: str, compile_group_callback, *, instance_key=None, owner_scope=None, function_id: FunctionId | None = None, function_group_cache=None, function_group_transaction=None, function_compilation_trace=None):
-    """Compile/update the node group that backs an editable catalog source."""
+def get_or_create_library_entry_group(
+    namespace: str,
+    name: str,
+    compile_group_callback,
+    *,
+    materialization: IRFunctionMaterialization | None = None,
+    function_group_cache=None,
+    function_group_transaction=None,
+    function_compilation_trace=None,
+):
+    """Compile/update an editable catalog group under one explicit authority contract.
+
+    ``materialization`` selects reusable-call semantics for ``functions`` and
+    ``examples``.  ``None`` is the separate direct-catalog contract and
+    materializes the canonical shared definition without compiler call state.
+    """
     record = find_library_entry_record(namespace, name)
     if record is None or record.source_path is None:
         raise CompileError(f"{namespace} library entry {name!r} has no editable .nf source")
     source = load_library_entry_source(namespace, name)
     backend_builtins = backend_builtins_for_entry(namespace, name)
-    if function_id is None:
-        function_id = library_function_id(namespace, record.package_id, name)
-    elif (
-        not isinstance(function_id, FunctionId)
-        or function_id.namespace != record.namespace
-        or function_id.package_id != normalize_library_package_id(record.package_id)
-        or function_id.name != record.name
-        or function_id.definition_owner
-        or function_id.signature
-    ):
-        raise CompileError(f"Internal error: canonical FunctionId does not match {namespace} library entry {name!r}")
+    expected_function_id = library_function_id(namespace, record.package_id, name)
+
+    if namespace == "local":
+        if materialization is not None:
+            raise CompileError("Internal error: Local catalog materialization cannot use reusable-call IR yet")
+        function_id = expected_function_id
+        instance_key = ""
+        owner_scope = None
+    elif materialization is None:
+        # Direct catalog/root materialization is a stable non-call API contract:
+        # materialize the canonical shared catalog definition directly.
+        function_id = expected_function_id
+        instance_key = ""
+        owner_scope = function_group_owner_scope(
+            "LIBRARY",
+            namespace,
+            normalize_library_package_id(record.package_id),
+            name,
+            instance_key=None,
+        )
+    else:
+        if materialization.callee != expected_function_id:
+            raise CompileError(f"Internal error: reusable-call FunctionId does not match {namespace} library entry {name!r}")
+        function_id = materialization.callee
+        instance_key = instance_key_for_materialization(materialization)
+        owner_scope = function_group_owner_scope(
+            "LIBRARY",
+            namespace,
+            function_id.package_id,
+            function_id.name,
+            instance_key=instance_key,
+        )
+
     backend_signature = _backend_signature_for_record(record)
     group_name = _group_name_for_record(record)
     if namespace == "local":
@@ -1004,7 +1042,6 @@ def get_or_create_library_entry_group(namespace: str, name: str, compile_group_c
         if function_group_cache is not None and cache_key in function_group_cache:
             return function_group_cache[cache_key]
         definition_identity = function_id.stable_key()
-        owner_scope = owner_scope or function_group_owner_scope("LIBRARY", namespace, normalize_library_package_id(record.package_id), name, instance_key=instance_key)
         own_inputs = {
             "kind": "library",
             "namespace": namespace,
@@ -1028,7 +1065,7 @@ def get_or_create_library_entry_group(namespace: str, name: str, compile_group_c
                 function_compilation_trace=function_compilation_trace,
                 function_compilation_inputs=own_inputs,
                 function_definition_identity=definition_identity,
-                function_instance_key=instance_key or "",
+                function_instance_key=instance_key,
                 preserve_if_equivalent=True,
             )
         else:
@@ -1043,7 +1080,7 @@ def get_or_create_library_entry_group(namespace: str, name: str, compile_group_c
                 function_compilation_trace=function_compilation_trace,
                 function_compilation_inputs=own_inputs,
                 function_definition_identity=definition_identity,
-                function_instance_key=instance_key or "",
+                function_instance_key=instance_key,
             )
         if function_group_cache is not None:
             function_group_cache[cache_key] = group
@@ -1054,7 +1091,7 @@ def get_or_create_library_entry_group(namespace: str, name: str, compile_group_c
         _write_package_metadata(group, record)
         stamp_function_metadata(
             group,
-            instance_key=instance_key or "",
+            instance_key=instance_key,
             definition_owner=function_id.stable_key(),
             fingerprint=stored_fingerprint(group),
         )
@@ -1062,6 +1099,7 @@ def get_or_create_library_entry_group(namespace: str, name: str, compile_group_c
     except Exception:
         pass
     return group
+
 
 
 def make_library_call_node(group, function_group, compiled_args, const_args, x=0, y=0):

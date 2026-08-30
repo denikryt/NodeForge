@@ -3,12 +3,16 @@ import ast
 import pytest
 
 from NodeForge.errors import CompileError
+from NodeForge.compiler_identities import CallSiteId, local_function_id
+from NodeForge.semantic_ir import IRFunctionMaterialization, IRFunctionMaterializationMode
 from NodeForge.function_instances import (
     FUNCTION_ROOT_OWNER_ID_PROP,
     FunctionCallModifiers,
     FunctionCompilationTrace,
     extract_function_call_modifiers,
     function_group_owner_scope,
+    instance_key_for,
+    instance_key_for_materialization,
     validate_root_owner_id,
 )
 
@@ -26,6 +30,19 @@ class DummyCompiler:
 def _call(source):
     return ast.parse(source, mode="eval").body
 
+
+
+def test_instance_key_for_materialization_preserves_existing_hash_protocol():
+    """Semantic materialization records do not alter persisted instance-key hashing."""
+    owner = function_group_owner_scope("ROOT", "0123456789abcdef0123456789abcdef")
+    function_id = local_function_id(owner, "helper", "x:FLOAT")
+    call_site = CallSiteId(owner, function_id, 0)
+    shared = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.SHARED)
+    unique = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.UNIQUE, call_site)
+
+    assert instance_key_for_materialization(shared) == ""
+    assert instance_key_for_materialization(unique) == instance_key_for(call_site)
+    assert instance_key_for_materialization(unique) == "41b0b35ed1633716105f59a9881b3d52"
 
 def test_unique_modifier_is_removed_and_tracks_explicit_false():
     cleaned, modifiers = extract_function_call_modifiers(DummyCompiler(), _call("helper(x, __unique__=False)"), "helper")

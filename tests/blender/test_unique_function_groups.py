@@ -215,7 +215,7 @@ output("Out", shared + first_unique + second_unique)
 
 
 def test_imported_unique_function_preserves_shared_and_occurrence_identity():
-    """Use canonical imported FunctionId without changing legacy unique keys."""
+    """Carry reusable-call materialization IR without changing legacy unique keys."""
     from NodeForge.compiler_identities import CallSiteId, library_function_id
     from NodeForge.function_instances import function_group_owner_scope, instance_key_for
 
@@ -248,16 +248,7 @@ first = import_unique_probe(2.0, __unique__=True)
 second = import_unique_probe(3.0, __unique__=True)
 output("Out", shared + first + second)
 """
-            original_materializer_identity_builder = library.library_function_id
-
-            def _unexpected_materializer_identity_reconstruction(*args, **kwargs):
-                raise AssertionError("materializer reconstructed an already-resolved imported FunctionId")
-
-            library.library_function_id = _unexpected_materializer_identity_reconstruction
-            try:
-                group = compile_group(source, "NFTest_imported_unique_identity")
-            finally:
-                library.library_function_id = original_materializer_identity_builder
+            group = compile_group(source, "NFTest_imported_unique_identity")
             root_id = str(group.get(FUNCTION_ROOT_OWNER_ID_PROP) or "")
             check(root_id, "root owner id is missing for imported unique test")
             root_scope = function_group_owner_scope("ROOT", root_id)

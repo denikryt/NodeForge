@@ -19,12 +19,13 @@ from .compile_time import reject_compile_time_object
 from .values import TupleValue, make_value, reject_tuple_value
 from .library_calls import _argument_type_matches
 from .compiler_identities import local_function_id
+from .semantic_ir import IRFunctionMaterializationMode
 from .function_instances import (
     FUNCTION_DEFINITION_OWNER_PROP,
     FUNCTION_INSTANCE_KEY_PROP,
     FunctionCallModifiers,
     function_group_owner_scope,
-    instance_key_for,
+    instance_key_for_materialization,
     stamp_function_metadata,
     stored_fingerprint,
 )
@@ -521,6 +522,11 @@ def compile_local_function_call(comp, expr, depth=0, modifiers=None):
     const_args = {}
     param_types = {}
     used = set()
+    # REUSABLE_CALL_IR_MIGRATION: This stage moves shared/unique materialization policy
+    # into compiler-owned IR only. Local call argument evaluation, specialization-type
+    # discovery, captures, and return realization still use the legacy Value/socket path.
+    # Remove this boundary when reusable call arguments/results have Blender-independent
+    # semantic types/IR values and local FunctionId is resolved before materialization.
     for idx, arg_expr in enumerate(expr.args):
         param = params[idx]
         value, is_dynamic = comp._const_or_compile_arg(arg_expr, depth + 1)
@@ -601,10 +607,17 @@ def compile_local_function_call(comp, expr, depth=0, modifiers=None):
     # bridge when semantic call resolution produces FunctionId/CallSiteId before
     # backend function-group materialization.
     function_id = local_function_id(definition_owner, name, signature)
-    call_site = comp.next_unique_function_call_site(function_id) if modifiers.unique else None
-    instance_key = instance_key_for(call_site) if call_site is not None else ""
-    owner_scope = function_group_owner_scope("LOCAL_DEF", definition_owner, name, signature, instance_key=instance_key)
-    cache_key = ("local-def", function_id, instance_key or "SHARED")
+    materialization = comp.resolve_reusable_function_materialization(function_id, modifiers)
+    instance_key = instance_key_for_materialization(materialization)
+    callee = materialization.callee
+    owner_scope = function_group_owner_scope(
+        "LOCAL_DEF",
+        callee.definition_owner,
+        callee.name,
+        callee.signature,
+        instance_key=instance_key,
+    )
+    cache_key = ("local-def", callee, instance_key or "SHARED")
     function_cache = getattr(comp, "function_group_cache", comp.local_group_cache)
     function_group = function_cache.get(cache_key)
     if function_group is None or getattr(function_group, "name", None) not in bpy.data.node_groups:
@@ -684,7 +697,7 @@ def compile_local_function_call(comp, expr, depth=0, modifiers=None):
     x = depth * 240
     y = -depth * 90
     result = make_local_function_call_node(comp.group, function_group, compiled_args, const_args, return_shape, x=x, y=y)
-    if modifiers.unique:
+    if materialization.mode is IRFunctionMaterializationMode.UNIQUE:
         for node in reversed(list(comp.group.nodes)):
             if getattr(node, "bl_idname", None) == "GeometryNodeGroup" and getattr(node, "node_tree", None) is function_group:
                 try:

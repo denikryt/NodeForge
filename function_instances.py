@@ -20,6 +20,7 @@ from .compiler_identities import (
     CallSiteId,
     CORE_PACKAGE_ID,
 )
+from .semantic_ir import IRFunctionMaterialization, IRFunctionMaterializationMode
 
 FUNCTION_INSTANCE_KEY_PROP = "nodeforge_function_instance_key"
 FUNCTION_DEFINITION_OWNER_PROP = "nodeforge_function_definition_owner"
@@ -128,6 +129,16 @@ def instance_key_for(call_site: CallSiteId) -> str:
         "callee_identity": call_site.callee.stable_key(),
         "ordinal": call_site.ordinal,
     })[:32]
+
+
+def instance_key_for_materialization(materialization: IRFunctionMaterialization) -> str:
+    """Return the persisted instance key implied by reusable-call Semantic IR."""
+
+    if not isinstance(materialization, IRFunctionMaterialization):
+        raise TypeError("materialization must be an IRFunctionMaterialization")
+    if materialization.mode is IRFunctionMaterializationMode.SHARED:
+        return ""
+    return instance_key_for(materialization.call_site)
 
 
 def new_root_owner_id() -> str:
@@ -288,6 +299,7 @@ __all__ = [
     "normalized_statements",
     "function_group_owner_scope",
     "instance_key_for",
+    "instance_key_for_materialization",
     "new_root_owner_id",
     "validate_root_owner_id",
     "interface_contract",

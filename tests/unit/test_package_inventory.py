@@ -257,6 +257,9 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
         def get(self, name, default=None):
             return super().get(name, default)
 
+        def __iter__(self):
+            return iter(self.values())
+
     fake_bpy = types.SimpleNamespace(data=types.SimpleNamespace(node_groups=FakeNodeGroups()))
     monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
     import NodeForge.library as library
@@ -281,12 +284,30 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
         group = existing_group or FakeGroup(group_name)
         group["compiled_source"] = source
         fake_bpy.data.node_groups[group_name] = group
-        compiled.append((group_name, existing_group))
+        compiled.append((group_name, existing_group, kwargs))
         return group
 
     group_a = library.materialize_library_entry_group("examples", "demo", compile_group)
+    from NodeForge.compiler_identities import library_function_id
+    from NodeForge.function_instances import (
+        FUNCTION_DEFINITION_OWNER_PROP,
+        FUNCTION_INSTANCE_KEY_PROP,
+        function_group_owner_scope,
+    )
+
+    function_id_a = library_function_id("examples", "vendor.a", "demo")
+    expected_owner_a = function_group_owner_scope("LIBRARY", "examples", "vendor.a", "demo", instance_key=None)
     assert group_a["nodeforge_package_id"] == "vendor.a"
+    assert group_a[FUNCTION_INSTANCE_KEY_PROP] == ""
+    assert group_a[FUNCTION_DEFINITION_OWNER_PROP] == function_id_a.stable_key()
+    assert compiled[0][2]["function_group_owner_scope"] == expected_owner_a
+    assert compiled[0][2]["function_definition_identity"] == function_id_a.stable_key()
+    assert compiled[0][2]["function_instance_key"] == ""
     assert group_a.name in fake_bpy.data.node_groups
+
+    direct_again = library.materialize_library_entry_group("examples", "demo", compile_group)
+    assert direct_again is group_a
+    assert compiled[-1][1] is group_a
 
     packages.uninstall_package("vendor.a")
     packages.install_package_directory(source_b, allow_python=False)
@@ -300,6 +321,74 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
     assert group_b["nodeforge_package_version"] == "1.0.0"
     assert group_a["nodeforge_package_id"] == "vendor.a"
 
+
+
+
+def test_library_materialization_contract_discriminator_is_explicit(package_inventory, tmp_path, monkeypatch):
+    """IR materialization selects call semantics while None selects direct shared definition."""
+    class FakeGroup(dict):
+        def __init__(self, name):
+            super().__init__()
+            self.name = name
+            self.bl_idname = "GeometryNodeTree"
+
+    class FakeNodeGroups(list):
+        def get(self, name, default=None):
+            return next((group for group in self if group.name == name), default)
+
+    fake_groups = FakeNodeGroups()
+    fake_bpy = types.SimpleNamespace(data=types.SimpleNamespace(node_groups=fake_groups))
+    monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
+    import NodeForge.library as library
+    library = importlib.reload(library)
+
+    source = tmp_path / "contract_pkg"
+    (source / "functions").mkdir(parents=True)
+    (source / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
+    _write_manifest(source, package_id="vendor.contract", contents={"functions": "functions"})
+    packages.install_package_directory(source, allow_python=False)
+
+    calls = []
+    def compile_group(source_text, group_name, existing_group=None, **kwargs):
+        group = existing_group or FakeGroup(f"{group_name}.{len(fake_groups)}")
+        if group not in fake_groups:
+            fake_groups.append(group)
+        calls.append(kwargs)
+        return group
+
+    from NodeForge.compiler_identities import CallSiteId, library_function_id
+    from NodeForge.function_instances import function_group_owner_scope, instance_key_for
+    from NodeForge.semantic_ir import IRFunctionMaterialization, IRFunctionMaterializationMode
+
+    function_id = library_function_id("functions", "vendor.contract", "demo")
+    direct_cache = {}
+    direct = library.get_or_create_library_entry_group(
+        "functions", "demo", compile_group, materialization=None, function_group_cache=direct_cache
+    )
+    assert direct.get("nodeforge_function_instance_key") == ""
+    assert calls[-1]["function_group_owner_scope"] == function_group_owner_scope(
+        "LIBRARY", "functions", "vendor.contract", "demo", instance_key=None
+    )
+    assert direct_cache[("library", function_id, "SHARED")] is direct
+
+    call_site = CallSiteId("root-owner", function_id, 0)
+    materialization = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.UNIQUE, call_site)
+    cache = {}
+    unique = library.get_or_create_library_entry_group(
+        "functions", "demo", compile_group, materialization=materialization, function_group_cache=cache
+    )
+    unique_key = instance_key_for(call_site)
+    assert unique is not direct
+    assert unique.get("nodeforge_function_instance_key") == unique_key
+    assert calls[-1]["function_group_owner_scope"] == function_group_owner_scope(
+        "LIBRARY", "functions", "vendor.contract", "demo", instance_key=unique_key
+    )
+    assert cache[("library", function_id, unique_key)] is unique
+
+    other_id = library_function_id("functions", "vendor.other", "demo")
+    wrong = IRFunctionMaterialization(other_id, IRFunctionMaterializationMode.SHARED)
+    with pytest.raises(CompileError, match="does not match"):
+        library.get_or_create_library_entry_group("functions", "demo", compile_group, materialization=wrong)
 
 
 def test_zip_rejects_multiple_manifest_candidates(package_inventory, tmp_path):

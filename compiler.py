@@ -11,6 +11,7 @@ import bpy
 from .constants import TYPE_FLOAT, TYPE_INT, TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
 from .errors import CompileError
 from .compiler_identities import BindingId, CallSiteId, FunctionId
+from .semantic_ir import IRFunctionMaterialization, IRFunctionMaterializationMode
 from .values import Value, make_value
 from .nodes import (
     _new_node,
@@ -47,6 +48,7 @@ from . import expression_compiler
 from .builtins import registry as builtin_registry
 from .function_instances import (
     FUNCTION_ROOT_OWNER_ID_PROP,
+    FunctionCallModifiers,
     FunctionCompilationTrace,
     function_group_owner_scope as make_function_group_owner_scope,
     interface_contract,
@@ -443,19 +445,36 @@ class Compiler:
             backend_values[binding_id] = value
         return RuntimeBindingSnapshot(semantic_bindings, backend_values)
 
-    def next_unique_function_call_site(self, callee: FunctionId) -> CallSiteId:
-        """Allocate the next unique reusable-function occurrence in this owner."""
-        if not isinstance(callee, FunctionId):
-            raise TypeError("callee must be a FunctionId")
-        # CANONICAL_CALL_ID_MIGRATION: CallSiteId allocation remains limited to existing
-        # __unique__ reusable-function calls so this behavior-preserving stage keeps the
-        # current per-owner/per-callee occurrence sequence exact. Remove this compatibility
-        # allocator when semantic call resolution assigns canonical call-site identities
-        # before legacy call materialization.
-        counter_key = (self.function_group_owner_scope, callee)
+    def resolve_reusable_function_materialization(
+        self,
+        function_id: FunctionId,
+        modifiers: FunctionCallModifiers,
+    ) -> IRFunctionMaterialization:
+        """Resolve shared/unique semantics for one canonical reusable callable."""
+        if not isinstance(function_id, FunctionId):
+            raise TypeError("function_id must be a FunctionId")
+        if not isinstance(modifiers, FunctionCallModifiers):
+            raise TypeError("modifiers must be FunctionCallModifiers")
+        if not modifiers.unique:
+            return IRFunctionMaterialization(
+                function_id,
+                IRFunctionMaterializationMode.SHARED,
+                None,
+            )
+        # REUSABLE_CALL_IR_MIGRATION: Unique materialization is now represented explicitly
+        # by IRFunctionMaterialization, but its CallSiteId ordinal is still allocated when
+        # the legacy AST call path reaches reusable-call preparation. Preserve the current
+        # unique-only per-owner/per-callee sequence here. Remove this allocator bridge when
+        # reusable calls are emitted by semantic lowering before backend/materialization.
+        counter_key = (self.function_group_owner_scope, function_id)
         ordinal = self._function_occurrence_counts.get(counter_key, 0)
         self._function_occurrence_counts[counter_key] = ordinal + 1
-        return CallSiteId(self.function_group_owner_scope, callee, ordinal)
+        call_site = CallSiteId(self.function_group_owner_scope, function_id, ordinal)
+        return IRFunctionMaterialization(
+            function_id,
+            IRFunctionMaterializationMode.UNIQUE,
+            call_site,
+        )
 
     def _compile_const_value(self, value, x=0, y=0):
         """Turn a compile-time constant into a node Value or script-level array."""

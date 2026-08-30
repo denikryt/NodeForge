@@ -11,7 +11,8 @@ from NodeForge.compiler_identities import (
     library_function_id,
     local_function_id,
 )
-from NodeForge.function_instances import function_group_owner_scope, instance_key_for
+from NodeForge.function_instances import FunctionCallModifiers, function_group_owner_scope, instance_key_for, instance_key_for_materialization
+from NodeForge.semantic_ir import IRFunctionMaterializationMode
 
 pytestmark = pytest.mark.unit
 
@@ -150,7 +151,7 @@ def test_compiler_runtime_binding_slots_and_snapshot_are_stable_and_coherent(mon
         _cleanup_compiler_imports(before)
 
 
-def test_compiler_unique_callsite_allocator_is_per_owner_per_typed_callee(monkeypatch):
+def test_compiler_materialization_resolution_preserves_unique_only_occurrence_sequence(monkeypatch):
     module, before = _load_compiler_without_blender(monkeypatch)
     try:
         compiler = object.__new__(module.Compiler)
@@ -158,9 +159,30 @@ def test_compiler_unique_callsite_allocator_is_per_owner_per_typed_callee(monkey
         compiler._function_occurrence_counts = {}
         first = local_function_id(_ROOT_OWNER, "first", "x:FLOAT")
         second = local_function_id(_ROOT_OWNER, "second", "x:FLOAT")
+        shared = FunctionCallModifiers(unique=False)
+        unique = FunctionCallModifiers(unique=True, unique_was_explicit=True)
 
-        assert compiler.next_unique_function_call_site(first) == CallSiteId(_ROOT_OWNER, first, 0)
-        assert compiler.next_unique_function_call_site(first) == CallSiteId(_ROOT_OWNER, first, 1)
-        assert compiler.next_unique_function_call_site(second) == CallSiteId(_ROOT_OWNER, second, 0)
+        first_shared = compiler.resolve_reusable_function_materialization(first, shared)
+        assert first_shared.mode is IRFunctionMaterializationMode.SHARED
+        assert first_shared.call_site is None
+        assert instance_key_for_materialization(first_shared) == ""
+        assert compiler._function_occurrence_counts == {}
+
+        first_unique = compiler.resolve_reusable_function_materialization(first, unique)
+        assert first_unique.call_site == CallSiteId(_ROOT_OWNER, first, 0)
+        assert instance_key_for_materialization(first_unique) == instance_key_for(CallSiteId(_ROOT_OWNER, first, 0))
+
+        explicit_false = compiler.resolve_reusable_function_materialization(
+            first, FunctionCallModifiers(unique=False, unique_was_explicit=True)
+        )
+        assert explicit_false.mode is IRFunctionMaterializationMode.SHARED
+        assert compiler._function_occurrence_counts[(_ROOT_OWNER, first)] == 1
+
+        assert compiler.resolve_reusable_function_materialization(first, unique).call_site == CallSiteId(_ROOT_OWNER, first, 1)
+        assert compiler.resolve_reusable_function_materialization(second, unique).call_site == CallSiteId(_ROOT_OWNER, second, 0)
+
+        other_owner = function_group_owner_scope("ROOT", "other")
+        compiler.function_group_owner_scope = other_owner
+        assert compiler.resolve_reusable_function_materialization(first, unique).call_site == CallSiteId(other_owner, first, 0)
     finally:
         _cleanup_compiler_imports(before)

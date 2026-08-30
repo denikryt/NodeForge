@@ -3,9 +3,42 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import TypeAlias
 
-from .compiler_identities import BindingId
+from .compiler_identities import BindingId, CallSiteId, FunctionId
+
+
+class IRFunctionMaterializationMode(str, Enum):
+    """Select physical materialization semantics for one resolved reusable call."""
+
+    SHARED = "SHARED"
+    UNIQUE = "UNIQUE"
+
+
+@dataclass(frozen=True)
+class IRFunctionMaterialization:
+    """Describe how one resolved reusable function call is materialized."""
+
+    callee: FunctionId
+    mode: IRFunctionMaterializationMode
+    call_site: CallSiteId | None = None
+
+    def __post_init__(self):
+        """Validate the semantic materialization invariants."""
+        if not isinstance(self.callee, FunctionId):
+            raise TypeError("callee must be a FunctionId")
+        if self.mode is IRFunctionMaterializationMode.SHARED:
+            if self.call_site is not None:
+                raise ValueError("shared function materialization cannot carry a CallSiteId")
+            return
+        if self.mode is IRFunctionMaterializationMode.UNIQUE:
+            if not isinstance(self.call_site, CallSiteId):
+                raise ValueError("unique function materialization requires a CallSiteId")
+            if self.call_site.callee != self.callee:
+                raise ValueError("function materialization CallSiteId must target the same callee")
+            return
+        raise ValueError("unsupported function materialization mode")
 
 
 @dataclass(frozen=True)
@@ -119,6 +152,8 @@ class IRProgram:
 
 
 __all__ = [
+    "IRFunctionMaterializationMode",
+    "IRFunctionMaterialization",
     "IRValue",
     "IROperation",
     "IRProgram",
