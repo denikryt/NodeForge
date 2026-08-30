@@ -20,14 +20,16 @@ from .values import TupleValue, make_value, reject_tuple_value
 from .library_calls import _argument_type_matches
 from .compiler_identities import local_function_id
 from .semantic_ir import IRFunctionMaterializationMode
+from .function_materializer import (
+    FunctionMaterializationContext,
+    FunctionMaterializer,
+    LocalFunctionMaterializationSpec,
+)
 from .function_instances import (
     FUNCTION_DEFINITION_OWNER_PROP,
     FUNCTION_INSTANCE_KEY_PROP,
     FunctionCallModifiers,
-    function_group_owner_scope,
-    instance_key_for_materialization,
     stamp_function_metadata,
-    stored_fingerprint,
 )
 
 LOCAL_HELPER_KIND_PROP = "nodeforge_generated_kind"
@@ -608,92 +610,65 @@ def compile_local_function_call(comp, expr, depth=0, modifiers=None):
     # backend function-group materialization.
     function_id = local_function_id(definition_owner, name, signature)
     materialization = comp.resolve_reusable_function_materialization(function_id, modifiers)
-    instance_key = instance_key_for_materialization(materialization)
-    callee = materialization.callee
-    owner_scope = function_group_owner_scope(
-        "LOCAL_DEF",
-        callee.definition_owner,
-        callee.name,
-        callee.signature,
-        instance_key=instance_key,
-    )
-    cache_key = ("local-def", callee, instance_key or "SHARED")
-    function_cache = getattr(comp, "function_group_cache", comp.local_group_cache)
-    function_group = function_cache.get(cache_key)
-    if function_group is None or getattr(function_group, "name", None) not in bpy.data.node_groups:
-        existing = _find_local_helper(
-            namespace=logical_namespace,
-            function_name=name,
-            signature=signature,
-            definition_owner=definition_owner,
-            instance_key=instance_key,
-            transaction=getattr(comp, "function_group_transaction", None),
-        )
-        own_inputs = {
-            "kind": "local-def",
-            "definition_owner": definition_owner,
-            "name": name,
-            "signature": signature,
-            "source": source,
-        }
-        if existing is not None:
-            function_group = comp.compile_group_callback(
-                source,
-                group_name,
-                existing_group=existing,
-                local_functions=comp.local_functions,
-                backend_builtins=comp.backend_builtins,
-                imported_library_functions=comp.imported_library_functions,
-                helper_namespace=getattr(comp, "helper_namespace", None),
-                local_helper_transaction=getattr(comp, "local_helper_transaction", None),
-                function_group_cache=function_cache,
-                function_group_transaction=getattr(comp, "function_group_transaction", None),
-                function_group_owner_scope=owner_scope,
-                function_definition_owner=definition_owner,
-                function_compilation_trace=getattr(comp, "function_compilation_trace", None),
-                function_compilation_inputs=own_inputs,
-                function_definition_identity=function_id.stable_key(),
-                function_instance_key=instance_key,
-                preserve_if_equivalent=True,
-            )
-        else:
-            function_group = comp.compile_group_callback(
-                source,
-                group_name,
-                local_functions=comp.local_functions,
-                backend_builtins=comp.backend_builtins,
-                imported_library_functions=comp.imported_library_functions,
-                helper_namespace=getattr(comp, "helper_namespace", None),
-                local_helper_transaction=getattr(comp, "local_helper_transaction", None),
-                function_group_cache=function_cache,
-                function_group_transaction=getattr(comp, "function_group_transaction", None),
-                function_group_owner_scope=owner_scope,
-                function_definition_owner=definition_owner,
-                function_compilation_trace=getattr(comp, "function_compilation_trace", None),
-                function_compilation_inputs=own_inputs,
-                function_definition_identity=function_id.stable_key(),
-                function_instance_key=instance_key,
-            )
-        fingerprint = stored_fingerprint(function_group)
+    own_inputs = {
+        "kind": "local-def",
+        "definition_owner": definition_owner,
+        "name": name,
+        "signature": signature,
+        "source": source,
+    }
+    compile_kwargs = {
+        "local_functions": comp.local_functions,
+        "backend_builtins": comp.backend_builtins,
+        "imported_library_functions": comp.imported_library_functions,
+        "helper_namespace": getattr(comp, "helper_namespace", None),
+        "local_helper_transaction": getattr(comp, "local_helper_transaction", None),
+    }
+
+    def finalize_local_group(group, fingerprint, instance_key):
+        """Persist local helper metadata and restore its readable datablock name."""
         _write_helper_metadata(
-            function_group,
+            group,
             namespace=logical_namespace,
             function_name=name,
             signature=signature,
             source=source,
             return_shape=return_shape,
-            return_types=[_socket_type_to_value_type(s) for s in function_group.interface.items_tree if getattr(s, "in_out", None) == "OUTPUT"],
+            return_types=[
+                _socket_type_to_value_type(socket)
+                for socket in group.interface.items_tree
+                if getattr(socket, "in_out", None) == "OUTPUT"
+            ],
             definition_owner=definition_owner,
             instance_key=instance_key,
             fingerprint=fingerprint,
         )
         # Datablock names are presentation only, but legacy helpers should migrate
         # back to the current readable function title after successful materialization.
-        function_group.name = group_name
-        function_cache[cache_key] = function_group
-    frame = getattr(getattr(comp, "function_compilation_trace", None), "current", None)
-    if frame is not None:
-        frame.record_child(owner_scope, stored_fingerprint(function_group))
+        group.name = group_name
+
+    spec = LocalFunctionMaterializationSpec(
+        materialization=materialization,
+        logical_namespace=logical_namespace,
+        group_name=group_name,
+        source=source,
+        definition_owner=definition_owner,
+        own_inputs=own_inputs,
+        compile_kwargs=compile_kwargs,
+        find_existing=_find_local_helper,
+        is_live_group=lambda group: getattr(group, "name", None) in bpy.data.node_groups,
+        finalize_group=finalize_local_group,
+    )
+    context = FunctionMaterializationContext(
+        function_group_cache=comp.function_group_cache,
+        function_group_transaction=comp.function_group_transaction,
+        function_compilation_trace=comp.function_compilation_trace,
+    )
+    materialized = FunctionMaterializer(
+        compile_group_callback=comp.compile_group_callback,
+    ).materialize_local(spec, context)
+    function_group = materialized.group
+    instance_key = materialized.instance_key
     x = depth * 240
     y = -depth * 90
     result = make_local_function_call_node(comp.group, function_group, compiled_args, const_args, return_shape, x=x, y=y)

@@ -360,24 +360,42 @@ def test_library_materialization_contract_discriminator_is_explicit(package_inve
     from NodeForge.function_instances import function_group_owner_scope, instance_key_for
     from NodeForge.semantic_ir import IRFunctionMaterialization, IRFunctionMaterializationMode
 
+    from NodeForge.function_materializer import FunctionMaterializationContext
+
     function_id = library_function_id("functions", "vendor.contract", "demo")
-    direct_cache = {}
-    direct = library.get_or_create_library_entry_group(
-        "functions", "demo", compile_group, materialization=None, function_group_cache=direct_cache
+    direct_result = library.get_or_create_library_entry_group(
+        "functions", "demo", compile_group, materialization=None
     )
+    direct = direct_result.group
+    assert direct_result.instance_key == ""
     assert direct.get("nodeforge_function_instance_key") == ""
     assert calls[-1]["function_group_owner_scope"] == function_group_owner_scope(
         "LIBRARY", "functions", "vendor.contract", "demo", instance_key=None
     )
-    assert direct_cache[("library", function_id, "SHARED")] is direct
+    assert calls[-1]["function_group_cache"] is None
+    assert calls[-1]["function_group_transaction"] is None
+    assert calls[-1]["function_compilation_trace"] is None
 
     call_site = CallSiteId("root-owner", function_id, 0)
     materialization = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.UNIQUE, call_site)
-    cache = {}
-    unique = library.get_or_create_library_entry_group(
-        "functions", "demo", compile_group, materialization=materialization, function_group_cache=cache
+    monkeypatch.setattr(
+        library,
+        "library_function_id",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("reusable adapter must not reconstruct FunctionId")),
     )
+    cache = {}
+    context = FunctionMaterializationContext(cache, None, None)
+    unique_result = library.get_or_create_library_entry_group(
+        "functions",
+        "demo",
+        compile_group,
+        materialization=materialization,
+        function_id=function_id,
+        materialization_context=context,
+    )
+    unique = unique_result.group
     unique_key = instance_key_for(call_site)
+    assert unique_result.instance_key == unique_key
     assert unique is not direct
     assert unique.get("nodeforge_function_instance_key") == unique_key
     assert calls[-1]["function_group_owner_scope"] == function_group_owner_scope(
@@ -388,7 +406,14 @@ def test_library_materialization_contract_discriminator_is_explicit(package_inve
     other_id = library_function_id("functions", "vendor.other", "demo")
     wrong = IRFunctionMaterialization(other_id, IRFunctionMaterializationMode.SHARED)
     with pytest.raises(CompileError, match="does not match"):
-        library.get_or_create_library_entry_group("functions", "demo", compile_group, materialization=wrong)
+        library.get_or_create_library_entry_group(
+            "functions",
+            "demo",
+            compile_group,
+            materialization=wrong,
+            function_id=function_id,
+            materialization_context=context,
+        )
 
 
 def test_zip_rejects_multiple_manifest_candidates(package_inventory, tmp_path):
@@ -883,3 +908,87 @@ def test_uninstall_removes_invalid_record_without_deleting_untrusted_target(pack
 
     assert "vendor.invalid" not in packages.load_package_state()["packages"]
     assert marker.read_text(encoding="utf-8") == "keep"
+
+
+def test_local_catalog_adapter_does_not_use_generic_function_group_cache(monkeypatch, tmp_path):
+    """Active Local catalog materialization must not acquire reusable-cache semantics."""
+    class FakeGroup(dict):
+        def __init__(self, name):
+            super().__init__()
+            self.name = name
+            self.bl_idname = "GeometryNodeTree"
+            self.interface = types.SimpleNamespace(items_tree=[])
+
+    class FakeNodeGroups(list):
+        def get(self, name, default=None):
+            return next((group for group in self if group.name == name), default)
+
+    class ExplodingMapping(dict):
+        def __getitem__(self, key):
+            raise AssertionError("Local catalog must not read function_group_cache")
+        def get(self, key, default=None):
+            raise AssertionError("Local catalog must not read function_group_cache")
+        def __contains__(self, key):
+            raise AssertionError("Local catalog must not inspect function_group_cache")
+        def __setitem__(self, key, value):
+            raise AssertionError("Local catalog must not write function_group_cache")
+        def setdefault(self, key, default=None):
+            raise AssertionError("Local catalog must not write function_group_cache")
+
+    class Frame:
+        def __init__(self):
+            self.unproven = []
+            self.children = []
+        def mark_unproven(self, reason):
+            self.unproven.append(reason)
+        def record_child(self, owner, fingerprint):
+            self.children.append((owner, fingerprint))
+
+    fake_groups = FakeNodeGroups()
+    fake_bpy = types.SimpleNamespace(data=types.SimpleNamespace(node_groups=fake_groups))
+    monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
+    import NodeForge.library as library
+    library = importlib.reload(library)
+    from NodeForge.function_materializer import FunctionMaterializationContext
+
+    source_path = tmp_path / "demo.nf"
+    source_path.write_text("output(value=1)\n", encoding="utf-8")
+    record = library.LibraryEntryRecord(
+        namespace="local",
+        name="demo",
+        kind="source",
+        path=source_path,
+        source_path=source_path,
+    )
+    monkeypatch.setattr(library, "find_library_entry_record", lambda namespace, name: record)
+    monkeypatch.setattr(library, "load_library_entry_source", lambda namespace, name: "output(value=1)\n")
+    monkeypatch.setattr(library, "backend_builtins_for_entry", lambda namespace, name: {})
+
+    transaction = object()
+    frame = Frame()
+    trace = types.SimpleNamespace(current=frame)
+    callback_calls = []
+
+    def compile_group(source, group_name, **kwargs):
+        callback_calls.append(kwargs)
+        group = FakeGroup(group_name)
+        fake_groups.append(group)
+        return group
+
+    materialized = library.get_or_create_library_entry_group(
+        "local",
+        "demo",
+        compile_group,
+        materialization_context=FunctionMaterializationContext(
+            ExplodingMapping(), transaction, trace
+        ),
+    )
+    group = materialized.group
+
+    assert materialized.instance_key == ""
+    assert group is fake_groups[-1]
+    assert callback_calls[0]["function_group_transaction"] is transaction
+    assert callback_calls[0]["function_compilation_trace"] is trace
+    assert "function_group_cache" not in callback_calls[0]
+    assert frame.unproven == ["local catalog dependency"]
+    assert frame.children == []

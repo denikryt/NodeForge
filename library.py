@@ -16,8 +16,15 @@ import bpy
 
 from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR, TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING, TYPE_BUNDLE
 from .errors import CompileError
-from .compiler_identities import CORE_PACKAGE_ID, library_function_id, normalize_library_package_id
+from .compiler_identities import CORE_PACKAGE_ID, FunctionId, library_function_id, normalize_library_package_id
 from .semantic_ir import IRFunctionMaterialization
+from .function_materializer import (
+    FunctionMaterializationContext,
+    FunctionMaterializer,
+    MaterializedFunctionGroup,
+    LibraryFunctionMaterializationSpec,
+    LibraryFunctionUpdateSpec,
+)
 from .interface import _set_socket_default
 from .nodes import _new_node
 from .values import Value, TupleValue, make_value
@@ -26,11 +33,6 @@ from . import packages
 from .function_instances import (
     FUNCTION_DEFINITION_OWNER_PROP,
     FUNCTION_INSTANCE_KEY_PROP,
-    function_group_owner_scope,
-    instance_key_for_materialization,
-    normalized_source,
-    stamp_function_metadata,
-    stored_fingerprint,
 )
 
 _SOURCE_EXTENSIONS = (".nf", ".nodeforge")
@@ -874,31 +876,21 @@ def update_materialized_library_entry_group(namespace: str, name: str, group, co
     source = load_library_entry_source(namespace, name)
     backend_builtins = backend_builtins_for_entry(namespace, name)
     function_id = library_function_id(namespace, record.package_id, name)
-    stable_function_id = function_id.stable_key()
-    updated = compile_group_callback(
-        source,
-        getattr(group, "name", _group_name_for_record(record)),
-        existing_group=group,
+    spec = LibraryFunctionUpdateSpec(
+        namespace=namespace,
+        name=name,
+        record=record,
+        source=source,
         backend_builtins=backend_builtins,
-        function_group_owner_scope=function_group_owner_scope("LIBRARY", namespace, normalize_library_package_id(record.package_id), name),
-        function_definition_owner=stable_function_id,
-        function_compilation_inputs={
-            "kind": "library-root",
-            "namespace": namespace,
-            "package_id": normalize_library_package_id(record.package_id),
-            "package_version": record.package_version or "",
-            "name": name,
-            "source": normalized_source(source),
-            "backend_signature": _backend_signature_for_record(record),
-        },
-        function_definition_identity=stable_function_id,
-        preserve_if_equivalent=True,
+        function_id=function_id,
+        group=group,
+        group_name=getattr(group, "name", _group_name_for_record(record)),
+        backend_signature=_backend_signature_for_record(record),
+        write_package_metadata=_write_package_metadata,
     )
-    # Compilation/cutover is the mutation boundary. Provenance is stamped only
-    # after it succeeds so a failed rebuild keeps the original metadata intact.
-    _write_package_metadata(updated, record)
-    updated["nodeforge_library_source"] = source
-    return updated
+    return FunctionMaterializer(
+        compile_group_callback=compile_group_callback,
+    ).update_library_group(spec)
 
 
 def _assert_owned_materialized_group(existing, record: LibraryEntryRecord, group_name: str) -> None:
@@ -962,144 +954,73 @@ def _find_owned_library_entry_group(record: LibraryEntryRecord, *, instance_key:
     return matches[0] if matches else None
 
 
+def _validate_library_function_id(function_id: FunctionId, record: LibraryEntryRecord) -> None:
+    """Validate one upstream canonical imported identity against a resolved record."""
+    if (
+        function_id.kind != "LIBRARY"
+        or function_id.namespace != record.namespace
+        or function_id.package_id != normalize_library_package_id(record.package_id)
+        or function_id.name != record.name
+    ):
+        raise CompileError(
+            f"Internal error: reusable-call FunctionId does not match {record.namespace} library entry {record.name!r}"
+        )
+
+
 def get_or_create_library_entry_group(
     namespace: str,
     name: str,
     compile_group_callback,
     *,
     materialization: IRFunctionMaterialization | None = None,
-    function_group_cache=None,
-    function_group_transaction=None,
-    function_compilation_trace=None,
-):
-    """Compile/update an editable catalog group under one explicit authority contract.
-
-    ``materialization`` selects reusable-call semantics for ``functions`` and
-    ``examples``.  ``None`` is the separate direct-catalog contract and
-    materializes the canonical shared definition without compiler call state.
-    """
+    function_id: FunctionId | None = None,
+    materialization_context: FunctionMaterializationContext | None = None,
+) -> MaterializedFunctionGroup:
+    """Resolve an editable catalog definition and return its materialization result."""
     record = find_library_entry_record(namespace, name)
     if record is None or record.source_path is None:
         raise CompileError(f"{namespace} library entry {name!r} has no editable .nf source")
     source = load_library_entry_source(namespace, name)
     backend_builtins = backend_builtins_for_entry(namespace, name)
-    expected_function_id = library_function_id(namespace, record.package_id, name)
 
     if namespace == "local":
         if materialization is not None:
             raise CompileError("Internal error: Local catalog materialization cannot use reusable-call IR yet")
-        function_id = expected_function_id
-        instance_key = ""
-        owner_scope = None
-    elif materialization is None:
-        # Direct catalog/root materialization is a stable non-call API contract:
-        # materialize the canonical shared catalog definition directly.
-        function_id = expected_function_id
-        instance_key = ""
-        owner_scope = function_group_owner_scope(
-            "LIBRARY",
-            namespace,
-            normalize_library_package_id(record.package_id),
-            name,
-            instance_key=None,
-        )
-    else:
-        if materialization.callee != expected_function_id:
-            raise CompileError(f"Internal error: reusable-call FunctionId does not match {namespace} library entry {name!r}")
-        function_id = materialization.callee
-        instance_key = instance_key_for_materialization(materialization)
-        owner_scope = function_group_owner_scope(
-            "LIBRARY",
-            namespace,
-            function_id.package_id,
-            function_id.name,
-            instance_key=instance_key,
-        )
-
-    backend_signature = _backend_signature_for_record(record)
-    group_name = _group_name_for_record(record)
-    if namespace == "local":
-        # Local sources are immutable per outer compilation. Always ask Blender
-        # for a fresh datablock with the logical base name; Blender assigns the
-        # usual .001/.002 suffix when that name is already present. This keeps
-        # older generated groups pinned to their original Local dependencies.
-        local_owner = function_group_owner_scope("LIBRARY", "local", "", name)
-        group = compile_group_callback(
-            source,
-            group_name,
-            backend_builtins=backend_builtins,
-            function_group_cache=function_group_cache,
-            function_group_transaction=function_group_transaction,
-            function_group_owner_scope=local_owner,
-            function_definition_owner=local_owner,
-            function_compilation_trace=function_compilation_trace,
-        )
-        frame = getattr(function_compilation_trace, "current", None)
-        if frame is not None:
-            frame.mark_unproven("local catalog dependency")
-    else:
-        cache_key = ("library", function_id, instance_key or "SHARED")
-        if function_group_cache is not None and cache_key in function_group_cache:
-            return function_group_cache[cache_key]
-        definition_identity = function_id.stable_key()
-        own_inputs = {
-            "kind": "library",
-            "namespace": namespace,
-            "package_id": normalize_library_package_id(record.package_id),
-            "package_version": record.package_version or "",
-            "name": name,
-            "source": normalized_source(source),
-            "backend_signature": backend_signature,
-        }
-        existing = _find_owned_library_entry_group(record, instance_key=instance_key, transaction=function_group_transaction)
-        if existing is not None:
-            group = compile_group_callback(
-                source,
-                group_name,
-                existing_group=existing,
-                backend_builtins=backend_builtins,
-                function_group_cache=function_group_cache,
-                function_group_transaction=function_group_transaction,
-                function_group_owner_scope=owner_scope,
-                function_definition_owner=definition_identity,
-                function_compilation_trace=function_compilation_trace,
-                function_compilation_inputs=own_inputs,
-                function_definition_identity=definition_identity,
-                function_instance_key=instance_key,
-                preserve_if_equivalent=True,
-            )
+        if function_id is not None:
+            _validate_library_function_id(function_id, record)
         else:
-            group = compile_group_callback(
-                source,
-                group_name,
-                backend_builtins=backend_builtins,
-                function_group_cache=function_group_cache,
-                function_group_transaction=function_group_transaction,
-                function_group_owner_scope=owner_scope,
-                function_definition_owner=definition_identity,
-                function_compilation_trace=function_compilation_trace,
-                function_compilation_inputs=own_inputs,
-                function_definition_identity=definition_identity,
-                function_instance_key=instance_key,
+            function_id = library_function_id(namespace, record.package_id, name)
+    elif materialization is not None:
+        if function_id is None:
+            raise CompileError("Internal error: reusable library materialization requires canonical FunctionId")
+        _validate_library_function_id(function_id, record)
+        if materialization.callee != function_id:
+            raise CompileError(
+                f"Internal error: reusable-call FunctionId does not match {namespace} library entry {name!r}"
             )
-        if function_group_cache is not None:
-            function_group_cache[cache_key] = group
-        frame = getattr(function_compilation_trace, "current", None)
-        if frame is not None:
-            frame.record_child(owner_scope, stored_fingerprint(group))
-    try:
-        _write_package_metadata(group, record)
-        stamp_function_metadata(
-            group,
-            instance_key=instance_key,
-            definition_owner=function_id.stable_key(),
-            fingerprint=stored_fingerprint(group),
-        )
-        group["nodeforge_library_source"] = source
-    except Exception:
-        pass
-    return group
+        if materialization_context is None:
+            raise CompileError("Internal error: reusable library materialization requires compilation context")
+    else:
+        if function_id is not None:
+            raise CompileError("Internal error: direct catalog materialization cannot receive call-provided FunctionId")
+        function_id = library_function_id(namespace, record.package_id, name)
 
+    spec = LibraryFunctionMaterializationSpec(
+        namespace=namespace,
+        name=name,
+        record=record,
+        source=source,
+        backend_builtins=backend_builtins,
+        function_id=function_id,
+        materialization=materialization,
+        group_name=_group_name_for_record(record),
+        backend_signature=_backend_signature_for_record(record),
+        find_existing=_find_owned_library_entry_group,
+        write_package_metadata=_write_package_metadata,
+    )
+    return FunctionMaterializer(
+        compile_group_callback=compile_group_callback,
+    ).materialize_library(spec, context=materialization_context)
 
 
 def make_library_call_node(group, function_group, compiled_args, const_args, x=0, y=0):
@@ -1143,7 +1064,8 @@ def materialize_library_entry_group(namespace: str, name: str, compile_group_cal
                 pass
             return apply_function_group_display_name(group, name) if namespace == "functions" else group
     if record.source_path is not None:
-        group = get_or_create_library_entry_group(namespace, name, compile_group_callback)
+        materialized = get_or_create_library_entry_group(namespace, name, compile_group_callback)
+        group = materialized.group
         return apply_function_group_display_name(group, name) if namespace == "functions" else group
     raise CompileError(f"Unknown {namespace} library entry: {name}")
 
@@ -1355,7 +1277,7 @@ def load_library_source(name: str) -> str:
 
 def get_or_create_library_group(name: str, compile_group_callback):
     """Compile/update a functions-catalog source group."""
-    return get_or_create_library_entry_group("functions", name, compile_group_callback)
+    return get_or_create_library_entry_group("functions", name, compile_group_callback).group
 
 
 def library_function_records() -> list[dict[str, str]]:

@@ -1,0 +1,501 @@
+"""Focused contracts for the physical reusable-function materializer."""
+
+from dataclasses import fields
+from types import SimpleNamespace
+
+import pytest
+
+from NodeForge.compiler_identities import CallSiteId, library_function_id, local_function_id
+from NodeForge.errors import CompileError
+from NodeForge.function_instances import (
+    FUNCTION_COMPILATION_FINGERPRINT_PROP,
+    function_group_owner_scope,
+    instance_key_for,
+)
+from NodeForge.function_materializer import (
+    FunctionMaterializationContext,
+    FunctionMaterializer,
+    LibraryFunctionMaterializationSpec,
+    LibraryFunctionUpdateSpec,
+    LocalFunctionMaterializationSpec,
+)
+from NodeForge.semantic_ir import IRFunctionMaterialization, IRFunctionMaterializationMode
+
+
+class FakeGroup(dict):
+    """Minimal Blender-like group used by pure materializer tests."""
+
+    def __init__(self, name="Group", fingerprint="fingerprint"):
+        super().__init__()
+        self.name = name
+        self.interface = SimpleNamespace(items_tree=[])
+        if fingerprint:
+            self[FUNCTION_COMPILATION_FINGERPRINT_PROP] = fingerprint
+
+
+class Frame:
+    """Record dependency-trace calls without requiring the full compiler trace."""
+
+    def __init__(self):
+        self.children = []
+        self.unproven = []
+
+    def record_child(self, owner, fingerprint):
+        self.children.append((owner, fingerprint))
+
+    def mark_unproven(self, reason):
+        self.unproven.append(reason)
+
+
+class Trace:
+    """Expose one current trace frame."""
+
+    def __init__(self, frame=None):
+        self.current = frame
+
+
+def local_request(*, materialization, existing=None, live=True, finalize=None):
+    """Build a controlled local materialization request for policy tests."""
+    callee = materialization.callee
+
+    def find_existing(**kwargs):
+        find_existing.calls.append(kwargs)
+        return existing
+
+    find_existing.calls = []
+
+    def default_finalize(group, fingerprint, instance_key):
+        group["finalized"] = (fingerprint, instance_key)
+        group.name = "Helper"
+
+    return LocalFunctionMaterializationSpec(
+        materialization=materialization,
+        logical_namespace="Root",
+        group_name="Helper",
+        source="output(value=1)\n",
+        definition_owner=callee.definition_owner,
+        own_inputs={
+            "kind": "local-def",
+            "definition_owner": callee.definition_owner,
+            "name": callee.name,
+            "signature": callee.signature,
+            "source": "output(value=1)\n",
+        },
+        compile_kwargs={
+            "local_functions": {"nested": object()},
+            "backend_builtins": {"backend": object()},
+            "imported_library_functions": {"imported": object()},
+            "helper_namespace": "Root",
+            "local_helper_transaction": object(),
+        },
+        find_existing=find_existing,
+        is_live_group=lambda group: live,
+        finalize_group=finalize or default_finalize,
+    )
+
+
+def library_record(namespace="functions", package_id="vendor.pkg", name="demo"):
+    """Return one resolved record-shaped object for materializer unit tests."""
+    return SimpleNamespace(
+        namespace=namespace,
+        package_id=package_id,
+        package_version="1.2.3",
+        package_name="Vendor",
+        name=name,
+        kind="source",
+    )
+
+
+def library_request(*, namespace="functions", materialization=None, write_metadata=None, existing=None):
+    """Build a controlled editable catalog materialization request."""
+    record = library_record(namespace=namespace)
+    function_id = library_function_id(namespace, record.package_id, record.name)
+
+    def find_existing(record_arg, *, instance_key=None, transaction=None):
+        find_existing.calls.append((record_arg, instance_key, transaction))
+        return existing
+
+    find_existing.calls = []
+
+    def default_write(group, record_arg):
+        group["package"] = record_arg.package_id
+
+    return LibraryFunctionMaterializationSpec(
+        namespace=namespace,
+        name=record.name,
+        record=record,
+        source="output(value=1)\n",
+        backend_builtins={"backend": object()},
+        function_id=function_id,
+        materialization=materialization,
+        group_name="Demo",
+        backend_signature="backend-signature",
+        find_existing=find_existing,
+        write_package_metadata=write_metadata or default_write,
+    )
+
+
+def test_materializer_constructor_and_context_are_minimal_and_borrowed():
+    """Keep compilation-owned lifecycle state out of materializer instance state."""
+    callback = object()
+    materializer = FunctionMaterializer(compile_group_callback=callback)
+    assert vars(materializer) == {"_compile_group_callback": callback}
+    assert tuple(field.name for field in fields(FunctionMaterializationContext)) == (
+        "function_group_cache",
+        "function_group_transaction",
+        "function_compilation_trace",
+    )
+
+
+def test_shared_and_unique_local_identity_cache_and_owner_scope():
+    """Derive the exact existing local owner/cache protocol without allocating ordinals."""
+    function_id = local_function_id("root-owner", "helper", "x:FLOAT")
+    shared = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.SHARED)
+    unique_site = CallSiteId("root-owner", function_id, 3)
+    unique = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.UNIQUE, unique_site)
+
+    for materialization, expected_key in ((shared, ""), (unique, instance_key_for(unique_site))):
+        cache = {}
+        frame = Frame()
+        calls = []
+
+        def compile_group(source, group_name, **kwargs):
+            calls.append(kwargs)
+            return FakeGroup(group_name)
+
+        result = FunctionMaterializer(compile_group_callback=compile_group).materialize_local(
+            local_request(materialization=materialization),
+            FunctionMaterializationContext(cache, object(), Trace(frame)),
+        )
+        owner = function_group_owner_scope(
+            "LOCAL_DEF", "root-owner", "helper", "x:FLOAT", instance_key=expected_key
+        )
+        assert result.instance_key == expected_key
+        assert result.owner_scope == owner
+        assert cache[("local-def", function_id, expected_key or "SHARED")] is result.group
+        assert calls[0]["function_group_owner_scope"] == owner
+        assert calls[0]["function_instance_key"] == expected_key
+        assert frame.children == [(owner, "fingerprint")]
+
+
+def test_local_live_cache_hit_records_trace_without_lookup_or_compile():
+    """Preserve the local liveness check and cache-hit child registration."""
+    function_id = local_function_id("root", "helper", "x:FLOAT")
+    materialization = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.SHARED)
+    group = FakeGroup("Helper")
+    cache = {("local-def", function_id, "SHARED"): group}
+    frame = Frame()
+    spec = local_request(materialization=materialization, existing=object(), live=True)
+
+    def fail_compile(*args, **kwargs):
+        raise AssertionError("live cache hit must not compile")
+
+    result = FunctionMaterializer(compile_group_callback=fail_compile).materialize_local(
+        spec, FunctionMaterializationContext(cache, object(), Trace(frame))
+    )
+    owner = function_group_owner_scope("LOCAL_DEF", "root", "helper", "x:FLOAT")
+    assert result.group is group
+    assert spec.find_existing.calls == []
+    assert frame.children == [(owner, "fingerprint")]
+
+
+def test_local_stale_cache_updates_existing_and_preserves_exact_context_kwargs():
+    """Ignore stale cached groups and keep nested transaction/cache/trace identity."""
+    function_id = local_function_id("root", "helper", "x:FLOAT")
+    materialization = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.SHARED)
+    stale = FakeGroup("Stale")
+    existing = FakeGroup("Existing")
+    cache = {("local-def", function_id, "SHARED"): stale}
+    transaction = object()
+    trace = Trace(Frame())
+    calls = []
+
+    def compile_group(source, group_name, **kwargs):
+        calls.append(kwargs)
+        assert kwargs["existing_group"] is existing
+        return existing
+
+    spec = local_request(materialization=materialization, existing=existing, live=False)
+    result = FunctionMaterializer(compile_group_callback=compile_group).materialize_local(
+        spec, FunctionMaterializationContext(cache, transaction, trace)
+    )
+    assert result.group is existing
+    assert calls[0]["function_group_cache"] is cache
+    assert calls[0]["function_group_transaction"] is transaction
+    assert calls[0]["function_compilation_trace"] is trace
+    assert calls[0]["preserve_if_equivalent"] is True
+    assert spec.find_existing.calls[0]["transaction"] is transaction
+
+
+def test_local_failure_order_does_not_publish_before_required_finalization():
+    """Keep local callback/finalization failure ahead of cache publication."""
+    function_id = local_function_id("root", "helper", "x:FLOAT")
+    materialization = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.SHARED)
+    cache = {}
+
+    def compile_fail(*args, **kwargs):
+        raise RuntimeError("compile failed")
+
+    with pytest.raises(RuntimeError, match="compile failed"):
+        FunctionMaterializer(compile_group_callback=compile_fail).materialize_local(
+            local_request(materialization=materialization),
+            FunctionMaterializationContext(cache, None, None),
+        )
+    assert cache == {}
+
+    def finalize_fail(*args):
+        raise RuntimeError("metadata failed")
+
+    with pytest.raises(RuntimeError, match="metadata failed"):
+        FunctionMaterializer(compile_group_callback=lambda *args, **kwargs: FakeGroup()).materialize_local(
+            local_request(materialization=materialization, finalize=finalize_fail),
+            FunctionMaterializationContext(cache, None, None),
+        )
+    assert cache == {}
+
+
+def test_imported_cache_hit_is_immediate_without_lookup_or_trace():
+    """Preserve imported cache hits without liveness checks or child registration."""
+    function_id = library_function_id("functions", "vendor.pkg", "demo")
+    materialization = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.SHARED)
+    spec = library_request(materialization=materialization)
+    assert spec.function_id == function_id
+    cached = FakeGroup("Cached")
+    cache = {("library", function_id, "SHARED"): cached}
+    frame = Frame()
+
+    result = FunctionMaterializer(compile_group_callback=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError())).materialize_library(
+        spec, FunctionMaterializationContext(cache, object(), Trace(frame))
+    )
+    assert result.group is cached
+    assert spec.find_existing.calls == []
+    assert frame.children == []
+
+
+def test_imported_publication_precedes_best_effort_metadata_failure():
+    """Keep imported cache/trace publication even when post-build metadata fails."""
+    function_id = library_function_id("functions", "vendor.pkg", "demo")
+    materialization = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.SHARED)
+
+    def write_fail(group, record):
+        raise RuntimeError("metadata failed")
+
+    spec = library_request(materialization=materialization, write_metadata=write_fail)
+    cache = {}
+    frame = Frame()
+    group = FakeGroup("Demo")
+    result = FunctionMaterializer(compile_group_callback=lambda *args, **kwargs: group).materialize_library(
+        spec, FunctionMaterializationContext(cache, object(), Trace(frame))
+    )
+    owner = function_group_owner_scope("LIBRARY", "functions", "vendor.pkg", "demo")
+    assert result.group is group
+    assert cache[("library", function_id, "SHARED")] is group
+    assert frame.children == [(owner, "fingerprint")]
+
+
+def test_direct_catalog_uses_no_compilation_context_and_no_reusable_cache():
+    """Keep standalone direct catalog materialization independent of compiler lifecycle state."""
+    spec = library_request(materialization=None)
+    calls = []
+
+    def compile_group(source, group_name, **kwargs):
+        calls.append(kwargs)
+        return FakeGroup(group_name)
+
+    result = FunctionMaterializer(compile_group_callback=compile_group).materialize_library(spec, context=None)
+    assert result.instance_key == ""
+    assert calls[0]["function_group_cache"] is None
+    assert calls[0]["function_group_transaction"] is None
+    assert calls[0]["function_compilation_trace"] is None
+    assert calls[0].get("preserve_if_equivalent") is None
+
+
+def test_local_catalog_context_cache_is_not_a_capability():
+    """Never read or write generic reusable cache state for Local catalog entries."""
+    class ExplodingMapping(dict):
+        def __getitem__(self, key):
+            raise AssertionError("Local catalog must not read function_group_cache")
+
+        def get(self, key, default=None):
+            raise AssertionError("Local catalog must not read function_group_cache")
+
+        def __contains__(self, key):
+            raise AssertionError("Local catalog must not inspect function_group_cache")
+
+        def __setitem__(self, key, value):
+            raise AssertionError("Local catalog must not write function_group_cache")
+
+        def setdefault(self, key, default=None):
+            raise AssertionError("Local catalog must not write function_group_cache")
+
+    spec = library_request(namespace="local", materialization=None)
+    transaction = object()
+    frame = Frame()
+    trace = Trace(frame)
+    calls = []
+
+    def compile_group(source, group_name, **kwargs):
+        calls.append(kwargs)
+        return FakeGroup(group_name)
+
+    result = FunctionMaterializer(compile_group_callback=compile_group).materialize_library(
+        spec, FunctionMaterializationContext(ExplodingMapping(), transaction, trace)
+    )
+    assert result.group.name == "Demo"
+    assert calls[0]["function_group_transaction"] is transaction
+    assert calls[0]["function_compilation_trace"] is trace
+    assert "function_group_cache" not in calls[0]
+    assert frame.unproven == ["local catalog dependency"]
+    assert frame.children == []
+
+
+def test_selected_root_reload_targets_exact_group_and_metadata_failure_propagates():
+    """Keep reload as selected-root update with required unsuppressed metadata."""
+    record = library_record()
+    function_id = library_function_id("functions", record.package_id, record.name)
+    group = FakeGroup("Readable Demo")
+    calls = []
+
+    def compile_group(source, group_name, **kwargs):
+        calls.append(kwargs)
+        return group
+
+    def metadata_fail(updated, record_arg):
+        raise RuntimeError("reload metadata failed")
+
+    spec = LibraryFunctionUpdateSpec(
+        namespace="functions",
+        name="demo",
+        record=record,
+        source="output(value=1)\n",
+        backend_builtins={"backend": object()},
+        function_id=function_id,
+        group=group,
+        group_name=group.name,
+        backend_signature="backend-signature",
+        write_package_metadata=metadata_fail,
+    )
+    with pytest.raises(RuntimeError, match="reload metadata failed"):
+        FunctionMaterializer(compile_group_callback=compile_group).update_library_group(spec)
+    assert calls[0]["existing_group"] is group
+    assert calls[0]["preserve_if_equivalent"] is True
+    assert calls[0]["function_compilation_inputs"]["kind"] == "library-root"
+    assert "function_group_cache" not in calls[0]
+    assert "function_compilation_trace" not in calls[0]
+
+
+def test_reusable_library_identity_mismatch_fails_before_mutation():
+    """Reject a materialization whose canonical callee differs from its request identity."""
+    spec = library_request(materialization=None)
+    other = library_function_id("functions", "vendor.other", "demo")
+    wrong = IRFunctionMaterialization(other, IRFunctionMaterializationMode.SHARED)
+    bad_spec = LibraryFunctionMaterializationSpec(
+        **{**spec.__dict__, "materialization": wrong}
+    )
+    with pytest.raises(CompileError, match="identity mismatch"):
+        FunctionMaterializer(compile_group_callback=lambda *args, **kwargs: pytest.fail("must not compile")).materialize_library(
+            bad_spec, FunctionMaterializationContext({}, None, None)
+        )
+
+
+def test_imported_unique_identity_uses_existing_call_site_key_and_owner_scope():
+    """Keep imported unique instance identity derived only from upstream CallSiteId."""
+    function_id = library_function_id("functions", "vendor.pkg", "demo")
+    call_site = CallSiteId("root-owner", function_id, 4)
+    materialization = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.UNIQUE, call_site)
+    spec = library_request(materialization=materialization)
+    cache = {}
+    calls = []
+
+    def compile_group(source, group_name, **kwargs):
+        calls.append(kwargs)
+        return FakeGroup(group_name)
+
+    result = FunctionMaterializer(compile_group_callback=compile_group).materialize_library(
+        spec, FunctionMaterializationContext(cache, None, None)
+    )
+    key = instance_key_for(call_site)
+    owner = function_group_owner_scope("LIBRARY", "functions", "vendor.pkg", "demo", instance_key=key)
+    assert result.instance_key == key
+    assert result.owner_scope == owner
+    assert cache[("library", function_id, key)] is result.group
+    assert calls[0]["function_group_owner_scope"] == owner
+    assert calls[0]["function_instance_key"] == key
+
+
+def test_imported_compile_failure_does_not_publish_cache_or_trace():
+    """Propagate physical build failure before imported cache/trace publication."""
+    function_id = library_function_id("functions", "vendor.pkg", "demo")
+    materialization = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.SHARED)
+    spec = library_request(materialization=materialization)
+    cache = {}
+    frame = Frame()
+
+    def compile_fail(*args, **kwargs):
+        raise RuntimeError("build failed")
+
+    with pytest.raises(RuntimeError, match="build failed"):
+        FunctionMaterializer(compile_group_callback=compile_fail).materialize_library(
+            spec, FunctionMaterializationContext(cache, None, Trace(frame))
+        )
+    assert cache == {}
+    assert frame.children == []
+
+
+def test_direct_and_local_catalog_metadata_failures_remain_best_effort():
+    """Keep both legacy direct and Local post-build metadata failures suppressed."""
+    def write_fail(group, record):
+        raise RuntimeError("metadata failed")
+
+    direct_group = FakeGroup("Direct")
+    direct = FunctionMaterializer(compile_group_callback=lambda *args, **kwargs: direct_group).materialize_library(
+        library_request(materialization=None, write_metadata=write_fail), context=None
+    )
+    assert direct.group is direct_group
+
+    frame = Frame()
+    local_group = FakeGroup("Local")
+    local = FunctionMaterializer(compile_group_callback=lambda *args, **kwargs: local_group).materialize_library(
+        library_request(namespace="local", materialization=None, write_metadata=write_fail),
+        FunctionMaterializationContext({}, None, Trace(frame)),
+    )
+    assert local.group is local_group
+    assert frame.unproven == ["local catalog dependency"]
+
+
+def test_materializer_source_has_no_compiler_backchannel_and_specs_are_ast_independent():
+    """Keep the physical authority independent of Compiler objects and raw AST calls."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / "function_materializer.py").read_text(encoding="utf-8")
+    assert "__self__" not in source
+    assert "__closure__" not in source
+    assert "from .compiler import" not in source
+    assert "import inspect" not in source
+    for spec_type in (LocalFunctionMaterializationSpec, LibraryFunctionMaterializationSpec, LibraryFunctionUpdateSpec):
+        names = {field.name for field in fields(spec_type)}
+        assert "comp" not in names
+        assert "compiler" not in names
+        assert "expr" not in names
+        assert "call" not in names
+
+
+def test_missing_child_fingerprint_preserves_unproven_trace_semantics():
+    """A materialized child without a stored fingerprint still makes freshness unproven."""
+    from NodeForge.function_instances import FunctionCompilationTrace
+
+    function_id = local_function_id("root", "helper", "x:FLOAT")
+    materialization = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.SHARED)
+    group = FakeGroup("Helper", fingerprint="")
+    cache = {("local-def", function_id, "SHARED"): group}
+    trace = FunctionCompilationTrace()
+
+    with trace.group("parent", {}) as frame:
+        result = FunctionMaterializer(
+            compile_group_callback=lambda *args, **kwargs: pytest.fail("cache hit must not compile")
+        ).materialize_local(
+            local_request(materialization=materialization, live=True),
+            FunctionMaterializationContext(cache, None, trace),
+        )
+        assert result.group is group
+        assert frame.freshness_unproven is True

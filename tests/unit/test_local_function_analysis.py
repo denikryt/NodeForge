@@ -74,3 +74,18 @@ def test_local_function_helper_namespace_fragment_preserves_distinct_parent_iden
     assert local_functions._helper_namespace_fragment("A_B") == "A_B"
     assert local_functions._helper_namespace_fragment("A.B") != local_functions._helper_namespace_fragment("A_B")
     assert local_functions._logical_namespace("A.B") == "A.B"
+
+
+def test_local_call_hands_physical_materialization_to_function_materializer():
+    """Keep local AST/capture work outside the physical helper lifecycle authority."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / "local_functions.py").read_text(encoding="utf-8")
+    body = source.split("def compile_local_function_call", 1)[1]
+    assert "LocalFunctionMaterializationSpec(" in body
+    assert "FunctionMaterializationContext(" in body
+    assert ").materialize_local(spec, context)" in body
+    assert "comp.compile_group_callback(" not in body
+    after_resolution = body.split("materialization = comp.resolve_reusable_function_materialization", 1)[1]
+    assert "function_group_owner_scope(" not in after_resolution
+    assert "_find_local_helper(" not in after_resolution

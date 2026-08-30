@@ -152,3 +152,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.50.8
 
 - Moved reusable-function shared/unique materialization policy into immutable Semantic IR while preserving existing `CallSiteId` instance keys, ownership/freshness metadata, direct catalog-definition materialization, and Geometry Nodes behavior.
+
+## 0.50.9
+
+- Separated editable reusable-function physical materialization into a dedicated `FunctionMaterializer`, preserving existing local/imported cache, freshness, reload, metadata, and Blender transaction behavior while making the materializer result the single source of physical instance identity for caller-node metadata.

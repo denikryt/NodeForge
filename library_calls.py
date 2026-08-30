@@ -7,6 +7,7 @@ from .values import Value
 from .compile_time import reject_compile_time_object
 from .compiler_identities import library_function_id
 from .semantic_ir import IRFunctionMaterializationMode
+from .function_materializer import FunctionMaterializationContext
 from .library import (
     has_native_compile_call,
     find_library_entry_record,
@@ -19,7 +20,6 @@ from .library import (
 from .function_instances import (
     FunctionCallModifiers,
     FUNCTION_INSTANCE_KEY_PROP,
-    instance_key_for_materialization,
     unsupported_unique,
 )
 
@@ -95,7 +95,6 @@ def compile_library_function_call(comp, expr, depth=0, function_name=None, names
         function_id = library_function_id(namespace, record.package_id, name)
         if namespace in {"functions", "examples"}:
             materialization = comp.resolve_reusable_function_materialization(function_id, modifiers)
-    instance_key = instance_key_for_materialization(materialization) if materialization is not None else ""
     cache_key = ("catalog", namespace, name)
     # REUSABLE_CALL_IR_MIGRATION: Local catalog entries keep their existing materialization
     # semantics in this behavior-preserving stage because the current namespace="local"
@@ -103,16 +102,22 @@ def compile_library_function_call(comp, expr, depth=0, function_name=None, names
     # Remove this exclusion only after Local catalog shared/unique ownership is explicitly
     # specified, compatibility-tested, and migrated as its own semantic contract.
     function_group = comp.local_group_cache.get(cache_key) if namespace == "local" else None
+    materialized = None
     if function_group is None:
-        function_group = get_or_create_library_entry_group(
+        materialization_context = FunctionMaterializationContext(
+            function_group_cache=comp.function_group_cache,
+            function_group_transaction=comp.function_group_transaction,
+            function_compilation_trace=comp.function_compilation_trace,
+        )
+        materialized = get_or_create_library_entry_group(
             namespace,
             name,
             comp.compile_group_callback,
             materialization=materialization,
-            function_group_cache=getattr(comp, "function_group_cache", None),
-            function_group_transaction=getattr(comp, "function_group_transaction", None),
-            function_compilation_trace=getattr(comp, "function_compilation_trace", None),
+            function_id=function_id if materialization is not None else None,
+            materialization_context=materialization_context,
         )
+        function_group = materialized.group
         if namespace == "local":
             # Reuse one freshly materialized Local dependency within this group
             # build while keeping separate outer compilations fully independent.
@@ -169,6 +174,9 @@ def compile_library_function_call(comp, expr, depth=0, function_name=None, names
 
     result = make_library_call_node(comp.group, function_group, compiled_args, const_args, x=x, y=y)
     if materialization is not None and materialization.mode is IRFunctionMaterializationMode.UNIQUE:
+        if materialized is None:
+            raise CompileError("Internal error: reusable library call lost materialization result")
+        instance_key = materialized.instance_key
         for node in reversed(list(comp.group.nodes)):
             if getattr(node, "bl_idname", None) == "GeometryNodeGroup" and getattr(node, "node_tree", None) is function_group:
                 try:

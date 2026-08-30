@@ -467,6 +467,7 @@ def test_exact_semantic_migration_markers_are_present_at_source_decisions():
             "local": "local_functions.py",
             "library_calls": "library_calls.py",
             "library": "library.py",
+            "materializer": "function_materializer.py",
         }.items()
     }
 
@@ -486,6 +487,9 @@ def test_exact_semantic_migration_markers_are_present_at_source_decisions():
     assert sources["local"].count("REUSABLE_CALL_IR_MIGRATION") == 1
     assert sources["library_calls"].count("REUSABLE_CALL_IR_MIGRATION") == 2
     assert sources["library"].count("REUSABLE_CALL_IR_MIGRATION") == 0
+    assert sources["materializer"].count("FUNCTION_MATERIALIZER_TRANSACTION_MIGRATION") == 1
+    assert sources["materializer"].count("FUNCTION_MATERIALIZER_CATALOG_METADATA_MIGRATION") == 1
+    assert sources["materializer"].count("FUNCTION_MATERIALIZER_RELOAD_METADATA_MIGRATION") == 1
 
     normalized = {name: "\n".join(line.lstrip() for line in source.splitlines()) for name, source in sources.items()}
     required_markers = (
@@ -500,6 +504,9 @@ def test_exact_semantic_migration_markers_are_present_at_source_decisions():
         (normalized["dispatcher"], "# SEMANTIC_IR_MIGRATION: Expressions outside the current IR slice continue on\n# the existing AST-to-Blender path while migration is incremental. The target\n# architecture is for migrated expression families to lower through Semantic IR\n# before Blender materialization. Remove this fallback only for an expression\n# family after that family is covered end-to-end by IR and its duplicated AST\n# lowering branch is removed in the same planned change set."),
         (normalized["semantic"], "# SEMANTIC_IR_VALUE_MIGRATION: Re-lower the shared middle source expression for\n# each comparison pair so this behavior-preserving stage emits distinct IR values\n# and preserves the current duplicated Geometry Nodes topology. Remove this rule\n# only in a dedicated topology-changing plan that defines IR value reuse and\n# updates the corresponding graph-shape contract tests."),
         (normalized["analysis"], "# SEMANTIC_ANALYSIS_MIGRATION: TYPE_OBJECT attribute semantics still belong to\n# the legacy ObjectValue.resolve_property() path. Keep Object property access\n# outside semantic analysis until its property resolution and result typing are\n# represented frontend-side. Remove this fallback when TYPE_OBJECT attribute\n# access is migrated end-to-end and ObjectValue is no longer the semantic owner."),
+        (normalized["materializer"], "# FUNCTION_MATERIALIZER_TRANSACTION_MIGRATION: Reusable-function artifact ownership\n# now lives in FunctionMaterializer, but physical create/update/cutover still enters\n# the legacy compiler group-build callback and FunctionGroupBuildTransaction. Keep\n# that callback contract exact in this behavior-preserving stage. Remove this bridge\n# when Blender group build/update transactions are extracted behind an explicit\n# materialization backend service and FunctionMaterializer no longer calls compiler.py."),
+        (normalized["materializer"], "# FUNCTION_MATERIALIZER_CATALOG_METADATA_MIGRATION: Editable catalog groups keep\n# the legacy post-build metadata contract in this behavior-preserving stage. Package\n# functions/examples publish cache/trace before package/function/source metadata;\n# Local catalog groups mark freshness unproven before the same metadata block; all\n# metadata write failures remain best-effort/suppressed. Do not promote these errors\n# to materialization failure because the legacy compiler callback may already have\n# committed FunctionGroupBuildTransaction before returning. Remove this boundary\n# when build/update, required metadata, publication, and commit share one explicit\n# rollback-capable transaction backend."),
+        (normalized["materializer"], "# FUNCTION_MATERIALIZER_RELOAD_METADATA_MIGRATION: Explicit editable-root reload keeps\n# its legacy failure contract in this behavior-preserving stage: physical update may\n# already be committed when required package/source metadata is written, and metadata\n# errors still propagate instead of being suppressed. Do not merge this branch with\n# ordinary imported best-effort metadata handling. Remove this boundary when selected-\n# root update and required reload metadata execute inside one explicit rollback-capable\n# Blender group transaction before commit."),
     )
     for source, marker in required_markers:
         assert marker in source
@@ -512,8 +519,13 @@ def test_exact_semantic_migration_markers_are_present_at_source_decisions():
     imported_after_materialization = sources["library_calls"].split("materialization = comp.resolve_reusable_function_materialization", 1)[1]
     assert "modifiers.unique" not in local_after_materialization
     assert "modifiers.unique" not in imported_after_materialization
-    assert "instance_key_for_materialization(materialization)" in local_after_materialization
-    assert "instance_key_for_materialization(materialization)" in imported_after_materialization
+    assert "instance_key_for_materialization(materialization)" not in local_after_materialization
+    assert "instance_key_for_materialization(materialization)" not in imported_after_materialization
+    assert "instance_key = materialized.instance_key" in imported_after_materialization
+    assert "function_group = materialized.group" in imported_after_materialization
+    assert "instance_key_for_materialization(materialization)" in sources["materializer"]
+    assert "comp.compile_group_callback(" not in sources["local"]
+    assert "compile_group_callback(" not in sources["library"]
 
 def test_blender_lowering_context_is_minimal_immutable_and_compiler_independent():
     from dataclasses import FrozenInstanceError, fields
