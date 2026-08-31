@@ -112,7 +112,7 @@ def compile_library_function_call(comp, expr, depth=0, function_name=None, names
         materialized = get_or_create_library_entry_group(
             namespace,
             name,
-            comp.compile_group_callback,
+            comp.group_backend,
             materialization=materialization,
             function_id=function_id if materialization is not None else None,
             materialization_context=materialization_context,

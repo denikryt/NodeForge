@@ -16,6 +16,7 @@ import bpy
 
 from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR, TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING, TYPE_BUNDLE
 from .errors import CompileError
+from .blender_group_authority import is_authority_ineligible_group
 from .compiler_identities import CORE_PACKAGE_ID, FunctionId, library_function_id, normalize_library_package_id
 from .semantic_ir import IRFunctionMaterialization
 from .function_materializer import (
@@ -827,7 +828,9 @@ def _backend_signature_for_record(record: LibraryEntryRecord | None) -> str:
 
 
 def _group_catalog_provenance(group) -> tuple[str, str]:
-    """Return the catalog namespace/name stored on a materialized group."""
+    """Return authoritative catalog namespace/name stored on a materialized group."""
+    if is_authority_ineligible_group(group):
+        raise CompileError("Selected node group is transaction-private or was not published")
     try:
         namespace = str(group.get("nodeforge_library_namespace") or "")
         name = str(group.get("nodeforge_library_name") or "")
@@ -870,7 +873,7 @@ def resolve_reloadable_library_entry(group, namespace: str | None = None, name: 
     return record
 
 
-def update_materialized_library_entry_group(namespace: str, name: str, group, compile_group_callback):
+def update_materialized_library_entry_group(namespace: str, name: str, group, group_backend):
     """Recompile the current editable catalog source into an existing root group."""
     record = resolve_reloadable_library_entry(group, namespace, name)
     source = load_library_entry_source(namespace, name)
@@ -889,7 +892,7 @@ def update_materialized_library_entry_group(namespace: str, name: str, group, co
         write_package_metadata=_write_package_metadata,
     )
     return FunctionMaterializer(
-        compile_group_callback=compile_group_callback,
+        group_backend=group_backend,
     ).update_library_group(spec)
 
 
@@ -946,6 +949,8 @@ def _find_owned_library_entry_group(record: LibraryEntryRecord, *, instance_key:
             continue
         if transaction is not None and hasattr(transaction, "owns_group") and transaction.owns_group(group):
             continue
+        if is_authority_ineligible_group(group):
+            continue
         if _library_metadata_matches(group, record, instance_key=instance_key):
             matches.append(group)
     if len(matches) > 1:
@@ -970,7 +975,7 @@ def _validate_library_function_id(function_id: FunctionId, record: LibraryEntryR
 def get_or_create_library_entry_group(
     namespace: str,
     name: str,
-    compile_group_callback,
+    group_backend,
     *,
     materialization: IRFunctionMaterialization | None = None,
     function_id: FunctionId | None = None,
@@ -1019,7 +1024,7 @@ def get_or_create_library_entry_group(
         write_package_metadata=_write_package_metadata,
     )
     return FunctionMaterializer(
-        compile_group_callback=compile_group_callback,
+        group_backend=group_backend,
     ).materialize_library(spec, context=materialization_context)
 
 
@@ -1048,7 +1053,7 @@ def make_library_call_node(group, function_group, compiled_args, const_args, x=0
     return values[0] if len(values) == 1 else TupleValue(values)
 
 
-def materialize_library_entry_group(namespace: str, name: str, compile_group_callback):
+def materialize_library_entry_group(namespace: str, name: str, group_backend):
     """Create/update a GeometryNodeTree for a catalog entry."""
     record = find_library_entry_record(namespace, name)
     if record is None:
@@ -1057,14 +1062,14 @@ def materialize_library_entry_group(namespace: str, name: str, compile_group_cal
         module = _load_entry_module(namespace, name)
         materialize = getattr(module, "materialize_group", None)
         if materialize is not None:
-            group = materialize(compile_group_callback)
+            group = materialize(group_backend.compile_group_callback)
             try:
                 _write_package_metadata(group, record)
             except Exception:
                 pass
             return apply_function_group_display_name(group, name) if namespace == "functions" else group
     if record.source_path is not None:
-        materialized = get_or_create_library_entry_group(namespace, name, compile_group_callback)
+        materialized = get_or_create_library_entry_group(namespace, name, group_backend)
         group = materialized.group
         return apply_function_group_display_name(group, name) if namespace == "functions" else group
     raise CompileError(f"Unknown {namespace} library entry: {name}")
@@ -1275,9 +1280,9 @@ def load_library_source(name: str) -> str:
     return load_library_entry_source("functions", name)
 
 
-def get_or_create_library_group(name: str, compile_group_callback):
+def get_or_create_library_group(name: str, group_backend):
     """Compile/update a functions-catalog source group."""
-    return get_or_create_library_entry_group("functions", name, compile_group_callback).group
+    return get_or_create_library_entry_group("functions", name, group_backend).group
 
 
 def library_function_records() -> list[dict[str, str]]:
@@ -1285,9 +1290,9 @@ def library_function_records() -> list[dict[str, str]]:
     return library_entry_records("functions")
 
 
-def materialize_library_function_group(name: str, compile_group_callback):
+def materialize_library_function_group(name: str, group_backend):
     """Create/update a reusable GeometryNodeTree for a functions entry."""
-    return materialize_library_entry_group("functions", name, compile_group_callback)
+    return materialize_library_entry_group("functions", name, group_backend)
 
 
 __all__ = [

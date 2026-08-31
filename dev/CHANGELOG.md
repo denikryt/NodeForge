@@ -156,3 +156,10 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.50.9
 
 - Separated editable reusable-function physical materialization into a dedicated `FunctionMaterializer`, preserving existing local/imported cache, freshness, reload, metadata, and Blender transaction behavior while making the materializer result the single source of physical instance identity for caller-node metadata.
+## 0.50.10
+
+- Extracted physical GeometryNodeTree create/update publication into `BlenderGroupBackend`, with one nested rollback/commit transaction, atomic editable catalog metadata finalization, and authority-safe handling of leaked temporary/provisional groups and generated-resource manifests.
+
+## 0.50.11
+
+- Fixed rollback-backup construction so failed snapshot copies clean up their private datablock, restored logical local-helper namespaces during parent updates, and kept dedicated failure injection on destructive authoritative cutover.

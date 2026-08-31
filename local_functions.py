@@ -9,6 +9,7 @@ import bpy
 
 from .constants import *
 from .errors import CompileError
+from .blender_group_authority import is_authority_ineligible_group
 from .library import (
     _new_node, _input_sockets, _output_sockets,
     _normalized_socket_name, _set_socket_default, _socket_type_to_value_type,
@@ -195,6 +196,8 @@ def _find_local_helper(*, namespace, function_name, signature, definition_owner=
     matches = []
     for group in bpy.data.node_groups:
         if transaction is not None and hasattr(transaction, "owns_group") and transaction.owns_group(group):
+            continue
+        if is_authority_ineligible_group(group):
             continue
         if _helper_metadata_matches(
             group,
@@ -665,7 +668,7 @@ def compile_local_function_call(comp, expr, depth=0, modifiers=None):
         function_compilation_trace=comp.function_compilation_trace,
     )
     materialized = FunctionMaterializer(
-        compile_group_callback=comp.compile_group_callback,
+        group_backend=comp.group_backend,
     ).materialize_local(spec, context)
     function_group = materialized.group
     instance_key = materialized.instance_key

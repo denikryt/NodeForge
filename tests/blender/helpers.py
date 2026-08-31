@@ -16,7 +16,7 @@ import bpy
 import pytest
 
 import NodeForge
-from NodeForge import compiler, library
+from NodeForge import compiler, library, blender_group_backend
 from NodeForge.constants import _FLOAT_FUNCS_1, _FLOAT_FUNCS_2
 from NodeForge.errors import CompileError
 from NodeForge import generated_resources
@@ -69,7 +69,7 @@ def _math_keyword_expr(name, params):
 def expect_compile_error(source, name, exc_type=CompileError, **kwargs):
     """Compile one source and require a controlled error type."""
     try:
-        compiler._make_group(source, name, **kwargs)
+        compiler._new_group_backend().create_or_update(source=source, name=name, build_options=kwargs)
     except exc_type:
         return
     except AttributeError as exc:

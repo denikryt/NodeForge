@@ -33,6 +33,36 @@ class FakeGroup(dict):
             self[FUNCTION_COMPILATION_FINGERPRINT_PROP] = fingerprint
 
 
+
+
+class FakeBackend:
+    """Adapt legacy callback-shaped fakes to the explicit backend test contract."""
+
+    def __init__(self, callback):
+        self.callback = callback
+        self.calls = []
+
+    def create_or_update(
+        self, *, source, name, existing_group=None, build_options=None,
+        preserve_if_equivalent=False, finalize_before_commit=None
+    ):
+        kwargs = dict(build_options or {})
+        if existing_group is not None:
+            kwargs["existing_group"] = existing_group
+        if preserve_if_equivalent:
+            kwargs["preserve_if_equivalent"] = True
+        self.calls.append((source, name, dict(kwargs)))
+        group = self.callback(source, name, **kwargs)
+        if finalize_before_commit is not None:
+            finalize_before_commit(group)
+        return group
+
+
+def make_materializer(callback):
+    """Return a FunctionMaterializer backed by one callback-shaped fake backend."""
+    return FunctionMaterializer(group_backend=FakeBackend(callback))
+
+
 class Frame:
     """Record dependency-trace calls without requiring the full compiler trace."""
 
@@ -138,8 +168,8 @@ def library_request(*, namespace="functions", materialization=None, write_metada
 def test_materializer_constructor_and_context_are_minimal_and_borrowed():
     """Keep compilation-owned lifecycle state out of materializer instance state."""
     callback = object()
-    materializer = FunctionMaterializer(compile_group_callback=callback)
-    assert vars(materializer) == {"_compile_group_callback": callback}
+    materializer = make_materializer(callback)
+    assert vars(materializer) == {"_group_backend": materializer._group_backend}
     assert tuple(field.name for field in fields(FunctionMaterializationContext)) == (
         "function_group_cache",
         "function_group_transaction",
@@ -163,7 +193,7 @@ def test_shared_and_unique_local_identity_cache_and_owner_scope():
             calls.append(kwargs)
             return FakeGroup(group_name)
 
-        result = FunctionMaterializer(compile_group_callback=compile_group).materialize_local(
+        result = make_materializer(compile_group).materialize_local(
             local_request(materialization=materialization),
             FunctionMaterializationContext(cache, object(), Trace(frame)),
         )
@@ -190,7 +220,7 @@ def test_local_live_cache_hit_records_trace_without_lookup_or_compile():
     def fail_compile(*args, **kwargs):
         raise AssertionError("live cache hit must not compile")
 
-    result = FunctionMaterializer(compile_group_callback=fail_compile).materialize_local(
+    result = make_materializer(fail_compile).materialize_local(
         spec, FunctionMaterializationContext(cache, object(), Trace(frame))
     )
     owner = function_group_owner_scope("LOCAL_DEF", "root", "helper", "x:FLOAT")
@@ -216,7 +246,7 @@ def test_local_stale_cache_updates_existing_and_preserves_exact_context_kwargs()
         return existing
 
     spec = local_request(materialization=materialization, existing=existing, live=False)
-    result = FunctionMaterializer(compile_group_callback=compile_group).materialize_local(
+    result = make_materializer(compile_group).materialize_local(
         spec, FunctionMaterializationContext(cache, transaction, trace)
     )
     assert result.group is existing
@@ -237,7 +267,7 @@ def test_local_failure_order_does_not_publish_before_required_finalization():
         raise RuntimeError("compile failed")
 
     with pytest.raises(RuntimeError, match="compile failed"):
-        FunctionMaterializer(compile_group_callback=compile_fail).materialize_local(
+        make_materializer(compile_fail).materialize_local(
             local_request(materialization=materialization),
             FunctionMaterializationContext(cache, None, None),
         )
@@ -247,7 +277,7 @@ def test_local_failure_order_does_not_publish_before_required_finalization():
         raise RuntimeError("metadata failed")
 
     with pytest.raises(RuntimeError, match="metadata failed"):
-        FunctionMaterializer(compile_group_callback=lambda *args, **kwargs: FakeGroup()).materialize_local(
+        make_materializer(lambda *args, **kwargs: FakeGroup()).materialize_local(
             local_request(materialization=materialization, finalize=finalize_fail),
             FunctionMaterializationContext(cache, None, None),
         )
@@ -264,7 +294,7 @@ def test_imported_cache_hit_is_immediate_without_lookup_or_trace():
     cache = {("library", function_id, "SHARED"): cached}
     frame = Frame()
 
-    result = FunctionMaterializer(compile_group_callback=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError())).materialize_library(
+    result = make_materializer(lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError())).materialize_library(
         spec, FunctionMaterializationContext(cache, object(), Trace(frame))
     )
     assert result.group is cached
@@ -272,8 +302,8 @@ def test_imported_cache_hit_is_immediate_without_lookup_or_trace():
     assert frame.children == []
 
 
-def test_imported_publication_precedes_best_effort_metadata_failure():
-    """Keep imported cache/trace publication even when post-build metadata fails."""
+def test_imported_metadata_failure_prevents_cache_and_trace_publication():
+    """Required editable metadata failure prevents cache/trace publication."""
     function_id = library_function_id("functions", "vendor.pkg", "demo")
     materialization = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.SHARED)
 
@@ -284,13 +314,12 @@ def test_imported_publication_precedes_best_effort_metadata_failure():
     cache = {}
     frame = Frame()
     group = FakeGroup("Demo")
-    result = FunctionMaterializer(compile_group_callback=lambda *args, **kwargs: group).materialize_library(
-        spec, FunctionMaterializationContext(cache, object(), Trace(frame))
-    )
-    owner = function_group_owner_scope("LIBRARY", "functions", "vendor.pkg", "demo")
-    assert result.group is group
-    assert cache[("library", function_id, "SHARED")] is group
-    assert frame.children == [(owner, "fingerprint")]
+    with pytest.raises(RuntimeError, match="metadata failed"):
+        make_materializer(lambda *args, **kwargs: group).materialize_library(
+            spec, FunctionMaterializationContext(cache, object(), Trace(frame))
+        )
+    assert cache == {}
+    assert frame.children == []
 
 
 def test_direct_catalog_uses_no_compilation_context_and_no_reusable_cache():
@@ -302,7 +331,7 @@ def test_direct_catalog_uses_no_compilation_context_and_no_reusable_cache():
         calls.append(kwargs)
         return FakeGroup(group_name)
 
-    result = FunctionMaterializer(compile_group_callback=compile_group).materialize_library(spec, context=None)
+    result = make_materializer(compile_group).materialize_library(spec, context=None)
     assert result.instance_key == ""
     assert calls[0]["function_group_cache"] is None
     assert calls[0]["function_group_transaction"] is None
@@ -338,7 +367,7 @@ def test_local_catalog_context_cache_is_not_a_capability():
         calls.append(kwargs)
         return FakeGroup(group_name)
 
-    result = FunctionMaterializer(compile_group_callback=compile_group).materialize_library(
+    result = make_materializer(compile_group).materialize_library(
         spec, FunctionMaterializationContext(ExplodingMapping(), transaction, trace)
     )
     assert result.group.name == "Demo"
@@ -376,7 +405,7 @@ def test_selected_root_reload_targets_exact_group_and_metadata_failure_propagate
         write_package_metadata=metadata_fail,
     )
     with pytest.raises(RuntimeError, match="reload metadata failed"):
-        FunctionMaterializer(compile_group_callback=compile_group).update_library_group(spec)
+        make_materializer(compile_group).update_library_group(spec)
     assert calls[0]["existing_group"] is group
     assert calls[0]["preserve_if_equivalent"] is True
     assert calls[0]["function_compilation_inputs"]["kind"] == "library-root"
@@ -393,7 +422,7 @@ def test_reusable_library_identity_mismatch_fails_before_mutation():
         **{**spec.__dict__, "materialization": wrong}
     )
     with pytest.raises(CompileError, match="identity mismatch"):
-        FunctionMaterializer(compile_group_callback=lambda *args, **kwargs: pytest.fail("must not compile")).materialize_library(
+        make_materializer(lambda *args, **kwargs: pytest.fail("must not compile")).materialize_library(
             bad_spec, FunctionMaterializationContext({}, None, None)
         )
 
@@ -411,7 +440,7 @@ def test_imported_unique_identity_uses_existing_call_site_key_and_owner_scope():
         calls.append(kwargs)
         return FakeGroup(group_name)
 
-    result = FunctionMaterializer(compile_group_callback=compile_group).materialize_library(
+    result = make_materializer(compile_group).materialize_library(
         spec, FunctionMaterializationContext(cache, None, None)
     )
     key = instance_key_for(call_site)
@@ -435,33 +464,30 @@ def test_imported_compile_failure_does_not_publish_cache_or_trace():
         raise RuntimeError("build failed")
 
     with pytest.raises(RuntimeError, match="build failed"):
-        FunctionMaterializer(compile_group_callback=compile_fail).materialize_library(
+        make_materializer(compile_fail).materialize_library(
             spec, FunctionMaterializationContext(cache, None, Trace(frame))
         )
     assert cache == {}
     assert frame.children == []
 
 
-def test_direct_and_local_catalog_metadata_failures_remain_best_effort():
-    """Keep both legacy direct and Local post-build metadata failures suppressed."""
+def test_direct_and_local_catalog_metadata_failures_are_required():
+    """Required editable catalog metadata failures propagate before publication."""
     def write_fail(group, record):
         raise RuntimeError("metadata failed")
 
     direct_group = FakeGroup("Direct")
-    direct = FunctionMaterializer(compile_group_callback=lambda *args, **kwargs: direct_group).materialize_library(
-        library_request(materialization=None, write_metadata=write_fail), context=None
-    )
-    assert direct.group is direct_group
+    with pytest.raises(RuntimeError, match="metadata failed"):
+        make_materializer(lambda *args, **kwargs: direct_group).materialize_library(
+            library_request(materialization=None, write_metadata=write_fail), context=None
+        )
 
-    frame = Frame()
     local_group = FakeGroup("Local")
-    local = FunctionMaterializer(compile_group_callback=lambda *args, **kwargs: local_group).materialize_library(
-        library_request(namespace="local", materialization=None, write_metadata=write_fail),
-        FunctionMaterializationContext({}, None, Trace(frame)),
-    )
-    assert local.group is local_group
-    assert frame.unproven == ["local catalog dependency"]
-
+    with pytest.raises(RuntimeError, match="metadata failed"):
+        make_materializer(lambda *args, **kwargs: local_group).materialize_library(
+            library_request(namespace="local", materialization=None, write_metadata=write_fail),
+            FunctionMaterializationContext({}, None, Trace(Frame())),
+        )
 
 def test_materializer_source_has_no_compiler_backchannel_and_specs_are_ast_independent():
     """Keep the physical authority independent of Compiler objects and raw AST calls."""
@@ -491,8 +517,8 @@ def test_missing_child_fingerprint_preserves_unproven_trace_semantics():
     trace = FunctionCompilationTrace()
 
     with trace.group("parent", {}) as frame:
-        result = FunctionMaterializer(
-            compile_group_callback=lambda *args, **kwargs: pytest.fail("cache hit must not compile")
+        result = make_materializer(
+            lambda *args, **kwargs: pytest.fail("cache hit must not compile")
         ).materialize_local(
             local_request(materialization=materialization, live=True),
             FunctionMaterializationContext(cache, None, trace),

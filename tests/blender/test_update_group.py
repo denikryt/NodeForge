@@ -17,6 +17,57 @@ def test_update_group_rollback_and_preflight_contracts():
     print('UPDATE_SUCCESS_FAILURE_OK')
 
 
+
+def test_rollback_backup_copy_failure_is_exception_safe(monkeypatch):
+    """Backup construction cleans its private datablock before returning failure."""
+    group = compile_group('x = 1\noutput("x", x)', 'NFTest_backup_copy_failure')
+    before = {g.name for g in bpy.data.node_groups if g.name.startswith("NodeForge.rollback.")}
+    blender_group_backend._TEST_BACKUP_COPY_FAIL_AFTER_RESET = True
+    try:
+        try:
+            compiler.update_expression_group(group, 'x = 2\noutput("x", x)')
+        except RuntimeError as exc:
+            check("rollback-backup copy failure" in str(exc), f"unexpected backup-copy failure: {exc}")
+        else:
+            raise AssertionError("injected rollback-backup copy failure did not raise")
+    finally:
+        blender_group_backend._TEST_BACKUP_COPY_FAIL_AFTER_RESET = False
+    after = {g.name for g in bpy.data.node_groups if g.name.startswith("NodeForge.rollback.")}
+    check(after == before, f"backup-copy failure leaked rollback groups: {sorted(after - before)}")
+
+
+def test_rollback_backup_failed_cleanup_remains_authority_ineligible(monkeypatch):
+    """A backup leaked only by failed removal remains permanently non-authoritative."""
+    group = compile_group('x = 1\noutput("x", x)', 'NFTest_backup_cleanup_failure')
+    original_remove = blender_group_backend._remove_node_group_if_live
+    leaked = []
+
+    def fail_backup_remove(candidate, *, failures=None):
+        if candidate is not None and candidate.name.startswith("NodeForge.rollback."):
+            leaked.append(candidate)
+            if failures is not None:
+                failures.append(RuntimeError("Injected rollback backup removal failure"))
+            return False
+        return original_remove(candidate, failures=failures)
+
+    monkeypatch.setattr(blender_group_backend, "_remove_node_group_if_live", fail_backup_remove)
+    blender_group_backend._TEST_BACKUP_COPY_FAIL_AFTER_RESET = True
+    try:
+        try:
+            compiler.update_expression_group(group, 'x = 2\noutput("x", x)')
+        except RuntimeError as exc:
+            check("rollback-backup copy failure" in str(exc), f"unexpected backup-copy failure: {exc}")
+        else:
+            raise AssertionError("injected rollback-backup copy failure did not raise")
+    finally:
+        blender_group_backend._TEST_BACKUP_COPY_FAIL_AFTER_RESET = False
+
+    check(leaked, "failed rollback-backup cleanup did not leave the injected backup")
+    backup = leaked[-1]
+    check(blender_group_backend.is_authority_ineligible_group(backup), "leaked rollback backup became authoritative")
+    monkeypatch.setattr(blender_group_backend, "_remove_node_group_if_live", original_remove)
+    original_remove(backup)
+
 def test_update_group_preserves_repeat_zone_dynamic_state_sockets_with_external_links():
     source = '''
 count = input_int("Count", default=4)
@@ -104,7 +155,7 @@ output("Radius", radius)
     check(not leaked, f"panel update leaked temporary groups: {leaked}")
 
     stable_snapshot = _panel_snapshot(group)
-    compiler._TEST_CUTOVER_FAIL_AFTER_RESET = True
+    blender_group_backend._TEST_CUTOVER_FAIL_AFTER_RESET = True
     try:
         compiler.update_expression_group(
             group,
@@ -214,7 +265,7 @@ output("Result", x + y + z + w)
     check(links_a.count((leaf_1, "Result", output, "Result")) == 1, "affected-to-stable link was not restored exactly once")
     check(links_b.count((leaf_3, "Result", math, "Value")) == 1, "cross-tree affected link was not restored exactly once")
 
-    compiler._TEST_CUTOVER_FAIL_AFTER_RESET = True
+    blender_group_backend._TEST_CUTOVER_FAIL_AFTER_RESET = True
     try:
         compiler.update_expression_group(group, source_before)
     except RuntimeError as exc:
@@ -341,11 +392,11 @@ def test_deferred_group_transaction_rollback_restores_first_external_snapshot():
     group_node.inputs["X"].default_value = 1.5
     wrapper.links.new(group_node.outputs["X"], output.inputs["X"])
 
-    transaction = compiler.LocalHelperBuildTransaction()
-    compiler._make_group(second, group.name, existing_group=group, local_helper_transaction=transaction)
+    transaction = blender_group_backend.BlenderGroupBuildTransaction()
+    compiler._new_group_backend().create_or_update(source=second, name=group.name, existing_group=group, build_options={"local_helper_transaction": transaction})
     check(_close(group_node.inputs["X"].default_value, 1.5), "first deferred update lost the original override")
     group_node.inputs["X"].default_value = 2.5
-    compiler._make_group(third, group.name, existing_group=group, local_helper_transaction=transaction)
+    compiler._new_group_backend().create_or_update(source=third, name=group.name, existing_group=group, build_options={"local_helper_transaction": transaction})
     check(_close(group_node.inputs["X"].default_value, 2.5), "second deferred update lost the intermediate override")
 
     transaction.rollback()
@@ -364,16 +415,16 @@ def test_function_group_savepoint_restores_immediate_state_after_second_update()
     third = 'x = input_float("X", default=3.0)\noutput("X", x)'
     group = compile_group(first, "NFTest_function_group_savepoint")
     pointer = group.as_pointer()
-    transaction = compiler.FunctionGroupBuildTransaction()
+    transaction = blender_group_backend.BlenderGroupBuildTransaction()
 
-    compiler._make_group(second, group.name, existing_group=group, function_group_transaction=transaction)
+    compiler._new_group_backend().create_or_update(source=second, name=group.name, existing_group=group, build_options={"function_group_transaction": transaction})
     check(len(transaction._updated_by_identity) == 1, "first update did not create one physical identity record")
     check(len(transaction._mutation_journal) == 1, "first update did not create one mutation journal entry")
     savepoint = transaction.savepoint()
 
     original_name = group.name
     group.name = original_name + "_renamed"
-    compiler._make_group(third, group.name, existing_group=group, function_group_transaction=transaction)
+    compiler._new_group_backend().create_or_update(source=third, name=group.name, existing_group=group, build_options={"function_group_transaction": transaction})
     check(group.as_pointer() == pointer, "second update changed physical group identity")
     check(len(transaction._updated_by_identity) == 1, "rename split one physical group into multiple transaction identities")
     check(len(transaction._mutation_journal) == 2, "second update was not journaled separately")
@@ -398,7 +449,7 @@ def test_function_group_savepoint_restores_immediate_state_after_second_update()
 
 def test_function_group_savepoint_restores_exact_cache_snapshot():
     """Probe rollback restores overwritten, removed, and newly added cache entries."""
-    transaction = compiler.FunctionGroupBuildTransaction()
+    transaction = blender_group_backend.BlenderGroupBuildTransaction()
     cache = {"existing": "before", "removed": "keep"}
     transaction.register_cache(cache)
     savepoint = transaction.savepoint()

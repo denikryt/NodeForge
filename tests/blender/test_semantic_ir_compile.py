@@ -219,7 +219,7 @@ output("Result", result)
 def test_semantic_error_keeps_outer_fresh_build_cleanup_boundary():
     before = {_pointer(group) for group in bpy.data.node_groups}
     with pytest.raises(CompileError, match="Unsupported operation between BOOL and FLOAT"):
-        compiler._make_group(
+        compiler.create_expression_group(
             "flag = input_bool('Flag')\nresult = flag + 1\noutput('Result', result)",
             "NFTest_semantic_ir_failure_cleanup",
         )

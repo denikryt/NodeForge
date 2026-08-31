@@ -269,7 +269,7 @@ def test_copy_interface_preserves_nested_native_panel_hierarchy():
     source.interface.new_socket(name="Result", in_out="OUTPUT", socket_type="NodeSocketFloat")
 
     destination = bpy.data.node_groups.new("NFTest_panel_nested_destination", "GeometryNodeTree")
-    compiler._copy_group_contents(source, destination)
+    blender_group_backend._copy_group_contents(source, destination)
 
     panels = {panel.name: panel for panel in _interface_panels(destination)}
     check(set(panels) == {"Outer", "Inner"}, f"nested copy panels missing: {set(panels)}")

@@ -9,6 +9,8 @@ from typing import Iterable
 
 import bpy
 
+from .blender_group_authority import is_authority_ineligible_group
+
 
 GROUP_MANIFEST_PROP = "nodeforge_generated_resources_v1"
 ID_METADATA_PROP = "nodeforge_generated_id_v1"
@@ -384,6 +386,8 @@ def live_manifest_resource_keys() -> set[tuple[str, str, str, str]]:
     keys = set()
     for group in bpy.data.node_groups:
         if getattr(group, "bl_idname", None) != "GeometryNodeTree":
+            continue
+        if is_authority_ineligible_group(group):
             continue
         for ref in manifest_resources(read_group_manifest(group)):
             keys.add((ref.kind, ref.name, ref.owner_group_uuid, ref.generation_uuid))

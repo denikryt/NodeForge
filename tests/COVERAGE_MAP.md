@@ -75,3 +75,9 @@
 - `tests/unit/test_semantic_ir.py`: Blender-independent IR records, canonical `BindingId` runtime binding references, immutable `IRFunctionMaterialization` shared/unique invariants, literal/binding typing, name precedence, operator contracts, ordered mixed-tree ownership, explicit immutable `BlenderIRLoweringContext`, binding/materialization invariants, Object attribute fallback, conditional ownership, downstream materialization-authority contracts, and migration-marker invariants.
 - `tests/unit/test_semantic_backend_contract.py`: analyzer-derived finite operation/type matrix executed through the explicit lowering context and the real `nodes.py` realization helpers, plus commitment semantics proving backend failure after successful analysis propagates without legacy AST retry.
 - `tests/blender/test_semantic_ir_compile.py`: production IR routing, direct context lowering over real Blender RNA for analyzer-reachable backend signatures, representative graph materialization, unary topology/socket identity, comparison-chain pairwise materialization/layout, and fresh-build cleanup on semantic or partially materialized backend failure without legacy retry.
+
+## Blender group transaction backend
+
+- `tests/unit/test_blender_group_backend.py`: nested savepoints, cache snapshots, commit/PONR ordering, multi-resource preparation, non-raising retirement diagnostics, custom-property marker preservation, and backend request contracts.
+- `tests/unit/test_blender_group_authority.py`: persistent transaction-private authority filtering, reload-stable process-local provisional state, publication/forget behavior, and stale-entry cleanup.
+- `tests/blender/test_update_group.py`, `tests/blender/test_library_catalogs.py`, and `tests/blender/test_unique_function_groups.py`: physical identity, rollback/cutover, editable metadata finalization, leaked temporary/provisional authority exclusion, generated-resource liveness, and reusable-function integration.

@@ -1,9 +1,9 @@
 """Physical materialization of editable reusable functions as Blender node groups.
 
 The materializer consumes already-resolved compiler identities and materialization
-policy.  Source/catalog resolution and caller-node realization stay in their
-feature modules, while the existing compiler callback remains the physical
-create/update backend until group transactions are extracted separately.
+policy. Source/catalog resolution and caller-node realization stay in their
+feature modules, while physical GeometryNodeTree publication is delegated to an
+explicit Blender group backend.
 """
 
 from __future__ import annotations
@@ -112,22 +112,10 @@ class LibraryFunctionUpdateSpec:
 class FunctionMaterializer:
     """Materialize canonical reusable-function definitions as Blender node groups."""
 
-    def __init__(self, *, compile_group_callback):
-        """Store only the legacy physical group-build callback."""
-        self._compile_group_callback = compile_group_callback
+    def __init__(self, *, group_backend):
+        """Store the explicit physical GeometryNodeTree backend."""
+        self._group_backend = group_backend
 
-    def _compile_or_update(self, source: str, group_name: str, *, existing_group=None, compile_kwargs=None):
-        """Invoke the existing create/update backend with an exact prepared kwarg set."""
-        kwargs = dict(compile_kwargs or {})
-        if existing_group is not None:
-            kwargs["existing_group"] = existing_group
-        # FUNCTION_MATERIALIZER_TRANSACTION_MIGRATION: Reusable-function artifact ownership
-        # now lives in FunctionMaterializer, but physical create/update/cutover still enters
-        # the legacy compiler group-build callback and FunctionGroupBuildTransaction. Keep
-        # that callback contract exact in this behavior-preserving stage. Remove this bridge
-        # when Blender group build/update transactions are extracted behind an explicit
-        # materialization backend service and FunctionMaterializer no longer calls compiler.py.
-        return self._compile_group_callback(source, group_name, **kwargs)
 
     def materialize_local(
         self,
@@ -176,14 +164,17 @@ class FunctionMaterializer:
         })
         if existing is not None:
             compile_kwargs["preserve_if_equivalent"] = True
-        function_group = self._compile_or_update(
-            spec.source,
-            spec.group_name,
+        preserve_if_equivalent = bool(compile_kwargs.pop("preserve_if_equivalent", False))
+        function_group = self._group_backend.create_or_update(
+            source=spec.source,
+            name=spec.group_name,
             existing_group=existing,
-            compile_kwargs=compile_kwargs,
+            build_options=compile_kwargs,
+            preserve_if_equivalent=preserve_if_equivalent,
+            finalize_before_commit=lambda group: spec.finalize_group(
+                group, stored_fingerprint(group), instance_key
+            ),
         )
-        fingerprint = stored_fingerprint(function_group)
-        spec.finalize_group(function_group, fingerprint, instance_key)
         function_cache[cache_key] = function_group
         self._record_child(context.function_compilation_trace, owner_scope, function_group)
         return MaterializedFunctionGroup(function_group, instance_key, owner_scope)
@@ -253,17 +244,29 @@ class FunctionMaterializer:
         }
         if existing is not None:
             compile_kwargs["preserve_if_equivalent"] = True
-        group = self._compile_or_update(
-            spec.source,
-            spec.group_name,
+        def finalize_before_commit(group):
+            spec.write_package_metadata(group, spec.record)
+            stamp_function_metadata(
+                group,
+                instance_key=instance_key,
+                definition_owner=spec.function_id.stable_key(),
+                fingerprint=stored_fingerprint(group),
+            )
+            group["nodeforge_library_source"] = spec.source
+
+        preserve_if_equivalent = bool(compile_kwargs.pop("preserve_if_equivalent", False))
+        group = self._group_backend.create_or_update(
+            source=spec.source,
+            name=spec.group_name,
             existing_group=existing,
-            compile_kwargs=compile_kwargs,
+            build_options=compile_kwargs,
+            preserve_if_equivalent=preserve_if_equivalent,
+            finalize_before_commit=finalize_before_commit,
         )
         if use_reusable_cache:
             context.function_group_cache[cache_key] = group
         if materialization is not None:
             self._record_child(trace, owner_scope, group)
-        self._finalize_catalog_metadata(spec, group, instance_key)
         return MaterializedFunctionGroup(group, instance_key, owner_scope)
 
     def _materialize_local_catalog(
@@ -282,35 +285,26 @@ class FunctionMaterializer:
             "function_definition_owner": local_owner,
             "function_compilation_trace": trace,
         }
-        group = self._compile_or_update(spec.source, spec.group_name, compile_kwargs=compile_kwargs)
-        frame = getattr(trace, "current", None)
-        if frame is not None:
-            frame.mark_unproven("local catalog dependency")
-        self._finalize_catalog_metadata(spec, group, "")
-        return group
-
-    def _finalize_catalog_metadata(self, spec: LibraryFunctionMaterializationSpec, group, instance_key: str) -> None:
-        """Apply the legacy best-effort editable-catalog metadata contract."""
-        # FUNCTION_MATERIALIZER_CATALOG_METADATA_MIGRATION: Editable catalog groups keep
-        # the legacy post-build metadata contract in this behavior-preserving stage. Package
-        # functions/examples publish cache/trace before package/function/source metadata;
-        # Local catalog groups mark freshness unproven before the same metadata block; all
-        # metadata write failures remain best-effort/suppressed. Do not promote these errors
-        # to materialization failure because the legacy compiler callback may already have
-        # committed FunctionGroupBuildTransaction before returning. Remove this boundary
-        # when build/update, required metadata, publication, and commit share one explicit
-        # rollback-capable transaction backend.
-        try:
+        def finalize_before_commit(group):
             spec.write_package_metadata(group, spec.record)
             stamp_function_metadata(
                 group,
-                instance_key=instance_key,
+                instance_key="",
                 definition_owner=spec.function_id.stable_key(),
                 fingerprint=stored_fingerprint(group),
             )
             group["nodeforge_library_source"] = spec.source
-        except Exception:
-            pass
+
+        group = self._group_backend.create_or_update(
+            source=spec.source,
+            name=spec.group_name,
+            build_options=compile_kwargs,
+            finalize_before_commit=finalize_before_commit,
+        )
+        frame = getattr(trace, "current", None)
+        if frame is not None:
+            frame.mark_unproven("local catalog dependency")
+        return group
 
     def update_library_group(self, spec: LibraryFunctionUpdateSpec):
         """Update exactly one provenance-validated editable catalog root group."""
@@ -337,22 +331,19 @@ class FunctionMaterializer:
             "function_definition_identity": stable_function_id,
             "preserve_if_equivalent": True,
         }
-        updated = self._compile_or_update(
-            spec.source,
-            spec.group_name,
+        def finalize_before_commit(group):
+            spec.write_package_metadata(group, spec.record)
+            group["nodeforge_library_source"] = spec.source
+
+        preserve_if_equivalent = bool(compile_kwargs.pop("preserve_if_equivalent", False))
+        return self._group_backend.create_or_update(
+            source=spec.source,
+            name=spec.group_name,
             existing_group=spec.group,
-            compile_kwargs=compile_kwargs,
+            build_options=compile_kwargs,
+            preserve_if_equivalent=preserve_if_equivalent,
+            finalize_before_commit=finalize_before_commit,
         )
-        # FUNCTION_MATERIALIZER_RELOAD_METADATA_MIGRATION: Explicit editable-root reload keeps
-        # its legacy failure contract in this behavior-preserving stage: physical update may
-        # already be committed when required package/source metadata is written, and metadata
-        # errors still propagate instead of being suppressed. Do not merge this branch with
-        # ordinary imported best-effort metadata handling. Remove this boundary when selected-
-        # root update and required reload metadata execute inside one explicit rollback-capable
-        # Blender group transaction before commit.
-        spec.write_package_metadata(updated, spec.record)
-        updated["nodeforge_library_source"] = spec.source
-        return updated
 
     @staticmethod
     def _record_child(trace, owner_scope: str, group) -> None:

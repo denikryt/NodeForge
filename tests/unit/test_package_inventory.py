@@ -26,6 +26,41 @@ def package_inventory(tmp_path):
     systems_registry.invalidate_cache()
 
 
+
+class _FakeGroupBackend:
+    """Exercise library adapters through the explicit group-backend contract."""
+
+    def __init__(self, callback):
+        self._callback = callback
+
+    def create_or_update(
+        self, *, source, name, existing_group=None, build_options=None,
+        preserve_if_equivalent=False, finalize_before_commit=None
+    ):
+        kwargs = dict(build_options or {})
+        if existing_group is not None:
+            kwargs["existing_group"] = existing_group
+        if preserve_if_equivalent:
+            kwargs["preserve_if_equivalent"] = True
+        group = self._callback(source, name, **kwargs)
+        if not hasattr(group, "interface"):
+            group.interface = types.SimpleNamespace(items_tree=[])
+        if finalize_before_commit is not None:
+            finalize_before_commit(group)
+        return group
+
+    def compile_group_callback(self, source, name="NodeForge Group", **kwargs):
+        """Provide the package-Python authoring callback over the same fake backend."""
+        existing_group = kwargs.pop("existing_group", None)
+        preserve = bool(kwargs.pop("preserve_if_equivalent", False))
+        return self.create_or_update(
+            source=source,
+            name=name,
+            existing_group=existing_group,
+            build_options=kwargs,
+            preserve_if_equivalent=preserve,
+        )
+
 def _write_manifest(
     root: Path,
     package_id="vendor.demo",
@@ -260,7 +295,7 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
         def __iter__(self):
             return iter(self.values())
 
-    fake_bpy = types.SimpleNamespace(data=types.SimpleNamespace(node_groups=FakeNodeGroups()))
+    fake_bpy = types.SimpleNamespace(data=types.SimpleNamespace(node_groups=FakeNodeGroups()), app=types.SimpleNamespace(driver_namespace={}))
     monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
     import NodeForge.library as library
 
@@ -287,7 +322,7 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
         compiled.append((group_name, existing_group, kwargs))
         return group
 
-    group_a = library.materialize_library_entry_group("examples", "demo", compile_group)
+    group_a = library.materialize_library_entry_group("examples", "demo", _FakeGroupBackend(compile_group))
     from NodeForge.compiler_identities import library_function_id
     from NodeForge.function_instances import (
         FUNCTION_DEFINITION_OWNER_PROP,
@@ -305,7 +340,7 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
     assert compiled[0][2]["function_instance_key"] == ""
     assert group_a.name in fake_bpy.data.node_groups
 
-    direct_again = library.materialize_library_entry_group("examples", "demo", compile_group)
+    direct_again = library.materialize_library_entry_group("examples", "demo", _FakeGroupBackend(compile_group))
     assert direct_again is group_a
     assert compiled[-1][1] is group_a
 
@@ -313,7 +348,7 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
     packages.install_package_directory(source_b, allow_python=False)
     systems_registry.invalidate_cache()
 
-    group_b = library.materialize_library_entry_group("examples", "demo", compile_group)
+    group_b = library.materialize_library_entry_group("examples", "demo", _FakeGroupBackend(compile_group))
 
     assert group_b is not group_a
     assert group_b.name != group_a.name
@@ -337,7 +372,7 @@ def test_library_materialization_contract_discriminator_is_explicit(package_inve
             return next((group for group in self if group.name == name), default)
 
     fake_groups = FakeNodeGroups()
-    fake_bpy = types.SimpleNamespace(data=types.SimpleNamespace(node_groups=fake_groups))
+    fake_bpy = types.SimpleNamespace(data=types.SimpleNamespace(node_groups=fake_groups), app=types.SimpleNamespace(driver_namespace={}))
     monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
     import NodeForge.library as library
     library = importlib.reload(library)
@@ -364,7 +399,7 @@ def test_library_materialization_contract_discriminator_is_explicit(package_inve
 
     function_id = library_function_id("functions", "vendor.contract", "demo")
     direct_result = library.get_or_create_library_entry_group(
-        "functions", "demo", compile_group, materialization=None
+        "functions", "demo", _FakeGroupBackend(compile_group), materialization=None
     )
     direct = direct_result.group
     assert direct_result.instance_key == ""
@@ -388,7 +423,7 @@ def test_library_materialization_contract_discriminator_is_explicit(package_inve
     unique_result = library.get_or_create_library_entry_group(
         "functions",
         "demo",
-        compile_group,
+        _FakeGroupBackend(compile_group),
         materialization=materialization,
         function_id=function_id,
         materialization_context=context,
@@ -409,7 +444,7 @@ def test_library_materialization_contract_discriminator_is_explicit(package_inve
         library.get_or_create_library_entry_group(
             "functions",
             "demo",
-            compile_group,
+            _FakeGroupBackend(compile_group),
             materialization=wrong,
             function_id=function_id,
             materialization_context=context,
@@ -945,7 +980,7 @@ def test_local_catalog_adapter_does_not_use_generic_function_group_cache(monkeyp
             self.children.append((owner, fingerprint))
 
     fake_groups = FakeNodeGroups()
-    fake_bpy = types.SimpleNamespace(data=types.SimpleNamespace(node_groups=fake_groups))
+    fake_bpy = types.SimpleNamespace(data=types.SimpleNamespace(node_groups=fake_groups), app=types.SimpleNamespace(driver_namespace={}))
     monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
     import NodeForge.library as library
     library = importlib.reload(library)
@@ -978,7 +1013,7 @@ def test_local_catalog_adapter_does_not_use_generic_function_group_cache(monkeyp
     materialized = library.get_or_create_library_entry_group(
         "local",
         "demo",
-        compile_group,
+        _FakeGroupBackend(compile_group),
         materialization_context=FunctionMaterializationContext(
             ExplodingMapping(), transaction, trace
         ),

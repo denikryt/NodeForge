@@ -338,7 +338,7 @@ output("State", state)
     group = compile_group(before, "NFTest_bundle_update_rollback")
     original_pointer = group.as_pointer()
     original_signature = _bundle_items(_one_node(group, "NodeCombineBundle"))
-    compiler._TEST_CUTOVER_FAIL_AFTER_RESET = True
+    blender_group_backend._TEST_CUTOVER_FAIL_AFTER_RESET = True
     try:
         try:
             compiler.update_expression_group(group, after)
@@ -347,7 +347,7 @@ output("State", state)
         else:
             raise AssertionError("injected Bundle cutover failure did not raise")
     finally:
-        compiler._TEST_CUTOVER_FAIL_AFTER_RESET = False
+        blender_group_backend._TEST_CUTOVER_FAIL_AFTER_RESET = False
     check(group.as_pointer() == original_pointer, "failed Bundle update replaced group identity")
     restored = _one_node(group, "NodeCombineBundle")
     check(_bundle_items(restored) == original_signature, f"failed Bundle update did not restore signature: {_bundle_items(restored)}")
