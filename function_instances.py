@@ -1,9 +1,10 @@
 """Shared ownership and freshness helpers for reusable function groups.
 
 This module contains the compiler-level protocol used by calls that
-materialize editable reusable ``GeometryNodeTree`` datablocks.  It deliberately
-does not resolve imports or predict dependencies; actual local/library
-materializers report the dependencies they use while normal compilation runs.
+materialize editable reusable ``GeometryNodeTree`` datablocks. It deliberately
+does not resolve imports or predict dependencies. Actual local/library
+materializers report canonical ``IRFunctionMaterialization`` identity and the
+realized child fingerprint while normal compilation runs.
 """
 
 from __future__ import annotations
@@ -141,6 +142,34 @@ def instance_key_for_materialization(materialization: IRFunctionMaterialization)
     return instance_key_for(materialization.call_site)
 
 
+def function_materialization_owner_scope(
+    materialization: IRFunctionMaterialization,
+) -> str:
+    """Serialize reusable physical ownership from canonical materialization IR."""
+
+    if not isinstance(materialization, IRFunctionMaterialization):
+        raise TypeError("materialization must be an IRFunctionMaterialization")
+    callee = materialization.callee
+    instance_key = instance_key_for_materialization(materialization)
+    if callee.kind == "LOCAL_DEF":
+        return function_group_owner_scope(
+            "LOCAL_DEF",
+            callee.definition_owner,
+            callee.name,
+            callee.signature,
+            instance_key=instance_key,
+        )
+    if callee.kind == "LIBRARY":
+        return function_group_owner_scope(
+            "LIBRARY",
+            callee.namespace,
+            callee.package_id,
+            callee.name,
+            instance_key=instance_key or None,
+        )
+    raise ValueError(f"Unsupported reusable FunctionId kind: {callee.kind!r}")
+
+
 def new_root_owner_id() -> str:
     """Return a new lowercase UUID hex root owner id."""
 
@@ -225,12 +254,19 @@ class FunctionCompilationFrame:
     freshness_unproven: bool = False
     result: FunctionCompilationResult | None = None
 
-    def record_child(self, owner_identity: str, fingerprint: str | None) -> None:
-        """Record an actually materialized editable child group."""
+    def record_dependency(
+        self,
+        materialization: IRFunctionMaterialization,
+        fingerprint: str | None,
+    ) -> None:
+        """Record an actual reusable access using canonical compiler identity."""
 
+        if not isinstance(materialization, IRFunctionMaterialization):
+            raise TypeError("materialization must be an IRFunctionMaterialization")
         if not fingerprint:
             self.freshness_unproven = True
             return
+        owner_identity = function_materialization_owner_scope(materialization)
         self.child_rows.append({"owner": owner_identity, "fingerprint": fingerprint})
 
     def mark_unproven(self, reason: str) -> None:
@@ -298,6 +334,7 @@ __all__ = [
     "normalized_source",
     "normalized_statements",
     "function_group_owner_scope",
+    "function_materialization_owner_scope",
     "instance_key_for",
     "instance_key_for_materialization",
     "new_root_owner_id",

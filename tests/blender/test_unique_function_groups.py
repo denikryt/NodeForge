@@ -267,3 +267,81 @@ output("Out", shared + first + second)
             check(actual == sorted(expected), f"imported unique instance keys changed: {actual}")
         finally:
             packages.uninstall_package("vendor.unique_identity")
+
+
+def _write_imported_dependency_package(root: Path, *, version: str, offset: float) -> None:
+    """Write one source-only imported dependency package for freshness tests."""
+    functions = root / "functions"
+    functions.mkdir(parents=True)
+    manifest = {
+        "schema_version": 1,
+        "id": "vendor.imported_dependency",
+        "name": "vendor.imported_dependency",
+        "version": version,
+        "author": "Tests",
+        "description": "Imported cache-hit dependency regression fixture.",
+        "nodeforge_min_version": "0.50.0",
+        "nodeforge_max_version": None,
+        "contents": {"functions": "functions"},
+        "permissions": {"python": False},
+    }
+    (root / "nodeforge_package.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    (functions / "imported_dependency_probe.nf").write_text(
+        'value = input_float("Value")\n'
+        f'output("Value", value + {offset})\n',
+        encoding="utf-8",
+    )
+
+
+def test_imported_cached_dependency_invalidates_both_unique_parents():
+    """Every parent observes an imported child even when the shared cache supplies it."""
+    source = """from functions import imported_dependency_probe
+def imported_parent_left(x):
+    factor = node("ShaderNodeFloatCurve", inputs={"Factor": 1.0, "Value": x}, output="Value", typ=Float)
+    return imported_dependency_probe(factor)
+
+def imported_parent_right(x):
+    factor = node("ShaderNodeFloatCurve", inputs={"Factor": 1.0, "Value": x}, output="Value", typ=Float)
+    return imported_dependency_probe(factor)
+
+left = imported_parent_left(0.25, __unique__=True)
+right = imported_parent_right(0.75, __unique__=True)
+output("Out", left + right)
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        v1 = tmp / "v1"
+        v2 = tmp / "v2"
+        _write_imported_dependency_package(v1, version="1.0.0", offset=1.0)
+        _write_imported_dependency_package(v2, version="2.0.0", offset=2.0)
+        packages.install_package_directory(v1, allow_python=False)
+        try:
+            root = compile_group(source, "NFTest_imported_dependency_two_parents")
+            left = _local_helpers("imported_parent_left")[0]
+            right = _local_helpers("imported_parent_right")[0]
+            left_pointer = left.as_pointer()
+            right_pointer = right.as_pointer()
+            left_key = left.get(FUNCTION_INSTANCE_KEY_PROP)
+            right_key = right.get(FUNCTION_INSTANCE_KEY_PROP)
+            left_nodes = len(left.nodes)
+            right_nodes = len(right.nodes)
+            left["manual_probe"] = "must-reset"
+            right["manual_probe"] = "must-reset"
+
+            packages.install_package_directory(v2, allow_python=False, replace=True)
+            compiler.update_expression_group(root, source)
+
+            left_after = _local_helpers("imported_parent_left")[0]
+            right_after = _local_helpers("imported_parent_right")[0]
+            check(left_after.as_pointer() == left_pointer, "left parent datablock identity changed")
+            check(right_after.as_pointer() == right_pointer, "right parent datablock identity changed")
+            check(left_after.get(FUNCTION_INSTANCE_KEY_PROP) == left_key, "left parent ownership changed")
+            check(right_after.get(FUNCTION_INSTANCE_KEY_PROP) == right_key, "right parent ownership changed")
+            check(left_after.get("manual_probe") is None, "first parent ignored imported dependency change")
+            check(right_after.get("manual_probe") is None, "cache-hit parent ignored imported dependency change")
+            check(len(left_after.nodes) == left_nodes, "left parent topology changed")
+            check(len(right_after.nodes) == right_nodes, "right parent topology changed")
+        finally:
+            packages.uninstall_package("vendor.imported_dependency")

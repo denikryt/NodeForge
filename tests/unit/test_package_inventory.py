@@ -976,8 +976,8 @@ def test_local_catalog_adapter_does_not_use_generic_function_group_cache(monkeyp
             self.children = []
         def mark_unproven(self, reason):
             self.unproven.append(reason)
-        def record_child(self, owner, fingerprint):
-            self.children.append((owner, fingerprint))
+        def record_dependency(self, materialization, fingerprint):
+            self.children.append((materialization, fingerprint))
 
     fake_groups = FakeNodeGroups()
     fake_bpy = types.SimpleNamespace(data=types.SimpleNamespace(node_groups=fake_groups), app=types.SimpleNamespace(driver_namespace={}))

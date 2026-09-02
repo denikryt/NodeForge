@@ -163,3 +163,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.50.11
 
 - Fixed rollback-backup construction so failed snapshot copies clean up their private datablock, restored logical local-helper namespaces during parent updates, and kept dedicated failure injection on destructive authoritative cutover.
+
+## 0.50.12
+
+- Moved reusable freshness dependency observation to canonical `IRFunctionMaterialization` identity, unified physical and fingerprint owner serialization, and fixed imported cache hits so every successful parent access records the child fingerprint.

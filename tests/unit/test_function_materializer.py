@@ -10,6 +10,7 @@ from NodeForge.errors import CompileError
 from NodeForge.function_instances import (
     FUNCTION_COMPILATION_FINGERPRINT_PROP,
     function_group_owner_scope,
+    function_materialization_owner_scope,
     instance_key_for,
 )
 from NodeForge.function_materializer import (
@@ -70,8 +71,8 @@ class Frame:
         self.children = []
         self.unproven = []
 
-    def record_child(self, owner, fingerprint):
-        self.children.append((owner, fingerprint))
+    def record_dependency(self, materialization, fingerprint):
+        self.children.append((materialization, fingerprint))
 
     def mark_unproven(self, reason):
         self.unproven.append(reason)
@@ -205,7 +206,8 @@ def test_shared_and_unique_local_identity_cache_and_owner_scope():
         assert cache[("local-def", function_id, expected_key or "SHARED")] is result.group
         assert calls[0]["function_group_owner_scope"] == owner
         assert calls[0]["function_instance_key"] == expected_key
-        assert frame.children == [(owner, "fingerprint")]
+        assert frame.children == [(materialization, "fingerprint")]
+        assert frame.children[0][0] is materialization
 
 
 def test_local_live_cache_hit_records_trace_without_lookup_or_compile():
@@ -226,7 +228,8 @@ def test_local_live_cache_hit_records_trace_without_lookup_or_compile():
     owner = function_group_owner_scope("LOCAL_DEF", "root", "helper", "x:FLOAT")
     assert result.group is group
     assert spec.find_existing.calls == []
-    assert frame.children == [(owner, "fingerprint")]
+    assert frame.children == [(materialization, "fingerprint")]
+    assert frame.children[0][0] is materialization
 
 
 def test_local_stale_cache_updates_existing_and_preserves_exact_context_kwargs():
@@ -284,8 +287,8 @@ def test_local_failure_order_does_not_publish_before_required_finalization():
     assert cache == {}
 
 
-def test_imported_cache_hit_is_immediate_without_lookup_or_trace():
-    """Preserve imported cache hits without liveness checks or child registration."""
+def test_imported_cache_hit_records_canonical_dependency_without_lookup():
+    """An imported cache hit records actual use in the current parent frame."""
     function_id = library_function_id("functions", "vendor.pkg", "demo")
     materialization = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.SHARED)
     spec = library_request(materialization=materialization)
@@ -299,7 +302,95 @@ def test_imported_cache_hit_is_immediate_without_lookup_or_trace():
     )
     assert result.group is cached
     assert spec.find_existing.calls == []
-    assert frame.children == []
+    assert frame.children == [(materialization, "fingerprint")]
+    assert frame.children[0][0] is spec.materialization
+
+
+def test_imported_cached_child_is_observed_by_each_parent_and_each_access():
+    """Shared cache population order cannot omit another parent's dependency."""
+    function_id = library_function_id("functions", "vendor.pkg", "demo")
+    materialization = IRFunctionMaterialization(
+        function_id, IRFunctionMaterializationMode.SHARED
+    )
+    spec = library_request(materialization=materialization)
+    cached = FakeGroup("Cached", fingerprint="child-v1")
+    cache = {("library", function_id, "SHARED"): cached}
+    materializer = make_materializer(
+        lambda *args, **kwargs: pytest.fail("cache hit must not compile")
+    )
+    first = Frame()
+    second = Frame()
+
+    context = FunctionMaterializationContext(cache, None, Trace(first))
+    materializer.materialize_library(spec, context)
+    materializer.materialize_library(spec, context)
+    materializer.materialize_library(
+        spec, FunctionMaterializationContext(cache, None, Trace(second))
+    )
+
+    assert first.children == [
+        (materialization, "child-v1"),
+        (materialization, "child-v1"),
+    ]
+    assert second.children == [(materialization, "child-v1")]
+    assert all(observed is materialization for observed, _ in first.children)
+    assert second.children[0][0] is materialization
+
+
+def test_imported_cached_child_fingerprint_changes_every_parent_fingerprint():
+    """Every parent digest follows the realized fingerprint of a cached child."""
+    from NodeForge.function_instances import FunctionCompilationTrace
+
+    function_id = library_function_id("functions", "vendor.pkg", "demo")
+    materialization = IRFunctionMaterialization(
+        function_id, IRFunctionMaterializationMode.SHARED
+    )
+    spec = library_request(materialization=materialization)
+    cached = FakeGroup("Cached", fingerprint="child-v1")
+    cache = {("library", function_id, "SHARED"): cached}
+    materializer = make_materializer(
+        lambda *args, **kwargs: pytest.fail("cache hit must not compile")
+    )
+
+    def parent_fingerprint(owner):
+        trace = FunctionCompilationTrace()
+        with trace.group(owner, {"source": owner}) as frame:
+            materializer.materialize_library(
+                spec, FunctionMaterializationContext(cache, None, trace)
+            )
+            return frame.finish("contract").fingerprint
+
+    first_v1 = parent_fingerprint("parent-1")
+    second_v1 = parent_fingerprint("parent-2")
+    cached[FUNCTION_COMPILATION_FINGERPRINT_PROP] = "child-v2"
+    first_v2 = parent_fingerprint("parent-1")
+    second_v2 = parent_fingerprint("parent-2")
+
+    assert first_v1 != first_v2
+    assert second_v1 != second_v2
+
+
+def test_imported_cache_hit_without_fingerprint_marks_current_parent_unproven():
+    """Missing metadata on an imported cache hit prevents equivalent reuse."""
+    from NodeForge.function_instances import FunctionCompilationTrace
+
+    function_id = library_function_id("functions", "vendor.pkg", "demo")
+    materialization = IRFunctionMaterialization(
+        function_id, IRFunctionMaterializationMode.SHARED
+    )
+    spec = library_request(materialization=materialization)
+    cached = FakeGroup("Cached", fingerprint="")
+    cache = {("library", function_id, "SHARED"): cached}
+    trace = FunctionCompilationTrace()
+
+    with trace.group("parent", {}) as frame:
+        make_materializer(
+            lambda *args, **kwargs: pytest.fail("cache hit must not compile")
+        ).materialize_library(
+            spec, FunctionMaterializationContext(cache, None, trace)
+        )
+        assert frame.freshness_unproven is True
+        assert frame.finish("contract").freshness_unproven is True
 
 
 def test_imported_metadata_failure_prevents_cache_and_trace_publication():
@@ -440,8 +531,9 @@ def test_imported_unique_identity_uses_existing_call_site_key_and_owner_scope():
         calls.append(kwargs)
         return FakeGroup(group_name)
 
+    frame = Frame()
     result = make_materializer(compile_group).materialize_library(
-        spec, FunctionMaterializationContext(cache, None, None)
+        spec, FunctionMaterializationContext(cache, None, Trace(frame))
     )
     key = instance_key_for(call_site)
     owner = function_group_owner_scope("LIBRARY", "functions", "vendor.pkg", "demo", instance_key=key)
@@ -450,6 +542,25 @@ def test_imported_unique_identity_uses_existing_call_site_key_and_owner_scope():
     assert cache[("library", function_id, key)] is result.group
     assert calls[0]["function_group_owner_scope"] == owner
     assert calls[0]["function_instance_key"] == key
+    assert frame.children == [(materialization, "fingerprint")]
+    assert frame.children[0][0] is spec.materialization
+
+
+def test_direct_library_materialization_retains_separate_owner_construction():
+    """A direct catalog build has physical ownership without reusable-call IR."""
+    spec = library_request(materialization=None)
+    calls = []
+
+    def compile_group(source, group_name, **kwargs):
+        calls.append(kwargs)
+        return FakeGroup(group_name)
+
+    result = make_materializer(compile_group).materialize_library(spec, context=None)
+    expected = function_group_owner_scope(
+        "LIBRARY", "functions", "vendor.pkg", "demo"
+    )
+    assert result.owner_scope == expected
+    assert calls[0]["function_group_owner_scope"] == expected
 
 
 def test_imported_compile_failure_does_not_publish_cache_or_trace():
@@ -498,6 +609,7 @@ def test_materializer_source_has_no_compiler_backchannel_and_specs_are_ast_indep
     assert "__closure__" not in source
     assert "from .compiler import" not in source
     assert "import inspect" not in source
+    assert "IR_DEPENDENCY_LOCAL_CATALOG_MIGRATION" in source
     for spec_type in (LocalFunctionMaterializationSpec, LibraryFunctionMaterializationSpec, LibraryFunctionUpdateSpec):
         names = {field.name for field in fields(spec_type)}
         assert "comp" not in names

@@ -17,6 +17,7 @@ from .compiler_identities import FunctionId
 from .semantic_ir import IRFunctionMaterialization
 from .function_instances import (
     function_group_owner_scope,
+    function_materialization_owner_scope,
     instance_key_for_materialization,
     normalized_source,
     stamp_function_metadata,
@@ -129,18 +130,14 @@ class FunctionMaterializer:
         materialization = spec.materialization
         instance_key = instance_key_for_materialization(materialization)
         callee = materialization.callee
-        owner_scope = function_group_owner_scope(
-            "LOCAL_DEF",
-            callee.definition_owner,
-            callee.name,
-            callee.signature,
-            instance_key=instance_key,
-        )
+        owner_scope = function_materialization_owner_scope(materialization)
         cache_key = ("local-def", callee, instance_key or "SHARED")
         function_cache = context.function_group_cache
         function_group = function_cache.get(cache_key)
         if function_group is not None and spec.is_live_group(function_group):
-            self._record_child(context.function_compilation_trace, owner_scope, function_group)
+            self._record_dependency(
+                context.function_compilation_trace, materialization, function_group
+            )
             return MaterializedFunctionGroup(function_group, instance_key, owner_scope)
 
         existing = spec.find_existing(
@@ -176,7 +173,9 @@ class FunctionMaterializer:
             ),
         )
         function_cache[cache_key] = function_group
-        self._record_child(context.function_compilation_trace, owner_scope, function_group)
+        self._record_dependency(
+            context.function_compilation_trace, materialization, function_group
+        )
         return MaterializedFunctionGroup(function_group, instance_key, owner_scope)
 
     def materialize_library(
@@ -206,16 +205,23 @@ class FunctionMaterializer:
             use_reusable_cache = False
 
         function_id = spec.function_id
-        owner_scope = function_group_owner_scope(
-            "LIBRARY",
-            namespace,
-            function_id.package_id,
-            function_id.name,
-            instance_key=instance_key or None,
-        )
+        if materialization is not None:
+            owner_scope = function_materialization_owner_scope(materialization)
+        else:
+            owner_scope = function_group_owner_scope(
+                "LIBRARY",
+                namespace,
+                function_id.package_id,
+                function_id.name,
+                instance_key=instance_key or None,
+            )
         cache_key = ("library", function_id, instance_key or "SHARED")
         if use_reusable_cache and cache_key in context.function_group_cache:
-            return MaterializedFunctionGroup(context.function_group_cache[cache_key], instance_key, owner_scope)
+            group = context.function_group_cache[cache_key]
+            self._record_dependency(
+                context.function_compilation_trace, materialization, group
+            )
+            return MaterializedFunctionGroup(group, instance_key, owner_scope)
 
         transaction = context.function_group_transaction if context is not None else None
         trace = context.function_compilation_trace if context is not None else None
@@ -266,7 +272,7 @@ class FunctionMaterializer:
         if use_reusable_cache:
             context.function_group_cache[cache_key] = group
         if materialization is not None:
-            self._record_child(trace, owner_scope, group)
+            self._record_dependency(trace, materialization, group)
         return MaterializedFunctionGroup(group, instance_key, owner_scope)
 
     def _materialize_local_catalog(
@@ -303,6 +309,12 @@ class FunctionMaterializer:
         )
         frame = getattr(trace, "current", None)
         if frame is not None:
+            # IR_DEPENDENCY_LOCAL_CATALOG_MIGRATION: Local catalog calls do not yet carry
+            # reusable IRFunctionMaterialization identity because their current fresh-snapshot
+            # contract intentionally has no shared/unique instance identity. Preserve the existing
+            # freshness-unproven fallback here. Remove this branch when Local catalog calls have an
+            # explicit semantic dependency contract and their ownership/reuse semantics are defined
+            # and regression-tested in a dedicated plan.
             frame.mark_unproven("local catalog dependency")
         return group
 
@@ -346,11 +358,11 @@ class FunctionMaterializer:
         )
 
     @staticmethod
-    def _record_child(trace, owner_scope: str, group) -> None:
-        """Record one actually materialized child using the existing trace semantics."""
+    def _record_dependency(trace, materialization: IRFunctionMaterialization, group) -> None:
+        """Record one successful reusable access with its realized fingerprint."""
         frame = getattr(trace, "current", None)
         if frame is not None:
-            frame.record_child(owner_scope, stored_fingerprint(group))
+            frame.record_dependency(materialization, stored_fingerprint(group))
 
 
 __all__ = [
