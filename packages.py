@@ -18,7 +18,7 @@ import uuid
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Iterable
 
 from .errors import CompileError
 
@@ -517,24 +517,34 @@ def package_manifests(include_invalid: bool = False):
     return active_package_manifests(include_invalid=include_invalid)
 
 
-def library_roots(namespace: str) -> list[LibraryRoot]:
-    """Return active package roots for the requested library namespace."""
+def library_roots_from_manifests(
+    namespace: str,
+    manifests: Iterable[PackageManifest],
+) -> tuple[LibraryRoot, ...]:
+    """Derive package library roots from an explicit validated manifest snapshot."""
     if namespace not in {"functions", "examples"}:
-        return []
+        return ()
     roots: list[LibraryRoot] = []
-    for item in active_package_manifests():
+    for item in manifests:
         if isinstance(item, PackageDiagnostic):
             continue
         path = item.root_for(namespace)
         if path is not None:
             roots.append(LibraryRoot(namespace, path, item.package_id, item.name, item.version, item.origin))
-    return roots
+    return tuple(roots)
 
 
-def system_package_records() -> list[SystemPackageRecord]:
-    """Return active system directories discovered by package convention."""
+def library_roots(namespace: str) -> list[LibraryRoot]:
+    """Return active package roots for the requested library namespace."""
+    return list(library_roots_from_manifests(namespace, active_package_manifests()))
+
+
+def system_package_records_from_manifests(
+    manifests: Iterable[PackageManifest],
+) -> tuple[SystemPackageRecord, ...]:
+    """Derive system entrypoint records from an explicit validated manifest snapshot."""
     records: list[SystemPackageRecord] = []
-    for item in active_package_manifests():
+    for item in manifests:
         if isinstance(item, PackageDiagnostic):
             continue
         systems_root = item.root_for("systems")
@@ -558,7 +568,12 @@ def system_package_records() -> list[SystemPackageRecord]:
                     permissions=item.permissions,
                 )
             )
-    return records
+    return tuple(records)
+
+
+def system_package_records() -> list[SystemPackageRecord]:
+    """Return active system directories discovered by package convention."""
+    return list(system_package_records_from_manifests(active_package_manifests()))
 
 
 def install_package_directory(source_dir: Path, *, allow_python: bool, replace: bool = False, origin: str = "user") -> PackageManifest:

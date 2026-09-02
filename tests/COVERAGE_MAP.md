@@ -16,6 +16,14 @@
 - `tests/blender/conftest.py`: every core Blender test starts with an isolated empty NodeForge package inventory, so the core suite cannot silently depend on user-installed packages.
 - Package-manager and library-boundary tests create temporary synthetic packages inside the test itself when package behavior is the NodeForge behavior under test. Package-owned function/example/system behavior belongs to the package repositories, not the NodeForge core suite.
 
+## Compilation-session resolved environment
+
+- `tests/unit/test_resolved_environment.py`: immutable catalog/system mappings, defensive copies, record placement invariants, deferred `CompileError` and complete `OSError` diagnostic replay, one active-state read, stable old/new session observations, exact import record identity, snapshot system dispatch, record-bound library calls, backend binding validation, parse-before-resolution ordering, and search-based rejection of compilation-path live discovery.
+- `tests/unit/test_package_inventory.py`: manifest-derived library/system records match permanent live wrappers without state reads, explicit system-owner resolution, lazy record-bound handler loading, invalid active-record exclusion, exact collision diagnostics, and unchanged package state schema behavior.
+- `tests/blender/test_library_catalogs.py`: unused malformed Local state remains deferred, failed snapshot lookup performs no rediscovery, root/parent/leaf compiler identity sharing, nested materialization after live lookups are disabled, direct `Compiler` one-resolution compatibility, and a new root session observing changed Local state.
+- `tests/blender/test_unique_function_groups.py`, `tests/blender/test_update_group.py`, and the existing catalog regressions preserve shared/unique counts, ownership and package metadata, selected-root identity, topology, rollback, and temporary-group cleanup across the session-resolution refactor.
+- UI catalog and package coverage continues to call the permanent live discovery APIs, proving that refresh operations observe current state independently of compiler snapshots.
+
 ## Object sockets
 
 - `tests/unit/test_object_type.py`: Object token, builtin registration, local-function source, raw-node type token.

@@ -110,6 +110,83 @@ def test_explicitly_installed_packages_use_unified_inventory(package_inventory, 
     assert {root.package_id for root in packages.library_roots("examples")} == {"vendor.inventory"}
 
 
+def test_manifest_derived_roots_match_live_wrappers_without_loading_state(
+    package_inventory,
+    tmp_path,
+    monkeypatch,
+):
+    """Explicit derivation must preserve live ordering without owning inventory reads."""
+    source = tmp_path / "derived_roots"
+    (source / "functions").mkdir(parents=True)
+    (source / "examples").mkdir()
+    (source / "systems" / "marker").mkdir(parents=True)
+    (source / "functions" / "alpha.nf").write_text("output(value=1)\n", encoding="utf-8")
+    (source / "examples" / "beta.nf").write_text("output(value=2)\n", encoding="utf-8")
+    (source / "systems" / "marker" / "system.py").write_text(
+        "CONSTRUCTORS = ['derived_marker']\n"
+        "def load_handlers():\n"
+        "    return {'derived_marker': lambda comp, expr, depth=0: None}\n",
+        encoding="utf-8",
+    )
+    _write_manifest(
+        source,
+        package_id="vendor.derived",
+        contents={"functions": "functions", "examples": "examples", "systems": "systems"},
+        python=True,
+    )
+    packages.install_package_directory(source, allow_python=True)
+
+    manifests = tuple(packages.active_package_manifests())
+    expected_functions = tuple(packages.library_roots("functions"))
+    expected_examples = tuple(packages.library_roots("examples"))
+    expected_systems = tuple(packages.system_package_records())
+    monkeypatch.setattr(
+        packages,
+        "active_package_manifests",
+        lambda *args, **kwargs: pytest.fail("explicit derivation must not load package state"),
+    )
+
+    assert packages.library_roots_from_manifests("functions", manifests) == expected_functions
+    assert packages.library_roots_from_manifests("examples", manifests) == expected_examples
+    assert packages.library_roots_from_manifests("local", manifests) == ()
+    assert packages.system_package_records_from_manifests(manifests) == expected_systems
+
+
+def test_system_resolution_and_handler_dispatch_use_explicit_record(package_inventory, tmp_path, monkeypatch):
+    """A resolved system binding must select and load its recorded owner directly."""
+    source = tmp_path / "resolved_system"
+    (source / "systems" / "marker").mkdir(parents=True)
+    _write_manifest(
+        source,
+        package_id="vendor.resolved",
+        contents={"systems": "systems"},
+        python=True,
+    )
+    (source / "systems" / "marker" / "system.py").write_text(
+        "CONSTRUCTORS = ['resolved_marker']\n"
+        "def load_handlers():\n"
+        "    return {'resolved_marker': lambda comp, expr, depth=0: ('selected', depth)}\n",
+        encoding="utf-8",
+    )
+    packages.install_package_directory(source, allow_python=True)
+
+    records = tuple(packages.system_package_records())
+    selected = systems_registry.resolve_constructors(records)["resolved_marker"]
+    systems_registry.invalidate_cache()
+    monkeypatch.setattr(packages, "system_package_records", lambda: [])
+    assert systems_registry.constructor_names() == ()
+    monkeypatch.setattr(
+        systems_registry,
+        "_constructor_map",
+        lambda: pytest.fail("record-bound handler dispatch must not use the live registry"),
+    )
+    handler = systems_registry.get_resolved_handler(selected)
+
+    assert selected.name == "resolved_marker"
+    assert selected.record is records[0]
+    assert handler(None, None, 4) == ("selected", 4)
+
+
 
 
 

@@ -1,6 +1,7 @@
 """Public compiler facade and high-level Geometry Nodes group assembly."""
 
 import ast
+import functools
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
@@ -38,10 +39,13 @@ from .update import (
     _capture_group_external_state,
     _restore_group_external_state,
 )
-from .library import library_entry_names, materialize_library_entry_group, update_materialized_library_entry_group
+from .library import (
+    LibraryEntryRecord,
+    materialize_library_entry_group_for_record,
+    update_materialized_library_entry_group_for_record,
+)
 from .statements import _unique_output_name
 from .compile_time import reject_compile_time_object
-from .systems import registry as systems_registry
 from . import expression_compiler
 from .builtins import registry as builtin_registry
 from .function_instances import (
@@ -61,6 +65,7 @@ from .function_instances import (
 from .statement_compiler import GroupBuildContext, compile_statements
 from .semantic_analysis import RuntimeBindingSymbol
 from .blender_group_backend import BlenderGroupBackend, BlenderGroupBuildTransaction
+from .resolved_environment import ResolvedEnvironment, resolve_environment
 
 # BLENDER_TRANSACTION_LEGACY_ALIAS_MIGRATION: Keep the historical transaction class
 # names importable from compiler.py for one compatibility stage after physical Blender
@@ -80,6 +85,12 @@ class LibraryBinding:
 
     namespace: str
     canonical_name: str
+    record: LibraryEntryRecord
+
+    def __post_init__(self) -> None:
+        """Require the binding label to match its exact resolved catalog record."""
+        if self.record.namespace != self.namespace or self.record.name != self.canonical_name:
+            raise ValueError("Library binding does not match its resolved record")
 
 
 @dataclass(frozen=True)
@@ -93,6 +104,29 @@ class RuntimeBindingSnapshot:
         """Freeze both maps while retaining exact backend Value object identity."""
         object.__setattr__(self, "semantic_bindings", MappingProxyType(dict(self.semantic_bindings)))
         object.__setattr__(self, "backend_values", MappingProxyType(dict(self.backend_values)))
+
+
+class _ResolvedEnvironmentSlot:
+    """Resolve at most one immutable environment for a compiler-owned backend."""
+
+    def __init__(self, resolved_environment: ResolvedEnvironment | None = None):
+        """Optionally seed the slot for direct catalog operations."""
+        self._environment = resolved_environment
+
+    def get(self) -> ResolvedEnvironment:
+        """Return the seeded snapshot or resolve and retain one complete result."""
+        if self._environment is None:
+            self._environment = resolve_environment()
+        return self._environment
+
+
+class _ResolvedEnvironmentBoundBackend(BlenderGroupBackend):
+    """Expose compiler-session identity without changing physical backend behavior."""
+
+    def __init__(self, *, populate_candidate, resolved_environment_for_session):
+        """Bind one population callback and its environment provider."""
+        super().__init__(populate_candidate=populate_candidate)
+        self._resolved_environment_for_session = resolved_environment_for_session
 
 
 class Compiler:
@@ -117,6 +151,7 @@ class Compiler:
         function_definition_owner=None,
         function_compilation_trace=None,
         reserved_name_labels=None,
+        resolved_environment: ResolvedEnvironment | None = None,
     ):
         """Initialize state shared by expression, statement, and call compilers."""
         self.group = group
@@ -127,7 +162,39 @@ class Compiler:
         self.local_group_cache = local_group_cache if local_group_cache is not None else {}
         self.function_group_cache = function_group_cache if function_group_cache is not None else self.local_group_cache
         self.backend_builtins = dict(backend_builtins or {})
-        self.group_backend = group_backend or _new_group_backend()
+        # RESOLVED_ENVIRONMENT_MIGRATION: Compiler is still exported and legacy tests or
+        # integrations may construct it directly without the root compiler entry points.
+        # A standalone Compiler creates one snapshot and an environment-bound backend, or
+        # adopts the exact snapshot exposed by a supplied environment-bound backend. Reject
+        # arbitrary backends because their nested populate callback could resolve again.
+        # Production root entry points always pass one shared ResolvedEnvironment. Remove
+        # this fallback when Compiler is internal/session-owned and every caller must pass
+        # both an explicit environment and its matching session-bound backend.
+        backend_environment = None
+        if group_backend is not None:
+            provider = getattr(group_backend, "_resolved_environment_for_session", None)
+            if not callable(provider):
+                raise CompileError(
+                    "Internal error: supplied group backend is not bound to a resolved environment"
+                )
+            backend_environment = provider()
+
+        if resolved_environment is None:
+            resolved_environment = (
+                backend_environment
+                if backend_environment is not None
+                else resolve_environment()
+            )
+
+        if group_backend is None:
+            group_backend = _new_group_backend(resolved_environment)
+        elif backend_environment is not resolved_environment:
+            raise CompileError(
+                "Internal error: supplied group backend uses a different resolved environment"
+            )
+
+        self.resolved_environment = resolved_environment
+        self.group_backend = group_backend
         self.generated_resource_transaction = generated_resource_transaction
         self.imported_library_functions = dict(imported_library_functions or {})
         self.helper_namespace = helper_namespace or getattr(group, "name", "Group")
@@ -343,17 +410,27 @@ class Compiler:
             return self.compile(expr), True
 
 
-def _validate_import_bindings(import_pairs, body_stmts, local_function_defs, backend_names, inherited_imports=None):
+def _validate_import_bindings(
+    import_pairs,
+    body_stmts,
+    local_function_defs,
+    backend_names,
+    resolved_environment,
+    inherited_imports=None,
+):
     """Validate and return source-local namespace-aware catalog bindings."""
     imported: dict[str, LibraryBinding] = {}
     local_bindings = _binding_names(body_stmts)
-    reserved_names = set(builtin_registry.BUILTIN_NAMES) | {"output", "store", "panel"} | set(_ALLOWED_CONSTS) | set(systems_registry.constructor_names()) | set(backend_names) | set(TYPE_TOKEN_NAMES)
+    reserved_names = set(builtin_registry.BUILTIN_NAMES) | {"output", "store", "panel"} | set(_ALLOWED_CONSTS) | set(resolved_environment.system_names()) | set(backend_names) | set(TYPE_TOKEN_NAMES)
 
-    def validate_pair(namespace, canonical_name, exposed_name, *, inherited=False):
-        names = library_entry_names(namespace)
-        if canonical_name not in names:
+    def validate_pair(namespace, canonical_name, exposed_name, *, inherited=False, inherited_record=None):
+        catalog = resolved_environment.catalog(namespace)
+        record = catalog.find(canonical_name)
+        if record is None:
             raise CompileError(f"Unknown {namespace} import: {canonical_name}")
-        binding = LibraryBinding(namespace, canonical_name)
+        if inherited_record is not None and inherited_record is not record:
+            raise CompileError("Internal error: inherited library binding does not match resolved environment")
+        binding = LibraryBinding(namespace, canonical_name, record)
         if exposed_name in imported:
             if inherited and imported[exposed_name] == binding:
                 return
@@ -367,19 +444,25 @@ def _validate_import_bindings(import_pairs, body_stmts, local_function_defs, bac
     for import_request in import_pairs:
         namespace = import_request.module
         if import_request.is_star:
-            for library_name in sorted(library_entry_names(namespace), key=str.lower):
+            for library_name in sorted(resolved_environment.catalog(namespace).names(), key=str.lower):
                 validate_pair(namespace, library_name, library_name)
             continue
         validate_pair(namespace, import_request.canonical_name, import_request.exposed_name)
     for inherited_exposed, inherited_binding in dict(inherited_imports or {}).items():
         if isinstance(inherited_binding, LibraryBinding):
-            validate_pair(inherited_binding.namespace, inherited_binding.canonical_name, inherited_exposed, inherited=True)
+            validate_pair(
+                inherited_binding.namespace,
+                inherited_binding.canonical_name,
+                inherited_exposed,
+                inherited=True,
+                inherited_record=inherited_binding.record,
+            )
         else:
             validate_pair("functions", inherited_binding, inherited_exposed, inherited=True)
     return imported
 
 
-def _registered_name_labels(local_function_defs, backend_names, imported_library_functions):
+def _registered_name_labels(local_function_defs, backend_names, imported_library_functions, system_names):
     """Return active DSL-owned names and human-readable reservation labels."""
     labels = {}
 
@@ -390,7 +473,7 @@ def _registered_name_labels(local_function_defs, backend_names, imported_library
     add(builtin_registry.BUILTIN_NAMES, "DSL builtin")
     add({"output", "store", "panel"}, "reserved helper")
     add(_ALLOWED_CONSTS, "compile-time constant")
-    add(systems_registry.constructor_names(), "embedded-system constructor")
+    add(system_names, "embedded-system constructor")
     add(backend_names, "backend helper")
     add(TYPE_TOKEN_NAMES, "type token")
     add(imported_library_functions, "imported function")
@@ -497,6 +580,8 @@ def _populate_group(
     group,
     source: str,
     name: str = "NodeForge Group",
+    *,
+    resolved_environment_for_session,
     local_functions=None,
     backend_builtins=None,
     generated_resource_transaction=None,
@@ -516,15 +601,23 @@ def _populate_group(
 ):
     """Compile NodeForge source into an already-created fresh GeometryNodeTree."""
     raw_stmts = _parse_source(source)
+    resolved_environment = resolved_environment_for_session()
     raw_body_stmts, import_pairs = _extract_function_imports(raw_stmts)
+    system_names = resolved_environment.system_names()
 
     local_function_defs = dict(local_functions or {})
     for existing_local_name in local_function_defs:
-        systems_registry.validate_no_reserved_collision(existing_local_name, "Local function")
+        if existing_local_name in system_names:
+            raise CompileError(
+                f"Local function {existing_local_name!r} collides with reserved system constructor name"
+            )
     body_stmts = []
     for stmt in raw_body_stmts:
         if isinstance(stmt, ast.FunctionDef):
-            systems_registry.validate_no_reserved_collision(stmt.name, "Local function")
+            if stmt.name in system_names:
+                raise CompileError(
+                    f"Local function {stmt.name!r} collides with reserved system constructor name"
+                )
             if stmt.name in local_function_defs:
                 raise CompileError(f"Duplicate local function: {stmt.name}")
             local_function_defs[stmt.name] = stmt
@@ -533,22 +626,27 @@ def _populate_group(
 
     backend_names = set(backend_builtins or {})
     for helper_name in backend_names:
-        systems_registry.validate_no_reserved_collision(helper_name, "Local backend helper")
+        if helper_name in system_names:
+            raise CompileError(
+                f"Local backend helper {helper_name!r} collides with reserved system constructor name"
+            )
     # Preserve the existing invariant that bundled catalog entries cannot use
     # reserved embedded-system names even when the current source has no imports.
     for namespace in ("functions", "examples"):
-        library_entry_names(namespace)
+        resolved_environment.catalog(namespace).names()
     own_imported_library_functions = _validate_import_bindings(
         import_pairs,
         raw_body_stmts,
         local_function_defs,
         backend_names,
+        resolved_environment,
         inherited_imports=imported_library_functions,
     )
     reserved_name_labels = _registered_name_labels(
         local_function_defs,
         backend_names,
         own_imported_library_functions,
+        system_names,
     )
     _validate_registered_name_bindings(
         raw_body_stmts,
@@ -558,7 +656,7 @@ def _populate_group(
     _validate_interface_directive_placement(raw_body_stmts)
 
     stmts, consts = _preprocess_compile_time(body_stmts)
-    callable_names = set(own_imported_library_functions) | set(local_function_defs) | backend_names | set(systems_registry.constructor_names())
+    callable_names = set(own_imported_library_functions) | set(local_function_defs) | backend_names | set(system_names)
     input_names = sorted(set(_collect_inputs(stmts, extra_builtin_names=callable_names, consts=consts)) - set(consts.keys()))
     input_types = _infer_input_types(stmts)
     try:
@@ -605,6 +703,7 @@ def _populate_group(
         function_definition_owner=function_definition_owner,
         function_compilation_trace=function_compilation_trace,
         reserved_name_labels=reserved_name_labels,
+        resolved_environment=resolved_environment,
     )
 
     implicit_iface_by_identifier = {
@@ -691,9 +790,17 @@ def _populate_group(
     return group
 
 
-def _new_group_backend():
-    """Return the Blender physical publication backend for compiler entry points."""
-    return BlenderGroupBackend(populate_candidate=_populate_group)
+def _new_group_backend(resolved_environment: ResolvedEnvironment | None = None):
+    """Return a physical backend bound to one compiler-session environment slot."""
+    slot = _ResolvedEnvironmentSlot(resolved_environment)
+    populate = functools.partial(
+        _populate_group,
+        resolved_environment_for_session=slot.get,
+    )
+    return _ResolvedEnvironmentBoundBackend(
+        populate_candidate=populate,
+        resolved_environment_for_session=slot.get,
+    )
 
 
 def create_expression_group(source: str, name: str = "NodeForge Group"):
@@ -703,7 +810,14 @@ def create_expression_group(source: str, name: str = "NodeForge Group"):
 
 def create_library_catalog_group(namespace: str, name: str):
     """Create or update a reusable node group for a catalog entry."""
-    return materialize_library_entry_group(namespace, name, _new_group_backend())
+    environment = resolve_environment()
+    record = environment.catalog(namespace).find(name)
+    if record is None:
+        raise CompileError(f"Unknown {namespace} library entry: {name}")
+    return materialize_library_entry_group_for_record(
+        record,
+        _new_group_backend(environment),
+    )
 
 
 def create_library_function_group(name: str):
@@ -713,7 +827,15 @@ def create_library_function_group(name: str):
 
 def update_library_catalog_group(group, namespace: str, name: str):
     """Reload a catalog-backed group in place from its current editable source."""
-    return update_materialized_library_entry_group(namespace, name, group, _new_group_backend())
+    environment = resolve_environment()
+    record = environment.catalog(namespace).find(name)
+    if record is None:
+        raise CompileError(f"Current source for {namespace} library entry {name!r} is unavailable")
+    return update_materialized_library_entry_group_for_record(
+        record,
+        group,
+        _new_group_backend(environment),
+    )
 
 
 def update_expression_group(group, source: str):

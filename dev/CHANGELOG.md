@@ -167,3 +167,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.50.12
 
 - Moved reusable freshness dependency observation to canonical `IRFunctionMaterialization` identity, unified physical and fingerprint owner serialization, and fixed imported cache hits so every successful parent access records the child fingerprint.
+
+## 0.50.13
+
+- Resolved active package catalogs and system constructors once per root compilation into an immutable environment shared by all nested builds, with record-bound imports, deferred Local discovery errors, and preserved live UI inventory behavior.

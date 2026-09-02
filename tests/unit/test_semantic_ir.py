@@ -791,3 +791,10 @@ def test_backend_vector_conditional_component_and_boolean_primitives_without_ble
     bool_program = _lower("flag and True", bindings={"flag": TYPE_BOOL})
     assert backend.lower_expression(context, bool_program).typ == TYPE_BOOL
     assert calls[-1] == ("boolean_math", "AND", 0, 0)
+
+
+def test_resolved_environment_does_not_enter_semantic_ir_materialization_records():
+    """Session selection stays upstream of reusable-call Semantic IR values."""
+    assert "resolved_environment" not in {
+        field.name for field in dataclasses.fields(IRFunctionMaterialization)
+    }

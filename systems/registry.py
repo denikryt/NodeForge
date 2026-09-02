@@ -8,21 +8,26 @@ import sys
 import types
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable, Mapping
 
 from ..errors import CompileError
 from .. import packages
 
-_RESERVED_CACHE: dict[str, "_ConstructorRecord"] | None = None
+_RESERVED_CACHE: dict[str, "ResolvedSystemConstructor"] | None = None
 _MODULE_CACHE: dict[str, object] = {}
 
 
 @dataclass(frozen=True)
-class _ConstructorRecord:
+class ResolvedSystemConstructor:
     """Resolved owner for one public system constructor name."""
 
+    name: str
     record: packages.SystemPackageRecord
     constructors: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        """Defensively freeze the selected owner's declared constructor sequence."""
+        object.__setattr__(self, "constructors", tuple(self.constructors))
 
 
 def invalidate_cache() -> None:
@@ -55,11 +60,18 @@ def get_handler(name: str) -> Callable:
     item = _constructor_map().get(name)
     if item is None:
         raise CompileError(f"Unsupported system constructor: {name}")
-    handlers = _load_handlers(item)
+    return get_resolved_handler(item)
+
+
+def get_resolved_handler(binding: ResolvedSystemConstructor) -> Callable:
+    """Return the handler selected by one compilation-session system binding."""
+    handlers = _load_handlers(binding)
     try:
-        return handlers[name]
+        return handlers[binding.name]
     except KeyError as exc:
-        raise CompileError(f"System {item.record.system_id!r} did not provide handler for {name!r}") from exc
+        raise CompileError(
+            f"System {binding.record.system_id!r} did not provide handler for {binding.name!r}"
+        ) from exc
 
 
 def compile_call(comp, expr, depth=0):
@@ -67,6 +79,13 @@ def compile_call(comp, expr, depth=0):
     name = expr.func.id
     handler = get_handler(name)
     return handler(comp, expr, depth)
+
+
+def compile_resolved_call(comp, expr, binding: ResolvedSystemConstructor, depth=0):
+    """Compile a call through the exact system owner selected for this session."""
+    if expr.func.id != binding.name:
+        raise CompileError("Internal error: resolved system binding does not match call name")
+    return get_resolved_handler(binding)(comp, expr, depth)
 
 
 def clear_cache() -> None:
@@ -80,24 +99,31 @@ def validate_no_reserved_collision(name: str, owner: str) -> None:
         raise CompileError(f"{owner} {name!r} collides with reserved system constructor name")
 
 
-def _constructor_map() -> dict[str, _ConstructorRecord]:
+def _constructor_map() -> dict[str, ResolvedSystemConstructor]:
     global _RESERVED_CACHE
     if _RESERVED_CACHE is not None:
         return _RESERVED_CACHE
-    out: dict[str, _ConstructorRecord] = {}
+    out = dict(resolve_constructors(packages.system_package_records()))
+    _RESERVED_CACHE = out
+    return out
+
+
+def resolve_constructors(
+    records: Iterable[packages.SystemPackageRecord],
+) -> Mapping[str, ResolvedSystemConstructor]:
+    """Resolve constructor ownership from explicit package system records."""
+    out: dict[str, ResolvedSystemConstructor] = {}
     owners: dict[str, str] = {}
-    for record in packages.system_package_records():
+    for record in records:
         module = _load_system_entrypoint(record)
         constructors = _read_constructors(module, record)
-        constructor_record = _ConstructorRecord(record, constructors)
         for name in constructors:
             if name in out:
                 raise CompileError(
                     f"Duplicate system constructor {name!r}: {owners[name]} and {record.package_id}/{record.system_id}"
                 )
-            out[name] = constructor_record
+            out[name] = ResolvedSystemConstructor(name, record, constructors)
             owners[name] = f"{record.package_id}/{record.system_id}"
-    _RESERVED_CACHE = out
     return out
 
 
@@ -119,7 +145,7 @@ def _read_constructors(module, record: packages.SystemPackageRecord) -> tuple[st
     return tuple(names)
 
 
-def _load_handlers(owner: _ConstructorRecord) -> dict[str, Callable]:
+def _load_handlers(owner: ResolvedSystemConstructor) -> dict[str, Callable]:
     module = _load_system_entrypoint(owner.record)
     handlers = module.load_handlers()
     if not isinstance(handlers, dict):
@@ -183,12 +209,16 @@ def NAMES() -> tuple[str, ...]:
 
 
 __all__ = [
+    "ResolvedSystemConstructor",
     "constructor_names",
     "constructor_owner",
     "get_handler",
+    "get_resolved_handler",
     "clear_cache",
     "has_system_constructor",
     "compile_call",
+    "compile_resolved_call",
+    "resolve_constructors",
     "validate_no_reserved_collision",
     "invalidate_cache",
     "NAMES",

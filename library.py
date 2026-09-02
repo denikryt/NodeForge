@@ -11,6 +11,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Collection, Iterable, TYPE_CHECKING
 
 import bpy
 
@@ -35,6 +36,9 @@ from .function_instances import (
     FUNCTION_DEFINITION_OWNER_PROP,
     FUNCTION_INSTANCE_KEY_PROP,
 )
+
+if TYPE_CHECKING:
+    from .resolved_environment import ResolvedCatalog
 
 _SOURCE_EXTENSIONS = (".nf", ".nodeforge")
 _PACKAGE_SOURCE_NAME = "source.nf"
@@ -168,8 +172,12 @@ def _write_local_source_registry(roots: list[dict[str, str]]) -> None:
         raise
 
 
-def local_source_roots(*, include_missing: bool = False) -> list[dict[str, object]]:
-    """Return the managed Local root followed by configured external source roots."""
+def _local_source_roots_from_registry(
+    registry: Iterable[dict[str, str]],
+    *,
+    include_missing: bool = False,
+) -> list[dict[str, object]]:
+    """Derive Local folder roots from one already-read registry snapshot."""
     managed = _canonical_path(_default_local_catalog_dir())
     records: list[dict[str, object]] = [{
         "path": managed,
@@ -178,7 +186,7 @@ def local_source_roots(*, include_missing: bool = False) -> list[dict[str, objec
         "exists": managed.is_dir(),
     }]
     seen = {_path_key(managed)}
-    for item in _read_local_source_registry():
+    for item in registry:
         if item.get("kind", "folder") != "folder":
             continue
         path = _canonical_path(item["path"])
@@ -195,6 +203,14 @@ def local_source_roots(*, include_missing: bool = False) -> list[dict[str, objec
                 "exists": exists,
             })
     return records
+
+
+def local_source_roots(*, include_missing: bool = False) -> list[dict[str, object]]:
+    """Return the managed Local root followed by configured external source roots."""
+    return _local_source_roots_from_registry(
+        _read_local_source_registry(),
+        include_missing=include_missing,
+    )
 
 
 def link_local_source_folder(path: str, *, label: str = "") -> Path:
@@ -222,10 +238,14 @@ def link_local_source_folder(path: str, *, label: str = "") -> Path:
     return target
 
 
-def local_source_files(*, include_missing: bool = False) -> list[dict[str, object]]:
-    """Return individually linked external Local source files."""
+def _local_source_files_from_registry(
+    registry: Iterable[dict[str, str]],
+    *,
+    include_missing: bool = False,
+) -> list[dict[str, object]]:
+    """Derive linked Local files from one already-read registry snapshot."""
     records: list[dict[str, object]] = []
-    for item in _read_local_source_registry():
+    for item in registry:
         if item.get("kind", "folder") != "file":
             continue
         path = _canonical_path(item["path"])
@@ -238,6 +258,14 @@ def local_source_files(*, include_missing: bool = False) -> list[dict[str, objec
                 "exists": exists,
             })
     return records
+
+
+def local_source_files(*, include_missing: bool = False) -> list[dict[str, object]]:
+    """Return individually linked external Local source files."""
+    return _local_source_files_from_registry(
+        _read_local_source_registry(),
+        include_missing=include_missing,
+    )
 
 
 def _unlink_local_source_registration(path: str | Path, *, kind: str) -> Path:
@@ -302,11 +330,19 @@ def _is_public_function_name(name: str) -> bool:
     return _is_valid_function_name(name) and not name.startswith("_")
 
 
-def _validate_public_entry_name(name: str, context: str = "Library entry") -> str:
+def _validate_public_entry_name(
+    name: str,
+    context: str = "Library entry",
+    *,
+    system_constructor_names: Collection[str] | None = None,
+) -> str:
     """Return a validated public library entry name."""
     if not _is_public_function_name(name):
         raise CompileError(f"{context} name must be a valid public NodeForge import name")
-    systems_registry.validate_no_reserved_collision(name, context)
+    if system_constructor_names is None:
+        systems_registry.validate_no_reserved_collision(name, context)
+    elif name in system_constructor_names:
+        raise CompileError(f"{context} {name!r} collides with reserved system constructor name")
     return name
 
 
@@ -444,19 +480,30 @@ def _record_kind_for_paths(source_path: Path | None, module_path: Path | None) -
     return "script"
 
 
-def _candidate_records(namespace: str) -> list[LibraryEntryRecord]:
-    """Return raw discovered records before duplicate-name reduction."""
+def _candidate_records_from_inputs(
+    namespace: str,
+    *,
+    package_roots: Iterable[packages.LibraryRoot],
+    local_registry: Iterable[dict[str, str]] = (),
+) -> list[LibraryEntryRecord]:
+    """Return raw records from explicit package roots and one Local registry snapshot."""
     catalog = _catalog(namespace)
     roots: list[tuple[Path, str, str, str]] = []
+    local_files: list[dict[str, object]] = []
     if namespace == "local":
         ensure_local_catalog_dir()
-        roots.extend((record["path"], "", "", "") for record in local_source_roots())
+        registry = tuple(local_registry)
+        roots.extend(
+            (record["path"], "", "", "")
+            for record in _local_source_roots_from_registry(registry)
+        )
+        local_files = _local_source_files_from_registry(registry)
     else:
         if namespace == "examples":
             roots.append((catalog_dir(namespace), "", "", ""))
         roots.extend(
             (root.path, root.package_id, root.package_name, root.package_version)
-            for root in packages.library_roots(namespace)
+            for root in package_roots
         )
     records: list[LibraryEntryRecord] = []
     for root, package_id, package_name, package_version in roots:
@@ -520,7 +567,7 @@ def _candidate_records(namespace: str) -> list[LibraryEntryRecord]:
                         )
                     )
     if namespace == "local":
-        for linked in local_source_files():
+        for linked in local_files:
             path = linked["path"]
             if path.suffix in _SOURCE_EXTENSIONS and _is_public_function_name(path.stem):
                 records.append(LibraryEntryRecord(
@@ -532,6 +579,16 @@ def _candidate_records(namespace: str) -> list[LibraryEntryRecord]:
                     folder_path="",
                 ))
     return records
+
+
+def _candidate_records(namespace: str) -> list[LibraryEntryRecord]:
+    """Return live raw records before duplicate-name reduction."""
+    local_registry = tuple(_read_local_source_registry()) if namespace == "local" else ()
+    return _candidate_records_from_inputs(
+        namespace,
+        package_roots=() if namespace == "local" else packages.library_roots(namespace),
+        local_registry=local_registry,
+    )
 
 def local_browser_records(current_path: str = "") -> list[dict[str, object]]:
     """Return direct children for the Local mini file browser's current directory."""
@@ -635,11 +692,20 @@ def local_browser_records(current_path: str = "") -> list[dict[str, object]]:
     return rows
 
 
-def _unique_records(namespace: str) -> dict[str, LibraryEntryRecord]:
-    """Return one unique record per public name or fail on duplicate layouts."""
+def _unique_records_from_candidates(
+    namespace: str,
+    candidates: Iterable[LibraryEntryRecord],
+    *,
+    system_constructor_names: Collection[str],
+) -> dict[str, LibraryEntryRecord]:
+    """Select one record per public name from explicit discovery candidates."""
     by_name: dict[str, list[LibraryEntryRecord]] = {}
-    for record in _candidate_records(namespace):
-        _validate_public_entry_name(record.name, f"{namespace} library entry")
+    for record in candidates:
+        _validate_public_entry_name(
+            record.name,
+            f"{namespace} library entry",
+            system_constructor_names=system_constructor_names,
+        )
         by_name.setdefault(record.name, []).append(record)
     unique: dict[str, LibraryEntryRecord] = {}
     for name, records in by_name.items():
@@ -648,6 +714,58 @@ def _unique_records(namespace: str) -> dict[str, LibraryEntryRecord]:
             raise CompileError(f"Duplicate {namespace} library entry {name!r}: {paths}")
         unique[name] = records[0]
     return unique
+
+
+def resolve_catalog(
+    namespace: str,
+    *,
+    package_roots: Iterable[packages.LibraryRoot],
+    system_constructor_names: Collection[str],
+) -> "ResolvedCatalog":
+    """Resolve one catalog from explicit package/system inputs as success or failure."""
+    from .resolved_environment import (
+        ResolvedCatalog,
+        ResolvedCompileErrorFailure,
+        ResolvedOSErrorFailure,
+    )
+
+    try:
+        local_registry = tuple(_read_local_source_registry()) if namespace == "local" else ()
+        candidates = _candidate_records_from_inputs(
+            namespace,
+            package_roots=tuple(package_roots),
+            local_registry=local_registry,
+        )
+        entries = _unique_records_from_candidates(
+            namespace,
+            candidates,
+            system_constructor_names=system_constructor_names,
+        )
+    except CompileError as exc:
+        failure = ResolvedCompileErrorFailure(tuple(exc.args))
+    except OSError as exc:
+        failure = ResolvedOSErrorFailure(
+            exception_type=type(exc),
+            exception_args=tuple(exc.args),
+            errno=exc.errno,
+            strerror=exc.strerror,
+            filename=exc.filename,
+            filename2=exc.filename2,
+            winerror=getattr(exc, "winerror", None),
+        )
+    else:
+        return ResolvedCatalog(namespace, entries)
+    return ResolvedCatalog(namespace, {}, failure)
+
+
+def _unique_records(namespace: str) -> dict[str, LibraryEntryRecord]:
+    """Return one live unique record per public name or replay discovery failure."""
+    catalog = resolve_catalog(
+        namespace,
+        package_roots=() if namespace == "local" else packages.library_roots(namespace),
+        system_constructor_names=systems_registry.constructor_names(),
+    )
+    return {record.name: record for record in catalog.records()}
 
 
 def library_entry_records(namespace: str) -> list[dict[str, str]]:
@@ -677,8 +795,25 @@ def has_library_entry(namespace: str, name: str) -> bool:
 def load_library_entry_source(namespace: str, name: str) -> str:
     """Load editable NodeForge source code for a catalog entry."""
     record = find_library_entry_record(namespace, name)
-    if record is None or record.source_path is None:
+    if record is None:
         raise CompileError(f"{namespace} library entry {name!r} has no editable .nf source")
+    return load_library_entry_source_for_record(record)
+
+
+def _validate_resolved_record(record: LibraryEntryRecord) -> None:
+    """Validate the intrinsic namespace/name/path contract of a selected record."""
+    _catalog(record.namespace)
+    if not _is_public_function_name(record.name):
+        raise CompileError(f"{record.namespace} library entry name must be a valid public NodeForge import name")
+    if record.path != (record.source_path or record.module_path or record.path):
+        raise CompileError("Internal error: resolved library record path is inconsistent")
+
+
+def load_library_entry_source_for_record(record: LibraryEntryRecord) -> str:
+    """Load editable source from an exact resolved catalog record."""
+    _validate_resolved_record(record)
+    if record.source_path is None:
+        raise CompileError(f"{record.namespace} library entry {record.name!r} has no editable .nf source")
     return record.source_path.read_text(encoding="utf-8")
 
 
@@ -690,33 +825,41 @@ def _module_path_for_entry(namespace: str, name: str) -> Path | None:
     return record.module_path
 
 
-def _load_entry_module(namespace: str, name: str):
-    """Load a trusted native helper module for a catalog entry."""
-    catalog = _catalog(namespace)
-    record = find_library_entry_record(namespace, name)
-    path = record.module_path if record is not None else None
+def _load_entry_module_for_record(record: LibraryEntryRecord):
+    """Load the trusted native module selected by an exact catalog record."""
+    _validate_resolved_record(record)
+    catalog = _catalog(record.namespace)
+    path = record.module_path
     if path is None or not catalog.allow_native or catalog.native_module_file is None:
-        raise CompileError(f"Unknown native {namespace} library entry: {name}")
+        raise CompileError(f"Unknown native {record.namespace} library entry: {record.name}")
     package = __package__ or "NodeForge"
     module_stem = Path(catalog.native_module_file).stem
     if record.package_id:
         safe_package_id = "".join(ch if ch.isalnum() else "_" for ch in record.package_id)
         digest = str(abs(hash(str(path.parent.resolve()))))
-        base_pkg = f"{package}._package_modules.{safe_package_id}.{namespace}.{name}_{digest}"
+        base_pkg = f"{package}._package_modules.{safe_package_id}.{record.namespace}.{record.name}_{digest}"
         _ensure_synthetic_package(base_pkg, path.parent)
         module_name = f"{base_pkg}.{module_stem}"
     else:
-        module_name = f"{package}.{catalog.dirname}.{name}.{module_stem}"
+        module_name = f"{package}.{catalog.dirname}.{record.name}.{module_stem}"
     existing = sys.modules.get(module_name)
     if existing is not None and getattr(existing, "__file__", None) == str(path):
         return existing
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
-        raise CompileError(f"Could not load {namespace} backend module: {path}")
+        raise CompileError(f"Could not load {record.namespace} backend module: {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _load_entry_module(namespace: str, name: str):
+    """Load a live-resolved trusted native helper module for a catalog entry."""
+    record = find_library_entry_record(namespace, name)
+    if record is None:
+        raise CompileError(f"Unknown native {namespace} library entry: {name}")
+    return _load_entry_module_for_record(record)
 
 
 def _ensure_synthetic_package(base_pkg: str, root: Path) -> None:
@@ -748,32 +891,58 @@ def has_native_compile_call(namespace: str, name: str | None = None) -> bool:
     """
     if name is None:
         namespace, name = "functions", namespace
-    if _module_path_for_entry(namespace, name) is None:
+    record = find_library_entry_record(namespace, name)
+    return False if record is None else has_native_compile_call_for_record(record)
+
+
+def has_native_compile_call_for_record(record: LibraryEntryRecord) -> bool:
+    """Return whether the exact selected record owns whole-call compilation."""
+    _validate_resolved_record(record)
+    if record.module_path is None:
         return False
-    module = _load_entry_module(namespace, name)
+    module = _load_entry_module_for_record(record)
     return callable(getattr(module, "compile_call", None))
 
 
 def backend_builtins_for_entry(namespace: str, name: str) -> dict[str, object]:
     """Return package-local backend helpers exposed while compiling source.nf."""
-    if _module_path_for_entry(namespace, name) is None:
+    record = find_library_entry_record(namespace, name)
+    if record is None:
         return {}
-    module = _load_entry_module(namespace, name)
+    return backend_builtins_for_record(record)
+
+
+def backend_builtins_for_record(record: LibraryEntryRecord) -> dict[str, object]:
+    """Return backend helpers from the exact selected catalog record."""
+    _validate_resolved_record(record)
+    if record.module_path is None:
+        return {}
+    module = _load_entry_module_for_record(record)
     builtins = getattr(module, "BACKEND_BUILTINS", None)
     if builtins is None:
         return {}
     if not isinstance(builtins, dict):
-        raise CompileError(f"{namespace} module {name} BACKEND_BUILTINS must be a dict")
+        raise CompileError(f"{record.namespace} module {record.name} BACKEND_BUILTINS must be a dict")
     return dict(builtins)
 
 
 def compile_module_library_entry_call(comp, expr, depth=0, namespace="functions", entry_name=None):
     """Compile a call handled by a trusted native helper module."""
     name = entry_name or expr.func.id
-    module = _load_entry_module(namespace, name)
+    record = find_library_entry_record(namespace, name)
+    if record is None:
+        raise CompileError(f"Unknown native {namespace} library entry: {name}")
+    return compile_module_library_entry_call_for_record(comp, expr, record, depth)
+
+
+def compile_module_library_entry_call_for_record(comp, expr, record: LibraryEntryRecord, depth=0):
+    """Compile a call through the native module of an exact selected record."""
+    module = _load_entry_module_for_record(record)
     compile_call = getattr(module, "compile_call", None)
     if compile_call is None:
-        raise CompileError(f"{namespace} module {name} must define compile_call(comp, expr, depth=0)")
+        raise CompileError(
+            f"{record.namespace} module {record.name} must define compile_call(comp, expr, depth=0)"
+        )
     return compile_call(comp, expr, depth)
 
 
@@ -858,8 +1027,19 @@ def resolve_reloadable_library_entry(group, namespace: str | None = None, name: 
     record = find_library_entry_record(namespace, name)
     if record is None:
         raise CompileError(f"Current source for {namespace} library entry {name!r} is unavailable")
+    return validate_reloadable_library_entry_record(group, record)
+
+
+def validate_reloadable_library_entry_record(group, record: LibraryEntryRecord) -> LibraryEntryRecord:
+    """Validate an exact selected record against an existing group's provenance."""
+    _validate_resolved_record(record)
+    stored_namespace, stored_name = _group_catalog_provenance(group)
+    if record.namespace != stored_namespace or record.name != stored_name:
+        raise CompileError(
+            f"Selected node group belongs to {stored_namespace}/{stored_name}, not {record.namespace}/{record.name}"
+        )
     if record.source_path is None:
-        raise CompileError(f"{namespace} library entry {name!r} has no reloadable .nf source")
+        raise CompileError(f"{record.namespace} library entry {record.name!r} has no reloadable .nf source")
 
     try:
         stored_package_id = str(group.get("nodeforge_package_id") or CORE_PACKAGE_ID)
@@ -868,7 +1048,7 @@ def resolve_reloadable_library_entry(group, namespace: str | None = None, name: 
     current_package_id = normalize_library_package_id(record.package_id)
     if stored_package_id != current_package_id:
         raise CompileError(
-            f"Current source for {namespace} library entry {name!r} belongs to a different package"
+            f"Current source for {record.namespace} library entry {record.name!r} belongs to a different package"
         )
     return record
 
@@ -876,12 +1056,18 @@ def resolve_reloadable_library_entry(group, namespace: str | None = None, name: 
 def update_materialized_library_entry_group(namespace: str, name: str, group, group_backend):
     """Recompile the current editable catalog source into an existing root group."""
     record = resolve_reloadable_library_entry(group, namespace, name)
-    source = load_library_entry_source(namespace, name)
-    backend_builtins = backend_builtins_for_entry(namespace, name)
-    function_id = library_function_id(namespace, record.package_id, name)
+    return update_materialized_library_entry_group_for_record(record, group, group_backend)
+
+
+def update_materialized_library_entry_group_for_record(record: LibraryEntryRecord, group, group_backend):
+    """Update an existing root group from one exact resolved catalog record."""
+    validate_reloadable_library_entry_record(group, record)
+    source = load_library_entry_source_for_record(record)
+    backend_builtins = backend_builtins_for_record(record)
+    function_id = library_function_id(record.namespace, record.package_id, record.name)
     spec = LibraryFunctionUpdateSpec(
-        namespace=namespace,
-        name=name,
+        namespace=record.namespace,
+        name=record.name,
         record=record,
         source=source,
         backend_builtins=backend_builtins,
@@ -983,10 +1169,33 @@ def get_or_create_library_entry_group(
 ) -> MaterializedFunctionGroup:
     """Resolve an editable catalog definition and return its materialization result."""
     record = find_library_entry_record(namespace, name)
-    if record is None or record.source_path is None:
+    if record is None:
         raise CompileError(f"{namespace} library entry {name!r} has no editable .nf source")
-    source = load_library_entry_source(namespace, name)
-    backend_builtins = backend_builtins_for_entry(namespace, name)
+    return get_or_create_library_entry_group_for_record(
+        record,
+        group_backend,
+        materialization=materialization,
+        function_id=function_id,
+        materialization_context=materialization_context,
+    )
+
+
+def get_or_create_library_entry_group_for_record(
+    record: LibraryEntryRecord,
+    group_backend,
+    *,
+    materialization: IRFunctionMaterialization | None = None,
+    function_id: FunctionId | None = None,
+    materialization_context: FunctionMaterializationContext | None = None,
+) -> MaterializedFunctionGroup:
+    """Materialize an editable definition from one exact resolved catalog record."""
+    _validate_resolved_record(record)
+    namespace = record.namespace
+    name = record.name
+    if record.source_path is None:
+        raise CompileError(f"{namespace} library entry {name!r} has no editable .nf source")
+    source = load_library_entry_source_for_record(record)
+    backend_builtins = backend_builtins_for_record(record)
 
     if namespace == "local":
         if materialization is not None:
@@ -1058,8 +1267,16 @@ def materialize_library_entry_group(namespace: str, name: str, group_backend):
     record = find_library_entry_record(namespace, name)
     if record is None:
         raise CompileError(f"Unknown {namespace} library entry: {name}")
+    return materialize_library_entry_group_for_record(record, group_backend)
+
+
+def materialize_library_entry_group_for_record(record: LibraryEntryRecord, group_backend):
+    """Create/update a GeometryNodeTree from one exact resolved catalog record."""
+    _validate_resolved_record(record)
+    namespace = record.namespace
+    name = record.name
     if record.module_path is not None:
-        module = _load_entry_module(namespace, name)
+        module = _load_entry_module_for_record(record)
         materialize = getattr(module, "materialize_group", None)
         if materialize is not None:
             group = materialize(group_backend.compile_group_callback)
@@ -1069,7 +1286,7 @@ def materialize_library_entry_group(namespace: str, name: str, group_backend):
                 pass
             return apply_function_group_display_name(group, name) if namespace == "functions" else group
     if record.source_path is not None:
-        materialized = get_or_create_library_entry_group(namespace, name, group_backend)
+        materialized = get_or_create_library_entry_group_for_record(record, group_backend)
         group = materialized.group
         return apply_function_group_display_name(group, name) if namespace == "functions" else group
     raise CompileError(f"Unknown {namespace} library entry: {name}")
@@ -1300,23 +1517,32 @@ __all__ = [
     "LibraryCatalog",
     "LibraryEntryRecord",
     "catalog_dir",
+    "resolve_catalog",
     "library_entry_names",
     "library_entry_records",
     "find_library_entry_record",
     "has_library_entry",
     "load_library_entry_source",
+    "load_library_entry_source_for_record",
     "resolve_reloadable_library_entry",
+    "validate_reloadable_library_entry_record",
     "update_materialized_library_entry_group",
+    "update_materialized_library_entry_group_for_record",
     "materialize_library_entry_group",
+    "materialize_library_entry_group_for_record",
     "get_or_create_library_entry_group",
+    "get_or_create_library_entry_group_for_record",
     "make_library_call_node",
     "display_name_for_function",
     "display_name_for_group",
     "apply_function_node_display_name",
     "has_module_library_entry",
     "has_native_compile_call",
+    "has_native_compile_call_for_record",
     "backend_builtins_for_entry",
+    "backend_builtins_for_record",
     "compile_module_library_entry_call",
+    "compile_module_library_entry_call_for_record",
     "ensure_local_catalog_dir",
     "local_source_roots",
     "link_local_source_folder",

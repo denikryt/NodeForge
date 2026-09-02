@@ -9,10 +9,9 @@ from .compiler_identities import library_function_id
 from .semantic_ir import IRFunctionMaterializationMode
 from .function_materializer import FunctionMaterializationContext
 from .library import (
-    has_native_compile_call,
-    find_library_entry_record,
-    compile_module_library_entry_call,
-    get_or_create_library_entry_group,
+    has_native_compile_call_for_record,
+    compile_module_library_entry_call_for_record,
+    get_or_create_library_entry_group_for_record,
     make_library_call_node,
     _normalized_socket_name,
     _socket_type_to_value_type,
@@ -63,38 +62,39 @@ def _validate_argument_type(function_name, socket_name, expected_type, value):
         )
 
 
-def _supports_unique_function_group(namespace: str, name: str) -> bool:
+def _supports_unique_function_group(record) -> bool:
     """Return whether an imported expression call has reusable editable groups."""
-    if namespace not in {"functions", "examples"}:
-        return False
-    record = find_library_entry_record(namespace, name)
-    return bool(record is not None and record.source_path is not None and not has_native_compile_call(namespace, name))
+    return bool(
+        record.namespace in {"functions", "examples"}
+        and record.source_path is not None
+        and not has_native_compile_call_for_record(record)
+    )
 
 
 def compile_library_function_call(comp, expr, depth=0, function_name=None, namespace="functions", binding=None, modifiers=None):
     """Compile a namespace-aware library call without owning discovery."""
     modifiers = modifiers or FunctionCallModifiers()
-    if binding is not None:
-        namespace = binding.namespace
-        name = binding.canonical_name
-    else:
-        name = function_name or expr.func.id
-    if modifiers.unique_was_explicit and not _supports_unique_function_group(namespace, name):
+    if binding is None:
+        raise CompileError("Internal error: imported library call requires a resolved binding")
+    namespace = binding.namespace
+    name = binding.canonical_name
+    record = binding.record
+    if record.namespace != namespace or record.name != name:
+        raise CompileError("Internal error: imported library binding record mismatch")
+    if modifiers.unique_was_explicit and not _supports_unique_function_group(record):
         raise unsupported_unique(name)
-    if has_native_compile_call(namespace, name):
-        return compile_module_library_entry_call(comp, expr, depth, namespace=namespace, entry_name=name)
+    if has_native_compile_call_for_record(record):
+        return compile_module_library_entry_call_for_record(comp, expr, record, depth)
     x = depth * 240
     y = -depth * 90
-    record = find_library_entry_record(namespace, name)
     materialization = None
-    if record is not None:
-        # CANONICAL_CALL_ID_MIGRATION: Imported reusable calls still resolve through the
-        # legacy AST/library dispatcher. Construct their canonical FunctionId at this
-        # boundary without changing call behavior. Remove this bridge when semantic call
-        # resolution owns imported callable identity before function-group materialization.
-        function_id = library_function_id(namespace, record.package_id, name)
-        if namespace in {"functions", "examples"}:
-            materialization = comp.resolve_reusable_function_materialization(function_id, modifiers)
+    # CANONICAL_CALL_ID_MIGRATION: Imported reusable calls still resolve through the
+    # legacy AST/library dispatcher. Construct their canonical FunctionId at this
+    # boundary without changing call behavior. Remove this bridge when semantic call
+    # resolution owns imported callable identity before function-group materialization.
+    function_id = library_function_id(namespace, record.package_id, name)
+    if namespace in {"functions", "examples"}:
+        materialization = comp.resolve_reusable_function_materialization(function_id, modifiers)
     cache_key = ("catalog", namespace, name)
     # REUSABLE_CALL_IR_MIGRATION: Local catalog entries keep their existing materialization
     # semantics in this behavior-preserving stage because the current namespace="local"
@@ -109,9 +109,8 @@ def compile_library_function_call(comp, expr, depth=0, function_name=None, names
             function_group_transaction=comp.function_group_transaction,
             function_compilation_trace=comp.function_compilation_trace,
         )
-        materialized = get_or_create_library_entry_group(
-            namespace,
-            name,
+        materialized = get_or_create_library_entry_group_for_record(
+            record,
             comp.group_backend,
             materialization=materialization,
             function_id=function_id if materialization is not None else None,

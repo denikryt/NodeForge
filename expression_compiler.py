@@ -297,10 +297,11 @@ def compile_expr(comp, expr, depth=0):
         name = expr.func.id
         expr, function_modifiers = extract_function_call_modifiers(comp, expr, name)
         is_imported_library_call = name in comp.imported_library_functions
+        system_binding = comp.resolved_environment.system(name)
         if (
             expr.keywords
             and not builtin_registry.has_callable_builtin(name)
-            and not systems_registry.has_system_constructor(name)
+            and system_binding is None
             and not is_imported_library_call
             and name not in comp.local_functions
             and name not in comp.backend_builtins
@@ -312,10 +313,10 @@ def compile_expr(comp, expr, depth=0):
             if function_modifiers.unique_was_explicit:
                 raise unsupported_unique(name)
             return builtin_registry.compile_call(comp, expr, depth)
-        if systems_registry.has_system_constructor(name):
+        if system_binding is not None:
             if function_modifiers.unique_was_explicit:
                 raise unsupported_unique(name)
-            return systems_registry.compile_call(comp, expr, depth)
+            return systems_registry.compile_resolved_call(comp, expr, system_binding, depth)
         if name in comp.local_functions:
             return local_functions.compile_local_function_call(comp, expr, depth, modifiers=function_modifiers)
         if name in comp.backend_builtins:
