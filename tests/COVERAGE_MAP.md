@@ -81,9 +81,10 @@
 
 ## Semantic IR expression boundary
 
-- `tests/unit/test_semantic_ir.py`: Blender-independent IR records, canonical `BindingId` runtime binding references, immutable `IRFunctionMaterialization` shared/unique invariants, literal/binding typing, name precedence, operator contracts, ordered mixed-tree ownership, explicit immutable `BlenderIRLoweringContext`, binding/materialization invariants, Object attribute fallback, conditional ownership, downstream materialization-authority contracts, and migration-marker invariants.
-- `tests/unit/test_semantic_backend_contract.py`: analyzer-derived finite operation/type matrix executed through the explicit lowering context and the real `nodes.py` realization helpers, plus commitment semantics proving backend failure after successful analysis propagates without legacy AST retry.
-- `tests/blender/test_semantic_ir_compile.py`: production IR routing, direct context lowering over real Blender RNA for analyzer-reachable backend signatures, representative graph materialization, unary topology/socket identity, comparison-chain pairwise materialization/layout, and fresh-build cleanup on semantic or partially materialized backend failure without legacy retry.
+- `tests/unit/test_semantic_ir.py`: Blender-independent IR records, structural `IRArray` results, detached semantic constants/const-eval snapshots, unary-plus structural identity, Vector subscript normalization, Object-property ownership, canonical `BindingId` runtime references, explicit call/legacy-binding fallbacks, materialization invariants, and exact migration-marker contracts.
+- `tests/unit/test_semantic_analysis.py`: semantic result/type validation plus cycle-safe detached constant snapshots that preserve list/tuple cycles, aliasing, and distinct opaque identities for const-eval while replacing opaque compiler/backend leaves without retaining original object identity.
+- `tests/unit/test_semantic_backend_contract.py`: analyzer-derived operation/type contracts executed through the explicit lowering context and real `nodes.py` helpers, including recursive array-result reconstruction, Vector literal Combine XYZ realization, exact `ObjectValue` Object Info reuse, impossible unary-plus IR rejection, and no legacy retry after accepted semantic lowering.
+- `tests/blender/test_semantic_ir_compile.py`: production routing for structural arrays, Vector literals/subscripts, Object properties, and explicit call-parent fallback; real Blender RNA coverage for arrays/unary identity, named Vector constants, Object property reuse/configuration, comparison-chain topology, cycle-safe unused constants, and fresh-build cleanup after semantic/backend failure.
 
 ## Blender group transaction backend
 
@@ -96,7 +97,7 @@
 `tests/blender/expression_characterization/` records and verifies black-box expression behavior through the production compiler and a real Blender `GeometryNodeTree`.
 
 - `.nf` source cases map mechanically to committed canonical JSON baselines through the flat manifest case ID.
-- Graph baselines cover ordered interface sockets, node types, semantic node properties/payloads, exact links, and opt-in representative expression placement while excluding inactive Blender defaults.
+- Graph baselines cover ordered interface sockets, node types, semantic node properties/payloads, and exact links while excluding inactive Blender defaults.
 - The manifest independently declares `graph` versus `compile_error` outcome, so the recorder cannot bless an unexpected success/failure transition.
 - Cases cover structural list/tuple/index behavior, Vector indexing, named compile-time Vectors, Object properties/Object Info reuse and configuration, unary identity, successful mixed call-boundary expressions, compile-time container semantics, and representative nested expressions.
 - Every case removes all node groups it created; controlled-failure cases additionally fail if compilation leaked any fresh group.

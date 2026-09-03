@@ -21,6 +21,7 @@ from NodeForge.constants import (
 from NodeForge.errors import CompileError
 from NodeForge.compiler_identities import BindingId, CallSiteId, local_function_id
 from NodeForge.semantic_ir import (
+    IRArray,
     IRBinary,
     IRFunctionMaterialization,
     IRFunctionMaterializationMode,
@@ -29,12 +30,22 @@ from NodeForge.semantic_ir import (
     IRCompare,
     IRConditional,
     IRLiteral,
+    IRObjectProperty,
     IRProgram,
     IRUnary,
     IRValue,
     IRVectorComponent,
+    IRVectorLiteral,
 )
-from NodeForge.semantic_analysis import RuntimeBindingSymbol, SemanticEnvironment, analyze_expression
+from NodeForge.semantic_analysis import (
+    ArrayResultShape,
+    RuntimeBindingSymbol,
+    RuntimeResultShape,
+    SemanticConstant,
+    SemanticEnvironment,
+    analyze_expression,
+    build_semantic_constant_snapshot,
+)
 from NodeForge.semantic_lowering import lower_analyzed_expression
 
 
@@ -59,17 +70,7 @@ def _environment(*, bindings=None, consts=None, labels=None, legacy_names=()):
     """Build one immutable semantic environment for pure IR tests."""
     from types import MappingProxyType
 
-    scalar_constants = {}
-    unsupported_constants = set()
-    for name, value in (consts or {}).items():
-        if isinstance(value, bool):
-            scalar_constants[name] = (TYPE_BOOL, value)
-        elif isinstance(value, (int, float)):
-            scalar_constants[name] = (TYPE_FLOAT, value)
-        elif isinstance(value, str):
-            scalar_constants[name] = (TYPE_STRING, value)
-        else:
-            unsupported_constants.add(name)
+    semantic_constants, const_eval_values = build_semantic_constant_snapshot(consts or {})
     runtime_bindings = {
         name: RuntimeBindingSymbol(_test_binding_id(name), typ)
         for name, typ in (bindings or {}).items()
@@ -77,8 +78,8 @@ def _environment(*, bindings=None, consts=None, labels=None, legacy_names=()):
     return SemanticEnvironment(
         MappingProxyType(runtime_bindings),
         frozenset(legacy_names),
-        MappingProxyType(scalar_constants),
-        frozenset(unsupported_constants),
+        semantic_constants,
+        const_eval_values,
         MappingProxyType(dict(labels or {})),
     )
 
@@ -138,7 +139,11 @@ def test_function_materialization_ir_enforces_shared_unique_invariants():
 
 
 def test_semantic_modules_are_blender_independent_and_ir_is_immutable():
-    assert "bpy" not in sys.modules
+    import NodeForge.semantic_analysis as semantic_analysis_module
+    import NodeForge.semantic_ir as semantic_ir_module
+    import NodeForge.semantic_lowering as semantic_lowering_module
+
+    assert all("bpy" not in module.__dict__ for module in (semantic_analysis_module, semantic_ir_module, semantic_lowering_module))
     program = _lower("a + 1", bindings={"a": TYPE_FLOAT})
     assert isinstance(program, IRProgram)
     assert dataclasses.is_dataclass(program)
@@ -250,10 +255,14 @@ def test_supported_scalar_const_and_allowed_const_lower_to_literals():
     assert pi.result.typ == TYPE_FLOAT
 
 
-def test_reached_unknown_name_is_error_and_unrepresented_constant_is_unsupported():
+def test_reached_unknown_name_is_error_and_non_scalar_constants_are_owned():
     with pytest.raises(CompileError, match="Unknown name: unknown"):
         _lower("unknown")
-    assert _lower("v", consts={"v": (1, 2, 3)}) is None
+    vector = _lower("v", consts={"v": (1, 2, 3)})
+    assert isinstance(vector.operations[0], IRVectorLiteral)
+    assert vector.result.typ == TYPE_VECTOR
+    with pytest.raises(CompileError, match="Unsupported compile-time value in runtime expression"):
+        _lower("bad", consts={"bad": object()})
 
 
 def test_type_token_and_reserved_value_diagnostics_are_preserved():
@@ -286,13 +295,12 @@ def test_invalid_owned_binary_operation_is_compile_error():
 
 
 @pytest.mark.parametrize("typ", [TYPE_FLOAT, TYPE_MATERIAL, TYPE_OBJECT, TYPE_GEOMETRY, TYPE_BUNDLE, TYPE_STRING])
-def test_unary_plus_is_explicit_identity_operation_for_any_owned_runtime_value(typ):
+def test_unary_plus_is_structural_identity_for_owned_runtime_values(typ):
     program = _lower("+a", bindings={"a": typ})
-    unary = program.operations[-1]
-    assert isinstance(unary, IRUnary)
-    assert unary.op == "+"
-    assert unary.result.typ == typ
-    assert unary.operand == program.operations[0].result
+    assert len(program.operations) == 1
+    assert isinstance(program.operations[0], IRBinding)
+    assert program.result is program.operations[0].result
+    assert not any(isinstance(operation, IRUnary) and operation.op == "+" for operation in program.operations)
 
 
 def test_unary_minus_and_not_types():
@@ -365,17 +373,21 @@ def test_conditional_validation_and_backend_ownership_order():
         _lower("a if cond else b", bindings={"cond": TYPE_FLOAT, "a": TYPE_MATERIAL, "b": TYPE_MATERIAL})
 
 
-def test_vector_component_consumes_vector_value_and_object_attribute_falls_back():
+def test_vector_component_and_object_property_semantics_are_owned():
     program = _lower("v.x", bindings={"v": TYPE_VECTOR})
     component = program.operations[-1]
     assert isinstance(component, IRVectorComponent)
     assert component.value == program.operations[0].result
-    assert component.value.typ == TYPE_VECTOR
     assert component.result.typ == TYPE_FLOAT
     with pytest.raises(CompileError, match="only be used on Vector"):
         _lower("a.x", bindings={"a": TYPE_FLOAT})
-    assert _lower("obj.location", bindings={"obj": TYPE_OBJECT}) is None
-    assert _lower("obj.x", bindings={"obj": TYPE_OBJECT}) is None
+    obj = _lower("obj.location", bindings={"obj": TYPE_OBJECT})
+    prop = obj.operations[-1]
+    assert isinstance(prop, IRObjectProperty)
+    assert prop.property_name == "location"
+    assert prop.result.typ == TYPE_VECTOR
+    with pytest.raises(CompileError, match="Object values support only"):
+        _lower("obj.x", bindings={"obj": TYPE_OBJECT})
 
 
 def test_mixed_fallback_and_diagnostic_boundaries_are_preserved():
@@ -387,9 +399,14 @@ def test_mixed_fallback_and_diagnostic_boundaries_are_preserved():
     assert _lower("1 < legacy_call() < (True + 1)") is None
 
 
-@pytest.mark.parametrize("source", ["foo(a)", "obj.info()", "[a, b]", "(a, b)", "a[0]"])
-def test_explicit_first_slice_boundaries_are_unsupported(source):
+@pytest.mark.parametrize("source", ["foo(a)", "obj.info()", "foo() + 1", "1 + foo()"])
+def test_call_boundaries_remain_unsupported(source):
     assert _lower(source, bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT, "obj": TYPE_OBJECT}) is None
+
+@pytest.mark.parametrize("name", ["builder", "raw_result", "tuple_result", "items"])
+def test_legacy_binding_boundaries_remain_unsupported(name):
+    source = f"{name}[0]" if name != "builder" else "builder.geometry"
+    assert _lower(source, legacy_names={name}) is None
 
 
 def test_ir_operations_store_no_ast_or_backend_objects():
@@ -412,7 +429,7 @@ def test_ir_emitter_consumes_analyzed_operation_facts_without_renormalizing_ast(
     expr = _expr("a < b")
     analysis = analyze_expression(expr, _environment(bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT}))
     facts = dict(analysis.facts)
-    facts[expr] = ExpressionFact(TYPE_BOOL, compare_operations=("GREATER_THAN",))
+    facts[expr] = ExpressionFact(RuntimeResultShape(TYPE_BOOL), compare_operations=("GREATER_THAN",))
     rewritten = ExpressionAnalysis(expr, MappingProxyType(facts))
     program = lower_analyzed_expression(expr, rewritten)
     compare = _operations(program, IRCompare)[0]
@@ -430,7 +447,7 @@ def test_ir_emitter_rejects_invalid_analysis_root_and_compare_fact_shape():
         lower_analyzed_expression(other, analysis)
 
     facts = dict(analysis.facts)
-    facts[expr] = ExpressionFact(TYPE_BOOL, compare_operations=())
+    facts[expr] = ExpressionFact(RuntimeResultShape(TYPE_BOOL), compare_operations=())
     malformed = ExpressionAnalysis(expr, MappingProxyType(facts))
     with pytest.raises(CompileError, match="comparison semantic operation count mismatch"):
         lower_analyzed_expression(expr, malformed)
@@ -471,14 +488,17 @@ def test_exact_semantic_migration_markers_are_present_at_source_decisions():
         }.items()
     }
 
-    assert sources["analysis"].count("SEMANTIC_ANALYSIS_MIGRATION") == 1
+    assert sources["analysis"].count("SEMANTIC_ANALYSIS_MIGRATION") == 0
     assert sources["semantic"].count("SEMANTIC_RESOLUTION_MIGRATION") == 0
     assert sources["semantic"].count("SEMANTIC_IR_VALUE_MIGRATION") == 1
-    assert sources["dispatcher"].count("SEMANTIC_IR_MIGRATION") == 1
     assert sources["dispatcher"].count("SEMANTIC_IR_VALUE_MIGRATION") == 1
     assert sources["dispatcher"].count("SEMANTIC_ANALYSIS_LEGACY_BINDING_MIGRATION") == 1
-    assert sources["dispatcher"].count("SEMANTIC_ANALYSIS_CONSTANT_SNAPSHOT_MIGRATION") == 1
     assert sources["backend"].count("SEMANTIC_IR_VALUE_MIGRATION") == 1
+    assert sources["analysis"].count("COMPLETE_EXPRESSION_IR_LEGACY_BINDING_FALLBACK") == 1
+    assert sources["analysis"].count("COMPLETE_EXPRESSION_IR_CALL_FALLBACK") == 1
+    assert sources["dispatcher"].count("COMPLETE_EXPRESSION_IR_CONSTANT_MIGRATION") == 1
+    assert sources["dispatcher"].count("COMPLETE_EXPRESSION_IR_FALLBACK") == 1
+    assert sum(source.count("COMPLETE_EXPRESSION_IR_") for source in sources.values()) == 4
     assert sources["compiler"].count("CANONICAL_BINDING_ID_MIGRATION") == 1
     assert sources["compiler"].count("CANONICAL_CALL_ID_MIGRATION") == 0
     assert sources["local"].count("CANONICAL_CALL_ID_MIGRATION") == 1
@@ -487,13 +507,15 @@ def test_exact_semantic_migration_markers_are_present_at_source_decisions():
     assert sources["local"].count("REUSABLE_CALL_IR_MIGRATION") == 1
     assert sources["library_calls"].count("REUSABLE_CALL_IR_MIGRATION") == 2
     assert sources["library"].count("REUSABLE_CALL_IR_MIGRATION") == 0
-    assert sources["materializer"].count("FUNCTION_MATERIALIZER_TRANSACTION_MIGRATION") == 0
-    assert sources["materializer"].count("FUNCTION_MATERIALIZER_CATALOG_METADATA_MIGRATION") == 0
-    assert sources["materializer"].count("FUNCTION_MATERIALIZER_RELOAD_METADATA_MIGRATION") == 0
     assert sources["compiler"].count("BLENDER_TRANSACTION_LEGACY_ALIAS_MIGRATION") == 1
+    assert sources["compiler"].count("RESOLVED_ENVIRONMENT_MIGRATION") == 1
+    assert sources["materializer"].count("IR_DEPENDENCY_LOCAL_CATALOG_MIGRATION") == 1
 
     normalized = {name: "\n".join(line.lstrip() for line in source.splitlines()) for name, source in sources.items()}
-    required_markers = (
+    preserved_markers = (
+        (normalized["dispatcher"], "# SEMANTIC_IR_VALUE_MIGRATION: comp.vars still stores legacy socket-bound Value\n# objects while statement and call migration is incomplete. Snapshot those Values\n# only at the frontend/backend boundary: semantic analysis receives detached types,\n# while Blender lowering receives the backend Value map. Remove this bridge when\n# runtime bindings use canonical compiler-owned references and comp.vars no longer\n# owns backend sockets."),
+        (normalized["dispatcher"], "# SEMANTIC_ANALYSIS_LEGACY_BINDING_MIGRATION: comp.vars also contains non-Value\n# compiler-side bindings such as GeometryBuilder, NodeResult, TupleValue, and\n# list-backed legacy values. Export only their names so semantic analysis keeps\n# comp.vars name precedence and returns unsupported instead of misdiagnosing an\n# existing legacy binding as unknown or falling through to consts. Remove this\n# bridge when every compiler binding has frontend-owned semantic metadata or its\n# expression semantics have been migrated into semantic analysis."),
+        (normalized["compiler"], "# RESOLVED_ENVIRONMENT_MIGRATION: Compiler is still exported and legacy tests or\n# integrations may construct it directly without the root compiler entry points.\n# A standalone Compiler creates one snapshot and an environment-bound backend, or\n# adopts the exact snapshot exposed by a supplied environment-bound backend. Reject\n# arbitrary backends because their nested populate callback could resolve again.\n# Production root entry points always pass one shared ResolvedEnvironment. Remove\n# this fallback when Compiler is internal/session-owned and every caller must pass\n# both an explicit environment and its matching session-bound backend."),
         (normalized["compiler"], "# CANONICAL_BINDING_ID_MIGRATION: comp.vars remains the legacy heterogeneous\n# source-name store while statement, loop, call, and compile-time binding migration\n# is incomplete. Project current Value entries into stable BindingId-based semantic\n# and backend snapshots here without changing comp.vars ownership. Remove this bridge\n# when runtime bindings are stored canonically by BindingId and source names exist\n# only in the frontend symbol table."),
         (normalized["local"], "# CANONICAL_CALL_ID_MIGRATION: Local calls still reach this legacy AST compiler\n# before call semantics are represented in Semantic IR. Construct the canonical\n# FunctionId here from the already-resolved specialization contract. Remove this\n# bridge when semantic call resolution produces FunctionId/CallSiteId before\n# backend function-group materialization."),
         (normalized["library_calls"], "# CANONICAL_CALL_ID_MIGRATION: Imported reusable calls still resolve through the\n# legacy AST/library dispatcher. Construct their canonical FunctionId at this\n# boundary without changing call behavior. Remove this bridge when semantic call\n# resolution owns imported callable identity before function-group materialization."),
@@ -501,11 +523,19 @@ def test_exact_semantic_migration_markers_are_present_at_source_decisions():
         (normalized["local"], "# REUSABLE_CALL_IR_MIGRATION: This stage moves shared/unique materialization policy\n# into compiler-owned IR only. Local call argument evaluation, specialization-type\n# discovery, captures, and return realization still use the legacy Value/socket path.\n# Remove this boundary when reusable call arguments/results have Blender-independent\n# semantic types/IR values and local FunctionId is resolved before materialization."),
         (normalized["library_calls"], "# REUSABLE_CALL_IR_MIGRATION: Imported callable identity/materialization policy is\n# compiler-owned, but argument names/types are still discovered from the materialized\n# Blender node-group interface. Keep this probe behavior unchanged in this stage.\n# Remove it when imported functions expose a Blender-independent callable signature\n# that semantic analysis can validate before function-group materialization."),
         (normalized["library_calls"], "# REUSABLE_CALL_IR_MIGRATION: Local catalog entries keep their existing materialization\n# semantics in this behavior-preserving stage because the current namespace=\"local\"\n# path does not assign durable per-occurrence instance keys/owner scopes for __unique__.\n# Remove this exclusion only after Local catalog shared/unique ownership is explicitly\n# specified, compatibility-tested, and migrated as its own semantic contract."),
-        (normalized["dispatcher"], "# SEMANTIC_IR_VALUE_MIGRATION: comp.vars still stores legacy socket-bound Value\n# objects while statement and call migration is incomplete. Snapshot those Values\n# only at the frontend/backend boundary: semantic analysis receives detached types,\n# while Blender lowering receives the backend Value map. Remove this bridge when\n# runtime bindings use canonical compiler-owned references and comp.vars no longer\n# owns backend sockets."),
-        (normalized["dispatcher"], "# SEMANTIC_IR_MIGRATION: Expressions outside the current IR slice continue on\n# the existing AST-to-Blender path while migration is incremental. The target\n# architecture is for migrated expression families to lower through Semantic IR\n# before Blender materialization. Remove this fallback only for an expression\n# family after that family is covered end-to-end by IR and its duplicated AST\n# lowering branch is removed in the same planned change set."),
-        (normalized["semantic"], "# SEMANTIC_IR_VALUE_MIGRATION: Re-lower the shared middle source expression for\n# each comparison pair so this behavior-preserving stage emits distinct IR values\n# and preserves the current duplicated Geometry Nodes topology. Remove this rule\n# only in a dedicated topology-changing plan that defines IR value reuse and\n# updates the corresponding graph-shape contract tests."),
-        (normalized["analysis"], "# SEMANTIC_ANALYSIS_MIGRATION: TYPE_OBJECT attribute semantics still belong to\n# the legacy ObjectValue.resolve_property() path. Keep Object property access\n# outside semantic analysis until its property resolution and result typing are\n# represented frontend-side. Remove this fallback when TYPE_OBJECT attribute\n# access is migrated end-to-end and ObjectValue is no longer the semantic owner."),
+        (normalized["materializer"], "# IR_DEPENDENCY_LOCAL_CATALOG_MIGRATION: Local catalog calls do not yet carry\n# reusable IRFunctionMaterialization identity because their current fresh-snapshot\n# contract intentionally has no shared/unique instance identity. Preserve the existing\n# freshness-unproven fallback here. Remove this branch when Local catalog calls have an\n# explicit semantic dependency contract and their ownership/reuse semantics are defined\n# and regression-tested in a dedicated plan."),
         (normalized["compiler"], "# BLENDER_TRANSACTION_LEGACY_ALIAS_MIGRATION: Keep the historical transaction class\n# names importable from compiler.py for one compatibility stage after physical Blender\n# transaction ownership moves to blender_group_backend.py. New production code must\n# import BlenderGroupBuildTransaction from the Blender group backend module and must not\n# depend on these aliases. Remove them after the next compatibility sweep confirms no\n# supported external/test consumer imports FunctionGroupBuildTransaction or\n# LocalHelperBuildTransaction from compiler.py."),
+    )
+    for source, marker in preserved_markers:
+        assert marker in source
+
+    required_markers = (
+        (normalized["dispatcher"], "# COMPLETE_EXPRESSION_IR_CONSTANT_MIGRATION: comp.consts is still legacy compiler-owned\n# compile-time storage. Normalize supported runtime-materializable constants into\n# detached immutable semantic records, plus a detached semantics-preserving const-eval copy\n# for subscript indices. Remove this bridge when compile-time bindings are frontend-owned\n# and SemanticEnvironment receives their semantic records without reading comp.consts."),
+        (normalized["analysis"], "# COMPLETE_EXPRESSION_IR_LEGACY_BINDING_FALLBACK: Non-Value compiler bindings still\n# have no frontend-owned semantic result shape. Keep the complete enclosing expression\n# on the legacy dispatcher when one is reached; do not carry the compiler object into IR.\n# Remove this fallback when those binding categories are represented semantically and\n# Blender/materialization objects are no longer required to determine their meaning."),
+        (normalized["analysis"], "# COMPLETE_EXPRESSION_IR_CALL_FALLBACK: Call resolution, argument/result shapes, keyword\n# rules, Object.info(), raw nodes, and reusable/local/imported materialization still belong\n# to the legacy call compiler. Keep the complete enclosing expression on that path; do not\n# represent a call as an opaque AST/backend IR leaf. Remove this fallback when semantic\n# callable resolution and call IR own every supported ast.Call category end-to-end."),
+        (normalized["dispatcher"], "# COMPLETE_EXPRESSION_IR_FALLBACK: After non-call expression completion, analysis may\n# return unsupported only when it reaches the explicit ast.Call fallback or a known\n# legacy non-Value compiler binding. Preserve whole-expression legacy dispatch so mixed\n# trees keep current behavior without opaque backend leaves in Semantic IR. Remove this\n# branch when call IR and compiler-binding migration eliminate both unsupported sources."),
+        (normalized["backend"], "# SEMANTIC_IR_VALUE_MIGRATION: compile_expr() and downstream compiler consumers still\n# expect legacy backend materializations: one socket-bound Value or a Python list of\n# such values for array expressions. Keep this return bridge while statements, calls,\n# runtime state, and interface wiring use the legacy value contract. Remove it when\n# compiler-owned runtime references replace these backend-facing expression results."),
+        (normalized["semantic"], "# SEMANTIC_IR_VALUE_MIGRATION: Re-lower the shared middle source expression for\n# each comparison pair so this behavior-preserving stage emits distinct IR values\n# and preserves the current duplicated Geometry Nodes topology. Remove this rule\n# only in a dedicated topology-changing plan that defines IR value reuse and\n# updates the corresponding graph-shape contract tests."),
     )
     for source, marker in required_markers:
         assert marker in source
@@ -798,3 +828,127 @@ def test_resolved_environment_does_not_enter_semantic_ir_materialization_records
     assert "resolved_environment" not in {
         field.name for field in dataclasses.fields(IRFunctionMaterialization)
     }
+
+
+def test_complete_expression_result_shapes_and_arrays_are_immutable():
+    runtime = RuntimeResultShape(TYPE_FLOAT)
+    array = ArrayResultShape((runtime, ArrayResultShape(())))
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        runtime.typ = TYPE_VECTOR
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        array.items = ()
+    program = _lower("[a, b]", bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT})
+    assert isinstance(program.result, IRArray)
+    assert [type(op) for op in program.operations] == [IRBinding, IRBinding]
+    assert [op.depth for op in program.operations] == [1, 1]
+    tuple_program = _lower("(a, b)", bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT})
+    assert isinstance(tuple_program.result, IRArray)
+    assert tuple_program.result == program.result
+
+
+def test_array_subscript_is_structural_and_eager_with_negative_indexing():
+    program = _lower("[[a, b], c][0][1]", bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT, "c": TYPE_FLOAT})
+    assert [type(op) for op in program.operations] == [IRBinding, IRBinding, IRBinding]
+    assert program.result == program.operations[1].result
+    negative = _lower("(a, b)[-1]", bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT})
+    assert negative.result == negative.operations[1].result
+    with pytest.raises(CompileError, match="array index out of range"):
+        _lower("[a, b][3]", bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT})
+
+
+def test_unary_plus_is_structural_identity_for_arrays_and_named_constant_arrays():
+    program = _lower("(+[a, b])[0]", bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT})
+    assert program.result == program.operations[0].result
+    assert len(program.operations) == 2
+    assert not _operations(program, IRUnary)
+    tuple_program = _lower("(+(a, b))[-1]", bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT})
+    assert tuple_program.result == tuple_program.operations[1].result
+    const_program = _lower("+items", consts={"items": [1, [2, 3]]})
+    assert isinstance(const_program.result, IRArray)
+    assert all(op.depth == 1 for op in const_program.operations)
+
+
+def test_semantic_constant_normalization_preserves_vector_coercion_and_nested_arrays():
+    constants, detached = build_semantic_constant_snapshot({
+        "flag": True,
+        "number": 2,
+        "text": "x",
+        "vec": (1, 2, 3),
+        "items": [1, [2, 3]],
+    })
+    assert constants["flag"] == SemanticConstant("scalar", TYPE_BOOL, True)
+    assert constants["number"] == SemanticConstant("scalar", TYPE_FLOAT, 2)
+    assert constants["text"] == SemanticConstant("scalar", TYPE_STRING, "x")
+    assert constants["vec"].kind == "vector" and constants["vec"].value == (1.0, 2.0, 3.0)
+    assert constants["items"].kind == "array"
+    assert isinstance(detached["items"], list)
+    assert isinstance(detached["items"][1], list)
+
+
+def test_detached_const_eval_snapshot_preserves_list_tuple_semantics_and_ownership():
+    original = {"xs": [1, 2], "nested": [[1], (2, [3])]}
+    _, detached = build_semantic_constant_snapshot(original)
+    assert isinstance(detached["xs"], list)
+    assert isinstance(detached["nested"], list)
+    assert isinstance(detached["nested"][1], tuple)
+    assert isinstance(detached["nested"][1][1], list)
+    original["nested"][0].append(9)
+    assert detached["nested"][0] == [1]
+    assert _lower("[a, b][xs == [1, 2]]", bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT}, consts={"xs": [1, 2]}).result.id == 1
+    assert _lower("[a, b, c][len(xs + [3]) - 1]", bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT, "c": TYPE_FLOAT}, consts={"xs": [1, 2]}).result.id == 2
+    assert _lower("[a, b, c][len(xs + range(1)) - 1]", bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT, "c": TYPE_FLOAT}, consts={"xs": [1, 2]}).result.id == 2
+
+    cyclic = [1]
+    cyclic.append(cyclic)
+    cyclic_program = _lower(
+        "[a, b][xs[1] == xs]",
+        bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT},
+        consts={"xs": cyclic},
+    )
+    assert cyclic_program.result == cyclic_program.operations[1].result
+
+
+def test_vector_subscript_normalizes_to_existing_component_ir():
+    for source, component in [("v[0]", "x"), ("v[1]", "y"), ("v[2]", "z"), ("v[i]", "y")]:
+        program = _lower(source, bindings={"v": TYPE_VECTOR}, consts={"i": 1})
+        op = program.operations[-1]
+        assert isinstance(op, IRVectorComponent)
+        assert op.component == component
+    with pytest.raises(CompileError, match="vector index must be 0, 1 or 2"):
+        _lower("v[3]", bindings={"v": TYPE_VECTOR})
+
+
+def test_object_properties_are_semantically_typed_and_calls_remain_fallback():
+    expected = {
+        "geometry": TYPE_GEOMETRY,
+        "location": TYPE_VECTOR,
+        "rotation": TYPE_VECTOR,
+        "scale": TYPE_VECTOR,
+    }
+    for name, typ in expected.items():
+        program = _lower(f"obj.{name}", bindings={"obj": TYPE_OBJECT})
+        op = program.operations[-1]
+        assert isinstance(op, IRObjectProperty)
+        assert op.property_name == name
+        assert op.result.typ == typ
+    for source in ("obj.x", "obj.foo"):
+        with pytest.raises(CompileError, match="Object values support only"):
+            _lower(source, bindings={"obj": TYPE_OBJECT})
+    assert _lower("obj.info()", bindings={"obj": TYPE_OBJECT}) is None
+
+
+def test_ir_records_never_carry_mutable_lists_or_ast_backend_objects_after_completion():
+    from NodeForge.values import Value
+
+    program = _lower("[v[0], obj.location]", bindings={"v": TYPE_VECTOR, "obj": TYPE_OBJECT})
+
+    def visit(value):
+        assert not isinstance(value, (ast.AST, Value, list))
+        if dataclasses.is_dataclass(value):
+            for field in dataclasses.fields(value):
+                visit(getattr(value, field.name))
+        elif isinstance(value, tuple):
+            for item in value:
+                visit(item)
+
+    visit(program)

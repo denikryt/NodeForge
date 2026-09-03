@@ -38,10 +38,10 @@ class ObjectValue(Value):
             self._info_as_instance = as_instance
         return self
 
-    def resolve_property(self, name, comp, x=0, y=0):
+    def resolve_property(self, name, group, x=0, y=0):
         """Resolve one Object Info output, creating and caching its node on first use."""
         from .builtins.object_info import resolve_object_property
-        return resolve_object_property(comp, self, name, x=x, y=y)
+        return resolve_object_property(group, self, name, x=x, y=y)
 
 
 def make_value(socket, typ):

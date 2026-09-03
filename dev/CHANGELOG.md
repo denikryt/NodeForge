@@ -175,3 +175,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.50.14
 
 - Added Blender expression behavior characterization baselines with `.nf` source fixtures, canonical JSON node-tree snapshots, explicit graph/error outcome contracts, semantic literal and Object Info payload capture, isolated per-case cleanup, explicit baseline recording, manifest navigation, readable mismatch diffs, and targeted expression-boundary coverage.
+
+## 0.50.15
+
+- Completed Semantic IR ownership of the non-call expression surface with structural arrays, cycle/alias-preserving detached compile-time const-eval snapshots with distinct opaque placeholders, Vector indexing, Object properties, production-routing coverage, and backend-preserving materialization while retaining explicit call and legacy-binding fallbacks.

@@ -2,6 +2,7 @@
 
 import ast
 import math
+from types import MappingProxyType
 
 TYPE_FLOAT = "FLOAT"
 TYPE_VECTOR = "VECTOR"
@@ -12,6 +13,13 @@ TYPE_MATERIAL = "MATERIAL"
 TYPE_OBJECT = "OBJECT"
 TYPE_STRING = "STRING"
 TYPE_BUNDLE = "BUNDLE"
+
+OBJECT_PROPERTY_TYPES = MappingProxyType({
+    "geometry": TYPE_GEOMETRY,
+    "location": TYPE_VECTOR,
+    "rotation": TYPE_VECTOR,
+    "scale": TYPE_VECTOR,
+})
 
 TYPE_TOKEN_NAMES = {
     "Float": TYPE_FLOAT,
@@ -41,4 +49,4 @@ _BOOLEAN_OPS = {ast.And: "AND", ast.Or: "OR"}
 _VECTOR_MATH_FLOAT_OUTPUT = {"length": "LENGTH", "distance": "DISTANCE", "dot": "DOT_PRODUCT"}
 _VECTOR_MATH_VECTOR_OUTPUT_1 = {"normalize": "NORMALIZE"}
 _VECTOR_MATH_VECTOR_OUTPUT_2 = {"cross": "CROSS_PRODUCT", "reflect": "REFLECT", "project": "PROJECT"}
-__all__ = [name for name in globals() if name.startswith('_') or name.startswith('TYPE_')]
+__all__ = [name for name in globals() if name.startswith('_') or name.startswith('TYPE_')] + ['OBJECT_PROPERTY_TYPES']

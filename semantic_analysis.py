@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import ast
+import copy
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import AbstractSet, Mapping
+from typing import AbstractSet, Mapping, TypeAlias
 
+from .compiler_identities import BindingId
 from .constants import (
+    OBJECT_PROPERTY_TYPES,
     TYPE_BOOL,
     TYPE_BUNDLE,
     TYPE_FLOAT,
@@ -22,8 +25,8 @@ from .constants import (
     _BOOLEAN_OPS,
     _COMPARE_OPS,
 )
+from .consteval import ConstVector, _const_eval, _is_const_vector
 from .errors import CompileError
-from .compiler_identities import BindingId
 
 
 _RESERVED_VALUE_LABELS = {
@@ -54,13 +57,40 @@ class RuntimeBindingSymbol:
 
 
 @dataclass(frozen=True)
+class RuntimeResultShape:
+    """Describe one socket-like runtime expression result."""
+
+    typ: str
+
+
+@dataclass(frozen=True)
+class ArrayResultShape:
+    """Describe one compiler-structural array expression result."""
+
+    items: tuple["SemanticResultShape", ...]
+
+
+SemanticResultShape: TypeAlias = RuntimeResultShape | ArrayResultShape
+
+
+@dataclass(frozen=True)
+class SemanticConstant:
+    """Detached immutable runtime-materializable view of one compile-time value."""
+
+    kind: str
+    typ: str | None = None
+    value: object | None = None
+    items: tuple["SemanticConstant", ...] = ()
+
+
+@dataclass(frozen=True)
 class SemanticEnvironment:
     """Immutable semantic metadata snapshot used by one expression analysis."""
 
     runtime_bindings: Mapping[str, RuntimeBindingSymbol]
     legacy_binding_names: AbstractSet[str]
-    scalar_constants: Mapping[str, tuple[str, object]]
-    unsupported_constant_names: AbstractSet[str]
+    constants: Mapping[str, SemanticConstant]
+    const_eval_values: Mapping[str, object]
     reserved_name_labels: Mapping[str, str]
 
 
@@ -69,7 +99,7 @@ class ResolvedName:
     """Describe how one reached source name resolved in the semantic frontend."""
 
     kind: str
-    typ: str
+    typ: str | None
     name: str | None = None
     value: object | None = None
     binding_id: BindingId | None = None
@@ -77,9 +107,9 @@ class ResolvedName:
 
 @dataclass(frozen=True)
 class ExpressionFact:
-    """Store resolved type and normalized semantic facts for one AST expression."""
+    """Store normalized semantic facts and result shape for one AST expression."""
 
-    typ: str
+    result_shape: SemanticResultShape
     operation: str | None = None
     compare_operations: tuple[str, ...] = ()
     resolved_name: ResolvedName | None = None
@@ -105,6 +135,20 @@ UNSUPPORTED = _Unsupported()
 def _is_number_type(typ):
     """Return whether *typ* follows the existing scalar Math-node contract."""
     return typ in {TYPE_FLOAT, TYPE_INT}
+
+
+def _require_runtime_type(fact, context):
+    """Return a runtime type or reject a structural result in *context*."""
+    if isinstance(fact.result_shape, RuntimeResultShape):
+        return fact.result_shape.typ
+    if context == "if-expression result":
+        raise CompileError("if-expression cannot return arrays")
+    raise CompileError(f"{context} requires a runtime value")
+
+
+def _is_array_result(fact):
+    """Return whether one analyzed expression yields compiler-structural array data."""
+    return isinstance(fact.result_shape, ArrayResultShape)
 
 
 def _validate_binary(op_type, left_typ, right_typ):
@@ -136,27 +180,121 @@ def _validate_compare(left_typ, right_typ):
     raise CompileError("Comparison inputs must both be numeric, both Bool, or both Vector")
 
 
-def analyze_expression(expr, environment):
-    """Resolve and type-check one current Semantic IR expression slice.
+class _UnsupportedConstEvalValue:
+    """Frontend-owned fail-closed placeholder for non-detachable compile-time values."""
 
-    Return an :class:`ExpressionAnalysis` when the whole expression belongs to the
-    migrated slice, or ``None`` when traversal first reaches an explicitly legacy
-    expression family/value shape. No IR values or Blender resources are created.
-    """
+
+
+
+def _normalize_semantic_constant_inner(value, active):
+    """Return one semantic constant plus whether its container graph contains a cycle."""
+    if isinstance(value, bool):
+        return SemanticConstant("scalar", TYPE_BOOL, value), False
+    if isinstance(value, (int, float)):
+        return SemanticConstant("scalar", TYPE_FLOAT, value), False
+    if isinstance(value, str):
+        return SemanticConstant("scalar", TYPE_STRING, value), False
+    if _is_const_vector(value) or (
+        isinstance(value, (list, tuple))
+        and len(value) == 3
+        and all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in value)
+    ):
+        return (
+            SemanticConstant("vector", TYPE_VECTOR, tuple(float(item) for item in value)),
+            False,
+        )
+    if isinstance(value, (list, tuple)):
+        identity = id(value)
+        if identity in active:
+            return SemanticConstant("unsupported"), True
+        active.add(identity)
+        try:
+            normalized_items = tuple(
+                _normalize_semantic_constant_inner(item, active)
+                for item in value
+            )
+        finally:
+            active.remove(identity)
+        if any(cyclic for _, cyclic in normalized_items):
+            return SemanticConstant("unsupported"), True
+        return SemanticConstant(
+            "array",
+            items=tuple(item for item, _ in normalized_items),
+        ), False
+    return SemanticConstant("unsupported"), False
+
+
+def _normalize_semantic_constant(value):
+    """Return the immutable semantic runtime view of one legacy constant value, cycle-safely."""
+    constant, _ = _normalize_semantic_constant_inner(value, set())
+    return constant
+
+
+def _seed_const_eval_copy_memo(value, memo, visited):
+    """Pre-seed deepcopy replacements while preserving supported container graph identity."""
+    if _is_const_vector(value):
+        memo[id(value)] = tuple(float(item) for item in value)
+        return
+    if isinstance(value, (bool, int, float, str, type(None))):
+        return
+    if isinstance(value, (list, tuple)):
+        identity = id(value)
+        if identity in visited:
+            return
+        visited.add(identity)
+        for item in value:
+            _seed_const_eval_copy_memo(item, memo, visited)
+        return
+    memo[id(value)] = _UnsupportedConstEvalValue()
+
+
+def _detached_const_eval_mapping(constants):
+    """Copy the complete const mapping while preserving cycles, aliasing, and container kinds."""
+    memo = {}
+    visited = set()
+    for value in constants.values():
+        _seed_const_eval_copy_memo(value, memo, visited)
+    return copy.deepcopy(dict(constants), memo)
+
+
+def build_semantic_constant_snapshot(constants):
+    """Build detached semantic and const-eval mappings from legacy constant storage."""
+    semantic = {
+        name: _normalize_semantic_constant(value)
+        for name, value in constants.items()
+    }
+    const_eval_values = _detached_const_eval_mapping(constants)
+    return MappingProxyType(semantic), MappingProxyType(const_eval_values)
+
+
+def _shape_for_constant(constant):
+    """Return the recursive semantic result shape for one supported constant."""
+    if constant.kind in {"scalar", "vector"}:
+        return RuntimeResultShape(constant.typ)
+    if constant.kind == "array":
+        return ArrayResultShape(tuple(_shape_for_constant(item) for item in constant.items))
+    raise CompileError("Unsupported compile-time value in runtime expression")
+
+
+def analyze_expression(expr, environment):
+    """Resolve and type-check one complete non-call Semantic IR expression tree."""
     facts = {}
 
     def record(node, fact):
         facts[node] = fact
         return fact
 
+    def runtime_fact(typ, **kwargs):
+        return ExpressionFact(RuntimeResultShape(typ), **kwargs)
+
     def analyze(node):
         if isinstance(node, ast.Constant):
             if isinstance(node.value, bool):
-                return record(node, ExpressionFact(TYPE_BOOL, literal_value=node.value))
+                return record(node, runtime_fact(TYPE_BOOL, literal_value=node.value))
             if isinstance(node.value, (int, float)):
-                return record(node, ExpressionFact(TYPE_FLOAT, literal_value=node.value))
+                return record(node, runtime_fact(TYPE_FLOAT, literal_value=node.value))
             if isinstance(node.value, str):
-                return record(node, ExpressionFact(TYPE_STRING, literal_value=node.value))
+                return record(node, runtime_fact(TYPE_STRING, literal_value=node.value))
             raise CompileError("Only numeric, boolean and string constants are supported")
 
         if isinstance(node, ast.Name):
@@ -170,40 +308,78 @@ def analyze_expression(expr, environment):
                     name=node.id,
                     binding_id=symbol.binding_id,
                 )
-                return record(node, ExpressionFact(symbol.typ, resolved_name=resolved))
+                return record(node, runtime_fact(symbol.typ, resolved_name=resolved))
+            # COMPLETE_EXPRESSION_IR_LEGACY_BINDING_FALLBACK: Non-Value compiler bindings still
+            # have no frontend-owned semantic result shape. Keep the complete enclosing expression
+            # on the legacy dispatcher when one is reached; do not carry the compiler object into IR.
+            # Remove this fallback when those binding categories are represented semantically and
+            # Blender/materialization objects are no longer required to determine their meaning.
             if node.id in environment.legacy_binding_names:
                 return UNSUPPORTED
-            if node.id in environment.scalar_constants:
-                typ, value = environment.scalar_constants[node.id]
-                resolved = ResolvedName("scalar_constant", typ, name=node.id, value=value)
-                return record(node, ExpressionFact(typ, resolved_name=resolved, literal_value=value))
-            if node.id in environment.unsupported_constant_names:
-                return UNSUPPORTED
+            if node.id in environment.constants:
+                constant = environment.constants[node.id]
+                if constant.kind == "unsupported":
+                    raise CompileError("Unsupported compile-time value in runtime expression")
+                resolved = ResolvedName(
+                    "semantic_constant",
+                    constant.typ,
+                    name=node.id,
+                    value=constant,
+                )
+                return record(node, ExpressionFact(_shape_for_constant(constant), resolved_name=resolved))
             if node.id in _ALLOWED_CONSTS:
                 value = _ALLOWED_CONSTS[node.id]
                 resolved = ResolvedName("allowed_constant", TYPE_FLOAT, name=node.id, value=value)
-                return record(node, ExpressionFact(TYPE_FLOAT, resolved_name=resolved, literal_value=value))
+                return record(node, runtime_fact(TYPE_FLOAT, resolved_name=resolved, literal_value=value))
             label = environment.reserved_name_labels.get(node.id)
             if label in _RESERVED_VALUE_LABELS:
                 raise CompileError(f"Name {node.id} is registered as {label} and cannot be used as a value")
             raise CompileError(f"Unknown name: {node.id}")
 
+        if isinstance(node, (ast.List, ast.Tuple)):
+            items = []
+            for child in node.elts:
+                item = analyze(child)
+                if item is UNSUPPORTED:
+                    return UNSUPPORTED
+                items.append(item.result_shape)
+            return record(node, ExpressionFact(ArrayResultShape(tuple(items))))
+
         if isinstance(node, ast.Attribute):
             base = analyze(node.value)
             if base is UNSUPPORTED:
                 return UNSUPPORTED
-            # SEMANTIC_ANALYSIS_MIGRATION: TYPE_OBJECT attribute semantics still belong to
-            # the legacy ObjectValue.resolve_property() path. Keep Object property access
-            # outside semantic analysis until its property resolution and result typing are
-            # represented frontend-side. Remove this fallback when TYPE_OBJECT attribute
-            # access is migrated end-to-end and ObjectValue is no longer the semantic owner.
-            if base.typ == TYPE_OBJECT:
-                return UNSUPPORTED
+            base_typ = _require_runtime_type(base, "attribute access")
+            if base_typ == TYPE_OBJECT:
+                if node.attr not in OBJECT_PROPERTY_TYPES:
+                    raise CompileError("Object values support only .geometry, .location, .rotation and .scale")
+                return record(node, runtime_fact(OBJECT_PROPERTY_TYPES[node.attr], operation=node.attr))
             if node.attr in {"x", "y", "z"}:
-                if base.typ != TYPE_VECTOR:
+                if base_typ != TYPE_VECTOR:
                     raise CompileError(".x/.y/.z can only be used on Vector values")
-                return record(node, ExpressionFact(TYPE_FLOAT, operation=node.attr))
+                return record(node, runtime_fact(TYPE_FLOAT, operation=node.attr))
             return UNSUPPORTED
+
+        if isinstance(node, ast.Subscript):
+            base = analyze(node.value)
+            if base is UNSUPPORTED:
+                return UNSUPPORTED
+            try:
+                index = int(_const_eval(node.slice, environment.const_eval_values))
+            except (CompileError, TypeError, ValueError, OverflowError) as exc:
+                raise CompileError("array/vector indexing currently requires a compile-time integer index") from exc
+            if isinstance(base.result_shape, ArrayResultShape):
+                try:
+                    selected_shape = base.result_shape.items[index]
+                except IndexError as exc:
+                    raise CompileError("array index out of range") from exc
+                return record(node, ExpressionFact(selected_shape, operation="array_index", literal_value=index))
+            base_typ = _require_runtime_type(base, "subscript")
+            if base_typ == TYPE_VECTOR:
+                if index not in (0, 1, 2):
+                    raise CompileError("vector index must be 0, 1 or 2")
+                return record(node, runtime_fact(TYPE_FLOAT, operation=("x", "y", "z")[index]))
+            raise CompileError("indexing is supported for arrays and Vector values only")
 
         if isinstance(node, ast.BinOp):
             left = analyze(node.left)
@@ -212,51 +388,52 @@ def analyze_expression(expr, environment):
             right = analyze(node.right)
             if right is UNSUPPORTED:
                 return UNSUPPORTED
+            left_typ = _require_runtime_type(left, "binary expression")
+            right_typ = _require_runtime_type(right, "binary expression")
             op_type = type(node.op)
-            typ = _validate_binary(op_type, left.typ, right.typ)
-            return record(node, ExpressionFact(typ, operation=_BIN_OPS[op_type]))
+            typ = _validate_binary(op_type, left_typ, right_typ)
+            return record(node, runtime_fact(typ, operation=_BIN_OPS[op_type]))
 
         if isinstance(node, ast.UnaryOp):
             operand = analyze(node.operand)
             if operand is UNSUPPORTED:
                 return UNSUPPORTED
             if isinstance(node.op, ast.UAdd):
-                return record(node, ExpressionFact(operand.typ, operation="+"))
+                return record(node, ExpressionFact(operand.result_shape, operation="+"))
+            operand_typ = _require_runtime_type(operand, "unary expression")
             if isinstance(node.op, ast.USub):
-                if _is_number_type(operand.typ):
-                    return record(node, ExpressionFact(TYPE_FLOAT, operation="-"))
-                if operand.typ == TYPE_VECTOR:
-                    return record(node, ExpressionFact(TYPE_VECTOR, operation="-"))
+                if _is_number_type(operand_typ):
+                    return record(node, runtime_fact(TYPE_FLOAT, operation="-"))
+                if operand_typ == TYPE_VECTOR:
+                    return record(node, runtime_fact(TYPE_VECTOR, operation="-"))
                 raise CompileError(f"Unsupported unary operator: {type(node.op).__name__}")
             if isinstance(node.op, ast.Not):
-                if operand.typ != TYPE_BOOL:
+                if operand_typ != TYPE_BOOL:
                     raise CompileError("not expects Bool")
-                return record(node, ExpressionFact(TYPE_BOOL, operation="not"))
+                return record(node, runtime_fact(TYPE_BOOL, operation="not"))
             raise CompileError(f"Unsupported unary operator: {type(node.op).__name__}")
 
         if isinstance(node, ast.BoolOp):
             if not node.values:
                 return UNSUPPORTED
-            if len(node.values) < 2:
-                first = analyze(node.values[0])
-                if first is UNSUPPORTED:
-                    return UNSUPPORTED
-                return record(node, ExpressionFact(first.typ))
-            op = _BOOLEAN_OPS.get(type(node.op))
-            if not op:
-                raise CompileError("Unsupported boolean operator")
             first = analyze(node.values[0])
             if first is UNSUPPORTED:
                 return UNSUPPORTED
-            current_typ = first.typ
+            if len(node.values) < 2:
+                return record(node, ExpressionFact(first.result_shape))
+            op = _BOOLEAN_OPS.get(type(node.op))
+            if not op:
+                raise CompileError("Unsupported boolean operator")
+            current_typ = _require_runtime_type(first, "boolean expression")
             for child in node.values[1:]:
                 nxt = analyze(child)
                 if nxt is UNSUPPORTED:
                     return UNSUPPORTED
-                if current_typ != TYPE_BOOL or nxt.typ != TYPE_BOOL:
+                next_typ = _require_runtime_type(nxt, "boolean expression")
+                if current_typ != TYPE_BOOL or next_typ != TYPE_BOOL:
                     raise CompileError("Boolean operations expect Bool values")
                 current_typ = TYPE_BOOL
-            return record(node, ExpressionFact(TYPE_BOOL, operation=op))
+            return record(node, runtime_fact(TYPE_BOOL, operation=op))
 
         if isinstance(node, ast.Compare):
             if len(node.ops) < 1 or len(node.comparators) < 1:
@@ -273,13 +450,13 @@ def analyze_expression(expr, environment):
                 op = _COMPARE_OPS.get(type(op_node))
                 if not op:
                     raise CompileError("Unsupported comparison operator")
-                _validate_compare(left.typ, right.typ)
+                _validate_compare(
+                    _require_runtime_type(left, "comparison"),
+                    _require_runtime_type(right, "comparison"),
+                )
                 normalized_ops.append(op)
                 left_expr = right_expr
-            return record(
-                node,
-                ExpressionFact(TYPE_BOOL, compare_operations=tuple(normalized_ops)),
-            )
+            return record(node, runtime_fact(TYPE_BOOL, compare_operations=tuple(normalized_ops)))
 
         if isinstance(node, ast.IfExp):
             condition = analyze(node.test)
@@ -291,13 +468,26 @@ def analyze_expression(expr, environment):
             false_value = analyze(node.orelse)
             if false_value is UNSUPPORTED:
                 return UNSUPPORTED
-            if condition.typ != TYPE_BOOL:
+            condition_typ = _require_runtime_type(condition, "if-expression condition")
+            if _is_array_result(true_value) or _is_array_result(false_value):
+                raise CompileError("if-expression cannot return arrays")
+            true_typ = _require_runtime_type(true_value, "if-expression result")
+            false_typ = _require_runtime_type(false_value, "if-expression result")
+            if condition_typ != TYPE_BOOL:
                 raise CompileError("select(cond, true, false): cond must be Bool")
-            if false_value.typ != true_value.typ:
+            if false_typ != true_typ:
                 raise CompileError("select() true/false values must have same type")
-            if false_value.typ not in _SWITCH_TYPES:
+            if false_typ not in _SWITCH_TYPES:
                 return UNSUPPORTED
-            return record(node, ExpressionFact(true_value.typ, operation="select"))
+            return record(node, runtime_fact(true_typ, operation="select"))
+
+        # COMPLETE_EXPRESSION_IR_CALL_FALLBACK: Call resolution, argument/result shapes, keyword
+        # rules, Object.info(), raw nodes, and reusable/local/imported materialization still belong
+        # to the legacy call compiler. Keep the complete enclosing expression on that path; do not
+        # represent a call as an opaque AST/backend IR leaf. Remove this fallback when semantic
+        # callable resolution and call IR own every supported ast.Call category end-to-end.
+        if isinstance(node, ast.Call):
+            return UNSUPPORTED
 
         return UNSUPPORTED
 
@@ -309,9 +499,14 @@ def analyze_expression(expr, environment):
 
 __all__ = [
     "RuntimeBindingSymbol",
+    "RuntimeResultShape",
+    "ArrayResultShape",
+    "SemanticResultShape",
+    "SemanticConstant",
     "SemanticEnvironment",
     "ResolvedName",
     "ExpressionFact",
     "ExpressionAnalysis",
+    "build_semantic_constant_snapshot",
     "analyze_expression",
 ]

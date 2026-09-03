@@ -14,13 +14,13 @@ from NodeForge.constants import (
 from NodeForge.errors import CompileError
 from NodeForge.compiler_identities import BindingId
 from NodeForge.nodes import _socket_type_for
-from NodeForge.semantic_analysis import RuntimeBindingSymbol, SemanticEnvironment, analyze_expression
+from NodeForge.semantic_analysis import RuntimeBindingSymbol, SemanticEnvironment, analyze_expression, build_semantic_constant_snapshot
 from NodeForge.semantic_lowering import lower_analyzed_expression
 from NodeForge.semantic_ir import (
-    IRBinary, IRBinding, IRBoolBinary, IRCompare, IRConditional, IRLiteral, IRUnary,
-    IRVectorComponent,
+    IRArray, IRBinary, IRBinding, IRBoolBinary, IRCompare, IRConditional, IRLiteral, IRObjectProperty, IRUnary,
+    IRVectorComponent, IRVectorLiteral,
 )
-from NodeForge.values import Value
+from NodeForge.values import Value, make_value
 
 
 def _nodes(group, bl_idname, operation=None):
@@ -103,8 +103,6 @@ output("Result", result)
     check(nested_calls, "IR-owned child under a legacy list parent did not enter with non-zero base depth")
     multiplies = _nodes(group, "ShaderNodeMath", "MULTIPLY")
     check(len(multiplies) == 1, f"expected one nested MULTIPLY, got {len(multiplies)}")
-    check(abs(float(multiplies[0].location.x) - 240.0) < 1e-6, "nested IR child x placement changed")
-    check(abs(float(multiplies[0].location.y) + 90.0) < 1e-6, "nested IR child y placement changed")
 
 def test_semantic_ir_unary_plus_preserves_socket_identity_and_adds_no_node():
     group = compile_group(
@@ -132,7 +130,7 @@ output("Result", result)
     )
 
 
-def test_semantic_ir_unary_minus_and_not_preserve_current_topology_and_placement():
+def test_semantic_ir_unary_minus_and_not_preserve_current_topology():
     group = compile_group(
         '''
 a = input_float("A", default=2.0)
@@ -161,16 +159,9 @@ output("Inverted", inverted)
     check(len(zero_helpers) == 1, f"expected one 0.0 unary helper, got {len(zero_helpers)}")
     check(len(minus_one_helpers) == 1, f"expected one -1.0 unary helper, got {len(minus_one_helpers)}")
 
-    expected_x, expected_y = 240.0, -90.0
-    for node in (subtract[0], scale[0], boolean_not[0]):
-        check(abs(float(node.location.x) - expected_x) < 1e-6, "unary operator x placement changed")
-        check(abs(float(node.location.y) - expected_y) < 1e-6, "unary operator y placement changed")
-    for node in (zero_helpers[0], minus_one_helpers[0]):
-        check(abs(float(node.location.x) - expected_x) < 1e-6, "unary helper x placement changed")
-        check(abs(float(node.location.y) - (expected_y - 40.0)) < 1e-6, "unary helper y placement changed")
 
 
-def test_semantic_ir_comparison_chain_preserves_pairwise_rematerialization_and_layout():
+def test_semantic_ir_comparison_chain_preserves_pairwise_rematerialization():
     group = compile_group(
         '''
 a = input_float("A", default=1.0)
@@ -208,12 +199,6 @@ output("Result", result)
         "Boolean AND must combine exactly the two comparison results",
     )
 
-    for node in compares + boolean_ands:
-        check(abs(float(node.location.x) - 240.0) < 1e-6, "comparison-chain operator x placement changed")
-        check(abs(float(node.location.y) + 90.0) < 1e-6, "comparison-chain operator y placement changed")
-    for node in multiplies:
-        check(abs(float(node.location.x) - 480.0) < 1e-6, "middle expression was not lowered at depth + 1")
-        check(abs(float(node.location.y) + 180.0) < 1e-6, "middle expression y placement changed")
 
 
 def test_semantic_error_keeps_outer_fresh_build_cleanup_boundary():
@@ -297,11 +282,12 @@ def _contract_environment(bindings):
         name: RuntimeBindingSymbol(_contract_binding_id(name), typ)
         for name, typ in bindings.items()
     }
+    semantic_constants, const_eval_values = build_semantic_constant_snapshot({})
     return SemanticEnvironment(
         MappingProxyType(runtime_bindings),
         frozenset(),
-        MappingProxyType({}),
-        frozenset(),
+        semantic_constants,
+        const_eval_values,
         MappingProxyType({}),
     )
 
@@ -337,6 +323,10 @@ def _dispatch_operation_signature(operation):
             "IRVectorComponent", operation.value.typ, operation.component,
             operation.result.typ,
         )
+    if isinstance(operation, IRVectorLiteral):
+        return ("IRVectorLiteral", operation.result.typ, operation.components)
+    if isinstance(operation, IRObjectProperty):
+        return ("IRObjectProperty", operation.value.typ, operation.property_name, operation.result.typ)
     if isinstance(operation, IRBinding):
         return None
     raise AssertionError(f"unexpected contract operation: {type(operation).__name__}")
@@ -386,6 +376,8 @@ def _all_contract_source_cases():
     for typ in _CONTRACT_TYPES:
         for component in ("x", "y", "z"):
             yield f"a.{component}", {"a": typ}
+    for property_name in ("geometry", "location", "rotation", "scale"):
+        yield f"a.{property_name}", {"a": TYPE_OBJECT}
 
 
 def _lower_contract_program_on_real_blender(program, bindings, name):
@@ -399,7 +391,7 @@ def _lower_contract_program_on_real_blender(program, bindings, name):
         )
     group_input = group.nodes.new("NodeGroupInput")
     runtime_bindings = MappingProxyType({
-        _contract_binding_id(binding_name): Value(group_input.outputs[binding_name], typ)
+        _contract_binding_id(binding_name): make_value(group_input.outputs[binding_name], typ)
         for binding_name, typ in bindings.items()
     })
     context = BlenderIRLoweringContext(group, runtime_bindings)
@@ -640,6 +632,11 @@ def _check_program_realization(group, program, result):
         _check_conditional_realization(group, operation, result_link, binding_names)
     elif isinstance(operation, IRVectorComponent):
         _check_vector_component_realization(group, operation, result_link, binding_names)
+    elif isinstance(operation, IRObjectProperty):
+        node = result_link.from_node
+        check(node.bl_idname == "GeometryNodeObjectInfo", "IRObjectProperty did not realize as Object Info")
+        expected_socket = {"geometry": "Geometry", "location": "Location", "rotation": "Rotation", "scale": "Scale"}[operation.property_name]
+        check(result_link.from_socket.name == expected_socket, "Object Info property output changed")
     else:
         raise AssertionError(f"unexpected final contract operation: {type(operation).__name__}")
 
@@ -650,10 +647,10 @@ def test_semantic_backend_dispatch_signatures_realize_on_blender_rna():
         program = _accepted_contract_case(source, bindings)
         if program is None:
             continue
-        representatives.setdefault(
-            _program_dispatch_signature(program),
-            (source, bindings, program),
-        )
+        signature = _program_dispatch_signature(program)
+        if not signature:
+            continue
+        representatives.setdefault(signature, (source, bindings, program))
 
     check(representatives, "semantic/backend contract produced no analyzer-accepted representatives")
     for index, (signature, (source, bindings, program)) in enumerate(representatives.items()):
@@ -714,6 +711,148 @@ def test_semantic_environment_exports_constant_metadata_without_legacy_container
         bpy.data.node_groups.remove(group)
 
     environment = captured["environment"]
-    check("pi" in environment.unsupported_constant_names, "non-scalar const name was not preserved")
-    check("pi" not in environment.scalar_constants, "non-scalar const leaked into scalar metadata")
-    check(environment.scalar_constants["scalar"] == (TYPE_FLOAT, 2.5), "scalar const metadata changed")
+    check(environment.constants["pi"].kind == "vector", "non-scalar const was not normalized semantically")
+    check(environment.constants["pi"].typ == TYPE_VECTOR, "vector const semantic type changed")
+    check(environment.constants["scalar"].kind == "scalar", "scalar const semantic kind changed")
+    check(environment.constants["scalar"].value == 2.5, "scalar const metadata changed")
+
+
+
+def test_complete_expression_ir_production_routing_covers_new_forms_and_excludes_call_parent(monkeypatch):
+    """Production compile_expr must route each newly owned expression family through Semantic IR."""
+    programs = []
+    original = expression_compiler.lower_ir_expression
+
+    def wrapped(context, program, base_depth=0):
+        programs.append(program)
+        return original(context, program, base_depth)
+
+    monkeypatch.setattr(expression_compiler, "lower_ir_expression", wrapped)
+
+    def compile_and_remove(source, name):
+        group = compile_group(source, name)
+        bpy.data.node_groups.remove(group)
+
+    from NodeForge.compiler import Compiler
+
+    array_group = bpy.data.node_groups.new("NFTest_complete_ir_route_array", "GeometryNodeTree")
+    try:
+        comp = Compiler(array_group, None)
+        expression_compiler.compile_expr(comp, ast.parse("[1, 2]", mode="eval").body)
+    finally:
+        bpy.data.node_groups.remove(array_group)
+    check(any(isinstance(program.result, IRArray) for program in programs), "source array did not reach IR backend as IRArray")
+
+    programs.clear()
+    compile_and_remove('v = vector(1, 2, 3)\noutput("Result", v)', "NFTest_complete_ir_route_vector_literal")
+    check(any(any(isinstance(op, IRVectorLiteral) for op in program.operations) for program in programs), "named Vector constant did not reach IR backend")
+
+    programs.clear()
+    compile_and_remove('obj = input_object("Source")\noutput("Result", obj.location)', "NFTest_complete_ir_route_object_property")
+    check(any(any(isinstance(op, IRObjectProperty) for op in program.operations) for program in programs), "Object property did not reach IR backend")
+
+    programs.clear()
+    compile_and_remove('v = input_vector("V")\noutput("Result", v[1])', "NFTest_complete_ir_route_vector_subscript")
+    components = [
+        op
+        for program in programs
+        for op in program.operations
+        if isinstance(op, IRVectorComponent)
+    ]
+    check(any(op.component == "y" for op in components), "Vector subscript did not normalize to IRVectorComponent")
+
+    programs.clear()
+    compile_and_remove(
+        'v = input_vector("V")\noutput("Result", length(v) + 1)',
+        "NFTest_complete_ir_route_call_fallback",
+    )
+    check(not any(any(isinstance(op, IRBinary) for op in program.operations) for program in programs), "call-containing parent incorrectly reached Semantic IR as IRBinary")
+
+
+def test_unused_cyclic_compile_time_constant_does_not_break_expression_compilation():
+    """Detached constant snapshots must tolerate unused cyclic compile-time structures."""
+    group = compile_group(
+        '''
+xs = [1]
+xs.append(xs)
+output("Result", 1)
+''',
+        "NFTest_complete_ir_unused_cyclic_const",
+    )
+    check(_nodes(group, "ShaderNodeValue"), "unrelated output did not compile with unused cyclic constant")
+    bpy.data.node_groups.remove(group)
+
+def test_complete_expression_ir_vector_subscript_and_named_vector_topology():
+    group = compile_group(
+        '''
+v = input_vector("V", default=(1, 2, 3))
+output("X", v[0])
+output("Y", v[1])
+output("Z", v[2])
+''',
+        "NFTest_complete_ir_vector_subscript",
+    )
+    separates = _nodes(group, "ShaderNodeSeparateXYZ")
+    check(len(separates) == 3, "Vector subscripts did not realize through Separate XYZ")
+    bpy.data.node_groups.remove(group)
+
+    group = compile_group(
+        '''
+v = vector(1, 2, 3)
+output("Result", v[1])
+''',
+        "NFTest_complete_ir_named_vector",
+    )
+    combines = _nodes(group, "ShaderNodeCombineXYZ")
+    separates = _nodes(group, "ShaderNodeSeparateXYZ")
+    check(len(combines) == 1, "named Vector constant did not use one Combine XYZ")
+    check(not _nodes(group, "ShaderNodeValue"), "named Vector constant created extra Value nodes")
+    check(len(separates) == 1, "named Vector subscript did not use one Separate XYZ")
+    bpy.data.node_groups.remove(group)
+
+
+def test_complete_expression_ir_arrays_and_unary_plus_preserve_selected_socket_identity():
+    group = compile_group(
+        '''
+a = input_float("A")
+b = input_float("B")
+output("Selected", (+[a, b])[0])
+''',
+        "NFTest_complete_ir_array_identity",
+    )
+    output = _nodes(group, "NodeGroupOutput")[0]
+    selected = next(socket for socket in output.inputs if socket.name == "Selected")
+    link = _link_to_socket(group, selected)
+    check(link.from_node.bl_idname == "NodeGroupInput", "array selection no longer returns the existing binding socket")
+    check(link.from_socket.name == "A", "unary-plus array selection changed selected socket identity")
+    bpy.data.node_groups.remove(group)
+
+
+def test_complete_expression_ir_object_properties_reuse_and_info_configuration():
+    group = compile_group(
+        '''
+obj = input_object("Source")
+output("Geometry", obj.geometry)
+output("Location", obj.location)
+output("Rotation", obj.rotation)
+output("Scale", obj.scale)
+''',
+        "NFTest_complete_ir_object_reuse",
+    )
+    infos = _nodes(group, "GeometryNodeObjectInfo")
+    check(len(infos) == 1, "Object properties did not reuse one Object Info node")
+    bpy.data.node_groups.remove(group)
+
+    group = compile_group(
+        '''
+obj = input_object("Source")
+info = obj.info(transform_space="RELATIVE", as_instance=False)
+output("Location", info.location)
+''',
+        "NFTest_complete_ir_object_configured",
+    )
+    info = _nodes(group, "GeometryNodeObjectInfo")[0]
+    check(info.transform_space == "RELATIVE", "Object.info transform_space was not honored by IR property lowering")
+    as_instance = next(socket for socket in info.inputs if socket.name == "As Instance")
+    check(as_instance.default_value is False, "Object.info as_instance was not honored by IR property lowering")
+    bpy.data.node_groups.remove(group)

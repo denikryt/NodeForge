@@ -9,18 +9,21 @@ from typing import Mapping
 from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_INT, TYPE_VECTOR
 from .errors import CompileError
 from .compiler_identities import BindingId
-from .nodes import _boolean_math, _compare, _math, _separate_xyz, _string_value, _switch, _value, _vector_math
+from .nodes import _boolean_math, _combine_xyz_mixed, _compare, _math, _separate_xyz, _string_value, _switch, _value, _vector_math
 from .semantic_ir import (
     IRBinary,
     IRBinding,
     IRBoolBinary,
     IRCompare,
+    IRArray,
     IRConditional,
     IRLiteral,
+    IRObjectProperty,
     IRUnary,
     IRVectorComponent,
+    IRVectorLiteral,
 )
-from .values import Value
+from .values import ObjectValue, Value
 
 
 @dataclass(frozen=True)
@@ -99,9 +102,7 @@ def _lower_binding(context, operation, materialized):
 def _lower_unary(context, operation, materialized, x, y):
     """Materialize one typed unary IR operation."""
     operand = _materialized_value(materialized, operation.operand)
-    if operation.op == "+":
-        result = operand
-    elif operation.op == "-":
+    if operation.op == "-":
         if operation.operand.typ in {TYPE_FLOAT, TYPE_INT}:
             zero = _value(context.group, 0.0, x, y - 40)
             result = _math(context.group, "SUBTRACT", [zero, operand], x, y)
@@ -175,6 +176,23 @@ def _lower_conditional(context, operation, materialized, x, y):
     _store_result(materialized, operation.result, result)
 
 
+
+def _lower_vector_literal(context, operation, materialized, x, y):
+    """Materialize one normalized compile-time Vector with existing topology."""
+    result = _combine_xyz_mixed(context.group, list(operation.components), x, y)
+    _store_result(materialized, operation.result, result)
+
+
+def _lower_object_property(context, operation, materialized, x, y):
+    """Materialize one validated Object property through the exact ObjectValue binding."""
+    value = _materialized_value(materialized, operation.value)
+    if not isinstance(value, ObjectValue):
+        raise CompileError(
+            f"Internal error: Semantic IR Object property expected ObjectValue, got {type(value).__name__}"
+        )
+    result = value.resolve_property(operation.property_name, context.group, x=x, y=y)
+    _store_result(materialized, operation.result, result)
+
 def _lower_vector_component(context, operation, materialized, x, y):
     """Materialize one Vector component projection."""
     value = _materialized_value(materialized, operation.value)
@@ -208,11 +226,24 @@ def _execute_operation(context, operation, materialized, base_depth):
     if isinstance(operation, IRConditional):
         _lower_conditional(context, operation, materialized, x, y)
         return
+    if isinstance(operation, IRVectorLiteral):
+        _lower_vector_literal(context, operation, materialized, x, y)
+        return
+    if isinstance(operation, IRObjectProperty):
+        _lower_object_property(context, operation, materialized, x, y)
+        return
     if isinstance(operation, IRVectorComponent):
         _lower_vector_component(context, operation, materialized, x, y)
         return
     raise CompileError(f"Internal error: unsupported Semantic IR operation {type(operation).__name__}")
 
+
+
+def _materialize_program_result(materialized, result):
+    """Reconstruct one legacy backend expression result from Semantic IR structure."""
+    if isinstance(result, IRArray):
+        return [_materialize_program_result(materialized, item) for item in result.items]
+    return _materialized_value(materialized, result)
 
 def lower_expression(context, program, base_depth=0):
     """Execute one ordered Semantic IR program through an explicit Blender context."""
@@ -220,13 +251,12 @@ def lower_expression(context, program, base_depth=0):
     for operation in program.operations:
         _execute_operation(context, operation, materialized, base_depth)
 
-    # SEMANTIC_IR_VALUE_MIGRATION: compile_expr() and downstream compiler consumers
-    # still expect a socket-bound Value result. Keep Value at this backend return
-    # boundary while statements, calls, runtime state, and interface wiring remain on
-    # the legacy compiler value contract. Remove this bridge when those consumers use
-    # compiler-owned runtime references and explicit Blender materialization is confined
-    # to the backend boundary.
-    return _materialized_value(materialized, program.result)
+    # SEMANTIC_IR_VALUE_MIGRATION: compile_expr() and downstream compiler consumers still
+    # expect legacy backend materializations: one socket-bound Value or a Python list of
+    # such values for array expressions. Keep this return bridge while statements, calls,
+    # runtime state, and interface wiring use the legacy value contract. Remove it when
+    # compiler-owned runtime references replace these backend-facing expression results.
+    return _materialize_program_result(materialized, program.result)
 
 
 __all__ = ["BlenderIRLoweringContext", "lower_expression"]

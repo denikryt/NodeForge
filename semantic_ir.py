@@ -50,6 +50,16 @@ class IRValue:
 
 
 @dataclass(frozen=True)
+class IRArray:
+    """Store one immutable compiler-structural expression result."""
+
+    items: tuple["IRResult", ...]
+
+
+IRResult: TypeAlias = IRValue | IRArray
+
+
+@dataclass(frozen=True)
 class IRLiteral:
     """Produce one scalar runtime literal."""
 
@@ -122,6 +132,25 @@ class IRConditional:
 
 
 @dataclass(frozen=True)
+class IRVectorLiteral:
+    """Produce one Vector value from normalized compile-time components."""
+
+    result: IRValue
+    depth: int
+    components: tuple[float, float, float]
+
+
+@dataclass(frozen=True)
+class IRObjectProperty:
+    """Produce one typed Object Info property from an Object runtime value."""
+
+    result: IRValue
+    depth: int
+    value: IRValue
+    property_name: str
+
+
+@dataclass(frozen=True)
 class IRVectorComponent:
     """Produce one Float value from a Vector component."""
 
@@ -139,6 +168,8 @@ IROperation: TypeAlias = (
     | IRBoolBinary
     | IRCompare
     | IRConditional
+    | IRVectorLiteral
+    | IRObjectProperty
     | IRVectorComponent
 )
 
@@ -148,13 +179,15 @@ class IRProgram:
     """Store one ordered expression program and its final program-local result."""
 
     operations: tuple[IROperation, ...]
-    result: IRValue
+    result: IRResult
 
 
 __all__ = [
     "IRFunctionMaterializationMode",
     "IRFunctionMaterialization",
     "IRValue",
+    "IRArray",
+    "IRResult",
     "IROperation",
     "IRProgram",
     "IRLiteral",
@@ -164,5 +197,7 @@ __all__ = [
     "IRBoolBinary",
     "IRCompare",
     "IRConditional",
+    "IRVectorLiteral",
+    "IRObjectProperty",
     "IRVectorComponent",
 ]

@@ -21,9 +21,9 @@ from NodeForge.constants import (
 )
 from NodeForge.errors import CompileError
 from NodeForge.compiler_identities import BindingId
-from NodeForge.semantic_analysis import RuntimeBindingSymbol, SemanticEnvironment, analyze_expression
+from NodeForge.semantic_analysis import RuntimeBindingSymbol, SemanticEnvironment, analyze_expression, build_semantic_constant_snapshot
 from NodeForge.semantic_lowering import lower_analyzed_expression
-from NodeForge.values import Value
+from NodeForge.values import ObjectValue, Value
 
 
 pytestmark = pytest.mark.unit
@@ -44,9 +44,10 @@ _TYPES = (
 class _FakeSocket:
     """Minimal Blender-facing socket accepted by the real NodeForge node helpers."""
 
-    def __init__(self, node=None, index=0):
+    def __init__(self, node=None, index=0, name=""):
         self.node = node
         self.index = index
+        self.name = name
         self.default_value = None
 
 
@@ -62,8 +63,18 @@ class _FakeNode:
         self.input_type = None
         self.integer = 0
         self.string = ""
-        self.inputs = [_FakeSocket(self, i) for i in range(8)]
-        self.outputs = [_FakeSocket(self, i) for i in range(4)]
+        if bl_idname == "GeometryNodeObjectInfo":
+            self.transform_space = "ORIGINAL"
+            self.inputs = [_FakeSocket(self, 0, "Object"), _FakeSocket(self, 1, "As Instance")]
+            self.outputs = [
+                _FakeSocket(self, 0, "Geometry"),
+                _FakeSocket(self, 1, "Location"),
+                _FakeSocket(self, 2, "Rotation"),
+                _FakeSocket(self, 3, "Scale"),
+            ]
+        else:
+            self.inputs = [_FakeSocket(self, i) for i in range(8)]
+            self.outputs = [_FakeSocket(self, i) for i in range(4)]
 
 
 class _FakeNodes(list):
@@ -102,11 +113,12 @@ def _environment(bindings):
         name: RuntimeBindingSymbol(BindingId("backend-contract", index), typ)
         for index, (name, typ) in enumerate(bindings.items())
     }
+    semantic_constants, const_eval_values = build_semantic_constant_snapshot({})
     return SemanticEnvironment(
         MappingProxyType(runtime_bindings),
         frozenset(),
-        MappingProxyType({}),
-        frozenset(),
+        semantic_constants,
+        const_eval_values,
         MappingProxyType({}),
     )
 
@@ -130,12 +142,11 @@ def _materialize(source, bindings):
         return False
     group = _FakeGroup()
     runtime_bindings = MappingProxyType({
-        BindingId("backend-contract", index): Value(_FakeSocket(), typ)
+        BindingId("backend-contract", index): (ObjectValue(_FakeSocket()) if typ == TYPE_OBJECT else Value(_FakeSocket(), typ))
         for index, (_, typ) in enumerate(bindings.items())
     })
     context = blender_ir_lowering.BlenderIRLoweringContext(group, runtime_bindings)
-    result = blender_ir_lowering.lower_expression(context, program)
-    assert result.typ == program.result.typ
+    blender_ir_lowering.lower_expression(context, program)
     return True
 
 
@@ -260,3 +271,83 @@ def test_successful_semantic_analysis_commits_to_ir_backend_without_legacy_retry
         for name in set(sys.modules) - before_modules:
             if name == "bpy" or name.startswith("NodeForge."):
                 sys.modules.pop(name, None)
+
+
+def test_array_program_result_reconstructs_legacy_python_lists_with_exact_value_identity():
+    from NodeForge.compiler_identities import BindingId
+    from NodeForge.values import Value
+
+    program = _accepted_program("[a, [b]]", {"a": TYPE_FLOAT, "b": TYPE_FLOAT})
+    first = Value(_FakeSocket(), TYPE_FLOAT)
+    second = Value(_FakeSocket(), TYPE_FLOAT)
+    context = blender_ir_lowering.BlenderIRLoweringContext(
+        _FakeGroup(),
+        MappingProxyType({
+            BindingId("backend-contract", 0): first,
+            BindingId("backend-contract", 1): second,
+        }),
+    )
+    result = blender_ir_lowering.lower_expression(context, program)
+    assert result[0] is first
+    assert result[1][0] is second
+    assert blender_ir_lowering.lower_expression(
+        blender_ir_lowering.BlenderIRLoweringContext(_FakeGroup(), MappingProxyType({})),
+        _accepted_program("[]", {}),
+    ) == []
+
+
+def test_vector_literal_uses_real_combine_xyz_helper_contract():
+    from NodeForge.semantic_analysis import build_semantic_constant_snapshot
+
+    expr = _expr("vec")
+    constants, const_eval_values = build_semantic_constant_snapshot({"vec": (1, 2, 3)})
+    environment = SemanticEnvironment(
+        MappingProxyType({}), frozenset(), constants, const_eval_values, MappingProxyType({})
+    )
+    program = lower_analyzed_expression(expr, analyze_expression(expr, environment))
+    group = _FakeGroup()
+    result = blender_ir_lowering.lower_expression(
+        blender_ir_lowering.BlenderIRLoweringContext(group, MappingProxyType({})), program
+    )
+    assert result.typ == TYPE_VECTOR
+    combine = next(node for node in group.nodes if node.bl_idname == "ShaderNodeCombineXYZ")
+    assert [socket.default_value for socket in combine.inputs[:3]] == [1.0, 2.0, 3.0]
+
+
+def test_object_property_uses_exact_object_value_and_reuses_object_info_node():
+    binding_id = BindingId("backend-contract", 0)
+    obj = ObjectValue(_FakeSocket())
+    group = _FakeGroup()
+    context = blender_ir_lowering.BlenderIRLoweringContext(group, MappingProxyType({binding_id: obj}))
+    environment = _environment({"obj": TYPE_OBJECT})
+
+    for source in ("obj.location", "obj.scale"):
+        expr = _expr(source)
+        program = lower_analyzed_expression(expr, analyze_expression(expr, environment))
+        blender_ir_lowering.lower_expression(context, program)
+
+    nodes = [node for node in group.nodes if node.bl_idname == "GeometryNodeObjectInfo"]
+    assert len(nodes) == 1
+    assert obj._info_resolved is True
+
+    wrong = blender_ir_lowering.BlenderIRLoweringContext(
+        _FakeGroup(), MappingProxyType({binding_id: Value(_FakeSocket(), TYPE_OBJECT)})
+    )
+    expr = _expr("obj.location")
+    program = lower_analyzed_expression(expr, analyze_expression(expr, environment))
+    with pytest.raises(CompileError, match="expected ObjectValue"):
+        blender_ir_lowering.lower_expression(wrong, program)
+
+
+def test_hand_constructed_unary_plus_is_rejected_by_backend():
+    from NodeForge.semantic_ir import IRBinding, IRProgram, IRUnary, IRValue
+
+    binding_id = BindingId("backend-contract", 0)
+    operand = IRValue(0, TYPE_FLOAT)
+    output = IRValue(1, TYPE_FLOAT)
+    program = IRProgram((IRBinding(operand, 0, binding_id), IRUnary(output, 0, "+", operand)), output)
+    context = blender_ir_lowering.BlenderIRLoweringContext(
+        _FakeGroup(), MappingProxyType({binding_id: Value(_FakeSocket(), TYPE_FLOAT)})
+    )
+    with pytest.raises(CompileError, match="unsupported Semantic IR unary operation"):
+        blender_ir_lowering.lower_expression(context, program)

@@ -15,7 +15,7 @@ from .systems import registry as systems_registry
 from . import local_functions
 from . import library_calls
 from .function_instances import extract_function_call_modifiers, unsupported_unique
-from .semantic_analysis import SemanticEnvironment, analyze_expression
+from .semantic_analysis import SemanticEnvironment, analyze_expression, build_semantic_constant_snapshot
 from .semantic_lowering import lower_analyzed_expression
 from .blender_ir_lowering import BlenderIRLoweringContext, lower_expression as lower_ir_expression
 
@@ -41,36 +41,25 @@ def compile_expr(comp, expr, depth=0):
         for name, value in comp.vars.items()
         if not isinstance(value, Value)
     )
-    # SEMANTIC_ANALYSIS_CONSTANT_SNAPSHOT_MIGRATION: comp.consts is heterogeneous
-    # mutable compiler storage. Export only scalar literal type/value facts plus the
-    # names of known non-scalar constants so semantic analysis preserves lookup
-    # precedence without receiving legacy list/tuple/ConstVector containers. Remove
-    # this bridge when compile-time bindings have frontend-owned semantic metadata.
-    scalar_constants = {}
-    unsupported_constant_names = set()
-    for name, value in comp.consts.items():
-        if isinstance(value, bool):
-            scalar_constants[name] = (TYPE_BOOL, value)
-        elif isinstance(value, (int, float)):
-            scalar_constants[name] = (TYPE_FLOAT, value)
-        elif isinstance(value, str):
-            scalar_constants[name] = (TYPE_STRING, value)
-        else:
-            unsupported_constant_names.add(name)
+    # COMPLETE_EXPRESSION_IR_CONSTANT_MIGRATION: comp.consts is still legacy compiler-owned
+    # compile-time storage. Normalize supported runtime-materializable constants into
+    # detached immutable semantic records, plus a detached semantics-preserving const-eval copy
+    # for subscript indices. Remove this bridge when compile-time bindings are frontend-owned
+    # and SemanticEnvironment receives their semantic records without reading comp.consts.
+    semantic_constants, const_eval_values = build_semantic_constant_snapshot(comp.consts)
     environment = SemanticEnvironment(
         runtime_bindings=runtime_binding_snapshot.semantic_bindings,
         legacy_binding_names=legacy_binding_names,
-        scalar_constants=MappingProxyType(scalar_constants),
-        unsupported_constant_names=frozenset(unsupported_constant_names),
+        constants=semantic_constants,
+        const_eval_values=const_eval_values,
         reserved_name_labels=MappingProxyType(dict(getattr(comp, "reserved_name_labels", {}))),
     )
     analysis = analyze_expression(expr, environment)
-    # SEMANTIC_IR_MIGRATION: Expressions outside the current IR slice continue on
-    # the existing AST-to-Blender path while migration is incremental. The target
-    # architecture is for migrated expression families to lower through Semantic IR
-    # before Blender materialization. Remove this fallback only for an expression
-    # family after that family is covered end-to-end by IR and its duplicated AST
-    # lowering branch is removed in the same planned change set.
+    # COMPLETE_EXPRESSION_IR_FALLBACK: After non-call expression completion, analysis may
+    # return unsupported only when it reaches the explicit ast.Call fallback or a known
+    # legacy non-Value compiler binding. Preserve whole-expression legacy dispatch so mixed
+    # trees keep current behavior without opaque backend leaves in Semantic IR. Remove this
+    # branch when call IR and compiler-binding migration eliminate both unsupported sources.
     if analysis is None:
         x = depth * 240
         y = -depth * 90
@@ -116,7 +105,7 @@ def compile_expr(comp, expr, depth=0):
         if isinstance(base, NodeResult):
             return base.get_output(expr.attr)
         if isinstance(base, ObjectValue):
-            return base.resolve_property(expr.attr, comp, x=x, y=y)
+            return base.resolve_property(expr.attr, comp.group, x=x, y=y)
         if expr.attr in {"x", "y", "z"}:
             reject_compile_time_object(base, f".{expr.attr} attribute access")
             return _separate_xyz(comp.group, base, expr.attr, x, y)
