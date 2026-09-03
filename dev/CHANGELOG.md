@@ -171,3 +171,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.50.13
 
 - Resolved active package catalogs and system constructors once per root compilation into an immutable environment shared by all nested builds, with record-bound imports, deferred Local discovery errors, and preserved live UI inventory behavior.
+
+## 0.50.14
+
+- Added Blender expression behavior characterization baselines with `.nf` source fixtures, canonical JSON node-tree snapshots, explicit graph/error outcome contracts, semantic literal and Object Info payload capture, isolated per-case cleanup, explicit baseline recording, manifest navigation, readable mismatch diffs, and targeted expression-boundary coverage.

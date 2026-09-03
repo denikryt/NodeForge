@@ -1,0 +1,59 @@
+{
+  "graph": {
+    "interface": [
+      {
+        "in_out": "OUTPUT",
+        "name": "Result",
+        "socket_type": "NodeSocketBool"
+      },
+      {
+        "default": true,
+        "in_out": "INPUT",
+        "name": "Flag",
+        "socket_type": "NodeSocketBool"
+      }
+    ],
+    "links": [
+      {
+        "from": [
+          "n0",
+          "Socket_0"
+        ],
+        "to": [
+          "n2",
+          "Boolean"
+        ]
+      },
+      {
+        "from": [
+          "n2",
+          "Boolean"
+        ],
+        "to": [
+          "n1",
+          "Socket_1"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "bl_idname": "NodeGroupInput",
+        "id": "n0",
+        "properties": {}
+      },
+      {
+        "bl_idname": "NodeGroupOutput",
+        "id": "n1",
+        "properties": {}
+      },
+      {
+        "bl_idname": "FunctionNodeBooleanMath",
+        "id": "n2",
+        "properties": {
+          "operation": "NOT"
+        }
+      }
+    ]
+  },
+  "kind": "graph"
+}

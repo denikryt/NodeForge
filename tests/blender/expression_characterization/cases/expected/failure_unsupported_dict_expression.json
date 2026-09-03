@@ -1,0 +1,5 @@
+{
+  "exception": "CompileError",
+  "kind": "compile_error",
+  "message": "Unsupported expression element: Dict"
+}

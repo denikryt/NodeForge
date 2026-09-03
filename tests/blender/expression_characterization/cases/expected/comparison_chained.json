@@ -1,0 +1,209 @@
+{
+  "graph": {
+    "interface": [
+      {
+        "in_out": "OUTPUT",
+        "name": "Result",
+        "socket_type": "NodeSocketBool"
+      },
+      {
+        "default": 1.0,
+        "in_out": "INPUT",
+        "name": "A",
+        "socket_type": "NodeSocketFloat"
+      },
+      {
+        "default": 2.0,
+        "in_out": "INPUT",
+        "name": "B",
+        "socket_type": "NodeSocketFloat"
+      },
+      {
+        "default": 3.0,
+        "in_out": "INPUT",
+        "name": "C",
+        "socket_type": "NodeSocketFloat"
+      }
+    ],
+    "links": [
+      {
+        "from": [
+          "n0",
+          "Socket_0"
+        ],
+        "to": [
+          "n4",
+          "A"
+        ]
+      },
+      {
+        "from": [
+          "n0",
+          "Socket_1"
+        ],
+        "to": [
+          "n3",
+          "Value"
+        ]
+      },
+      {
+        "from": [
+          "n0",
+          "Socket_1"
+        ],
+        "to": [
+          "n6",
+          "Value"
+        ]
+      },
+      {
+        "from": [
+          "n0",
+          "Socket_2"
+        ],
+        "to": [
+          "n7",
+          "B"
+        ]
+      },
+      {
+        "from": [
+          "n2",
+          "Value"
+        ],
+        "to": [
+          "n3",
+          "Value_001"
+        ]
+      },
+      {
+        "from": [
+          "n3",
+          "Value"
+        ],
+        "to": [
+          "n4",
+          "B"
+        ]
+      },
+      {
+        "from": [
+          "n4",
+          "Result"
+        ],
+        "to": [
+          "n8",
+          "Boolean"
+        ]
+      },
+      {
+        "from": [
+          "n5",
+          "Value"
+        ],
+        "to": [
+          "n6",
+          "Value_001"
+        ]
+      },
+      {
+        "from": [
+          "n6",
+          "Value"
+        ],
+        "to": [
+          "n7",
+          "A"
+        ]
+      },
+      {
+        "from": [
+          "n7",
+          "Result"
+        ],
+        "to": [
+          "n8",
+          "Boolean_001"
+        ]
+      },
+      {
+        "from": [
+          "n8",
+          "Boolean"
+        ],
+        "to": [
+          "n1",
+          "Socket_3"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "bl_idname": "NodeGroupInput",
+        "id": "n0",
+        "properties": {}
+      },
+      {
+        "bl_idname": "NodeGroupOutput",
+        "id": "n1",
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeValue",
+        "id": "n2",
+        "payload": {
+          "value": 2.0
+        },
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeMath",
+        "id": "n3",
+        "properties": {
+          "operation": "MULTIPLY"
+        }
+      },
+      {
+        "bl_idname": "FunctionNodeCompare",
+        "id": "n4",
+        "properties": {
+          "data_type": "FLOAT",
+          "mode": "ELEMENT",
+          "operation": "LESS_THAN"
+        }
+      },
+      {
+        "bl_idname": "ShaderNodeValue",
+        "id": "n5",
+        "payload": {
+          "value": 2.0
+        },
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeMath",
+        "id": "n6",
+        "properties": {
+          "operation": "MULTIPLY"
+        }
+      },
+      {
+        "bl_idname": "FunctionNodeCompare",
+        "id": "n7",
+        "properties": {
+          "data_type": "FLOAT",
+          "mode": "ELEMENT",
+          "operation": "LESS_THAN"
+        }
+      },
+      {
+        "bl_idname": "FunctionNodeBooleanMath",
+        "id": "n8",
+        "properties": {
+          "operation": "AND"
+        }
+      }
+    ]
+  },
+  "kind": "graph"
+}

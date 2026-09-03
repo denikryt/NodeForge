@@ -1,0 +1,139 @@
+{
+  "graph": {
+    "interface": [
+      {
+        "in_out": "OUTPUT",
+        "name": "Result",
+        "socket_type": "NodeSocketFloat"
+      },
+      {
+        "default": 1.0,
+        "in_out": "INPUT",
+        "name": "A",
+        "socket_type": "NodeSocketFloat"
+      },
+      {
+        "default": 2.0,
+        "in_out": "INPUT",
+        "name": "B",
+        "socket_type": "NodeSocketFloat"
+      },
+      {
+        "default": 3.0,
+        "in_out": "INPUT",
+        "name": "C",
+        "socket_type": "NodeSocketFloat"
+      },
+      {
+        "default": 4.0,
+        "in_out": "INPUT",
+        "name": "D",
+        "socket_type": "NodeSocketFloat"
+      }
+    ],
+    "links": [
+      {
+        "from": [
+          "n0",
+          "Socket_0"
+        ],
+        "to": [
+          "n2",
+          "X"
+        ]
+      },
+      {
+        "from": [
+          "n0",
+          "Socket_1"
+        ],
+        "to": [
+          "n2",
+          "Y"
+        ]
+      },
+      {
+        "from": [
+          "n0",
+          "Socket_2"
+        ],
+        "to": [
+          "n2",
+          "Z"
+        ]
+      },
+      {
+        "from": [
+          "n0",
+          "Socket_3"
+        ],
+        "to": [
+          "n4",
+          "Value_001"
+        ]
+      },
+      {
+        "from": [
+          "n2",
+          "Vector"
+        ],
+        "to": [
+          "n3",
+          "Vector"
+        ]
+      },
+      {
+        "from": [
+          "n3",
+          "Value"
+        ],
+        "to": [
+          "n4",
+          "Value"
+        ]
+      },
+      {
+        "from": [
+          "n4",
+          "Value"
+        ],
+        "to": [
+          "n1",
+          "Socket_4"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "bl_idname": "NodeGroupInput",
+        "id": "n0",
+        "properties": {}
+      },
+      {
+        "bl_idname": "NodeGroupOutput",
+        "id": "n1",
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeCombineXYZ",
+        "id": "n2",
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeVectorMath",
+        "id": "n3",
+        "properties": {
+          "operation": "LENGTH"
+        }
+      },
+      {
+        "bl_idname": "ShaderNodeMath",
+        "id": "n4",
+        "properties": {
+          "operation": "ADD"
+        }
+      }
+    ]
+  },
+  "kind": "graph"
+}

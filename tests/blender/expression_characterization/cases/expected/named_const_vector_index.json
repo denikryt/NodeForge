@@ -1,0 +1,61 @@
+{
+  "graph": {
+    "interface": [
+      {
+        "in_out": "OUTPUT",
+        "name": "Result",
+        "socket_type": "NodeSocketFloat"
+      }
+    ],
+    "links": [
+      {
+        "from": [
+          "n2",
+          "Vector"
+        ],
+        "to": [
+          "n3",
+          "Vector"
+        ]
+      },
+      {
+        "from": [
+          "n3",
+          "Y"
+        ],
+        "to": [
+          "n1",
+          "Socket_0"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "bl_idname": "NodeGroupInput",
+        "id": "n0",
+        "properties": {}
+      },
+      {
+        "bl_idname": "NodeGroupOutput",
+        "id": "n1",
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeCombineXYZ",
+        "defaults": {
+          "X": 1.0,
+          "Y": 2.0,
+          "Z": 3.0
+        },
+        "id": "n2",
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeSeparateXYZ",
+        "id": "n3",
+        "properties": {}
+      }
+    ]
+  },
+  "kind": "graph"
+}

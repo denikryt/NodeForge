@@ -1,0 +1,5 @@
+obj = input_object("Source")
+output("Geometry", obj.geometry)
+output("Location", obj.location)
+output("Rotation", obj.rotation)
+output("Scale", obj.scale)

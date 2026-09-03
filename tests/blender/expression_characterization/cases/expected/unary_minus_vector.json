@@ -1,0 +1,81 @@
+{
+  "graph": {
+    "interface": [
+      {
+        "in_out": "OUTPUT",
+        "name": "Result",
+        "socket_type": "NodeSocketVector"
+      },
+      {
+        "default": [
+          1.0,
+          2.0,
+          3.0
+        ],
+        "in_out": "INPUT",
+        "name": "V",
+        "socket_type": "NodeSocketVector"
+      }
+    ],
+    "links": [
+      {
+        "from": [
+          "n0",
+          "Socket_0"
+        ],
+        "to": [
+          "n3",
+          "Vector"
+        ]
+      },
+      {
+        "from": [
+          "n2",
+          "Value"
+        ],
+        "to": [
+          "n3",
+          "Scale"
+        ]
+      },
+      {
+        "from": [
+          "n3",
+          "Vector"
+        ],
+        "to": [
+          "n1",
+          "Socket_1"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "bl_idname": "NodeGroupInput",
+        "id": "n0",
+        "properties": {}
+      },
+      {
+        "bl_idname": "NodeGroupOutput",
+        "id": "n1",
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeValue",
+        "id": "n2",
+        "payload": {
+          "value": -1.0
+        },
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeVectorMath",
+        "id": "n3",
+        "properties": {
+          "operation": "SCALE"
+        }
+      }
+    ]
+  },
+  "kind": "graph"
+}

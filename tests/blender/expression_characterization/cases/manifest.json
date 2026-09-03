@@ -1,0 +1,497 @@
+[
+  {
+    "id": "literal_float",
+    "description": "Float literal materialization",
+    "tags": [
+      "literal",
+      "float"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "literal_bool",
+    "description": "Bool literal materialization",
+    "tags": [
+      "literal",
+      "bool"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "literal_string",
+    "description": "String literal materialization",
+    "tags": [
+      "literal",
+      "string"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "binding_runtime",
+    "description": "Runtime binding preserves input link",
+    "tags": [
+      "binding",
+      "input"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "unary_plus_runtime",
+    "description": "Unary plus is runtime identity",
+    "tags": [
+      "unary",
+      "identity"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "unary_minus_float",
+    "description": "Unary minus over Float",
+    "tags": [
+      "unary",
+      "float"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "unary_minus_vector",
+    "description": "Unary minus over Vector",
+    "tags": [
+      "unary",
+      "vector"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "unary_not_bool",
+    "description": "Boolean not",
+    "tags": [
+      "unary",
+      "bool"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "binary_add",
+    "description": "Float addition",
+    "tags": [
+      "binary",
+      "arithmetic"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "binary_mul_add",
+    "description": "Nested multiply then add",
+    "tags": [
+      "binary",
+      "arithmetic",
+      "nested"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "vector_scale_right",
+    "description": "Vector multiplied by Float",
+    "tags": [
+      "binary",
+      "vector"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "vector_scale_left",
+    "description": "Float multiplied by Vector",
+    "tags": [
+      "binary",
+      "vector"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "vector_divide_scalar",
+    "description": "Vector divided by Float",
+    "tags": [
+      "binary",
+      "vector"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "bool_and",
+    "description": "Boolean and",
+    "tags": [
+      "bool",
+      "binary"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "bool_or",
+    "description": "Boolean or",
+    "tags": [
+      "bool",
+      "binary"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "comparison_less",
+    "description": "Float less-than comparison",
+    "tags": [
+      "comparison"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "comparison_chained",
+    "description": "Chained comparison rematerializes middle expression",
+    "tags": [
+      "comparison",
+      "nested"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "conditional_float",
+    "description": "Runtime conditional expression",
+    "tags": [
+      "conditional",
+      "bool"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "vector_component_x",
+    "description": "Vector .x component access",
+    "tags": [
+      "vector",
+      "attribute"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "vector_component_y",
+    "description": "Vector .y component access",
+    "tags": [
+      "vector",
+      "attribute"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "vector_component_z",
+    "description": "Vector .z component access",
+    "tags": [
+      "vector",
+      "attribute"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "list_literal_binding",
+    "description": "List syntax stored then indexed",
+    "tags": [
+      "array",
+      "list"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "tuple_literal_binding",
+    "description": "Tuple syntax stored then indexed",
+    "tags": [
+      "array",
+      "tuple"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "nested_list_literal",
+    "description": "Nested source list syntax",
+    "tags": [
+      "array",
+      "list",
+      "nested"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "empty_list_literal",
+    "description": "Empty list assignment remains accepted",
+    "tags": [
+      "array",
+      "list",
+      "empty"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "list_direct_index",
+    "description": "Direct indexing into list syntax",
+    "tags": [
+      "array",
+      "list",
+      "subscript"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "tuple_negative_index",
+    "description": "Negative indexing into tuple syntax",
+    "tags": [
+      "array",
+      "tuple",
+      "subscript"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "named_array_index",
+    "description": "Indexing an assigned source array",
+    "tags": [
+      "array",
+      "subscript",
+      "binding"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "unary_plus_array_index",
+    "description": "Unary plus identity over list syntax before indexing",
+    "tags": [
+      "unary",
+      "identity",
+      "array",
+      "subscript"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "unary_plus_tuple_index",
+    "description": "Unary plus identity over tuple syntax before negative indexing",
+    "tags": [
+      "unary",
+      "identity",
+      "tuple",
+      "subscript"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "unary_plus_const_array",
+    "description": "Unary plus identity over named compile-time/source array",
+    "tags": [
+      "unary",
+      "identity",
+      "array",
+      "const"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "const_list_equality_index",
+    "description": "Compile-time list equality determines array index",
+    "tags": [
+      "const",
+      "array",
+      "subscript"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "const_list_concat_index",
+    "description": "Compile-time list concatenation and len determine index",
+    "tags": [
+      "const",
+      "array",
+      "subscript"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "const_list_range_concat_index",
+    "description": "Compile-time list plus range and len determine index",
+    "tags": [
+      "const",
+      "array",
+      "subscript",
+      "range"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "mixed_array_arithmetic_index",
+    "description": "Nested arithmetic inside list syntax",
+    "tags": [
+      "array",
+      "binary",
+      "nested",
+      "subscript"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "mixed_conditional_add",
+    "description": "Conditional nested under binary expression",
+    "tags": [
+      "conditional",
+      "binary",
+      "nested"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "mixed_vector_components_index",
+    "description": "Vector components inside indexed list syntax",
+    "tags": [
+      "vector",
+      "array",
+      "attribute",
+      "subscript"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "call_inside_binary",
+    "description": "Builtin call nested under binary expression",
+    "tags": [
+      "call",
+      "legacy-boundary",
+      "binary"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "call_inside_array_index",
+    "description": "Builtin call inside source array before indexing",
+    "tags": [
+      "call",
+      "legacy-boundary",
+      "array",
+      "subscript"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "call_then_vector_attribute",
+    "description": "Builtin vector call followed by component attribute",
+    "tags": [
+      "call",
+      "legacy-boundary",
+      "vector",
+      "attribute"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "failure_bool_plus_float",
+    "description": "Unsupported Bool and Float binary operation",
+    "tags": [
+      "failure",
+      "binary",
+      "type"
+    ],
+    "outcome": "compile_error"
+  },
+  {
+    "id": "failure_array_index_out_of_range",
+    "description": "Out-of-range source array index",
+    "tags": [
+      "failure",
+      "array",
+      "subscript"
+    ],
+    "outcome": "compile_error"
+  },
+  {
+    "id": "failure_unsupported_dict_expression",
+    "description": "Unsupported expression on compatibility path",
+    "tags": [
+      "failure",
+      "legacy-boundary",
+      "unsupported"
+    ],
+    "outcome": "compile_error"
+  },
+  {
+    "id": "vector_index_components",
+    "outcome": "graph",
+    "description": "Vector indexing 0, 1 and 2 materializes component access",
+    "tags": [
+      "vector",
+      "subscript",
+      "targeted"
+    ]
+  },
+  {
+    "id": "named_const_vector_index",
+    "outcome": "graph",
+    "description": "Named compile-time Vector survives binding and indexing",
+    "tags": [
+      "vector",
+      "const",
+      "subscript",
+      "targeted"
+    ]
+  },
+  {
+    "id": "object_properties_reuse",
+    "outcome": "graph",
+    "description": "Object geometry/location/rotation/scale share one Object Info realization",
+    "tags": [
+      "object",
+      "attribute",
+      "reuse",
+      "targeted"
+    ]
+  },
+  {
+    "id": "object_info_configured_properties",
+    "outcome": "graph",
+    "description": "Configured Object.info properties preserve sequencing and reuse",
+    "tags": [
+      "object",
+      "attribute",
+      "info",
+      "reuse",
+      "targeted"
+    ]
+  },
+  {
+    "id": "local_call_array_argument",
+    "outcome": "compile_error",
+    "description": "Local function array argument preserves current controlled rejection",
+    "tags": [
+      "call",
+      "local",
+      "array",
+      "failure",
+      "targeted"
+    ]
+  },
+  {
+    "id": "local_call_mixed_array_index",
+    "outcome": "graph",
+    "description": "Local function call receives an indexed runtime array expression and composes with root arithmetic",
+    "tags": [
+      "call",
+      "local",
+      "array",
+      "subscript",
+      "legacy-boundary",
+      "targeted"
+    ]
+  },
+  {
+    "id": "failure_object_unknown_property",
+    "outcome": "compile_error",
+    "description": "Unknown Object property preserves the current controlled diagnostic",
+    "tags": [
+      "failure",
+      "object",
+      "attribute",
+      "targeted"
+    ]
+  }
+]

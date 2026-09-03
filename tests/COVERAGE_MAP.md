@@ -90,3 +90,15 @@
 - `tests/unit/test_blender_group_backend.py`: nested savepoints, cache snapshots, commit/PONR ordering, multi-resource preparation, non-raising retirement diagnostics, custom-property marker preservation, and backend request contracts.
 - `tests/unit/test_blender_group_authority.py`: persistent transaction-private authority filtering, reload-stable process-local provisional state, publication/forget behavior, and stale-entry cleanup.
 - `tests/blender/test_update_group.py`, `tests/blender/test_library_catalogs.py`, and `tests/blender/test_unique_function_groups.py`: physical identity, rollback/cutover, editable metadata finalization, leaked temporary/provisional authority exclusion, generated-resource liveness, and reusable-function integration.
+
+## Expression behavior characterization baseline
+
+`tests/blender/expression_characterization/` records and verifies black-box expression behavior through the production compiler and a real Blender `GeometryNodeTree`.
+
+- `.nf` source cases map mechanically to committed canonical JSON baselines through the flat manifest case ID.
+- Graph baselines cover ordered interface sockets, node types, semantic node properties/payloads, exact links, and opt-in representative expression placement while excluding inactive Blender defaults.
+- The manifest independently declares `graph` versus `compile_error` outcome, so the recorder cannot bless an unexpected success/failure transition.
+- Cases cover structural list/tuple/index behavior, Vector indexing, named compile-time Vectors, Object properties/Object Info reuse and configuration, unary identity, successful mixed call-boundary expressions, compile-time container semantics, and representative nested expressions.
+- Every case removes all node groups it created; controlled-failure cases additionally fail if compilation leaked any fresh group.
+- Harness contract tests verify literal payload sensitivity, socket-reference uniqueness, semantic-default filtering, outcome enforcement, child-group cleanup, and pre-record missing-baseline behavior.
+- Baselines are updated only by the explicit Blender recorder; ordinary pytest runs are read-only comparisons.
