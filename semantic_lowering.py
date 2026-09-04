@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 
 from .constants import TYPE_BOOL, TYPE_OBJECT
+from .nf_types import NFType
 from .errors import CompileError
 from .semantic_analysis import (
     ArrayResultShape,
@@ -36,8 +37,10 @@ class _IRBuilder:
         self._next_value_id = 0
         self._operations = []
 
-    def new_value(self, typ):
+    def new_value(self, typ: NFType):
         """Allocate the next deterministic value identity for *typ*."""
+        if not isinstance(typ, NFType):
+            raise TypeError("typ must be an NFType")
         value = IRValue(self._next_value_id, typ)
         self._next_value_id += 1
         return value

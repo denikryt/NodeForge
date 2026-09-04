@@ -179,3 +179,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.50.15
 
 - Completed Semantic IR ownership of the non-call expression surface with structural arrays, cycle/alias-preserving detached compile-time const-eval snapshots with distinct opaque placeholders, Vector indexing, Object properties, production-routing coverage, and backend-preserving materialization while retaining explicit call and legacy-binding fallbacks.
+
+## 0.50.16
+
+- Replaced internal runtime semantic type strings with canonical `NFType` identities while preserving public DSL syntax, Blender topology, durable metadata tokens, and reusable-function identity.

@@ -2,6 +2,7 @@
 
 from .storage import INPUT_DEFAULTS_PROP
 from .errors import CompileError
+from .nf_types import NFType, serialize_nf_type
 
 
 
@@ -57,15 +58,17 @@ def _set_interface_socket_default(group, name, in_out, value):
         pass
     return ok
 
-def _record_group_input_default(group, name, typ, default):
-    """Function `_record_group_input_default` used by the NodeForge addon."""
+def _record_group_input_default(group, name, typ: NFType, default):
+    """Persist one input default using the stable external type token."""
+    if not isinstance(typ, NFType):
+        raise TypeError("typ must be an NFType")
     if default is None:
         return
     try:
         data = dict(group.get(INPUT_DEFAULTS_PROP, {}))
     except Exception:
         data = {}
-    data[name] = {"type": typ, "default": _json_safe_default(default)}
+    data[name] = {"type": serialize_nf_type(typ), "default": _json_safe_default(default)}
     try:
         group[INPUT_DEFAULTS_PROP] = data
     except Exception:

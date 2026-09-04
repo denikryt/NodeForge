@@ -52,7 +52,7 @@ output("Literal", literal)
     check(iface.socket_type == "NodeSocketString", "input_string did not create NodeSocketString")
     check(iface.default_value == "Weight_A", f"input_string default mismatch: {iface.default_value!r}")
     defaults = _get_group_input_defaults(group)
-    check(defaults["Attribute"] == {"type": TYPE_STRING, "default": "Weight_A"}, f"stored String default mismatch: {defaults}")
+    check(defaults["Attribute"] == {"type": "STRING", "default": "Weight_A"}, f"stored String default mismatch: {defaults}")
     check(_interface_socket(group, "Runtime", "OUTPUT").socket_type == "NodeSocketString", "runtime String output type mismatch")
     check(_interface_socket(group, "Literal", "OUTPUT").socket_type == "NodeSocketString", "literal String output type mismatch")
     string_nodes = [node for node in group.nodes if node.bl_idname == "FunctionNodeInputString"]

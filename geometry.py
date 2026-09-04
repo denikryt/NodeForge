@@ -113,7 +113,7 @@ def _euler_to_rotation(group, euler_vec, x=0, y=0):
         raise CompileError("rotation= must be Vector")
     node = _new_node(group, "FunctionNodeEulerToRotation", x, y)
     group.links.new(euler_vec.socket, node.inputs[0])
-    return Value(node.outputs[0], "ROTATION")
+    return Value(node.outputs[0], TYPE_ROTATION)
 
 def _is_const_number(v):
     """Function `_is_const_number` used by the NodeForge addon."""

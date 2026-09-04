@@ -4,15 +4,23 @@ import ast
 import math
 from types import MappingProxyType
 
-TYPE_FLOAT = "FLOAT"
-TYPE_VECTOR = "VECTOR"
-TYPE_BOOL = "BOOL"
-TYPE_GEOMETRY = "GEOMETRY"
-TYPE_INT = "INT"
-TYPE_MATERIAL = "MATERIAL"
-TYPE_OBJECT = "OBJECT"
-TYPE_STRING = "STRING"
-TYPE_BUNDLE = "BUNDLE"
+from .nf_types import NFType
+
+# CANONICAL_NFTYPE_TYPE_ALIAS_MIGRATION: TYPE_* names temporarily preserve existing
+# NodeForge-owned imports while their values are canonical NFType members. Do not use
+# these aliases to accept or serialize raw type strings. Remove the alias block after
+# all NodeForge-owned runtime-type references use NFType directly and migration tests
+# confirm no supported public contract depends on TYPE_* symbol names.
+TYPE_FLOAT = NFType.FLOAT
+TYPE_VECTOR = NFType.VECTOR
+TYPE_BOOL = NFType.BOOL
+TYPE_GEOMETRY = NFType.GEOMETRY
+TYPE_INT = NFType.INT
+TYPE_MATERIAL = NFType.MATERIAL
+TYPE_OBJECT = NFType.OBJECT
+TYPE_STRING = NFType.STRING
+TYPE_BUNDLE = NFType.BUNDLE
+TYPE_ROTATION = NFType.ROTATION
 
 OBJECT_PROPERTY_TYPES = MappingProxyType({
     "geometry": TYPE_GEOMETRY,

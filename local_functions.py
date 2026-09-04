@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import bpy
 
 from .constants import *
+from .nf_types import NFType, serialize_nf_type
 from .errors import CompileError
 from .blender_group_authority import is_authority_ineligible_group
 from .library import (
@@ -42,7 +43,7 @@ LOCAL_HELPER_SOURCE_PROP = "nodeforge_local_function_source"
 LOCAL_HELPER_RETURN_PROP = "nodeforge_local_function_return_shape"
 
 
-def value_type_for_const(value):
+def value_type_for_const(value) -> NFType:
     """Infer the NodeForge type represented by a compile-time argument."""
     if _is_const_vector(value) or (
         isinstance(value, (tuple, list))
@@ -61,7 +62,7 @@ def value_type_for_const(value):
     raise CompileError("Local function constant arguments must be numbers, booleans, strings or vectors")
 
 
-def input_call_for_type(param_name, typ):
+def input_call_for_type(param_name, typ: NFType):
     """Return source code that recreates a local function parameter as an input."""
     constructors = {
         TYPE_GEOMETRY: "input_geometry", TYPE_MATERIAL: "input_material",
@@ -132,7 +133,7 @@ def analyze_local_return_shape(fn):
     return LocalReturnShape(tuple(elements))
 
 
-def resolve_local_parameter_annotation(annotation):
+def resolve_local_parameter_annotation(annotation) -> NFType | None:
     """Resolve one simple local-function parameter annotation to a type token."""
     if annotation is None:
         return None
@@ -178,6 +179,11 @@ def _helper_namespace_fragment(namespace):
         else:
             encoded.append(f"_u{ord(char):06X}_")
     return "".join(encoded) or "Group"
+
+
+def _serialize_local_signature(signature_names, param_types) -> str:
+    """Serialize local parameter types to the stable helper identity format."""
+    return ",".join(f"{param}:{serialize_nf_type(param_types[param])}" for param in signature_names)
 
 
 def _local_helper_group_name(namespace, function_name, signature):
@@ -433,7 +439,7 @@ def _serialize_return_shape(shape, types=None):
     payload = [{"key": e.key, "name": e.socket_name} for e in shape.elements]
     if types is not None:
         for item, typ in zip(payload, types):
-            item["type"] = typ
+            item["type"] = serialize_nf_type(typ)
     return json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
 
@@ -601,7 +607,7 @@ def compile_local_function_call(comp, expr, depth=0, modifiers=None):
             const_args[capture_name] = value
 
     signature_names = tuple(params) + hidden_capture_names
-    signature = ",".join(f"{param}:{param_types[param]}" for param in signature_names)
+    signature = _serialize_local_signature(signature_names, param_types)
     logical_namespace = _logical_namespace(getattr(comp, "helper_namespace", None) or getattr(comp.group, "name", "Group"))
     group_name = _local_helper_group_name(logical_namespace, name, signature)
     source = local_function_source(fn, param_types, hidden_captures=hidden_capture_names, return_shape=return_shape)

@@ -9,6 +9,7 @@ import pytest
 from NodeForge.constants import TYPE_FLOAT, TYPE_TOKEN_NAMES
 from NodeForge.errors import CompileError
 from NodeForge.values import TupleValue, Value
+from NodeForge.nf_types import NFType
 
 
 def _local_functions(monkeypatch):
@@ -86,3 +87,16 @@ def test_compile_time_preprocessor_preserves_runtime_unpacking():
     assert isinstance(processed[0].targets[0], ast.Tuple)
     assert "a" not in constants
     assert "b" not in constants
+
+
+def test_return_shape_metadata_serializes_historical_type_tokens(monkeypatch):
+    """Local helper return metadata stays byte-for-byte compatible."""
+    module = _local_functions(monkeypatch)
+    shape = module.analyze_local_return_shape(_function("def f(x):\n    return x\n"))
+    assert module._serialize_return_shape(shape, (NFType.FLOAT,)) == '[{"key":"return:0","name":"Value","type":"FLOAT"}]'
+
+
+def test_local_signature_serialization_preserves_historical_identity(monkeypatch):
+    """Canonical in-memory types retain the exact local helper signature bytes."""
+    module = _local_functions(monkeypatch)
+    assert module._serialize_local_signature(("a", "b"), {"a": NFType.FLOAT, "b": NFType.VECTOR}) == "a:FLOAT,b:VECTOR"

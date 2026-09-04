@@ -16,6 +16,7 @@ from typing import Collection, Iterable, TYPE_CHECKING
 import bpy
 
 from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR, TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING, TYPE_BUNDLE
+from .nf_types import NFType
 from .errors import CompileError
 from .blender_group_authority import is_authority_ineligible_group
 from .compiler_identities import CORE_PACKAGE_ID, FunctionId, library_function_id, normalize_library_package_id
@@ -946,7 +947,7 @@ def compile_module_library_entry_call_for_record(comp, expr, record: LibraryEntr
     return compile_call(comp, expr, depth)
 
 
-def _socket_type_to_value_type(socket) -> str:
+def _socket_type_to_value_type(socket) -> NFType:
     """Map a supported Blender group socket to a NodeForge semantic type."""
     bl_idname = getattr(socket, "bl_idname", "") or getattr(socket, "socket_type", "") or getattr(socket, "bl_socket_idname", "")
     mappings = (

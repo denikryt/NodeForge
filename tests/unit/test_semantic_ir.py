@@ -485,6 +485,7 @@ def test_exact_semantic_migration_markers_are_present_at_source_decisions():
             "library_calls": "library_calls.py",
             "library": "library.py",
             "materializer": "function_materializer.py",
+            "constants": "constants.py",
         }.items()
     }
 
@@ -510,8 +511,16 @@ def test_exact_semantic_migration_markers_are_present_at_source_decisions():
     assert sources["compiler"].count("BLENDER_TRANSACTION_LEGACY_ALIAS_MIGRATION") == 1
     assert sources["compiler"].count("RESOLVED_ENVIRONMENT_MIGRATION") == 1
     assert sources["materializer"].count("IR_DEPENDENCY_LOCAL_CATALOG_MIGRATION") == 1
+    assert sources["constants"].count("CANONICAL_NFTYPE_TYPE_ALIAS_MIGRATION") == 1
+    assert sum(source.count("CANONICAL_NFTYPE_") for source in sources.values()) == 1
+    all_python_source = "\n".join(path.read_text(encoding="utf-8") for path in root.glob("*.py"))
+    assert all_python_source.count("CANONICAL_NFTYPE_TYPE_ALIAS_MIGRATION") == 1
+    assert all_python_source.count("CANONICAL_NFTYPE_") == 1
 
     normalized = {name: "\n".join(line.lstrip() for line in source.splitlines()) for name, source in sources.items()}
+    canonical_nftype_marker = "# CANONICAL_NFTYPE_TYPE_ALIAS_MIGRATION: TYPE_* names temporarily preserve existing\n# NodeForge-owned imports while their values are canonical NFType members. Do not use\n# these aliases to accept or serialize raw type strings. Remove the alias block after\n# all NodeForge-owned runtime-type references use NFType directly and migration tests\n# confirm no supported public contract depends on TYPE_* symbol names."
+    assert canonical_nftype_marker in normalized["constants"]
+
     preserved_markers = (
         (normalized["dispatcher"], "# SEMANTIC_IR_VALUE_MIGRATION: comp.vars still stores legacy socket-bound Value\n# objects while statement and call migration is incomplete. Snapshot those Values\n# only at the frontend/backend boundary: semantic analysis receives detached types,\n# while Blender lowering receives the backend Value map. Remove this bridge when\n# runtime bindings use canonical compiler-owned references and comp.vars no longer\n# owns backend sockets."),
         (normalized["dispatcher"], "# SEMANTIC_ANALYSIS_LEGACY_BINDING_MIGRATION: comp.vars also contains non-Value\n# compiler-side bindings such as GeometryBuilder, NodeResult, TupleValue, and\n# list-backed legacy values. Export only their names so semantic analysis keeps\n# comp.vars name precedence and returns unsupported instead of misdiagnosing an\n# existing legacy binding as unknown or falling through to consts. Remove this\n# bridge when every compiler binding has frontend-owned semantic metadata or its\n# expression semantics have been migrated into semantic analysis."),

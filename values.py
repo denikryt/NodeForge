@@ -5,12 +5,15 @@ from types import MappingProxyType
 from .compile_time import CompileTimeObject
 from .errors import CompileError
 from .constants import TYPE_OBJECT
+from .nf_types import NFType
 
 
 class Value:
     """Typed reference to a Blender node socket produced by the compiler."""
-    def __init__(self, socket, typ):
-        """Store the Blender socket and NodeForge semantic type for this value."""
+    def __init__(self, socket, typ: NFType):
+        """Store the Blender socket and canonical NodeForge semantic type."""
+        if not isinstance(typ, NFType):
+            raise TypeError("typ must be an NFType")
         self.socket = socket
         self.typ = typ
 

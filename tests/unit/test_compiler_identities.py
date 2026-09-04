@@ -13,6 +13,7 @@ from NodeForge.compiler_identities import (
 )
 from NodeForge.function_instances import FunctionCallModifiers, function_group_owner_scope, instance_key_for, instance_key_for_materialization
 from NodeForge.semantic_ir import IRFunctionMaterializationMode
+from NodeForge.nf_types import NFType
 
 pytestmark = pytest.mark.unit
 
@@ -111,14 +112,14 @@ def test_compiler_runtime_binding_slots_and_snapshot_are_stable_and_coherent(mon
         compiler.function_group_owner_scope = _ROOT_OWNER
         compiler._runtime_binding_ids = {}
         compiler._next_runtime_binding_local_id = 0
-        first = Value(object(), "FLOAT")
-        second = Value(object(), "VECTOR")
+        first = Value(object(), NFType.FLOAT)
+        second = Value(object(), NFType.VECTOR)
         compiler.vars = {"a": first, "legacy": object()}
 
         first_id = compiler.runtime_binding_id("a")
         snapshot = compiler.snapshot_runtime_bindings()
         assert snapshot.semantic_bindings["a"].binding_id == first_id
-        assert snapshot.semantic_bindings["a"].typ == "FLOAT"
+        assert snapshot.semantic_bindings["a"].typ is NFType.FLOAT
         assert snapshot.backend_values[first_id] is first
         assert "legacy" not in snapshot.semantic_bindings
         with pytest.raises(TypeError):
@@ -130,7 +131,7 @@ def test_compiler_runtime_binding_slots_and_snapshot_are_stable_and_coherent(mon
         assert compiler.runtime_binding_id("a") == first_id
         rebound = compiler.snapshot_runtime_bindings()
         assert rebound.semantic_bindings["a"].binding_id == first_id
-        assert rebound.semantic_bindings["a"].typ == "VECTOR"
+        assert rebound.semantic_bindings["a"].typ is NFType.VECTOR
         assert rebound.backend_values[first_id] is second
 
         compiler.vars["a"] = object()

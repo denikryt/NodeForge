@@ -7,6 +7,7 @@ from enum import Enum
 from typing import TypeAlias
 
 from .compiler_identities import BindingId, CallSiteId, FunctionId
+from .nf_types import NFType
 
 
 class IRFunctionMaterializationMode(str, Enum):
@@ -46,7 +47,12 @@ class IRValue:
     """Identify one typed semantic value inside a single :class:`IRProgram`."""
 
     id: int
-    typ: str
+    typ: NFType
+
+    def __post_init__(self):
+        """Reject non-canonical semantic type identities."""
+        if not isinstance(self.typ, NFType):
+            raise TypeError("typ must be an NFType")
 
 
 @dataclass(frozen=True)

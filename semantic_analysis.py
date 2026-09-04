@@ -27,6 +27,7 @@ from .constants import (
 )
 from .consteval import ConstVector, _const_eval, _is_const_vector
 from .errors import CompileError
+from .nf_types import NFType, NUMERIC_NF_TYPES
 
 
 _RESERVED_VALUE_LABELS = {
@@ -53,14 +54,24 @@ class RuntimeBindingSymbol:
     """Frontend metadata for one resolved runtime binding slot."""
 
     binding_id: BindingId
-    typ: str
+    typ: NFType
+
+    def __post_init__(self):
+        """Reject non-canonical runtime type identities."""
+        if not isinstance(self.typ, NFType):
+            raise TypeError("typ must be an NFType")
 
 
 @dataclass(frozen=True)
 class RuntimeResultShape:
     """Describe one socket-like runtime expression result."""
 
-    typ: str
+    typ: NFType
+
+    def __post_init__(self):
+        """Reject non-canonical runtime type identities."""
+        if not isinstance(self.typ, NFType):
+            raise TypeError("typ must be an NFType")
 
 
 @dataclass(frozen=True)
@@ -78,9 +89,14 @@ class SemanticConstant:
     """Detached immutable runtime-materializable view of one compile-time value."""
 
     kind: str
-    typ: str | None = None
+    typ: NFType | None = None
     value: object | None = None
     items: tuple["SemanticConstant", ...] = ()
+
+    def __post_init__(self):
+        """Reject non-canonical runtime type identities when a type is present."""
+        if self.typ is not None and not isinstance(self.typ, NFType):
+            raise TypeError("typ must be an NFType or None")
 
 
 @dataclass(frozen=True)
@@ -99,10 +115,15 @@ class ResolvedName:
     """Describe how one reached source name resolved in the semantic frontend."""
 
     kind: str
-    typ: str | None
+    typ: NFType | None
     name: str | None = None
     value: object | None = None
     binding_id: BindingId | None = None
+
+    def __post_init__(self):
+        """Reject non-canonical runtime type identities when a type is present."""
+        if self.typ is not None and not isinstance(self.typ, NFType):
+            raise TypeError("typ must be an NFType or None")
 
 
 @dataclass(frozen=True)
@@ -134,7 +155,7 @@ UNSUPPORTED = _Unsupported()
 
 def _is_number_type(typ):
     """Return whether *typ* follows the existing scalar Math-node contract."""
-    return typ in {TYPE_FLOAT, TYPE_INT}
+    return typ in NUMERIC_NF_TYPES
 
 
 def _require_runtime_type(fact, context):
