@@ -106,7 +106,7 @@ def test_materialization_owner_scope_rejects_invalid_input_and_callee_kind():
         function_materialization_owner_scope(materialization)
 
 def test_unique_modifier_is_removed_and_tracks_explicit_false():
-    cleaned, modifiers = extract_function_call_modifiers(DummyCompiler(), _call("helper(x, __unique__=False)"), "helper")
+    cleaned, modifiers = extract_function_call_modifiers(_call("helper(x, __unique__=False)"), "helper", {})
     assert isinstance(modifiers, FunctionCallModifiers)
     assert modifiers.unique is False
     assert modifiers.unique_was_explicit is True
@@ -114,15 +114,15 @@ def test_unique_modifier_is_removed_and_tracks_explicit_false():
 
 
 def test_unique_modifier_accepts_only_exact_compile_time_bool():
-    _, modifiers = extract_function_call_modifiers(DummyCompiler({"flag": True}), _call("helper(__unique__=flag)"), "helper")
+    _, modifiers = extract_function_call_modifiers(_call("helper(__unique__=flag)"), "helper", {"flag": True})
     assert modifiers.unique is True
     for expr in ("helper(__unique__=1)", "helper(__unique__='yes')", "helper(__unique__=x)"):
         with pytest.raises(CompileError):
-            extract_function_call_modifiers(DummyCompiler(), _call(expr), "helper")
+            extract_function_call_modifiers(_call(expr), "helper", {})
 
 
 def test_unique_spelling_without_double_underscores_is_user_keyword():
-    cleaned, modifiers = extract_function_call_modifiers(DummyCompiler(), _call("helper(unique=True)"), "helper")
+    cleaned, modifiers = extract_function_call_modifiers(_call("helper(unique=True)"), "helper", {})
     assert modifiers == FunctionCallModifiers()
     assert [kw.arg for kw in cleaned.keywords] == ["unique"]
 

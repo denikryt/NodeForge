@@ -86,6 +86,13 @@
 - `tests/unit/test_semantic_backend_contract.py`: analyzer-derived operation/type contracts executed through the explicit lowering context and real `nodes.py` helpers, including recursive array-result reconstruction, Vector literal Combine XYZ realization, exact `ObjectValue` Object Info reuse, impossible unary-plus IR rejection, and no legacy retry after accepted semantic lowering.
 - `tests/blender/test_semantic_ir_compile.py`: production routing for structural arrays, Vector literals/subscripts, Object properties, and explicit call-parent fallback; real Blender RNA coverage for arrays/unary identity, named Vector constants, Object property reuse/configuration, comparison-chain topology, cycle-safe unused constants, and fresh-build cleanup after semantic/backend failure.
 
+## Semantic callable resolution and Call IR
+
+- `tests/unit/test_call_resolution.py`: immutable callable-environment snapshots, exact builtin/system/local/helper/library precedence, canonical imported `FunctionId`, detached `__unique__` parsing, unresolved diagnostic precedence, and pure-resolution dependency boundaries.
+- `tests/unit/test_builtin_call_semantics.py`: exhaustive stateless-vs-stateful builtin classification, Blender-independent arity/type/keyword analysis, const-vs-runtime normalization, tuple results, raw single/named output modes, and explicit `geometry_builder()` expression diagnostics.
+- `tests/unit/test_semantic_analysis.py` and `tests/unit/test_semantic_ir.py`: mixed expressions with core calls remain on the Semantic IR path, dynamic extension/stateful builtin fallbacks stay explicit, `IRCall`/`IRTuple`/`IRNamedOutputs` invariants, raw attribute/string-subscript selection, canonical `NFType` call operands/results, and exact stage-15 migration-marker contracts.
+- `tests/blender/test_semantic_ir_compile.py`: core Call IR realization, depth-based node placement, raw-node dependency-first insertion-order exception, one-entry named-output structure, tuple selection, mixed-invalid raw-node error ordering, and stateful `grid`/`grid_uv` plus named-input fallback behavior.
+
 ## Blender group transaction backend
 
 - `tests/unit/test_blender_group_backend.py`: nested savepoints, cache snapshots, commit/PONR ordering, multi-resource preparation, non-raising retirement diagnostics, custom-property marker preservation, and backend request contracts.

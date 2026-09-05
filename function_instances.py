@@ -54,12 +54,12 @@ def _digest_payload(value) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
-def extract_function_call_modifiers(comp, expr: ast.Call, function_name: str) -> tuple[ast.Call, FunctionCallModifiers]:
+def extract_function_call_modifiers(expr: ast.Call, function_name: str, const_eval_values) -> tuple[ast.Call, FunctionCallModifiers]:
     """Return a copy of *expr* without compiler-reserved call modifiers.
 
     Only the exact keyword ``__unique__`` is reserved.  Its value must be a
-    compile-time ``bool`` evaluated with the active compiler constants, and the
-    keyword is removed before ordinary argument binding sees the call.
+    compile-time ``bool`` evaluated from the detached semantic constant snapshot, and
+    the keyword is removed before ordinary argument binding sees the call.
     """
 
     unique_seen = False
@@ -75,7 +75,8 @@ def extract_function_call_modifiers(comp, expr: ast.Call, function_name: str) ->
         if kw.arg is None:
             raise CompileError(f"{function_name}() does not support **kwargs")
         try:
-            value = comp._const_eval_macro_arg(kw.value)
+            from .consteval import _const_eval
+            value = _const_eval(kw.value, const_eval_values)
         except CompileError as exc:
             raise CompileError(f"{function_name}() __unique__ must be a compile-time Bool") from exc
         if type(value) is not bool:

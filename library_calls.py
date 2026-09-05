@@ -5,8 +5,8 @@ from .consteval import _is_const_vector
 from .errors import CompileError
 from .values import Value
 from .compile_time import reject_compile_time_object
-from .compiler_identities import library_function_id
 from .semantic_ir import IRFunctionMaterializationMode
+from .compiler_identities import normalize_library_package_id
 from .function_materializer import FunctionMaterializationContext
 from .library import (
     has_native_compile_call_for_record,
@@ -71,7 +71,7 @@ def _supports_unique_function_group(record) -> bool:
     )
 
 
-def compile_library_function_call(comp, expr, depth=0, function_name=None, namespace="functions", binding=None, modifiers=None):
+def compile_library_function_call(comp, expr, depth=0, function_name=None, namespace="functions", binding=None, function_id=None, modifiers=None):
     """Compile a namespace-aware library call without owning discovery."""
     modifiers = modifiers or FunctionCallModifiers()
     if binding is None:
@@ -81,6 +81,16 @@ def compile_library_function_call(comp, expr, depth=0, function_name=None, names
     record = binding.record
     if record.namespace != namespace or record.name != name:
         raise CompileError("Internal error: imported library binding record mismatch")
+    if function_id is None:
+        raise CompileError("Internal error: imported library call requires a resolved FunctionId")
+    expected_package_id = normalize_library_package_id(record.package_id)
+    if (
+        function_id.kind != "LIBRARY"
+        or function_id.namespace != namespace
+        or function_id.package_id != expected_package_id
+        or function_id.name != name
+    ):
+        raise CompileError("Internal error: imported library FunctionId does not match resolved binding")
     if modifiers.unique_was_explicit and not _supports_unique_function_group(record):
         raise unsupported_unique(name)
     if has_native_compile_call_for_record(record):
@@ -88,11 +98,6 @@ def compile_library_function_call(comp, expr, depth=0, function_name=None, names
     x = depth * 240
     y = -depth * 90
     materialization = None
-    # CANONICAL_CALL_ID_MIGRATION: Imported reusable calls still resolve through the
-    # legacy AST/library dispatcher. Construct their canonical FunctionId at this
-    # boundary without changing call behavior. Remove this bridge when semantic call
-    # resolution owns imported callable identity before function-group materialization.
-    function_id = library_function_id(namespace, record.package_id, name)
     if namespace in {"functions", "examples"}:
         materialization = comp.resolve_reusable_function_materialization(function_id, modifiers)
     cache_key = ("catalog", namespace, name)

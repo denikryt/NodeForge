@@ -21,12 +21,19 @@ from NodeForge.constants import (
 )
 from NodeForge.errors import CompileError
 from NodeForge.compiler_identities import BindingId
+from NodeForge.call_resolution import CallableEnvironment
+from NodeForge.builtin_call_semantics import IR_CAPABLE_BUILTIN_NAMES
 from NodeForge.semantic_analysis import RuntimeBindingSymbol, SemanticEnvironment, analyze_expression, build_semantic_constant_snapshot
 from NodeForge.semantic_lowering import lower_analyzed_expression
 from NodeForge.values import ObjectValue, Value
 
 
 pytestmark = pytest.mark.unit
+
+def _empty_callable_environment():
+    """Return an empty immutable callable namespace for non-call semantic tests."""
+    return CallableEnvironment(frozenset(), {}, {}, frozenset(), {})
+
 
 _TYPES = (
     TYPE_FLOAT,
@@ -120,6 +127,7 @@ def _environment(bindings):
         semantic_constants,
         const_eval_values,
         MappingProxyType({}),
+        callable_environment=CallableEnvironment(frozenset(IR_CAPABLE_BUILTIN_NAMES), {}, {}, frozenset(), {}),
     )
 
 
@@ -256,6 +264,10 @@ def test_successful_semantic_analysis_commits_to_ir_backend_without_legacy_retry
             consts={},
             reserved_name_labels={},
             group=object(),
+            resolved_environment=SimpleNamespace(system_constructors={}),
+            local_functions={},
+            backend_builtins={},
+            imported_library_functions={},
             snapshot_runtime_bindings=lambda: SimpleNamespace(
                 semantic_bindings=MappingProxyType({}),
                 backend_values=MappingProxyType({}),
@@ -302,7 +314,8 @@ def test_vector_literal_uses_real_combine_xyz_helper_contract():
     expr = _expr("vec")
     constants, const_eval_values = build_semantic_constant_snapshot({"vec": (1, 2, 3)})
     environment = SemanticEnvironment(
-        MappingProxyType({}), frozenset(), constants, const_eval_values, MappingProxyType({})
+        MappingProxyType({}), frozenset(), constants, const_eval_values, MappingProxyType({}),
+        callable_environment=CallableEnvironment(frozenset(IR_CAPABLE_BUILTIN_NAMES), {}, {}, frozenset(), {}),
     )
     program = lower_analyzed_expression(expr, analyze_expression(expr, environment))
     group = _FakeGroup()
@@ -351,3 +364,28 @@ def test_hand_constructed_unary_plus_is_rejected_by_backend():
     )
     with pytest.raises(CompileError, match="unsupported Semantic IR unary operation"):
         blender_ir_lowering.lower_expression(context, program)
+
+
+
+def test_core_call_ir_reaches_ast_independent_backend_helpers():
+    """Representative field/vector calls materialize from IR without Compiler or AST payloads."""
+    assert _materialize("position()", {})
+    assert _materialize("length(v)", {"v": TYPE_VECTOR})
+
+
+def test_object_info_call_ir_configures_existing_object_value_before_property_access():
+    """Object.info call options are realized on the exact backend ObjectValue."""
+    binding_id = BindingId("backend-contract", 0)
+    obj = ObjectValue(_FakeSocket())
+    group = _FakeGroup()
+    environment = _environment({"obj": TYPE_OBJECT})
+    expr = _expr('obj.info(transform_space="RELATIVE", as_instance=False).location')
+    program = lower_analyzed_expression(expr, analyze_expression(expr, environment))
+    result = blender_ir_lowering.lower_expression(
+        blender_ir_lowering.BlenderIRLoweringContext(group, MappingProxyType({binding_id: obj})),
+        program,
+    )
+    assert result.typ == TYPE_VECTOR
+    info = next(node for node in group.nodes if node.bl_idname == "GeometryNodeObjectInfo")
+    assert info.transform_space == "RELATIVE"
+    assert info.inputs[1].default_value is False

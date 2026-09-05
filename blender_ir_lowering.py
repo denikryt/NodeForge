@@ -10,8 +10,31 @@ from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_INT, TYPE_VECTOR
 from .errors import CompileError
 from .compiler_identities import BindingId
 from .nodes import _boolean_math, _combine_xyz_mixed, _compare, _math, _separate_xyz, _string_value, _switch, _value, _vector_math
+from .geometry import (
+    _capture_attribute_geometry,
+    _cube_geometry,
+    _empty_geometry,
+    _instance_on_points,
+    _join_geometry,
+    _line_geometry,
+    _point_geometry,
+    _points_geometry,
+    _polyline_geometry,
+    _realize_instances,
+    _set_material_geometry,
+    _set_position_geometry,
+    _store_named_attribute_geometry,
+    _transform_geometry,
+)
+from .nodes import _id as _field_id, _index as _field_index, _normal as _field_normal, _position as _field_position
+from .builtins.bundle import build_bundle, build_bundle_get, build_bundle_set
+from .builtins.raw_nodes import build_materialized_raw_node
 from .semantic_ir import (
     IRBinary,
+    IRCall,
+    IRCallableKind,
+    IRNamedOutputs,
+    IRTuple,
     IRBinding,
     IRBoolBinary,
     IRCompare,
@@ -23,7 +46,7 @@ from .semantic_ir import (
     IRVectorComponent,
     IRVectorLiteral,
 )
-from .values import ObjectValue, Value
+from .values import NodeResult, ObjectValue, TupleValue, Value
 
 
 @dataclass(frozen=True)
@@ -200,6 +223,187 @@ def _lower_vector_component(context, operation, materialized, x, y):
     _store_result(materialized, operation.result, result)
 
 
+
+def _slot_value(slot, operands):
+    """Resolve one normalized const/runtime call option against materialized operands."""
+    if slot is None:
+        return None
+    mode, payload = slot
+    if mode == "const":
+        return payload
+    if mode == "runtime":
+        try:
+            return operands[payload]
+        except IndexError as exc:
+            raise CompileError("Internal error: Call IR runtime option index is out of range") from exc
+    raise CompileError(f"Internal error: unknown Call IR option mode {mode!r}")
+
+
+def _store_call_results(materialized, operation, backend_result):
+    """Store one scalar or structural backend call result into declared IR results."""
+    if isinstance(backend_result, TupleValue):
+        values = tuple(backend_result.values)
+    elif isinstance(backend_result, NodeResult):
+        values = tuple(backend_result.get_output(name) for name in backend_result.output_names)
+    elif isinstance(backend_result, tuple):
+        values = tuple(backend_result)
+    else:
+        values = (backend_result,)
+    if len(values) != len(operation.results):
+        raise CompileError(
+            f"Internal error: Call IR {operation.target.name!r} produced {len(values)} values for {len(operation.results)} results"
+        )
+    for result, value in zip(operation.results, values):
+        _store_result(materialized, result, value)
+
+
+def _lower_builtin_call(context, operation, operands, x, y):
+    """Materialize one AST-free compiler-owned builtin Call IR operation."""
+    name = operation.target.name
+    options = dict(operation.options)
+    group = context.group
+
+    if name == "position":
+        return _field_position(group, x, y)
+    if name == "normal":
+        return _field_normal(group, x, y)
+    if name == "index":
+        return _field_index(group, x, y)
+    if name == "id":
+        return _field_id(group, x, y)
+    if name == "vector":
+        components = [_slot_value(slot, operands) for slot in options["components"]]
+        return _combine_xyz_mixed(group, components, x, y)
+    if "vector_operation" in options:
+        result_type = operation.results[0].typ
+        return _vector_math(group, options["vector_operation"], operands, result_type, x, y)
+
+    if name == "empty_geometry":
+        return _empty_geometry(group, x, y)
+    if name == "points":
+        return _points_geometry(group, _slot_value(options["count"], operands), x, y)
+    if name == "point":
+        return _point_geometry(group, _slot_value(options["slots"][0], operands), x, y)
+    if name == "line":
+        slots = options["slots"]
+        return _line_geometry(group, _slot_value(slots[0], operands), _slot_value(slots[1], operands), x, y)
+    if name == "set_position":
+        selection = operands[2] if len(operands) > 2 else None
+        return _set_position_geometry(group, operands[0], operands[1], selection=selection, x=x, y=y)
+    if name == "capture_attribute":
+        selection = operands[2] if len(operands) > 2 else None
+        return _capture_attribute_geometry(
+            group,
+            operands[0],
+            operands[1],
+            selection=selection,
+            domain=options.get("domain", "POINT"),
+            data_type=options.get("data_type"),
+            x=x,
+            y=y,
+        )
+    if name == "store_named_attribute":
+        name_mode = options["name_mode"]
+        attr_name = _slot_value(name_mode, operands)
+        value_index = 2 if name_mode[0] == "runtime" else 1
+        value = operands[value_index]
+        selection = operands[value_index + 1] if len(operands) > value_index + 1 else None
+        return _store_named_attribute_geometry(
+            group,
+            operands[0],
+            attr_name,
+            value,
+            selection=selection,
+            domain=options.get("domain", "POINT"),
+            data_type_override=options.get("data_type"),
+            x=x,
+            y=y,
+        )
+    if name == "set_material":
+        return _set_material_geometry(group, operands[0], _slot_value(options["material"], operands), x, y)
+    if name == "cube":
+        return _cube_geometry(group, _slot_value(options["size"], operands), x, y)
+    if name == "join":
+        return _join_geometry(group, operands, x, y)
+    if name == "transform":
+        return _transform_geometry(
+            group,
+            operands[0],
+            translation=_slot_value(options.get("translation"), operands),
+            scale=_slot_value(options.get("scale"), operands),
+            rotation=_slot_value(options.get("rotation"), operands),
+            x=x,
+            y=y,
+        )
+    if name == "polyline":
+        return _polyline_geometry(group, [tuple(point) for point in options["points"]], x, y)
+    if name == "instance_on_points":
+        selection = None
+        for index, argument in enumerate(operation.arguments):
+            if argument.parameter_name == "selection":
+                selection = operands[index]
+                break
+        return _instance_on_points(
+            group,
+            operands[0],
+            operands[1],
+            selection=selection,
+            scale=_slot_value(options.get("scale"), operands),
+            rotation=_slot_value(options.get("rotation"), operands),
+            realize=options.get("realize", True),
+            x=x,
+            y=y,
+        )
+    if name == "realize_instances":
+        return _realize_instances(group, operands[0], x, y)
+    if name == "bundle":
+        return build_bundle(group, list(zip(options["item_names"], operands)), x=x, y=y)
+    if name == "bundle_get":
+        return build_bundle_get(group, operands[0], operands[1], options["item_type"], x=x, y=y)
+    if name == "bundle_set":
+        return build_bundle_set(group, operands[0], operands[1], operands[2], x=x, y=y)
+    if name == "node":
+        raw_inputs = {}
+        for socket_name, spec in options.get("inputs", ()):
+            mode, payload = spec
+            if mode == "literal":
+                raw_inputs[socket_name] = payload
+            elif mode == "runtime":
+                raw_inputs[socket_name] = operands[payload]
+            elif mode == "multi":
+                raw_inputs[socket_name] = [operands[index] for index in payload]
+            else:
+                raise CompileError(f"Internal error: unknown raw-node input mode {mode!r}")
+        outputs = options.get("outputs")
+        return build_materialized_raw_node(
+            group,
+            bl_idname=options["bl_idname"],
+            props=dict(options.get("props", ())),
+            inputs=raw_inputs,
+            output=options.get("output"),
+            typ=options.get("typ"),
+            outputs=dict(outputs) if outputs is not None else None,
+            x=x,
+            y=y,
+            context="node()",
+        )
+    raise CompileError(f"Internal error: no Blender lowering for builtin Call IR {name!r}")
+
+
+def _lower_call(context, operation, materialized, x, y):
+    """Materialize one typed Call IR operation without source AST or Compiler state."""
+    operands = [_materialized_value(materialized, argument.value) for argument in operation.arguments]
+    if operation.target.kind is IRCallableKind.OBJECT_INFO:
+        receiver = operands[0]
+        if not isinstance(receiver, ObjectValue):
+            raise CompileError("Internal error: Object.info Call IR receiver is not ObjectValue")
+        result = receiver.configure_info(**dict(operation.options))
+    elif operation.target.kind is IRCallableKind.BUILTIN:
+        result = _lower_builtin_call(context, operation, operands, x, y)
+    else:
+        raise CompileError(f"Internal error: unsupported Call IR target kind {operation.target.kind}")
+    _store_call_results(materialized, operation, result)
+
 def _execute_operation(context, operation, materialized, base_depth):
     """Dispatch one ordered IR operation to its Blender realization helper."""
     effective_depth = base_depth + operation.depth
@@ -235,6 +439,9 @@ def _execute_operation(context, operation, materialized, base_depth):
     if isinstance(operation, IRVectorComponent):
         _lower_vector_component(context, operation, materialized, x, y)
         return
+    if isinstance(operation, IRCall):
+        _lower_call(context, operation, materialized, x, y)
+        return
     raise CompileError(f"Internal error: unsupported Semantic IR operation {type(operation).__name__}")
 
 
@@ -243,6 +450,10 @@ def _materialize_program_result(materialized, result):
     """Reconstruct one legacy backend expression result from Semantic IR structure."""
     if isinstance(result, IRArray):
         return [_materialize_program_result(materialized, item) for item in result.items]
+    if isinstance(result, IRTuple):
+        return TupleValue(tuple(_materialized_value(materialized, item) for item in result.items))
+    if isinstance(result, IRNamedOutputs):
+        return NodeResult({name: _materialized_value(materialized, item) for name, item in result.items})
     return _materialized_value(materialized, result)
 
 def lower_expression(context, program, base_depth=0):
@@ -251,11 +462,11 @@ def lower_expression(context, program, base_depth=0):
     for operation in program.operations:
         _execute_operation(context, operation, materialized, base_depth)
 
-    # SEMANTIC_IR_VALUE_MIGRATION: compile_expr() and downstream compiler consumers still
-    # expect legacy backend materializations: one socket-bound Value or a Python list of
-    # such values for array expressions. Keep this return bridge while statements, calls,
-    # runtime state, and interface wiring use the legacy value contract. Remove it when
-    # compiler-owned runtime references replace these backend-facing expression results.
+    # SEMANTIC_CALL_IR_RESULT_MIGRATION: Semantic IR now represents core call results,
+    # including structural tuple/named-output results, but statements, runtime state, and
+    # source bindings still consume legacy backend Value/TupleValue/NodeResult containers.
+    # Reconstruct those containers only at this backend return boundary. Remove this bridge
+    # when compiler-owned runtime bindings/results replace backend objects above lowering.
     return _materialize_program_result(materialized, program.result)
 
 

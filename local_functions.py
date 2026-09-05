@@ -612,11 +612,12 @@ def compile_local_function_call(comp, expr, depth=0, modifiers=None):
     group_name = _local_helper_group_name(logical_namespace, name, signature)
     source = local_function_source(fn, param_types, hidden_captures=hidden_capture_names, return_shape=return_shape)
     definition_owner = getattr(comp, "function_definition_owner", None) or logical_namespace
-    # CANONICAL_CALL_ID_MIGRATION: Local calls still reach this legacy AST compiler
-    # before call semantics are represented in Semantic IR. Construct the canonical
-    # FunctionId here from the already-resolved specialization contract. Remove this
-    # bridge when semantic call resolution produces FunctionId/CallSiteId before
-    # backend function-group materialization.
+    # SEMANTIC_CALL_IR_LOCAL_SPECIALIZATION_FALLBACK: The callable name is resolved before
+    # legacy dispatch, but a local FunctionId still requires the current specialization
+    # signature derived from argument and transitive-capture types in this backend-coupled
+    # path. Keep canonical identity construction here; do not create a provisional local ID.
+    # Remove this bridge when local function bodies/captures have a pure semantic signature
+    # analysis that produces the exact specialization before reusable-group materialization.
     function_id = local_function_id(definition_owner, name, signature)
     materialization = comp.resolve_reusable_function_materialization(function_id, modifiers)
     own_inputs = {

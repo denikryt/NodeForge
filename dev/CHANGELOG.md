@@ -183,3 +183,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.50.16
 
 - Replaced internal runtime semantic type strings with canonical `NFType` identities while preserving public DSL syntax, Blender topology, durable metadata tokens, and reusable-function identity.
+
+## 0.50.17
+
+- Added compiler-owned semantic callable resolution and typed Call IR for stateless core expression calls, with canonical imported identity validated before native module execution and explicit whole-expression/stateful/dynamic compatibility fallbacks preserving existing public DSL behavior.

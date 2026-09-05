@@ -13,6 +13,7 @@ import pytest
 import NodeForge
 from NodeForge import packages
 from NodeForge.errors import CompileError
+from NodeForge.compiler_identities import library_function_id, local_function_id
 from NodeForge.resolved_environment import (
     ResolvedCatalog,
     ResolvedCompileErrorFailure,
@@ -391,7 +392,7 @@ def test_expression_dispatch_passes_exact_resolved_system_binding(monkeypatch):
     from NodeForge import expression_compiler
 
     binding = types.SimpleNamespace(name="snapshot_marker")
-    environment = types.SimpleNamespace(system=lambda name: binding if name == "snapshot_marker" else None)
+    environment = types.SimpleNamespace(system_constructors={"snapshot_marker": binding})
     comp = types.SimpleNamespace(
         resolved_environment=environment,
         imported_library_functions={},
@@ -444,10 +445,64 @@ def test_library_call_uses_binding_record_without_live_discovery(monkeypatch):
     expr = ast.parse("selected()", mode="eval").body
     comp = object()
 
-    result = library_calls.compile_library_function_call(comp, expr, 5, binding=binding)
+    result = library_calls.compile_library_function_call(
+        comp,
+        expr,
+        5,
+        binding=binding,
+        function_id=library_function_id("functions", "vendor.selected", "selected"),
+    )
 
     assert result == (comp, expr, record, 5)
     assert observed["call"][2] is record
+
+
+@pytest.mark.parametrize(
+    "wrong_function_id",
+    [
+        local_function_id("owner", "selected", "sig"),
+        library_function_id("examples", "vendor.selected", "selected"),
+        library_function_id("functions", "vendor.other", "selected"),
+        library_function_id("functions", "vendor.selected", "other"),
+    ],
+    ids=["kind", "namespace", "package_id", "name"],
+)
+def test_native_library_call_rejects_mismatched_function_id_before_module_execution(monkeypatch, wrong_function_id):
+    """Canonical imported identity is validated before native module code can run."""
+    compiler = _import_compiler_with_fake_bpy(monkeypatch)
+    from NodeForge import library_calls
+
+    record = types.SimpleNamespace(
+        namespace="functions",
+        name="selected",
+        source_path=None,
+        module_path=Path("/selected/function.py"),
+        package_id="vendor.selected",
+        package_version="2.0.0",
+    )
+    binding = compiler.LibraryBinding("functions", "selected", record)
+    observed = {"native_probe": 0, "handler": 0}
+
+    def has_native(item):
+        observed["native_probe"] += 1
+        return True
+
+    def compile_native(comp, expr, item, depth=0):
+        observed["handler"] += 1
+        return "native"
+
+    monkeypatch.setattr(library_calls, "has_native_compile_call_for_record", has_native)
+    monkeypatch.setattr(library_calls, "compile_module_library_entry_call_for_record", compile_native)
+
+    with pytest.raises(CompileError, match="FunctionId does not match resolved binding"):
+        library_calls.compile_library_function_call(
+            object(),
+            ast.parse("selected()", mode="eval").body,
+            binding=binding,
+            function_id=wrong_function_id,
+        )
+
+    assert observed == {"native_probe": 0, "handler": 0}
 
 
 def test_direct_compiler_fallback_resolves_once_and_binds_its_backend(monkeypatch):

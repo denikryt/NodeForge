@@ -15,6 +15,8 @@ from .systems import registry as systems_registry
 from . import local_functions
 from . import library_calls
 from .function_instances import extract_function_call_modifiers, unsupported_unique
+from .call_resolution import CallableEnvironment, CallableKind, UNRESOLVED, resolve_simple_callable
+from .builtin_call_semantics import IR_CAPABLE_BUILTIN_NAMES, STATEFUL_FALLBACK_BUILTIN_NAMES
 from .semantic_analysis import SemanticEnvironment, analyze_expression, build_semantic_constant_snapshot
 from .semantic_lowering import lower_analyzed_expression
 from .blender_ir_lowering import BlenderIRLoweringContext, lower_expression as lower_ir_expression
@@ -47,19 +49,28 @@ def compile_expr(comp, expr, depth=0):
     # for subscript indices. Remove this bridge when compile-time bindings are frontend-owned
     # and SemanticEnvironment receives their semantic records without reading comp.consts.
     semantic_constants, const_eval_values = build_semantic_constant_snapshot(comp.consts)
+    callable_environment = CallableEnvironment(
+        callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | STATEFUL_FALLBACK_BUILTIN_NAMES),
+        system_constructors=comp.resolved_environment.system_constructors,
+        local_functions=comp.local_functions,
+        backend_helper_names=frozenset(comp.backend_builtins),
+        imported_functions=comp.imported_library_functions,
+    )
     environment = SemanticEnvironment(
         runtime_bindings=runtime_binding_snapshot.semantic_bindings,
         legacy_binding_names=legacy_binding_names,
         constants=semantic_constants,
         const_eval_values=const_eval_values,
         reserved_name_labels=MappingProxyType(dict(getattr(comp, "reserved_name_labels", {}))),
+        callable_environment=callable_environment,
     )
     analysis = analyze_expression(expr, environment)
-    # COMPLETE_EXPRESSION_IR_FALLBACK: After non-call expression completion, analysis may
-    # return unsupported only when it reaches the explicit ast.Call fallback or a known
-    # legacy non-Value compiler binding. Preserve whole-expression legacy dispatch so mixed
-    # trees keep current behavior without opaque backend leaves in Semantic IR. Remove this
-    # branch when call IR and compiler-binding migration eliminate both unsupported sources.
+    # SEMANTIC_CALL_IR_FALLBACK: Stateless compiler-owned calls now lower through Semantic IR,
+    # but resolved dynamic extension calls, explicitly stateful compiler-owned builtins, and
+    # legacy non-Value compiler bindings can still make analysis unsupported. Preserve legacy
+    # whole-expression dispatch only for those marked categories; do not add opaque backend
+    # leaves or a temporary lowering-session protocol. Remove this branch when all three
+    # fallback sources have permanent frontend-owned semantic/runtime contracts.
     if analysis is None:
         x = depth * 240
         y = -depth * 90
@@ -250,6 +261,8 @@ def compile_expr(comp, expr, depth=0):
 
     if isinstance(expr, ast.Call):
         if isinstance(expr.func, ast.Attribute):
+            # Object.info() is Semantic-IR owned. Reaching the legacy branch means the
+            # receiver itself forced whole-expression fallback, so preserve its old path.
             if expr.func.attr != "info":
                 raise CompileError("Object values support only the .info() method")
             receiver = compile_expr(comp, expr.func.value, depth + 1)
@@ -284,47 +297,57 @@ def compile_expr(comp, expr, depth=0):
         if not isinstance(expr.func, ast.Name):
             raise CompileError("Only simple function calls are supported")
         name = expr.func.id
-        expr, function_modifiers = extract_function_call_modifiers(comp, expr, name)
-        is_imported_library_call = name in comp.imported_library_functions
-        system_binding = comp.resolved_environment.system(name)
-        if (
-            expr.keywords
-            and not builtin_registry.has_callable_builtin(name)
-            and system_binding is None
-            and not is_imported_library_call
-            and name not in comp.local_functions
-            and name not in comp.backend_builtins
-        ):
-            raise CompileError(
-                f"Keyword arguments are only supported for builtins, library functions, local functions or local backend helpers; {name} is not registered as one"
-            )
-        if builtin_registry.has_callable_builtin(name):
+        resolved = resolve_simple_callable(name, callable_environment)
+        cleaned_expr, function_modifiers = extract_function_call_modifiers(expr, name, const_eval_values)
+        if resolved is UNRESOLVED:
+            if cleaned_expr.keywords:
+                raise CompileError(
+                    f"Keyword arguments are only supported for builtins, library functions, local functions or local backend helpers; {name} is not registered as one"
+                )
             if function_modifiers.unique_was_explicit:
                 raise unsupported_unique(name)
-            return builtin_registry.compile_call(comp, expr, depth)
-        if system_binding is not None:
+            raise CompileError(f"Unsupported function: {name}")
+        if resolved.kind is CallableKind.TOP_LEVEL_ONLY:
+            if cleaned_expr.keywords:
+                raise CompileError(
+                    f"Keyword arguments are only supported for builtins, library functions, local functions or local backend helpers; {name} is not registered as one"
+                )
+            raise CompileError(f"{name}() is only supported as a top-level call")
+
+        # SEMANTIC_CALL_IR_LEGACY_DISPATCH: Remaining dynamic extension calls, explicitly stateful
+        # builtins, and IR-capable wrapper builtins whose nested operand forced the already-active
+        # whole-expression fallback still consume ast.Call and compiler/backend state here. Dispatch
+        # only the already-resolved callable category; an IR-capable BUILTIN is permitted here only
+        # because this branch is unreachable unless semantic analysis returned unsupported for the
+        # enclosing expression. Do not repeat source-name precedence. Remove this branch when dynamic
+        # extensions, stateful builtins, and legacy non-Value operands all have permanent frontend-owned
+        # typed/runtime contracts and whole-expression fallback is gone.
+        if resolved.kind is CallableKind.BUILTIN:
+            if name not in STATEFUL_FALLBACK_BUILTIN_NAMES and name not in IR_CAPABLE_BUILTIN_NAMES:
+                raise CompileError(f"Internal error: unclassified builtin {name!r} reached legacy call dispatch")
             if function_modifiers.unique_was_explicit:
                 raise unsupported_unique(name)
-            return systems_registry.compile_resolved_call(comp, expr, system_binding, depth)
-        if name in comp.local_functions:
-            return local_functions.compile_local_function_call(comp, expr, depth, modifiers=function_modifiers)
-        if name in comp.backend_builtins:
+            return builtin_registry.compile_call(comp, cleaned_expr, depth)
+        if resolved.kind is CallableKind.SYSTEM:
             if function_modifiers.unique_was_explicit:
                 raise unsupported_unique(name)
-            return local_functions.compile_backend_builtin_call(comp, expr, depth)
-        if is_imported_library_call:
+            return systems_registry.compile_resolved_call(comp, cleaned_expr, resolved.target, depth)
+        if resolved.kind is CallableKind.LOCAL_FUNCTION:
+            return local_functions.compile_local_function_call(comp, cleaned_expr, depth, modifiers=function_modifiers)
+        if resolved.kind is CallableKind.BACKEND_HELPER:
+            if function_modifiers.unique_was_explicit:
+                raise unsupported_unique(name)
+            return local_functions.compile_backend_builtin_call(comp, cleaned_expr, depth)
+        if resolved.kind is CallableKind.LIBRARY:
             return library_calls.compile_library_function_call(
                 comp,
-                expr,
+                cleaned_expr,
                 depth,
-                binding=comp.imported_library_functions[name],
+                binding=resolved.target,
+                function_id=resolved.library_function_id,
                 modifiers=function_modifiers,
             )
-        if name in {"output", "store"}:
-            raise CompileError(f"{name}() is only supported as a top-level call")
-        if function_modifiers.unique_was_explicit:
-            raise unsupported_unique(name)
-        raise CompileError(f"Unsupported function: {name}")
+        raise CompileError(f"Internal error: unsupported resolved callable category {resolved.kind}")
 
     raise CompileError(f"Unsupported expression element: {type(expr).__name__}")
 

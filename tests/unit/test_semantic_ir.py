@@ -23,6 +23,13 @@ from NodeForge.compiler_identities import BindingId, CallSiteId, local_function_
 from NodeForge.semantic_ir import (
     IRArray,
     IRBinary,
+    IRCall,
+    IRCallArgument,
+    IRCallableKind,
+    IRCallableTarget,
+    IRNamedOutputs,
+    IRRawNodeOutputMode,
+    IRTuple,
     IRFunctionMaterialization,
     IRFunctionMaterializationMode,
     IRBinding,
@@ -37,6 +44,8 @@ from NodeForge.semantic_ir import (
     IRVectorComponent,
     IRVectorLiteral,
 )
+from NodeForge.builtin_call_semantics import IR_CAPABLE_BUILTIN_NAMES, STATEFUL_FALLBACK_BUILTIN_NAMES
+from NodeForge.call_resolution import CallableEnvironment
 from NodeForge.semantic_analysis import (
     ArrayResultShape,
     RuntimeBindingSymbol,
@@ -50,6 +59,11 @@ from NodeForge.semantic_lowering import lower_analyzed_expression
 
 
 pytestmark = pytest.mark.unit
+
+def _empty_callable_environment():
+    """Return an empty immutable callable namespace for non-call semantic tests."""
+    return CallableEnvironment(frozenset(), {}, {}, frozenset(), {})
+
 
 _TEST_BINDING_LOCAL_IDS = {}
 
@@ -66,7 +80,7 @@ def _expr(source):
     return ast.parse(source, mode="eval").body
 
 
-def _environment(*, bindings=None, consts=None, labels=None, legacy_names=()):
+def _environment(*, bindings=None, consts=None, labels=None, legacy_names=(), backend_helpers=(), builtins=None, systems=None, local_functions=None, imported_functions=None):
     """Build one immutable semantic environment for pure IR tests."""
     from types import MappingProxyType
 
@@ -81,15 +95,19 @@ def _environment(*, bindings=None, consts=None, labels=None, legacy_names=()):
         semantic_constants,
         const_eval_values,
         MappingProxyType(dict(labels or {})),
+        callable_environment=CallableEnvironment(
+            frozenset(IR_CAPABLE_BUILTIN_NAMES | STATEFUL_FALLBACK_BUILTIN_NAMES) if builtins is None else frozenset(builtins),
+            systems or {}, local_functions or {}, frozenset(backend_helpers), imported_functions or {},
+        ),
     )
 
 
-def _lower(source, *, bindings=None, consts=None, labels=None, legacy_names=()):
+def _lower(source, *, bindings=None, consts=None, labels=None, legacy_names=(), backend_helpers=(), builtins=None, systems=None, local_functions=None, imported_functions=None):
     """Analyze and lower one source expression through the pure frontend stages."""
     expr = _expr(source)
     analysis = analyze_expression(
         expr,
-        _environment(bindings=bindings, consts=consts, labels=labels, legacy_names=legacy_names),
+        _environment(bindings=bindings, consts=consts, labels=labels, legacy_names=legacy_names, backend_helpers=backend_helpers, builtins=builtins, systems=systems, local_functions=local_functions, imported_functions=imported_functions),
     )
     return None if analysis is None else lower_analyzed_expression(expr, analysis)
 
@@ -323,7 +341,7 @@ def test_boolop_emits_pairwise_operations_and_preserves_validation_order():
     with pytest.raises(CompileError, match="Boolean operations expect Bool values"):
         _lower("True and 1 and (True + 1)")
     with pytest.raises(CompileError, match="Boolean operations expect Bool values"):
-        _lower("True and 1 and legacy_call()")
+        _lower("True and 1 and legacy_call()", backend_helpers={"legacy_call"})
 
 
 def test_comparison_chain_emits_explicit_compare_and_and_values():
@@ -391,17 +409,52 @@ def test_vector_component_and_object_property_semantics_are_owned():
 
 
 def test_mixed_fallback_and_diagnostic_boundaries_are_preserved():
-    assert _lower("legacy_call() + (True + 1)") is None
+    assert _lower("legacy_call() + (True + 1)", backend_helpers={"legacy_call"}) is None
     with pytest.raises(CompileError, match="Unsupported operation between BOOL and FLOAT"):
-        _lower("(True + 1) + legacy_call()")
+        _lower("(True + 1) + legacy_call()", backend_helpers={"legacy_call"})
     with pytest.raises(CompileError, match="Unsupported operation between BOOL and FLOAT"):
         _lower("(True + 1) if 1 else 2")
-    assert _lower("1 < legacy_call() < (True + 1)") is None
+    assert _lower("1 < legacy_call() < (True + 1)", backend_helpers={"legacy_call"}) is None
 
 
-@pytest.mark.parametrize("source", ["foo(a)", "obj.info()", "foo() + 1", "1 + foo()"])
-def test_call_boundaries_remain_unsupported(source):
-    assert _lower(source, bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT, "obj": TYPE_OBJECT}) is None
+def test_unknown_calls_are_diagnosed_and_dynamic_calls_remain_explicit_fallbacks():
+    with pytest.raises(CompileError, match="Unsupported function: foo"):
+        _lower("foo()")
+    assert _lower("legacy_call(a)", bindings={"a": TYPE_FLOAT}, backend_helpers={"legacy_call"}) is None
+
+
+def test_object_info_emits_typed_ast_free_call_ir():
+    program = _lower('obj.info(transform_space="RELATIVE", as_instance=False)', bindings={"obj": TYPE_OBJECT})
+    calls = _operations(program, IRCall)
+    assert len(calls) == 1
+    call = calls[0]
+    assert call.target.kind is IRCallableKind.OBJECT_INFO
+    assert call.target.name == "Object.info"
+    assert dict(call.options) == {"transform_space": "RELATIVE", "as_instance": False}
+    assert call.results == (program.result,)
+    assert call.results[0].typ == TYPE_OBJECT
+
+
+def test_raw_named_outputs_remain_structural_for_one_or_many_members():
+    one = _lower('node("ShaderNodeSeparateXYZ", outputs={"X": Float})')
+    assert isinstance(one.result, IRNamedOutputs)
+    assert tuple(name for name, _ in one.result.items) == ("X",)
+    assert len(_operations(one, IRCall)) == 1
+
+    attr = _lower('node("ShaderNodeSeparateXYZ", outputs={"X": Float}).X')
+    sub = _lower('node("ShaderNodeSeparateXYZ", outputs={"X": Float})["X"]')
+    assert not isinstance(attr.result, IRNamedOutputs)
+    assert attr.result.typ == TYPE_FLOAT
+    assert sub.result.typ == TYPE_FLOAT
+    assert len(_operations(attr, IRCall)) == len(_operations(sub, IRCall)) == 1
+
+
+def test_capture_attribute_call_result_is_structural_tuple_until_selected():
+    tuple_program = _lower("capture_attribute(geo, value)", bindings={"geo": TYPE_GEOMETRY, "value": TYPE_VECTOR})
+    assert isinstance(tuple_program.result, IRTuple)
+    assert tuple(value.typ for value in tuple_program.result.items) == (TYPE_GEOMETRY, TYPE_VECTOR)
+    selected = _lower("capture_attribute(geo, value)[1]", bindings={"geo": TYPE_GEOMETRY, "value": TYPE_VECTOR})
+    assert selected.result.typ == TYPE_VECTOR
 
 @pytest.mark.parametrize("name", ["builder", "raw_result", "tuple_result", "items"])
 def test_legacy_binding_boundaries_remain_unsupported(name):
@@ -472,6 +525,7 @@ def _backend_bindings(bindings):
     }
 
 def test_exact_semantic_migration_markers_are_present_at_source_decisions():
+    """Stage-15 compatibility markers are exact, searchable, and exhaustively enumerated."""
     root = Path(__file__).resolve().parents[2]
     sources = {
         name: (root / path).read_text(encoding="utf-8")
@@ -483,87 +537,49 @@ def test_exact_semantic_migration_markers_are_present_at_source_decisions():
             "compiler": "compiler.py",
             "local": "local_functions.py",
             "library_calls": "library_calls.py",
-            "library": "library.py",
             "materializer": "function_materializer.py",
             "constants": "constants.py",
         }.items()
     }
+    normalized = {name: "\n".join(line.lstrip() for line in source.splitlines()) for name, source in sources.items()}
 
-    assert sources["analysis"].count("SEMANTIC_ANALYSIS_MIGRATION") == 0
-    assert sources["semantic"].count("SEMANTIC_RESOLUTION_MIGRATION") == 0
-    assert sources["semantic"].count("SEMANTIC_IR_VALUE_MIGRATION") == 1
+    assert sources["analysis"].count("COMPLETE_EXPRESSION_IR_CALL_FALLBACK") == 0
+    assert sources["dispatcher"].count("COMPLETE_EXPRESSION_IR_FALLBACK") == 0
+    assert sources["backend"].count("SEMANTIC_IR_VALUE_MIGRATION") == 0
+    assert sources["local"].count("CANONICAL_CALL_ID_MIGRATION") == 0
+    assert sources["library_calls"].count("CANONICAL_CALL_ID_MIGRATION") == 0
+
+    required = {
+        "SEMANTIC_CALL_IR_DYNAMIC_FALLBACK": ("analysis", "# SEMANTIC_CALL_IR_DYNAMIC_FALLBACK: Callable identity is resolved here, but local,\n# imported, system, backend-helper, and native-Python calls do not yet expose a complete\n# Blender-independent result signature. Keep the enclosing expression on the legacy\n# realization path instead of inventing unknown types, opaque IR, or semantic-time Blender\n# probes. Remove this fallback when each remaining callable category has a compiler-owned\n# typed signature/result contract and can emit AST-free Call IR before materialization."),
+        "SEMANTIC_CALL_IR_FALLBACK": ("dispatcher", "# SEMANTIC_CALL_IR_FALLBACK: Stateless compiler-owned calls now lower through Semantic IR,\n# but resolved dynamic extension calls, explicitly stateful compiler-owned builtins, and\n# legacy non-Value compiler bindings can still make analysis unsupported. Preserve legacy\n# whole-expression dispatch only for those marked categories; do not add opaque backend\n# leaves or a temporary lowering-session protocol. Remove this branch when all three\n# fallback sources have permanent frontend-owned semantic/runtime contracts."),
+        "SEMANTIC_CALL_IR_LEGACY_DISPATCH": ("dispatcher", "# SEMANTIC_CALL_IR_LEGACY_DISPATCH: Remaining dynamic extension calls, explicitly stateful\n# builtins, and IR-capable wrapper builtins whose nested operand forced the already-active\n# whole-expression fallback still consume ast.Call and compiler/backend state here. Dispatch\n# only the already-resolved callable category; an IR-capable BUILTIN is permitted here only\n# because this branch is unreachable unless semantic analysis returned unsupported for the\n# enclosing expression. Do not repeat source-name precedence. Remove this branch when dynamic\n# extensions, stateful builtins, and legacy non-Value operands all have permanent frontend-owned\n# typed/runtime contracts and whole-expression fallback is gone."),
+        "SEMANTIC_CALL_IR_LOCAL_SPECIALIZATION_FALLBACK": ("local", "# SEMANTIC_CALL_IR_LOCAL_SPECIALIZATION_FALLBACK: The callable name is resolved before\n# legacy dispatch, but a local FunctionId still requires the current specialization\n# signature derived from argument and transitive-capture types in this backend-coupled\n# path. Keep canonical identity construction here; do not create a provisional local ID.\n# Remove this bridge when local function bodies/captures have a pure semantic signature\n# analysis that produces the exact specialization before reusable-group materialization."),
+        "SEMANTIC_CALL_IR_RESULT_MIGRATION": ("backend", "# SEMANTIC_CALL_IR_RESULT_MIGRATION: Semantic IR now represents core call results,\n# including structural tuple/named-output results, but statements, runtime state, and\n# source bindings still consume legacy backend Value/TupleValue/NodeResult containers.\n# Reconstruct those containers only at this backend return boundary. Remove this bridge\n# when compiler-owned runtime bindings/results replace backend objects above lowering."),
+        "SEMANTIC_CALL_IR_STATEFUL_BUILTIN_FALLBACK": ("analysis", "# SEMANTIC_CALL_IR_STATEFUL_BUILTIN_FALLBACK: grid/grid_uv and input_* still depend on\n# compilation-scoped mutable Compiler state across expression boundaries: grid UV context,\n# interface socket reuse/registration/default metadata, and publication into comp.vars.\n# Keep these calls on legacy realization rather than introducing a temporary lowering\n# session or passing Compiler through the IR backend boundary. Remove this fallback when\n# frontend-owned runtime bindings/session state permanently owns those effects."),
+    }
+    for marker, (source_name, body) in required.items():
+        assert sources[source_name].count(marker) == 1
+        assert body in normalized[source_name]
+
+    all_stage15 = set()
+    for source in sources.values():
+        for line in source.splitlines():
+            if "SEMANTIC_CALL_IR_" in line:
+                tail = line.split("SEMANTIC_CALL_IR_", 1)[1]
+                name = "SEMANTIC_CALL_IR_" + tail.split(":", 1)[0].split()[0]
+                all_stage15.add(name)
+    assert all_stage15 == set(required)
+
+    # Existing non-stage-15 boundaries remain explicitly searchable.
     assert sources["dispatcher"].count("SEMANTIC_IR_VALUE_MIGRATION") == 1
     assert sources["dispatcher"].count("SEMANTIC_ANALYSIS_LEGACY_BINDING_MIGRATION") == 1
-    assert sources["backend"].count("SEMANTIC_IR_VALUE_MIGRATION") == 1
     assert sources["analysis"].count("COMPLETE_EXPRESSION_IR_LEGACY_BINDING_FALLBACK") == 1
-    assert sources["analysis"].count("COMPLETE_EXPRESSION_IR_CALL_FALLBACK") == 1
     assert sources["dispatcher"].count("COMPLETE_EXPRESSION_IR_CONSTANT_MIGRATION") == 1
-    assert sources["dispatcher"].count("COMPLETE_EXPRESSION_IR_FALLBACK") == 1
-    assert sum(source.count("COMPLETE_EXPRESSION_IR_") for source in sources.values()) == 4
-    assert sources["compiler"].count("CANONICAL_BINDING_ID_MIGRATION") == 1
-    assert sources["compiler"].count("CANONICAL_CALL_ID_MIGRATION") == 0
-    assert sources["local"].count("CANONICAL_CALL_ID_MIGRATION") == 1
-    assert sources["library_calls"].count("CANONICAL_CALL_ID_MIGRATION") == 1
     assert sources["compiler"].count("REUSABLE_CALL_IR_MIGRATION") == 1
     assert sources["local"].count("REUSABLE_CALL_IR_MIGRATION") == 1
     assert sources["library_calls"].count("REUSABLE_CALL_IR_MIGRATION") == 2
-    assert sources["library"].count("REUSABLE_CALL_IR_MIGRATION") == 0
-    assert sources["compiler"].count("BLENDER_TRANSACTION_LEGACY_ALIAS_MIGRATION") == 1
-    assert sources["compiler"].count("RESOLVED_ENVIRONMENT_MIGRATION") == 1
     assert sources["materializer"].count("IR_DEPENDENCY_LOCAL_CATALOG_MIGRATION") == 1
     assert sources["constants"].count("CANONICAL_NFTYPE_TYPE_ALIAS_MIGRATION") == 1
-    assert sum(source.count("CANONICAL_NFTYPE_") for source in sources.values()) == 1
-    all_python_source = "\n".join(path.read_text(encoding="utf-8") for path in root.glob("*.py"))
-    assert all_python_source.count("CANONICAL_NFTYPE_TYPE_ALIAS_MIGRATION") == 1
-    assert all_python_source.count("CANONICAL_NFTYPE_") == 1
-
-    normalized = {name: "\n".join(line.lstrip() for line in source.splitlines()) for name, source in sources.items()}
-    canonical_nftype_marker = "# CANONICAL_NFTYPE_TYPE_ALIAS_MIGRATION: TYPE_* names temporarily preserve existing\n# NodeForge-owned imports while their values are canonical NFType members. Do not use\n# these aliases to accept or serialize raw type strings. Remove the alias block after\n# all NodeForge-owned runtime-type references use NFType directly and migration tests\n# confirm no supported public contract depends on TYPE_* symbol names."
-    assert canonical_nftype_marker in normalized["constants"]
-
-    preserved_markers = (
-        (normalized["dispatcher"], "# SEMANTIC_IR_VALUE_MIGRATION: comp.vars still stores legacy socket-bound Value\n# objects while statement and call migration is incomplete. Snapshot those Values\n# only at the frontend/backend boundary: semantic analysis receives detached types,\n# while Blender lowering receives the backend Value map. Remove this bridge when\n# runtime bindings use canonical compiler-owned references and comp.vars no longer\n# owns backend sockets."),
-        (normalized["dispatcher"], "# SEMANTIC_ANALYSIS_LEGACY_BINDING_MIGRATION: comp.vars also contains non-Value\n# compiler-side bindings such as GeometryBuilder, NodeResult, TupleValue, and\n# list-backed legacy values. Export only their names so semantic analysis keeps\n# comp.vars name precedence and returns unsupported instead of misdiagnosing an\n# existing legacy binding as unknown or falling through to consts. Remove this\n# bridge when every compiler binding has frontend-owned semantic metadata or its\n# expression semantics have been migrated into semantic analysis."),
-        (normalized["compiler"], "# RESOLVED_ENVIRONMENT_MIGRATION: Compiler is still exported and legacy tests or\n# integrations may construct it directly without the root compiler entry points.\n# A standalone Compiler creates one snapshot and an environment-bound backend, or\n# adopts the exact snapshot exposed by a supplied environment-bound backend. Reject\n# arbitrary backends because their nested populate callback could resolve again.\n# Production root entry points always pass one shared ResolvedEnvironment. Remove\n# this fallback when Compiler is internal/session-owned and every caller must pass\n# both an explicit environment and its matching session-bound backend."),
-        (normalized["compiler"], "# CANONICAL_BINDING_ID_MIGRATION: comp.vars remains the legacy heterogeneous\n# source-name store while statement, loop, call, and compile-time binding migration\n# is incomplete. Project current Value entries into stable BindingId-based semantic\n# and backend snapshots here without changing comp.vars ownership. Remove this bridge\n# when runtime bindings are stored canonically by BindingId and source names exist\n# only in the frontend symbol table."),
-        (normalized["local"], "# CANONICAL_CALL_ID_MIGRATION: Local calls still reach this legacy AST compiler\n# before call semantics are represented in Semantic IR. Construct the canonical\n# FunctionId here from the already-resolved specialization contract. Remove this\n# bridge when semantic call resolution produces FunctionId/CallSiteId before\n# backend function-group materialization."),
-        (normalized["library_calls"], "# CANONICAL_CALL_ID_MIGRATION: Imported reusable calls still resolve through the\n# legacy AST/library dispatcher. Construct their canonical FunctionId at this\n# boundary without changing call behavior. Remove this bridge when semantic call\n# resolution owns imported callable identity before function-group materialization."),
-        (normalized["compiler"], "# REUSABLE_CALL_IR_MIGRATION: Unique materialization is now represented explicitly\n# by IRFunctionMaterialization, but its CallSiteId ordinal is still allocated when\n# the legacy AST call path reaches reusable-call preparation. Preserve the current\n# unique-only per-owner/per-callee sequence here. Remove this allocator bridge when\n# reusable calls are emitted by semantic lowering before backend/materialization."),
-        (normalized["local"], "# REUSABLE_CALL_IR_MIGRATION: This stage moves shared/unique materialization policy\n# into compiler-owned IR only. Local call argument evaluation, specialization-type\n# discovery, captures, and return realization still use the legacy Value/socket path.\n# Remove this boundary when reusable call arguments/results have Blender-independent\n# semantic types/IR values and local FunctionId is resolved before materialization."),
-        (normalized["library_calls"], "# REUSABLE_CALL_IR_MIGRATION: Imported callable identity/materialization policy is\n# compiler-owned, but argument names/types are still discovered from the materialized\n# Blender node-group interface. Keep this probe behavior unchanged in this stage.\n# Remove it when imported functions expose a Blender-independent callable signature\n# that semantic analysis can validate before function-group materialization."),
-        (normalized["library_calls"], "# REUSABLE_CALL_IR_MIGRATION: Local catalog entries keep their existing materialization\n# semantics in this behavior-preserving stage because the current namespace=\"local\"\n# path does not assign durable per-occurrence instance keys/owner scopes for __unique__.\n# Remove this exclusion only after Local catalog shared/unique ownership is explicitly\n# specified, compatibility-tested, and migrated as its own semantic contract."),
-        (normalized["materializer"], "# IR_DEPENDENCY_LOCAL_CATALOG_MIGRATION: Local catalog calls do not yet carry\n# reusable IRFunctionMaterialization identity because their current fresh-snapshot\n# contract intentionally has no shared/unique instance identity. Preserve the existing\n# freshness-unproven fallback here. Remove this branch when Local catalog calls have an\n# explicit semantic dependency contract and their ownership/reuse semantics are defined\n# and regression-tested in a dedicated plan."),
-        (normalized["compiler"], "# BLENDER_TRANSACTION_LEGACY_ALIAS_MIGRATION: Keep the historical transaction class\n# names importable from compiler.py for one compatibility stage after physical Blender\n# transaction ownership moves to blender_group_backend.py. New production code must\n# import BlenderGroupBuildTransaction from the Blender group backend module and must not\n# depend on these aliases. Remove them after the next compatibility sweep confirms no\n# supported external/test consumer imports FunctionGroupBuildTransaction or\n# LocalHelperBuildTransaction from compiler.py."),
-    )
-    for source, marker in preserved_markers:
-        assert marker in source
-
-    required_markers = (
-        (normalized["dispatcher"], "# COMPLETE_EXPRESSION_IR_CONSTANT_MIGRATION: comp.consts is still legacy compiler-owned\n# compile-time storage. Normalize supported runtime-materializable constants into\n# detached immutable semantic records, plus a detached semantics-preserving const-eval copy\n# for subscript indices. Remove this bridge when compile-time bindings are frontend-owned\n# and SemanticEnvironment receives their semantic records without reading comp.consts."),
-        (normalized["analysis"], "# COMPLETE_EXPRESSION_IR_LEGACY_BINDING_FALLBACK: Non-Value compiler bindings still\n# have no frontend-owned semantic result shape. Keep the complete enclosing expression\n# on the legacy dispatcher when one is reached; do not carry the compiler object into IR.\n# Remove this fallback when those binding categories are represented semantically and\n# Blender/materialization objects are no longer required to determine their meaning."),
-        (normalized["analysis"], "# COMPLETE_EXPRESSION_IR_CALL_FALLBACK: Call resolution, argument/result shapes, keyword\n# rules, Object.info(), raw nodes, and reusable/local/imported materialization still belong\n# to the legacy call compiler. Keep the complete enclosing expression on that path; do not\n# represent a call as an opaque AST/backend IR leaf. Remove this fallback when semantic\n# callable resolution and call IR own every supported ast.Call category end-to-end."),
-        (normalized["dispatcher"], "# COMPLETE_EXPRESSION_IR_FALLBACK: After non-call expression completion, analysis may\n# return unsupported only when it reaches the explicit ast.Call fallback or a known\n# legacy non-Value compiler binding. Preserve whole-expression legacy dispatch so mixed\n# trees keep current behavior without opaque backend leaves in Semantic IR. Remove this\n# branch when call IR and compiler-binding migration eliminate both unsupported sources."),
-        (normalized["backend"], "# SEMANTIC_IR_VALUE_MIGRATION: compile_expr() and downstream compiler consumers still\n# expect legacy backend materializations: one socket-bound Value or a Python list of\n# such values for array expressions. Keep this return bridge while statements, calls,\n# runtime state, and interface wiring use the legacy value contract. Remove it when\n# compiler-owned runtime references replace these backend-facing expression results."),
-        (normalized["semantic"], "# SEMANTIC_IR_VALUE_MIGRATION: Re-lower the shared middle source expression for\n# each comparison pair so this behavior-preserving stage emits distinct IR values\n# and preserves the current duplicated Geometry Nodes topology. Remove this rule\n# only in a dedicated topology-changing plan that defines IR value reuse and\n# updates the corresponding graph-shape contract tests."),
-    )
-    for source, marker in required_markers:
-        assert marker in source
-
-    assert "IRBinding still stores the legacy source binding name" not in sources["semantic"]
-    assert "source-name -> legacy Value map" not in sources["backend"]
-
-    assert "next_unique_function_call_site" not in sources["compiler"]
-    local_after_materialization = sources["local"].split("materialization = comp.resolve_reusable_function_materialization", 1)[1]
-    imported_after_materialization = sources["library_calls"].split("materialization = comp.resolve_reusable_function_materialization", 1)[1]
-    assert "modifiers.unique" not in local_after_materialization
-    assert "modifiers.unique" not in imported_after_materialization
-    assert "instance_key_for_materialization(materialization)" not in local_after_materialization
-    assert "instance_key_for_materialization(materialization)" not in imported_after_materialization
-    assert "instance_key = materialized.instance_key" in imported_after_materialization
-    assert "function_group = materialized.group" in imported_after_materialization
-    assert "instance_key_for_materialization(materialization)" in sources["materializer"]
-    assert "comp.compile_group_callback(" not in sources["local"]
-    assert "compile_group_callback(" not in sources["library"]
 
 def test_blender_lowering_context_is_minimal_immutable_and_compiler_independent():
     from dataclasses import FrozenInstanceError, fields
@@ -943,7 +959,9 @@ def test_object_properties_are_semantically_typed_and_calls_remain_fallback():
     for source in ("obj.x", "obj.foo"):
         with pytest.raises(CompileError, match="Object values support only"):
             _lower(source, bindings={"obj": TYPE_OBJECT})
-    assert _lower("obj.info()", bindings={"obj": TYPE_OBJECT}) is None
+    info = _lower("obj.info()", bindings={"obj": TYPE_OBJECT})
+    assert isinstance(info.operations[-1], IRCall)
+    assert info.operations[-1].target.kind is IRCallableKind.OBJECT_INFO
 
 
 def test_ir_records_never_carry_mutable_lists_or_ast_backend_objects_after_completion():
@@ -961,3 +979,160 @@ def test_ir_records_never_carry_mutable_lists_or_ast_backend_objects_after_compl
                 visit(item)
 
     visit(program)
+
+
+
+def _raw_call(*, mode, results, outputs=None, output=None, typ=None, options=()):
+    """Construct one hand-authored raw-node IR call for invariant tests."""
+    base = (
+        ("bl_idname", "ShaderNodeSeparateXYZ"),
+        ("props", ()),
+        ("inputs", ()),
+        ("raw_output_mode", mode.value),
+        ("output", output),
+        ("typ", typ),
+        ("outputs", outputs),
+    )
+    return IRCall(
+        tuple(results),
+        0,
+        IRCallableTarget(IRCallableKind.BUILTIN, "node"),
+        (),
+        base + tuple(options),
+        mode,
+    )
+
+
+def test_call_ir_rejects_noncanonical_types_ast_backend_and_mutable_payloads():
+    """Call IR admits only NFType values and detached immutable option data."""
+    from NodeForge.values import Value
+
+    with pytest.raises(TypeError, match="typ must be an NFType"):
+        IRValue(0, "FLOAT")
+    with pytest.raises(TypeError, match="IRCallArgument.value"):
+        IRCallArgument("x", _expr("x"))
+    target = IRCallableTarget(IRCallableKind.BUILTIN, "position")
+    result = IRValue(0, TYPE_VECTOR)
+    for payload in (_expr("x"), Value(object(), TYPE_FLOAT), [], {}):
+        with pytest.raises(TypeError, match="detached immutable IR data"):
+            IRCall((result,), 0, target, (), (("payload", payload),))
+
+
+def test_call_ir_rejects_invalid_structural_members_and_targets():
+    """Structural call results and callable targets remain explicit compiler-owned records."""
+    with pytest.raises(TypeError, match="IRTuple"):
+        IRTuple((object(),))
+    with pytest.raises(TypeError, match="members must be IRValue"):
+        IRNamedOutputs((("X", object()),))
+    with pytest.raises(ValueError, match="unique names"):
+        IRNamedOutputs((("X", IRValue(0, TYPE_FLOAT)), ("X", IRValue(1, TYPE_FLOAT))))
+    with pytest.raises(TypeError, match="kind must be an IRCallableKind"):
+        IRCallableTarget("BUILTIN", "position")
+    with pytest.raises(TypeError, match="IRCallableTarget"):
+        IRCall((IRValue(0, TYPE_FLOAT),), 0, object(), ())
+
+
+def test_raw_call_ir_enforces_syntax_mode_and_declared_result_cardinality():
+    """Raw-node output protocol is source-mode driven even for one named output."""
+    scalar = _raw_call(
+        mode=IRRawNodeOutputMode.SINGLE_OUTPUT,
+        results=(IRValue(0, TYPE_FLOAT),),
+        output="Value",
+        typ=TYPE_FLOAT,
+    )
+    assert scalar.raw_output_mode is IRRawNodeOutputMode.SINGLE_OUTPUT
+
+    named_one = _raw_call(
+        mode=IRRawNodeOutputMode.NAMED_OUTPUTS,
+        results=(IRValue(0, TYPE_FLOAT),),
+        outputs=(("X", TYPE_FLOAT),),
+    )
+    structural = IRNamedOutputs((("X", named_one.results[0]),))
+    assert isinstance(structural, IRNamedOutputs)
+    assert structural.get("X") is named_one.results[0]
+
+    with pytest.raises(ValueError, match="result count"):
+        _raw_call(
+            mode=IRRawNodeOutputMode.NAMED_OUTPUTS,
+            results=(IRValue(0, TYPE_FLOAT),),
+            outputs=(("X", TYPE_FLOAT), ("Y", TYPE_FLOAT)),
+        )
+    with pytest.raises(ValueError, match="unique output names"):
+        _raw_call(
+            mode=IRRawNodeOutputMode.NAMED_OUTPUTS,
+            results=(IRValue(0, TYPE_FLOAT), IRValue(1, TYPE_FLOAT)),
+            outputs=(("X", TYPE_FLOAT), ("X", TYPE_FLOAT)),
+        )
+    with pytest.raises(ValueError, match="exactly one result"):
+        _raw_call(
+            mode=IRRawNodeOutputMode.SINGLE_OUTPUT,
+            results=(IRValue(0, TYPE_FLOAT), IRValue(1, TYPE_FLOAT)),
+            output="Value",
+            typ=TYPE_FLOAT,
+        )
+    with pytest.raises(ValueError, match="requires named output metadata"):
+        _raw_call(
+            mode=IRRawNodeOutputMode.NAMED_OUTPUTS,
+            results=(IRValue(0, TYPE_FLOAT),),
+            outputs=None,
+        )
+
+
+def test_call_ir_all_analyzed_runtime_operand_and_result_types_are_nftype():
+    """A representative migrated call preserves NFType identity through analysis and IR."""
+    program = _lower("length(v) + 1.0", bindings={"v": TYPE_VECTOR})
+    calls = _operations(program, IRCall)
+    assert len(calls) == 1
+    call = calls[0]
+    assert all(isinstance(argument.value.typ, type(TYPE_FLOAT)) for argument in call.arguments)
+    assert all(isinstance(result.typ, type(TYPE_FLOAT)) for result in call.results)
+
+
+def test_raw_named_output_selection_preserves_attribute_and_string_subscript_diagnostics():
+    """Structural raw outputs accept only declared attributes or compile-time non-empty string keys."""
+    with pytest.raises(CompileError, match="Unknown raw node output 'Y'"):
+        _lower('node("ShaderNodeSeparateXYZ", outputs={"X": Float}).Y')
+    with pytest.raises(CompileError, match="Unknown raw node output 'Y'"):
+        _lower('node("ShaderNodeSeparateXYZ", outputs={"X": Float})["Y"]')
+    with pytest.raises(CompileError, match="compile-time string key"):
+        _lower(
+            'node("ShaderNodeSeparateXYZ", outputs={"X": Float})[key]',
+            bindings={"key": TYPE_STRING},
+        )
+    with pytest.raises(CompileError, match="non-empty string key"):
+        _lower('node("ShaderNodeSeparateXYZ", outputs={"X": Float})[1]')
+    with pytest.raises(CompileError, match="non-empty string key"):
+        _lower('node("ShaderNodeSeparateXYZ", outputs={"X": Float})[""]')
+
+
+def test_mixed_core_calls_stay_on_ir_path_and_dynamic_categories_remain_fallback():
+    """Stage 15 owns stateless core calls inside parent expressions but not dynamic extension calls."""
+    from types import SimpleNamespace
+
+    core_cases = [
+        ("length(v) + 1.0", {"v": TYPE_VECTOR}),
+        ("cube(scale * 2.0)", {"scale": TYPE_FLOAT}),
+        ("condition and (length(v) > 0.0)", {"condition": TYPE_BOOL, "v": TYPE_VECTOR}),
+        ('node("ShaderNodeValue", output="Value", typ=Float) * gain', {"gain": TYPE_FLOAT}),
+        ('node("ShaderNodeSeparateXYZ", outputs={"X": Float}).X', {}),
+        ('node("ShaderNodeSeparateXYZ", outputs={"X": Float})["X"]', {}),
+        ("capture_attribute(geo, value)[1]", {"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT}),
+        ("obj.info().location", {"obj": TYPE_OBJECT}),
+    ]
+    for source, bindings in core_cases:
+        program = _lower(source, bindings=bindings)
+        assert program is not None, source
+        assert _operations(program, IRCall), source
+
+    record = SimpleNamespace(package_id="vendor.pkg", namespace="functions", name="imported_fn")
+    binding = SimpleNamespace(namespace="functions", canonical_name="imported_fn", record=record)
+    assert _lower("local_fn(x) + 1.0", bindings={"x": TYPE_FLOAT}, local_functions={"local_fn": object()}) is None
+    assert _lower("imported_fn(x) + 1.0", bindings={"x": TYPE_FLOAT}, imported_functions={"imported_fn": binding}) is None
+    assert _lower("system_constructor() + 1.0", systems={"system_constructor": object()}) is None
+    assert _lower("backend_helper(x) + 1.0", bindings={"x": TYPE_FLOAT}, backend_helpers={"backend_helper"}) is None
+
+
+def test_stateful_builtins_take_fixed_builtin_fallback_not_dynamic_resolution():
+    """Stateful calls are still resolved as builtins but deliberately remain unsupported by Semantic IR."""
+    for source in ("grid(4, 3)", "grid_uv()", 'input_float("Scale")'):
+        assert _lower(source) is None

@@ -20,6 +20,7 @@ from NodeForge.constants import (
 from NodeForge.errors import CompileError
 from NodeForge.consteval import _const_eval
 from NodeForge.compiler_identities import BindingId
+from NodeForge.call_resolution import CallableEnvironment
 from NodeForge.semantic_analysis import (
     ArrayResultShape, RuntimeBindingSymbol, RuntimeResultShape, SemanticEnvironment,
     analyze_expression, build_semantic_constant_snapshot,
@@ -28,13 +29,18 @@ from NodeForge.semantic_analysis import (
 
 pytestmark = pytest.mark.unit
 
+def _empty_callable_environment():
+    """Return an empty immutable callable namespace for non-call semantic tests."""
+    return CallableEnvironment(frozenset(), {}, {}, frozenset(), {})
+
+
 
 def _expr(source):
     """Parse one expression fixture."""
     return ast.parse(source, mode="eval").body
 
 
-def _env(*, bindings=None, legacy=(), consts=None, labels=None, **_ignored):
+def _env(*, bindings=None, legacy=(), consts=None, labels=None, backend_helpers=(), builtins=(), systems=None, local_functions=None, imported_functions=None, **_ignored):
     """Construct the immutable semantic snapshot used by analyzer tests."""
     runtime_bindings = {
         name: RuntimeBindingSymbol(BindingId("test-owner", index), typ)
@@ -47,6 +53,13 @@ def _env(*, bindings=None, legacy=(), consts=None, labels=None, **_ignored):
         constants,
         const_eval_values,
         MappingProxyType(dict(labels or {})),
+        callable_environment=CallableEnvironment(
+            frozenset(builtins),
+            systems or {},
+            local_functions or {},
+            frozenset(backend_helpers),
+            imported_functions or {},
+        ),
     )
 
 def _typ(fact):
@@ -130,6 +143,7 @@ def test_constant_snapshot_is_cycle_safe_and_never_retains_unsupported_object_id
         constants,
         const_eval_values,
         MappingProxyType({}),
+        callable_environment=_empty_callable_environment(),
     )
     analysis = analyze_expression(_expr("1"), environment)
     assert _typ(analysis.facts[analysis.root]) == TYPE_FLOAT
@@ -200,7 +214,7 @@ def test_type_token_diagnostic_is_preserved():
 
 
 def test_unsupported_left_short_circuits_before_unknown_right():
-    assert _analyze("legacy_call() + unknown_name") is None
+    assert _analyze("legacy_call() + unknown_name", backend_helpers={"legacy_call"}) is None
     with pytest.raises(CompileError, match="Unknown name: unknown_name"):
         _analyze("a + unknown_name", bindings={"a": TYPE_FLOAT})
 
@@ -280,7 +294,7 @@ def test_vector_component_and_object_attribute_boundaries():
 
 
 def test_only_calls_and_legacy_bindings_remain_planned_fallbacks():
-    assert _analyze("f()", bindings={"a": TYPE_FLOAT}) is None
+    assert _analyze("f()", bindings={"a": TYPE_FLOAT}, backend_helpers={"f"}) is None
     assert _analyze("legacy[0]", legacy={"legacy"}) is None
     array = _analyze("[a]", bindings={"a": TYPE_FLOAT})
     assert isinstance(array.facts[array.root].result_shape, ArrayResultShape)

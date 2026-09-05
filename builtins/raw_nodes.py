@@ -219,6 +219,90 @@ def build_raw_node(
     return make_value(out_socket, typ)
 
 
+
+def build_materialized_raw_node(
+    group,
+    *,
+    bl_idname,
+    props=None,
+    inputs=None,
+    output=None,
+    typ=None,
+    outputs=None,
+    x=0,
+    y=0,
+    context="raw node",
+):
+    """Build a raw Blender node from already-materialized runtime operands.
+
+    ``inputs`` contains literal values, runtime :class:`Value` objects, or
+    non-empty lists/tuples of runtime Values for Blender multi-input fanout.
+    Source AST and Compiler state never cross this backend helper boundary.
+    """
+    props = dict(props or {})
+    inputs = dict(inputs or {})
+    if not isinstance(bl_idname, str) or not bl_idname:
+        raise CompileError(f"{context}: bl_idname must be a non-empty string")
+    _validate_public_type(typ, f"{context}: typ") if typ is not None else None
+    if outputs is not None:
+        if not outputs:
+            raise CompileError(f"{context}: outputs cannot be empty")
+        for out_typ in outputs.values():
+            _validate_public_type(out_typ, f"{context}: output type")
+    elif output is None or typ is None:
+        raise CompileError(f"{context}: raw node requires single-output or multi-output declaration")
+
+    try:
+        node = _new_node(group, bl_idname, x, y)
+    except Exception as exc:
+        raise CompileError(f"{context}: could not create Blender node {bl_idname!r}: {exc}") from exc
+
+    for prop_name, prop_value in props.items():
+        _set_node_property(node, prop_name, prop_value, context)
+
+    input_contracts = []
+    for socket_name, value_spec in inputs.items():
+        socket = resolve_socket(node.inputs, socket_name, direction="input", context=context)
+        if isinstance(value_spec, list):
+            _require_multi_input(socket, context, socket_name)
+            if not value_spec:
+                raise CompileError(f"{context}: multi-input {socket_name!r} items cannot be empty")
+            for value in value_spec:
+                _link_materialized_value(group, value, socket, context, socket_name)
+            input_contracts.append({"name": socket_name, "mode": INPUT_MULTI_LINK, "links": len(value_spec)})
+        elif isinstance(value_spec, Value):
+            _link_materialized_value(group, value_spec, socket, context, socket_name)
+            input_contracts.append({"name": socket_name, "mode": INPUT_SINGLE_LINK, "links": 1})
+        else:
+            normalized = _assign_literal_default(socket, value_spec, context, socket_name)
+            input_contracts.append({"name": socket_name, "mode": INPUT_LITERAL, "default": normalized})
+
+    if outputs is not None:
+        values = {}
+        for socket_name, out_typ in outputs.items():
+            socket = resolve_socket(node.outputs, socket_name, direction="output", context=context)
+            _validate_runtime_socket_type(socket, out_typ, direction="output", context=context, socket_name=socket_name)
+            values[socket_name] = make_value(socket, out_typ)
+        _write_raw_metadata(node, bl_idname, props, input_contracts, tuple(outputs.keys()), RAW_MULTI_MODE)
+        return NodeResult(values)
+
+    out_socket = resolve_socket(node.outputs, output, direction="output", context=context)
+    _validate_runtime_socket_type(out_socket, typ, direction="output", context=context, socket_name=output)
+    _write_raw_metadata(node, bl_idname, props, input_contracts, (output,), RAW_SINGLE_MODE)
+    return make_value(out_socket, typ)
+
+
+def _link_materialized_value(group, value, socket, context, socket_name):
+    """Link one already-materialized runtime Value to a validated raw-node input."""
+    if not isinstance(value, Value):
+        raise CompileError(f"{context}: input {socket_name!r} expects a runtime node value")
+    _validate_runtime_socket_type(socket, value.typ, direction="input", context=context, socket_name=socket_name)
+    try:
+        group.links.new(value.socket, socket)
+    except Exception as exc:
+        raise CompileError(f"{context}: failed to link input {socket_name!r}: {exc}") from exc
+
+
 def _validate_public_type(typ, context):
     if typ not in _SUPPORTED_TYPES:
         raise CompileError(f"{context} must be a NodeForge type token")

@@ -9,6 +9,24 @@ from types import MappingProxyType
 from typing import AbstractSet, Mapping, TypeAlias
 
 from .compiler_identities import BindingId
+from .call_resolution import (
+    AnalyzedCall,
+    AnalyzedCallOperand,
+    CallableEnvironment,
+    CallableKind,
+    NamedOutputsCallResult,
+    ResolvedCallable,
+    RuntimeCallResult,
+    TupleCallResult,
+    UNRESOLVED,
+    resolve_simple_callable,
+)
+from .builtin_call_semantics import (
+    IR_CAPABLE_BUILTIN_NAMES,
+    STATEFUL_FALLBACK_BUILTIN_NAMES,
+    analyze_builtin_call,
+)
+from .function_instances import extract_function_call_modifiers, unsupported_unique
 from .constants import (
     OBJECT_PROPERTY_TYPES,
     TYPE_BOOL,
@@ -81,7 +99,34 @@ class ArrayResultShape:
     items: tuple["SemanticResultShape", ...]
 
 
-SemanticResultShape: TypeAlias = RuntimeResultShape | ArrayResultShape
+@dataclass(frozen=True)
+class TupleResultShape:
+    """Describe one fixed tuple returned by a compiler-owned runtime call."""
+
+    items: tuple[RuntimeResultShape, ...]
+
+
+@dataclass(frozen=True)
+class NamedOutputsResultShape:
+    """Describe declared outputs returned by raw ``node(..., outputs=...)`` syntax."""
+
+    items: tuple[tuple[str, RuntimeResultShape], ...]
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        """Return declared output names in source order."""
+        return tuple(name for name, _ in self.items)
+
+    def get(self, name: str) -> RuntimeResultShape:
+        """Return one declared output shape or preserve the current NodeResult diagnostic."""
+        for item_name, shape in self.items:
+            if item_name == name:
+                return shape
+        known = ", ".join(repr(item_name) for item_name, _ in self.items) or "<none>"
+        raise CompileError(f"Unknown raw node output {name!r}; declared outputs are: {known}")
+
+
+SemanticResultShape: TypeAlias = RuntimeResultShape | ArrayResultShape | TupleResultShape | NamedOutputsResultShape
 
 
 @dataclass(frozen=True)
@@ -108,6 +153,7 @@ class SemanticEnvironment:
     constants: Mapping[str, SemanticConstant]
     const_eval_values: Mapping[str, object]
     reserved_name_labels: Mapping[str, str]
+    callable_environment: CallableEnvironment
 
 
 @dataclass(frozen=True)
@@ -135,6 +181,8 @@ class ExpressionFact:
     compare_operations: tuple[str, ...] = ()
     resolved_name: ResolvedName | None = None
     literal_value: object | None = None
+    analyzed_call: AnalyzedCall | None = None
+    call_operand_nodes: tuple[ast.expr, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -153,6 +201,11 @@ class _Unsupported:
 UNSUPPORTED = _Unsupported()
 
 
+class _BuiltinOperandUnsupported(Exception):
+    """Abort semantic call ownership when one runtime operand still requires legacy fallback."""
+
+
+
 def _is_number_type(typ):
     """Return whether *typ* follows the existing scalar Math-node contract."""
     return typ in NUMERIC_NF_TYPES
@@ -160,10 +213,17 @@ def _is_number_type(typ):
 
 def _require_runtime_type(fact, context):
     """Return a runtime type or reject a structural result in *context*."""
-    if isinstance(fact.result_shape, RuntimeResultShape):
-        return fact.result_shape.typ
-    if context == "if-expression result":
+    shape = fact.result_shape
+    if isinstance(shape, RuntimeResultShape):
+        return shape.typ
+    if context == "if-expression result" and isinstance(shape, ArrayResultShape):
         raise CompileError("if-expression cannot return arrays")
+    if isinstance(shape, TupleResultShape):
+        raise CompileError(
+            f"{context} received a tuple of {len(shape.items)} values; unpack it or select an element by a compile-time index"
+        )
+    if isinstance(shape, NamedOutputsResultShape):
+        raise CompileError(f"NodeResult is compile-time only and cannot be used in {context}")
     raise CompileError(f"{context} requires a runtime value")
 
 
@@ -297,6 +357,26 @@ def _shape_for_constant(constant):
     raise CompileError("Unsupported compile-time value in runtime expression")
 
 
+def _call_result_shape(result):
+    """Convert one normalized call result contract to semantic expression shape."""
+    if isinstance(result, RuntimeCallResult):
+        return RuntimeResultShape(result.typ)
+    if isinstance(result, TupleCallResult):
+        return TupleResultShape(tuple(RuntimeResultShape(typ) for typ in result.types))
+    if isinstance(result, NamedOutputsCallResult):
+        return NamedOutputsResultShape(
+            tuple((name, RuntimeResultShape(typ)) for name, typ in result.items)
+        )
+    raise CompileError("Internal error: unsupported analyzed call result contract")
+
+
+def _unregistered_keyword_error(name):
+    """Create the exact legacy diagnostic for keywords on an unresolved call."""
+    return CompileError(
+        f"Keyword arguments are only supported for builtins, library functions, local functions or local backend helpers; {name} is not registered as one"
+    )
+
+
 def analyze_expression(expr, environment):
     """Resolve and type-check one complete non-call Semantic IR expression tree."""
     facts = {}
@@ -370,6 +450,15 @@ def analyze_expression(expr, environment):
             base = analyze(node.value)
             if base is UNSUPPORTED:
                 return UNSUPPORTED
+            if isinstance(base.result_shape, NamedOutputsResultShape):
+                return record(
+                    node,
+                    ExpressionFact(
+                        base.result_shape.get(node.attr),
+                        operation="named_output",
+                        literal_value=node.attr,
+                    ),
+                )
             base_typ = _require_runtime_type(base, "attribute access")
             if base_typ == TYPE_OBJECT:
                 if node.attr not in OBJECT_PROPERTY_TYPES:
@@ -385,6 +474,35 @@ def analyze_expression(expr, environment):
             base = analyze(node.value)
             if base is UNSUPPORTED:
                 return UNSUPPORTED
+            if isinstance(base.result_shape, NamedOutputsResultShape):
+                try:
+                    key = _const_eval(node.slice, environment.const_eval_values)
+                except CompileError as exc:
+                    raise CompileError("raw node output lookup requires a compile-time string key") from exc
+                if not isinstance(key, str) or not key:
+                    raise CompileError("raw node output lookup requires a non-empty string key")
+                return record(
+                    node,
+                    ExpressionFact(
+                        base.result_shape.get(key),
+                        operation="named_output",
+                        literal_value=key,
+                    ),
+                )
+            if isinstance(base.result_shape, TupleResultShape):
+                try:
+                    index = _const_eval(node.slice, environment.const_eval_values)
+                except CompileError as exc:
+                    raise CompileError("tuple result indexing requires a compile-time integer index") from exc
+                if not isinstance(index, int) or isinstance(index, bool):
+                    raise CompileError("tuple result indexing requires a compile-time integer index")
+                try:
+                    selected_shape = base.result_shape.items[index]
+                except IndexError as exc:
+                    raise CompileError(
+                        f"tuple result index {index} is out of range for {len(base.result_shape.items)} values"
+                    ) from exc
+                return record(node, ExpressionFact(selected_shape, operation="tuple_index", literal_value=index))
             try:
                 index = int(_const_eval(node.slice, environment.const_eval_values))
             except (CompileError, TypeError, ValueError, OverflowError) as exc:
@@ -502,13 +620,131 @@ def analyze_expression(expr, environment):
                 return UNSUPPORTED
             return record(node, runtime_fact(true_typ, operation="select"))
 
-        # COMPLETE_EXPRESSION_IR_CALL_FALLBACK: Call resolution, argument/result shapes, keyword
-        # rules, Object.info(), raw nodes, and reusable/local/imported materialization still belong
-        # to the legacy call compiler. Keep the complete enclosing expression on that path; do not
-        # represent a call as an opaque AST/backend IR leaf. Remove this fallback when semantic
-        # callable resolution and call IR own every supported ast.Call category end-to-end.
         if isinstance(node, ast.Call):
-            return UNSUPPORTED
+            if isinstance(node.func, ast.Attribute):
+                if node.func.attr != "info":
+                    raise CompileError("Object values support only the .info() method")
+                receiver = analyze(node.func.value)
+                if receiver is UNSUPPORTED:
+                    return UNSUPPORTED
+                if _require_runtime_type(receiver, ".info() receiver") != TYPE_OBJECT:
+                    raise CompileError(".info() can only be used on Object values")
+                if node.args:
+                    raise CompileError("Object.info() accepts only keyword arguments")
+                if any(kw.arg is None for kw in node.keywords):
+                    raise CompileError("Object.info() does not support **kwargs")
+                kws = {kw.arg: kw.value for kw in node.keywords}
+                extra = set(kws) - {"transform_space", "as_instance"}
+                if extra:
+                    raise CompileError("Object.info() accepts only transform_space= and as_instance=")
+                options = []
+                if "transform_space" in kws:
+                    try:
+                        value = _const_eval(kws["transform_space"], environment.const_eval_values)
+                    except CompileError as exc:
+                        raise CompileError("Object.info() transform_space must be 'ORIGINAL' or 'RELATIVE'") from exc
+                    if value not in {"ORIGINAL", "RELATIVE"}:
+                        raise CompileError("Object.info() transform_space must be 'ORIGINAL' or 'RELATIVE'")
+                    options.append(("transform_space", value))
+                if "as_instance" in kws:
+                    try:
+                        value = _const_eval(kws["as_instance"], environment.const_eval_values)
+                    except CompileError as exc:
+                        raise CompileError("Object.info() as_instance must be a compile-time Bool") from exc
+                    if not isinstance(value, bool):
+                        raise CompileError("Object.info() as_instance must be a compile-time Bool")
+                    options.append(("as_instance", value))
+                target = ResolvedCallable(CallableKind.OBJECT_INFO, "Object.info", target="Object.info")
+                analyzed_call = AnalyzedCall(
+                    target=target,
+                    runtime_operands=(AnalyzedCallOperand("receiver", TYPE_OBJECT),),
+                    options=tuple(options),
+                    result=RuntimeCallResult(TYPE_OBJECT),
+                )
+                return record(
+                    node,
+                    runtime_fact(
+                        TYPE_OBJECT,
+                        analyzed_call=analyzed_call,
+                        call_operand_nodes=(node.func.value,),
+                    ),
+                )
+            if not isinstance(node.func, ast.Name):
+                raise CompileError("Only simple function calls are supported")
+            name = node.func.id
+            resolved = resolve_simple_callable(name, environment.callable_environment)
+            cleaned_call, modifiers = extract_function_call_modifiers(
+                node, name, environment.const_eval_values
+            )
+            if resolved is UNRESOLVED:
+                if cleaned_call.keywords:
+                    raise _unregistered_keyword_error(name)
+                if modifiers.unique_was_explicit:
+                    raise unsupported_unique(name)
+                raise CompileError(f"Unsupported function: {name}")
+            if resolved.kind is CallableKind.TOP_LEVEL_ONLY:
+                if cleaned_call.keywords:
+                    raise _unregistered_keyword_error(name)
+                raise CompileError(f"{name}() is only supported as a top-level call")
+            if resolved.kind is CallableKind.BUILTIN:
+                if modifiers.unique_was_explicit:
+                    raise unsupported_unique(name)
+                if name in STATEFUL_FALLBACK_BUILTIN_NAMES:
+                    # SEMANTIC_CALL_IR_STATEFUL_BUILTIN_FALLBACK: grid/grid_uv and input_* still depend on
+                    # compilation-scoped mutable Compiler state across expression boundaries: grid UV context,
+                    # interface socket reuse/registration/default metadata, and publication into comp.vars.
+                    # Keep these calls on legacy realization rather than introducing a temporary lowering
+                    # session or passing Compiler through the IR backend boundary. Remove this fallback when
+                    # frontend-owned runtime bindings/session state permanently owns those effects.
+                    return UNSUPPORTED
+                if name not in IR_CAPABLE_BUILTIN_NAMES:
+                    raise CompileError(f"Internal error: unclassified callable builtin {name!r}")
+                runtime_nodes = []
+
+                def add_runtime(child, parameter_name, context):
+                    child_fact = analyze(child)
+                    if child_fact is UNSUPPORTED:
+                        raise _BuiltinOperandUnsupported
+                    typ = _require_runtime_type(child_fact, context)
+                    runtime_nodes.append(child)
+                    return typ
+
+                try:
+                    builtin = analyze_builtin_call(
+                        name, cleaned_call, environment.const_eval_values, add_runtime
+                    )
+                except _BuiltinOperandUnsupported:
+                    return UNSUPPORTED
+                analyzed_call = AnalyzedCall(
+                    target=resolved,
+                    runtime_operands=builtin.operands,
+                    options=builtin.options,
+                    result=builtin.result,
+                )
+                return record(
+                    node,
+                    ExpressionFact(
+                        _call_result_shape(builtin.result),
+                        analyzed_call=analyzed_call,
+                        call_operand_nodes=tuple(runtime_nodes),
+                    ),
+                )
+            if resolved.kind in {
+                CallableKind.SYSTEM,
+                CallableKind.LOCAL_FUNCTION,
+                CallableKind.BACKEND_HELPER,
+                CallableKind.LIBRARY,
+            }:
+                if resolved.kind in {CallableKind.SYSTEM, CallableKind.BACKEND_HELPER} and modifiers.unique_was_explicit:
+                    raise unsupported_unique(name)
+                # SEMANTIC_CALL_IR_DYNAMIC_FALLBACK: Callable identity is resolved here, but local,
+                # imported, system, backend-helper, and native-Python calls do not yet expose a complete
+                # Blender-independent result signature. Keep the enclosing expression on the legacy
+                # realization path instead of inventing unknown types, opaque IR, or semantic-time Blender
+                # probes. Remove this fallback when each remaining callable category has a compiler-owned
+                # typed signature/result contract and can emit AST-free Call IR before materialization.
+                return UNSUPPORTED
+            raise CompileError(f"Internal error: unsupported resolved callable category {resolved.kind}")
 
         return UNSUPPORTED
 
@@ -522,6 +758,8 @@ __all__ = [
     "RuntimeBindingSymbol",
     "RuntimeResultShape",
     "ArrayResultShape",
+    "NamedOutputsResultShape",
+    "TupleResultShape",
     "SemanticResultShape",
     "SemanticConstant",
     "SemanticEnvironment",

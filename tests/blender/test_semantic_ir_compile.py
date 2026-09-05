@@ -14,6 +14,7 @@ from NodeForge.constants import (
 from NodeForge.errors import CompileError
 from NodeForge.compiler_identities import BindingId
 from NodeForge.nodes import _socket_type_for
+from NodeForge.call_resolution import CallableEnvironment
 from NodeForge.semantic_analysis import RuntimeBindingSymbol, SemanticEnvironment, analyze_expression, build_semantic_constant_snapshot
 from NodeForge.semantic_lowering import lower_analyzed_expression
 from NodeForge.semantic_ir import (
@@ -22,6 +23,11 @@ from NodeForge.semantic_ir import (
 )
 from NodeForge.values import Value, make_value
 
+
+
+def _empty_callable_environment():
+    """Return an empty immutable callable namespace for non-call semantic tests."""
+    return CallableEnvironment(frozenset(), {}, {}, frozenset(), {})
 
 def _nodes(group, bl_idname, operation=None):
     """Return nodes matching one Blender node type and optional operation enum."""
@@ -289,6 +295,7 @@ def _contract_environment(bindings):
         semantic_constants,
         const_eval_values,
         MappingProxyType({}),
+        callable_environment=_empty_callable_environment(),
     )
 
 
@@ -766,7 +773,7 @@ def test_complete_expression_ir_production_routing_covers_new_forms_and_excludes
         'v = input_vector("V")\noutput("Result", length(v) + 1)',
         "NFTest_complete_ir_route_call_fallback",
     )
-    check(not any(any(isinstance(op, IRBinary) for op in program.operations) for program in programs), "call-containing parent incorrectly reached Semantic IR as IRBinary")
+    check(any(any(isinstance(op, IRBinary) for op in program.operations) for program in programs), "Call IR parent did not remain inside Semantic IR as IRBinary")
 
 
 def test_unused_cyclic_compile_time_constant_does_not_break_expression_compilation():
@@ -855,4 +862,142 @@ output("Location", info.location)
     check(info.transform_space == "RELATIVE", "Object.info transform_space was not honored by IR property lowering")
     as_instance = next(socket for socket in info.inputs if socket.name == "As Instance")
     check(as_instance.default_value is False, "Object.info as_instance was not honored by IR property lowering")
+    bpy.data.node_groups.remove(group)
+
+
+def test_semantic_call_ir_materializes_core_calls_with_existing_layout(monkeypatch):
+    """Stateless core calls enter IR and retain the existing depth-derived placement."""
+    calls = []
+    original = expression_compiler.lower_ir_expression
+
+    def wrapped(context, program, base_depth=0):
+        calls.extend(operation for operation in program.operations if type(operation).__name__ == "IRCall")
+        return original(context, program, base_depth)
+
+    monkeypatch.setattr(expression_compiler, "lower_ir_expression", wrapped)
+    group = compile_group(
+        '''
+v = input_vector("V", default=(1, 2, 3))
+scale = input_float("Scale", default=2.0)
+length_value = length(v)
+geo = cube(scale * 2.0)
+output("Length", length_value)
+output("Geometry", geo)
+''',
+        "NFTest_semantic_call_ir_core",
+    )
+    check(calls, "core calls did not emit IRCall operations")
+    check({call.target.name for call in calls} >= {"length", "cube"}, "expected length/cube Call IR targets")
+    length_nodes = _nodes(group, "ShaderNodeVectorMath", "LENGTH")
+    cube_nodes = _nodes(group, "GeometryNodeMeshCube")
+    multiply_nodes = _nodes(group, "ShaderNodeMath", "MULTIPLY")
+    check(len(length_nodes) == 1, "length() did not preserve one Vector Math node")
+    check(len(cube_nodes) == 1, "cube() did not preserve one Mesh Cube node")
+    check(len(multiply_nodes) == 1, "cube runtime size expression did not preserve multiply topology")
+    check(tuple(length_nodes[0].location) == (240.0, -90.0), f"length() location changed: {tuple(length_nodes[0].location)}")
+    check(tuple(cube_nodes[0].location) == (240.0, -90.0), f"cube() location changed: {tuple(cube_nodes[0].location)}")
+    check(tuple(multiply_nodes[0].location) == (480.0, -180.0), f"cube() operand depth changed: {tuple(multiply_nodes[0].location)}")
+    bpy.data.node_groups.remove(group)
+
+
+def test_semantic_call_ir_raw_named_outputs_preserve_one_entry_structure_and_selection():
+    """outputs= remains NodeResult-shaped for one output and supports both selectors on the IR path."""
+    group = compile_group(
+        '''
+a = node("ShaderNodeSeparateXYZ", inputs={"Vector": (1, 2, 3)}, outputs={"X": Float}).X
+b = node("ShaderNodeSeparateXYZ", inputs={"Vector": (4, 5, 6)}, outputs={"X": Float})["X"]
+output("A", a)
+output("B", b)
+''',
+        "NFTest_semantic_call_ir_raw_named_one",
+    )
+    raw = _nodes(group, "ShaderNodeSeparateXYZ")
+    check(len(raw) == 2, f"expected two raw Separate XYZ nodes, got {len(raw)}")
+    for node in raw:
+        from NodeForge.builtins import raw_nodes
+        check(raw_nodes.is_raw_node(node), "one-entry outputs= lost raw-node metadata")
+    bpy.data.node_groups.remove(group)
+
+    expect_compile_error(
+        '''
+r = node("ShaderNodeSeparateXYZ", inputs={"Vector": (1, 2, 3)}, outputs={"X": Float})
+output("X", r)
+''',
+        "NFTest_semantic_call_ir_raw_named_unselected",
+    )
+
+
+def test_semantic_call_ir_raw_runtime_operand_is_created_before_raw_node_by_authorized_exception():
+    """Raw-node insertion order may follow dependency-ordered IR while graph semantics stay unchanged."""
+    group = compile_group(
+        '''
+mask = node(
+    "FunctionNodeCompare",
+    props={"data_type": "FLOAT", "operation": "GREATER_THAN"},
+    inputs={"A": position().z, "B": 0.5},
+    output="Result",
+    typ=Bool,
+)
+output("Mask", mask)
+''',
+        "NFTest_semantic_call_ir_raw_order",
+    )
+    nodes = list(group.nodes)
+    pos_index = next(i for i, node in enumerate(nodes) if node.bl_idname == "GeometryNodeInputPosition")
+    sep_index = next(i for i, node in enumerate(nodes) if node.bl_idname == "ShaderNodeSeparateXYZ")
+    raw_index = next(i for i, node in enumerate(nodes) if node.bl_idname == "FunctionNodeCompare")
+    check(pos_index < raw_index and sep_index < raw_index, "authorized dependency-first raw-node order was not realized")
+    raw = nodes[raw_index]
+    check(raw.operation == "GREATER_THAN", "raw-node property changed under insertion-order exception")
+    bpy.data.node_groups.remove(group)
+
+
+def test_semantic_call_ir_raw_mixed_invalid_prefers_frontend_operand_error():
+    """Stage-15 explicitly permits operand diagnostics before independent Blender raw-node errors."""
+    try:
+        compile_group(
+            '''
+x = node("NoSuchNode", inputs={"A": no_such_function()}, output="Result", typ=Bool)
+output("X", x)
+''',
+            "NFTest_semantic_call_ir_raw_mixed_invalid",
+        )
+    except CompileError as exc:
+        check(str(exc) == "Unsupported function: no_such_function", f"unexpected mixed-invalid precedence: {exc}")
+    else:
+        raise AssertionError("mixed-invalid raw node unexpectedly compiled")
+
+
+def test_semantic_call_ir_stateful_builtin_fallback_preserves_cross_expression_state():
+    """Marker 10 keeps grid UV and named input reuse on the existing Compiler-owned state path."""
+    group = compile_group(
+        '''
+geo = grid(4, 3)
+uv = grid_uv()
+a = input_float("Scale", default=2.0)
+b = input_float("Scale", default=2.0)
+output("Geometry", geo)
+output("UV", uv)
+output("Sum", a + b)
+''',
+        "NFTest_semantic_call_ir_stateful_fallback",
+    )
+    check(len(_nodes(group, "GeometryNodeMeshGrid")) == 1, "grid/grid_uv fallback lost shared grid state")
+    scale_items = [item for item in group.interface.items_tree if getattr(item, "item_type", "") == "SOCKET" and item.name == "Scale"]
+    check(len(scale_items) == 1, f"repeated input_float did not reuse one Scale socket: {len(scale_items)}")
+    bpy.data.node_groups.remove(group)
+
+
+def test_semantic_call_ir_tuple_result_indexing_reaches_blender_without_legacy_result_coercion():
+    """capture_attribute tuple selection maps one declared IR result back to its exact backend Value."""
+    group = compile_group(
+        '''
+geo = cube(1.0)
+value = position().x
+captured = capture_attribute(geo, value)[1]
+output("Captured", captured)
+''',
+        "NFTest_semantic_call_ir_capture_tuple",
+    )
+    check(len(_nodes(group, "GeometryNodeCaptureAttribute")) == 1, "capture_attribute Call IR node missing")
     bpy.data.node_groups.remove(group)
