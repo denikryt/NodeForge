@@ -104,7 +104,7 @@ def _builder_method_call(comp, stmt):
     if not isinstance(call.func.value, ast.Name):
         return None
     receiver = call.func.value.id
-    value = comp.vars.get(receiver)
+    value = comp.legacy_structural_binding(receiver)
     if isinstance(value, GeometryBuilder):
         return value, call.func.attr, call
     return None
@@ -163,7 +163,7 @@ def _compile_panel_statement(ctx, call):
     seen = set()
     for member in members_expr.elts:
         name = member.id
-        value = comp.vars.get(name)
+        value = comp.runtime_value(name)
         iface_item = comp.interface_input_for_value(value) if value is not None else None
         identity = comp.interface_input_identity_for_value(value) if value is not None else None
         if iface_item is None or identity is None:
@@ -216,7 +216,7 @@ def compile_statement(
                 raise CompileError("Tuple unpacking target names must be unique")
             for name in names:
                 _check_runtime_binding(comp, name)
-                if isinstance(comp.vars.get(name), GeometryBuilder):
+                if isinstance(comp.legacy_structural_binding(name), GeometryBuilder):
                     raise CompileError("Cannot assign over geometry_builder binding")
             value = comp.compile(stmt.value)
             if not isinstance(value, TupleValue):
@@ -225,19 +225,19 @@ def compile_statement(
                 raise CompileError(f"Tuple unpacking expected {len(names)} values, got {len(value)}")
             for name, item in zip(names, value.values):
                 comp.consts.pop(name, None)
-                comp.vars[name] = item
+                comp.bind_runtime_value(name, item)
             ctx.auto_final_output = None
             return
         if not isinstance(assignment_target, ast.Name):
             raise CompileError("Only simple assignments like name = value are supported")
         target = assignment_target.id
         _check_runtime_binding(comp, target)
-        if isinstance(comp.vars.get(target), GeometryBuilder) and not _is_geometry_builder_constructor(stmt.value):
+        if isinstance(comp.legacy_structural_binding(target), GeometryBuilder) and not _is_geometry_builder_constructor(stmt.value):
             raise CompileError("Cannot assign over geometry_builder binding")
         if _is_geometry_builder_constructor(stmt.value):
             validate_geometry_builder_constructor(stmt.value)
             comp.consts.pop(target, None)
-            comp.vars[target] = GeometryBuilder(binding_name=target)
+            comp.bind_legacy_structural(target, GeometryBuilder(binding_name=target))
             ctx.auto_final_output = None
             return
         try:
@@ -249,13 +249,16 @@ def compile_statement(
                 comp.consts.pop(target, None)
             values = [comp.compile(e) for e in stmt.value.elts]
             reject_compile_time_object(values, "array literal")
-            comp.vars[target] = values
+            comp.bind_legacy_structural(target, values)
             ctx.auto_final_output = None
             return
         value = comp.compile(stmt.value)
         if isinstance(value, GeometryBuilder):
             reject_compile_time_object(value, "assignment")
-        comp.vars[target] = value
+        if isinstance(value, Value):
+            comp.bind_runtime_value(target, value)
+        else:
+            comp.bind_legacy_structural(target, value)
         if isinstance(value, (list, TupleValue)):
             ctx.auto_final_output = None
         else:
@@ -272,12 +275,12 @@ def compile_statement(
             raise CompileError("Only simple augmented assignments like name += value are supported")
         target = stmt.target.id
         _check_runtime_binding(comp, target)
-        if target not in comp.vars:
+        if comp.runtime_value(target) is None:
             raise CompileError(f"Unknown name for augmented assignment: {target}")
         bin_expr = ast.BinOp(left=ast.Name(id=target, ctx=ast.Load()), op=stmt.op, right=stmt.value)
         value = comp.compile(bin_expr)
         reject_compile_time_object(value, "augmented assignment")
-        comp.vars[target] = value
+        comp.bind_runtime_value(target, value)
         comp.consts.pop(target, None)
         if isinstance(value, list):
             ctx.auto_final_output = None
@@ -301,7 +304,7 @@ def compile_statement(
             if not isinstance(expr.func.value, ast.Name) or len(expr.args) != 1:
                 raise CompileError("append must look like items.append(value)")
             list_name = expr.func.value.id
-            arr = comp.vars.get(list_name)
+            arr = comp.legacy_structural_binding(list_name)
             if not isinstance(arr, list):
                 raise CompileError(f"{list_name} is not an array")
             value = comp.compile(expr.args[0])
@@ -339,8 +342,8 @@ def compile_statement(
             return
 
         iter_values = None
-        if isinstance(stmt.iter, ast.Name) and stmt.iter.id in comp.vars:
-            iter_values = _as_array_iter_value(comp.vars[stmt.iter.id])
+        if isinstance(stmt.iter, ast.Name):
+            iter_values = _as_array_iter_value(comp.legacy_structural_binding(stmt.iter.id))
         if iter_values is None:
             try:
                 raw_iter = _const_eval(stmt.iter, comp.consts)
@@ -352,25 +355,22 @@ def compile_statement(
             target_names = _target_names(stmt.target)
             for target_name in target_names:
                 _check_runtime_binding(comp, target_name)
-            old_values = {name: comp.vars.get(name) for name in target_names}
-            had_old = {name: name in comp.vars for name in target_names}
+            old_states = {name: comp._snapshot_binding_name_state(name) for name in target_names}
             try:
                 for item in iter_values:
-                    if len(target_names) == 1:
-                        comp.vars[target_names[0]] = item
-                    else:
-                        if not isinstance(item, list) or len(item) != len(target_names):
-                            raise CompileError("tuple unpack in for loop needs matching tuple/list item length")
-                        for name, val in zip(target_names, item):
-                            comp.vars[name] = val
+                    assignments = (item,) if len(target_names) == 1 else item
+                    if len(target_names) != 1 and (not isinstance(item, list) or len(item) != len(target_names)):
+                        raise CompileError("tuple unpack in for loop needs matching tuple/list item length")
+                    for name, val in zip(target_names, assignments):
+                        if isinstance(val, Value):
+                            comp.bind_runtime_value(name, val)
+                        else:
+                            comp.bind_legacy_structural(name, val)
                     for sub in stmt.body:
                         compile_statement(ctx, sub, idx, allow_final_expr=False, allow_interface_directives=False)
             finally:
                 for name in target_names:
-                    if had_old[name]:
-                        comp.vars[name] = old_values[name]
-                    else:
-                        comp.vars.pop(name, None)
+                    comp._restore_binding_name_state(name, old_states[name])
             return
 
         if isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id == "range":
@@ -399,26 +399,28 @@ def compile_statement(
             raise CompileError("geometry_builder mutations inside runtime if are supported only inside repeat_range(...)")
         cond = comp.compile(stmt.test)
         reject_compile_time_object(cond, "runtime if condition")
-        base_vars = dict(comp.vars)
+        base_state = comp._snapshot_binding_state()
+        base_vars = comp._binding_identity_view(base_state)
         saved_auto = ctx.auto_final_output
 
         def _compile_runtime_if_branch(branch_stmts):
             """Compile one dynamic if branch and report variables changed by the branch."""
-            comp.vars.clear(); comp.vars.update(base_vars)
+            comp._restore_binding_state(base_state)
             ctx.auto_final_output = saved_auto
             for sub in branch_stmts:
                 compile_statement(ctx, sub, idx, allow_final_expr=False, allow_interface_directives=False)
-            branch_vars = dict(comp.vars)
+            branch_state = comp._snapshot_binding_state()
+            branch_vars = comp._binding_identity_view(branch_state)
             changed = {
                 name for name, value in branch_vars.items()
                 if name not in base_vars or base_vars.get(name) is not value
             }
-            comp.vars.clear(); comp.vars.update(base_vars)
+            comp._restore_binding_state(base_state)
             ctx.auto_final_output = saved_auto
-            return branch_vars, changed
+            return branch_state, branch_vars, changed
 
-        true_vars, true_changed = _compile_runtime_if_branch(stmt.body)
-        false_vars, false_changed = _compile_runtime_if_branch(stmt.orelse)
+        true_state, true_vars, true_changed = _compile_runtime_if_branch(stmt.body)
+        false_state, false_vars, false_changed = _compile_runtime_if_branch(stmt.orelse)
         common_changed = sorted(true_changed & false_changed)
         if not common_changed:
             raise CompileError("runtime if branches must assign at least one common variable")
@@ -438,11 +440,11 @@ def compile_statement(
             if true_val.typ != false_val.typ:
                 raise CompileError(f"runtime if branch values for {target} have different types")
             merged = _switch(group, cond, false_val, true_val, 360 + idx * 160, -220 - idx * 70)
-            comp.vars[target] = merged
+            comp.bind_runtime_value(target, merged)
             last_target = target
 
         if last_target is not None:
-            ctx.auto_final_output = (last_target, comp.vars[last_target])
+            ctx.auto_final_output = (last_target, comp.runtime_value(last_target))
         return
 
     if call and call.func.id == "store":

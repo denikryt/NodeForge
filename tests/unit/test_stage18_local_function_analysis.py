@@ -21,10 +21,33 @@ class _CaptureComp:
     """Minimal compiler-like object consumed by _analyze_captures."""
 
     def __init__(self, labels, *, vars=None, consts=None, local_functions=None):
-        self.vars = dict(vars or {})
+        from NodeForge.compiler_identities import BindingId
+        from NodeForge.runtime_bindings import RuntimeBindingSymbol
+
+        self._values = dict(vars or {})
+        self._symbols = {
+            binding_name: RuntimeBindingSymbol(BindingId("capture-test", index), value.typ)
+            for index, (binding_name, value) in enumerate(self._values.items())
+        }
         self.consts = dict(consts or {})
         self.local_functions = dict(local_functions or {})
         self.reserved_name_labels = labels
+
+    def runtime_binding(self, name):
+        """Return frontend metadata for one test runtime capture."""
+        return self._symbols.get(name)
+
+    def runtime_value(self, name):
+        """Return the exact backend-like test object paired with a runtime symbol."""
+        return self._values.get(name)
+
+    def has_legacy_structural_binding(self, name):
+        """These capture fixtures contain no structural bindings."""
+        return False
+
+    def legacy_structural_binding(self, name):
+        """Return no structural fixture value."""
+        return None
 
 
 def test_stage18_allowed_compile_time_constants_are_not_hidden_captures(monkeypatch):

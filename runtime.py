@@ -138,7 +138,7 @@ class OrdinaryStateDescriptor:
         frame.current_values[self] = value
 
     def commit_after_repeat(self, comp, value):
-        comp.vars[self.display_name] = value
+        comp.bind_runtime_value(self.display_name, value)
 
     def repeat_socket_type(self):
         return _repeat_item_type_for_value(self.initial_value)
@@ -196,7 +196,7 @@ def _builder_method_info(comp, sub):
     if call.func.attr not in {"add", "extend"} or not isinstance(call.func.value, ast.Name):
         return None
     receiver = call.func.value.id
-    builder = comp.vars.get(receiver)
+    builder = comp.legacy_structural_binding(receiver)
     if not isinstance(builder, GeometryBuilder):
         raise CompileError("repeat_range builder method receiver must be a geometry_builder")
     return builder, call.func.attr, call
@@ -211,18 +211,27 @@ def _runtime_state_descriptors(comp, stmts):
 
     def add_ordinary(name):
         nonlocal order
-        if name in comp.vars and name not in ordinary_by_name:
-            value = comp.vars[name]
+        if name in ordinary_by_name:
+            order += 1
+            return
+        symbol = comp.runtime_binding(name)
+        if symbol is not None:
+            value = comp.runtime_value(name)
+        elif comp.has_legacy_structural_binding(name):
+            value = comp.legacy_structural_binding(name)
             if isinstance(value, GeometryBuilder):
                 raise CompileError("Cannot assign over geometry_builder binding")
-            reject_compile_time_object(value, "repeat_range state")
-            if isinstance(value, list) or not isinstance(value, Value):
-                raise CompileError("repeat_range state must be a node value")
-            if value.typ not in {TYPE_GEOMETRY, TYPE_VECTOR, TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_BUNDLE}:
-                raise CompileError(f"repeat_range state {name!r} has unsupported type {value.typ}")
-            desc = OrdinaryStateDescriptor(name, value, order)
-            ordinary_by_name[name] = desc
-            descriptors.append(desc)
+        else:
+            order += 1
+            return
+        reject_compile_time_object(value, "repeat_range state")
+        if isinstance(value, list) or not isinstance(value, Value):
+            raise CompileError("repeat_range state must be a node value")
+        if value.typ not in {TYPE_GEOMETRY, TYPE_VECTOR, TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_BUNDLE}:
+            raise CompileError(f"repeat_range state {name!r} has unsupported type {value.typ}")
+        desc = OrdinaryStateDescriptor(name, value, order)
+        ordinary_by_name[name] = desc
+        descriptors.append(desc)
         order += 1
 
     def add_builder(builder):
@@ -313,7 +322,7 @@ def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=No
     for desc in descriptors:
         group.links.new(desc.initial_value.socket, _socket_by_name(ri.inputs, desc.display_name))
 
-    old_vars = dict(comp.vars)
+    old_binding_state = comp._snapshot_binding_state()
     descriptor_by_name = {desc.display_name: desc for desc in descriptors if isinstance(desc, OrdinaryStateDescriptor)}
     descriptor_by_builder = {desc.builder: desc for desc in descriptors if isinstance(desc, BuilderStateDescriptor)}
     frame = RuntimeStateFrame(descriptors)
@@ -325,7 +334,7 @@ def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=No
     def set_comp_state_from_frame(active_frame):
         for desc in descriptors:
             if isinstance(desc, OrdinaryStateDescriptor):
-                comp.vars[desc.display_name] = desc.current_get(active_frame)
+                comp.bind_runtime_value(desc.display_name, desc.current_get(active_frame))
 
     def compatible_or_raise(desc, val):
         reject_compile_time_object(val, "repeat_range state")
@@ -368,7 +377,10 @@ def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=No
             desc = descriptor_by_name.get(name)
             if desc is not None:
                 desc.current_set(active_frame, item)
-            comp.vars[name] = item
+            if isinstance(item, Value):
+                comp.bind_runtime_value(name, item)
+            else:
+                comp.bind_legacy_structural(name, item)
             comp.consts.pop(name, None)
 
     def compile_builder_method(sub, active_frame):
@@ -415,30 +427,28 @@ def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=No
         reject_compile_time_object(cond, "repeat_range if condition")
         if cond.typ != TYPE_BOOL:
             raise CompileError("repeat_range if condition must be Bool")
-        base_vars = dict(comp.vars)
+        base_binding_state = comp._snapshot_binding_state()
         base_frame = active_frame.copy()
 
         def run_branch(branch):
             branch_frame = base_frame.copy()
-            comp.vars.clear()
-            comp.vars.update(base_vars)
+            comp._restore_binding_state(base_binding_state)
             set_comp_state_from_frame(branch_frame)
             set_active_frame(branch_frame)
             try:
                 for branch_sub in branch:
                     compile_runtime_stmt(branch_sub, branch_frame, depth + 1)
-                return branch_frame, dict(comp.vars)
+                return branch_frame, comp._snapshot_binding_state()
             finally:
-                comp.vars.clear()
-                comp.vars.update(base_vars)
+                comp._restore_binding_state(base_binding_state)
                 set_comp_state_from_frame(active_frame)
                 set_active_frame(active_frame)
 
-        true_frame, true_vars = run_branch(sub.body)
+        true_frame, true_binding_state = run_branch(sub.body)
         if sub.orelse:
-            false_frame, false_vars = run_branch(sub.orelse)
+            false_frame, false_binding_state = run_branch(sub.orelse)
         else:
-            false_frame, false_vars = base_frame.copy(), dict(base_vars)
+            false_frame, false_binding_state = base_frame.copy(), base_binding_state
 
         for desc in descriptors:
             base_val = desc.current_get(base_frame)
@@ -461,12 +471,11 @@ def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=No
             compatible_or_raise(desc, merged)
             desc.current_set(active_frame, merged)
             if isinstance(desc, OrdinaryStateDescriptor):
-                comp.vars[desc.display_name] = merged
+                comp.bind_runtime_value(desc.display_name, merged)
 
         # Restore branch-local temporaries from the parent frame and keep only
         # descriptor merges. New branch temporaries intentionally do not escape.
-        comp.vars.clear()
-        comp.vars.update(base_vars)
+        comp._restore_binding_state(base_binding_state)
         set_comp_state_from_frame(active_frame)
         set_active_frame(active_frame)
 
@@ -490,8 +499,7 @@ def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=No
             # Repeat's own Iteration socket. Preserve the exact branch-local
             # binding because compile_runtime_stmt() is also used inside runtime
             # if branch frames.
-            missing = object()
-            enclosing_index_value = comp.vars.get(index_name, missing) if index_name else missing
+            enclosing_index_state = comp._snapshot_binding_name_state(index_name) if index_name else None
             try:
                 nested_iterations = _compile_repeat_iteration_count(
                     group, comp, iterations_expr, x + 300 + depth * 140, y - 360 - depth * 220
@@ -505,8 +513,8 @@ def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=No
                     x=x + 360 + depth * 180,
                     y=y - 500 - depth * 280,
                 )
-                # The recursive Repeat commits ordinary variables to comp.vars. Mirror
-                # every state shared with this enclosing Repeat into its current frame.
+                # The recursive Repeat commits ordinary variables through Compiler binding APIs.
+                # Mirror every state shared with this enclosing Repeat into its current frame.
                 for desc in descriptors:
                     value = nested_results.get(desc.display_name)
                     if value is None:
@@ -514,13 +522,10 @@ def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=No
                     compatible_or_raise(desc, value)
                     desc.current_set(active_frame, value)
                     if isinstance(desc, OrdinaryStateDescriptor):
-                        comp.vars[desc.display_name] = value
+                        comp.bind_runtime_value(desc.display_name, value)
             finally:
                 if index_name:
-                    if enclosing_index_value is missing:
-                        comp.vars.pop(index_name, None)
-                    else:
-                        comp.vars[index_name] = enclosing_index_value
+                    comp._restore_binding_name_state(index_name, enclosing_index_state)
                 set_active_frame(active_frame)
             return
         raise CompileError("repeat_range body supports assignments, builder methods, if blocks, and nested repeat_range loops")
@@ -531,9 +536,9 @@ def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=No
             repeat_value = Value(_socket_by_name(ri.outputs, desc.display_name), desc.old_type)
             desc.current_set(frame, repeat_value)
             if isinstance(desc, OrdinaryStateDescriptor):
-                comp.vars[desc.display_name] = repeat_value
+                comp.bind_runtime_value(desc.display_name, repeat_value)
         if index_name:
-            comp.vars[index_name] = Value(ri.outputs[0], TYPE_INT)
+            comp.bind_runtime_value(index_name, Value(ri.outputs[0], TYPE_INT))
         for sub in body_stmts:
             compile_runtime_stmt(sub, frame)
         for desc in descriptors:
@@ -542,8 +547,7 @@ def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=No
             group.links.new(val.socket, _socket_by_name(ro.inputs, desc.display_name))
     finally:
         comp.pop_runtime_frame(frame)
-        comp.vars.clear()
-        comp.vars.update(old_vars)
+        comp._restore_binding_state(old_binding_state)
 
     result = {}
     for desc in descriptors:

@@ -103,50 +103,48 @@ def _cleanup_compiler_imports(before):
             sys.modules.pop(name, None)
 
 
-def test_compiler_runtime_binding_slots_and_snapshot_are_stable_and_coherent(monkeypatch):
+def test_compiler_runtime_binding_slots_are_frontend_owned_and_backend_coherent(monkeypatch):
     from NodeForge.values import Value
 
     module, before = _load_compiler_without_blender(monkeypatch)
     try:
         compiler = object.__new__(module.Compiler)
         compiler.function_group_owner_scope = _ROOT_OWNER
-        compiler._runtime_binding_ids = {}
-        compiler._next_runtime_binding_local_id = 0
+        compiler._runtime_bindings = module.FrontendRuntimeBindings(_ROOT_OWNER)
+        compiler._runtime_binding_values = {}
+        compiler._legacy_structural_bindings = {}
         first = Value(object(), NFType.FLOAT)
         second = Value(object(), NFType.VECTOR)
-        compiler.vars = {"a": first, "legacy": object()}
 
-        first_id = compiler.runtime_binding_id("a")
-        snapshot = compiler.snapshot_runtime_bindings()
-        assert snapshot.semantic_bindings["a"].binding_id == first_id
-        assert snapshot.semantic_bindings["a"].typ is NFType.FLOAT
-        assert snapshot.backend_values[first_id] is first
-        assert "legacy" not in snapshot.semantic_bindings
+        first_symbol = compiler.bind_runtime_value("a", first)
+        first_id = first_symbol.binding_id
+        snapshot = compiler.runtime_bindings_snapshot()
+        backend = compiler.backend_runtime_values_snapshot()
+        assert snapshot["a"].binding_id == first_id
+        assert snapshot["a"].typ is NFType.FLOAT
+        assert backend[first_id] is first
         with pytest.raises(TypeError):
-            snapshot.semantic_bindings["b"] = snapshot.semantic_bindings["a"]
+            snapshot["b"] = snapshot["a"]
         with pytest.raises(TypeError):
-            snapshot.backend_values[first_id] = second
+            backend[first_id] = second
 
-        compiler.vars["a"] = second
-        assert compiler.runtime_binding_id("a") == first_id
-        rebound = compiler.snapshot_runtime_bindings()
-        assert rebound.semantic_bindings["a"].binding_id == first_id
-        assert rebound.semantic_bindings["a"].typ is NFType.VECTOR
-        assert rebound.backend_values[first_id] is second
+        rebound = compiler.bind_runtime_value("a", second)
+        assert rebound.binding_id == first_id
+        assert rebound.typ is NFType.VECTOR
+        assert compiler.runtime_value("a") is second
 
-        compiler.vars["a"] = object()
-        hidden = compiler.snapshot_runtime_bindings()
-        assert "a" not in hidden.semantic_bindings
-        assert first_id not in hidden.backend_values
+        compiler.bind_legacy_structural("a", [])
+        assert compiler.runtime_binding("a") is None
+        assert compiler.legacy_structural_binding("a") == []
 
-        compiler.vars["a"] = first
-        restored = compiler.snapshot_runtime_bindings()
-        assert restored.semantic_bindings["a"].binding_id == first_id
-        assert restored.backend_values[first_id] is first
+        restored = compiler.bind_runtime_value("a", first)
+        assert restored.binding_id == first_id
+        assert compiler.runtime_value("a") is first
+        assert not compiler.has_legacy_structural_binding("a")
 
-        other_id = compiler.runtime_binding_id("b")
-        assert other_id != first_id
-        assert other_id.owner_scope == _ROOT_OWNER
+        other = compiler.bind_runtime_value("b", first)
+        assert other.binding_id != first_id
+        assert other.binding_id.owner_scope == _ROOT_OWNER
         assert BindingId(function_group_owner_scope("ROOT", "other"), first_id.local_id) != first_id
     finally:
         _cleanup_compiler_imports(before)

@@ -260,7 +260,6 @@ def test_successful_semantic_analysis_commits_to_ir_backend_without_legacy_retry
         monkeypatch.setattr(expression_compiler, "_math", legacy_math)
 
         comp = SimpleNamespace(
-            vars={},
             consts={},
             reserved_name_labels={},
             group=object(),
@@ -268,10 +267,9 @@ def test_successful_semantic_analysis_commits_to_ir_backend_without_legacy_retry
             local_functions={},
             backend_builtins={},
             imported_library_functions={},
-            snapshot_runtime_bindings=lambda: SimpleNamespace(
-                semantic_bindings=MappingProxyType({}),
-                backend_values=MappingProxyType({}),
-            ),
+            runtime_bindings_snapshot=lambda: MappingProxyType({}),
+            backend_runtime_values_snapshot=lambda: MappingProxyType({}),
+            legacy_structural_binding_names_snapshot=lambda: frozenset(),
         )
         with pytest.raises(CompileError) as exc_info:
             expression_compiler.compile_expr(comp, expr)

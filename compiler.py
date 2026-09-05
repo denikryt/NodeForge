@@ -9,10 +9,11 @@ from typing import Mapping
 import bpy
 
 from .constants import TYPE_FLOAT, TYPE_INT, TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
+from .nf_types import NFType
 from .errors import CompileError
 from .compiler_identities import BindingId, CallSiteId, FunctionId
 from .semantic_ir import IRFunctionMaterialization, IRFunctionMaterializationMode
-from .values import Value, make_value
+from .values import TupleValue, Value, make_value
 from .nodes import (
     _new_node,
     _value,
@@ -45,7 +46,7 @@ from .library import (
     update_materialized_library_entry_group_for_record,
 )
 from .statements import _unique_output_name
-from .compile_time import reject_compile_time_object
+from .compile_time import CompileTimeObject, reject_compile_time_object
 from . import expression_compiler
 from .builtins import registry as builtin_registry
 from .function_instances import (
@@ -63,7 +64,7 @@ from .function_instances import (
 )
 
 from .statement_compiler import GroupBuildContext, compile_statements
-from .semantic_analysis import RuntimeBindingSymbol
+from .runtime_bindings import FrontendRuntimeBindings, RuntimeBindingSymbol
 from .blender_group_backend import BlenderGroupBackend, BlenderGroupBuildTransaction
 from .resolved_environment import ResolvedEnvironment, resolve_environment
 
@@ -94,16 +95,28 @@ class LibraryBinding:
 
 
 @dataclass(frozen=True)
-class RuntimeBindingSnapshot:
-    """Freeze coherent frontend/backend views of current runtime Value bindings."""
+class _CompilerBindingState:
+    """Shallow coherent snapshot of active compiler binding maps."""
 
-    semantic_bindings: Mapping[str, RuntimeBindingSymbol]
-    backend_values: Mapping[BindingId, Value]
+    runtime_symbols: Mapping[str, RuntimeBindingSymbol]
+    runtime_values: Mapping[BindingId, Value]
+    legacy_structural: Mapping[str, object]
 
     def __post_init__(self):
-        """Freeze both maps while retaining exact backend Value object identity."""
-        object.__setattr__(self, "semantic_bindings", MappingProxyType(dict(self.semantic_bindings)))
-        object.__setattr__(self, "backend_values", MappingProxyType(dict(self.backend_values)))
+        """Detach the three maps while preserving contained object identity."""
+        object.__setattr__(self, "runtime_symbols", MappingProxyType(dict(self.runtime_symbols)))
+        object.__setattr__(self, "runtime_values", MappingProxyType(dict(self.runtime_values)))
+        object.__setattr__(self, "legacy_structural", MappingProxyType(dict(self.legacy_structural)))
+
+
+@dataclass(frozen=True)
+class _CompilerNameBindingState:
+    """Capture one source name for temporary lexical shadowing and restoration."""
+
+    runtime_symbol: RuntimeBindingSymbol | None
+    runtime_value: Value | None
+    legacy_structural: object | None
+    had_legacy_structural: bool
 
 
 class _ResolvedEnvironmentSlot:
@@ -156,7 +169,6 @@ class Compiler:
         """Initialize state shared by expression, statement, and call compilers."""
         self.group = group
         self.group_input = group_input
-        self.vars = {}
         self.consts = consts if consts is not None else {}
         self.local_functions = local_functions or {}
         self.local_group_cache = local_group_cache if local_group_cache is not None else {}
@@ -205,8 +217,22 @@ class Compiler:
         self.function_compilation_trace = function_compilation_trace or FunctionCompilationTrace()
         self.reserved_name_labels = dict(reserved_name_labels or {})
         self._function_occurrence_counts = {}
-        self._runtime_binding_ids = {}
-        self._next_runtime_binding_local_id = 0
+        self._runtime_bindings = FrontendRuntimeBindings(self.function_group_owner_scope)
+        # FRONTEND_RUNTIME_BINDING_BACKEND_VALUE_BRIDGE: Frontend runtime bindings now own
+        # source-name identity and NFType, but legacy statement/runtime lowering still needs the
+        # currently materialized Blender Value between expression compilations. Keep those backend
+        # Values only in a BindingId-keyed map; never derive frontend symbols from this map and never
+        # expose it to semantic analysis. Remove this bridge when statement/function-body IR makes
+        # backend Value materialization local to Blender lowering rather than Compiler session state.
+        self._runtime_binding_values: dict[BindingId, Value] = {}
+        # FRONTEND_RUNTIME_BINDING_STRUCTURAL_COMPAT: Ordinary runtime Values no longer live in
+        # source-name storage, but CompileTimeObject instances, arrays, and TupleValue still lack one
+        # complete frontend-owned binding representation. Keep only those protocol-approved non-Value
+        # categories in this private compatibility store; Value/ObjectValue insertion is forbidden and
+        # all access outside Compiler goes through the compiler-level structural binding API. Remove
+        # this store when structural/compile-time binding semantics are represented by the frontend and
+        # no backend/compiler container is required for source-name resolution.
+        self._legacy_structural_bindings: dict[str, object] = {}
         self._interface_inputs_by_identifier = {}
         self._interface_inputs_by_socket_pointer = {}
         self._panel_input_memberships = {}
@@ -297,32 +323,178 @@ class Compiler:
             return ("identifier", identifier)
         return ("interface", self._rna_pointer(iface_item))
 
-    def runtime_binding_id(self, name: str) -> BindingId:
-        """Return the stable compiler-local identity for one source binding slot."""
-        binding_id = self._runtime_binding_ids.get(name)
-        if binding_id is None:
-            binding_id = BindingId(self.function_group_owner_scope, self._next_runtime_binding_local_id)
-            self._next_runtime_binding_local_id += 1
-            self._runtime_binding_ids[name] = binding_id
-        return binding_id
+    def runtime_binding(self, name: str) -> RuntimeBindingSymbol | None:
+        """Return active frontend metadata for one ordinary runtime source binding."""
+        return self._runtime_bindings.get(name)
 
-    def snapshot_runtime_bindings(self) -> RuntimeBindingSnapshot:
-        """Snapshot current runtime Values into coherent semantic/backend identity maps."""
-        semantic_bindings = {}
-        backend_values = {}
-        # CANONICAL_BINDING_ID_MIGRATION: comp.vars remains the legacy heterogeneous
-        # source-name store while statement, loop, call, and compile-time binding migration
-        # is incomplete. Project current Value entries into stable BindingId-based semantic
-        # and backend snapshots here without changing comp.vars ownership. Remove this bridge
-        # when runtime bindings are stored canonically by BindingId and source names exist
-        # only in the frontend symbol table.
-        for name, value in self.vars.items():
+    def runtime_bindings_snapshot(self) -> Mapping[str, RuntimeBindingSymbol]:
+        """Return a detached read-only snapshot of active frontend runtime bindings."""
+        return self._runtime_bindings.snapshot()
+
+    def runtime_value(self, name: str) -> Value | None:
+        """Return the current backend materialization for an active runtime source binding."""
+        symbol = self._runtime_bindings.get(name)
+        if symbol is None:
+            return None
+        value = self._runtime_binding_values.get(symbol.binding_id)
+        if value is None:
+            raise CompileError(f"Internal error: runtime binding {name!r} has no backend materialization")
+        if value.typ is not symbol.typ:
+            raise CompileError(f"Internal error: runtime binding {name!r} type/materialization mismatch")
+        return value
+
+    def backend_runtime_values_snapshot(self) -> Mapping[BindingId, Value]:
+        """Return a detached read-only snapshot of current backend runtime materializations."""
+        self._validate_binding_state()
+        return MappingProxyType(dict(self._runtime_binding_values))
+
+    def bind_runtime_value(self, name: str, value: Value) -> RuntimeBindingSymbol:
+        """Atomically publish one ordinary runtime Value under compiler-owned frontend identity."""
+        if not isinstance(value, Value):
+            raise TypeError("runtime binding value must be a Value")
+        if not isinstance(value.typ, NFType):
+            raise TypeError("runtime binding Value.typ must be an NFType")
+        self._validate_binding_state()
+        symbol = self._runtime_bindings.bind(name, value.typ)
+        self._runtime_binding_values[symbol.binding_id] = value
+        self._legacy_structural_bindings.pop(name, None)
+        self._validate_binding_state()
+        return symbol
+
+    def unbind_runtime_binding(self, name: str) -> None:
+        """Deactivate one runtime binding while retaining its historical BindingId reservation."""
+        symbol = self._runtime_bindings.get(name)
+        if symbol is not None:
+            self._runtime_binding_values.pop(symbol.binding_id, None)
+            self._runtime_bindings.unbind(name)
+
+    def legacy_structural_binding(self, name: str):
+        """Return one active temporary structural/compiler-only source binding."""
+        return self._legacy_structural_bindings.get(name)
+
+    def has_legacy_structural_binding(self, name: str) -> bool:
+        """Return whether a source name currently owns a legacy structural binding."""
+        return name in self._legacy_structural_bindings
+
+    def legacy_structural_binding_names_snapshot(self) -> frozenset[str]:
+        """Return the active structural names without exposing compiler/backend objects."""
+        return frozenset(self._legacy_structural_bindings)
+
+    @staticmethod
+    def _validate_legacy_structural_candidate(value) -> None:
+        """Reject ordinary runtime Values and unknown categories before structural mutation."""
+        if isinstance(value, Value):
+            raise TypeError("legacy structural binding cannot contain Value/ObjectValue")
+        if not isinstance(value, (CompileTimeObject, list, TupleValue)):
+            raise TypeError(f"unsupported legacy structural binding category: {type(value).__name__}")
+
+    def bind_legacy_structural(self, name: str, value) -> None:
+        """Atomically publish one characterized structural binding and deactivate runtime ownership."""
+        if not isinstance(name, str) or not name:
+            raise ValueError("legacy structural binding name must be a non-empty string")
+        self._validate_legacy_structural_candidate(value)
+        self._validate_binding_state()
+        self.unbind_runtime_binding(name)
+        self._legacy_structural_bindings[name] = value
+        self._validate_binding_state()
+
+    def unbind_legacy_structural(self, name: str) -> None:
+        """Remove one active legacy structural binding."""
+        self._legacy_structural_bindings.pop(name, None)
+
+    def _validate_binding_state_candidate(self, runtime_symbols, runtime_values, legacy_structural) -> None:
+        """Validate a complete candidate binding state without mutating current state."""
+        self._runtime_bindings.validate_active_state(runtime_symbols)
+        if not isinstance(runtime_values, Mapping) or not isinstance(legacy_structural, Mapping):
+            raise TypeError("compiler binding state maps are invalid")
+        active_ids = set()
+        for name, symbol in runtime_symbols.items():
+            if name in legacy_structural:
+                raise CompileError(f"Internal error: binding {name!r} is both runtime and structural")
+            value = runtime_values.get(symbol.binding_id)
             if not isinstance(value, Value):
-                continue
-            binding_id = self.runtime_binding_id(name)
-            semantic_bindings[name] = RuntimeBindingSymbol(binding_id, value.typ)
-            backend_values[binding_id] = value
-        return RuntimeBindingSnapshot(semantic_bindings, backend_values)
+                raise CompileError(f"Internal error: runtime binding {name!r} has no backend Value")
+            if value.typ is not symbol.typ:
+                raise CompileError(f"Internal error: runtime binding {name!r} type/materialization mismatch")
+            active_ids.add(symbol.binding_id)
+        if set(runtime_values) != active_ids:
+            raise CompileError("Internal error: backend runtime binding map does not match active frontend bindings")
+        if not all(isinstance(key, BindingId) for key in runtime_values):
+            raise CompileError("Internal error: backend runtime binding map contains a non-BindingId key")
+        for value in legacy_structural.values():
+            self._validate_legacy_structural_candidate(value)
+
+    def _validate_binding_state(self) -> None:
+        """Verify active frontend, backend, and structural binding ownership is coherent."""
+        self._validate_binding_state_candidate(
+            self._runtime_bindings.snapshot(),
+            self._runtime_binding_values,
+            self._legacy_structural_bindings,
+        )
+
+    # FRONTEND_RUNTIME_BINDING_STATE_CHECKPOINT_COMPAT: Legacy statement/runtime lowering
+    # speculatively compiles branches and nested loops, so a checkpoint must still pair frontend
+    # binding symbols with their current backend Value materializations and legacy structural
+    # bindings. This is a compiler-control-flow compatibility mechanism, not Semantic IR state.
+    # Remove it when statement/control-flow IR represents branch and loop state before Blender
+    # materialization and speculative lowering no longer mutates Compiler binding state.
+    def _snapshot_binding_state(self) -> _CompilerBindingState:
+        """Capture a detached shallow checkpoint of all active binding maps."""
+        self._validate_binding_state()
+        return _CompilerBindingState(
+            self._runtime_bindings.snapshot(),
+            self._runtime_binding_values,
+            self._legacy_structural_bindings,
+        )
+
+    def _restore_binding_state(self, state: _CompilerBindingState) -> None:
+        """Restore one validated checkpoint without rewinding historical BindingId allocation."""
+        if not isinstance(state, _CompilerBindingState):
+            raise TypeError("state must be a _CompilerBindingState")
+        self._validate_binding_state_candidate(
+            state.runtime_symbols, state.runtime_values, state.legacy_structural
+        )
+        self._runtime_bindings.restore_active_state(state.runtime_symbols)
+        self._runtime_binding_values = dict(state.runtime_values)
+        self._legacy_structural_bindings = dict(state.legacy_structural)
+        self._validate_binding_state()
+
+    def _snapshot_binding_name_state(self, name: str) -> _CompilerNameBindingState:
+        """Capture one source name for temporary lexical shadowing."""
+        symbol = self.runtime_binding(name)
+        value = self.runtime_value(name) if symbol is not None else None
+        had_structural = self.has_legacy_structural_binding(name)
+        structural = self.legacy_structural_binding(name) if had_structural else None
+        return _CompilerNameBindingState(symbol, value, structural, had_structural)
+
+    def _restore_binding_name_state(self, name: str, state: _CompilerNameBindingState) -> None:
+        """Restore one source name while retaining all historical BindingId reservations."""
+        if not isinstance(state, _CompilerNameBindingState):
+            raise TypeError("state must be a _CompilerNameBindingState")
+        if state.runtime_symbol is not None:
+            if state.runtime_value is None or state.runtime_value.typ is not state.runtime_symbol.typ:
+                raise CompileError("Internal error: invalid saved runtime binding state")
+            self._runtime_bindings.validate_active_state({name: state.runtime_symbol})
+        elif state.had_legacy_structural:
+            self._validate_legacy_structural_candidate(state.legacy_structural)
+        self.unbind_runtime_binding(name)
+        self.unbind_legacy_structural(name)
+        if state.runtime_symbol is not None:
+            restored = self._runtime_bindings.bind(name, state.runtime_symbol.typ)
+            self._runtime_binding_values[restored.binding_id] = state.runtime_value
+        elif state.had_legacy_structural:
+            self._legacy_structural_bindings[name] = state.legacy_structural
+        self._validate_binding_state()
+
+    def _binding_identity_view(self, state: _CompilerBindingState | None = None) -> Mapping[str, object]:
+        """Return source names mapped to current backend/structural object identity for branch diffing."""
+        if state is None:
+            state = self._snapshot_binding_state()
+        view = {}
+        for name, symbol in state.runtime_symbols.items():
+            view[name] = state.runtime_values[symbol.binding_id]
+        view.update(state.legacy_structural)
+        return MappingProxyType(view)
 
     def resolve_reusable_function_materialization(
         self,
@@ -379,8 +551,13 @@ class Compiler:
 
     def _create_input_socket_value(self, name, typ, default=None):
         """Create or reuse a group input socket and expose it as a Value."""
-        if name in self.vars:
-            existing = self.vars[name]
+        existing = self.runtime_value(name)
+        if existing is not None:
+            if existing.typ != typ:
+                raise CompileError(f'Input "{name}" already exists with another type')
+            return existing
+        if self.has_legacy_structural_binding(name):
+            existing = self.legacy_structural_binding(name)
             if existing.typ != typ:
                 raise CompileError(f'Input "{name}" already exists with another type')
             return existing
@@ -395,7 +572,7 @@ class Compiler:
             raise CompileError(f'Internal error: input socket "{name}" was not created')
         self._register_interface_input(socket, iface)
         val = make_value(socket, typ)
-        self.vars[name] = val
+        self.bind_runtime_value(name, val)
         return val
 
     def _const_eval_macro_arg(self, expr):
@@ -727,7 +904,7 @@ def _populate_group(
             if iface_item is None:
                 raise CompileError(f'Internal error: implicit input socket "{socket.name}" has no interface item')
             comp._register_interface_input(socket, iface_item)
-            comp.vars[socket.name] = make_value(socket, input_types.get(socket.name, TYPE_FLOAT))
+            comp.bind_runtime_value(socket.name, make_value(socket, input_types.get(socket.name, TYPE_FLOAT)))
 
     geometry_socket = None
     if geometry_mode:
@@ -846,7 +1023,6 @@ def update_expression_group(group, source: str):
 __all__ = [
     "CompileError",
     "Compiler",
-    "RuntimeBindingSnapshot",
     "FunctionGroupBuildTransaction",
     "LocalHelperBuildTransaction",
     "create_expression_group",

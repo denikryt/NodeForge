@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import sys
 import types
+from types import MappingProxyType
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -399,9 +400,10 @@ def test_expression_dispatch_passes_exact_resolved_system_binding(monkeypatch):
         local_functions={},
         backend_builtins={},
         consts={},
-        vars={},
         reserved_name_labels={},
-        snapshot_runtime_bindings=lambda: compiler.RuntimeBindingSnapshot({}, {}),
+        runtime_bindings_snapshot=lambda: MappingProxyType({}),
+        backend_runtime_values_snapshot=lambda: MappingProxyType({}),
+        legacy_structural_binding_names_snapshot=lambda: frozenset(),
     )
     observed = {}
 

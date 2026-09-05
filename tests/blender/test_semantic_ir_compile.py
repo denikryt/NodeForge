@@ -692,8 +692,18 @@ output("Geometry", result)
     check(_nodes(group, "GeometryNodeMeshCube"), "GeometryBuilder legacy expression behavior changed")
     builder_envs = [env for env in environments if "builder" in env.legacy_binding_names]
     check(builder_envs, "GeometryBuilder name was not exported as a known legacy binding")
+    from NodeForge.runtime_bindings import RuntimeBindingSymbol
+
     for environment in builder_envs:
         check("builder" not in environment.runtime_bindings, "GeometryBuilder leaked into runtime types")
+        check(
+            all(isinstance(symbol, RuntimeBindingSymbol) for symbol in environment.runtime_bindings.values()),
+            "semantic runtime environment carried a backend Value instead of frontend binding metadata",
+        )
+        check(
+            all(not hasattr(symbol, "socket") for symbol in environment.runtime_bindings.values()),
+            "semantic runtime binding metadata leaked a Blender socket",
+        )
         check(all(isinstance(name, str) for name in environment.legacy_binding_names), "legacy snapshot carried non-name values")
 
 

@@ -24,25 +24,13 @@ from .blender_ir_lowering import BlenderIRLoweringContext, lower_expression as l
 
 def compile_expr(comp, expr, depth=0):
     """Compile one AST expression into the active node group context."""
-    # SEMANTIC_IR_VALUE_MIGRATION: comp.vars still stores legacy socket-bound Value
-    # objects while statement and call migration is incomplete. Snapshot those Values
-    # only at the frontend/backend boundary: semantic analysis receives detached types,
-    # while Blender lowering receives the backend Value map. Remove this bridge when
-    # runtime bindings use canonical compiler-owned references and comp.vars no longer
-    # owns backend sockets.
-    runtime_binding_snapshot = comp.snapshot_runtime_bindings()
-    # SEMANTIC_ANALYSIS_LEGACY_BINDING_MIGRATION: comp.vars also contains non-Value
-    # compiler-side bindings such as GeometryBuilder, NodeResult, TupleValue, and
-    # list-backed legacy values. Export only their names so semantic analysis keeps
-    # comp.vars name precedence and returns unsupported instead of misdiagnosing an
-    # existing legacy binding as unknown or falling through to consts. Remove this
-    # bridge when every compiler binding has frontend-owned semantic metadata or its
-    # expression semantics have been migrated into semantic analysis.
-    legacy_binding_names = frozenset(
-        name
-        for name, value in comp.vars.items()
-        if not isinstance(value, Value)
-    )
+    runtime_bindings = comp.runtime_bindings_snapshot()
+    # FRONTEND_RUNTIME_BINDING_STRUCTURAL_FALLBACK: Runtime Value bindings are now frontend-owned,
+    # but structural/compiler-only bindings still use the explicit compatibility store. Export
+    # only their names so semantic analysis preserves source-name precedence and returns the
+    # existing whole-expression fallback without receiving backend/compiler objects. Remove this
+    # fallback when every structural binding category has frontend-owned semantic metadata.
+    legacy_binding_names = comp.legacy_structural_binding_names_snapshot()
     # COMPLETE_EXPRESSION_IR_CONSTANT_MIGRATION: comp.consts is still legacy compiler-owned
     # compile-time storage. Normalize supported runtime-materializable constants into
     # detached immutable semantic records, plus a detached semantics-preserving const-eval copy
@@ -57,7 +45,7 @@ def compile_expr(comp, expr, depth=0):
         imported_functions=comp.imported_library_functions,
     )
     environment = SemanticEnvironment(
-        runtime_bindings=runtime_binding_snapshot.semantic_bindings,
+        runtime_bindings=runtime_bindings,
         legacy_binding_names=legacy_binding_names,
         constants=semantic_constants,
         const_eval_values=const_eval_values,
@@ -78,7 +66,7 @@ def compile_expr(comp, expr, depth=0):
         ir = lower_analyzed_expression(expr, analysis)
         context = BlenderIRLoweringContext(
             group=comp.group,
-            runtime_bindings=runtime_binding_snapshot.backend_values,
+            runtime_bindings=comp.backend_runtime_values_snapshot(),
         )
         return lower_ir_expression(context, ir, depth)
 
@@ -96,8 +84,11 @@ def compile_expr(comp, expr, depth=0):
     if isinstance(expr, ast.Name):
         if expr.id in TYPE_TOKEN_NAMES:
             raise CompileError(f"Type token {expr.id} may only be used in node(...) type declarations")
-        if expr.id in comp.vars:
-            return comp.vars[expr.id]
+        runtime_value = comp.runtime_value(expr.id)
+        if runtime_value is not None:
+            return runtime_value
+        if comp.has_legacy_structural_binding(expr.id):
+            return comp.legacy_structural_binding(expr.id)
         if expr.id in comp.consts:
             return comp._compile_const_value(comp.consts[expr.id], x, y)
         if expr.id in _ALLOWED_CONSTS:

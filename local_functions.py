@@ -354,13 +354,21 @@ def _resolve_direct_capture(comp, fn, capture_name):
     reserved = _reserved_capture_label(comp, capture_name)
     if reserved is not None:
         raise CompileError(f"Local function {fn.name}() cannot capture {capture_name}: name is {reserved}")
-    if capture_name in comp.vars:
-        value = comp.vars[capture_name]
+    symbol = comp.runtime_binding(capture_name)
+    if symbol is not None:
+        value = comp.runtime_value(capture_name)
+        if value is None or value.typ is not symbol.typ:
+            raise CompileError(
+                f"Internal error: local function capture {capture_name!r} frontend/backend type mismatch"
+            )
+        return (capture_name, value, True, symbol.typ)
+    if comp.has_legacy_structural_binding(capture_name):
+        value = comp.legacy_structural_binding(capture_name)
         reject_compile_time_object(value, f"local function {fn.name}() capture {capture_name}")
         reject_tuple_value(value, f"local function {fn.name}() capture {capture_name}")
         if isinstance(value, list):
             raise CompileError(f"Local function {fn.name}() cannot capture {capture_name}: arrays are not supported")
-        return (capture_name, value, True, value.typ)
+        raise CompileError(f"Local function {fn.name}() cannot capture {capture_name}: unsupported binding")
     if capture_name in comp.consts:
         value = comp.consts[capture_name]
         try:

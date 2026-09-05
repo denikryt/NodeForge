@@ -187,3 +187,8 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.50.17
 
 - Added compiler-owned semantic callable resolution and typed Call IR for stateless core expression calls, with canonical imported identity validated before native module execution and explicit whole-expression/stateful/dynamic compatibility fallbacks preserving existing public DSL behavior.
+## 0.50.18
+
+- Moved ordinary runtime source bindings to compiler-owned `BindingId`/`NFType` metadata with separate Blender `Value` materializations, preserving existing DSL behavior while removing the heterogeneous `Compiler.vars` binding store.
+- Preserved package-system compile-time state assignment by accepting the generic `CompileTimeObject` extension protocol in the temporary structural binding store, with resolved-system regression coverage.
+- Fixed `repeat_range()` local multi-return assignment so temporary `TupleValue` bindings remain structural compiler state instead of being routed through ordinary runtime `Value` bindings.

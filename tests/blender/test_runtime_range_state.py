@@ -185,7 +185,7 @@ def test_repeat_state_assignment_allows_explicit_item_named_like_removed_default
     try:
         group_input = group.nodes.new("NodeGroupInput")
         comp = Compiler(group, group_input, consts={})
-        comp.vars["Geometry"] = _value(group, 0, 0, 0)
+        comp.bind_runtime_value("Geometry", _value(group, 0, 0, 0))
         iterations = _int_value(group, 3, 0, -80)
         body = ast.parse("Geometry = 1").body
 

@@ -46,6 +46,7 @@ from .constants import (
 from .consteval import ConstVector, _const_eval, _is_const_vector
 from .errors import CompileError
 from .nf_types import NFType, NUMERIC_NF_TYPES
+from .runtime_bindings import RuntimeBindingSymbol
 
 
 _RESERVED_VALUE_LABELS = {
@@ -65,19 +66,6 @@ _SWITCH_TYPES = {
     TYPE_STRING,
     TYPE_BUNDLE,
 }
-
-
-@dataclass(frozen=True)
-class RuntimeBindingSymbol:
-    """Frontend metadata for one resolved runtime binding slot."""
-
-    binding_id: BindingId
-    typ: NFType
-
-    def __post_init__(self):
-        """Reject non-canonical runtime type identities."""
-        if not isinstance(self.typ, NFType):
-            raise TypeError("typ must be an NFType")
 
 
 @dataclass(frozen=True)
@@ -692,10 +680,10 @@ def analyze_expression(expr, environment):
                 if name in STATEFUL_FALLBACK_BUILTIN_NAMES:
                     # SEMANTIC_CALL_IR_STATEFUL_BUILTIN_FALLBACK: grid/grid_uv and input_* still depend on
                     # compilation-scoped mutable Compiler state across expression boundaries: grid UV context,
-                    # interface socket reuse/registration/default metadata, and publication into comp.vars.
-                    # Keep these calls on legacy realization rather than introducing a temporary lowering
-                    # session or passing Compiler through the IR backend boundary. Remove this fallback when
-                    # frontend-owned runtime bindings/session state permanently owns those effects.
+                    # interface socket reuse/registration/default metadata, and publication into compiler-owned
+                    # runtime binding/session state. Keep these calls on legacy realization rather than introducing
+                    # a temporary lowering session or passing Compiler through the IR backend boundary. Remove this
+                    # fallback when function-body IR permanently owns those stateful effects before backend lowering.
                     return UNSUPPORTED
                 if name not in IR_CAPABLE_BUILTIN_NAMES:
                     raise CompileError(f"Internal error: unclassified callable builtin {name!r}")
