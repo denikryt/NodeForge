@@ -289,6 +289,7 @@ class FunctionMaterializer:
             "function_group_transaction": transaction,
             "function_group_owner_scope": local_owner,
             "function_definition_owner": local_owner,
+            "function_definition_identity": spec.function_id.stable_key(),
             "function_compilation_trace": trace,
         }
         def finalize_before_commit(group):

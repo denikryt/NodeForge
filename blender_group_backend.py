@@ -17,7 +17,11 @@ import bpy
 
 from .errors import CompileError
 from .storage import _reset_node_group
-from .update import _capture_group_external_state, _restore_group_external_state
+from .update import (
+    _capture_group_external_state,
+    _restore_group_external_state,
+    _validate_group_external_state_for_replacement,
+)
 from . import generated_resources
 from .blender_group_authority import (
     BACKEND_PRIVATE_GROUP_PROPERTIES,
@@ -1068,6 +1072,7 @@ class BlenderGroupBackend:
 
             backup = self._new_private_backup(existing_group, name)
             external_state = _capture_group_external_state(existing_group)
+            _validate_group_external_state_for_replacement(replacement, external_state)
             original_name = getattr(existing_group, "name", None)
             try:
                 _copy_group_contents(replacement, existing_group, copy_role="cutover")

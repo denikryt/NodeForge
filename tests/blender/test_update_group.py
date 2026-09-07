@@ -298,7 +298,10 @@ output("Result", x + y + z + w)
         for endpoint in (link["from"], link["to"])
         if endpoint.get("kind") == "group_node_socket"
     )
-    affected_endpoint["socket_key"] = ("INPUT", "Missing", "NodeSocketFloat", 0)
+    if affected_endpoint.get("input_reference") is not None:
+        affected_endpoint["input_reference"]["old_socket_key"] = ("INPUT", "Missing", "NodeSocketFloat", 0)
+    else:
+        affected_endpoint["socket_key"] = ("INPUT", "Missing", "NodeSocketFloat", 0)
     try:
         compiler._restore_group_external_state(group, strict_state, strict=True)
     except Exception:
@@ -651,3 +654,209 @@ def test_library_reload_preserves_all_instance_values_defaults_and_links():
             bpy.data.node_groups.remove(second_wrapper, do_unlink=True)
         if group is not None and bpy.data.node_groups.get(group.name) is group:
             bpy.data.node_groups.remove(group, do_unlink=True)
+
+
+def test_duplicate_input_update_preserves_live_state_by_declaration_identity():
+    """Insertion/reorder/display rename cannot retarget state between duplicate input labels."""
+    before = '''
+first = input_float("Scale", default=1.0)
+second = input_float("Scale", default=7.0)
+output("Second", second)
+'''
+    after = '''
+inserted = input_float("Scale", default=0.5)
+second = input_float("Renamed", default=8.0)
+first = input_float("Scale", default=2.0)
+output("Second", second)
+'''
+    group = compile_group(before, "NFTest_input_declaration_identity_update")
+    wrapper = bpy.data.node_groups.new("NFTest_input_declaration_identity_wrapper", "GeometryNodeTree")
+    wrapper.interface.new_socket(name="Driver", in_out="INPUT", socket_type="NodeSocketFloat")
+    wrapper_input = wrapper.nodes.new("NodeGroupInput")
+    group_node = wrapper.nodes.new("GeometryNodeGroup")
+    group_node.node_tree = group
+    compiler._apply_group_defaults_to_node(group_node)
+    old_scale = [socket for socket in group_node.inputs if socket.name == "Scale"]
+    check(len(old_scale) == 2, "fixture did not create duplicate Scale sockets")
+    old_scale[1].default_value = 9.0
+    wrapper.links.new(wrapper_input.outputs["Driver"], old_scale[1])
+
+    compiler.update_expression_group(group, after)
+
+    scale = [socket for socket in group_node.inputs if socket.name == "Scale"]
+    renamed = [socket for socket in group_node.inputs if socket.name == "Renamed"]
+    check(len(scale) == 2 and len(renamed) == 1, "updated duplicate/display-rename interface is incorrect")
+    check(_close(scale[0].default_value, 0.5), f"inserted input default changed: {scale[0].default_value}")
+    check(_close(scale[1].default_value, 2.0), f"first input default changed: {scale[1].default_value}")
+    check(_close(renamed[0].default_value, 9.0), "second declaration override was not restored by declaration identity")
+    incoming = [link for link in wrapper.links if link.to_node == group_node]
+    check(len(incoming) == 1 and incoming[0].to_socket == renamed[0], "duplicate input link was retargeted by occurrence")
+
+    bpy.data.node_groups.remove(wrapper, do_unlink=True)
+    bpy.data.node_groups.remove(group, do_unlink=True)
+
+
+def test_legacy_duplicate_input_live_state_aborts_before_cutover():
+    """A group without declaration metadata never guesses among duplicate replacement inputs."""
+    from NodeForge import interface as interface_module
+
+    source = '''
+first = input_float("Scale", default=0.0)
+second = input_float("Scale", default=0.0)
+output("Second", second)
+'''
+    group = compile_group(source, "NFTest_legacy_duplicate_input_ambiguity")
+    wrapper = bpy.data.node_groups.new("NFTest_legacy_duplicate_input_ambiguity_wrapper", "GeometryNodeTree")
+    group_node = wrapper.nodes.new("GeometryNodeGroup")
+    group_node.node_tree = group
+    compiler._apply_group_defaults_to_node(group_node)
+    scale = [socket for socket in group_node.inputs if socket.name == "Scale"]
+    scale[1].default_value = 3.0
+    if interface_module.INPUT_DECLARATIONS_PROP in group:
+        del group[interface_module.INPUT_DECLARATIONS_PROP]
+
+    try:
+        compiler.update_expression_group(group, source)
+    except CompileError as exc:
+        check("correspondence is ambiguous" in str(exc), f"unexpected legacy ambiguity diagnostic: {exc}")
+    else:
+        raise AssertionError("ambiguous legacy duplicate live state did not block cutover")
+
+    scale_after = [socket for socket in group_node.inputs if socket.name == "Scale"]
+    check(len(scale_after) == 2, "failed pre-cutover migration changed authoritative interface")
+    check(_close(scale_after[1].default_value, 3.0), "failed pre-cutover migration changed authoritative override")
+
+    bpy.data.node_groups.remove(wrapper, do_unlink=True)
+    bpy.data.node_groups.remove(group, do_unlink=True)
+
+
+def test_legacy_unique_input_live_state_migrates_unambiguously():
+    """Legacy groups without declaration metadata still migrate one provably unique input."""
+    from NodeForge import interface as interface_module
+
+    group = compile_group('x = input_float("Scale", default=0.0)\noutput(x)', "NFTest_legacy_unique_input")
+    wrapper = bpy.data.node_groups.new("NFTest_legacy_unique_input_wrapper", "GeometryNodeTree")
+    group_node = wrapper.nodes.new("GeometryNodeGroup")
+    group_node.node_tree = group
+    compiler._apply_group_defaults_to_node(group_node)
+    group_node.inputs["Scale"].default_value = 3.0
+    if interface_module.INPUT_DECLARATIONS_PROP in group:
+        del group[interface_module.INPUT_DECLARATIONS_PROP]
+
+    compiler.update_expression_group(group, 'x = input_float("Scale", default=1.0)\noutput(x)')
+    check(_close(group_node.inputs["Scale"].default_value, 3.0), "unambiguous legacy override was not migrated")
+
+    bpy.data.node_groups.remove(wrapper, do_unlink=True)
+    bpy.data.node_groups.remove(group, do_unlink=True)
+
+
+def test_input_declaration_metadata_failure_never_publishes_or_cuts_over(monkeypatch):
+    """Mandatory declaration metadata failure stays inside the existing group transaction."""
+    from NodeForge import interface
+
+    source = 'x = input_float("Scale", default=1.0)\noutput("X", x)'
+    group = compile_group(source, "NFTest_input_metadata_failure_existing")
+    pointer = group.as_pointer()
+    interface_before = [
+        (item.name, item.in_out, getattr(item, "socket_type", ""))
+        for item in group.interface.items_tree
+        if getattr(item, "item_type", "") == "SOCKET"
+    ]
+    temporary_before = {
+        item.as_pointer()
+        for item in bpy.data.node_groups
+        if item.name.startswith("NodeForge.replacement.")
+    }
+
+    def fail_write(*_args, **_kwargs):
+        raise CompileError("Failed to persist NodeForge input declaration metadata")
+
+    monkeypatch.setattr(interface, "_write_group_input_declarations", fail_write)
+
+    try:
+        compiler.create_expression_group(source, "NFTest_input_metadata_failure_new")
+    except CompileError as exc:
+        check("Failed to persist NodeForge input declaration metadata" in str(exc), f"unexpected metadata failure: {exc}")
+    else:
+        raise AssertionError("initial compilation published a group without mandatory declaration metadata")
+    check(bpy.data.node_groups.get("NFTest_input_metadata_failure_new") is None, "failed initial compilation published a group")
+
+    try:
+        compiler.update_expression_group(group, 'x = input_float("Renamed", default=2.0)\noutput("X", x)')
+    except CompileError as exc:
+        check("Failed to persist NodeForge input declaration metadata" in str(exc), f"unexpected update metadata failure: {exc}")
+    else:
+        raise AssertionError("update cut over after mandatory declaration metadata failure")
+
+    check(group.as_pointer() == pointer, "metadata failure replaced the authoritative datablock")
+    interface_after = [
+        (item.name, item.in_out, getattr(item, "socket_type", ""))
+        for item in group.interface.items_tree
+        if getattr(item, "item_type", "") == "SOCKET"
+    ]
+    check(interface_after == interface_before, "metadata failure changed the authoritative interface")
+    temporary_after = {
+        item.as_pointer()
+        for item in bpy.data.node_groups
+        if item.name.startswith("NodeForge.replacement.")
+    }
+    check(temporary_after == temporary_before, "metadata failure leaked a replacement group")
+    bpy.data.node_groups.remove(group)
+
+
+def test_invalid_nested_input_update_fails_before_cutover():
+    """Declaration-only input grammar prevents invalid replacement source from mutating authority."""
+    source = 'x = input_float("Scale", default=1.0)\noutput("X", x)'
+    group = compile_group(source, "NFTest_nested_input_update_rejected")
+    pointer = group.as_pointer()
+    interface_before = [
+        (item.name, item.in_out, getattr(item, "socket_type", ""))
+        for item in group.interface.items_tree
+        if getattr(item, "item_type", "") == "SOCKET"
+    ]
+    try:
+        compiler.update_expression_group(
+            group,
+            'x = input_float("Scale", default=7.0) + 1.0\noutput("X", x)',
+        )
+    except CompileError as exc:
+        check(
+            str(exc) == "input_*() may only be used as the complete right-hand side of a simple assignment",
+            f"unexpected nested-input update diagnostic: {exc}",
+        )
+    else:
+        raise AssertionError("invalid nested input update unexpectedly succeeded")
+    check(group.as_pointer() == pointer, "invalid nested input update replaced authority")
+    interface_after = [
+        (item.name, item.in_out, getattr(item, "socket_type", ""))
+        for item in group.interface.items_tree
+        if getattr(item, "item_type", "") == "SOCKET"
+    ]
+    check(interface_after == interface_before, "invalid nested input update changed authoritative interface")
+    leaked = [item.name for item in bpy.data.node_groups if item.name.startswith("NodeForge.replacement.")]
+    check(not leaked, f"invalid nested input update leaked replacement groups: {leaked}")
+    bpy.data.node_groups.remove(group)
+
+
+def test_update_group_preserves_zero_override_with_mixed_implicit_and_explicit_input_defaults():
+    """Explicit declaration metadata must not hide implicit-input defaults during update capture."""
+    source = '''
+x = input_float("Scale", default=1.0)
+for i in repeat_range(iterations):
+    x = x + 1.0
+output("Result", x)
+'''
+    group = compile_group(source, "NFTest_update_mixed_input_defaults")
+    wrapper = bpy.data.node_groups.new("NFTest_update_mixed_input_defaults_wrapper", "GeometryNodeTree")
+    group_node = wrapper.nodes.new("GeometryNodeGroup")
+    group_node.node_tree = group
+    compiler._apply_group_defaults_to_node(group_node)
+
+    check(int(group_node.inputs["iterations"].default_value) == 1, "implicit script default was not applied")
+    check(abs(float(group_node.inputs["Scale"].default_value) - 1.0) < 1e-6, "explicit script default was not applied")
+    group_node.inputs["iterations"].default_value = 0
+
+    compiler.update_expression_group(group, source)
+
+    check(int(group_node.inputs["iterations"].default_value) == 0, "zero-valued implicit-input override was lost")
+    check(abs(float(group_node.inputs["Scale"].default_value) - 1.0) < 1e-6, "explicit default changed unexpectedly")

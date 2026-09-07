@@ -93,13 +93,13 @@
 - `tests/unit/test_call_resolution.py`: immutable callable-environment snapshots, exact builtin/system/local/helper/library precedence, canonical imported `FunctionId`, detached `__unique__` parsing, unresolved diagnostic precedence, and pure-resolution dependency boundaries.
 - `tests/unit/test_builtin_call_semantics.py`: exhaustive stateless-vs-stateful builtin classification, Blender-independent arity/type/keyword analysis, const-vs-runtime normalization, tuple results, raw single/named output modes, and explicit `geometry_builder()` expression diagnostics.
 - `tests/unit/test_semantic_analysis.py` and `tests/unit/test_semantic_ir.py`: mixed expressions with core calls remain on the Semantic IR path, dynamic extension/stateful builtin fallbacks stay explicit, `IRCall`/`IRTuple`/`IRNamedOutputs` invariants, raw attribute/string-subscript selection, canonical `NFType` call operands/results, and exact stage-15 migration-marker contracts.
-- `tests/blender/test_semantic_ir_compile.py`: core Call IR realization, depth-based node placement, raw-node dependency-first insertion-order exception, one-entry named-output structure, tuple selection, mixed-invalid raw-node error ordering, and stateful `grid`/`grid_uv` plus named-input fallback behavior.
+- `tests/blender/test_semantic_ir_compile.py`: core Call IR realization, depth-based node placement, raw-node dependency-first insertion-order exception, one-entry named-output structure, tuple selection, mixed-invalid raw-node error ordering, and stateful `grid`/`grid_uv` fallback behavior plus the corrected one-call/one-socket explicit-input contract.
 
 ## Blender group transaction backend
 
 - `tests/unit/test_blender_group_backend.py`: nested savepoints, cache snapshots, commit/PONR ordering, multi-resource preparation, non-raising retirement diagnostics, custom-property marker preservation, and backend request contracts.
 - `tests/unit/test_blender_group_authority.py`: persistent transaction-private authority filtering, reload-stable process-local provisional state, publication/forget behavior, and stale-entry cleanup.
-- `tests/blender/test_update_group.py`, `tests/blender/test_library_catalogs.py`, and `tests/blender/test_unique_function_groups.py`: physical identity, rollback/cutover, editable metadata finalization, leaked temporary/provisional authority exclusion, generated-resource liveness, and reusable-function integration.
+- `tests/blender/test_update_group.py`, `tests/blender/test_library_catalogs.py`, and `tests/blender/test_unique_function_groups.py`: physical identity, rollback/cutover, mandatory input-declaration metadata publication failure, invalid-input-placement pre-cutover rejection, editable metadata finalization, leaked temporary/provisional authority exclusion, generated-resource liveness, and reusable-function integration.
 
 ## Expression behavior characterization baseline
 
@@ -112,3 +112,13 @@
 - Every case removes all node groups it created; controlled-failure cases additionally fail if compilation leaked any fresh group.
 - Harness contract tests verify literal payload sensitivity, socket-reference uniqueness, semantic-default filtering, outcome enforcement, child-group cleanup, and pre-record missing-baseline behavior.
 - Baselines are updated only by the explicit Blender recorder; ordinary pytest runs are read-only comparisons.
+
+
+## Basic statement / function-body Semantic IR
+
+- `tests/unit/test_semantic_body.py`: pure straight-line body analysis, deterministic body-local `BindingId` allocation/rebinding, augmented-assignment normalization, compile-time constant snapshots, explicit/auto outputs, stable per-target `InputDeclarationId` allocation, duplicate display labels, whole-body fallback, body-entry allocator audit, and static proof that the semantic/accepted route does not publish backend Values through `Compiler`.
+- `tests/unit/test_input_declaration_identity.py`: versioned durable input metadata, mandatory metadata-write failure, semantic/physical identity separation, malformed/duplicate metadata rejection, value-equal stand-in separation, declaration-ID replacement mapping, type-compatibility gating, and fail-closed legacy ambiguity.
+- `tests/unit/test_nf_types.py`: occurrence-aware physical input/default locators, duplicate-label independent defaults, and pre-declaration-metadata normalization.
+- `tests/blender/test_semantic_body_ir.py`: one-session IRBody routing, assignment/augassign/output topology and placement, duplicate-label physical sockets/defaults, separation of display labels from runtime source bindings, and declaration-only `input_*` placement with no failure-time resource leak.
+- `tests/blender/test_update_group.py`: durable explicit-input link/override restoration across duplicate-label insertion/reorder/display rename, unambiguous legacy migration, and pre-cutover rejection of ambiguous legacy live state.
+- `tests/blender/test_semantic_ir_compile.py`: legacy stateful fallback keeps `grid`/`grid_uv` shared state while adopting the 0.51 one-call/one-socket explicit-input contract.

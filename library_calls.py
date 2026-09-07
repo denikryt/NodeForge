@@ -137,44 +137,52 @@ def compile_library_function_call(comp, expr, depth=0, function_name=None, names
     probe.node_tree = function_group
     input_sockets = [s for s in probe.inputs if getattr(s, "enabled", True)]
     input_names = [s.name for s in input_sockets]
-    input_types = {s.name: _socket_type_to_value_type(s) for s in input_sockets}
+    input_types = [_socket_type_to_value_type(s) for s in input_sockets]
     comp.group.nodes.remove(probe)
 
-    if len(expr.args) > len(input_names):
+    if len(expr.args) > len(input_sockets):
         raise CompileError(f"{name}() got too many positional arguments")
 
-    compiled_args = {}
-    const_args = {}
-    used = set()
+    compiled_args = []
+    const_args = []
+    used_positions = set()
     for idx, arg_expr in enumerate(expr.args):
         socket_name = input_names[idx]
         value, is_dynamic = comp._const_or_compile_arg(arg_expr, depth + 1)
-        _validate_argument_type(name, socket_name, input_types[socket_name], value)
+        _validate_argument_type(name, socket_name, input_types[idx], value)
         if is_dynamic:
             reject_compile_time_object(value, "function-library argument")
-            compiled_args[socket_name] = value
+            compiled_args.append((idx, value))
         else:
-            const_args[socket_name] = value
-        used.add(_normalized_socket_name(socket_name))
+            const_args.append((idx, value))
+        used_positions.add(idx)
 
-    normalized_inputs = {_normalized_socket_name(n): n for n in input_names}
+    normalized_positions = {}
+    for index, socket_name in enumerate(input_names):
+        normalized_positions.setdefault(_normalized_socket_name(socket_name), []).append(index)
     for kw in expr.keywords:
         if kw.arg is None:
             raise CompileError(f"{name}() does not support **kwargs")
         key = _normalized_socket_name(kw.arg)
-        if key not in normalized_inputs:
+        matches = normalized_positions.get(key, [])
+        if not matches:
             raise CompileError(f"{name}() got unknown keyword argument {kw.arg!r}")
-        if key in used:
+        if len(matches) > 1:
+            raise CompileError(
+                f"{name}() input {kw.arg!r} is ambiguous because multiple inputs share that label; use positional arguments"
+            )
+        position = matches[0]
+        if position in used_positions:
             raise CompileError(f"{name}() got multiple values for input {kw.arg!r}")
-        socket_name = normalized_inputs[key]
+        socket_name = input_names[position]
         value, is_dynamic = comp._const_or_compile_arg(kw.value, depth + 1)
-        _validate_argument_type(name, socket_name, input_types[socket_name], value)
+        _validate_argument_type(name, socket_name, input_types[position], value)
         if is_dynamic:
             reject_compile_time_object(value, "function-library argument")
-            compiled_args[socket_name] = value
+            compiled_args.append((position, value))
         else:
-            const_args[socket_name] = value
-        used.add(key)
+            const_args.append((position, value))
+        used_positions.add(position)
 
     result = make_library_call_node(comp.group, function_group, compiled_args, const_args, x=x, y=y)
     if materialization is not None and materialization.mode is IRFunctionMaterializationMode.UNIQUE:

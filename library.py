@@ -1239,29 +1239,26 @@ def get_or_create_library_entry_group_for_record(
 
 
 def make_library_call_node(group, function_group, compiled_args, const_args, x=0, y=0):
-    """Create a GeometryNodeGroup call to a compiled library node group."""
+    """Create a GeometryNodeGroup call using physical input positions, not display-name identity."""
     node = _new_node(group, "GeometryNodeGroup", x, y)
     node.node_tree = function_group
     apply_function_node_display_name(node, function_group)
 
-    normalized_inputs = {_normalized_socket_name(s.name): s for s in _input_sockets(node)}
-    for raw_name, value in const_args.items():
-        socket = normalized_inputs.get(_normalized_socket_name(raw_name))
-        if socket is None:
-            raise CompileError(f"Function {function_group.name} has no input named {raw_name!r}")
-        _set_socket_default(socket, value)
-    for raw_name, value in compiled_args.items():
-        socket = normalized_inputs.get(_normalized_socket_name(raw_name))
-        if socket is None:
-            raise CompileError(f"Function {function_group.name} has no input named {raw_name!r}")
-        group.links.new(value.socket, socket)
+    inputs = _input_sockets(node)
+    for input_index, value in const_args:
+        if input_index < 0 or input_index >= len(inputs):
+            raise CompileError(f"Function {function_group.name} has no input at position {input_index}")
+        _set_socket_default(inputs[input_index], value)
+    for input_index, value in compiled_args:
+        if input_index < 0 or input_index >= len(inputs):
+            raise CompileError(f"Function {function_group.name} has no input at position {input_index}")
+        group.links.new(value.socket, inputs[input_index])
 
     outputs = _output_sockets(node)
     if not outputs:
         raise CompileError(f"Library function {function_group.name} has no outputs")
     values = tuple(make_value(socket, _socket_type_to_value_type(socket)) for socket in outputs)
     return values[0] if len(values) == 1 else TupleValue(values)
-
 
 def materialize_library_entry_group(namespace: str, name: str, group_backend):
     """Create/update a GeometryNodeTree for a catalog entry."""

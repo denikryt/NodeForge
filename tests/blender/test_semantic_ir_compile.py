@@ -5,7 +5,7 @@ from helpers import *
 import ast
 from types import MappingProxyType, SimpleNamespace
 
-from NodeForge import expression_compiler
+from NodeForge import expression_compiler, statement_compiler
 from NodeForge.blender_ir_lowering import BlenderIRLoweringContext, lower_expression as lower_ir_program
 from NodeForge.constants import (
     TYPE_BOOL, TYPE_BUNDLE, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_MATERIAL,
@@ -45,15 +45,26 @@ def _pointer(value):
         return id(value)
 
 
+def _body_programs(body):
+    """Yield expression IR programs embedded in one straight-line IRBody."""
+    for statement in body.statements:
+        program = getattr(statement, "value", None)
+        if hasattr(program, "operations"):
+            yield program
+
+
 def test_semantic_ir_route_materializes_representative_runtime_expressions(monkeypatch):
     calls = []
-    original = expression_compiler.lower_ir_expression
+    original = statement_compiler.lower_ir_body
 
-    def wrapped(comp, program, base_depth=0):
-        calls.append((base_depth, tuple(type(operation).__name__ for operation in program.operations)))
-        return original(comp, program, base_depth)
+    def wrapped(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):
+        for program in _body_programs(body):
+            calls.append((base_depth, tuple(type(operation).__name__ for operation in program.operations)))
+        return original(
+            context, body, initial_runtime_bindings, base_depth, group_input=group_input
+        )
 
-    monkeypatch.setattr(expression_compiler, "lower_ir_expression", wrapped)
+    monkeypatch.setattr(statement_compiler, "lower_ir_body", wrapped)
     group = compile_group(
         '''
 a = input_float("A", default=2.0)
@@ -220,21 +231,14 @@ def test_semantic_error_keeps_outer_fresh_build_cleanup_boundary():
 
 
 def test_semantic_backend_failure_does_not_retry_legacy_and_cleans_fresh_group(monkeypatch):
-    """Keep backend failure committed to IR while removing the partial fresh group."""
+    """Keep body-backend failure committed to IR while removing the partial fresh group."""
     before = {_pointer(group) for group in bpy.data.node_groups}
     backend_error = CompileError("controlled Semantic IR backend failure")
     legacy_calls = []
     backend_calls = []
-    original_analyze = expression_compiler.analyze_expression
 
-    def checked_analyze(expr, environment):
-        analysis = original_analyze(expr, environment)
-        if isinstance(expr, ast.BinOp):
-            check(analysis is not None, "backend-failure fixture did not pass semantic analysis")
-        return analysis
-
-    def fail_backend(context, program, base_depth=0):
-        backend_calls.append(program)
+    def fail_backend(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):
+        backend_calls.extend(_body_programs(body))
         context.group.nodes.new("ShaderNodeValue")
         raise backend_error
 
@@ -242,8 +246,7 @@ def test_semantic_backend_failure_does_not_retry_legacy_and_cleans_fresh_group(m
         legacy_calls.append("math")
         raise AssertionError("legacy AST binary lowering ran after semantic backend failure")
 
-    monkeypatch.setattr(expression_compiler, "analyze_expression", checked_analyze)
-    monkeypatch.setattr(expression_compiler, "lower_ir_expression", fail_backend)
+    monkeypatch.setattr(statement_compiler, "lower_ir_body", fail_backend)
     monkeypatch.setattr(expression_compiler, "_math", legacy_math)
 
     try:
@@ -736,15 +739,23 @@ def test_semantic_environment_exports_constant_metadata_without_legacy_container
 
 
 def test_complete_expression_ir_production_routing_covers_new_forms_and_excludes_call_parent(monkeypatch):
-    """Production compile_expr must route each newly owned expression family through Semantic IR."""
+    """Production expression/body routes must send owned forms through Semantic IR."""
     programs = []
-    original = expression_compiler.lower_ir_expression
+    original_expression = expression_compiler.lower_ir_expression
+    original_body = statement_compiler.lower_ir_body
 
-    def wrapped(context, program, base_depth=0):
+    def wrapped_expression(context, program, base_depth=0):
         programs.append(program)
-        return original(context, program, base_depth)
+        return original_expression(context, program, base_depth)
 
-    monkeypatch.setattr(expression_compiler, "lower_ir_expression", wrapped)
+    def wrapped_body(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):
+        programs.extend(_body_programs(body))
+        return original_body(
+            context, body, initial_runtime_bindings, base_depth, group_input=group_input
+        )
+
+    monkeypatch.setattr(expression_compiler, "lower_ir_expression", wrapped_expression)
+    monkeypatch.setattr(statement_compiler, "lower_ir_body", wrapped_body)
 
     def compile_and_remove(source, name):
         group = compile_group(source, name)
@@ -876,15 +887,20 @@ output("Location", info.location)
 
 
 def test_semantic_call_ir_materializes_core_calls_with_existing_layout(monkeypatch):
-    """Stateless core calls enter IR and retain the existing depth-derived placement."""
+    """Stateless core calls enter body IR and retain the existing depth-derived placement."""
     calls = []
-    original = expression_compiler.lower_ir_expression
+    original = statement_compiler.lower_ir_body
 
-    def wrapped(context, program, base_depth=0):
-        calls.extend(operation for operation in program.operations if type(operation).__name__ == "IRCall")
-        return original(context, program, base_depth)
+    def wrapped(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):
+        for program in _body_programs(body):
+            calls.extend(
+                operation for operation in program.operations if type(operation).__name__ == "IRCall"
+            )
+        return original(
+            context, body, initial_runtime_bindings, base_depth, group_input=group_input
+        )
 
-    monkeypatch.setattr(expression_compiler, "lower_ir_expression", wrapped)
+    monkeypatch.setattr(statement_compiler, "lower_ir_body", wrapped)
     group = compile_group(
         '''
 v = input_vector("V", default=(1, 2, 3))
@@ -978,8 +994,8 @@ output("X", x)
         raise AssertionError("mixed-invalid raw node unexpectedly compiled")
 
 
-def test_semantic_call_ir_stateful_builtin_fallback_preserves_cross_expression_state():
-    """Marker 10 keeps grid UV and named input reuse on the existing Compiler-owned state path."""
+def test_semantic_call_ir_stateful_builtin_fallback_preserves_grid_state_and_fresh_input_sockets():
+    """Legacy grid state stays shared while explicit input labels no longer imply socket reuse."""
     group = compile_group(
         '''
 geo = grid(4, 3)
@@ -994,7 +1010,7 @@ output("Sum", a + b)
     )
     check(len(_nodes(group, "GeometryNodeMeshGrid")) == 1, "grid/grid_uv fallback lost shared grid state")
     scale_items = [item for item in group.interface.items_tree if getattr(item, "item_type", "") == "SOCKET" and item.name == "Scale"]
-    check(len(scale_items) == 1, f"repeated input_float did not reuse one Scale socket: {len(scale_items)}")
+    check(len(scale_items) == 2, f"repeated input_float did not create two Scale sockets: {len(scale_items)}")
     bpy.data.node_groups.remove(group)
 
 

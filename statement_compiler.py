@@ -22,6 +22,16 @@ from .consteval import _const_eval
 from .compile_time import reject_compile_time_object
 from .interface import _create_interface_panel
 from .geometry_builder import GeometryBuilder, validate_geometry_builder_constructor
+from .call_resolution import CallableEnvironment
+from .builtin_call_semantics import (
+    IR_CAPABLE_BUILTIN_NAMES,
+    STATEFUL_FALLBACK_BUILTIN_NAMES,
+    analyze_input_declaration_call,
+)
+from .compiler_identities import InputDeclarationId
+from .semantic_body import BODY_UNSUPPORTED, lower_basic_body
+from .blender_ir_lowering import BlenderIRLoweringContext, lower_body as lower_ir_body
+from .runtime_bindings import validate_runtime_binding_target
 from .runtime import (
     _compile_repeat_iteration_count,
     _parse_repeat_range_for,
@@ -41,6 +51,7 @@ class GroupBuildContext:
     explicit_outputs: list = field(default_factory=list)
     auto_final_output: object = None
     output_names: set = field(default_factory=set)
+    input_declaration_ordinals: dict[str, int] = field(default_factory=dict)
 
 
 def _as_array_iter_value(value):
@@ -59,34 +70,9 @@ def _target_names(target):
     raise CompileError("array for target must be a simple name or tuple of names")
 
 
-def _reserved_binding_label(comp, name):
-    """Return the active registered-name label for a binding target, if any."""
-    return getattr(comp, "reserved_name_labels", {}).get(name)
-
-
-def _format_reserved_binding_label(label):
-    """Return diagnostic text for a registered-name binding violation."""
-    if label == "DSL builtin":
-        return "reserved by DSL builtin"
-    if label == "imported function":
-        return "already registered as imported function"
-    if label == "local function":
-        return "already registered as local function"
-    if label == "type token":
-        return "reserved by type token"
-    return f"reserved by {label}"
-
-
-def _allows_existing_top_level_shadow(label):
-    """Return True for legacy top-level names that remain value-rebindable."""
-    return label in {"DSL builtin", "compile-time constant"}
-
-
 def _check_runtime_binding(comp, name):
-    """Defensively reject rebinding of non-shadowable registered DSL names."""
-    label = _reserved_binding_label(comp, name)
-    if label is not None and not _allows_existing_top_level_shadow(label):
-        raise CompileError(f"Cannot assign to {name}: name is {_format_reserved_binding_label(label)}")
+    """Defensively apply the canonical compiler-owned runtime binding target rule."""
+    validate_runtime_binding_target(name, getattr(comp, "reserved_name_labels", {}))
 
 
 def _is_geometry_builder_constructor(expr):
@@ -240,6 +226,29 @@ def compile_statement(
             comp.bind_legacy_structural(target, GeometryBuilder(binding_name=target))
             ctx.auto_final_output = None
             return
+        if (
+            isinstance(stmt.value, ast.Call)
+            and isinstance(stmt.value.func, ast.Name)
+            and stmt.value.func.id.startswith("input_")
+        ):
+            try:
+                semantics = analyze_input_declaration_call(stmt.value, comp.consts)
+            except ValueError:
+                semantics = None
+            if semantics is not None:
+                comp.consts.pop(target, None)
+                ordinal = ctx.input_declaration_ordinals.get(target, 0)
+                ctx.input_declaration_ordinals[target] = ordinal + 1
+                declaration_id = InputDeclarationId(comp.input_declaration_owner, target, ordinal)
+                value = comp._create_input_socket_value(
+                    semantics.display_name,
+                    semantics.typ,
+                    semantics.default,
+                    declaration_id=declaration_id,
+                )
+                comp.bind_runtime_value(target, value)
+                ctx.auto_final_output = (target, value)
+                return
         try:
             comp.consts[target] = _const_eval(stmt.value, comp.consts)
         except CompileError:
@@ -516,15 +525,60 @@ def compile_statement(
 
 
 def compile_statements(ctx, stmts):
-    """Compile all top-level statements in order."""
-    for idx, stmt in enumerate(stmts):
-        compile_statement(
-            ctx,
-            stmt,
-            idx,
-            allow_final_expr=(idx == len(stmts) - 1),
-            allow_interface_directives=True,
-        )
+    """Compile one body through Semantic Body IR or one whole legacy fallback route."""
+    comp = ctx.comp
+    runtime_bindings = comp.runtime_bindings_snapshot()
+    callable_environment = CallableEnvironment(
+        callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | STATEFUL_FALLBACK_BUILTIN_NAMES),
+        system_constructors=comp.resolved_environment.system_constructors,
+        local_functions=comp.local_functions,
+        backend_helper_names=frozenset(comp.backend_builtins),
+        imported_functions=comp.imported_library_functions,
+    )
+    body_compilation = lower_basic_body(
+        stmts,
+        initial_runtime_bindings=runtime_bindings,
+        initial_constants=comp.consts,
+        legacy_binding_names=comp.legacy_structural_binding_names_snapshot(),
+        reserved_name_labels=getattr(comp, "reserved_name_labels", {}),
+        callable_environment=callable_environment,
+        owner_scope=comp.function_group_owner_scope,
+        declaration_owner=comp.input_declaration_owner,
+    )
+    if body_compilation is BODY_UNSUPPORTED:
+        # BASIC_BODY_IR_WHOLE_BODY_FALLBACK: Straight-line runtime assignment/output bodies now
+        # lower as one compiler-owned IRBody, but structural bindings, control flow, interface/
+        # geometry side-effect statements, grid/grid_uv or non-declaration stateful calls, and
+        # dynamic extension calls still require the existing statement compiler. Keep the entire body on one legacy path when
+        # any such construct is present; do not synchronize IRBody and legacy backend state midway
+        # through a body. Remove this fallback when every supported statement/body category has a
+        # frontend-owned semantic representation and body lowering no longer needs compile_statement().
+        for idx, stmt in enumerate(stmts):
+            compile_statement(
+                ctx,
+                stmt,
+                idx,
+                allow_final_expr=(idx == len(stmts) - 1),
+                allow_interface_directives=True,
+            )
+        return ctx
+
+    comp.consts.clear()
+    comp.consts.update(body_compilation.final_constants)
+    backend_context = BlenderIRLoweringContext(
+        group=ctx.group,
+        runtime_bindings=comp.backend_runtime_values_snapshot(),
+    )
+    result = lower_ir_body(
+        backend_context,
+        body_compilation.body,
+        comp.backend_runtime_values_snapshot(),
+        base_depth=1,
+        group_input=comp.group_input,
+    )
+    ctx.explicit_outputs.extend(result.explicit_outputs)
+    ctx.output_names.update(name for name, _ in result.explicit_outputs)
+    ctx.auto_final_output = result.auto_output
     return ctx
 
 

@@ -1,7 +1,6 @@
 """AST expression lowering into Geometry Nodes."""
 
 import ast
-from types import MappingProxyType
 
 from .constants import *
 from .errors import CompileError
@@ -16,8 +15,13 @@ from . import local_functions
 from . import library_calls
 from .function_instances import extract_function_call_modifiers, unsupported_unique
 from .call_resolution import CallableEnvironment, CallableKind, UNRESOLVED, resolve_simple_callable
-from .builtin_call_semantics import IR_CAPABLE_BUILTIN_NAMES, STATEFUL_FALLBACK_BUILTIN_NAMES
-from .semantic_analysis import SemanticEnvironment, analyze_expression, build_semantic_constant_snapshot
+from .builtin_call_semantics import (
+    INPUT_DECLARATION_BUILTIN_NAMES,
+    INPUT_DECLARATION_PLACEMENT_ERROR,
+    IR_CAPABLE_BUILTIN_NAMES,
+    STATEFUL_FALLBACK_BUILTIN_NAMES,
+)
+from .semantic_analysis import analyze_expression, build_semantic_environment
 from .semantic_lowering import lower_analyzed_expression
 from .blender_ir_lowering import BlenderIRLoweringContext, lower_expression as lower_ir_expression
 
@@ -36,7 +40,6 @@ def compile_expr(comp, expr, depth=0):
     # detached immutable semantic records, plus a detached semantics-preserving const-eval copy
     # for subscript indices. Remove this bridge when compile-time bindings are frontend-owned
     # and SemanticEnvironment receives their semantic records without reading comp.consts.
-    semantic_constants, const_eval_values = build_semantic_constant_snapshot(comp.consts)
     callable_environment = CallableEnvironment(
         callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | STATEFUL_FALLBACK_BUILTIN_NAMES),
         system_constructors=comp.resolved_environment.system_constructors,
@@ -44,12 +47,11 @@ def compile_expr(comp, expr, depth=0):
         backend_helper_names=frozenset(comp.backend_builtins),
         imported_functions=comp.imported_library_functions,
     )
-    environment = SemanticEnvironment(
+    environment = build_semantic_environment(
         runtime_bindings=runtime_bindings,
         legacy_binding_names=legacy_binding_names,
-        constants=semantic_constants,
-        const_eval_values=const_eval_values,
-        reserved_name_labels=MappingProxyType(dict(getattr(comp, "reserved_name_labels", {}))),
+        constants=comp.consts,
+        reserved_name_labels=getattr(comp, "reserved_name_labels", {}),
         callable_environment=callable_environment,
     )
     analysis = analyze_expression(expr, environment)
@@ -289,7 +291,7 @@ def compile_expr(comp, expr, depth=0):
             raise CompileError("Only simple function calls are supported")
         name = expr.func.id
         resolved = resolve_simple_callable(name, callable_environment)
-        cleaned_expr, function_modifiers = extract_function_call_modifiers(expr, name, const_eval_values)
+        cleaned_expr, function_modifiers = extract_function_call_modifiers(expr, name, environment.const_eval_values)
         if resolved is UNRESOLVED:
             if cleaned_expr.keywords:
                 raise CompileError(
@@ -314,6 +316,8 @@ def compile_expr(comp, expr, depth=0):
         # extensions, stateful builtins, and legacy non-Value operands all have permanent frontend-owned
         # typed/runtime contracts and whole-expression fallback is gone.
         if resolved.kind is CallableKind.BUILTIN:
+            if name in INPUT_DECLARATION_BUILTIN_NAMES:
+                raise CompileError(INPUT_DECLARATION_PLACEMENT_ERROR)
             if name not in STATEFUL_FALLBACK_BUILTIN_NAMES and name not in IR_CAPABLE_BUILTIN_NAMES:
                 raise CompileError(f"Internal error: unclassified builtin {name!r} reached legacy call dispatch")
             if function_modifiers.unique_was_explicit:

@@ -40,6 +40,36 @@ class BindingId:
 
 
 @dataclass(frozen=True)
+class InputDeclarationId:
+    """Identify one direct explicit-input declaration across recompilations."""
+
+    owner_scope: str
+    target_name: str
+    declaration_ordinal: int
+
+    def __post_init__(self):
+        """Reject malformed owner/target identities and declaration ordinals."""
+        if not isinstance(self.owner_scope, str) or not self.owner_scope:
+            raise ValueError("InputDeclarationId.owner_scope must be a non-empty string")
+        if not isinstance(self.target_name, str) or not self.target_name:
+            raise ValueError("InputDeclarationId.target_name must be a non-empty string")
+        if (
+            not isinstance(self.declaration_ordinal, int)
+            or isinstance(self.declaration_ordinal, bool)
+            or self.declaration_ordinal < 0
+        ):
+            raise ValueError("InputDeclarationId.declaration_ordinal must be a non-negative integer")
+
+    def stable_key(self) -> str:
+        """Return deterministic persisted identity independent of display metadata."""
+        return _canonical_json({
+            "owner_scope": self.owner_scope,
+            "target_name": self.target_name,
+            "declaration_ordinal": self.declaration_ordinal,
+        })
+
+
+@dataclass(frozen=True)
 class FunctionId:
     """Identify one reusable local or imported function specialization."""
 
@@ -120,6 +150,7 @@ __all__ = [
     "CallSiteId",
     "CORE_PACKAGE_ID",
     "FunctionId",
+    "InputDeclarationId",
     "library_function_id",
     "local_function_id",
     "normalize_library_package_id",

@@ -540,6 +540,9 @@ def test_exact_semantic_migration_markers_are_present_at_source_decisions():
             "materializer": "function_materializer.py",
             "constants": "constants.py",
             "runtime_bindings": "runtime_bindings.py",
+            "statement": "statement_compiler.py",
+            "body": "semantic_body.py",
+            "interface": "interface.py",
         }.items()
     }
     normalized = {name: "\n".join(line.lstrip() for line in source.splitlines()) for name, source in sources.items()}
@@ -556,7 +559,6 @@ def test_exact_semantic_migration_markers_are_present_at_source_decisions():
         "SEMANTIC_CALL_IR_LEGACY_DISPATCH": ("dispatcher", "# SEMANTIC_CALL_IR_LEGACY_DISPATCH: Remaining dynamic extension calls, explicitly stateful\n# builtins, and IR-capable wrapper builtins whose nested operand forced the already-active\n# whole-expression fallback still consume ast.Call and compiler/backend state here. Dispatch\n# only the already-resolved callable category; an IR-capable BUILTIN is permitted here only\n# because this branch is unreachable unless semantic analysis returned unsupported for the\n# enclosing expression. Do not repeat source-name precedence. Remove this branch when dynamic\n# extensions, stateful builtins, and legacy non-Value operands all have permanent frontend-owned\n# typed/runtime contracts and whole-expression fallback is gone."),
         "SEMANTIC_CALL_IR_LOCAL_SPECIALIZATION_FALLBACK": ("local", "# SEMANTIC_CALL_IR_LOCAL_SPECIALIZATION_FALLBACK: The callable name is resolved before\n# legacy dispatch, but a local FunctionId still requires the current specialization\n# signature derived from argument and transitive-capture types in this backend-coupled\n# path. Keep canonical identity construction here; do not create a provisional local ID.\n# Remove this bridge when local function bodies/captures have a pure semantic signature\n# analysis that produces the exact specialization before reusable-group materialization."),
         "SEMANTIC_CALL_IR_RESULT_MIGRATION": ("backend", "# SEMANTIC_CALL_IR_RESULT_MIGRATION: Semantic IR now represents core call results,\n# including structural tuple/named-output results, but statements, runtime state, and\n# source bindings still consume legacy backend Value/TupleValue/NodeResult containers.\n# Reconstruct those containers only at this backend return boundary. Remove this bridge\n# when compiler-owned runtime bindings/results replace backend objects above lowering."),
-        "SEMANTIC_CALL_IR_STATEFUL_BUILTIN_FALLBACK": ("analysis", "# SEMANTIC_CALL_IR_STATEFUL_BUILTIN_FALLBACK: grid/grid_uv and input_* still depend on\n# compilation-scoped mutable Compiler state across expression boundaries: grid UV context,\n# interface socket reuse/registration/default metadata, and publication into compiler-owned\n# runtime binding/session state. Keep these calls on legacy realization rather than introducing\n# a temporary lowering session or passing Compiler through the IR backend boundary. Remove this\n# fallback when function-body IR permanently owns those stateful effects before backend lowering."),
     }
     for marker, (source_name, body) in required.items():
         assert sources[source_name].count(marker) == 1
@@ -577,7 +579,7 @@ def test_exact_semantic_migration_markers_are_present_at_source_decisions():
     assert sources["compiler"].count("CANONICAL_BINDING_ID_MIGRATION") == 0
     stage16_markers = {
         "compiler": (
-            "# FRONTEND_RUNTIME_BINDING_BACKEND_VALUE_BRIDGE: Frontend runtime bindings now own\n# source-name identity and NFType, but legacy statement/runtime lowering still needs the\n# currently materialized Blender Value between expression compilations. Keep those backend\n# Values only in a BindingId-keyed map; never derive frontend symbols from this map and never\n# expose it to semantic analysis. Remove this bridge when statement/function-body IR makes\n# backend Value materialization local to Blender lowering rather than Compiler session state.",
+            "# BASIC_BODY_IR_LEGACY_BACKEND_BINDING_BRIDGE: IRBody lowering now owns values created by\n# migrated inter-statement assignments, but legacy whole-body lowering and current body-entry\n# input/state seeding still require compiler-session BindingId -> Value materializations.\n# Never publish IRBody-created local assignment Values back into this map. Remove this bridge\n# when all supported bodies, interface/stateful input publication, and runtime control-flow\n# lowering pass backend binding materializations directly into body lowering.",
             "# FRONTEND_RUNTIME_BINDING_STRUCTURAL_COMPAT: Ordinary runtime Values no longer live in\n# source-name storage, but CompileTimeObject instances, arrays, and TupleValue still lack one\n# complete frontend-owned binding representation. Keep only those protocol-approved non-Value\n# categories in this private compatibility store; Value/ObjectValue insertion is forbidden and\n# all access outside Compiler goes through the compiler-level structural binding API. Remove\n# this store when structural/compile-time binding semantics are represented by the frontend and\n# no backend/compiler container is required for source-name resolution.",
             "# FRONTEND_RUNTIME_BINDING_STATE_CHECKPOINT_COMPAT: Legacy statement/runtime lowering\n# speculatively compiles branches and nested loops, so a checkpoint must still pair frontend\n# binding symbols with their current backend Value materializations and legacy structural\n# bindings. This is a compiler-control-flow compatibility mechanism, not Semantic IR state.\n# Remove it when statement/control-flow IR represents branch and loop state before Blender\n# materialization and speculative lowering no longer mutates Compiler binding state.",
         ),
@@ -590,6 +592,30 @@ def test_exact_semantic_migration_markers_are_present_at_source_decisions():
             marker = body.split(":", 1)[0].split()[-1]
             assert sources[source_name].count(marker) == 1
             assert body in normalized[source_name]
+
+    assert sources["analysis"].count("SEMANTIC_CALL_IR_STATEFUL_BUILTIN_FALLBACK") == 0
+    assert sources["compiler"].count("FRONTEND_RUNTIME_BINDING_BACKEND_VALUE_BRIDGE") == 0
+    stage17_markers = {
+        "statement": (
+            "BASIC_BODY_IR_WHOLE_BODY_FALLBACK",
+        ),
+        "body": (
+            "BASIC_BODY_IR_EXPRESSION_FALLBACK",
+            "BASIC_BODY_IR_STRUCTURAL_BINDING_FALLBACK",
+        ),
+        "compiler": (
+            "BASIC_BODY_IR_LEGACY_BACKEND_BINDING_BRIDGE",
+        ),
+        "analysis": (
+            "BASIC_BODY_IR_REMAINING_STATEFUL_CALL_FALLBACK",
+        ),
+        "interface": (
+                "INPUT_DECLARATION_METADATA_LEGACY_COMPAT",
+        ),
+    }
+    for source_name, markers in stage17_markers.items():
+        for marker in markers:
+            assert sources[source_name].count(marker) == 1
 
     production_sources = []
     for path in root.rglob("*.py"):
@@ -1163,5 +1189,5 @@ def test_mixed_core_calls_stay_on_ir_path_and_dynamic_categories_remain_fallback
 
 def test_stateful_builtins_take_fixed_builtin_fallback_not_dynamic_resolution():
     """Stateful calls are still resolved as builtins but deliberately remain unsupported by Semantic IR."""
-    for source in ("grid(4, 3)", "grid_uv()", 'input_float("Scale")'):
+    for source in ("grid(4, 3)", "grid_uv()"):
         assert _lower(source) is None

@@ -59,6 +59,15 @@ panel([branch_angle], name="Branching", collapsed=True)
 output("Length", stem_length)
 ```
 
+Explicit `input_*` calls are declarations and must be the complete right-hand side of a simple-name assignment. The string argument is a display label only. The assignment target owns the runtime value, so `x = input_float("Scale")` binds `x`; it does not create a runtime binding named `Scale`. Repeating the same display label creates distinct sockets with independent defaults:
+
+```python
+first = input_float("Scale", default=1.0)
+second = input_float("Scale", default=7.0)
+```
+
+Reusable function calls bind positional arguments by socket order. Keyword arguments may use a unique socket label; if multiple inputs share the same label, that keyword is ambiguous and is rejected, so use positional arguments instead.
+
 `panel()` is an interface declaration and is written directly in the group body. Each input can belong to one panel. Inputs omitted from all `panel()` declarations remain at the root of the group interface. The initial DSL surface creates root-level panels; native nested panels are still preserved when NodeForge updates an existing Blender interface.
 
 
@@ -76,7 +85,7 @@ from local import my_custom_script
 
 Managed and linked Local source roots may contain folders for organization, for example `math/noise.nf`, but import names remain flat: use `from local import noise`, not `from local.math import noise`.
 
-Each new compilation materializes fresh Local dependency groups. Blender keeps the logical base name and assigns its normal `.001`, `.002`, and later suffixes when earlier versions already exist. Existing generated node groups therefore keep their original Local dependencies, while a newly compiled group receives a new set. Repeated calls to the same Local script within one group build share that build's single fresh backing group. Select an existing NodeForge library group and use **Reload from Source** to rebuild it from the current catalog source while keeping the root group datablock and compatible input overrides and external links on every `GeometryNodeGroup` instance that uses it. Reload matches existing sockets by display name and Blender socket type; new or renamed sockets use compiled defaults, and removed sockets are discarded. Use **Update Selected NodeGroup** for the manual Blender Text workflow with the same shared-instance preservation behavior.
+Each new compilation materializes fresh Local dependency groups. Blender keeps the logical base name and assigns its normal `.001`, `.002`, and later suffixes when earlier versions already exist. Existing generated node groups therefore keep their original Local dependencies, while a newly compiled group receives a new set. Repeated calls to the same Local script within one group build share that build's single fresh backing group. Select an existing NodeForge library group and use **Reload from Source** to rebuild it from the current catalog source while keeping the root group datablock and compatible input overrides and external links on every `GeometryNodeGroup` instance that uses it. Reload matches existing sockets by display name, Blender socket type, and same-type/name occurrence in interface order; new or renamed sockets use compiled defaults, and removed sockets are discarded. Use **Update Selected NodeGroup** for the manual Blender Text workflow with the same shared-instance preservation behavior.
 
 Compiled NodeForge node groups remain usable when the add-on is disabled or uninstalled. Generated Blender resources referenced by a live compiled group are preserved with the `.blend`; NodeForge only cleans resources that are proven orphaned or replaced by a later successful build.
 
@@ -265,8 +274,10 @@ def split_values(value: Float):
     tripled = value * 3
     return doubled, tripled
 
-first, second = split_values(input_float("Value"))
-result = split_values(input_float("Other Value"))
+value = input_float("Value")
+other_value = input_float("Other Value")
+first, second = split_values(value)
+result = split_values(other_value)
 last = result[-1]
 ```
 

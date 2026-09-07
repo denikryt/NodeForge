@@ -37,6 +37,10 @@ from .errors import CompileError
 from .nf_types import NFType, NUMERIC_NF_TYPES
 
 
+INPUT_DECLARATION_PLACEMENT_ERROR = (
+    "input_*() may only be used as the complete right-hand side of a simple assignment"
+)
+
 STATEFUL_FALLBACK_BUILTIN_NAMES = frozenset({
     "grid",
     "grid_uv",
@@ -50,6 +54,10 @@ STATEFUL_FALLBACK_BUILTIN_NAMES = frozenset({
     "input_string",
     "input_bundle",
 })
+
+INPUT_DECLARATION_BUILTIN_NAMES = frozenset(
+    name for name in STATEFUL_FALLBACK_BUILTIN_NAMES if name.startswith("input_")
+)
 
 IR_CAPABLE_BUILTIN_NAMES = frozenset(
     {"vector"}
@@ -89,6 +97,80 @@ class BuiltinCallSemantics:
     options: tuple[tuple[str, object], ...]
     result: RuntimeCallResult | TupleCallResult | NamedOutputsCallResult
 
+
+
+
+@dataclass(frozen=True)
+class InputDeclarationSemantics:
+    """Normalized display-only input declaration metadata for body Semantic IR."""
+
+    display_name: str
+    typ: NFType
+    default: object | None
+
+
+def analyze_input_declaration_call(expr, consts):
+    """Normalize one direct ``input_*`` call without touching compiler or Blender state."""
+    if not (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name)):
+        raise TypeError("input declaration analysis requires a simple call")
+    name = expr.func.id
+    if name not in INPUT_DECLARATION_BUILTIN_NAMES:
+        raise ValueError("call is not an input declaration builtin")
+    kws = _kw_dict(expr)
+    allowed_keywords = {
+        "input_geometry": set(),
+        "input_material": set(),
+        "input_object": set(),
+        "input_float": {"default"},
+        "input_int": {"default"},
+        "input_bool": {"default"},
+        "input_vector": {"default"},
+        "input_string": {"default"},
+        "input_bundle": set(),
+    }
+    _check_extra(kws, allowed_keywords[name])
+    if len(expr.args) != 1:
+        raise CompileError(f'{name}(name, ...) expects exactly one name argument')
+    display_name = _literal_string(expr.args[0], consts, f"{name}() name")
+    type_map = {
+        "input_geometry": TYPE_GEOMETRY,
+        "input_material": TYPE_MATERIAL,
+        "input_object": TYPE_OBJECT,
+        "input_bundle": TYPE_BUNDLE,
+        "input_float": TYPE_FLOAT,
+        "input_int": TYPE_INT,
+        "input_bool": TYPE_BOOL,
+        "input_vector": TYPE_VECTOR,
+        "input_string": TYPE_STRING,
+    }
+    typ = type_map[name]
+    default_expr = kws.get("default")
+    if name in {"input_geometry", "input_material", "input_object", "input_bundle"}:
+        default = None
+    elif name == "input_float":
+        default = 0.0 if default_expr is None else _as_float_const(_const_eval(default_expr, consts), "input_float default")
+    elif name == "input_int":
+        default = 0 if default_expr is None else int(_as_float_const(_const_eval(default_expr, consts), "input_int default"))
+    elif name == "input_bool":
+        default = False if default_expr is None else bool(_const_eval(default_expr, consts))
+    elif name == "input_vector":
+        if default_expr is None:
+            default = (0.0, 0.0, 0.0)
+        else:
+            raw = _const_eval(default_expr, consts)
+            if _is_const_vector(raw):
+                default = tuple(float(item) for item in raw)
+            elif isinstance(raw, (tuple, list)) and len(raw) == 3:
+                default = tuple(_as_float_const(item, "input_vector default component") for item in raw)
+            else:
+                raise CompileError("input_vector default= must be vector(x,y,z) or a 3-number tuple/list")
+    elif name == "input_string":
+        default = "" if default_expr is None else _const_eval(default_expr, consts)
+        if not isinstance(default, str):
+            raise CompileError("input_string default= must be a compile-time string")
+    else:
+        raise CompileError(f"Unsupported io builtin: {name}")
+    return InputDeclarationSemantics(display_name, typ, _freeze(default))
 
 RuntimeAnalyzer = Callable[[ast.expr, str | None, str], NFType]
 
@@ -824,5 +906,7 @@ __all__ = [
     "BuiltinCallSemantics",
     "IR_CAPABLE_BUILTIN_NAMES",
     "STATEFUL_FALLBACK_BUILTIN_NAMES",
+    "INPUT_DECLARATION_BUILTIN_NAMES",
+    "INPUT_DECLARATION_PLACEMENT_ERROR",
     "analyze_builtin_call",
 ]

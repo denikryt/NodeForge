@@ -192,3 +192,12 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 - Moved ordinary runtime source bindings to compiler-owned `BindingId`/`NFType` metadata with separate Blender `Value` materializations, preserving existing DSL behavior while removing the heterogeneous `Compiler.vars` binding store.
 - Preserved package-system compile-time state assignment by accepting the generic `CompileTimeObject` extension protocol in the temporary structural binding store, with resolved-system regression coverage.
 - Fixed `repeat_range()` local multi-return assignment so temporary `TupleValue` bindings remain structural compiler state instead of being routed through ordinary runtime `Value` bindings.
+
+
+## 0.51.0
+
+- Added compiler-owned straight-line function/group body IR for ordinary assignments, direct explicit inputs, augmented assignments, outputs, and final expressions, with body-local `BindingId -> Value` Blender materialization and whole-body fallback for remaining structural/control-flow/stateful categories.
+- Corrected explicit `input_*` identity so the string argument is display text only: every call creates its own interface socket, duplicate labels retain independent defaults, and reusable calls reject ambiguous duplicate-label keywords while preserving positional binding.
+- Added durable `InputDeclarationId` metadata for direct explicit inputs so transactional updates preserve links and overrides by compiler-owned declaration identity rather than duplicate-label occurrence, with fail-closed migration for ambiguous legacy live state.
+- Made explicit-input declaration metadata mandatory for publication and restricted `input_*` to a complete simple-assignment RHS, rejecting nested/general expression use before Blender effects.
+- Preserved user overrides for groups that mix implicit runtime inputs with explicit `input_*` declarations by merging both persisted script-default metadata stores during update capture.

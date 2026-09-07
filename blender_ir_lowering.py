@@ -45,8 +45,14 @@ from .semantic_ir import (
     IRUnary,
     IRVectorComponent,
     IRVectorLiteral,
+    IRAssign,
+    IRBody,
+    IRFinalExpression,
+    IRInputDeclaration,
+    IROutput,
 )
 from .values import NodeResult, ObjectValue, TupleValue, Value
+from .interface import _create_group_input_socket
 
 
 @dataclass(frozen=True)
@@ -107,9 +113,9 @@ def _lower_literal(context, operation, materialized, x, y):
     _store_result(materialized, operation.result, result)
 
 
-def _lower_binding(context, operation, materialized):
+def _lower_binding(context, operation, materialized, runtime_bindings):
     """Resolve one semantic runtime binding to its backend materialization."""
-    value = context.runtime_bindings.get(operation.binding_id)
+    value = runtime_bindings.get(operation.binding_id)
     if not isinstance(value, Value):
         raise CompileError(
             f"Internal error: Semantic IR binding {operation.binding_id!r} is no longer a runtime Value"
@@ -404,8 +410,9 @@ def _lower_call(context, operation, materialized, x, y):
         raise CompileError(f"Internal error: unsupported Call IR target kind {operation.target.kind}")
     _store_call_results(materialized, operation, result)
 
-def _execute_operation(context, operation, materialized, base_depth):
+def _execute_operation(context, operation, materialized, base_depth, runtime_bindings=None):
     """Dispatch one ordered IR operation to its Blender realization helper."""
+    runtime_bindings = context.runtime_bindings if runtime_bindings is None else runtime_bindings
     effective_depth = base_depth + operation.depth
     x, y = _position(effective_depth)
 
@@ -413,7 +420,7 @@ def _execute_operation(context, operation, materialized, base_depth):
         _lower_literal(context, operation, materialized, x, y)
         return
     if isinstance(operation, IRBinding):
-        _lower_binding(context, operation, materialized)
+        _lower_binding(context, operation, materialized, runtime_bindings)
         return
     if isinstance(operation, IRUnary):
         _lower_unary(context, operation, materialized, x, y)
@@ -446,6 +453,82 @@ def _execute_operation(context, operation, materialized, base_depth):
 
 
 
+def _lower_program_result(context, program, runtime_bindings, base_depth):
+    """Execute one expression program against an explicit body runtime map."""
+    materialized = {}
+    for operation in program.operations:
+        _execute_operation(context, operation, materialized, base_depth, runtime_bindings)
+    return _materialized_value(materialized, program.result)
+
+
+def _require_body_value_type(value, expected_type):
+    """Reject impossible backend/body semantic type mismatches before publication."""
+    if not isinstance(value, Value):
+        raise CompileError("Internal error: IRBody expression did not materialize a runtime Value")
+    if value.typ is not expected_type:
+        raise CompileError(
+            f"Internal error: IRBody backend type {value.typ} does not match semantic type {expected_type}"
+        )
+    return value
+
+
+@dataclass(frozen=True)
+class BodyLoweringResult:
+    """Return body-level explicit and automatic outputs to group publication."""
+
+    explicit_outputs: tuple[tuple[str, Value], ...]
+    auto_output: tuple[str, Value] | None
+
+
+def lower_body(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):
+    """Materialize one validated straight-line IRBody without publishing body locals to Compiler."""
+    if not isinstance(body, IRBody):
+        raise TypeError("body must be an IRBody")
+    runtime_bindings = dict(initial_runtime_bindings)
+    explicit_outputs = []
+    auto_output = None
+    for statement in body.statements:
+        if isinstance(statement, IRInputDeclaration):
+            if group_input is None:
+                raise CompileError("Internal error: body input declaration requires Group Input context")
+            value, _iface = _create_group_input_socket(
+                context.group,
+                group_input,
+                statement.display_name,
+                statement.typ,
+                statement.default,
+                declaration_id=statement.declaration_id,
+            )
+            runtime_bindings[statement.target_binding_id] = value
+            auto_output = (statement.target_name, value)
+            continue
+        if isinstance(statement, IRAssign):
+            value = _require_body_value_type(
+                _lower_program_result(context, statement.value, runtime_bindings, base_depth),
+                statement.value.result.typ,
+            )
+            runtime_bindings[statement.binding_id] = value
+            auto_output = (statement.source_name, value)
+            continue
+        if isinstance(statement, IROutput):
+            value = _require_body_value_type(
+                _lower_program_result(context, statement.value, runtime_bindings, base_depth),
+                statement.value.result.typ,
+            )
+            explicit_outputs.append((statement.name, value))
+            auto_output = None
+            continue
+        if isinstance(statement, IRFinalExpression):
+            value = _require_body_value_type(
+                _lower_program_result(context, statement.value, runtime_bindings, base_depth),
+                statement.value.result.typ,
+            )
+            auto_output = ("out", value)
+            continue
+        raise CompileError(f"Internal error: unsupported IRBody statement {type(statement).__name__}")
+    return BodyLoweringResult(tuple(explicit_outputs), auto_output)
+
+
 def _materialize_program_result(materialized, result):
     """Reconstruct one legacy backend expression result from Semantic IR structure."""
     if isinstance(result, IRArray):
@@ -470,4 +553,4 @@ def lower_expression(context, program, base_depth=0):
     return _materialize_program_result(materialized, program.result)
 
 
-__all__ = ["BlenderIRLoweringContext", "lower_expression"]
+__all__ = ["BlenderIRLoweringContext", "BodyLoweringResult", "lower_expression", "lower_body"]

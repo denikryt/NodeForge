@@ -32,7 +32,7 @@ from .storage import (
     _replace_text_contents,
     INPUT_DEFAULTS_PROP,
 )
-from .interface import _set_socket_default, _set_interface_socket_default, _record_group_input_default
+from .interface import _set_socket_default, _set_interface_socket_default, _record_group_input_default, _create_group_input_socket
 from .update import (
     _apply_group_defaults_to_node,
     _capture_node_external_state,
@@ -162,6 +162,7 @@ class Compiler:
         function_group_transaction=None,
         function_group_owner_scope=None,
         function_definition_owner=None,
+        input_declaration_owner=None,
         function_compilation_trace=None,
         reserved_name_labels=None,
         resolved_environment: ResolvedEnvironment | None = None,
@@ -214,16 +215,17 @@ class Compiler:
         self.function_group_transaction = function_group_transaction or local_helper_transaction
         self.function_group_owner_scope = function_group_owner_scope or make_function_group_owner_scope("ROOT", getattr(group, "name", "Group"))
         self.function_definition_owner = function_definition_owner or self.function_group_owner_scope
+        self.input_declaration_owner = input_declaration_owner or self.function_definition_owner
         self.function_compilation_trace = function_compilation_trace or FunctionCompilationTrace()
         self.reserved_name_labels = dict(reserved_name_labels or {})
         self._function_occurrence_counts = {}
         self._runtime_bindings = FrontendRuntimeBindings(self.function_group_owner_scope)
-        # FRONTEND_RUNTIME_BINDING_BACKEND_VALUE_BRIDGE: Frontend runtime bindings now own
-        # source-name identity and NFType, but legacy statement/runtime lowering still needs the
-        # currently materialized Blender Value between expression compilations. Keep those backend
-        # Values only in a BindingId-keyed map; never derive frontend symbols from this map and never
-        # expose it to semantic analysis. Remove this bridge when statement/function-body IR makes
-        # backend Value materialization local to Blender lowering rather than Compiler session state.
+        # BASIC_BODY_IR_LEGACY_BACKEND_BINDING_BRIDGE: IRBody lowering now owns values created by
+        # migrated inter-statement assignments, but legacy whole-body lowering and current body-entry
+        # input/state seeding still require compiler-session BindingId -> Value materializations.
+        # Never publish IRBody-created local assignment Values back into this map. Remove this bridge
+        # when all supported bodies, interface/stateful input publication, and runtime control-flow
+        # lowering pass backend binding materializations directly into body lowering.
         self._runtime_binding_values: dict[BindingId, Value] = {}
         # FRONTEND_RUNTIME_BINDING_STRUCTURAL_COMPAT: Ordinary runtime Values no longer live in
         # source-name storage, but CompileTimeObject instances, arrays, and TupleValue still lack one
@@ -549,31 +551,18 @@ class Compiler:
             return [self._compile_const_value(v, x, y) for v in value]
         raise CompileError("Unsupported compile-time value in runtime expression")
 
-    def _create_input_socket_value(self, name, typ, default=None):
-        """Create or reuse a group input socket and expose it as a Value."""
-        existing = self.runtime_value(name)
-        if existing is not None:
-            if existing.typ != typ:
-                raise CompileError(f'Input "{name}" already exists with another type')
-            return existing
-        if self.has_legacy_structural_binding(name):
-            existing = self.legacy_structural_binding(name)
-            if existing.typ != typ:
-                raise CompileError(f'Input "{name}" already exists with another type')
-            return existing
-        sock_type = _socket_type_for(typ)
-        iface = self.group.interface.new_socket(name=name, in_out="INPUT", socket_type=sock_type)
-        if default is not None:
-            _set_socket_default(iface, default)
-            _set_interface_socket_default(self.group, name, "INPUT", default)
-            _record_group_input_default(self.group, name, typ, default)
-        socket = next((s for s in self.group_input.outputs if s.name == name), None)
-        if socket is None:
-            raise CompileError(f'Internal error: input socket "{name}" was not created')
-        self._register_interface_input(socket, iface)
-        val = make_value(socket, typ)
-        self.bind_runtime_value(name, val)
-        return val
+    def _create_input_socket_value(self, name, typ, default=None, *, declaration_id=None):
+        """Create one fresh explicit group input and expose it as a runtime Value."""
+        value, iface = _create_group_input_socket(
+            self.group,
+            self.group_input,
+            name,
+            typ,
+            default,
+            declaration_id=declaration_id,
+        )
+        self._register_interface_input(value.socket, iface)
+        return value
 
     def _const_eval_macro_arg(self, expr):
         """Evaluate a compile-time macro argument."""
@@ -878,6 +867,7 @@ def _populate_group(
         function_group_transaction=function_group_transaction or local_helper_transaction,
         function_group_owner_scope=function_group_owner_scope,
         function_definition_owner=function_definition_owner,
+        input_declaration_owner=function_definition_identity or function_definition_owner or function_group_owner_scope,
         function_compilation_trace=function_compilation_trace,
         reserved_name_labels=reserved_name_labels,
         resolved_environment=resolved_environment,

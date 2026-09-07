@@ -23,6 +23,8 @@ from .call_resolution import (
 )
 from .builtin_call_semantics import (
     IR_CAPABLE_BUILTIN_NAMES,
+    INPUT_DECLARATION_BUILTIN_NAMES,
+    INPUT_DECLARATION_PLACEMENT_ERROR,
     STATEFUL_FALLBACK_BUILTIN_NAMES,
     analyze_builtin_call,
 )
@@ -365,6 +367,28 @@ def _unregistered_keyword_error(name):
     )
 
 
+
+
+def build_semantic_environment(
+    *,
+    runtime_bindings,
+    legacy_binding_names,
+    constants,
+    reserved_name_labels,
+    callable_environment,
+):
+    """Build one immutable expression environment from detached compiler-owned snapshots."""
+    semantic_constants, const_eval_values = build_semantic_constant_snapshot(constants)
+    return SemanticEnvironment(
+        runtime_bindings=MappingProxyType(dict(runtime_bindings)),
+        legacy_binding_names=frozenset(legacy_binding_names),
+        constants=semantic_constants,
+        const_eval_values=const_eval_values,
+        reserved_name_labels=MappingProxyType(dict(reserved_name_labels)),
+        callable_environment=callable_environment,
+    )
+
+
 def analyze_expression(expr, environment):
     """Resolve and type-check one complete non-call Semantic IR expression tree."""
     facts = {}
@@ -677,13 +701,13 @@ def analyze_expression(expr, environment):
             if resolved.kind is CallableKind.BUILTIN:
                 if modifiers.unique_was_explicit:
                     raise unsupported_unique(name)
+                if name in INPUT_DECLARATION_BUILTIN_NAMES:
+                    raise CompileError(INPUT_DECLARATION_PLACEMENT_ERROR)
                 if name in STATEFUL_FALLBACK_BUILTIN_NAMES:
-                    # SEMANTIC_CALL_IR_STATEFUL_BUILTIN_FALLBACK: grid/grid_uv and input_* still depend on
-                    # compilation-scoped mutable Compiler state across expression boundaries: grid UV context,
-                    # interface socket reuse/registration/default metadata, and publication into compiler-owned
-                    # runtime binding/session state. Keep these calls on legacy realization rather than introducing
-                    # a temporary lowering session or passing Compiler through the IR backend boundary. Remove this
-                    # fallback when function-body IR permanently owns those stateful effects before backend lowering.
+                    # BASIC_BODY_IR_REMAINING_STATEFUL_CALL_FALLBACK: grid/grid_uv still depend on
+                    # compilation-scoped state. Keep those calls on whole-body legacy fallback until
+                    # they have permanent compiler-owned semantic operations; input_* is declaration-only
+                    # language syntax and is rejected before reaching this fallback.
                     return UNSUPPORTED
                 if name not in IR_CAPABLE_BUILTIN_NAMES:
                     raise CompileError(f"Internal error: unclassified callable builtin {name!r}")
@@ -755,5 +779,6 @@ __all__ = [
     "ExpressionFact",
     "ExpressionAnalysis",
     "build_semantic_constant_snapshot",
+    "build_semantic_environment",
     "analyze_expression",
 ]

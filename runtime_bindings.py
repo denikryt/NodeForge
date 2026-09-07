@@ -90,4 +90,35 @@ class FrontendRuntimeBindings:
         self._active = dict(state)
 
 
-__all__ = ["FrontendRuntimeBindings", "RuntimeBindingSymbol"]
+def reserved_binding_label(reserved_name_labels, name: str):
+    """Return the registered-name label for one binding target, if any."""
+    return reserved_name_labels.get(name)
+
+
+def format_reserved_binding_label(label: str) -> str:
+    """Return the existing diagnostic suffix for one registered-name conflict."""
+    if label == "DSL builtin":
+        return "reserved by DSL builtin"
+    if label == "imported function":
+        return "already registered as imported function"
+    if label == "local function":
+        return "already registered as local function"
+    if label == "type token":
+        return "reserved by type token"
+    return f"reserved by {label}"
+
+
+def allows_existing_top_level_shadow(label: str | None) -> bool:
+    """Return whether current top-level semantics permit rebinding this label."""
+    return label in {"DSL builtin", "compile-time constant"}
+
+
+def validate_runtime_binding_target(name: str, reserved_name_labels) -> None:
+    """Apply the canonical assignment-target reservation rule with legacy diagnostics."""
+    label = reserved_binding_label(reserved_name_labels, name)
+    if label is not None and not allows_existing_top_level_shadow(label):
+        from .errors import CompileError
+        raise CompileError(f"Cannot assign to {name}: name is {format_reserved_binding_label(label)}")
+
+
+__all__ = ["FrontendRuntimeBindings", "RuntimeBindingSymbol", "reserved_binding_label", "format_reserved_binding_label", "allows_existing_top_level_shadow", "validate_runtime_binding_target"]

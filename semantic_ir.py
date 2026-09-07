@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TypeAlias
 
-from .compiler_identities import BindingId, CallSiteId, FunctionId
+from .compiler_identities import BindingId, CallSiteId, FunctionId, InputDeclarationId
 from .nf_types import NFType
 
 
@@ -357,6 +357,95 @@ class IRProgram:
     result: IRResult
 
 
+@dataclass(frozen=True)
+class IRAssign:
+    """Bind one body-local runtime name to the result of an expression program."""
+
+    binding_id: BindingId
+    source_name: str
+    value: IRProgram
+
+    def __post_init__(self) -> None:
+        """Require one compiler-owned binding and ordinary runtime result."""
+        if not isinstance(self.binding_id, BindingId):
+            raise TypeError("binding_id must be a BindingId")
+        if not isinstance(self.source_name, str) or not self.source_name:
+            raise ValueError("source_name must be a non-empty string")
+        if not isinstance(self.value, IRProgram) or not isinstance(self.value.result, IRValue):
+            raise TypeError("IRAssign value must be an IRProgram with an IRValue result")
+
+
+@dataclass(frozen=True)
+class IRInputDeclaration:
+    """Declare one physical group input whose source target owns the runtime value."""
+
+    target_binding_id: BindingId
+    declaration_id: InputDeclarationId
+    target_name: str
+    display_name: str
+    typ: NFType
+    default: object | None = None
+
+    def __post_init__(self) -> None:
+        """Keep input identity separate from display-only interface metadata."""
+        if not isinstance(self.target_binding_id, BindingId):
+            raise TypeError("target_binding_id must be a BindingId")
+        if not isinstance(self.declaration_id, InputDeclarationId):
+            raise TypeError("declaration_id must be an InputDeclarationId")
+        if not isinstance(self.target_name, str) or not self.target_name:
+            raise ValueError("target_name must be a non-empty string")
+        if not isinstance(self.display_name, str) or not self.display_name:
+            raise ValueError("display_name must be a non-empty string")
+        if not isinstance(self.typ, NFType):
+            raise TypeError("typ must be an NFType")
+        if not _is_ir_option_value(self.default):
+            raise TypeError("input default must be detached immutable IR data")
+
+
+@dataclass(frozen=True)
+class IROutput:
+    """Publish one explicitly named body runtime value."""
+
+    name: str
+    value: IRProgram
+
+    def __post_init__(self) -> None:
+        """Require one non-empty display name and ordinary runtime program result."""
+        if not isinstance(self.name, str) or not self.name:
+            raise ValueError("output name must be a non-empty string")
+        if not isinstance(self.value, IRProgram) or not isinstance(self.value.result, IRValue):
+            raise TypeError("IROutput value must be an IRProgram with an IRValue result")
+
+
+@dataclass(frozen=True)
+class IRFinalExpression:
+    """Represent the one eligible body-final automatic output expression."""
+
+    value: IRProgram
+
+    def __post_init__(self) -> None:
+        """Require an ordinary runtime result."""
+        if not isinstance(self.value, IRProgram) or not isinstance(self.value.result, IRValue):
+            raise TypeError("IRFinalExpression value must be an IRProgram with an IRValue result")
+
+
+IRBodyStatement: TypeAlias = IRAssign | IRInputDeclaration | IROutput | IRFinalExpression
+
+
+@dataclass(frozen=True)
+class IRBody:
+    """Store one ordered compiler-owned straight-line executable body."""
+
+    statements: tuple[IRBodyStatement, ...]
+
+    def __post_init__(self) -> None:
+        """Freeze statement order and reject non-body records."""
+        object.__setattr__(self, "statements", tuple(self.statements))
+        allowed = (IRAssign, IRInputDeclaration, IROutput, IRFinalExpression)
+        if not all(isinstance(statement, allowed) for statement in self.statements):
+            raise TypeError("IRBody contains an unsupported statement record")
+
+
 __all__ = [
     "IRCallableKind",
     "IRCallableTarget",
@@ -382,4 +471,10 @@ __all__ = [
     "IRVectorLiteral",
     "IRObjectProperty",
     "IRVectorComponent",
+    "IRAssign",
+    "IRInputDeclaration",
+    "IROutput",
+    "IRFinalExpression",
+    "IRBodyStatement",
+    "IRBody",
 ]
