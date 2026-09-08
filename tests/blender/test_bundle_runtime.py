@@ -366,3 +366,27 @@ def test_bundle_errors_are_controlled():
     )
     for index, (source, _label) in enumerate(cases):
         expect_compile_error(source, f"NFTest_bundle_error_{index}")
+
+
+def test_straight_line_bundle_body_uses_call_ir_not_legacy_ast_handler(monkeypatch):
+    """Stage-18 structural changes keep stateless Bundle calls on the migrated IRBody route."""
+    from NodeForge.builtins import bundle as bundle_builtin
+
+    def forbidden_legacy_call(*_args, **_kwargs):
+        raise AssertionError("legacy Bundle compile_call unexpectedly used for IRBody")
+
+    monkeypatch.setattr(bundle_builtin, "compile_call", forbidden_legacy_call)
+    group = compile_group(
+        '''
+path = input_string("Path", default="value")
+state = bundle(value=2.0)
+value = bundle_get(state, path, typ=Float)
+state = bundle_set(state, "value", value + 1.0)
+output("State", state)
+''',
+        "NFTest_bundle_semantic_body_ir",
+    )
+    check(len([node for node in group.nodes if node.bl_idname == "NodeCombineBundle"]) == 1, "Bundle IRBody combine topology changed")
+    check(len([node for node in group.nodes if node.bl_idname == "NodeGetBundleItem"]) == 1, "Bundle IRBody get topology changed")
+    check(len([node for node in group.nodes if node.bl_idname == "NodeStoreBundleItem"]) == 1, "Bundle IRBody set topology changed")
+    bpy.data.node_groups.remove(group)

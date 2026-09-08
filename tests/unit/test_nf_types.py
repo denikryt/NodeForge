@@ -7,7 +7,8 @@ import pytest
 from NodeForge.constants import OBJECT_PROPERTY_TYPES, TYPE_FLOAT, TYPE_TOKEN_NAMES, TYPE_VECTOR
 from NodeForge.compiler_identities import BindingId, InputDeclarationId
 from NodeForge.nf_types import NFType, deserialize_nf_type, serialize_nf_type
-from NodeForge.semantic_analysis import ResolvedName, RuntimeBindingSymbol, RuntimeResultShape, SemanticConstant
+from NodeForge.semantic_analysis import ResolvedName, RuntimeBindingSymbol, SemanticConstant
+from NodeForge.semantic_values import RuntimeResultShape
 from NodeForge.semantic_ir import IRValue
 from NodeForge.values import Value
 

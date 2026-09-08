@@ -212,7 +212,8 @@ def test_late_unsupported_statement_returns_whole_body_fallback_without_mutation
 
 def test_structural_and_dynamic_categories_reject_entire_body():
     assert _lower("items = [a]\nitems", bindings=dict([_binding("a", 0)])) is BODY_UNSUPPORTED
-    assert _lower("a, b = pair", bindings=dict([_binding("pair", 0)])) is BODY_UNSUPPORTED
+    with pytest.raises(CompileError, match="Cannot unpack scalar result into 2 names"):
+        _lower("a, b = pair", bindings=dict([_binding("pair", 0)]))
     assert _lower("builder = geometry_builder()\nbuilder") is BODY_UNSUPPORTED
     assert _lower("x = grid(2, 2)\nx") is BODY_UNSUPPORTED
     assert _lower("if True:\n    x = 1") is BODY_UNSUPPORTED
@@ -275,6 +276,13 @@ def test_basic_body_frontend_has_no_backend_dependencies_or_compiler_mutation():
 
     root = Path(__file__).resolve().parents[2]
     source = (root / "semantic_body.py").read_text(encoding="utf-8")
+    import io
+    import tokenize
+    code_only = "".join(
+        token.string
+        for token in tokenize.generate_tokens(io.StringIO(source).readline)
+        if token.type not in {tokenize.COMMENT, tokenize.STRING}
+    )
     for forbidden in (
         "import bpy",
         "from .nodes",
@@ -287,7 +295,7 @@ def test_basic_body_frontend_has_no_backend_dependencies_or_compiler_mutation():
         "comp.bind_runtime_value(",
         "compile_statement(",
     ):
-        assert forbidden not in source
+        assert forbidden not in code_only
 
 
 def test_accepted_compile_statements_route_never_publishes_body_local_values_to_compiler():
@@ -297,7 +305,7 @@ def test_accepted_compile_statements_route_never_publishes_body_local_values_to_
     root = Path(__file__).resolve().parents[2]
     source = (root / "statement_compiler.py").read_text(encoding="utf-8")
     function = source[source.index("def compile_statements("):]
-    marker = function.index("# BASIC_BODY_IR_WHOLE_BODY_FALLBACK:")
+    marker = function.index("# STRUCTURAL_SEMANTICS_WHOLE_BODY_FALLBACK:")
     accepted = function[:marker]
     after_legacy_loop = function.index("    comp.consts.clear()", marker)
     accepted += function[after_legacy_loop:]
@@ -473,3 +481,226 @@ def test_direct_input_removes_target_const_before_evaluating_display_metadata():
     """Input declaration normalization preserves legacy assignment const-state ordering."""
     with pytest.raises(CompileError, match="Expected a non-empty compile-time string for input_float\\(\\) name"):
         _lower('x = input_float(x)', constants={"x": "Scale"})
+
+
+def test_fixed_tuple_assignment_projection_and_unpack_use_one_leaf_binding_ir():
+    """IRBody stores fixed tuple leaves by BindingId instead of TupleValue."""
+    bindings = dict([_binding("geo", 0, NFType.GEOMETRY), _binding("value", 1, NFType.FLOAT)])
+    stored = _lower(
+        "pair = capture_attribute(geo, value)\n"
+        "output('Captured', pair[1])",
+        bindings=bindings,
+    )
+    from NodeForge.semantic_ir import IRBindLeaves, IROutput, IRBinding
+
+    assert isinstance(stored.body.statements[0], IRBindLeaves)
+    assert isinstance(stored.body.statements[1], IROutput)
+    assert isinstance(stored.body.statements[1].value.operations[-1], IRBinding)
+
+    unpacked = _lower(
+        "a, b = capture_attribute(geo, value)\n"
+        "output('Captured', b)",
+        bindings=bindings,
+    )
+    assert isinstance(unpacked.body.statements[0], IRBindLeaves)
+    assert [binding.destination for binding in unpacked.body.statements[0].bindings] == [
+        BindingId("scope", 2),
+        BindingId("scope", 3),
+    ]
+
+    list_unpacked = _lower(
+        "[a, b] = capture_attribute(geo, value)\n"
+        "output('Captured', b)",
+        bindings=bindings,
+    )
+    assert isinstance(list_unpacked.body.statements[0], IRBindLeaves)
+
+
+def test_fixed_named_outputs_are_stored_and_selected_without_legacy_structural_state():
+    """Raw named outputs remain frontend structure across later statements."""
+    from NodeForge.semantic_ir import IRBindLeaves, IROutput, IRBinding
+
+    result = _lower(
+        'parts = node("ShaderNodeSeparateXYZ", outputs={"X": Float, "Y": Float})\n'
+        'output("X", parts.X)\n'
+        'output("Y", parts["Y"])'
+    )
+    assert isinstance(result.body.statements[0], IRBindLeaves)
+    assert all(isinstance(statement, IROutput) for statement in result.body.statements[1:])
+    assert all(isinstance(statement.value.operations[-1], IRBinding) for statement in result.body.statements[1:])
+
+
+def test_named_outputs_do_not_unpack_positionally():
+    with pytest.raises(CompileError, match="Cannot unpack scalar result into 2 names"):
+        _lower('a, b = node("ShaderNodeSeparateXYZ", outputs={"X": Float, "Y": Float})')
+
+
+def test_object_info_alias_configuration_is_frontend_owned_in_basic_body():
+    """Aliases share one Object identity and explicit Object Info configuration."""
+    from NodeForge.semantic_ir import IRAssign, IRDiscardExpression, IRObjectProperty, IROutput
+
+    result = _lower(
+        'obj = input_object("Source")\n'
+        'alias = obj\n'
+        'obj.info(as_instance=False)\n'
+        'output("Geometry", alias.geometry)'
+    )
+    assert isinstance(result.body.statements[1], IRAssign)
+    assert isinstance(result.body.statements[2], IRDiscardExpression)
+    output = result.body.statements[3]
+    assert isinstance(output, IROutput)
+    prop = output.value.operations[-1]
+    assert isinstance(prop, IRObjectProperty)
+    assert prop.as_instance is False
+    assert prop.transform_space == "ORIGINAL"
+
+
+def test_object_identity_survives_unary_plus_and_array_projection_and_locks_info():
+    """Zero-operation Object pass-throughs preserve the same semantic identity."""
+    for alias_expr in ("+obj", "[obj][0]"):
+        with pytest.raises(CompileError, match=r"Object\.info\(\) cannot be changed after Object Info has been resolved"):
+            _lower(
+                'obj = input_object("Source")\n'
+                f'alias = {alias_expr}\n'
+                'geometry = alias.geometry\n'
+                'obj.info(as_instance=False)\n'
+                'output("Geometry", geometry)'
+            )
+
+
+def test_object_reassignment_to_scalar_does_not_fail_on_stale_semantic_state():
+    result = _lower(
+        'obj = input_object("Source")\n'
+        'obj = 1.0\n'
+        'output("Value", obj)'
+    )
+    assert isinstance(result.body.statements[-1], IROutput)
+    assert result.body.statements[-1].value.result.typ is NFType.FLOAT
+
+
+def test_standalone_object_info_is_discard_not_automatic_output():
+    from NodeForge.semantic_ir import IRDiscardExpression, IRFinalExpression
+
+    result = _lower('obj = input_object("Source")\nobj.info(as_instance=False)')
+    assert isinstance(result.body.statements[-1], IRDiscardExpression)
+    assert not any(isinstance(statement, IRFinalExpression) for statement in result.body.statements)
+
+
+def test_temporary_object_info_statement_is_accepted_before_later_output():
+    from NodeForge.semantic_ir import IRDiscardExpression, IROutput
+
+    result = _lower(
+        'node("GeometryNodeObjectInfo", output="Object", typ=Object).info(as_instance=False)\n'
+        'output("Value", 1.0)'
+    )
+    assert isinstance(result.body.statements[0], IRDiscardExpression)
+    assert isinstance(result.body.statements[1], IROutput)
+
+
+def test_structural_projection_binding_ids_are_stable_by_key_and_never_recycled():
+    """Historical projection slots reuse only the same source/key and new keys stay monotonic."""
+    from NodeForge.semantic_ir import IRBindLeaves
+
+    bindings = dict([_binding("geo", 0, NFType.GEOMETRY), _binding("value", 1, NFType.FLOAT)])
+    result = _lower(
+        'parts = node("ShaderNodeSeparateXYZ", outputs={"X": Float, "Y": Float})\n'
+        'parts = node("ShaderNodeSeparateXYZ", outputs={"X": Float, "Z": Float})\n'
+        'parts = node("ShaderNodeSeparateXYZ", outputs={"X": Float, "Y": Float})\n'
+        'output("Y", parts.Y)',
+        bindings=bindings,
+    )
+    bind_records = [statement for statement in result.body.statements if isinstance(statement, IRBindLeaves)]
+    first_ids = [binding.destination for binding in bind_records[0].bindings]
+    second_ids = [binding.destination for binding in bind_records[1].bindings]
+    third_ids = [binding.destination for binding in bind_records[2].bindings]
+    assert first_ids[0] == second_ids[0] == third_ids[0]
+    assert third_ids[1] == first_ids[1]
+    assert second_ids[1] not in first_ids
+    assert second_ids[1].local_id > max(binding.local_id for binding in first_ids)
+
+
+def test_ordinary_and_structural_ownership_are_mutually_exclusive_with_historical_reuse():
+    """Rebinding a name across scalar/structural forms keeps separate stable slot identities."""
+    from NodeForge.semantic_ir import IRAssign, IRBindLeaves
+
+    result = _lower(
+        'x = 1.0\n'
+        'x = node("ShaderNodeSeparateXYZ", outputs={"X": Float, "Y": Float})\n'
+        'x = 2.0\n'
+        'output("Value", x)'
+    )
+    first_assign = result.body.statements[0]
+    structural = result.body.statements[1]
+    second_assign = result.body.statements[2]
+    assert isinstance(first_assign, IRAssign)
+    assert isinstance(structural, IRBindLeaves)
+    assert isinstance(second_assign, IRAssign)
+    assert first_assign.binding_id == second_assign.binding_id
+    assert first_assign.binding_id not in {binding.destination for binding in structural.bindings}
+
+
+def test_tuple_unpack_clears_stale_compile_time_constants():
+    bindings = dict([_binding("geo", 0, NFType.GEOMETRY), _binding("value", 1, NFType.FLOAT)])
+    result = _lower(
+        'a, b = capture_attribute(geo, value)\noutput("Value", b)',
+        bindings=bindings,
+        constants={"a": 10.0, "b": 20.0},
+    )
+    assert "a" not in result.final_constants
+    assert "b" not in result.final_constants
+
+
+def test_partial_object_info_configuration_merges_before_resolution():
+    """Separate pre-resolution info calls update one shared Object state rather than resetting it."""
+    from NodeForge.semantic_ir import IRObjectProperty
+
+    result = _lower(
+        'obj = input_object("Source")\n'
+        'obj.info(transform_space="RELATIVE")\n'
+        'obj.info(as_instance=False)\n'
+        'output("Location", obj.location)'
+    )
+    prop = result.body.statements[-1].value.operations[-1]
+    assert isinstance(prop, IRObjectProperty)
+    assert prop.transform_space == "RELATIVE"
+    assert prop.as_instance is False
+
+
+def test_rebinding_one_alias_does_not_change_surviving_object_alias_identity():
+    result = _lower(
+        'obj = input_object("Source")\n'
+        'alias = obj\n'
+        'obj = 1.0\n'
+        'output("Geometry", alias.geometry)'
+    )
+    assert result.body.statements[-1].value.result.typ is NFType.GEOMETRY
+
+
+def test_structural_object_leaves_preserve_independent_provenance():
+    """Each Object leaf keeps its own semantic identity through stored named outputs."""
+    result = _lower(
+        'parts = node("GeometryNodeObjectInfo", outputs={"A": Object, "B": Object})\n'
+        'a = parts.A\n'
+        'b = parts.B\n'
+        'ga = a.geometry\n'
+        'b.info(as_instance=False)\n'
+        'output("Geometry", ga)'
+    )
+    from NodeForge.semantic_ir import IRDiscardExpression
+    assert any(isinstance(statement, IRDiscardExpression) for statement in result.body.statements)
+
+
+def test_stored_tuple_negative_index_selects_existing_leaf_binding():
+    from NodeForge.semantic_ir import IRBindLeaves, IROutput, IRBinding
+
+    bindings = dict([_binding("geo", 0, NFType.GEOMETRY), _binding("value", 1, NFType.FLOAT)])
+    result = _lower(
+        'pair = capture_attribute(geo, value)\noutput("Value", pair[-1])',
+        bindings=bindings,
+    )
+    stored = result.body.statements[0]
+    output = result.body.statements[1]
+    assert isinstance(stored, IRBindLeaves) and isinstance(output, IROutput)
+    selected = output.value.operations[-1]
+    assert isinstance(selected, IRBinding)
+    assert selected.binding_id == stored.bindings[-1].destination

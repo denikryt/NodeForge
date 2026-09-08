@@ -214,14 +214,23 @@ def test_object_info_method_syntax_is_classified_by_semantic_analysis():
         build_semantic_constant_snapshot,
     )
 
+    from NodeForge.semantic_values import ObjectInfoState, ObjectSemanticId, ObjectSemanticSnapshot
+
     constants, detached = build_semantic_constant_snapshot({})
+    binding_id = BindingId("object-info", 0)
+    object_id = ObjectSemanticId(0)
     env = SemanticEnvironment(
-        MappingProxyType({"obj": RuntimeBindingSymbol(BindingId("object-info", 0), TYPE_OBJECT)}),
+        MappingProxyType({"obj": RuntimeBindingSymbol(binding_id, TYPE_OBJECT)}),
         frozenset(),
         constants,
         detached,
         MappingProxyType({}),
         CallableEnvironment(frozenset(), {}, {}, frozenset(), {}),
+        object_semantics=ObjectSemanticSnapshot(
+            {binding_id: object_id},
+            {object_id: ObjectInfoState()},
+            1,
+        ),
     )
     expr = _call("obj.info(transform_space='RELATIVE')")
     analysis = analyze_expression(expr, env)

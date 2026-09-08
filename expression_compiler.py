@@ -29,11 +29,12 @@ from .blender_ir_lowering import BlenderIRLoweringContext, lower_expression as l
 def compile_expr(comp, expr, depth=0):
     """Compile one AST expression into the active node group context."""
     runtime_bindings = comp.runtime_bindings_snapshot()
-    # FRONTEND_RUNTIME_BINDING_STRUCTURAL_FALLBACK: Runtime Value bindings are now frontend-owned,
-    # but structural/compiler-only bindings still use the explicit compatibility store. Export
-    # only their names so semantic analysis preserves source-name precedence and returns the
-    # existing whole-expression fallback without receiving backend/compiler objects. Remove this
-    # fallback when every structural binding category has frontend-owned semantic metadata.
+    # STRUCTURAL_SEMANTICS_REMAINING_LEGACY_NAME_FALLBACK: Fixed tuple and raw named-output bindings
+    # now have frontend semantic descriptors, but arrays, GeometryBuilder/CompileTimeObject state,
+    # and structural values created only by whole-body dynamic-call fallback still expose names only.
+    # Pass those names without backend objects so semantic analysis can reject the complete expression
+    # or body before Blender effects. Remove this fallback when every remaining source-visible binding
+    # category has frontend-owned semantic metadata and no name-only legacy structural set is needed.
     legacy_binding_names = comp.legacy_structural_binding_names_snapshot()
     # COMPLETE_EXPRESSION_IR_CONSTANT_MIGRATION: comp.consts is still legacy compiler-owned
     # compile-time storage. Normalize supported runtime-materializable constants into

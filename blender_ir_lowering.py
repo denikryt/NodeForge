@@ -28,6 +28,7 @@ from .geometry import (
 )
 from .nodes import _id as _field_id, _index as _field_index, _normal as _field_normal, _position as _field_position
 from .builtins.bundle import build_bundle, build_bundle_get, build_bundle_set
+from .builtins.object_info import resolve_object_property_explicit
 from .builtins.raw_nodes import build_materialized_raw_node
 from .semantic_ir import (
     IRBinary,
@@ -50,6 +51,8 @@ from .semantic_ir import (
     IRFinalExpression,
     IRInputDeclaration,
     IROutput,
+    IRBindLeaves,
+    IRDiscardExpression,
 )
 from .values import NodeResult, ObjectValue, TupleValue, Value
 from .interface import _create_group_input_socket
@@ -219,7 +222,15 @@ def _lower_object_property(context, operation, materialized, x, y):
         raise CompileError(
             f"Internal error: Semantic IR Object property expected ObjectValue, got {type(value).__name__}"
         )
-    result = value.resolve_property(operation.property_name, context.group, x=x, y=y)
+    result = resolve_object_property_explicit(
+        context.group,
+        value,
+        operation.property_name,
+        transform_space=operation.transform_space,
+        as_instance=operation.as_instance,
+        x=x,
+        y=y,
+    )
     _store_result(materialized, operation.result, result)
 
 def _lower_vector_component(context, operation, materialized, x, y):
@@ -399,12 +410,7 @@ def _lower_builtin_call(context, operation, operands, x, y):
 def _lower_call(context, operation, materialized, x, y):
     """Materialize one typed Call IR operation without source AST or Compiler state."""
     operands = [_materialized_value(materialized, argument.value) for argument in operation.arguments]
-    if operation.target.kind is IRCallableKind.OBJECT_INFO:
-        receiver = operands[0]
-        if not isinstance(receiver, ObjectValue):
-            raise CompileError("Internal error: Object.info Call IR receiver is not ObjectValue")
-        result = receiver.configure_info(**dict(operation.options))
-    elif operation.target.kind is IRCallableKind.BUILTIN:
+    if operation.target.kind is IRCallableKind.BUILTIN:
         result = _lower_builtin_call(context, operation, operands, x, y)
     else:
         raise CompileError(f"Internal error: unsupported Call IR target kind {operation.target.kind}")
@@ -453,11 +459,17 @@ def _execute_operation(context, operation, materialized, base_depth, runtime_bin
 
 
 
-def _lower_program_result(context, program, runtime_bindings, base_depth):
-    """Execute one expression program against an explicit body runtime map."""
+def _lower_program_materialized(context, program, runtime_bindings, base_depth):
+    """Execute one expression program once and return its program-local materializations."""
     materialized = {}
     for operation in program.operations:
         _execute_operation(context, operation, materialized, base_depth, runtime_bindings)
+    return materialized
+
+
+def _lower_program_result(context, program, runtime_bindings, base_depth):
+    """Execute one scalar expression program against an explicit body runtime map."""
+    materialized = _lower_program_materialized(context, program, runtime_bindings, base_depth)
     return _materialized_value(materialized, program.result)
 
 
@@ -510,6 +522,17 @@ def lower_body(context, body, initial_runtime_bindings, base_depth=1, *, group_i
             runtime_bindings[statement.binding_id] = value
             auto_output = (statement.source_name, value)
             continue
+        if isinstance(statement, IRBindLeaves):
+            materialized = _lower_program_materialized(context, statement.value, runtime_bindings, base_depth)
+            for binding in statement.bindings:
+                value = _require_body_value_type(_materialized_value(materialized, binding.source), binding.typ)
+                runtime_bindings[binding.destination] = value
+            auto_output = None
+            continue
+        if isinstance(statement, IRDiscardExpression):
+            _lower_program_materialized(context, statement.value, runtime_bindings, base_depth)
+            auto_output = None
+            continue
         if isinstance(statement, IROutput):
             value = _require_body_value_type(
                 _lower_program_result(context, statement.value, runtime_bindings, base_depth),
@@ -545,11 +568,12 @@ def lower_expression(context, program, base_depth=0):
     for operation in program.operations:
         _execute_operation(context, operation, materialized, base_depth)
 
-    # SEMANTIC_CALL_IR_RESULT_MIGRATION: Semantic IR now represents core call results,
-    # including structural tuple/named-output results, but statements, runtime state, and
-    # source bindings still consume legacy backend Value/TupleValue/NodeResult containers.
-    # Reconstruct those containers only at this backend return boundary. Remove this bridge
-    # when compiler-owned runtime bindings/results replace backend objects above lowering.
+    # STRUCTURAL_SEMANTICS_LEGACY_EXPRESSION_RESULT_BRIDGE: Migrated IRBody consumes tuple/named-output
+    # structure through compiler-owned leaf BindingIds and never requires TupleValue/NodeResult, but
+    # legacy whole-body statement lowering still calls expression lowering and expects list/TupleValue/
+    # NodeResult return containers. Reconstruct them only at this legacy expression return boundary.
+    # Remove this bridge when compile_statement() is no longer a production body path and no caller
+    # above Blender lowering consumes backend structural containers.
     return _materialize_program_result(materialized, program.result)
 
 

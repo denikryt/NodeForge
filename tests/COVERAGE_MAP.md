@@ -122,3 +122,13 @@
 - `tests/blender/test_semantic_body_ir.py`: one-session IRBody routing, assignment/augassign/output topology and placement, duplicate-label physical sockets/defaults, separation of display labels from runtime source bindings, and declaration-only `input_*` placement with no failure-time resource leak.
 - `tests/blender/test_update_group.py`: durable explicit-input link/override restoration across duplicate-label insertion/reorder/display rename, unambiguous legacy migration, and pre-cutover rejection of ambiguous legacy live state.
 - `tests/blender/test_semantic_ir_compile.py`: legacy stateful fallback keeps `grid`/`grid_uv` shared state while adopting the 0.51 one-call/one-socket explicit-input contract.
+
+
+## Fixed structural / Object semantic body ownership
+
+- `tests/unit/test_semantic_structures.py`: detached tuple/named-output leaf descriptors, strict per-leaf Object provenance, Bundle leaf genericity, `IRBindLeaves` invariants, discarded-expression IR, forbidden aggregate `NFType` variants, and Blender-independent semantic-layer contracts.
+- `tests/unit/test_semantic_body.py`: IRBody tuple assignment/projection/unpack, stored raw named outputs, standalone `Object.info()` discard semantics, Object alias/pass-through identity and configuration lock, scalar rebinding with stale body-local Object state, and remaining whole-body fallback boundaries.
+- `tests/unit/test_semantic_analysis.py` and `tests/unit/test_semantic_ir.py`: body-owned versus legacy Object semantic ownership, exact Object Info configuration in IR, no migrated Object-info backend call, and exact Stage-18 compatibility markers.
+- `tests/unit/test_semantic_backend_contract.py`: explicit Object Info configuration reaches the centralized Blender helper while legacy `ObjectValue` semantic fields remain untouched on the migrated path.
+- `tests/unit/test_builtin_call_semantics.py` and `tests/unit/test_bundle_type.py`: Bundle remains `NFType.BUNDLE`, runtime String bundle paths remain typed, and no structural schema/type layer is introduced.
+- `tests/blender/test_semantic_body_ir.py`, `tests/blender/test_raw_nodes.py`, `tests/blender/test_object_inputs.py`, `tests/blender/test_bundle_runtime.py`, and `tests/blender/test_local_function_multi_return.py`: real-Blender topology/behavior regression targets for tuple/named-output body IR, Object Info, Bundle routing, and intentionally retained dynamic multi-return fallback.

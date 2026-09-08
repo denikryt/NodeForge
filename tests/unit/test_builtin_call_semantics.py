@@ -224,3 +224,22 @@ def test_transform_validates_runtime_options_in_backend_order_after_compiling_al
             "transform(geo, translation=translation, scale=scale, rotation=rotation)",
             types=analyzed_types,
         )
+
+
+def test_bundle_semantics_remain_opaque_runtime_type_without_schema_inference():
+    """Stage 18 keeps Bundle as one ordinary runtime leaf and requires explicit get typing."""
+    from NodeForge.nf_types import NFType
+
+    assert TYPE_BUNDLE is NFType.BUNDLE
+    assert not hasattr(NFType, "TUPLE")
+    assert not hasattr(NFType, "NODE_RESULT")
+    assert not hasattr(NFType, "NAMED_OUTPUTS")
+    runtime_path = _analyze(
+        "bundle_get",
+        "bundle_get(b, path, typ=Vector)",
+        types={"b": TYPE_BUNDLE, "path": TYPE_STRING},
+    )
+    assert isinstance(runtime_path.result, RuntimeCallResult)
+    assert runtime_path.result.typ is TYPE_VECTOR
+    with pytest.raises(CompileError):
+        _analyze("bundle_get", "bundle_get(b, path)", types={"b": TYPE_BUNDLE, "path": TYPE_STRING})

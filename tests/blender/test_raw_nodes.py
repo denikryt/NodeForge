@@ -232,3 +232,20 @@ def test_raw_node_error_fixtures_are_controlled_compile_errors():
     ]
     for index, source in enumerate(bad_sources):
         expect_compile_error(source, f"NFTest_raw_error_{index}")
+
+
+def test_stored_raw_named_outputs_project_later_without_duplicate_raw_node():
+    """IRBody stores named raw leaves by BindingId and later selections reuse one raw node."""
+    group = compile_group(
+        '''
+parts = node("ShaderNodeSeparateXYZ", inputs={"Vector": position()}, outputs={"X": Float, "Y": Float})
+output("X", parts.X)
+output("Y", parts["Y"])
+''',
+        "NFTest_raw_stored_named_outputs",
+    )
+    separate = [node for node in group.nodes if node.bl_idname == "ShaderNodeSeparateXYZ"]
+    check(len(separate) == 1, f"stored named-output projections duplicated raw node: {len(separate)}")
+    outputs = [item.name for item in group.interface.items_tree if getattr(item, "item_type", None) == "SOCKET" and getattr(item, "in_out", None) == "OUTPUT"]
+    check(outputs == ["X", "Y"], f"stored named-output interface changed: {outputs}")
+    bpy.data.node_groups.remove(group)

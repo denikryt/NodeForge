@@ -1,8 +1,9 @@
 """Pure Semantic IR construction for basic straight-line executable bodies.
 
-This stage owns assignments, direct explicit input declarations, augmented
-assignments, explicit outputs, and one eligible final expression.  It does not
-materialize Blender nodes or synchronize with the legacy statement compiler.
+This stage owns ordinary runtime assignments, fixed tuple/named-output
+structural bindings, direct explicit inputs, explicit outputs, and migrated
+Object semantics. Unsupported categories reject the complete body before
+Blender lowering begins.
 """
 
 from __future__ import annotations
@@ -18,13 +19,38 @@ from .builtin_call_semantics import (
     analyze_input_declaration_call,
 )
 from .compiler_identities import BindingId, InputDeclarationId
+from .constants import TYPE_OBJECT
 from .consteval import _const_eval
 from .errors import CompileError
 from .parsing import _literal_string
 from .runtime_bindings import RuntimeBindingSymbol, validate_runtime_binding_target
 from .semantic_analysis import analyze_expression, build_semantic_environment
-from .semantic_ir import IRAssign, IRBody, IRFinalExpression, IRInputDeclaration, IROutput, IRValue
+from .semantic_ir import (
+    IRAssign,
+    IRBindLeaves,
+    IRBody,
+    IRDiscardExpression,
+    IRFinalExpression,
+    IRInputDeclaration,
+    IRLeafBinding,
+    IRNamedOutputs,
+    IROutput,
+    IRProgram,
+    IRTuple,
+    IRValue,
+)
 from .semantic_lowering import lower_analyzed_expression
+from .semantic_values import (
+    NamedOutputsResultShape,
+    ObjectInfoState,
+    ObjectSemanticId,
+    ObjectSemanticSnapshot,
+    RuntimeResultShape,
+    StructuralBindingKind,
+    StructuralBindingSymbol,
+    StructuralLeafBinding,
+    TupleResultShape,
+)
 
 
 @dataclass(frozen=True)
@@ -45,6 +71,15 @@ class BasicBodyCompilation:
     def __post_init__(self) -> None:
         """Freeze the final constant mapping exposed to orchestration."""
         object.__setattr__(self, "final_constants", MappingProxyType(dict(self.final_constants)))
+
+
+@dataclass(frozen=True)
+class _AnalyzedBodyExpression:
+    """Pair one emitted expression program with semantic shape/state needed by body ownership."""
+
+    program: IRProgram
+    result_shape: object
+    object_semantics: ObjectSemanticSnapshot
 
 
 def _kw_dict(call: ast.Call) -> dict[str, ast.expr]:
@@ -117,35 +152,27 @@ def validate_input_declaration_placement(stmts) -> None:
             raise CompileError(INPUT_DECLARATION_PLACEMENT_ERROR)
 
 
-def _analyze_runtime_expression(expr, *, runtime_bindings, legacy_binding_names, constants, reserved_name_labels, callable_environment):
-    """Analyze and emit one ordinary runtime expression program or return fallback."""
-    environment = build_semantic_environment(
-        runtime_bindings=runtime_bindings,
-        legacy_binding_names=legacy_binding_names,
-        constants=constants,
-        reserved_name_labels=reserved_name_labels,
-        callable_environment=callable_environment,
-    )
-    analysis = analyze_expression(expr, environment)
-    if analysis is None:
-        # BASIC_BODY_IR_EXPRESSION_FALLBACK: Body IR accepts only expressions already fully owned
-        # by the semantic expression pipeline. A dynamic/stateful call or legacy structural binding
-        # therefore rejects the whole body instead of embedding AST/backend payloads or lowering one
-        # statement early. Remove this branch when expression semantic analysis has no supported
-        # production fallback categories left.
-        return BODY_UNSUPPORTED
-    return lower_analyzed_expression(expr, analysis)
-
-
-def _reject_structural_binding():
-    """Return the whole-body fallback sentinel for structural body bindings."""
-    # BASIC_BODY_IR_STRUCTURAL_BINDING_FALLBACK: Expression IR can represent arrays, tuples,
-    # and named outputs, but source-name ownership/mutation for those structures is not yet a
-    # permanent frontend binding model. Keep any body that assigns/unpacks a structural result
-    # on the whole-body legacy path; do not add fake NFType variants or store backend containers
-    # in IRBody. Remove this fallback when structural body bindings have compiler-owned identity,
-    # shape, assignment, and mutation semantics.
+def _reject_remaining_legacy_structural_binding():
+    """Return whole-body fallback for intentionally out-of-scope structural categories."""
+    # STRUCTURAL_SEMANTICS_BODY_REMAINING_FALLBACK: IRBody now owns fixed tuple and raw named-output
+    # source bindings/unpacking, but mutable script arrays, GeometryBuilder state, and structural
+    # results whose callable signatures are still legacy-only remain whole-body fallback categories.
+    # Do not embed their Python/compiler/backend containers in IRBody. Remove this fallback when those
+    # categories have explicit frontend semantics and whole-body lowering can represent them without
+    # compile_statement().
     return BODY_UNSUPPORTED
+
+
+def _tuple_target_names(target_node: ast.Tuple | ast.List) -> list[str]:
+    """Validate one legacy-compatible flat tuple/list unpack target and return its names."""
+    if any(isinstance(item, ast.Starred) for item in target_node.elts):
+        raise CompileError("Starred tuple unpacking is not supported")
+    if not target_node.elts or not all(isinstance(item, ast.Name) for item in target_node.elts):
+        raise CompileError("Tuple unpacking target must be a flat sequence of names")
+    names = [item.id for item in target_node.elts]
+    if len(set(names)) != len(names):
+        raise CompileError("Tuple unpacking target names must be unique")
+    return names
 
 
 def lower_basic_body(
@@ -159,13 +186,10 @@ def lower_basic_body(
     owner_scope: str,
     declaration_owner: str | None = None,
 ):
-    """Lower one whole eligible straight-line source body to compiler-owned IR.
-
-    The function is side-effect free.  Any unsupported category rejects the
-    complete body before Blender lowering begins.
-    """
+    """Lower one whole eligible straight-line source body to compiler-owned IR."""
     validate_input_declaration_placement(stmts)
     runtime_bindings = dict(initial_runtime_bindings)
+    structural_bindings: dict[str, StructuralBindingSymbol] = {}
     constants = dict(initial_constants)
     statements = []
     output_names: set[str] = set()
@@ -178,17 +202,134 @@ def lower_basic_body(
     next_local_id = max(local_ids, default=-1) + 1
     declaration_owner = declaration_owner or owner_scope
     input_declaration_ordinals: dict[str, int] = {}
+    ordinary_reservations = {name: symbol.binding_id for name, symbol in runtime_bindings.items()}
+    structural_reservations: dict[tuple[str, tuple[str, int | str]], BindingId] = {}
 
-    def bind(name: str, typ):
+    object_ids_by_binding: dict[BindingId, ObjectSemanticId] = {}
+    object_states: dict[ObjectSemanticId, ObjectInfoState] = {}
+    next_object_id = 0
+
+    def allocate_binding_id() -> BindingId:
         nonlocal next_local_id
+        binding_id = BindingId(owner_scope, next_local_id)
+        next_local_id += 1
+        return binding_id
+
+    def allocate_object_id() -> ObjectSemanticId:
+        nonlocal next_object_id
+        object_id = ObjectSemanticId(next_object_id)
+        next_object_id += 1
+        object_states[object_id] = ObjectInfoState()
+        return object_id
+
+    for symbol in runtime_bindings.values():
+        if symbol.typ is TYPE_OBJECT:
+            object_ids_by_binding[symbol.binding_id] = allocate_object_id()
+
+    def object_snapshot() -> ObjectSemanticSnapshot:
+        return ObjectSemanticSnapshot(object_ids_by_binding, object_states, next_object_id)
+
+    def adopt_object_snapshot(snapshot: ObjectSemanticSnapshot) -> None:
+        nonlocal object_ids_by_binding, object_states, next_object_id
+        object_ids_by_binding = dict(snapshot.object_ids_by_binding)
+        object_states = dict(snapshot.states)
+        next_object_id = snapshot.next_object_id
+
+    def clear_binding_object(binding_id: BindingId) -> None:
+        object_ids_by_binding.pop(binding_id, None)
+
+    def bind_runtime(name: str, shape: RuntimeResultShape) -> RuntimeBindingSymbol:
         current = runtime_bindings.get(name)
-        if current is None:
-            current = RuntimeBindingSymbol(BindingId(owner_scope, next_local_id), typ)
-            next_local_id += 1
+        if current is not None:
+            binding_id = current.binding_id
         else:
-            current = RuntimeBindingSymbol(current.binding_id, typ)
-        runtime_bindings[name] = current
-        return current
+            binding_id = ordinary_reservations.get(name)
+            if binding_id is None:
+                binding_id = allocate_binding_id()
+                ordinary_reservations[name] = binding_id
+        old_structural = structural_bindings.pop(name, None)
+        if old_structural is not None:
+            for leaf in old_structural.leaves:
+                clear_binding_object(leaf.binding_id)
+        symbol = RuntimeBindingSymbol(binding_id, shape.typ)
+        runtime_bindings[name] = symbol
+        clear_binding_object(binding_id)
+        if shape.typ is TYPE_OBJECT:
+            object_ids_by_binding[binding_id] = shape.object_id
+        return symbol
+
+    def bind_input(name: str, typ) -> RuntimeBindingSymbol:
+        object_id = allocate_object_id() if typ is TYPE_OBJECT else None
+        return bind_runtime(name, RuntimeResultShape(typ, object_id))
+
+    def bind_structural(name: str, shape) -> StructuralBindingSymbol:
+        runtime = runtime_bindings.pop(name, None)
+        if runtime is not None:
+            clear_binding_object(runtime.binding_id)
+        previous = structural_bindings.get(name)
+        previous_by_key = {} if previous is None else {leaf.projection_key: leaf for leaf in previous.leaves}
+        if isinstance(shape, TupleResultShape):
+            kind = StructuralBindingKind.TUPLE
+            keyed_shapes = [(('index', index), item) for index, item in enumerate(shape.items)]
+        elif isinstance(shape, NamedOutputsResultShape):
+            kind = StructuralBindingKind.NAMED_OUTPUTS
+            keyed_shapes = [(('name', item_name), item_shape) for item_name, item_shape in shape.items]
+        else:
+            raise TypeError("fixed structural binding requires tuple or named-output shape")
+        leaves = []
+        active_ids = set()
+        for projection_key, leaf_shape in keyed_shapes:
+            previous_leaf = previous_by_key.get(projection_key)
+            if previous_leaf is not None:
+                binding_id = previous_leaf.binding_id
+            else:
+                reservation_key = (name, projection_key)
+                binding_id = structural_reservations.get(reservation_key)
+                if binding_id is None:
+                    binding_id = allocate_binding_id()
+                    structural_reservations[reservation_key] = binding_id
+            active_ids.add(binding_id)
+            clear_binding_object(binding_id)
+            if leaf_shape.typ is TYPE_OBJECT:
+                object_ids_by_binding[binding_id] = leaf_shape.object_id
+            leaves.append(StructuralLeafBinding(projection_key, binding_id, leaf_shape.typ))
+        if previous is not None:
+            for leaf in previous.leaves:
+                if leaf.binding_id not in active_ids:
+                    clear_binding_object(leaf.binding_id)
+        symbol = StructuralBindingSymbol(kind, tuple(leaves))
+        structural_bindings[name] = symbol
+        return symbol
+
+    def analyze_runtime_expression(expr):
+        environment = build_semantic_environment(
+            runtime_bindings=runtime_bindings,
+            structural_bindings=structural_bindings,
+            legacy_binding_names=legacy_binding_names,
+            constants=constants,
+            reserved_name_labels=reserved_name_labels,
+            callable_environment=callable_environment,
+            object_semantics=object_snapshot(),
+        )
+        analysis = analyze_expression(expr, environment)
+        if analysis is None:
+            # BASIC_BODY_IR_EXPRESSION_FALLBACK: Body IR accepts only expressions already fully owned
+            # by the semantic expression pipeline. A dynamic/stateful call or legacy structural binding
+            # therefore rejects the whole body instead of embedding AST/backend payloads or lowering one
+            # statement early. Remove this branch when expression semantic analysis has no supported
+            # production fallback categories left.
+            return BODY_UNSUPPORTED
+        if analysis.object_semantics is None:
+            raise CompileError("Internal error: body expression analysis lost Object semantic registry")
+        program = lower_analyzed_expression(expr, analysis)
+        return _AnalyzedBodyExpression(program, analysis.facts[expr].result_shape, analysis.object_semantics)
+
+    def accept_expression(expr):
+        analyzed = analyze_runtime_expression(expr)
+        if analyzed is BODY_UNSUPPORTED:
+            return BODY_UNSUPPORTED
+        adopt_object_snapshot(analyzed.object_semantics)
+        return analyzed
 
     for index, stmt in enumerate(stmts):
         is_final = index == len(stmts) - 1
@@ -201,7 +342,27 @@ def lower_basic_body(
                 raise CompileError("Assignment supports one name or one flat unpacking target")
             target_node = stmt.targets[0]
             if isinstance(target_node, (ast.Tuple, ast.List)):
-                return _reject_structural_binding()
+                names = _tuple_target_names(target_node)
+                if any(name in legacy_binding_names for name in names):
+                    return BODY_UNSUPPORTED
+                for name in names:
+                    validate_runtime_binding_target(name, reserved_name_labels)
+                analyzed = accept_expression(stmt.value)
+                if analyzed is BODY_UNSUPPORTED:
+                    return BODY_UNSUPPORTED
+                if not isinstance(analyzed.result_shape, TupleResultShape) or not isinstance(analyzed.program.result, IRTuple):
+                    if isinstance(analyzed.result_shape, (NamedOutputsResultShape, RuntimeResultShape)):
+                        raise CompileError(f"Cannot unpack scalar result into {len(names)} names")
+                    return _reject_remaining_legacy_structural_binding()
+                if len(analyzed.result_shape.items) != len(names):
+                    raise CompileError(f"Tuple unpacking expected {len(names)} values, got {len(analyzed.result_shape.items)}")
+                bindings = []
+                for name, source, shape in zip(names, analyzed.program.result.items, analyzed.result_shape.items):
+                    constants.pop(name, None)
+                    symbol = bind_runtime(name, shape)
+                    bindings.append(IRLeafBinding(source, symbol.binding_id, shape.typ))
+                statements.append(IRBindLeaves(analyzed.program, tuple(bindings)))
+                continue
             if not isinstance(target_node, ast.Name):
                 raise CompileError("Only simple assignments like name = value are supported")
             target = target_node.id
@@ -211,16 +372,13 @@ def lower_basic_body(
 
             input_call = _direct_input_call(stmt.value)
             if input_call is not None:
-                # Legacy assignment const-eval fails for runtime input calls and removes the
-                # assignment target before the builtin's compile-time label/default arguments
-                # are evaluated. Preserve that ordering while changing only input identity.
                 constants.pop(target, None)
                 try:
                     input_semantics = analyze_input_declaration_call(input_call, constants)
                 except ValueError:
                     input_semantics = None
                 if input_semantics is not None:
-                    symbol = bind(target, input_semantics.typ)
+                    symbol = bind_input(target, input_semantics.typ)
                     declaration_ordinal = input_declaration_ordinals.get(target, 0)
                     input_declaration_ordinals[target] = declaration_ordinal + 1
                     statements.append(
@@ -236,59 +394,50 @@ def lower_basic_body(
                     continue
 
             if isinstance(stmt.value, (ast.List, ast.Tuple)):
-                return _reject_structural_binding()
-            if (
-                isinstance(stmt.value, ast.Call)
-                and isinstance(stmt.value.func, ast.Name)
-                and stmt.value.func.id == "geometry_builder"
-            ):
+                return _reject_remaining_legacy_structural_binding()
+            if isinstance(stmt.value, ast.Call) and isinstance(stmt.value.func, ast.Name) and stmt.value.func.id == "geometry_builder":
                 return BODY_UNSUPPORTED
             try:
                 constants[target] = _const_eval(stmt.value, constants)
             except CompileError:
                 constants.pop(target, None)
-            program = _analyze_runtime_expression(
-                stmt.value,
-                runtime_bindings=runtime_bindings,
-                legacy_binding_names=legacy_binding_names,
-                constants=constants,
-                reserved_name_labels=reserved_name_labels,
-                callable_environment=callable_environment,
-            )
-            if program is BODY_UNSUPPORTED:
+            analyzed = accept_expression(stmt.value)
+            if analyzed is BODY_UNSUPPORTED:
                 return BODY_UNSUPPORTED
-            if not isinstance(program.result, IRValue):
-                return _reject_structural_binding()
-            symbol = bind(target, program.result.typ)
-            statements.append(IRAssign(symbol.binding_id, target, program))
-            continue
+            if isinstance(analyzed.result_shape, RuntimeResultShape) and isinstance(analyzed.program.result, IRValue):
+                symbol = bind_runtime(target, analyzed.result_shape)
+                statements.append(IRAssign(symbol.binding_id, target, analyzed.program))
+                continue
+            if isinstance(analyzed.result_shape, (TupleResultShape, NamedOutputsResultShape)) and isinstance(analyzed.program.result, (IRTuple, IRNamedOutputs)):
+                structural = bind_structural(target, analyzed.result_shape)
+                sources = analyzed.program.result.items if isinstance(analyzed.program.result, IRTuple) else tuple(value for _name, value in analyzed.program.result.items)
+                bindings = tuple(
+                    IRLeafBinding(source, leaf.binding_id, leaf.typ)
+                    for source, leaf in zip(sources, structural.leaves)
+                )
+                statements.append(IRBindLeaves(analyzed.program, bindings))
+                continue
+            return _reject_remaining_legacy_structural_binding()
 
         if isinstance(stmt, ast.AugAssign):
             if not isinstance(stmt.target, ast.Name):
                 raise CompileError("Only simple augmented assignments like name += value are supported")
             target = stmt.target.id
             validate_runtime_binding_target(target, reserved_name_labels)
-            if target in legacy_binding_names:
+            if target in legacy_binding_names or target in structural_bindings:
                 return BODY_UNSUPPORTED
             current = runtime_bindings.get(target)
             if current is None:
                 raise CompileError(f"Unknown name for augmented assignment: {target}")
             bin_expr = ast.BinOp(left=ast.Name(id=target, ctx=ast.Load()), op=stmt.op, right=stmt.value)
-            program = _analyze_runtime_expression(
-                bin_expr,
-                runtime_bindings=runtime_bindings,
-                legacy_binding_names=legacy_binding_names,
-                constants=constants,
-                reserved_name_labels=reserved_name_labels,
-                callable_environment=callable_environment,
-            )
-            if program is BODY_UNSUPPORTED:
+            analyzed = accept_expression(bin_expr)
+            if analyzed is BODY_UNSUPPORTED:
                 return BODY_UNSUPPORTED
-            if not isinstance(program.result, IRValue):
-                return _reject_structural_binding()
+            if not isinstance(analyzed.result_shape, RuntimeResultShape) or not isinstance(analyzed.program.result, IRValue):
+                return _reject_remaining_legacy_structural_binding()
             constants.pop(target, None)
-            symbol = bind(target, program.result.typ)
-            statements.append(IRAssign(symbol.binding_id, target, program))
+            symbol = bind_runtime(target, analyzed.result_shape)
+            statements.append(IRAssign(symbol.binding_id, target, analyzed.program))
             continue
 
         if isinstance(stmt, ast.Expr):
@@ -298,13 +447,10 @@ def lower_basic_body(
                     kws = _kw_dict(call)
                     _check_no_extra_keywords(kws, {"name", "value"})
                     if call.args:
-                        raise CompileError('output() cannot mix positional and keyword arguments')
+                        raise CompileError("output() cannot mix positional and keyword arguments")
                     if "value" not in kws:
                         raise CompileError('output(name="Name", value=value) expects value=...')
-                    if "name" in kws:
-                        out_name = _unique_output_name(output_names, _literal_string(kws["name"], "output() name", constants))
-                    else:
-                        out_name = _unique_output_name(output_names, "out")
+                    out_name = _unique_output_name(output_names, _literal_string(kws["name"], "output() name", constants)) if "name" in kws else _unique_output_name(output_names, "out")
                     value_expr = kws["value"]
                 elif len(call.args) == 1:
                     out_name = _unique_output_name(output_names, "out")
@@ -314,42 +460,38 @@ def lower_basic_body(
                     value_expr = call.args[1]
                 else:
                     raise CompileError('output(value), output("Name", value), or output(name="Name", value=value) expected')
-                program = _analyze_runtime_expression(
-                    value_expr,
-                    runtime_bindings=runtime_bindings,
-                    legacy_binding_names=legacy_binding_names,
-                    constants=constants,
-                    reserved_name_labels=reserved_name_labels,
-                    callable_environment=callable_environment,
-                )
-                if program is BODY_UNSUPPORTED:
+                analyzed = accept_expression(value_expr)
+                if analyzed is BODY_UNSUPPORTED:
                     return BODY_UNSUPPORTED
-                if not isinstance(program.result, IRValue):
-                    return _reject_structural_binding()
-                statements.append(IROutput(out_name, program))
+                if not isinstance(analyzed.result_shape, RuntimeResultShape) or not isinstance(analyzed.program.result, IRValue):
+                    return _reject_remaining_legacy_structural_binding()
+                statements.append(IROutput(out_name, analyzed.program))
                 continue
 
             if call is not None and call.func.id in {"panel", "store", "set_position"}:
                 return BODY_UNSUPPORTED
             if call is not None and call.func.id.startswith("input_"):
                 return BODY_UNSUPPORTED
+
             if isinstance(stmt.value, ast.Call) and isinstance(stmt.value.func, ast.Attribute):
-                return BODY_UNSUPPORTED
+                if stmt.value.func.attr != "info":
+                    return BODY_UNSUPPORTED
+                analyzed = accept_expression(stmt.value)
+                if analyzed is BODY_UNSUPPORTED:
+                    return BODY_UNSUPPORTED
+                if not isinstance(analyzed.result_shape, RuntimeResultShape) or analyzed.result_shape.typ is not TYPE_OBJECT:
+                    return BODY_UNSUPPORTED
+                statements.append(IRDiscardExpression(analyzed.program))
+                continue
+
             if not is_final:
                 return BODY_UNSUPPORTED
-            program = _analyze_runtime_expression(
-                stmt.value,
-                runtime_bindings=runtime_bindings,
-                legacy_binding_names=legacy_binding_names,
-                constants=constants,
-                reserved_name_labels=reserved_name_labels,
-                callable_environment=callable_environment,
-            )
-            if program is BODY_UNSUPPORTED:
+            analyzed = accept_expression(stmt.value)
+            if analyzed is BODY_UNSUPPORTED:
                 return BODY_UNSUPPORTED
-            if not isinstance(program.result, IRValue):
-                return _reject_structural_binding()
-            statements.append(IRFinalExpression(program))
+            if not isinstance(analyzed.result_shape, RuntimeResultShape) or not isinstance(analyzed.program.result, IRValue):
+                return _reject_remaining_legacy_structural_binding()
+            statements.append(IRFinalExpression(analyzed.program))
             continue
 
         return BODY_UNSUPPORTED
@@ -357,4 +499,4 @@ def lower_basic_body(
     return BasicBodyCompilation(IRBody(tuple(statements)), constants)
 
 
-__all__ = ["BODY_UNSUPPORTED", "BasicBodyCompilation", "lower_basic_body"]
+__all__ = ["BODY_UNSUPPORTED", "BasicBodyCompilation", "lower_basic_body", "validate_input_declaration_placement"]

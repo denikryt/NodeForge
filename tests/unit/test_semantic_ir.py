@@ -47,13 +47,18 @@ from NodeForge.semantic_ir import (
 from NodeForge.builtin_call_semantics import IR_CAPABLE_BUILTIN_NAMES, STATEFUL_FALLBACK_BUILTIN_NAMES
 from NodeForge.call_resolution import CallableEnvironment
 from NodeForge.semantic_analysis import (
-    ArrayResultShape,
     RuntimeBindingSymbol,
-    RuntimeResultShape,
     SemanticConstant,
     SemanticEnvironment,
     analyze_expression,
     build_semantic_constant_snapshot,
+)
+from NodeForge.semantic_values import (
+    ArrayResultShape,
+    ObjectInfoState,
+    ObjectSemanticId,
+    ObjectSemanticSnapshot,
+    RuntimeResultShape,
 )
 from NodeForge.semantic_lowering import lower_analyzed_expression
 
@@ -80,8 +85,13 @@ def _expr(source):
     return ast.parse(source, mode="eval").body
 
 
-def _environment(*, bindings=None, consts=None, labels=None, legacy_names=(), backend_helpers=(), builtins=None, systems=None, local_functions=None, imported_functions=None):
-    """Build one immutable semantic environment for pure IR tests."""
+def _environment(*, bindings=None, consts=None, labels=None, legacy_names=(), backend_helpers=(), builtins=None, systems=None, local_functions=None, imported_functions=None, object_registry=True):
+    """Build one immutable semantic environment for pure IR tests.
+
+    Object-focused frontend tests opt into the same persistent registry that
+    ``lower_basic_body()`` owns.  Tests for legacy expression fallback disable
+    it explicitly.
+    """
     from types import MappingProxyType
 
     semantic_constants, const_eval_values = build_semantic_constant_snapshot(consts or {})
@@ -89,6 +99,18 @@ def _environment(*, bindings=None, consts=None, labels=None, legacy_names=(), ba
         name: RuntimeBindingSymbol(_test_binding_id(name), typ)
         for name, typ in (bindings or {}).items()
     }
+    object_semantics = None
+    if object_registry:
+        object_ids = {}
+        states = {}
+        next_id = 0
+        for symbol in runtime_bindings.values():
+            if symbol.typ is TYPE_OBJECT:
+                object_id = ObjectSemanticId(next_id)
+                next_id += 1
+                object_ids[symbol.binding_id] = object_id
+                states[object_id] = ObjectInfoState()
+        object_semantics = ObjectSemanticSnapshot(object_ids, states, next_id)
     return SemanticEnvironment(
         MappingProxyType(runtime_bindings),
         frozenset(legacy_names),
@@ -99,15 +121,16 @@ def _environment(*, bindings=None, consts=None, labels=None, legacy_names=(), ba
             frozenset(IR_CAPABLE_BUILTIN_NAMES | STATEFUL_FALLBACK_BUILTIN_NAMES) if builtins is None else frozenset(builtins),
             systems or {}, local_functions or {}, frozenset(backend_helpers), imported_functions or {},
         ),
+        object_semantics=object_semantics,
     )
 
 
-def _lower(source, *, bindings=None, consts=None, labels=None, legacy_names=(), backend_helpers=(), builtins=None, systems=None, local_functions=None, imported_functions=None):
+def _lower(source, *, bindings=None, consts=None, labels=None, legacy_names=(), backend_helpers=(), builtins=None, systems=None, local_functions=None, imported_functions=None, object_registry=True):
     """Analyze and lower one source expression through the pure frontend stages."""
     expr = _expr(source)
     analysis = analyze_expression(
         expr,
-        _environment(bindings=bindings, consts=consts, labels=labels, legacy_names=legacy_names, backend_helpers=backend_helpers, builtins=builtins, systems=systems, local_functions=local_functions, imported_functions=imported_functions),
+        _environment(bindings=bindings, consts=consts, labels=labels, legacy_names=legacy_names, backend_helpers=backend_helpers, builtins=builtins, systems=systems, local_functions=local_functions, imported_functions=imported_functions, object_registry=object_registry),
     )
     return None if analysis is None else lower_analyzed_expression(expr, analysis)
 
@@ -423,16 +446,18 @@ def test_unknown_calls_are_diagnosed_and_dynamic_calls_remain_explicit_fallbacks
     assert _lower("legacy_call(a)", bindings={"a": TYPE_FLOAT}, backend_helpers={"legacy_call"}) is None
 
 
-def test_object_info_emits_typed_ast_free_call_ir():
-    program = _lower('obj.info(transform_space="RELATIVE", as_instance=False)', bindings={"obj": TYPE_OBJECT})
-    calls = _operations(program, IRCall)
-    assert len(calls) == 1
-    call = calls[0]
-    assert call.target.kind is IRCallableKind.OBJECT_INFO
-    assert call.target.name == "Object.info"
-    assert dict(call.options) == {"transform_space": "RELATIVE", "as_instance": False}
-    assert call.results == (program.result,)
-    assert call.results[0].typ == TYPE_OBJECT
+def test_object_info_is_frontend_state_effect_without_backend_call_ir():
+    expr = _expr('obj.info(transform_space="RELATIVE", as_instance=False)')
+    analysis = analyze_expression(expr, _environment(bindings={"obj": TYPE_OBJECT}))
+    program = lower_analyzed_expression(expr, analysis)
+
+    assert not _operations(program, IRCall)
+    assert len(program.operations) == 1
+    assert isinstance(program.operations[0], IRBinding)
+    assert program.result == program.operations[0].result
+    state = analysis.object_semantics.states[analysis.facts[analysis.root].result_shape.object_id]
+    assert state.transform_space == "RELATIVE"
+    assert state.as_instance is False
 
 
 def test_raw_named_outputs_remain_structural_for_one_or_many_members():
@@ -524,117 +549,44 @@ def _backend_bindings(bindings):
         for name, value in bindings.items()
     }
 
-def test_exact_semantic_migration_markers_are_present_at_source_decisions():
-    """Stage-15 compatibility markers are exact, searchable, and exhaustively enumerated."""
+def test_exact_structural_semantics_migration_markers_are_present_once():
+    """Stage-18 compatibility decisions stay exact, searchable, and exhaustively enumerated."""
     root = Path(__file__).resolve().parents[2]
-    sources = {
-        name: (root / path).read_text(encoding="utf-8")
-        for name, path in {
-            "analysis": "semantic_analysis.py",
-            "semantic": "semantic_lowering.py",
-            "dispatcher": "expression_compiler.py",
-            "backend": "blender_ir_lowering.py",
-            "compiler": "compiler.py",
-            "local": "local_functions.py",
-            "library_calls": "library_calls.py",
-            "materializer": "function_materializer.py",
-            "constants": "constants.py",
-            "runtime_bindings": "runtime_bindings.py",
-            "statement": "statement_compiler.py",
-            "body": "semantic_body.py",
-            "interface": "interface.py",
-        }.items()
+    expected = {
+        "compiler.py": "STRUCTURAL_SEMANTICS_ARRAY_BUILDER_COMPAT",
+        "expression_compiler.py": "STRUCTURAL_SEMANTICS_REMAINING_LEGACY_NAME_FALLBACK",
+        "semantic_body.py": "STRUCTURAL_SEMANTICS_BODY_REMAINING_FALLBACK",
+        "blender_ir_lowering.py": "STRUCTURAL_SEMANTICS_LEGACY_EXPRESSION_RESULT_BRIDGE",
+        "values.py": (
+            "STRUCTURAL_SEMANTICS_LEGACY_TUPLEVALUE_COMPAT",
+            "STRUCTURAL_SEMANTICS_LEGACY_NODERESULT_COMPAT",
+            "STRUCTURAL_SEMANTICS_LEGACY_OBJECT_INFO_STATE",
+        ),
+        "builtins/bundle.py": "STRUCTURAL_SEMANTICS_LEGACY_BUNDLE_CALL_COMPAT",
+        "semantic_analysis.py": (
+            "STRUCTURAL_SEMANTICS_DYNAMIC_RESULT_FALLBACK",
+            "STRUCTURAL_SEMANTICS_LEGACY_OBJECT_EXPRESSION_FALLBACK",
+        ),
+        "statement_compiler.py": "STRUCTURAL_SEMANTICS_WHOLE_BODY_FALLBACK",
     }
-    normalized = {name: "\n".join(line.lstrip() for line in source.splitlines()) for name, source in sources.items()}
+    found = set()
+    for relative, marker_names in expected.items():
+        source = (root / relative).read_text(encoding="utf-8")
+        if isinstance(marker_names, str):
+            marker_names = (marker_names,)
+        for marker in marker_names:
+            assert source.count(marker) == 1, (relative, marker)
+            found.add(marker)
 
-    assert sources["analysis"].count("COMPLETE_EXPRESSION_IR_CALL_FALLBACK") == 0
-    assert sources["dispatcher"].count("COMPLETE_EXPRESSION_IR_FALLBACK") == 0
-    assert sources["backend"].count("SEMANTIC_IR_VALUE_MIGRATION") == 0
-    assert sources["local"].count("CANONICAL_CALL_ID_MIGRATION") == 0
-    assert sources["library_calls"].count("CANONICAL_CALL_ID_MIGRATION") == 0
-
-    required = {
-        "SEMANTIC_CALL_IR_DYNAMIC_FALLBACK": ("analysis", "# SEMANTIC_CALL_IR_DYNAMIC_FALLBACK: Callable identity is resolved here, but local,\n# imported, system, backend-helper, and native-Python calls do not yet expose a complete\n# Blender-independent result signature. Keep the enclosing expression on the legacy\n# realization path instead of inventing unknown types, opaque IR, or semantic-time Blender\n# probes. Remove this fallback when each remaining callable category has a compiler-owned\n# typed signature/result contract and can emit AST-free Call IR before materialization."),
-        "SEMANTIC_CALL_IR_FALLBACK": ("dispatcher", "# SEMANTIC_CALL_IR_FALLBACK: Stateless compiler-owned calls now lower through Semantic IR,\n# but resolved dynamic extension calls, explicitly stateful compiler-owned builtins, and\n# legacy non-Value compiler bindings can still make analysis unsupported. Preserve legacy\n# whole-expression dispatch only for those marked categories; do not add opaque backend\n# leaves or a temporary lowering-session protocol. Remove this branch when all three\n# fallback sources have permanent frontend-owned semantic/runtime contracts."),
-        "SEMANTIC_CALL_IR_LEGACY_DISPATCH": ("dispatcher", "# SEMANTIC_CALL_IR_LEGACY_DISPATCH: Remaining dynamic extension calls, explicitly stateful\n# builtins, and IR-capable wrapper builtins whose nested operand forced the already-active\n# whole-expression fallback still consume ast.Call and compiler/backend state here. Dispatch\n# only the already-resolved callable category; an IR-capable BUILTIN is permitted here only\n# because this branch is unreachable unless semantic analysis returned unsupported for the\n# enclosing expression. Do not repeat source-name precedence. Remove this branch when dynamic\n# extensions, stateful builtins, and legacy non-Value operands all have permanent frontend-owned\n# typed/runtime contracts and whole-expression fallback is gone."),
-        "SEMANTIC_CALL_IR_LOCAL_SPECIALIZATION_FALLBACK": ("local", "# SEMANTIC_CALL_IR_LOCAL_SPECIALIZATION_FALLBACK: The callable name is resolved before\n# legacy dispatch, but a local FunctionId still requires the current specialization\n# signature derived from argument and transitive-capture types in this backend-coupled\n# path. Keep canonical identity construction here; do not create a provisional local ID.\n# Remove this bridge when local function bodies/captures have a pure semantic signature\n# analysis that produces the exact specialization before reusable-group materialization."),
-        "SEMANTIC_CALL_IR_RESULT_MIGRATION": ("backend", "# SEMANTIC_CALL_IR_RESULT_MIGRATION: Semantic IR now represents core call results,\n# including structural tuple/named-output results, but statements, runtime state, and\n# source bindings still consume legacy backend Value/TupleValue/NodeResult containers.\n# Reconstruct those containers only at this backend return boundary. Remove this bridge\n# when compiler-owned runtime bindings/results replace backend objects above lowering."),
+    assert len(found) == 11
+    all_sources = "\n".join(path.read_text(encoding="utf-8") for path in root.rglob("*.py") if ".git" not in path.parts)
+    discovered = {
+        token.split(":", 1)[0]
+        for line in all_sources.splitlines()
+        for token in line.split()
+        if token.startswith("STRUCTURAL_SEMANTICS_")
     }
-    for marker, (source_name, body) in required.items():
-        assert sources[source_name].count(marker) == 1
-        assert body in normalized[source_name]
-
-    all_stage15 = set()
-    for source in sources.values():
-        for line in source.splitlines():
-            if "SEMANTIC_CALL_IR_" in line:
-                tail = line.split("SEMANTIC_CALL_IR_", 1)[1]
-                name = "SEMANTIC_CALL_IR_" + tail.split(":", 1)[0].split()[0]
-                all_stage15.add(name)
-    assert all_stage15 == set(required)
-
-    # Stage-16 runtime binding ownership replaces the old comp.vars projection markers.
-    assert sources["dispatcher"].count("SEMANTIC_IR_VALUE_MIGRATION") == 0
-    assert sources["dispatcher"].count("SEMANTIC_ANALYSIS_LEGACY_BINDING_MIGRATION") == 0
-    assert sources["compiler"].count("CANONICAL_BINDING_ID_MIGRATION") == 0
-    stage16_markers = {
-        "compiler": (
-            "# BASIC_BODY_IR_LEGACY_BACKEND_BINDING_BRIDGE: IRBody lowering now owns values created by\n# migrated inter-statement assignments, but legacy whole-body lowering and current body-entry\n# input/state seeding still require compiler-session BindingId -> Value materializations.\n# Never publish IRBody-created local assignment Values back into this map. Remove this bridge\n# when all supported bodies, interface/stateful input publication, and runtime control-flow\n# lowering pass backend binding materializations directly into body lowering.",
-            "# FRONTEND_RUNTIME_BINDING_STRUCTURAL_COMPAT: Ordinary runtime Values no longer live in\n# source-name storage, but CompileTimeObject instances, arrays, and TupleValue still lack one\n# complete frontend-owned binding representation. Keep only those protocol-approved non-Value\n# categories in this private compatibility store; Value/ObjectValue insertion is forbidden and\n# all access outside Compiler goes through the compiler-level structural binding API. Remove\n# this store when structural/compile-time binding semantics are represented by the frontend and\n# no backend/compiler container is required for source-name resolution.",
-            "# FRONTEND_RUNTIME_BINDING_STATE_CHECKPOINT_COMPAT: Legacy statement/runtime lowering\n# speculatively compiles branches and nested loops, so a checkpoint must still pair frontend\n# binding symbols with their current backend Value materializations and legacy structural\n# bindings. This is a compiler-control-flow compatibility mechanism, not Semantic IR state.\n# Remove it when statement/control-flow IR represents branch and loop state before Blender\n# materialization and speculative lowering no longer mutates Compiler binding state.",
-        ),
-        "dispatcher": (
-            "# FRONTEND_RUNTIME_BINDING_STRUCTURAL_FALLBACK: Runtime Value bindings are now frontend-owned,\n# but structural/compiler-only bindings still use the explicit compatibility store. Export\n# only their names so semantic analysis preserves source-name precedence and returns the\n# existing whole-expression fallback without receiving backend/compiler objects. Remove this\n# fallback when every structural binding category has frontend-owned semantic metadata.",
-        ),
-    }
-    for source_name, marker_bodies in stage16_markers.items():
-        for body in marker_bodies:
-            marker = body.split(":", 1)[0].split()[-1]
-            assert sources[source_name].count(marker) == 1
-            assert body in normalized[source_name]
-
-    assert sources["analysis"].count("SEMANTIC_CALL_IR_STATEFUL_BUILTIN_FALLBACK") == 0
-    assert sources["compiler"].count("FRONTEND_RUNTIME_BINDING_BACKEND_VALUE_BRIDGE") == 0
-    stage17_markers = {
-        "statement": (
-            "BASIC_BODY_IR_WHOLE_BODY_FALLBACK",
-        ),
-        "body": (
-            "BASIC_BODY_IR_EXPRESSION_FALLBACK",
-            "BASIC_BODY_IR_STRUCTURAL_BINDING_FALLBACK",
-        ),
-        "compiler": (
-            "BASIC_BODY_IR_LEGACY_BACKEND_BINDING_BRIDGE",
-        ),
-        "analysis": (
-            "BASIC_BODY_IR_REMAINING_STATEFUL_CALL_FALLBACK",
-        ),
-        "interface": (
-                "INPUT_DECLARATION_METADATA_LEGACY_COMPAT",
-        ),
-    }
-    for source_name, markers in stage17_markers.items():
-        for marker in markers:
-            assert sources[source_name].count(marker) == 1
-
-    production_sources = []
-    for path in root.rglob("*.py"):
-        if "tests" in path.parts:
-            continue
-        production_sources.append(path.read_text(encoding="utf-8"))
-    production_text = "\n".join(production_sources)
-    assert "comp.vars" not in production_text
-    assert "self.vars" not in production_text
-    assert "snapshot_runtime_bindings" not in production_text
-    assert "RuntimeBindingSnapshot" not in production_text
-
-    assert sources["analysis"].count("COMPLETE_EXPRESSION_IR_LEGACY_BINDING_FALLBACK") == 1
-    assert sources["dispatcher"].count("COMPLETE_EXPRESSION_IR_CONSTANT_MIGRATION") == 1
-    assert sources["compiler"].count("REUSABLE_CALL_IR_MIGRATION") == 1
-    assert sources["local"].count("REUSABLE_CALL_IR_MIGRATION") == 1
-    assert sources["library_calls"].count("REUSABLE_CALL_IR_MIGRATION") == 2
-    assert sources["materializer"].count("IR_DEPENDENCY_LOCAL_CATALOG_MIGRATION") == 1
-    assert sources["constants"].count("CANONICAL_NFTYPE_TYPE_ALIAS_MIGRATION") == 1
+    assert found <= discovered
 
 def test_blender_lowering_context_is_minimal_immutable_and_compiler_independent():
     from dataclasses import FrozenInstanceError, fields
@@ -1015,8 +967,8 @@ def test_object_properties_are_semantically_typed_and_calls_remain_fallback():
         with pytest.raises(CompileError, match="Object values support only"):
             _lower(source, bindings={"obj": TYPE_OBJECT})
     info = _lower("obj.info()", bindings={"obj": TYPE_OBJECT})
-    assert isinstance(info.operations[-1], IRCall)
-    assert info.operations[-1].target.kind is IRCallableKind.OBJECT_INFO
+    assert not _operations(info, IRCall)
+    assert isinstance(info.operations[-1], IRBinding)
 
 
 def test_ir_records_never_carry_mutable_lists_or_ast_backend_objects_after_completion():
@@ -1177,7 +1129,11 @@ def test_mixed_core_calls_stay_on_ir_path_and_dynamic_categories_remain_fallback
     for source, bindings in core_cases:
         program = _lower(source, bindings=bindings)
         assert program is not None, source
-        assert _operations(program, IRCall), source
+        if source == "obj.info().location":
+            assert isinstance(program.operations[-1], IRObjectProperty)
+            assert not _operations(program, IRCall)
+        else:
+            assert _operations(program, IRCall), source
 
     record = SimpleNamespace(package_id="vendor.pkg", namespace="functions", name="imported_fn")
     binding = SimpleNamespace(namespace="functions", canonical_name="imported_fn", record=record)

@@ -14,7 +14,8 @@ from helpers import (
     _evaluated_mesh_snapshot,
     _socket_identifier_by_name,
 )
-from NodeForge import packages
+from NodeForge import compiler, packages
+from NodeForge.errors import CompileError
 
 
 def _interface_socket(group, name, in_out):
@@ -253,3 +254,53 @@ output("Geometry", join(location_point, rotation_point, scale_point))
     check(set(vector_vertices) == expected, f"Object vector runtime outputs changed: {vector_vertices}")
 
     _cleanup_objects(target_obj, target_mesh, vector_target, vector_mesh, source_obj, source_mesh)
+
+
+def test_object_info_legacy_whole_body_fallback_preserves_configuration():
+    """A later unsupported statement leaves legacy ObjectValue as the only persistent Object-state owner."""
+    group = compile_group(
+        '''
+obj = input_object("Source")
+obj.info(as_instance=False)
+items = [1.0]
+output("Geometry", obj.geometry)
+''',
+        "NFTest_object_info_legacy_fallback_config",
+    )
+    nodes = _object_info_nodes(group)
+    check(len(nodes) == 1, f"expected one Object Info node, got {len(nodes)}")
+    check(nodes[0].inputs["As Instance"].default_value is False, "legacy fallback lost Object.info(as_instance=False)")
+    bpy.data.node_groups.remove(group)
+
+
+def test_object_info_legacy_whole_body_fallback_preserves_resolution_lock_and_alias():
+    """Legacy fallback keeps Object resolution lock shared through aliases across compile_expr calls."""
+    for suffix, source in (
+        (
+            "direct",
+            '''
+obj = input_object("Source")
+geometry = obj.geometry
+items = [1.0]
+obj.info(as_instance=False)
+output("Geometry", geometry)
+''',
+        ),
+        (
+            "alias",
+            '''
+obj = input_object("Source")
+alias = obj
+geometry = alias.geometry
+items = [1.0]
+obj.info(as_instance=False)
+output("Geometry", geometry)
+''',
+        ),
+    ):
+        try:
+            compiler.create_expression_group(source, f"NFTest_object_info_legacy_fallback_lock_{suffix}")
+        except CompileError as exc:
+            check(str(exc) == "Object.info() cannot be changed after Object Info has been resolved", f"unexpected Object lock diagnostic: {exc}")
+        else:
+            raise AssertionError("legacy Object Info resolution lock was lost after whole-body fallback")

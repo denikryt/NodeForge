@@ -36,6 +36,11 @@ _BUNDLE_SOCKET_TYPES = {
 }
 
 
+# STRUCTURAL_SEMANTICS_LEGACY_BUNDLE_CALL_COMPAT: Stateless Bundle calls are compiler-owned Call IR
+# in migrated expressions/bodies and lower through build_bundle/build_bundle_get/build_bundle_set.
+# Keep this AST/Compiler handler only because remaining whole-body legacy statements still route
+# expressions through builtin compile_call dispatch. Do not call it from Semantic IR lowering.
+# Remove it when the legacy expression/statement call dispatcher is no longer a production path.
 def compile_call(comp, expr, depth=0):
     """Compile one public Bundle built-in call."""
     name = expr.func.id

@@ -8,14 +8,8 @@ from .constants import TYPE_BOOL, TYPE_OBJECT
 from .nf_types import NFType
 from .call_resolution import CallableKind, NamedOutputsCallResult, RuntimeCallResult, TupleCallResult
 from .errors import CompileError
-from .semantic_analysis import (
-    ArrayResultShape,
-    ExpressionAnalysis,
-    NamedOutputsResultShape,
-    RuntimeResultShape,
-    SemanticConstant,
-    TupleResultShape,
-)
+from .semantic_analysis import ExpressionAnalysis, SemanticConstant
+from .semantic_values import ArrayResultShape, NamedOutputsResultShape, RuntimeResultShape, StructuralBindingKind, TupleResultShape
 from .semantic_ir import (
     IRArray,
     IRCall,
@@ -118,6 +112,19 @@ def lower_analyzed_expression(expr, analysis):
                     raise CompileError("Internal error: resolved runtime binding has no BindingId")
                 result = builder.new_value(runtime_type(node_fact))
                 return builder.emit(IRBinding(result, depth, resolved.binding_id))
+            if resolved.kind == "structural_binding":
+                structural = resolved.structural_binding
+                if structural is None:
+                    raise CompileError("Internal error: resolved structural binding has no descriptor")
+                emitted = []
+                for leaf in structural.leaves:
+                    result = builder.new_value(leaf.typ)
+                    emitted.append(builder.emit(IRBinding(result, depth, leaf.binding_id)))
+                if structural.kind is StructuralBindingKind.TUPLE:
+                    return IRTuple(tuple(emitted))
+                return IRNamedOutputs(
+                    tuple((leaf.projection_key[1], value) for leaf, value in zip(structural.leaves, emitted))
+                )
             if resolved.kind == "semantic_constant":
                 if not isinstance(resolved.value, SemanticConstant):
                     raise CompileError("Internal error: semantic constant resolution has invalid payload")
@@ -131,6 +138,12 @@ def lower_analyzed_expression(expr, analysis):
             return IRArray(tuple(emit(child, depth + 1) for child in node.elts))
 
         if isinstance(node, ast.Attribute):
+            if node_fact.resolved_name is not None and node_fact.resolved_name.kind == "runtime_binding":
+                resolved = node_fact.resolved_name
+                if resolved.binding_id is None:
+                    raise CompileError("Internal error: structural projection has no BindingId")
+                result = builder.new_value(runtime_type(node_fact))
+                return builder.emit(IRBinding(result, depth, resolved.binding_id))
             value = emit(node.value, depth + 1)
             if isinstance(value, IRNamedOutputs):
                 if node_fact.operation != "named_output":
@@ -143,10 +156,28 @@ def lower_analyzed_expression(expr, analysis):
                 raise CompileError("Internal error: attribute base lowered to a structural result")
             result = builder.new_value(runtime_type(node_fact))
             if value.typ == TYPE_OBJECT:
-                return builder.emit(IRObjectProperty(result, depth, value, node_fact.operation))
+                state = node_fact.object_info_state
+                if state is None:
+                    raise CompileError("Internal error: Object property has no semantic configuration")
+                return builder.emit(
+                    IRObjectProperty(
+                        result,
+                        depth,
+                        value,
+                        node_fact.operation,
+                        state.transform_space,
+                        state.as_instance,
+                    )
+                )
             return builder.emit(IRVectorComponent(result, depth, value, node_fact.operation))
 
         if isinstance(node, ast.Subscript):
+            if node_fact.resolved_name is not None and node_fact.resolved_name.kind == "runtime_binding":
+                resolved = node_fact.resolved_name
+                if resolved.binding_id is None:
+                    raise CompileError("Internal error: structural projection has no BindingId")
+                result = builder.new_value(runtime_type(node_fact))
+                return builder.emit(IRBinding(result, depth, resolved.binding_id))
             base = emit(node.value, depth + 1)
             if isinstance(base, IRArray):
                 try:
@@ -172,6 +203,13 @@ def lower_analyzed_expression(expr, analysis):
             analyzed = node_fact.analyzed_call
             if analyzed is None:
                 raise CompileError("Internal error: semantic call fact has no normalized call payload")
+            if analyzed.target.kind is CallableKind.OBJECT_INFO:
+                if len(node_fact.call_operand_nodes) != 1:
+                    raise CompileError("Internal error: Object.info semantic call has invalid receiver metadata")
+                receiver = emit(node_fact.call_operand_nodes[0], depth + 1)
+                if not isinstance(receiver, IRValue) or receiver.typ is not TYPE_OBJECT:
+                    raise CompileError("Internal error: Object.info receiver lowered to invalid IR value")
+                return receiver
             if len(analyzed.runtime_operands) != len(node_fact.call_operand_nodes):
                 raise CompileError("Internal error: analyzed call operand metadata is inconsistent")
             arguments = []
@@ -185,8 +223,6 @@ def lower_analyzed_expression(expr, analysis):
 
             if analyzed.target.kind is CallableKind.BUILTIN:
                 target = IRCallableTarget(IRCallableKind.BUILTIN, analyzed.target.source_name)
-            elif analyzed.target.kind is CallableKind.OBJECT_INFO:
-                target = IRCallableTarget(IRCallableKind.OBJECT_INFO, "Object.info")
             else:
                 raise CompileError("Internal error: dynamic callable reached Semantic Call IR lowering")
 

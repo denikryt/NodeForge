@@ -26,10 +26,19 @@ class ObjectValue(Value):
 
     def __init__(self, socket):
         super().__init__(socket, TYPE_OBJECT)
+        # STRUCTURAL_SEMANTICS_LEGACY_OBJECT_INFO_STATE: Migrated IRBody owns Object.info configuration,
+        # alias identity, and post-resolution locking in frontend semantic state. In whole-body legacy
+        # compilation, expression-only semantic analysis deliberately returns UNSUPPORTED for Object
+        # semantics (STRUCTURAL_SEMANTICS_LEGACY_OBJECT_EXPRESSION_FALLBACK), so compile_expr() still reaches
+        # ObjectValue.configure_info()/resolve_property() and these historical mutable fields remain the
+        # single Object semantic-state owner for that legacy route. New Semantic IR lowering must pass
+        # explicit Object Info configuration and must not read this legacy state. Remove these fields/method
+        # semantics only when no supported production body routes Object expressions through legacy compile_expr().
         self._info_transform_space = "ORIGINAL"
         self._info_as_instance = True
         self._info_resolved = False
         self._object_info_outputs = None
+        self._object_info_cache_config = None
 
     def configure_info(self, *, transform_space=_UNSET, as_instance=_UNSET):
         """Update unresolved Object Info settings and return this value for chaining."""
@@ -54,6 +63,11 @@ def make_value(socket, typ):
     return Value(socket, typ)
 
 
+# STRUCTURAL_SEMANTICS_LEGACY_TUPLEVALUE_COMPAT: IRBody fixed tuple semantics use immutable IRTuple
+# plus typed leaf BindingIds and do not store this backend container. Keep TupleValue only for
+# dynamic local/library and other whole-body legacy call paths whose typed result signatures are
+# not yet frontend-owned. Remove this class when every supported multi-result callable has a
+# compiler-owned result contract and no legacy statement/expression path consumes TupleValue.
 class TupleValue:
     """Fixed compiler-side tuple of ordinary runtime socket values."""
 
@@ -85,6 +99,11 @@ def reject_tuple_value(value, context):
         )
 
 
+# STRUCTURAL_SEMANTICS_LEGACY_NODERESULT_COMPAT: IRBody raw named-output semantics use
+# IRNamedOutputs plus named typed leaf BindingIds and do not store NodeResult. Keep this compile-time
+# backend container only for whole-body legacy consumers that still receive raw-node expression
+# results after Blender lowering. Remove it when no production caller above lowering requires a
+# backend object to select declared raw-node outputs.
 class NodeResult(CompileTimeObject):
     """Compile-time-only container for declared raw node outputs."""
 

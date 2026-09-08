@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import ast
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import AbstractSet, Mapping, TypeAlias
+from typing import AbstractSet, Mapping
 
 from .compiler_identities import BindingId
 from .call_resolution import (
@@ -49,6 +49,17 @@ from .consteval import ConstVector, _const_eval, _is_const_vector
 from .errors import CompileError
 from .nf_types import NFType, NUMERIC_NF_TYPES
 from .runtime_bindings import RuntimeBindingSymbol
+from .semantic_values import (
+    ArrayResultShape,
+    NamedOutputsResultShape,
+    ObjectInfoState,
+    ObjectSemanticId,
+    ObjectSemanticSnapshot,
+    RuntimeResultShape,
+    SemanticResultShape,
+    StructuralBindingSymbol,
+    TupleResultShape,
+)
 
 
 _RESERVED_VALUE_LABELS = {
@@ -68,55 +79,6 @@ _SWITCH_TYPES = {
     TYPE_STRING,
     TYPE_BUNDLE,
 }
-
-
-@dataclass(frozen=True)
-class RuntimeResultShape:
-    """Describe one socket-like runtime expression result."""
-
-    typ: NFType
-
-    def __post_init__(self):
-        """Reject non-canonical runtime type identities."""
-        if not isinstance(self.typ, NFType):
-            raise TypeError("typ must be an NFType")
-
-
-@dataclass(frozen=True)
-class ArrayResultShape:
-    """Describe one compiler-structural array expression result."""
-
-    items: tuple["SemanticResultShape", ...]
-
-
-@dataclass(frozen=True)
-class TupleResultShape:
-    """Describe one fixed tuple returned by a compiler-owned runtime call."""
-
-    items: tuple[RuntimeResultShape, ...]
-
-
-@dataclass(frozen=True)
-class NamedOutputsResultShape:
-    """Describe declared outputs returned by raw ``node(..., outputs=...)`` syntax."""
-
-    items: tuple[tuple[str, RuntimeResultShape], ...]
-
-    @property
-    def names(self) -> tuple[str, ...]:
-        """Return declared output names in source order."""
-        return tuple(name for name, _ in self.items)
-
-    def get(self, name: str) -> RuntimeResultShape:
-        """Return one declared output shape or preserve the current NodeResult diagnostic."""
-        for item_name, shape in self.items:
-            if item_name == name:
-                return shape
-        known = ", ".join(repr(item_name) for item_name, _ in self.items) or "<none>"
-        raise CompileError(f"Unknown raw node output {name!r}; declared outputs are: {known}")
-
-
-SemanticResultShape: TypeAlias = RuntimeResultShape | ArrayResultShape | TupleResultShape | NamedOutputsResultShape
 
 
 @dataclass(frozen=True)
@@ -144,6 +106,8 @@ class SemanticEnvironment:
     const_eval_values: Mapping[str, object]
     reserved_name_labels: Mapping[str, str]
     callable_environment: CallableEnvironment
+    structural_bindings: Mapping[str, StructuralBindingSymbol] = field(default_factory=lambda: MappingProxyType({}))
+    object_semantics: ObjectSemanticSnapshot | None = None
 
 
 @dataclass(frozen=True)
@@ -155,6 +119,7 @@ class ResolvedName:
     name: str | None = None
     value: object | None = None
     binding_id: BindingId | None = None
+    structural_binding: StructuralBindingSymbol | None = None
 
     def __post_init__(self):
         """Reject non-canonical runtime type identities when a type is present."""
@@ -173,14 +138,16 @@ class ExpressionFact:
     literal_value: object | None = None
     analyzed_call: AnalyzedCall | None = None
     call_operand_nodes: tuple[ast.expr, ...] = ()
+    object_info_state: ObjectInfoState | None = None
 
 
 @dataclass(frozen=True)
 class ExpressionAnalysis:
-    """Ephemeral AST-associated semantic facts for one fully owned expression."""
+    """Ephemeral AST-associated semantic facts plus detached Object semantic state."""
 
     root: ast.expr
     facts: Mapping[ast.AST, ExpressionFact]
+    object_semantics: ObjectSemanticSnapshot | None = None
 
 
 @dataclass(frozen=True)
@@ -347,16 +314,14 @@ def _shape_for_constant(constant):
     raise CompileError("Unsupported compile-time value in runtime expression")
 
 
-def _call_result_shape(result):
-    """Convert one normalized call result contract to semantic expression shape."""
+def _call_result_types(result):
+    """Return runtime leaf types from one normalized call result contract."""
     if isinstance(result, RuntimeCallResult):
-        return RuntimeResultShape(result.typ)
+        return (result.typ,)
     if isinstance(result, TupleCallResult):
-        return TupleResultShape(tuple(RuntimeResultShape(typ) for typ in result.types))
+        return tuple(result.types)
     if isinstance(result, NamedOutputsCallResult):
-        return NamedOutputsResultShape(
-            tuple((name, RuntimeResultShape(typ)) for name, typ in result.items)
-        )
+        return tuple(typ for _name, typ in result.items)
     raise CompileError("Internal error: unsupported analyzed call result contract")
 
 
@@ -376,29 +341,106 @@ def build_semantic_environment(
     constants,
     reserved_name_labels,
     callable_environment,
+    structural_bindings=None,
+    object_semantics=None,
 ):
     """Build one immutable expression environment from detached compiler-owned snapshots."""
+    structural_bindings = {} if structural_bindings is None else dict(structural_bindings)
+    runtime_bindings = dict(runtime_bindings)
+    overlap = set(runtime_bindings) & set(structural_bindings)
+    if overlap:
+        raise CompileError("Internal error: source name is both runtime and structural binding")
+    if object_semantics is not None and not isinstance(object_semantics, ObjectSemanticSnapshot):
+        raise TypeError("object_semantics must be an ObjectSemanticSnapshot or None")
+    if object_semantics is not None:
+        object_ids = object_semantics.object_ids_by_binding
+        object_states = object_semantics.states
+        active_types = {symbol.binding_id: symbol.typ for symbol in runtime_bindings.values()}
+        for structural in structural_bindings.values():
+            for leaf in structural.leaves:
+                active_types[leaf.binding_id] = leaf.typ
+        for binding_id, typ in active_types.items():
+            if typ is NFType.OBJECT:
+                object_id = object_ids.get(binding_id)
+                if not isinstance(object_id, ObjectSemanticId):
+                    raise CompileError("Internal error: active Object binding has no ObjectSemanticId")
+                if object_id not in object_states:
+                    raise CompileError("Internal error: active Object binding references missing ObjectInfoState")
+            elif binding_id in object_ids:
+                raise CompileError("Internal error: non-Object binding has ObjectSemanticId")
     semantic_constants, const_eval_values = build_semantic_constant_snapshot(constants)
     return SemanticEnvironment(
-        runtime_bindings=MappingProxyType(dict(runtime_bindings)),
+        runtime_bindings=MappingProxyType(runtime_bindings),
         legacy_binding_names=frozenset(legacy_binding_names),
         constants=semantic_constants,
         const_eval_values=const_eval_values,
         reserved_name_labels=MappingProxyType(dict(reserved_name_labels)),
         callable_environment=callable_environment,
+        structural_bindings=MappingProxyType(structural_bindings),
+        object_semantics=object_semantics,
     )
 
 
 def analyze_expression(expr, environment):
-    """Resolve and type-check one complete non-call Semantic IR expression tree."""
+    """Resolve and type-check one complete expression with detached semantic state."""
     facts = {}
+    if not isinstance(environment, SemanticEnvironment):
+        raise TypeError("environment must be a SemanticEnvironment")
+    if environment.object_semantics is None:
+        object_ids_by_binding = None
+        object_states = None
+        next_object_id = None
+    else:
+        object_ids_by_binding = dict(environment.object_semantics.object_ids_by_binding)
+        object_states = dict(environment.object_semantics.states)
+        next_object_id = environment.object_semantics.next_object_id
+
+    def has_body_object_semantics():
+        """Return whether this expression runs with persistent body-owned Object semantics."""
+        # STRUCTURAL_SEMANTICS_LEGACY_OBJECT_EXPRESSION_FALLBACK: Object semantics are stateful across
+        # expressions. Only lower_basic_body() supplies the persistent frontend Object registry required
+        # to own Object identity, Object.info() configuration, aliases, and post-resolution locking. When
+        # expression-only semantic analysis runs from the legacy compile_expr() path without that registry,
+        # reject Object bindings/results, Object.info(), Object properties, and Object-preserving projections
+        # as UNSUPPORTED so compile_expr() reaches the existing ObjectValue legacy implementation. Remove
+        # this fallback only when legacy body compilation no longer routes Object expressions through
+        # compile_expr(), or every remaining legacy body route has an explicitly planned persistent frontend
+        # Object semantic context with one unambiguous owner.
+        return object_ids_by_binding is not None and object_states is not None
+
+    def allocate_object_id():
+        nonlocal next_object_id
+        if object_ids_by_binding is None or object_states is None or next_object_id is None:
+            raise CompileError("Internal error: Object identity allocation requires body-owned semantic state")
+        object_id = ObjectSemanticId(next_object_id)
+        next_object_id += 1
+        object_states[object_id] = ObjectInfoState()
+        return object_id
 
     def record(node, fact):
         facts[node] = fact
         return fact
 
-    def runtime_fact(typ, **kwargs):
-        return ExpressionFact(RuntimeResultShape(typ), **kwargs)
+    def runtime_fact(typ, *, object_id=None, **kwargs):
+        if typ is NFType.OBJECT and object_id is None:
+            raise CompileError("Internal error: Object runtime fact requires ObjectSemanticId")
+        return ExpressionFact(RuntimeResultShape(typ, object_id), **kwargs)
+
+    def call_result_shape(result):
+        types = _call_result_types(result)
+        if any(typ is NFType.OBJECT for typ in types) and object_ids_by_binding is None:
+            return UNSUPPORTED
+        shapes = tuple(
+            RuntimeResultShape(typ, allocate_object_id() if typ is NFType.OBJECT else None)
+            for typ in types
+        )
+        if isinstance(result, RuntimeCallResult):
+            return shapes[0]
+        if isinstance(result, TupleCallResult):
+            return TupleResultShape(shapes)
+        if isinstance(result, NamedOutputsCallResult):
+            return NamedOutputsResultShape(tuple((name, shape) for (name, _), shape in zip(result.items, shapes)))
+        raise CompileError("Internal error: unsupported analyzed call result contract")
 
     def analyze(node):
         if isinstance(node, ast.Constant):
@@ -415,13 +457,33 @@ def analyze_expression(expr, environment):
                 raise CompileError(f"Type token {node.id} may only be used in node(...) type declarations")
             if node.id in environment.runtime_bindings:
                 symbol = environment.runtime_bindings[node.id]
+                if symbol.typ is NFType.OBJECT:
+                    if not has_body_object_semantics():
+                        return UNSUPPORTED
+                    object_id = object_ids_by_binding.get(symbol.binding_id)
+                    if not isinstance(object_id, ObjectSemanticId):
+                        raise CompileError("Internal error: Object runtime binding has no ObjectSemanticId")
+                else:
+                    object_id = None
                 resolved = ResolvedName(
                     "runtime_binding",
                     symbol.typ,
                     name=node.id,
                     binding_id=symbol.binding_id,
                 )
-                return record(node, runtime_fact(symbol.typ, resolved_name=resolved))
+                return record(node, runtime_fact(symbol.typ, object_id=object_id, resolved_name=resolved))
+            if node.id in environment.structural_bindings:
+                structural = environment.structural_bindings[node.id]
+                if object_ids_by_binding is None and any(leaf.typ is NFType.OBJECT for leaf in structural.leaves):
+                    return UNSUPPORTED
+                shape = structural.result_shape({} if object_ids_by_binding is None else object_ids_by_binding)
+                resolved = ResolvedName(
+                    "structural_binding",
+                    None,
+                    name=node.id,
+                    structural_binding=structural,
+                )
+                return record(node, ExpressionFact(shape, resolved_name=resolved))
             # COMPLETE_EXPRESSION_IR_LEGACY_BINDING_FALLBACK: Non-Value compiler bindings still
             # have no frontend-owned semantic result shape. Keep the complete enclosing expression
             # on the legacy dispatcher when one is reached; do not carry the compiler object into IR.
@@ -463,19 +525,52 @@ def analyze_expression(expr, environment):
             if base is UNSUPPORTED:
                 return UNSUPPORTED
             if isinstance(base.result_shape, NamedOutputsResultShape):
+                shape = base.result_shape.get(node.attr)
+                resolved_name = None
+                structural = base.resolved_name.structural_binding if base.resolved_name is not None else None
+                if structural is not None:
+                    leaf = structural.leaf_by_name(node.attr)
+                    resolved_name = ResolvedName(
+                        "runtime_binding",
+                        leaf.typ,
+                        name=base.resolved_name.name,
+                        binding_id=leaf.binding_id,
+                    )
                 return record(
                     node,
                     ExpressionFact(
-                        base.result_shape.get(node.attr),
+                        shape,
                         operation="named_output",
                         literal_value=node.attr,
+                        resolved_name=resolved_name,
                     ),
                 )
             base_typ = _require_runtime_type(base, "attribute access")
             if base_typ == TYPE_OBJECT:
+                if not has_body_object_semantics():
+                    return UNSUPPORTED
                 if node.attr not in OBJECT_PROPERTY_TYPES:
                     raise CompileError("Object values support only .geometry, .location, .rotation and .scale")
-                return record(node, runtime_fact(OBJECT_PROPERTY_TYPES[node.attr], operation=node.attr))
+                object_id = base.result_shape.object_id
+                if not isinstance(object_id, ObjectSemanticId):
+                    raise CompileError("Internal error: Object property receiver has no ObjectSemanticId")
+                state = object_states.get(object_id)
+                if not isinstance(state, ObjectInfoState):
+                    raise CompileError("Internal error: Object property receiver has no ObjectInfoState")
+                property_state = state
+                object_states[object_id] = ObjectInfoState(
+                    transform_space=state.transform_space,
+                    as_instance=state.as_instance,
+                    resolved=True,
+                )
+                return record(
+                    node,
+                    runtime_fact(
+                        OBJECT_PROPERTY_TYPES[node.attr],
+                        operation=node.attr,
+                        object_info_state=property_state,
+                    ),
+                )
             if node.attr in {"x", "y", "z"}:
                 if base_typ != TYPE_VECTOR:
                     raise CompileError(".x/.y/.z can only be used on Vector values")
@@ -493,12 +588,24 @@ def analyze_expression(expr, environment):
                     raise CompileError("raw node output lookup requires a compile-time string key") from exc
                 if not isinstance(key, str) or not key:
                     raise CompileError("raw node output lookup requires a non-empty string key")
+                shape = base.result_shape.get(key)
+                resolved_name = None
+                structural = base.resolved_name.structural_binding if base.resolved_name is not None else None
+                if structural is not None:
+                    leaf = structural.leaf_by_name(key)
+                    resolved_name = ResolvedName(
+                        "runtime_binding",
+                        leaf.typ,
+                        name=base.resolved_name.name,
+                        binding_id=leaf.binding_id,
+                    )
                 return record(
                     node,
                     ExpressionFact(
-                        base.result_shape.get(key),
+                        shape,
                         operation="named_output",
                         literal_value=key,
+                        resolved_name=resolved_name,
                     ),
                 )
             if isinstance(base.result_shape, TupleResultShape):
@@ -514,7 +621,25 @@ def analyze_expression(expr, environment):
                     raise CompileError(
                         f"tuple result index {index} is out of range for {len(base.result_shape.items)} values"
                     ) from exc
-                return record(node, ExpressionFact(selected_shape, operation="tuple_index", literal_value=index))
+                resolved_name = None
+                structural = base.resolved_name.structural_binding if base.resolved_name is not None else None
+                if structural is not None:
+                    leaf = structural.leaf_by_index(index)
+                    resolved_name = ResolvedName(
+                        "runtime_binding",
+                        leaf.typ,
+                        name=base.resolved_name.name,
+                        binding_id=leaf.binding_id,
+                    )
+                return record(
+                    node,
+                    ExpressionFact(
+                        selected_shape,
+                        operation="tuple_index",
+                        literal_value=index,
+                        resolved_name=resolved_name,
+                    ),
+                )
             try:
                 index = int(_const_eval(node.slice, environment.const_eval_values))
             except (CompileError, TypeError, ValueError, OverflowError) as exc:
@@ -636,11 +761,21 @@ def analyze_expression(expr, environment):
             if isinstance(node.func, ast.Attribute):
                 if node.func.attr != "info":
                     raise CompileError("Object values support only the .info() method")
+                if not has_body_object_semantics():
+                    return UNSUPPORTED
                 receiver = analyze(node.func.value)
                 if receiver is UNSUPPORTED:
                     return UNSUPPORTED
                 if _require_runtime_type(receiver, ".info() receiver") != TYPE_OBJECT:
                     raise CompileError(".info() can only be used on Object values")
+                object_id = receiver.result_shape.object_id
+                if not isinstance(object_id, ObjectSemanticId):
+                    raise CompileError("Internal error: Object.info receiver has no ObjectSemanticId")
+                state = object_states.get(object_id)
+                if not isinstance(state, ObjectInfoState):
+                    raise CompileError("Internal error: Object.info receiver has no ObjectInfoState")
+                if state.resolved:
+                    raise CompileError("Object.info() cannot be changed after Object Info has been resolved")
                 if node.args:
                     raise CompileError("Object.info() accepts only keyword arguments")
                 if any(kw.arg is None for kw in node.keywords):
@@ -649,36 +784,39 @@ def analyze_expression(expr, environment):
                 extra = set(kws) - {"transform_space", "as_instance"}
                 if extra:
                     raise CompileError("Object.info() accepts only transform_space= and as_instance=")
-                options = []
+                transform_space = state.transform_space
+                as_instance = state.as_instance
                 if "transform_space" in kws:
                     try:
-                        value = _const_eval(kws["transform_space"], environment.const_eval_values)
+                        transform_space = _const_eval(kws["transform_space"], environment.const_eval_values)
                     except CompileError as exc:
                         raise CompileError("Object.info() transform_space must be 'ORIGINAL' or 'RELATIVE'") from exc
-                    if value not in {"ORIGINAL", "RELATIVE"}:
+                    if transform_space not in {"ORIGINAL", "RELATIVE"}:
                         raise CompileError("Object.info() transform_space must be 'ORIGINAL' or 'RELATIVE'")
-                    options.append(("transform_space", value))
                 if "as_instance" in kws:
                     try:
-                        value = _const_eval(kws["as_instance"], environment.const_eval_values)
+                        as_instance = _const_eval(kws["as_instance"], environment.const_eval_values)
                     except CompileError as exc:
                         raise CompileError("Object.info() as_instance must be a compile-time Bool") from exc
-                    if not isinstance(value, bool):
+                    if not isinstance(as_instance, bool):
                         raise CompileError("Object.info() as_instance must be a compile-time Bool")
-                    options.append(("as_instance", value))
+                new_state = ObjectInfoState(transform_space=transform_space, as_instance=as_instance, resolved=False)
+                object_states[object_id] = new_state
                 target = ResolvedCallable(CallableKind.OBJECT_INFO, "Object.info", target="Object.info")
                 analyzed_call = AnalyzedCall(
                     target=target,
                     runtime_operands=(AnalyzedCallOperand("receiver", TYPE_OBJECT),),
-                    options=tuple(options),
+                    options=(),
                     result=RuntimeCallResult(TYPE_OBJECT),
                 )
                 return record(
                     node,
                     runtime_fact(
                         TYPE_OBJECT,
+                        object_id=object_id,
                         analyzed_call=analyzed_call,
                         call_operand_nodes=(node.func.value,),
+                        object_info_state=new_state,
                     ),
                 )
             if not isinstance(node.func, ast.Name):
@@ -733,10 +871,13 @@ def analyze_expression(expr, environment):
                     options=builtin.options,
                     result=builtin.result,
                 )
+                result_shape = call_result_shape(builtin.result)
+                if result_shape is UNSUPPORTED:
+                    return UNSUPPORTED
                 return record(
                     node,
                     ExpressionFact(
-                        _call_result_shape(builtin.result),
+                        result_shape,
                         analyzed_call=analyzed_call,
                         call_operand_nodes=tuple(runtime_nodes),
                     ),
@@ -749,12 +890,12 @@ def analyze_expression(expr, environment):
             }:
                 if resolved.kind in {CallableKind.SYSTEM, CallableKind.BACKEND_HELPER} and modifiers.unique_was_explicit:
                     raise unsupported_unique(name)
-                # SEMANTIC_CALL_IR_DYNAMIC_FALLBACK: Callable identity is resolved here, but local,
-                # imported, system, backend-helper, and native-Python calls do not yet expose a complete
-                # Blender-independent result signature. Keep the enclosing expression on the legacy
-                # realization path instead of inventing unknown types, opaque IR, or semantic-time Blender
-                # probes. Remove this fallback when each remaining callable category has a compiler-owned
-                # typed signature/result contract and can emit AST-free Call IR before materialization.
+                # STRUCTURAL_SEMANTICS_DYNAMIC_RESULT_FALLBACK: Fixed tuple/named-output structures are frontend-owned
+                # only when the resolved callable already provides a typed semantic result contract. Local/imported/
+                # system/backend/native call categories that still derive result shape or behavior from dynamic
+                # compilation/execution remain whole-expression/body fallback. Do not probe Blender interfaces,
+                # execute Python helpers, or invent opaque tuple signatures during semantic analysis. Remove this
+                # fallback when those callable categories expose compiler-owned typed result/signature contracts.
                 return UNSUPPORTED
             raise CompileError(f"Internal error: unsupported resolved callable category {resolved.kind}")
 
@@ -763,16 +904,15 @@ def analyze_expression(expr, environment):
     result = analyze(expr)
     if result is UNSUPPORTED:
         return None
-    return ExpressionAnalysis(expr, MappingProxyType(dict(facts)))
+    if object_ids_by_binding is None:
+        snapshot = None
+    else:
+        snapshot = ObjectSemanticSnapshot(object_ids_by_binding, object_states, next_object_id)
+    return ExpressionAnalysis(expr, MappingProxyType(dict(facts)), snapshot)
 
 
 __all__ = [
     "RuntimeBindingSymbol",
-    "RuntimeResultShape",
-    "ArrayResultShape",
-    "NamedOutputsResultShape",
-    "TupleResultShape",
-    "SemanticResultShape",
     "SemanticConstant",
     "SemanticEnvironment",
     "ResolvedName",

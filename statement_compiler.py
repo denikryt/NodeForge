@@ -546,13 +546,13 @@ def compile_statements(ctx, stmts):
         declaration_owner=comp.input_declaration_owner,
     )
     if body_compilation is BODY_UNSUPPORTED:
-        # BASIC_BODY_IR_WHOLE_BODY_FALLBACK: Straight-line runtime assignment/output bodies now
-        # lower as one compiler-owned IRBody, but structural bindings, control flow, interface/
-        # geometry side-effect statements, grid/grid_uv or non-declaration stateful calls, and
-        # dynamic extension calls still require the existing statement compiler. Keep the entire body on one legacy path when
-        # any such construct is present; do not synchronize IRBody and legacy backend state midway
-        # through a body. Remove this fallback when every supported statement/body category has a
-        # frontend-owned semantic representation and body lowering no longer needs compile_statement().
+        # STRUCTURAL_SEMANTICS_WHOLE_BODY_FALLBACK: Straight-line runtime values plus fixed tuple/raw
+        # named-output structural bindings and migrated Object semantics lower as one compiler-owned IRBody.
+        # Mutable arrays, GeometryBuilder, runtime control flow, interface/geometry side-effect statements,
+        # stateful calls, and dynamic extension/function categories still require compile_statement(). Keep
+        # the entire body on one legacy path when any such construct is present; never mix partially lowered
+        # IRBody state with legacy Blender mutation. Remove this fallback when every supported body category
+        # has a frontend-owned semantic representation and compile_statement() is no longer production code.
         for idx, stmt in enumerate(stmts):
             compile_statement(
                 ctx,

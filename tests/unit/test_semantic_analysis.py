@@ -21,6 +21,7 @@ from NodeForge.errors import CompileError
 from NodeForge.consteval import _const_eval
 from NodeForge.compiler_identities import BindingId
 from NodeForge.call_resolution import CallableEnvironment
+from NodeForge.semantic_values import ObjectInfoState, ObjectSemanticId, ObjectSemanticSnapshot
 from NodeForge.semantic_analysis import (
     ArrayResultShape, RuntimeBindingSymbol, RuntimeResultShape, SemanticEnvironment,
     analyze_expression, build_semantic_constant_snapshot,
@@ -40,13 +41,25 @@ def _expr(source):
     return ast.parse(source, mode="eval").body
 
 
-def _env(*, bindings=None, legacy=(), consts=None, labels=None, backend_helpers=(), builtins=(), systems=None, local_functions=None, imported_functions=None, **_ignored):
+def _env(*, bindings=None, legacy=(), consts=None, labels=None, backend_helpers=(), builtins=(), systems=None, local_functions=None, imported_functions=None, object_registry=True, **_ignored):
     """Construct the immutable semantic snapshot used by analyzer tests."""
     runtime_bindings = {
         name: RuntimeBindingSymbol(BindingId("test-owner", index), typ)
         for index, (name, typ) in enumerate((bindings or {}).items())
     }
     constants, const_eval_values = build_semantic_constant_snapshot(consts or {})
+    object_semantics = None
+    if object_registry:
+        object_ids = {}
+        states = {}
+        next_id = 0
+        for symbol in runtime_bindings.values():
+            if symbol.typ is TYPE_OBJECT:
+                object_id = ObjectSemanticId(next_id)
+                next_id += 1
+                object_ids[symbol.binding_id] = object_id
+                states[object_id] = ObjectInfoState()
+        object_semantics = ObjectSemanticSnapshot(object_ids, states, next_id)
     return SemanticEnvironment(
         MappingProxyType(runtime_bindings),
         frozenset(legacy),
@@ -60,6 +73,7 @@ def _env(*, bindings=None, legacy=(), consts=None, labels=None, backend_helpers=
             frozenset(backend_helpers),
             imported_functions or {},
         ),
+        object_semantics=object_semantics,
     )
 
 def _typ(fact):
@@ -292,6 +306,13 @@ def test_vector_component_and_object_attribute_boundaries():
     obj = _analyze("obj.geometry", bindings={"obj": TYPE_OBJECT})
     assert _typ(obj.facts[obj.root]) == TYPE_GEOMETRY
 
+
+
+def test_legacy_expression_environment_allows_unused_object_but_falls_back_when_reached():
+    """Marker 11 is reached by use, not merely by Object presence in the environment."""
+    arithmetic = _analyze("1.0 + 2.0", bindings={"obj": TYPE_OBJECT}, object_registry=False)
+    assert arithmetic is not None
+    assert _analyze("obj.geometry", bindings={"obj": TYPE_OBJECT}, object_registry=False) is None
 
 def test_only_calls_and_legacy_bindings_remain_planned_fallbacks():
     assert _analyze("f()", bindings={"a": TYPE_FLOAT}, backend_helpers={"f"}) is None

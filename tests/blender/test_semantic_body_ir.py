@@ -197,3 +197,53 @@ def test_nested_input_calls_fail_before_interface_socket_creation():
         raise AssertionError("nested input call unexpectedly compiled")
     leaked = [group.name for group in bpy.data.node_groups if group.as_pointer() not in before]
     check(not leaked, f"invalid nested input compilation leaked groups: {leaked}")
+
+
+def test_fixed_tuple_storage_and_unpack_stay_in_one_irbody_and_one_producer(monkeypatch):
+    """Stored/projected and unpacked capture_attribute tuples avoid whole-body legacy lowering."""
+    calls = []
+    original = statement_compiler.lower_ir_body
+
+    def wrapped(context, body, initial_runtime_bindings, base_depth=1, **kwargs):
+        calls.append(body)
+        return original(context, body, initial_runtime_bindings, base_depth, **kwargs)
+
+    monkeypatch.setattr(statement_compiler, "lower_ir_body", wrapped)
+    group = compile_group(
+        '''
+geo = input_geometry("Geometry")
+pair = capture_attribute(geo, position().x)
+output("Stored", pair[-1])
+a, b = capture_attribute(geo, position().y)
+output("Unpacked", b)
+''',
+        "NFTest_structural_tuple_body_ir",
+    )
+    check(len(calls) == 1, f"expected one IRBody lowering session, got {len(calls)}")
+    captures = [node for node in group.nodes if node.bl_idname == "GeometryNodeCaptureAttribute"]
+    check(len(captures) == 2, f"tuple projection duplicated capture producers: {len(captures)}")
+    check([item.name for item in _interface_sockets(group, "OUTPUT")] == ["Stored", "Unpacked"], "tuple output order changed")
+    bpy.data.node_groups.remove(group)
+
+
+def test_flat_list_target_unpack_uses_structural_body_ir(monkeypatch):
+    """List-target unpack has the same fixed-tuple leaf binding semantics as tuple-target unpack."""
+    legacy_calls = []
+    original = statement_compiler.compile_statement
+
+    def wrapped(*args, **kwargs):
+        legacy_calls.append(args[1])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(statement_compiler, "compile_statement", wrapped)
+    group = compile_group(
+        '''
+geo = input_geometry("Geometry")
+[a, b] = capture_attribute(geo, position().x)
+output("Value", b)
+''',
+        "NFTest_structural_list_unpack_body_ir",
+    )
+    check(not legacy_calls, "fixed tuple list-unpack unexpectedly entered legacy statement lowering")
+    check(len([node for node in group.nodes if node.bl_idname == "GeometryNodeCaptureAttribute"]) == 1, "list unpack duplicated producer")
+    bpy.data.node_groups.remove(group)

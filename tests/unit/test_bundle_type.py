@@ -6,6 +6,7 @@ import pytest
 
 from NodeForge.builtins import bundle, io, raw_nodes
 from NodeForge.constants import TYPE_BUNDLE, TYPE_TOKEN_NAMES, TYPE_VECTOR
+from NodeForge.nf_types import NFType
 from NodeForge.errors import CompileError
 from NodeForge.local_functions import input_call_for_type, resolve_local_parameter_annotation, value_type_for_const
 from NodeForge.nodes import _socket_type_for
@@ -57,3 +58,10 @@ def test_unknown_group_socket_does_not_fall_back_to_float():
 
     with pytest.raises(CompileError, match="Unsupported Blender group socket type"):
         _socket_type_to_value_type(FakeSocket())
+
+
+def test_bundle_remains_one_runtime_nftype_without_structural_schema_types():
+    assert TYPE_BUNDLE is NFType.BUNDLE
+    assert not hasattr(NFType, "TUPLE")
+    assert not hasattr(NFType, "NODE_RESULT")
+    assert not hasattr(NFType, "NAMED_OUTPUTS")

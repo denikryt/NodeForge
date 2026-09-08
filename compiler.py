@@ -227,13 +227,12 @@ class Compiler:
         # when all supported bodies, interface/stateful input publication, and runtime control-flow
         # lowering pass backend binding materializations directly into body lowering.
         self._runtime_binding_values: dict[BindingId, Value] = {}
-        # FRONTEND_RUNTIME_BINDING_STRUCTURAL_COMPAT: Ordinary runtime Values no longer live in
-        # source-name storage, but CompileTimeObject instances, arrays, and TupleValue still lack one
-        # complete frontend-owned binding representation. Keep only those protocol-approved non-Value
-        # categories in this private compatibility store; Value/ObjectValue insertion is forbidden and
-        # all access outside Compiler goes through the compiler-level structural binding API. Remove
-        # this store when structural/compile-time binding semantics are represented by the frontend and
-        # no backend/compiler container is required for source-name resolution.
+        # STRUCTURAL_SEMANTICS_ARRAY_BUILDER_COMPAT: Fixed tuple and raw named-output bindings are
+        # frontend-owned in IRBody, but mutable script arrays, GeometryBuilder/CompileTimeObject state,
+        # and structural values produced inside whole-body legacy fallback still require the private
+        # compiler-side compatibility store. Migrated IRBody tuple/named-output statements must never
+        # write here. Remove this store only after array/builder semantics, dynamic-call structural
+        # results, and remaining whole-body legacy statement lowering have compiler-owned representations.
         self._legacy_structural_bindings: dict[str, object] = {}
         self._interface_inputs_by_identifier = {}
         self._interface_inputs_by_socket_pointer = {}
@@ -371,27 +370,27 @@ class Compiler:
             self._runtime_bindings.unbind(name)
 
     def legacy_structural_binding(self, name: str):
-        """Return one active temporary structural/compiler-only source binding."""
+        """Return one remaining legacy-only array/builder/dynamic structural binding."""
         return self._legacy_structural_bindings.get(name)
 
     def has_legacy_structural_binding(self, name: str) -> bool:
-        """Return whether a source name currently owns a legacy structural binding."""
+        """Return whether a source name owns a remaining legacy-only structural binding."""
         return name in self._legacy_structural_bindings
 
     def legacy_structural_binding_names_snapshot(self) -> frozenset[str]:
-        """Return the active structural names without exposing compiler/backend objects."""
+        """Return only remaining legacy structural names without exposing their objects."""
         return frozenset(self._legacy_structural_bindings)
 
     @staticmethod
     def _validate_legacy_structural_candidate(value) -> None:
-        """Reject ordinary runtime Values and unknown categories before structural mutation."""
+        """Accept only legacy array/builder/dynamic-result containers, never IRBody structure."""
         if isinstance(value, Value):
             raise TypeError("legacy structural binding cannot contain Value/ObjectValue")
         if not isinstance(value, (CompileTimeObject, list, TupleValue)):
             raise TypeError(f"unsupported legacy structural binding category: {type(value).__name__}")
 
     def bind_legacy_structural(self, name: str, value) -> None:
-        """Atomically publish one characterized structural binding and deactivate runtime ownership."""
+        """Publish one remaining legacy-only structural binding and deactivate runtime ownership."""
         if not isinstance(name, str) or not name:
             raise ValueError("legacy structural binding name must be a non-empty string")
         self._validate_legacy_structural_candidate(value)

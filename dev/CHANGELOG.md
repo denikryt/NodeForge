@@ -201,3 +201,6 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 - Added durable `InputDeclarationId` metadata for direct explicit inputs so transactional updates preserve links and overrides by compiler-owned declaration identity rather than duplicate-label occurrence, with fail-closed migration for ambiguous legacy live state.
 - Made explicit-input declaration metadata mandatory for publication and restricted `input_*` to a complete simple-assignment RHS, rejecting nested/general expression use before Blender effects.
 - Preserved user overrides for groups that mix implicit runtime inputs with explicit `input_*` declarations by merging both persisted script-default metadata stores during update capture.
+## 0.51.1
+
+- Moved fixed tuple/raw named-output body bindings and migrated Object Info configuration/alias locking into compiler-owned semantic state, while preserving legacy whole-body fallback behavior and keeping Bundle as the existing opaque runtime type.

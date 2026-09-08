@@ -30,7 +30,6 @@ class IRCallableKind(str, Enum):
     """Identify a compiler-owned call target that Semantic IR can realize."""
 
     BUILTIN = "BUILTIN"
-    OBJECT_INFO = "OBJECT_INFO"
 
 
 @dataclass(frozen=True)
@@ -316,12 +315,28 @@ class IRVectorLiteral:
 
 @dataclass(frozen=True)
 class IRObjectProperty:
-    """Produce one typed Object Info property from an Object runtime value."""
+    """Produce one typed Object Info property with frontend-owned configuration."""
 
     result: IRValue
     depth: int
     value: IRValue
     property_name: str
+    transform_space: str
+    as_instance: bool
+
+    def __post_init__(self) -> None:
+        """Validate Object property type/configuration before Blender lowering."""
+        from .constants import OBJECT_PROPERTY_TYPES, TYPE_OBJECT
+        if self.property_name not in OBJECT_PROPERTY_TYPES:
+            raise ValueError("unsupported Object property")
+        if self.value.typ is not TYPE_OBJECT:
+            raise TypeError("IRObjectProperty value must be Object")
+        if self.result.typ is not OBJECT_PROPERTY_TYPES[self.property_name]:
+            raise TypeError("IRObjectProperty result type does not match property contract")
+        if self.transform_space not in {"ORIGINAL", "RELATIVE"}:
+            raise ValueError("IRObjectProperty transform_space must be ORIGINAL or RELATIVE")
+        if not isinstance(self.as_instance, bool):
+            raise TypeError("IRObjectProperty as_instance must be bool")
 
 
 @dataclass(frozen=True)
@@ -429,7 +444,84 @@ class IRFinalExpression:
             raise TypeError("IRFinalExpression value must be an IRProgram with an IRValue result")
 
 
-IRBodyStatement: TypeAlias = IRAssign | IRInputDeclaration | IROutput | IRFinalExpression
+
+def _bindable_runtime_result_leaves(result: IRResult) -> tuple[IRValue, ...]:
+    """Return stage-18 leaves accepted by ``IRBindLeaves``.
+
+    Mutable/source-array semantics remain a whole-body legacy category in this
+    stage.  Leaf binding therefore accepts only scalar runtime values and the
+    fixed structural result forms whose frontend semantics are already owned.
+    """
+    if isinstance(result, IRValue):
+        return (result,)
+    if isinstance(result, IRTuple):
+        return result.items
+    if isinstance(result, IRNamedOutputs):
+        return tuple(value for _name, value in result.items)
+    if isinstance(result, IRArray):
+        raise TypeError("IRBindLeaves does not accept IRArray results")
+    raise TypeError("unsupported IR result")
+
+
+@dataclass(frozen=True)
+class IRLeafBinding:
+    """Map one exact program-result leaf to one body-local destination BindingId."""
+
+    source: IRValue
+    destination: BindingId
+    typ: NFType
+
+    def __post_init__(self) -> None:
+        """Require canonical source/destination/type metadata."""
+        if not isinstance(self.source, IRValue):
+            raise TypeError("IRLeafBinding.source must be an IRValue")
+        if not isinstance(self.destination, BindingId):
+            raise TypeError("IRLeafBinding.destination must be a BindingId")
+        if not isinstance(self.typ, NFType):
+            raise TypeError("IRLeafBinding.typ must be an NFType")
+        if self.source.typ is not self.typ:
+            raise TypeError("IRLeafBinding type must equal source type")
+
+
+@dataclass(frozen=True)
+class IRBindLeaves:
+    """Evaluate one structural program once and bind selected runtime leaves."""
+
+    value: IRProgram
+    bindings: tuple[IRLeafBinding, ...]
+
+    def __post_init__(self) -> None:
+        """Validate exact result-leaf membership and one-to-one destinations."""
+        if not isinstance(self.value, IRProgram):
+            raise TypeError("IRBindLeaves.value must be an IRProgram")
+        object.__setattr__(self, "bindings", tuple(self.bindings))
+        if not self.bindings or not all(isinstance(binding, IRLeafBinding) for binding in self.bindings):
+            raise TypeError("IRBindLeaves requires one or more IRLeafBinding records")
+        leaves = _bindable_runtime_result_leaves(self.value.result)
+        leaf_ids = {(leaf.id, leaf.typ) for leaf in leaves}
+        if any((binding.source.id, binding.source.typ) not in leaf_ids for binding in self.bindings):
+            raise ValueError("IRBindLeaves source must be an exact runtime leaf of value.result")
+        destinations = [binding.destination for binding in self.bindings]
+        sources = [(binding.source.id, binding.source.typ) for binding in self.bindings]
+        if len(destinations) != len(set(destinations)):
+            raise ValueError("IRBindLeaves destinations must be unique")
+        if len(sources) != len(set(sources)):
+            raise ValueError("IRBindLeaves source leaves must be unique")
+
+
+@dataclass(frozen=True)
+class IRDiscardExpression:
+    """Evaluate one expression program exactly once and discard its result."""
+
+    value: IRProgram
+
+    def __post_init__(self) -> None:
+        """Require a complete compiler-owned expression program."""
+        if not isinstance(self.value, IRProgram):
+            raise TypeError("IRDiscardExpression.value must be an IRProgram")
+
+
+IRBodyStatement: TypeAlias = IRAssign | IRInputDeclaration | IROutput | IRFinalExpression | IRBindLeaves | IRDiscardExpression
 
 
 @dataclass(frozen=True)
@@ -441,7 +533,7 @@ class IRBody:
     def __post_init__(self) -> None:
         """Freeze statement order and reject non-body records."""
         object.__setattr__(self, "statements", tuple(self.statements))
-        allowed = (IRAssign, IRInputDeclaration, IROutput, IRFinalExpression)
+        allowed = (IRAssign, IRInputDeclaration, IROutput, IRFinalExpression, IRBindLeaves, IRDiscardExpression)
         if not all(isinstance(statement, allowed) for statement in self.statements):
             raise TypeError("IRBody contains an unsupported statement record")
 
@@ -475,6 +567,9 @@ __all__ = [
     "IRInputDeclaration",
     "IROutput",
     "IRFinalExpression",
+    "IRLeafBinding",
+    "IRBindLeaves",
+    "IRDiscardExpression",
     "IRBodyStatement",
     "IRBody",
 ]

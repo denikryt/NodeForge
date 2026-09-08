@@ -24,6 +24,7 @@ from NodeForge.compiler_identities import BindingId
 from NodeForge.call_resolution import CallableEnvironment
 from NodeForge.builtin_call_semantics import IR_CAPABLE_BUILTIN_NAMES
 from NodeForge.semantic_analysis import RuntimeBindingSymbol, SemanticEnvironment, analyze_expression, build_semantic_constant_snapshot
+from NodeForge.semantic_values import ObjectInfoState, ObjectSemanticId, ObjectSemanticSnapshot
 from NodeForge.semantic_lowering import lower_analyzed_expression
 from NodeForge.values import ObjectValue, Value
 
@@ -58,6 +59,18 @@ class _FakeSocket:
         self.default_value = None
 
 
+class _FakeSockets(list):
+    """Socket collection supporting Blender-style integer and name lookup."""
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            for socket in self:
+                if socket.name == key:
+                    return socket
+            raise KeyError(key)
+        return super().__getitem__(key)
+
+
 class _FakeNode:
     """Minimal mutable node object with generic sockets and RNA-like attributes."""
 
@@ -72,16 +85,16 @@ class _FakeNode:
         self.string = ""
         if bl_idname == "GeometryNodeObjectInfo":
             self.transform_space = "ORIGINAL"
-            self.inputs = [_FakeSocket(self, 0, "Object"), _FakeSocket(self, 1, "As Instance")]
-            self.outputs = [
+            self.inputs = _FakeSockets([_FakeSocket(self, 0, "Object"), _FakeSocket(self, 1, "As Instance")])
+            self.outputs = _FakeSockets([
                 _FakeSocket(self, 0, "Geometry"),
                 _FakeSocket(self, 1, "Location"),
                 _FakeSocket(self, 2, "Rotation"),
                 _FakeSocket(self, 3, "Scale"),
-            ]
+            ])
         else:
-            self.inputs = [_FakeSocket(self, i) for i in range(8)]
-            self.outputs = [_FakeSocket(self, i) for i in range(4)]
+            self.inputs = _FakeSockets([_FakeSocket(self, i) for i in range(8)])
+            self.outputs = _FakeSockets([_FakeSocket(self, i) for i in range(4)])
 
 
 class _FakeNodes(list):
@@ -114,13 +127,25 @@ def _expr(source):
     return ast.parse(source, mode="eval").body
 
 
-def _environment(bindings):
+def _environment(bindings, *, object_registry=True):
     """Build an immutable environment containing canonical runtime binding facts."""
     runtime_bindings = {
         name: RuntimeBindingSymbol(BindingId("backend-contract", index), typ)
         for index, (name, typ) in enumerate(bindings.items())
     }
     semantic_constants, const_eval_values = build_semantic_constant_snapshot({})
+    object_semantics = None
+    if object_registry:
+        object_ids = {}
+        states = {}
+        next_id = 0
+        for symbol in runtime_bindings.values():
+            if symbol.typ is TYPE_OBJECT:
+                object_id = ObjectSemanticId(next_id)
+                next_id += 1
+                object_ids[symbol.binding_id] = object_id
+                states[object_id] = ObjectInfoState()
+        object_semantics = ObjectSemanticSnapshot(object_ids, states, next_id)
     return SemanticEnvironment(
         MappingProxyType(runtime_bindings),
         frozenset(),
@@ -128,6 +153,7 @@ def _environment(bindings):
         const_eval_values,
         MappingProxyType({}),
         callable_environment=CallableEnvironment(frozenset(IR_CAPABLE_BUILTIN_NAMES), {}, {}, frozenset(), {}),
+        object_semantics=object_semantics,
     )
 
 
@@ -339,7 +365,8 @@ def test_object_property_uses_exact_object_value_and_reuses_object_info_node():
 
     nodes = [node for node in group.nodes if node.bl_idname == "GeometryNodeObjectInfo"]
     assert len(nodes) == 1
-    assert obj._info_resolved is True
+    assert obj._info_resolved is False
+    assert obj._object_info_cache_config == ("ORIGINAL", True)
 
     wrong = blender_ir_lowering.BlenderIRLoweringContext(
         _FakeGroup(), MappingProxyType({binding_id: Value(_FakeSocket(), TYPE_OBJECT)})
@@ -371,14 +398,15 @@ def test_core_call_ir_reaches_ast_independent_backend_helpers():
     assert _materialize("length(v)", {"v": TYPE_VECTOR})
 
 
-def test_object_info_call_ir_configures_existing_object_value_before_property_access():
-    """Object.info call options are realized on the exact backend ObjectValue."""
+def test_object_info_frontend_state_is_embedded_in_property_ir_without_mutating_legacy_state():
+    """Migrated Object properties consume explicit frontend configuration, not ObjectValue state."""
     binding_id = BindingId("backend-contract", 0)
     obj = ObjectValue(_FakeSocket())
     group = _FakeGroup()
     environment = _environment({"obj": TYPE_OBJECT})
     expr = _expr('obj.info(transform_space="RELATIVE", as_instance=False).location')
-    program = lower_analyzed_expression(expr, analyze_expression(expr, environment))
+    analysis = analyze_expression(expr, environment)
+    program = lower_analyzed_expression(expr, analysis)
     result = blender_ir_lowering.lower_expression(
         blender_ir_lowering.BlenderIRLoweringContext(group, MappingProxyType({binding_id: obj})),
         program,
@@ -387,3 +415,7 @@ def test_object_info_call_ir_configures_existing_object_value_before_property_ac
     info = next(node for node in group.nodes if node.bl_idname == "GeometryNodeObjectInfo")
     assert info.transform_space == "RELATIVE"
     assert info.inputs[1].default_value is False
+    assert obj._info_transform_space == "ORIGINAL"
+    assert obj._info_as_instance is True
+    assert obj._info_resolved is False
+    assert obj._object_info_cache_config == ("RELATIVE", False)
