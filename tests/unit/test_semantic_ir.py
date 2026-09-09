@@ -36,9 +36,15 @@ from NodeForge.semantic_ir import (
     IRBoolBinary,
     IRCompare,
     IRConditional,
+    IRDiscardExpression,
     IRLiteral,
     IRObjectProperty,
     IRProgram,
+    IRBody,
+    IRBranchMerge,
+    IRIf,
+    IRRepeat,
+    IRRepeatState,
     IRUnary,
     IRValue,
     IRVectorComponent,
@@ -181,10 +187,19 @@ def test_function_materialization_ir_enforces_shared_unique_invariants():
 
 def test_semantic_modules_are_blender_independent_and_ir_is_immutable():
     import NodeForge.semantic_analysis as semantic_analysis_module
+    import NodeForge.semantic_body as semantic_body_module
+    import NodeForge.semantic_control_flow as semantic_control_flow_module
     import NodeForge.semantic_ir as semantic_ir_module
     import NodeForge.semantic_lowering as semantic_lowering_module
 
-    assert all("bpy" not in module.__dict__ for module in (semantic_analysis_module, semantic_ir_module, semantic_lowering_module))
+    semantic_modules = (
+        semantic_analysis_module,
+        semantic_body_module,
+        semantic_control_flow_module,
+        semantic_ir_module,
+        semantic_lowering_module,
+    )
+    assert all("bpy" not in module.__dict__ for module in semantic_modules)
     program = _lower("a + 1", bindings={"a": TYPE_FLOAT})
     assert isinstance(program, IRProgram)
     assert dataclasses.is_dataclass(program)
@@ -532,6 +547,50 @@ def test_ir_emitter_rejects_invalid_analysis_root_and_compare_fact_shape():
 
 
 
+
+def _literal_program(typ, value):
+    """Build one single-literal program for structured control-flow invariant tests."""
+    result = IRValue(0, typ)
+    return IRProgram((IRLiteral(result, 0, value),), result)
+
+
+def test_control_flow_ir_records_are_frozen_and_validate_local_structure_only():
+    """Structured control-flow records reject malformed self-contained contracts."""
+    cond = _literal_program(TYPE_BOOL, True)
+    body = IRBody((IRDiscardExpression(_literal_program(TYPE_FLOAT, 1.0)),))
+    merge = IRBranchMerge(BindingId("scope", 1), "x", TYPE_FLOAT)
+    branch = IRIf(cond, body, body, (merge,))
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        branch.merges = ()
+    with pytest.raises(TypeError, match="Bool"):
+        IRIf(_literal_program(TYPE_FLOAT, 1.0), body, body, ())
+    with pytest.raises(ValueError, match="BindingIds"):
+        IRIf(cond, body, body, (merge, merge))
+    with pytest.raises(ValueError, match="source names"):
+        IRIf(cond, body, body, (merge, IRBranchMerge(BindingId("scope", 2), "x", TYPE_FLOAT)))
+    assert not hasattr(branch, "merge_policy")
+
+
+def test_repeat_ir_accepts_sole_nonpublishing_state_and_rejects_local_collisions():
+    """Repeat eligibility depends on physical carried state, not exit publication policy."""
+    state_id = BindingId("scope", 1)
+    iteration_id = BindingId("scope", 2)
+    state = IRRepeatState(state_id, "i", TYPE_INT, TYPE_FLOAT, 0, False)
+    body = IRBody((IRDiscardExpression(_literal_program(TYPE_FLOAT, 1.0)),))
+    repeat = IRRepeat(_literal_program(TYPE_INT, 2), iteration_id, "j", (state,), body)
+    assert repeat.states == (state,)
+    assert repeat.states[0].publish_to_parent is False
+    with pytest.raises(TypeError, match="publish_to_parent"):
+        IRRepeatState(state_id, "i", TYPE_INT, TYPE_FLOAT, 0, 0)
+    with pytest.raises(TypeError, match="output type"):
+        IRRepeatState(state_id, "i", TYPE_FLOAT, TYPE_INT, 0, True)
+    with pytest.raises(ValueError, match="BindingId"):
+        IRRepeat(_literal_program(TYPE_INT, 2), state_id, "j", (state,), body)
+    with pytest.raises(TypeError, match="at least one"):
+        IRRepeat(_literal_program(TYPE_INT, 2), iteration_id, "j", (), body)
+    with pytest.raises(TypeError, match="Int"):
+        IRRepeat(_literal_program(TYPE_FLOAT, 2.0), iteration_id, "j", (state,), body)
+
 def _backend_context(backend, bindings=None, group=None):
     """Build an immutable explicit backend context for unit lowering tests."""
     from types import MappingProxyType
@@ -549,25 +608,28 @@ def _backend_bindings(bindings):
         for name, value in bindings.items()
     }
 
-def test_exact_structural_semantics_migration_markers_are_present_once():
-    """Stage-18 compatibility decisions stay exact, searchable, and exhaustively enumerated."""
+def test_exact_control_flow_migration_markers_are_present_once():
+    """Stage-19 compatibility decisions stay exact, searchable, and exhaustively enumerated."""
     root = Path(__file__).resolve().parents[2]
     expected = {
-        "compiler.py": "STRUCTURAL_SEMANTICS_ARRAY_BUILDER_COMPAT",
-        "expression_compiler.py": "STRUCTURAL_SEMANTICS_REMAINING_LEGACY_NAME_FALLBACK",
-        "semantic_body.py": "STRUCTURAL_SEMANTICS_BODY_REMAINING_FALLBACK",
-        "blender_ir_lowering.py": "STRUCTURAL_SEMANTICS_LEGACY_EXPRESSION_RESULT_BRIDGE",
-        "values.py": (
-            "STRUCTURAL_SEMANTICS_LEGACY_TUPLEVALUE_COMPAT",
-            "STRUCTURAL_SEMANTICS_LEGACY_NODERESULT_COMPAT",
-            "STRUCTURAL_SEMANTICS_LEGACY_OBJECT_INFO_STATE",
+        "compiler.py": (
+            "CONTROL_FLOW_IR_REMAINING_STRUCTURAL_COMPAT",
+            "CONTROL_FLOW_IR_LEGACY_RUNTIME_FRAME_COMPAT",
         ),
-        "builtins/bundle.py": "STRUCTURAL_SEMANTICS_LEGACY_BUNDLE_CALL_COMPAT",
-        "semantic_analysis.py": (
-            "STRUCTURAL_SEMANTICS_DYNAMIC_RESULT_FALLBACK",
-            "STRUCTURAL_SEMANTICS_LEGACY_OBJECT_EXPRESSION_FALLBACK",
+        "semantic_body.py": (
+            "CONTROL_FLOW_IR_BODY_REMAINING_FALLBACK",
+            "CONTROL_FLOW_IR_NESTED_ATOMIC_FALLBACK",
         ),
-        "statement_compiler.py": "STRUCTURAL_SEMANTICS_WHOLE_BODY_FALLBACK",
+        "statement_compiler.py": (
+            "CONTROL_FLOW_IR_LEGACY_IF_COMPAT",
+            "CONTROL_FLOW_IR_LEGACY_REPEAT_DISPATCH_COMPAT",
+            "CONTROL_FLOW_IR_WHOLE_BODY_FALLBACK",
+        ),
+        "runtime.py": (
+            "CONTROL_FLOW_IR_LEGACY_REPEAT_ENGINE_COMPAT",
+            "CONTROL_FLOW_IR_BLENDER_REPEAT_SOCKET_COMPAT",
+        ),
+        "semantic_control_flow.py": "CONTROL_FLOW_IR_LEGACY_CONSTANT_THREADING_COMPAT",
     }
     found = set()
     for relative, marker_names in expected.items():
@@ -578,15 +640,23 @@ def test_exact_structural_semantics_migration_markers_are_present_once():
             assert source.count(marker) == 1, (relative, marker)
             found.add(marker)
 
-    assert len(found) == 11
     all_sources = "\n".join(path.read_text(encoding="utf-8") for path in root.rglob("*.py") if ".git" not in path.parts)
     discovered = {
         token.split(":", 1)[0]
         for line in all_sources.splitlines()
         for token in line.split()
-        if token.startswith("STRUCTURAL_SEMANTICS_")
+        if token.startswith("CONTROL_FLOW_IR_")
     }
-    assert found <= discovered
+    assert discovered == found
+
+    retained_markers = {
+        "blender_ir_lowering.py": "STRUCTURAL_SEMANTICS_LEGACY_EXPRESSION_RESULT_BRIDGE",
+        "semantic_analysis.py": "STRUCTURAL_SEMANTICS_LEGACY_OBJECT_EXPRESSION_FALLBACK",
+        "builtins/bundle.py": "STRUCTURAL_SEMANTICS_LEGACY_BUNDLE_CALL_COMPAT",
+    }
+    for relative, marker in retained_markers.items():
+        assert (root / relative).read_text(encoding="utf-8").count(marker) == 1, (relative, marker)
+
 
 def test_blender_lowering_context_is_minimal_immutable_and_compiler_independent():
     from dataclasses import FrozenInstanceError, fields

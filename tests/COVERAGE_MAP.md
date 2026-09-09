@@ -132,3 +132,13 @@
 - `tests/unit/test_semantic_backend_contract.py`: explicit Object Info configuration reaches the centralized Blender helper while legacy `ObjectValue` semantic fields remain untouched on the migrated path.
 - `tests/unit/test_builtin_call_semantics.py` and `tests/unit/test_bundle_type.py`: Bundle remains `NFType.BUNDLE`, runtime String bundle paths remain typed, and no structural schema/type layer is introduced.
 - `tests/blender/test_semantic_body_ir.py`, `tests/blender/test_raw_nodes.py`, `tests/blender/test_object_inputs.py`, `tests/blender/test_bundle_runtime.py`, and `tests/blender/test_local_function_multi_return.py`: real-Blender topology/behavior regression targets for tuple/named-output body IR, Object Info, Bundle routing, and intentionally retained dynamic multi-return fallback.
+
+## Structured runtime control-flow Semantic IR
+
+- `tests/unit/test_semantic_control_flow.py`: pure runtime-if construction, top-level versus Repeat-local policy, legacy constant threading, deterministic Repeat mutation/state order, Int/Float state contracts, lexical iteration ownership, non-publishing nested carried state, durable branch input ordinals, and atomic fallback classification.
+- `tests/unit/test_semantic_ir.py`: immutable `IRBranchMerge` / `IRIf` / `IRRepeatState` / `IRRepeat` structural invariants plus exact stage-19 compatibility-marker contracts.
+- `tests/unit/test_input_declaration_identity.py`: deterministic non-rewinding `InputDeclarationId` stable keys across opposite runtime branches.
+- `tests/blender/test_semantic_body_ir.py`: runtime-if IR routing, Switch topology, compile-time-if no-Switch behavior, and distinct branch declaration metadata.
+- `tests/blender/test_runtime_range_state.py`: ordinary/nested Repeat IR routing, state item order/socket types, lexical iteration restoration, Repeat-local runtime-if behavior, Int physical-item versus Float logical-exit behavior, Bundle state, and evaluated nested results.
+- `tests/blender/test_update_group.py`: transactional preservation of branch-declared input identities, user overrides, and external links across recompilation.
+- `tests/blender/test_geometry_builder.py`: retained whole-body legacy Repeat path for `GeometryBuilder` state.

@@ -399,3 +399,72 @@ output("x", x)
 """,
         "NFTest_nested_repeat_state_type_error",
     )
+
+
+def test_ordinary_repeat_range_uses_ir_backend_not_legacy_engine(monkeypatch):
+    """An eligible ordinary Repeat must not call the AST/Compiler legacy Repeat engine."""
+    from NodeForge import statement_compiler
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("eligible ordinary Repeat reached legacy _repeat_state_assignments")
+
+    monkeypatch.setattr(statement_compiler, "_repeat_state_assignments", forbidden)
+    group = compile_group(
+        '''
+x = 0
+for i in repeat_range(2):
+    x = x + 1
+output("x", x)
+''',
+        "NFTest_repeat_ir_route",
+    )
+    check(len(_nodes(group, "GeometryNodeRepeatInput")) == 1, "IR Repeat did not create one Repeat Input")
+    check(len(_nodes(group, "GeometryNodeRepeatOutput")) == 1, "IR Repeat did not create one Repeat Output")
+    bpy.data.node_groups.remove(group)
+
+
+def test_repeat_int_state_keeps_int_physical_item_and_float_logical_exit():
+    """Legacy Int Repeat topology stays physical Int while post-Repeat semantics expose Float."""
+    group = compile_group(
+        '''
+x = input_int("X", default=1)
+for i in repeat_range(2):
+    x = x + 1
+output("x", x)
+''',
+        "NFTest_repeat_int_physical_logical_split",
+    )
+    repeat_output = _repeat_output(group)
+    items = list(repeat_output.repeat_items)
+    check(len(items) == 1 and items[0].name == "x", f"unexpected Int Repeat state items: {[item.name for item in items]}")
+    check(items[0].socket_type == "INT", f"physical Int Repeat item changed type: {items[0].socket_type}")
+    outputs = [
+        item for item in group.interface.items_tree
+        if getattr(item, "item_type", "") == "SOCKET" and getattr(item, "in_out", "") == "OUTPUT"
+    ]
+    check(len(outputs) == 1 and outputs[0].socket_type == "NodeSocketFloat", "logical post-Repeat output stopped being Float")
+    bpy.data.node_groups.remove(group)
+
+
+def test_nested_repeat_enclosing_iteration_is_carried_inside_but_not_published_after_exit():
+    """Inner Repeat carries enclosing i internally while outer lexical Iteration survives inner exit."""
+    group = compile_group(
+        '''
+x = 0
+for i in repeat_range(2):
+    for j in repeat_range(2):
+        i = i + 10
+        x = x + i
+    x = x + i
+output("Geometry", point(vector(x, 0, 0)))
+''',
+        "NFTest_nested_repeat_internal_i_restore",
+    )
+    repeat_outputs = _nodes(group, "GeometryNodeRepeatOutput")
+    check(len(repeat_outputs) == 2, f"expected two Repeat Outputs, found {len(repeat_outputs)}")
+    state_sets = [[item.name for item in output.repeat_items] for output in repeat_outputs]
+    check(any("i" in names for names in state_sets), f"enclosing i was not a real inner Repeat state: {state_sets}")
+    check(
+        _evaluated_vertices(group, "NFTest_nested_repeat_internal_i_restore_eval") == [(63.0, 0.0, 0.0)],
+        "inner carried i did not restore the outer lexical Iteration after inner Repeat exit",
+    )

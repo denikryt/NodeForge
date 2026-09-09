@@ -204,3 +204,6 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.51.1
 
 - Moved fixed tuple/raw named-output body bindings and migrated Object Info configuration/alias locking into compiler-owned semantic state, while preserving legacy whole-body fallback behavior and keeping Bundle as the existing opaque runtime type.
+## 0.51.2
+
+- Moved ordinary runtime `if` and `repeat_range()` into structured Semantic IR with compiler-owned branch/repeat state, lexical iteration identities, deterministic carried-state ordering, and recursive Blender lowering while preserving legacy topology, Int/Float Repeat behavior, durable input-declaration identity, and whole-body fallback for builder/array/stateful/dynamic categories.

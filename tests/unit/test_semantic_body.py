@@ -216,7 +216,7 @@ def test_structural_and_dynamic_categories_reject_entire_body():
         _lower("a, b = pair", bindings=dict([_binding("pair", 0)]))
     assert _lower("builder = geometry_builder()\nbuilder") is BODY_UNSUPPORTED
     assert _lower("x = grid(2, 2)\nx") is BODY_UNSUPPORTED
-    assert _lower("if True:\n    x = 1") is BODY_UNSUPPORTED
+    assert _lower("if True:\n    x = 1") is not BODY_UNSUPPORTED
     assert _lower("for i in [1]:\n    x = i") is BODY_UNSUPPORTED
     assert _lower("panel('P', a)", bindings=dict([_binding("a", 0)])) is BODY_UNSUPPORTED
     assert _lower("store(a, 'x', a)", bindings=dict([_binding("a", 0)])) is BODY_UNSUPPORTED
@@ -305,7 +305,7 @@ def test_accepted_compile_statements_route_never_publishes_body_local_values_to_
     root = Path(__file__).resolve().parents[2]
     source = (root / "statement_compiler.py").read_text(encoding="utf-8")
     function = source[source.index("def compile_statements("):]
-    marker = function.index("# STRUCTURAL_SEMANTICS_WHOLE_BODY_FALLBACK:")
+    marker = function.index("# CONTROL_FLOW_IR_WHOLE_BODY_FALLBACK:")
     accepted = function[:marker]
     after_legacy_loop = function.index("    comp.consts.clear()", marker)
     accepted += function[after_legacy_loop:]

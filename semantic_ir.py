@@ -521,7 +521,132 @@ class IRDiscardExpression:
             raise TypeError("IRDiscardExpression.value must be an IRProgram")
 
 
-IRBodyStatement: TypeAlias = IRAssign | IRInputDeclaration | IROutput | IRFinalExpression | IRBindLeaves | IRDiscardExpression
+@dataclass(frozen=True)
+class IRBranchMerge:
+    """Describe one typed runtime binding merged at a structured branch exit."""
+
+    binding_id: BindingId
+    source_name: str
+    typ: NFType
+    false_coerce_to: NFType | None = None
+    true_coerce_to: NFType | None = None
+
+    def __post_init__(self) -> None:
+        """Validate self-contained branch merge metadata."""
+        if not isinstance(self.binding_id, BindingId):
+            raise TypeError("binding_id must be a BindingId")
+        if not isinstance(self.source_name, str) or not self.source_name:
+            raise ValueError("source_name must be a non-empty string")
+        if not isinstance(self.typ, NFType):
+            raise TypeError("typ must be an NFType")
+        for value in (self.false_coerce_to, self.true_coerce_to):
+            if value is not None and not isinstance(value, NFType):
+                raise TypeError("branch coercion types must be NFType members or None")
+
+
+@dataclass(frozen=True)
+class IRIf:
+    """Represent one already-resolved runtime conditional and its binding merges."""
+
+    condition: IRProgram
+    true_body: "IRBody"
+    false_body: "IRBody"
+    merges: tuple[IRBranchMerge, ...]
+
+    def __post_init__(self) -> None:
+        """Validate only context-free structured conditional invariants."""
+        object.__setattr__(self, "merges", tuple(self.merges))
+        if not isinstance(self.condition, IRProgram) or not isinstance(self.condition.result, IRValue):
+            raise TypeError("IRIf condition must be an IRProgram with an IRValue result")
+        if self.condition.result.typ is not NFType.BOOL:
+            raise TypeError("IRIf condition must have Bool type")
+        if not isinstance(self.true_body, IRBody) or not isinstance(self.false_body, IRBody):
+            raise TypeError("IRIf branches must be IRBody records")
+        if not all(isinstance(item, IRBranchMerge) for item in self.merges):
+            raise TypeError("IRIf merges must be IRBranchMerge records")
+        ids = [item.binding_id for item in self.merges]
+        names = [item.source_name for item in self.merges]
+        if len(ids) != len(set(ids)):
+            raise ValueError("IRIf merge BindingIds must be unique")
+        if len(names) != len(set(names)):
+            raise ValueError("IRIf merge source names must be unique")
+
+
+_REPEAT_STATE_TYPES = frozenset({
+    NFType.GEOMETRY, NFType.VECTOR, NFType.FLOAT, NFType.INT, NFType.BOOL, NFType.BUNDLE
+})
+
+
+@dataclass(frozen=True)
+class IRRepeatState:
+    """Describe one physical Repeat item and its logical lexical-exit behavior."""
+
+    binding_id: BindingId
+    source_name: str
+    input_type: NFType
+    output_type: NFType
+    source_order: int
+    publish_to_parent: bool
+
+    def __post_init__(self) -> None:
+        """Validate context-free Repeat state metadata."""
+        if not isinstance(self.binding_id, BindingId):
+            raise TypeError("binding_id must be a BindingId")
+        if not isinstance(self.source_name, str) or not self.source_name:
+            raise ValueError("source_name must be a non-empty string")
+        if self.input_type not in _REPEAT_STATE_TYPES or self.output_type not in _REPEAT_STATE_TYPES:
+            raise TypeError("IRRepeatState uses an unsupported Repeat state type")
+        if self.output_type is not self.input_type and not (
+            self.input_type is NFType.INT and self.output_type is NFType.FLOAT
+        ):
+            raise TypeError("IRRepeatState output type is incompatible with input type")
+        if not isinstance(self.source_order, int) or isinstance(self.source_order, bool) or self.source_order < 0:
+            raise ValueError("source_order must be a non-negative integer")
+        if not isinstance(self.publish_to_parent, bool):
+            raise TypeError("publish_to_parent must be bool")
+
+
+@dataclass(frozen=True)
+class IRRepeat:
+    """Represent one structured runtime Repeat Zone with explicit carried state."""
+
+    iterations: IRProgram
+    iteration_binding_id: BindingId
+    iteration_name: str
+    states: tuple[IRRepeatState, ...]
+    body: "IRBody"
+
+    def __post_init__(self) -> None:
+        """Validate self-contained Repeat structure before backend lowering."""
+        object.__setattr__(self, "states", tuple(self.states))
+        if not isinstance(self.iterations, IRProgram) or not isinstance(self.iterations.result, IRValue):
+            raise TypeError("IRRepeat iterations must be an IRProgram with an IRValue result")
+        if self.iterations.result.typ is not NFType.INT:
+            raise TypeError("IRRepeat iterations must have Int type")
+        if not isinstance(self.iteration_binding_id, BindingId):
+            raise TypeError("iteration_binding_id must be a BindingId")
+        if not isinstance(self.iteration_name, str) or not self.iteration_name:
+            raise ValueError("iteration_name must be a non-empty string")
+        if not self.states or not all(isinstance(item, IRRepeatState) for item in self.states):
+            raise TypeError("IRRepeat requires at least one IRRepeatState")
+        ids = [item.binding_id for item in self.states]
+        names = [item.source_name for item in self.states]
+        orders = [item.source_order for item in self.states]
+        if self.iteration_binding_id in ids:
+            raise ValueError("IRRepeat own iteration BindingId cannot also be carried state")
+        if self.iteration_name in names:
+            raise ValueError("IRRepeat own iteration name cannot also be a state name")
+        if len(ids) != len(set(ids)) or len(names) != len(set(names)):
+            raise ValueError("IRRepeat state IDs and names must be unique")
+        if orders != list(range(len(orders))):
+            raise ValueError("IRRepeat state source_order must be contiguous and ordered")
+        if not isinstance(self.body, IRBody) or not self.body.statements:
+            raise TypeError("IRRepeat body must be a non-empty IRBody")
+
+
+IRBodyStatement: TypeAlias = (
+    IRAssign | IRInputDeclaration | IROutput | IRFinalExpression | IRBindLeaves | IRDiscardExpression | IRIf | IRRepeat
+)
 
 
 @dataclass(frozen=True)
@@ -533,7 +658,7 @@ class IRBody:
     def __post_init__(self) -> None:
         """Freeze statement order and reject non-body records."""
         object.__setattr__(self, "statements", tuple(self.statements))
-        allowed = (IRAssign, IRInputDeclaration, IROutput, IRFinalExpression, IRBindLeaves, IRDiscardExpression)
+        allowed = (IRAssign, IRInputDeclaration, IROutput, IRFinalExpression, IRBindLeaves, IRDiscardExpression, IRIf, IRRepeat)
         if not all(isinstance(statement, allowed) for statement in self.statements):
             raise TypeError("IRBody contains an unsupported statement record")
 
@@ -570,6 +695,10 @@ __all__ = [
     "IRLeafBinding",
     "IRBindLeaves",
     "IRDiscardExpression",
+    "IRBranchMerge",
+    "IRIf",
+    "IRRepeatState",
+    "IRRepeat",
     "IRBodyStatement",
     "IRBody",
 ]

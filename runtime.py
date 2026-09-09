@@ -9,6 +9,7 @@ from .nodes import _int_value, _new_node, _switch
 from .geometry import _join_geometry
 from .geometry_builder import GeometryBuilder
 from .consteval import _const_eval
+from .nf_types import NFType
 
 
 def _is_range_call(stmt, name):
@@ -69,19 +70,28 @@ def _parse_repeat_range_for(stmt):
     return stmt.iter.args[0], stmt.body
 
 
+def _repeat_item_type_for_nf_type(typ: NFType) -> str:
+    """Map one supported semantic type to the exact Blender Repeat item token."""
+    mapping = {
+        NFType.GEOMETRY: "GEOMETRY",
+        NFType.VECTOR: "VECTOR",
+        NFType.BOOL: "BOOLEAN",
+        NFType.INT: "INT",
+        NFType.BUNDLE: "BUNDLE",
+        NFType.FLOAT: "FLOAT",
+    }
+    try:
+        return mapping[typ]
+    except KeyError as exc:
+        raise CompileError(f"repeat_range state has unsupported type {typ}") from exc
+
+
 def _repeat_item_type_for_value(value):
-    """Map a NodeForge value type to a Blender Repeat Zone item type."""
-    if value.typ == TYPE_GEOMETRY:
-        return "GEOMETRY"
-    if value.typ == TYPE_VECTOR:
-        return "VECTOR"
-    if value.typ == TYPE_BOOL:
-        return "BOOLEAN"
-    if value.typ == TYPE_INT:
-        return "INT"
-    if value.typ == TYPE_BUNDLE:
-        return "BUNDLE"
-    return "FLOAT"
+    """Map a legacy backend Value to a Repeat token, retaining old Float defaulting."""
+    try:
+        return _repeat_item_type_for_nf_type(value.typ)
+    except CompileError:
+        return "FLOAT"
 
 
 def _socket_by_name(sockets, name):
@@ -101,6 +111,36 @@ def _remove_default_repeat_items(repeat_output):
     except Exception:
         pass
 
+
+
+def _create_repeat_zone(group, state_specs, index_name, x=0, y=0):
+    """Create one physical Repeat Zone and its compiler-specified state items."""
+    ri = _new_node(group, "GeometryNodeRepeatInput", x, y)
+    ro = _new_node(group, "GeometryNodeRepeatOutput", x + 1120, y)
+    if not ri.pair_with_output(ro):
+        raise CompileError("Could not pair Repeat Zone nodes")
+    _remove_default_repeat_items(ro)
+
+    # CONTROL_FLOW_IR_BLENDER_REPEAT_SOCKET_COMPAT: Semantic analysis validates compiler-known Repeat
+    # names, but Blender may expose version-specific system socket names only after the physical zone is
+    # created. Keep this final backend collision check centralized here and treat failure as the existing
+    # controlled DSL error. Remove only if NodeForge later owns a versioned authoritative Blender Repeat
+    # socket schema that makes the runtime probe unnecessary across all supported Blender versions.
+    system_socket_names = {"Iterations", "Iteration"}
+    for sockets in (ri.inputs, ri.outputs, ro.inputs, ro.outputs):
+        for socket in sockets:
+            system_socket_names.add(socket.name)
+    if index_name in system_socket_names:
+        raise CompileError(f"repeat_range loop index name {index_name!r} conflicts with Repeat Zone socket name")
+    names = [name for _typ, name in state_specs]
+    if len(names) != len(set(names)):
+        raise CompileError("repeat_range state names must be unique")
+    for name in names:
+        if name in system_socket_names:
+            raise CompileError(f"repeat_range state name {name!r} conflicts with Repeat Zone socket name")
+    for typ, name in state_specs:
+        ro.repeat_items.new(_repeat_item_type_for_nf_type(typ), name)
+    return ri, ro
 
 
 class RuntimeStateFrame:
@@ -202,6 +242,11 @@ def _builder_method_info(comp, sub):
     return builder, call.func.attr, call
 
 
+# CONTROL_FLOW_IR_LEGACY_REPEAT_ENGINE_COMPAT: Migrated ordinary repeat_range() semantics are owned by
+# typed IRRepeat and recursive Blender IR lowering. Keep this AST/Compiler/RuntimeStateFrame engine only
+# for whole-body fallback categories such as GeometryBuilder and dynamic legacy expressions. New IR
+# lowering may reuse backend-only Repeat Zone helpers from this module but must not call this legacy
+# semantic engine. Remove it when every supported Repeat body has frontend-owned state semantics.
 def _runtime_state_descriptors(comp, stmts):
     """Collect ordinary and builder Repeat Zone states in first mutation order."""
     descriptors = []
@@ -558,5 +603,6 @@ def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=No
     return result
 
 __all__ = [
-    '_compile_repeat_iteration_count', '_parse_repeat_range_for', '_repeat_state_assignments'
+    '_compile_repeat_iteration_count', '_parse_repeat_range_for', '_repeat_state_assignments',
+    '_repeat_item_type_for_nf_type', '_create_repeat_zone', '_socket_by_name'
 ]

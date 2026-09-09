@@ -860,3 +860,54 @@ output("Result", x)
 
     check(int(group_node.inputs["iterations"].default_value) == 0, "zero-valued implicit-input override was lost")
     check(abs(float(group_node.inputs["Scale"].default_value) - 1.0) < 1e-6, "explicit default changed unexpectedly")
+
+
+def test_update_group_preserves_branch_input_declaration_identity_overrides_and_link():
+    """Branch-local explicit inputs keep durable identities and live wrapper state across update."""
+    from NodeForge import interface
+
+    before = '''
+flag = input_bool("Flag", default=True)
+if flag:
+    x = input_float("A", default=1.0)
+else:
+    x = input_float("B", default=2.0)
+output("X", x)
+'''
+    after = '''
+flag = input_bool("Flag", default=True)
+if flag:
+    x = input_float("A", default=10.0)
+else:
+    x = input_float("B", default=20.0)
+x = x + 0
+output("X", x)
+'''
+    group = compile_group(before, "NFTest_update_branch_input_identity")
+    before_records = interface._get_group_input_declarations(group)
+    before_x_keys = sorted(
+        key for key, record in before_records.items() if record["declaration_id"].target_name == "x"
+    )
+    check(len(before_x_keys) == 2, f"expected two x declaration identities, got {before_x_keys}")
+
+    wrapper = bpy.data.node_groups.new("NFTest_update_branch_input_identity_wrapper", "GeometryNodeTree")
+    wrapper.interface.new_socket(name="External B", in_out="INPUT", socket_type="NodeSocketFloat")
+    wrapper_input = wrapper.nodes.new("NodeGroupInput")
+    group_node = wrapper.nodes.new("GeometryNodeGroup")
+    group_node.node_tree = group
+    compiler._apply_group_defaults_to_node(group_node)
+    group_node.inputs["A"].default_value = 11.0
+    group_node.inputs["B"].default_value = 22.0
+    wrapper.links.new(wrapper_input.outputs["External B"], group_node.inputs["B"])
+
+    compiler.update_expression_group(group, after)
+
+    after_records = interface._get_group_input_declarations(group)
+    after_x_keys = sorted(
+        key for key, record in after_records.items() if record["declaration_id"].target_name == "x"
+    )
+    check(after_x_keys == before_x_keys, f"branch declaration stable keys changed: {before_x_keys} -> {after_x_keys}")
+    check(abs(float(group_node.inputs["A"].default_value) - 11.0) < 1e-6, "A override was not restored")
+    check(abs(float(group_node.inputs["B"].default_value) - 22.0) < 1e-6, "B override was not restored")
+    incoming = [link for link in wrapper.links if link.to_node == group_node and link.to_socket.name == "B"]
+    check(len(incoming) == 1 and incoming[0].from_socket.name == "External B", "external B link was not restored")

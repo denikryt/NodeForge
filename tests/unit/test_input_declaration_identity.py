@@ -1,5 +1,6 @@
 """Durable explicit-input identity and conservative update migration contracts."""
 
+import ast
 import sys
 from types import SimpleNamespace
 
@@ -11,6 +12,10 @@ from NodeForge.compiler_identities import InputDeclarationId
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
 from NodeForge import interface, update
+from NodeForge.builtin_call_semantics import IR_CAPABLE_BUILTIN_NAMES, STATEFUL_FALLBACK_BUILTIN_NAMES
+from NodeForge.call_resolution import CallableEnvironment
+from NodeForge.semantic_body import lower_basic_body
+from NodeForge.semantic_ir import IRIf, IRInputDeclaration
 
 pytestmark = pytest.mark.unit
 
@@ -176,3 +181,48 @@ def test_legacy_live_state_migrates_only_when_replacement_correspondence_is_unam
     reference["new_socket_key"] = None
     with pytest.raises(CompileError, match="correspondence is ambiguous"):
         update._validate_group_external_state_for_replacement(ambiguous, _state_for(reference))
+
+
+def _control_flow_declaration_keys(source):
+    """Return deterministic declaration stable keys from one pure root-body analysis."""
+    callables = CallableEnvironment(
+        callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | STATEFUL_FALLBACK_BUILTIN_NAMES),
+        system_constructors={},
+        local_functions={},
+        backend_helper_names=frozenset(),
+        imported_functions={},
+    )
+    result = lower_basic_body(
+        ast.parse(source, mode="exec").body,
+        initial_runtime_bindings={},
+        initial_constants={},
+        legacy_binding_names=frozenset(),
+        reserved_name_labels={},
+        callable_environment=callables,
+        owner_scope="owner",
+        declaration_owner="owner",
+    )
+    branch = next(statement for statement in result.body.statements if isinstance(statement, IRIf))
+    declarations = [
+        statement
+        for body in (branch.true_body, branch.false_body)
+        for statement in body.statements
+        if isinstance(statement, IRInputDeclaration)
+    ]
+    return [statement.declaration_id.stable_key() for statement in declarations]
+
+
+def test_control_flow_input_declaration_ordinals_are_monotonic_and_rebuild_stable():
+    """Opposite branches share one non-rewinding declaration allocator per root analysis."""
+    source = (
+        'flag = input_bool("Flag")\n'
+        'if flag:\n    x = input_float("A")\nelse:\n    x = input_float("B")\n'
+        'output(x)'
+    )
+    first = _control_flow_declaration_keys(source)
+    second = _control_flow_declaration_keys(source)
+    assert first == second
+    assert first == [
+        InputDeclarationId("owner", "x", 0).stable_key(),
+        InputDeclarationId("owner", "x", 1).stable_key(),
+    ]

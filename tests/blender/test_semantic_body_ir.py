@@ -247,3 +247,55 @@ output("Value", b)
     check(not legacy_calls, "fixed tuple list-unpack unexpectedly entered legacy statement lowering")
     check(len([node for node in group.nodes if node.bl_idname == "GeometryNodeCaptureAttribute"]) == 1, "list unpack duplicated producer")
     bpy.data.node_groups.remove(group)
+
+
+def test_runtime_if_uses_structured_body_ir_and_distinct_branch_input_declarations(monkeypatch):
+    """Eligible runtime-if avoids legacy statements and keeps branch declaration identities distinct."""
+    from NodeForge import interface
+
+    legacy_calls = []
+    original = statement_compiler.compile_statement
+
+    def forbidden(*args, **kwargs):
+        legacy_calls.append(args[1])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(statement_compiler, "compile_statement", forbidden)
+    group = compile_group(
+        '''
+flag = input_bool("Flag")
+if flag:
+    x = input_float("A", default=1.0)
+else:
+    x = input_float("B", default=2.0)
+output("X", x)
+''',
+        "NFTest_runtime_if_body_ir_inputs",
+    )
+    check(not legacy_calls, "eligible runtime-if unexpectedly entered legacy statement lowering")
+    switches = [node for node in group.nodes if getattr(node, "bl_idname", "") == "GeometryNodeSwitch"]
+    check(len(switches) == 1, f"expected one runtime-if Switch, found {len(switches)}")
+    records = list(interface._get_group_input_declarations(group).values())
+    x_records = [record for record in records if record["declaration_id"].target_name == "x"]
+    check(len(x_records) == 2, f"expected two branch declaration records for x, found {len(x_records)}")
+    ordinals = [record["declaration_id"].declaration_ordinal for record in x_records]
+    check(ordinals == [0, 1], f"branch declaration ordinals changed: {ordinals}")
+    bpy.data.node_groups.remove(group)
+
+
+def test_compile_time_if_still_creates_no_switch():
+    """Compile-time conditional selection remains outside runtime control-flow materialization."""
+    group = compile_group(
+        '''
+x = 1.0
+if True:
+    x = x + 1
+else:
+    x = x + 100
+output(x)
+''',
+        "NFTest_compile_time_if_no_switch",
+    )
+    switches = [node for node in group.nodes if getattr(node, "bl_idname", "") == "GeometryNodeSwitch"]
+    check(not switches, f"compile-time if unexpectedly created Switch nodes: {len(switches)}")
+    bpy.data.node_groups.remove(group)

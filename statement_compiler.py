@@ -335,6 +335,10 @@ def compile_statement(
             return
 
     if isinstance(stmt, ast.For):
+        # CONTROL_FLOW_IR_LEGACY_REPEAT_DISPATCH_COMPAT: Ordinary repeat_range() is now represented by
+        # IRRepeat. Keep this AST dispatch only for whole-body legacy fallback, including GeometryBuilder and
+        # dynamic-call bodies not yet representable in Semantic IR. Do not invoke it after IRBody lowering has
+        # started. Remove it when no supported repeat_range() body depends on legacy statement compilation.
         if isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id == "repeat_range":
             for target_name in _target_names(stmt.target):
                 _check_runtime_binding(comp, target_name)
@@ -386,6 +390,10 @@ def compile_statement(
             raise CompileError("range(...) requires compile-time integer arguments; use repeat_range(...) for Repeat Zone loops")
         raise CompileError("for loop requires a compile-time iterable, an array, or repeat_range(...)")
 
+    # CONTROL_FLOW_IR_LEGACY_IF_COMPAT: Ordinary runtime if is now represented by IRIf and lowered by
+    # blender_ir_lowering. Keep this AST/Compiler/backend implementation only because remaining whole-body
+    # fallback categories can still contain legacy if statements. New Semantic IR paths must never call
+    # this branch. Remove it when compile_statement() is no longer a production path for supported bodies.
     if isinstance(stmt, ast.If):
         try:
             branch = stmt.body if bool(_const_eval(stmt.test, comp.consts)) else stmt.orelse
@@ -546,13 +554,12 @@ def compile_statements(ctx, stmts):
         declaration_owner=comp.input_declaration_owner,
     )
     if body_compilation is BODY_UNSUPPORTED:
-        # STRUCTURAL_SEMANTICS_WHOLE_BODY_FALLBACK: Straight-line runtime values plus fixed tuple/raw
-        # named-output structural bindings and migrated Object semantics lower as one compiler-owned IRBody.
-        # Mutable arrays, GeometryBuilder, runtime control flow, interface/geometry side-effect statements,
-        # stateful calls, and dynamic extension/function categories still require compile_statement(). Keep
-        # the entire body on one legacy path when any such construct is present; never mix partially lowered
-        # IRBody state with legacy Blender mutation. Remove this fallback when every supported body category
-        # has a frontend-owned semantic representation and compile_statement() is no longer production code.
+        # CONTROL_FLOW_IR_WHOLE_BODY_FALLBACK: Straight-line bodies plus ordinary runtime if/repeat control
+        # flow now lower as one compiler-owned IRBody. Mutable arrays, GeometryBuilder, compile-time iterable
+        # loops, interface/geometry side-effect statements, stateful calls, and dynamic extension/function
+        # categories still require compile_statement(). Keep the complete body on one legacy path whenever
+        # any such category is present; never mix partially materialized IRBody control flow with legacy AST
+        # lowering. Remove this fallback when every supported body category has frontend-owned semantics.
         for idx, stmt in enumerate(stmts):
             compile_statement(
                 ctx,

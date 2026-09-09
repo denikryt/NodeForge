@@ -227,16 +227,21 @@ class Compiler:
         # when all supported bodies, interface/stateful input publication, and runtime control-flow
         # lowering pass backend binding materializations directly into body lowering.
         self._runtime_binding_values: dict[BindingId, Value] = {}
-        # STRUCTURAL_SEMANTICS_ARRAY_BUILDER_COMPAT: Fixed tuple and raw named-output bindings are
-        # frontend-owned in IRBody, but mutable script arrays, GeometryBuilder/CompileTimeObject state,
-        # and structural values produced inside whole-body legacy fallback still require the private
-        # compiler-side compatibility store. Migrated IRBody tuple/named-output statements must never
-        # write here. Remove this store only after array/builder semantics, dynamic-call structural
-        # results, and remaining whole-body legacy statement lowering have compiler-owned representations.
+        # CONTROL_FLOW_IR_REMAINING_STRUCTURAL_COMPAT: Fixed tuple/raw named outputs, ordinary runtime
+        # bindings, Object semantics, and ordinary runtime if/repeat state are compiler-owned Semantic IR.
+        # Mutable script arrays, GeometryBuilder/CompileTimeObject state, and dynamic-call structural results
+        # still require the private legacy structural store and force whole-body fallback before Blender IR
+        # lowering. Never place these backend/compiler objects in IRIf/IRRepeat. Remove this store when array,
+        # builder, dynamic-result, and remaining legacy statement semantics all have frontend representations.
         self._legacy_structural_bindings: dict[str, object] = {}
         self._interface_inputs_by_identifier = {}
         self._interface_inputs_by_socket_pointer = {}
         self._panel_input_memberships = {}
+        # CONTROL_FLOW_IR_LEGACY_RUNTIME_FRAME_COMPAT: Migrated IRIf/IRRepeat use semantic lexical state and
+        # body-local BindingId -> Value maps and must never read or mutate this Compiler frame stack. Keep it
+        # only for whole-body legacy repeat_range() fallback, especially GeometryBuilder and dynamic-call
+        # cases still implemented by runtime.py's AST/Compiler path. Remove the stack and its accessors when
+        # no supported production Repeat is lowered through the legacy runtime control-flow implementation.
         self._runtime_state_frames = []
         self.depth = 0
 

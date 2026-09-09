@@ -145,8 +145,12 @@ NodeForge/
 ├── compiler.py              # DSL compiler orchestration
 ├── parsing.py               # Python AST parsing and source inspection
 ├── consteval.py             # Compile-time expression evaluation
+├── semantic_ir.py           # Backend-independent typed Semantic IR records
+├── semantic_body.py         # Whole-body semantic lowering and binding state
+├── semantic_control_flow.py # Runtime if / Repeat semantic construction
+├── blender_ir_lowering.py   # Semantic IR -> Geometry Nodes materialization
 ├── statements.py            # Top-level statement compilation helpers
-├── runtime.py               # repeat_range / Repeat Zone state handling
+├── runtime.py               # Centralized Repeat Zone backend + legacy fallback
 ├── geometry.py              # Low-level Geometry Nodes construction helpers
 ├── nodes.py                 # Node creation and link utilities
 ├── values.py                # Typed socket wrappers

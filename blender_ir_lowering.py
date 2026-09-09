@@ -9,7 +9,7 @@ from typing import Mapping
 from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_INT, TYPE_VECTOR
 from .errors import CompileError
 from .compiler_identities import BindingId
-from .nodes import _boolean_math, _combine_xyz_mixed, _compare, _math, _separate_xyz, _string_value, _switch, _value, _vector_math
+from .nodes import _boolean_math, _combine_xyz_mixed, _compare, _int_value, _math, _separate_xyz, _string_value, _switch, _value, _vector_math
 from .geometry import (
     _capture_attribute_geometry,
     _cube_geometry,
@@ -53,9 +53,12 @@ from .semantic_ir import (
     IROutput,
     IRBindLeaves,
     IRDiscardExpression,
+    IRIf,
+    IRRepeat,
 )
 from .values import NodeResult, ObjectValue, TupleValue, Value
 from .interface import _create_group_input_socket
+from .runtime import _create_repeat_zone, _socket_by_name
 
 
 @dataclass(frozen=True)
@@ -111,6 +114,8 @@ def _lower_literal(context, operation, materialized, x, y):
         result = _compare(context.group, "NOT_EQUAL", val, zero, x, y)
     elif operation.result.typ == TYPE_FLOAT:
         result = _value(context.group, operation.value, x, y)
+    elif operation.result.typ == TYPE_INT:
+        result = _int_value(context.group, operation.value, x, y)
     else:
         result = _string_value(context.group, operation.value, x, y)
     _store_result(materialized, operation.result, result)
@@ -486,20 +491,41 @@ def _require_body_value_type(value, expected_type):
 
 @dataclass(frozen=True)
 class BodyLoweringResult:
-    """Return body-level explicit and automatic outputs to group publication."""
+    """Return body outputs plus the final backend binding map for recursive control flow."""
 
     explicit_outputs: tuple[tuple[str, Value], ...]
     auto_output: tuple[str, Value] | None
+    runtime_bindings: Mapping[BindingId, Value]
+
+    def __post_init__(self) -> None:
+        """Freeze the backend binding view returned to the enclosing lowering scope."""
+        object.__setattr__(self, "runtime_bindings", MappingProxyType(dict(self.runtime_bindings)))
 
 
-def lower_body(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):
-    """Materialize one validated straight-line IRBody without publishing body locals to Compiler."""
-    if not isinstance(body, IRBody):
-        raise TypeError("body must be an IRBody")
-    runtime_bindings = dict(initial_runtime_bindings)
+def _coerce_branch_value(value: Value, target_type):
+    """Apply the characterized Repeat Int/Float logical retag without creating a node."""
+    if target_type is None or value.typ is target_type:
+        return value
+    return Value(value.socket, target_type)
+
+
+def _lower_body_internal(
+    context,
+    body,
+    runtime_bindings,
+    base_depth,
+    *,
+    group_input=None,
+    repeat_origin=None,
+    control_depth=0,
+    legacy_index_override=None,
+):
+    """Recursively lower one validated structured IRBody against a detached binding map."""
+    runtime_bindings = dict(runtime_bindings)
     explicit_outputs = []
     auto_output = None
-    for statement in body.statements:
+    for index, statement in enumerate(body.statements):
+        layout_index = index if legacy_index_override is None else legacy_index_override
         if isinstance(statement, IRInputDeclaration):
             if group_input is None:
                 raise CompileError("Internal error: body input declaration requires Group Input context")
@@ -548,8 +574,120 @@ def lower_body(context, body, initial_runtime_bindings, base_depth=1, *, group_i
             )
             auto_output = ("out", value)
             continue
+        if isinstance(statement, IRIf):
+            condition = _require_body_value_type(
+                _lower_program_result(context, statement.condition, runtime_bindings, base_depth),
+                TYPE_BOOL,
+            )
+            branch_kwargs = {
+                "group_input": group_input,
+                "repeat_origin": repeat_origin,
+                "control_depth": control_depth + 1 if repeat_origin is not None else control_depth,
+                "legacy_index_override": layout_index if repeat_origin is None else None,
+            }
+            true_result = _lower_body_internal(
+                context, statement.true_body, dict(runtime_bindings), base_depth + 1, **branch_kwargs
+            )
+            false_result = _lower_body_internal(
+                context, statement.false_body, dict(runtime_bindings), base_depth + 1, **branch_kwargs
+            )
+            if repeat_origin is None:
+                switch_x = 360 + layout_index * 160
+                switch_y = -220 - layout_index * 70
+            else:
+                switch_x = repeat_origin[0] + 680 + control_depth * 120
+                switch_y = repeat_origin[1] - 220
+            for merge in statement.merges:
+                try:
+                    true_value = true_result.runtime_bindings[merge.binding_id]
+                    false_value = false_result.runtime_bindings[merge.binding_id]
+                except KeyError as exc:
+                    raise CompileError("Internal error: IRIf merge binding missing from branch backend state") from exc
+                true_value = _coerce_branch_value(true_value, merge.true_coerce_to)
+                false_value = _coerce_branch_value(false_value, merge.false_coerce_to)
+                if true_value.typ is not merge.typ or false_value.typ is not merge.typ:
+                    raise CompileError("Internal error: IRIf backend merge type does not match semantic contract")
+                merged = _switch(
+                    context.group,
+                    condition,
+                    false_value,
+                    true_value,
+                    switch_x,
+                    switch_y,
+                )
+                runtime_bindings[merge.binding_id] = merged
+                auto_output = (merge.source_name, merged)
+            continue
+        if isinstance(statement, IRRepeat):
+            iterations = _require_body_value_type(
+                _lower_program_result(context, statement.iterations, runtime_bindings, base_depth),
+                TYPE_INT,
+            )
+            state_specs = tuple((state.input_type, state.source_name) for state in statement.states)
+            if repeat_origin is None:
+                repeat_x = 300 + layout_index * 160
+                repeat_y = -380 - layout_index * 70
+            else:
+                repeat_x = repeat_origin[0] + 360 + control_depth * 180
+                repeat_y = repeat_origin[1] - 500 - control_depth * 280
+            ri, ro = _create_repeat_zone(
+                context.group,
+                state_specs,
+                statement.iteration_name,
+                repeat_x,
+                repeat_y,
+            )
+            context.group.links.new(iterations.socket, ri.inputs[0])
+            for state in statement.states:
+                try:
+                    initial = runtime_bindings[state.binding_id]
+                except KeyError as exc:
+                    raise CompileError(f"Internal error: missing Repeat entry state {state.source_name!r}") from exc
+                if initial.typ is not state.input_type:
+                    raise CompileError("Internal error: Repeat backend entry type does not match semantic input type")
+                context.group.links.new(initial.socket, _socket_by_name(ri.inputs, state.source_name))
+
+            body_bindings = dict(runtime_bindings)
+            for state in statement.states:
+                body_bindings[state.binding_id] = Value(_socket_by_name(ri.outputs, state.source_name), state.input_type)
+            body_bindings[statement.iteration_binding_id] = Value(ri.outputs[0], TYPE_INT)
+            body_result = _lower_body_internal(
+                context,
+                statement.body,
+                body_bindings,
+                base_depth + 1,
+                group_input=group_input,
+                repeat_origin=(repeat_x, repeat_y),
+                control_depth=0,
+            )
+            for state in statement.states:
+                try:
+                    final_value = body_result.runtime_bindings[state.binding_id]
+                except KeyError as exc:
+                    raise CompileError(f"Internal error: missing Repeat exit state {state.source_name!r}") from exc
+                if final_value.typ is not state.input_type and {final_value.typ, state.input_type} != {TYPE_INT, TYPE_FLOAT}:
+                    raise CompileError("Internal error: Repeat backend exit type violates semantic state contract")
+                context.group.links.new(final_value.socket, _socket_by_name(ro.inputs, state.source_name))
+                output_value = Value(_socket_by_name(ro.outputs, state.source_name), state.output_type)
+                if state.publish_to_parent:
+                    runtime_bindings[state.binding_id] = output_value
+                    auto_output = (state.source_name, output_value)
+            continue
         raise CompileError(f"Internal error: unsupported IRBody statement {type(statement).__name__}")
-    return BodyLoweringResult(tuple(explicit_outputs), auto_output)
+    return BodyLoweringResult(tuple(explicit_outputs), auto_output, runtime_bindings)
+
+
+def lower_body(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):
+    """Materialize one fully validated structured IRBody without publishing locals to Compiler."""
+    if not isinstance(body, IRBody):
+        raise TypeError("body must be an IRBody")
+    return _lower_body_internal(
+        context,
+        body,
+        initial_runtime_bindings,
+        base_depth,
+        group_input=group_input,
+    )
 
 
 def _materialize_program_result(materialized, result):
