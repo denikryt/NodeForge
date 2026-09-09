@@ -28,7 +28,7 @@ def compile_call(comp, expr, depth=0):
         comps = []
         for comp_expr in vector_args:
             try:
-                comps.append(_as_float_const(_const_eval(comp_expr, comp.consts), "vector component"))
+                comps.append(_as_float_const(_const_eval(comp_expr, comp.compile_time.values), "vector component"))
             except CompileError:
                 value = comp.compile(comp_expr)
                 reject_compile_time_object(value, "vector() component")

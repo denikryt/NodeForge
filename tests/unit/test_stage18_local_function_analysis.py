@@ -29,7 +29,9 @@ class _CaptureComp:
             binding_name: RuntimeBindingSymbol(BindingId("capture-test", index), value.typ)
             for index, (binding_name, value) in enumerate(self._values.items())
         }
-        self.consts = dict(consts or {})
+        from NodeForge.compile_time import CompileTimeState
+
+        self.compile_time = CompileTimeState(consts or {})
         self.local_functions = dict(local_functions or {})
         self.reserved_name_labels = labels
 
@@ -61,6 +63,24 @@ def test_stage18_allowed_compile_time_constants_are_not_hidden_captures(monkeypa
 
     assert captures == ()
 
+
+
+def test_stage18_same_name_runtime_capture_wins_over_compile_time(monkeypatch):
+    """Runtime capture keeps precedence when compile-time state has the same source name."""
+    local_functions = _import_local_functions_with_stubbed_bpy(monkeypatch)
+    from NodeForge.constants import TYPE_FLOAT
+
+    class _Value:
+        typ = TYPE_FLOAT
+
+    fn = ast.parse("def f():\n    return a\n").body[0]
+    runtime_value = _Value()
+    captures = local_functions._analyze_captures(
+        _CaptureComp({}, vars={"a": runtime_value}, consts={"a": 7}),
+        fn,
+    )
+
+    assert captures == (("a", runtime_value, True, TYPE_FLOAT),)
 
 def test_stage18_nested_local_function_calls_forward_outer_captures(monkeypatch):
     local_functions = _import_local_functions_with_stubbed_bpy(monkeypatch)

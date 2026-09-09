@@ -45,7 +45,6 @@ class GroupBuildContext:
 
     group: object
     comp: object
-    consts: dict
     geometry_mode: bool
     geometry_socket: object = None
     explicit_outputs: list = field(default_factory=list)
@@ -134,11 +133,11 @@ def _compile_panel_statement(ctx, call):
     _check_no_extra_keywords(kws, {"name", "collapsed"})
     if "name" not in kws:
         raise CompileError("panel() requires name=")
-    panel_name = _literal_string(kws["name"], "panel() name", comp.consts)
+    panel_name = _literal_string(kws["name"], "panel() name", comp.compile_time.values)
     collapsed = False
     if "collapsed" in kws:
         try:
-            collapsed = _const_eval(kws["collapsed"], comp.consts)
+            collapsed = _const_eval(kws["collapsed"], comp.compile_time.values)
         except CompileError as exc:
             raise CompileError("panel() collapsed= must be a compile-time bool") from exc
         if not isinstance(collapsed, bool):
@@ -210,7 +209,7 @@ def compile_statement(
             if len(value) != len(names):
                 raise CompileError(f"Tuple unpacking expected {len(names)} values, got {len(value)}")
             for name, item in zip(names, value.values):
-                comp.consts.pop(name, None)
+                comp.compile_time.discard(name)
                 comp.bind_runtime_value(name, item)
             ctx.auto_final_output = None
             return
@@ -222,7 +221,7 @@ def compile_statement(
             raise CompileError("Cannot assign over geometry_builder binding")
         if _is_geometry_builder_constructor(stmt.value):
             validate_geometry_builder_constructor(stmt.value)
-            comp.consts.pop(target, None)
+            comp.compile_time.discard(target)
             comp.bind_legacy_structural(target, GeometryBuilder(binding_name=target))
             ctx.auto_final_output = None
             return
@@ -232,11 +231,11 @@ def compile_statement(
             and stmt.value.func.id.startswith("input_")
         ):
             try:
-                semantics = analyze_input_declaration_call(stmt.value, comp.consts)
+                semantics = analyze_input_declaration_call(stmt.value, comp.compile_time.values)
             except ValueError:
                 semantics = None
             if semantics is not None:
-                comp.consts.pop(target, None)
+                comp.compile_time.discard(target)
                 ordinal = ctx.input_declaration_ordinals.get(target, 0)
                 ctx.input_declaration_ordinals[target] = ordinal + 1
                 declaration_id = InputDeclarationId(comp.input_declaration_owner, target, ordinal)
@@ -250,12 +249,12 @@ def compile_statement(
                 ctx.auto_final_output = (target, value)
                 return
         try:
-            comp.consts[target] = _const_eval(stmt.value, comp.consts)
+            comp.compile_time.bind(target, _const_eval(stmt.value, comp.compile_time.values))
         except CompileError:
-            comp.consts.pop(target, None)
+            comp.compile_time.discard(target)
         if isinstance(stmt.value, (ast.List, ast.Tuple)):
             if isinstance(stmt.value, ast.List) and not stmt.value.elts:
-                comp.consts.pop(target, None)
+                comp.compile_time.discard(target)
             values = [comp.compile(e) for e in stmt.value.elts]
             reject_compile_time_object(values, "array literal")
             comp.bind_legacy_structural(target, values)
@@ -290,7 +289,7 @@ def compile_statement(
         value = comp.compile(bin_expr)
         reject_compile_time_object(value, "augmented assignment")
         comp.bind_runtime_value(target, value)
-        comp.consts.pop(target, None)
+        comp.compile_time.discard(target)
         if isinstance(value, list):
             ctx.auto_final_output = None
         else:
@@ -320,7 +319,7 @@ def compile_statement(
             reject_compile_time_object(value, "array append")
             reject_tuple_value(value, "array append")
             arr.append(value)
-            comp.consts.pop(list_name, None)
+            comp.compile_time.discard(list_name)
             ctx.auto_final_output = None
             return
         if not (call and call.func.id in {"store", "set_position", "output"}):
@@ -359,7 +358,7 @@ def compile_statement(
             iter_values = _as_array_iter_value(comp.legacy_structural_binding(stmt.iter.id))
         if iter_values is None:
             try:
-                raw_iter = _const_eval(stmt.iter, comp.consts)
+                raw_iter = _const_eval(stmt.iter, comp.compile_time.values)
                 if isinstance(raw_iter, (list, tuple)):
                     iter_values = [comp._compile_const_value(v, 260 + idx * 120, -220 - idx * 50) for v in raw_iter]
             except CompileError:
@@ -396,7 +395,7 @@ def compile_statement(
     # this branch. Remove it when compile_statement() is no longer a production path for supported bodies.
     if isinstance(stmt, ast.If):
         try:
-            branch = stmt.body if bool(_const_eval(stmt.test, comp.consts)) else stmt.orelse
+            branch = stmt.body if bool(_const_eval(stmt.test, comp.compile_time.values)) else stmt.orelse
             for sub in branch:
                 compile_statement(ctx, sub, idx, allow_final_expr=False, allow_interface_directives=False)
             return
@@ -478,8 +477,8 @@ def compile_statement(
         if isinstance(value, list):
             raise CompileError("store() value cannot be an array")
         selection = _selection_kw(comp, kws)
-        domain = _optional_string_kw(kws, "domain", "POINT", comp.consts)
-        data_type_override = _optional_string_kw(kws, "type", None, comp.consts)
+        domain = _optional_string_kw(kws, "domain", "POINT", comp.compile_time.values)
+        data_type_override = _optional_string_kw(kws, "type", None, comp.compile_time.values)
         ctx.geometry_socket = _store_named_attribute(group, ctx.geometry_socket, attr_name, value, selection, domain, data_type_override, 520 + idx * 130, -260 - idx * 60)
         ctx.auto_final_output = None
         return
@@ -508,7 +507,7 @@ def compile_statement(
             if "value" not in kws:
                 raise CompileError('output(name="Name", value=value) expects value=...')
             if "name" in kws:
-                out_name = _unique_output_name(ctx.output_names, _literal_string(kws["name"], "output() name", comp.consts))
+                out_name = _unique_output_name(ctx.output_names, _literal_string(kws["name"], "output() name", comp.compile_time.values))
             else:
                 out_name = _unique_output_name(ctx.output_names, "out")
             value_expr = kws["value"]
@@ -516,7 +515,7 @@ def compile_statement(
             out_name = _unique_output_name(ctx.output_names, "out")
             value_expr = call.args[0]
         elif len(call.args) == 2:
-            out_name = _unique_output_name(ctx.output_names, _literal_string(call.args[0], "output() name", comp.consts))
+            out_name = _unique_output_name(ctx.output_names, _literal_string(call.args[0], "output() name", comp.compile_time.values))
             value_expr = call.args[1]
         else:
             raise CompileError('output(value), output("Name", value), or output(name="Name", value=value) expected')
@@ -543,10 +542,11 @@ def compile_statements(ctx, stmts):
         backend_helper_names=frozenset(comp.backend_builtins),
         imported_functions=comp.imported_library_functions,
     )
+    root_compile_time = comp.compile_time.snapshot()
     body_compilation = lower_basic_body(
         stmts,
         initial_runtime_bindings=runtime_bindings,
-        initial_constants=comp.consts,
+        initial_compile_time=root_compile_time,
         legacy_binding_names=comp.legacy_structural_binding_names_snapshot(),
         reserved_name_labels=getattr(comp, "reserved_name_labels", {}),
         callable_environment=callable_environment,
@@ -554,12 +554,13 @@ def compile_statements(ctx, stmts):
         declaration_owner=comp.input_declaration_owner,
     )
     if body_compilation is BODY_UNSUPPORTED:
-        # CONTROL_FLOW_IR_WHOLE_BODY_FALLBACK: Straight-line bodies plus ordinary runtime if/repeat control
-        # flow now lower as one compiler-owned IRBody. Mutable arrays, GeometryBuilder, compile-time iterable
-        # loops, interface/geometry side-effect statements, stateful calls, and dynamic extension/function
-        # categories still require compile_statement(). Keep the complete body on one legacy path whenever
-        # any such category is present; never mix partially materialized IRBody control flow with legacy AST
-        # lowering. Remove this fallback when every supported body category has frontend-owned semantics.
+        # COMPILE_TIME_STATE_LEGACY_STATEMENT_PATH_COMPAT: Whole-body fallback still executes the legacy
+        # AST/Compiler statement engine for arrays, GeometryBuilder, stateful statements, and dynamic
+        # result categories. The preceding Semantic Body attempt runs on a detached speculative
+        # CompileTimeState, so BODY_UNSUPPORTED reaches this branch with Compiler.compile_time unchanged.
+        # This legacy engine then mutates only the committed Compiler.compile_time owner; it must not
+        # resurrect comp.consts as a second state owner. Remove this marker with the whole-body legacy
+        # statement path when all supported statement categories are Semantic-IR owned.
         for idx, stmt in enumerate(stmts):
             compile_statement(
                 ctx,
@@ -570,8 +571,7 @@ def compile_statements(ctx, stmts):
             )
         return ctx
 
-    comp.consts.clear()
-    comp.consts.update(body_compilation.final_constants)
+    comp.compile_time.replace(body_compilation.final_compile_time)
     backend_context = BlenderIRLoweringContext(
         group=ctx.group,
         runtime_bindings=comp.backend_runtime_values_snapshot(),

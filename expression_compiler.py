@@ -36,11 +36,6 @@ def compile_expr(comp, expr, depth=0):
     # or body before Blender effects. Remove this fallback when every remaining source-visible binding
     # category has frontend-owned semantic metadata and no name-only legacy structural set is needed.
     legacy_binding_names = comp.legacy_structural_binding_names_snapshot()
-    # COMPLETE_EXPRESSION_IR_CONSTANT_MIGRATION: comp.consts is still legacy compiler-owned
-    # compile-time storage. Normalize supported runtime-materializable constants into
-    # detached immutable semantic records, plus a detached semantics-preserving const-eval copy
-    # for subscript indices. Remove this bridge when compile-time bindings are frontend-owned
-    # and SemanticEnvironment receives their semantic records without reading comp.consts.
     callable_environment = CallableEnvironment(
         callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | STATEFUL_FALLBACK_BUILTIN_NAMES),
         system_constructors=comp.resolved_environment.system_constructors,
@@ -51,7 +46,7 @@ def compile_expr(comp, expr, depth=0):
     environment = build_semantic_environment(
         runtime_bindings=runtime_bindings,
         legacy_binding_names=legacy_binding_names,
-        constants=comp.consts,
+        compile_time=comp.compile_time.snapshot(),
         reserved_name_labels=getattr(comp, "reserved_name_labels", {}),
         callable_environment=callable_environment,
     )
@@ -92,8 +87,8 @@ def compile_expr(comp, expr, depth=0):
             return runtime_value
         if comp.has_legacy_structural_binding(expr.id):
             return comp.legacy_structural_binding(expr.id)
-        if expr.id in comp.consts:
-            return comp._compile_const_value(comp.consts[expr.id], x, y)
+        if comp.compile_time.contains(expr.id):
+            return comp._compile_const_value(comp.compile_time.get(expr.id), x, y)
         if expr.id in _ALLOWED_CONSTS:
             return _value(comp.group, _ALLOWED_CONSTS[expr.id], x, y)
         label = getattr(comp, "reserved_name_labels", {}).get(expr.id)
@@ -223,7 +218,7 @@ def compile_expr(comp, expr, depth=0):
         base = compile_expr(comp, expr.value, depth + 1)
         if isinstance(base, NodeResult):
             try:
-                key = _const_eval(expr.slice, comp.consts)
+                key = _const_eval(expr.slice, comp.compile_time.values)
             except CompileError as exc:
                 raise CompileError("raw node output lookup requires a compile-time string key") from exc
             if not isinstance(key, str) or not key:
@@ -231,14 +226,14 @@ def compile_expr(comp, expr, depth=0):
             return base.get_output(key)
         if isinstance(base, TupleValue):
             try:
-                index = _const_eval(expr.slice, comp.consts)
+                index = _const_eval(expr.slice, comp.compile_time.values)
             except CompileError as exc:
                 raise CompileError("tuple result indexing requires a compile-time integer index") from exc
             if not isinstance(index, int) or isinstance(index, bool):
                 raise CompileError("tuple result indexing requires a compile-time integer index")
             return base.get_item(index)
         try:
-            idx = int(_const_eval(expr.slice, comp.consts))
+            idx = int(_const_eval(expr.slice, comp.compile_time.values))
         except CompileError as exc:
             raise CompileError("array/vector indexing currently requires a compile-time integer index") from exc
         reject_compile_time_object(base, "subscript")
@@ -273,7 +268,7 @@ def compile_expr(comp, expr, depth=0):
             options = {}
             if "transform_space" in kws:
                 try:
-                    value = _const_eval(kws["transform_space"], comp.consts)
+                    value = _const_eval(kws["transform_space"], comp.compile_time.values)
                 except CompileError as exc:
                     raise CompileError("Object.info() transform_space must be 'ORIGINAL' or 'RELATIVE'") from exc
                 if value not in {"ORIGINAL", "RELATIVE"}:
@@ -281,7 +276,7 @@ def compile_expr(comp, expr, depth=0):
                 options["transform_space"] = value
             if "as_instance" in kws:
                 try:
-                    value = _const_eval(kws["as_instance"], comp.consts)
+                    value = _const_eval(kws["as_instance"], comp.compile_time.values)
                 except CompileError as exc:
                     raise CompileError("Object.info() as_instance must be a compile-time Bool") from exc
                 if not isinstance(value, bool):

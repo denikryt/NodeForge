@@ -11,9 +11,12 @@ class GeometryBuilder(CompileTimeObject):
     """Script-local procedural Geometry accumulator.
 
     A builder is owned by one source binding and exists only while compiling a
-    single DSL source. Outside runtime Repeat Zones it stores pending Geometry
-    values until a snapshot is needed. Inside Repeat Zones the active state is
-    owned by runtime descriptors, not by this mutable object.
+    single DSL source. It is mutable compiler/backend structural state, not a
+    const-evaluable value, so it stays in the legacy structural binding store
+    rather than :class:`CompileTimeState`. Outside runtime Repeat Zones it
+    stores pending Geometry values until a snapshot is needed. Inside Repeat
+    Zones the active state is owned by runtime descriptors, not by this mutable
+    object.
     """
 
     def __init__(self, binding_name):

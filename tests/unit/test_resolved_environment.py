@@ -399,7 +399,7 @@ def test_expression_dispatch_passes_exact_resolved_system_binding(monkeypatch):
         imported_library_functions={},
         local_functions={},
         backend_builtins={},
-        consts={},
+        compile_time=__import__("NodeForge.compile_time", fromlist=["CompileTimeState"]).CompileTimeState(),
         reserved_name_labels={},
         runtime_bindings_snapshot=lambda: MappingProxyType({}),
         backend_runtime_values_snapshot=lambda: MappingProxyType({}),

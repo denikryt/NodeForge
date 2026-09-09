@@ -17,5 +17,5 @@ NAMES = {
 
 def compile_call(comp, expr, depth=0):
     """Compile one normalized explicit input declaration into a fresh socket."""
-    semantics = analyze_input_declaration_call(expr, comp.consts)
+    semantics = analyze_input_declaration_call(expr, comp.compile_time.values)
     return comp._create_input_socket_value(semantics.display_name, semantics.typ, semantics.default)

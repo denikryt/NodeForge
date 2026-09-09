@@ -128,17 +128,20 @@ def repeat_mutation_names(stmts) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class RuntimeIfResult:
-    """Return one constructed IRIf plus the two analyzed branch states."""
+    """Return one constructed IRIf plus explicit runtime and compile-time branch exits."""
 
     statement: IRIf
     true_state: object
     false_state: object
+    true_compile_time: object
+    false_compile_time: object
 
 
 def lower_runtime_if(
     stmt: ast.If,
     *,
     base_state,
+    compile_time,
     policy: BranchMergePolicy,
     analyze_condition: Callable,
     lower_branch: Callable,
@@ -147,35 +150,36 @@ def lower_runtime_if(
 ):
     """Construct one runtime IRIf using caller-owned semantic state operations.
 
-    The state object is intentionally private to ``semantic_body``. This helper
-    only requires ``fork()``, ``constants``, ``runtime_bindings``, and
-    ``changed_runtime_ids`` so the control-flow policy stays separate from body
-    statement mechanics.
+    Runtime semantic state and compile-time state are intentionally separate.
+    This helper orchestrates their existing branch propagation policy without
+    making either state domain own the other.
     """
     if policy is BranchMergePolicy.TOP_LEVEL and not stmt.orelse:
         raise CompileError("runtime if currently requires an else branch")
 
-    analyzed_condition = analyze_condition(stmt.test, base_state)
+    analyzed_condition = analyze_condition(stmt.test, base_state, compile_time)
     if analyzed_condition is unsupported_sentinel:
         return unsupported_sentinel
     if analyzed_condition.program.result.typ is not NFType.BOOL:
         message = "repeat_range if condition must be Bool" if policy is BranchMergePolicy.REPEAT else "select(cond, true, false): cond must be Bool"
         raise CompileError(message)
 
-    true_state = base_state.fork(constants=dict(base_state.constants))
-
-    # CONTROL_FLOW_IR_LEGACY_CONSTANT_THREADING_COMPAT: Legacy runtime-if snapshots/restores active
-    # runtime/structural bindings but not comp.consts, so true-branch constant mutations are visible while
-    # compiling the false branch and false-exit constants become the post-if constant state. Preserve that
-    # deterministic true-then-false threading here; do not independently fork/restore constants with branch
-    # bindings. Remove this compatibility rule only when compile-time/runtime state separation defines and
-    # migrates a new explicit branch-constant contract with its own behavior/update compatibility coverage.
-    true_body = lower_branch(stmt.body, true_state, policy)
+    true_state = base_state.fork()
+    true_compile_time = compile_time.fork()
+    true_body = lower_branch(stmt.body, true_state, true_compile_time, policy)
     if true_body is unsupported_sentinel:
         return unsupported_sentinel
 
-    false_state = base_state.fork(constants=dict(true_state.constants))
-    false_body = lower_branch(stmt.orelse, false_state, policy) if stmt.orelse else lower_branch((), false_state, policy)
+    # Preserve the established deterministic compile-time branch order explicitly:
+    # the false branch observes the true-branch compile-time exit and its exit becomes
+    # the post-if compile-time state. Runtime branch state remains independently forked.
+    false_state = base_state.fork()
+    false_compile_time = true_compile_time.fork()
+    false_body = (
+        lower_branch(stmt.orelse, false_state, false_compile_time, policy)
+        if stmt.orelse
+        else lower_branch((), false_state, false_compile_time, policy)
+    )
     if false_body is unsupported_sentinel:
         return unsupported_sentinel
 
@@ -232,7 +236,7 @@ def lower_runtime_if(
     if policy is BranchMergePolicy.TOP_LEVEL and not merges:
         raise CompileError("runtime if branches must assign at least one common variable")
 
-    return RuntimeIfResult(IRIf(analyzed_condition.program, true_body, false_body, tuple(merges)), true_state, false_state)
+    return RuntimeIfResult(IRIf(analyzed_condition.program, true_body, false_body, tuple(merges)), true_state, false_state, true_compile_time, false_compile_time)
 
 
 __all__ = [

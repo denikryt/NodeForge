@@ -16,7 +16,8 @@ def test_material_type_token():
 
 def test_raw_node_parser_accepts_material_type_token():
     class DummyComp:
-        consts = {}
+        from NodeForge.compile_time import CompileTimeState
+        compile_time = CompileTimeState()
 
     expr = ast.parse(
         'node("GeometryNodeSetMaterial", inputs={"Material": mat}, output="Geometry", typ=Geometry)'

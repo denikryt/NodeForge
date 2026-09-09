@@ -46,7 +46,7 @@ from .library import (
     update_materialized_library_entry_group_for_record,
 )
 from .statements import _unique_output_name
-from .compile_time import CompileTimeObject, reject_compile_time_object
+from .compile_time import CompileTimeObject, CompileTimeState, reject_compile_time_object
 from . import expression_compiler
 from .builtins import registry as builtin_registry
 from .function_instances import (
@@ -170,7 +170,11 @@ class Compiler:
         """Initialize state shared by expression, statement, and call compilers."""
         self.group = group
         self.group_input = group_input
-        self.consts = consts if consts is not None else {}
+        if isinstance(consts, CompileTimeState):
+            self.compile_time = consts
+        else:
+            backing_consts = consts if consts is not None else {}
+            self.compile_time = CompileTimeState(backing_consts, adopt_mapping=True)
         self.local_functions = local_functions or {}
         self.local_group_cache = local_group_cache if local_group_cache is not None else {}
         self.function_group_cache = function_group_cache if function_group_cache is not None else self.local_group_cache
@@ -227,12 +231,12 @@ class Compiler:
         # when all supported bodies, interface/stateful input publication, and runtime control-flow
         # lowering pass backend binding materializations directly into body lowering.
         self._runtime_binding_values: dict[BindingId, Value] = {}
-        # CONTROL_FLOW_IR_REMAINING_STRUCTURAL_COMPAT: Fixed tuple/raw named outputs, ordinary runtime
-        # bindings, Object semantics, and ordinary runtime if/repeat state are compiler-owned Semantic IR.
-        # Mutable script arrays, GeometryBuilder/CompileTimeObject state, and dynamic-call structural results
-        # still require the private legacy structural store and force whole-body fallback before Blender IR
-        # lowering. Never place these backend/compiler objects in IRIf/IRRepeat. Remove this store when array,
-        # builder, dynamic-result, and remaining legacy statement semantics all have frontend representations.
+        # COMPILE_TIME_STATE_LEGACY_STRUCTURAL_COMPAT: CompileTimeState now owns only const-evaluable
+        # source bindings. Mutable runtime-value arrays, GeometryBuilder/CompileTimeObject state, and
+        # dynamic structural call results are neither compile-time constants nor migrated runtime-semantic
+        # bindings, so they remain quarantined in this compatibility store and force whole-body fallback.
+        # Never move these backend/compiler objects into CompileTimeState merely to unify name storage.
+        # Remove this store when every remaining structural category has explicit frontend semantics.
         self._legacy_structural_bindings: dict[str, object] = {}
         self._interface_inputs_by_identifier = {}
         self._interface_inputs_by_socket_pointer = {}
@@ -244,6 +248,25 @@ class Compiler:
         # no supported production Repeat is lowered through the legacy runtime control-flow implementation.
         self._runtime_state_frames = []
         self.depth = 0
+
+    # COMPILE_TIME_STATE_COMPILER_CONSTS_COMPAT: Compile-time bindings are now owned by
+    # Compiler.compile_time, but Compiler remains importable and older tests/integrations may read,
+    # mutate, or replace the historical mutable comp.consts mapping directly. Keep this facade backed
+    # by the exact CompileTimeState mapping so those direct Compiler callers retain current behavior.
+    # Repository-owned production code must not use comp.consts. Remove this facade when Compiler is
+    # internal/session-owned and no supported integration or test contract mutates .consts directly.
+    @property
+    def consts(self):
+        """Return the historical mutable compile-time mapping compatibility surface."""
+        return self.compile_time._values
+
+    @consts.setter
+    def consts(self, values):
+        """Replace historical compile-time mapping contents without replacing the owner."""
+        if hasattr(self, "compile_time"):
+            self.compile_time.replace(values)
+        else:
+            self.compile_time = CompileTimeState(values if values is not None else {}, adopt_mapping=True)
 
     def push_runtime_frame(self, frame):
         """Push one lexical Repeat Zone runtime-state frame."""
@@ -438,12 +461,11 @@ class Compiler:
             self._legacy_structural_bindings,
         )
 
-    # FRONTEND_RUNTIME_BINDING_STATE_CHECKPOINT_COMPAT: Legacy statement/runtime lowering
-    # speculatively compiles branches and nested loops, so a checkpoint must still pair frontend
-    # binding symbols with their current backend Value materializations and legacy structural
-    # bindings. This is a compiler-control-flow compatibility mechanism, not Semantic IR state.
-    # Remove it when statement/control-flow IR represents branch and loop state before Blender
-    # materialization and speculative lowering no longer mutates Compiler binding state.
+    # COMPILE_TIME_STATE_LEGACY_BINDING_CHECKPOINT_COMPAT: Legacy statement/runtime lowering still
+    # snapshots runtime symbols, backend Value materializations, and legacy structural bindings while
+    # compiling speculative branches/loops. Compile-time state is intentionally excluded and is owned
+    # separately by Compiler.compile_time, preserving the existing branch-order semantics explicitly.
+    # Remove these binding checkpoints when no supported body uses legacy speculative AST lowering.
     def _snapshot_binding_state(self) -> _CompilerBindingState:
         """Capture a detached shallow checkpoint of all active binding maps."""
         self._validate_binding_state()
@@ -570,12 +592,12 @@ class Compiler:
 
     def _const_eval_macro_arg(self, expr):
         """Evaluate a compile-time macro argument."""
-        return _const_eval(expr, self.consts)
+        return _const_eval(expr, self.compile_time.values)
 
     def _const_or_compile_arg(self, expr, depth=0):
         """Return a compile-time value or a dynamic Value for a call argument."""
         try:
-            return _const_eval(expr, self.consts), False
+            return _const_eval(expr, self.compile_time.values), False
         except CompileError:
             return self.compile(expr), True
 
@@ -825,9 +847,9 @@ def _populate_group(
     )
     _validate_interface_directive_placement(raw_body_stmts)
 
-    stmts, consts = _preprocess_compile_time(body_stmts)
+    stmts, compile_time = _preprocess_compile_time(body_stmts)
     callable_names = set(own_imported_library_functions) | set(local_function_defs) | backend_names | set(system_names)
-    input_names = sorted(set(_collect_inputs(stmts, extra_builtin_names=callable_names, consts=consts)) - set(consts.keys()))
+    input_names = sorted(set(_collect_inputs(stmts, extra_builtin_names=callable_names, consts=compile_time.values)) - set(compile_time.values.keys()))
     input_types = _infer_input_types(stmts)
     try:
         group.color_tag = 'CONVERTER'
@@ -858,7 +880,7 @@ def _populate_group(
     comp = Compiler(
         group,
         group_input,
-        consts,
+        compile_time,
         local_functions=local_function_defs,
         local_group_cache=function_group_cache if function_group_cache is not None else {},
         backend_builtins=backend_builtins,
@@ -909,7 +931,6 @@ def _populate_group(
     ctx = GroupBuildContext(
         group=group,
         comp=comp,
-        consts=comp.consts,
         geometry_mode=geometry_mode,
         geometry_socket=geometry_socket,
     )

@@ -92,6 +92,8 @@ def _load_compiler(monkeypatch):
     compiler._runtime_bindings = FrontendRuntimeBindings(compiler.function_group_owner_scope)
     compiler._runtime_binding_values = {}
     compiler._legacy_structural_bindings = {}
+    from NodeForge.compile_time import CompileTimeState
+    compiler.compile_time = CompileTimeState()
     return module, compiler
 
 
@@ -206,7 +208,9 @@ def test_assignment_accepts_compile_time_object_from_resolved_system_constructor
         return state
 
     monkeypatch.setattr(systems_registry, "compile_resolved_call", compile_resolved_call)
-    ctx = GroupBuildContext(group=compiler.group, comp=compiler, consts=compiler.consts, geometry_mode=False)
+    from NodeForge import expression_compiler
+    monkeypatch.setattr(expression_compiler.systems_registry, "compile_resolved_call", compile_resolved_call)
+    ctx = GroupBuildContext(group=compiler.group, comp=compiler, geometry_mode=False)
     stmt = ast.parse("state = package_state()").body[0]
 
     compile_statement(ctx, stmt)
@@ -240,3 +244,23 @@ def test_private_binding_stores_are_not_accessed_outside_compiler_production_cod
             if token in source:
                 offenders.append((str(path.relative_to(root)), token))
     assert offenders == []
+
+
+def test_runtime_binding_mutation_does_not_implicitly_change_compile_time_state(monkeypatch):
+    """Runtime binding ownership remains independent from same-name compile-time state."""
+    from NodeForge.values import Value
+
+    _module, compiler = _load_compiler(monkeypatch)
+    compiler.compile_time.bind("x", 7)
+    compiler.bind_runtime_value("x", Value(object(), NFType.FLOAT))
+    assert compiler.compile_time.get("x") == 7
+
+
+def test_binding_checkpoint_excludes_compile_time_state(monkeypatch):
+    """Legacy runtime/structural checkpoints never roll compile-time state backward."""
+    _module, compiler = _load_compiler(monkeypatch)
+    compiler.compile_time.bind("c", 1)
+    checkpoint = compiler._snapshot_binding_state()
+    compiler.compile_time.bind("c", 2)
+    compiler._restore_binding_state(checkpoint)
+    assert compiler.compile_time.get("c") == 2

@@ -3,6 +3,7 @@ import ast
 import pytest
 
 from NodeForge.consteval import _const_eval
+from NodeForge.compile_time import CompileTimeState
 from NodeForge.errors import CompileError
 
 pytestmark = pytest.mark.unit
@@ -60,8 +61,9 @@ def test_literal_string_and_input_discovery_use_compile_time_fstrings():
     stmts = _parse_source('prefix = "Result"\nvalue = input_float(f"{prefix} Value")\noutput(f"{prefix} Output", value)')
     from NodeForge.consteval import _preprocess_compile_time
 
-    retained, consts = _preprocess_compile_time(stmts)
-    assert _collect_inputs(retained, consts=consts) == []
+    retained, compile_time = _preprocess_compile_time(stmts)
+    assert isinstance(compile_time, CompileTimeState)
+    assert _collect_inputs(retained, consts=compile_time.values) == []
 
     retained = _parse_source('output(f"{runtime_name}", 1)')
     assert _collect_inputs(retained, consts={}) == ["runtime_name"]
@@ -71,7 +73,8 @@ def _preprocess_source(source):
     from NodeForge.consteval import _preprocess_compile_time
     from NodeForge.parsing import _parse_source
 
-    return _preprocess_compile_time(_parse_source(source))
+    retained, compile_time = _preprocess_compile_time(_parse_source(source))
+    return retained, compile_time.values
 
 
 def test_preprocess_preserves_integer_assignments_as_compile_time_range_candidates():
@@ -155,7 +158,7 @@ def test_handle_stmt_invalidates_integer_candidate_for_preserved_repeat_range_st
     env = {"COUNT": 8}
     out = []
 
-    _handle_compile_time_stmt(stmt, env, out, preserve_names={"COUNT"})
+    _handle_compile_time_stmt(stmt, CompileTimeState(env, adopt_mapping=True), out, preserve_names={"COUNT"})
 
     assert "COUNT" not in env
     assert out == [stmt]

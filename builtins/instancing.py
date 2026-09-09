@@ -33,7 +33,7 @@ def compile_call(comp, expr, depth=0):
         realize = True
         if "realize" in kws:
             try:
-                realize = bool(_const_eval(kws["realize"], comp.consts))
+                realize = bool(_const_eval(kws["realize"], comp.compile_time.values))
             except CompileError:
                 raise CompileError("instance_on_points realize= must be a compile-time bool")
         return _instance_on_points(comp.group, instance, points_geo, selection=selection, scale=scale, rotation=rotation, realize=realize, x=x, y=y)
@@ -53,7 +53,7 @@ def compile_call(comp, expr, depth=0):
 def _const_or_compile(comp, expr):
     """Return a compile-time option value or compile a dynamic node value."""
     try:
-        return _const_eval(expr, comp.consts)
+        return _const_eval(expr, comp.compile_time.values)
     except CompileError:
         value = comp.compile(expr)
         reject_compile_time_object(value, "instancing builtin argument")

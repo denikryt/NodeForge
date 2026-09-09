@@ -3,6 +3,7 @@
 import ast
 from .constants import *
 from .errors import CompileError
+from .compile_time import CompileTimeState
 
 _ALLOWED_MATH_FUNCS = {
     "sin": __import__("math").sin,
@@ -266,50 +267,45 @@ def _contains_builder_method_stmt(stmts):
                 return True
     return False
 
-def _handle_compile_time_stmt(stmt, env, out_stmts, preserve_names=None):
-    """Function `_handle_compile_time_stmt` used by the NodeForge addon."""
+def _handle_compile_time_stmt(stmt, state: CompileTimeState, out_stmts, preserve_names=None):
+    """Fold one statement into explicit compile-time state when current semantics allow it."""
     preserve_names = preserve_names or set()
-    if isinstance(stmt, ast.Assign):
+    env = state.values
+    if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
         target = stmt.targets[0]
-        if not isinstance(target, ast.Name):
-            # Runtime tuple unpacking is validated and lowered atomically by the
-            # statement compiler. It cannot be folded as one compile-time value.
-            for nested in ast.walk(target):
+        if isinstance(target, (ast.Tuple, ast.List)):
+            for nested in target.elts:
                 if isinstance(nested, ast.Name):
-                    env.pop(nested.id, None)
+                    state.discard(nested.id)
             out_stmts.append(stmt)
             return
-        # Preserve initial values for repeat_range state variables; they must become GN values.
+        if not isinstance(target, ast.Name):
+            out_stmts.append(stmt)
+            return
         if target.id in preserve_names:
-            env.pop(target.id, None)
+            state.discard(target.id)
             out_stmts.append(stmt)
             return
-        # Empty lists are script-level runtime arrays: keep them for the compiler
-        # so later `items.append(dynamic_value)` can collect node Values.
         if isinstance(stmt.value, ast.List) and not stmt.value.elts:
-            env.pop(target.id, None)
+            state.discard(target.id)
             out_stmts.append(stmt)
             return
-        # Treat fully-constant assignments as compile-time only.  If such a
-        # value is later used by a runtime expression or output, expression
-        # lowering materializes just the final constant value instead of the
-        # intermediate arithmetic that produced it.
         try:
-            val = _const_eval(stmt.value, env)
-            env[target.id] = val
-            return
+            value = _const_eval(stmt.value, env)
         except CompileError:
-            env.pop(target.id, None)
-        out_stmts.append(stmt)
+            state.discard(target.id)
+            out_stmts.append(stmt)
+            return
+        state.bind(target.id, value)
         return
     if isinstance(stmt, ast.AugAssign):
         if isinstance(stmt.target, ast.Name):
-            env.pop(stmt.target.id, None)
+            state.discard(stmt.target.id)
         out_stmts.append(stmt)
         return
     if isinstance(stmt, ast.AnnAssign):
         if isinstance(stmt.target, ast.Name):
-            env.pop(stmt.target.id, None)
+            state.discard(stmt.target.id)
         out_stmts.append(stmt)
         return
     if isinstance(stmt, ast.Expr):
@@ -318,13 +314,13 @@ def _handle_compile_time_stmt(stmt, env, out_stmts, preserve_names=None):
             if not isinstance(call.func.value, ast.Name) or len(call.args) != 1:
                 raise CompileError("append must look like items.append(value)")
             list_name = call.func.value.id
-            if list_name in env and isinstance(env[list_name], list):
+            current = state.get(list_name)
+            if isinstance(current, list):
                 try:
-                    env[list_name].append(_const_eval(call.args[0], env))
+                    current.append(_const_eval(call.args[0], env))
                     return
                 except CompileError:
                     pass
-            # Non-constant append is a script-level runtime array operation.
             out_stmts.append(stmt)
             return
         out_stmts.append(stmt)
@@ -336,11 +332,9 @@ def _handle_compile_time_stmt(stmt, env, out_stmts, preserve_names=None):
             out_stmts.append(stmt)
             return
         for sub in branch:
-            _handle_compile_time_stmt(sub, env, out_stmts, preserve_names)
+            _handle_compile_time_stmt(sub, state, out_stmts, preserve_names)
         return
     if isinstance(stmt, ast.For):
-        # Non-constant for iterables are preserved so statement lowering can report
-        # a precise range(...)/repeat_range(...) error or handle array iteration.
         try:
             iterable = _const_eval(stmt.iter, env)
         except CompileError:
@@ -348,9 +342,6 @@ def _handle_compile_time_stmt(stmt, env, out_stmts, preserve_names=None):
                 raise
             out_stmts.append(stmt)
             return
-        # Keep loops with array append or geometry_builder mutation for the main
-        # compiler; it can unroll them while preserving dynamic node Values and
-        # compiler-owned mutable objects with the loop target bound.
         if _contains_builder_method_stmt(stmt.body):
             out_stmts.append(stmt)
             return
@@ -360,13 +351,16 @@ def _handle_compile_time_stmt(stmt, env, out_stmts, preserve_names=None):
                 return
         if not isinstance(stmt.target, ast.Name):
             raise CompileError("Only simple compile-time for targets are supported")
-        old = env.get(stmt.target.id, None); had_old = stmt.target.id in env
+        had_old = state.contains(stmt.target.id)
+        old = state.get(stmt.target.id)
         for item in iterable:
-            env[stmt.target.id] = item
+            state.bind(stmt.target.id, item)
             for sub in stmt.body:
-                _handle_compile_time_stmt(sub, env, out_stmts, preserve_names)
-        if had_old: env[stmt.target.id] = old
-        else: env.pop(stmt.target.id, None)
+                _handle_compile_time_stmt(sub, state, out_stmts, preserve_names)
+        if had_old:
+            state.bind(stmt.target.id, old)
+        else:
+            state.discard(stmt.target.id)
         return
     out_stmts.append(stmt)
 
@@ -418,13 +412,13 @@ def _repeat_range_state_names(stmts):
 
 
 def _preprocess_compile_time(stmts):
-    """Function `_preprocess_compile_time` used by the NodeForge addon."""
-    env = {}
+    """Preprocess statements and return the explicit compile-time state owner."""
+    state = CompileTimeState()
     out = []
     preserve = _repeat_range_state_names(stmts)
     for stmt in stmts:
-        _handle_compile_time_stmt(stmt, env, out, preserve)
-    return out, env
+        _handle_compile_time_stmt(stmt, state, out, preserve)
+    return out, state
 
 
 def _infer_input_types(stmts):

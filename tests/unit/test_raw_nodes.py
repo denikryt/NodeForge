@@ -62,7 +62,8 @@ def test_raw_node_parser_rejects_malformed_call_without_blender():
     from NodeForge.builtins import raw_nodes
 
     class DummyComp:
-        consts = {}
+        from NodeForge.compile_time import CompileTimeState
+        compile_time = CompileTimeState()
 
     malformed = [
         'node("FunctionNodeCompare")',
@@ -84,7 +85,8 @@ def test_raw_node_parser_accepts_type_tokens_without_comp_vars():
     from NodeForge.builtins import raw_nodes
 
     class DummyComp:
-        consts = {}
+        from NodeForge.compile_time import CompileTimeState
+        compile_time = CompileTimeState()
         vars = {"Bool": Value(object(), TYPE_FLOAT)}
 
     expr = ast.parse('node("FunctionNodeCompare", output="Result", typ=Bool, outputs=None)', mode="eval").body

@@ -86,7 +86,7 @@ def _parse_node_call(comp, expr):
 def _literal_string_node_arg(comp, expr, context):
     """Return a node(...) string argument resolved from compile-time constants."""
     try:
-        value = _const_eval(expr, comp.consts)
+        value = _const_eval(expr, comp.compile_time.values)
     except CompileError as exc:
         raise CompileError(f"node(...) {context} must be a non-empty compile-time string") from exc
     if isinstance(value, str) and value:
@@ -135,7 +135,7 @@ def _parse_literal_dict(comp, expr, context):
         if key in out:
             raise CompileError(f"node(...) {context} has duplicate key {key!r}")
         try:
-            value = _const_eval(value_expr, comp.consts)
+            value = _const_eval(value_expr, comp.compile_time.values)
         except CompileError as exc:
             raise CompileError(f"node(...) {context} values must be compile-time literals") from exc
         out[key] = _normalize_json_value(value, f"node(...) {context}{key!r}")
@@ -416,7 +416,7 @@ def _wire_or_default_input(comp, node, socket_name, socket, value_spec, context)
     literal = value_spec
     if isinstance(value_spec, ast.AST):
         try:
-            literal = _const_eval(value_spec, comp.consts)
+            literal = _const_eval(value_spec, comp.compile_time.values)
             literal_known = True
         except CompileError:
             literal_known = False

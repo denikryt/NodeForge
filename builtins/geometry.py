@@ -79,7 +79,7 @@ def compile_call(comp, expr, depth=0):
         if len(expr.args) != 1:
             raise CompileError("points(count) expects one Int argument")
         try:
-            count = _const_eval(expr.args[0], comp.consts)
+            count = _const_eval(expr.args[0], comp.compile_time.values)
         except CompileError:
             count = comp.compile(expr.args[0])
             reject_compile_time_object(count, "points() count")
@@ -127,8 +127,8 @@ def compile_call(comp, expr, depth=0):
         reject_compile_time_object(geo, "capture_attribute() geometry")
         reject_compile_time_object(value, "capture_attribute() value")
         selection = _selection_kw(comp, kws)
-        domain = _optional_string_kw(kws, "domain", "POINT", comp.consts)
-        data_type_override = _optional_string_kw(kws, "type", None, comp.consts)
+        domain = _optional_string_kw(kws, "domain", "POINT", comp.compile_time.values)
+        data_type_override = _optional_string_kw(kws, "type", None, comp.compile_time.values)
         from ..values import TupleValue
         captured_geo, captured_value = _capture_attribute_geometry(comp.group, geo, value, selection, domain, data_type_override, x, y)
         return TupleValue((captured_geo, captured_value))
@@ -145,8 +145,8 @@ def compile_call(comp, expr, depth=0):
         if isinstance(value, list):
             raise CompileError("store_named_attribute() value cannot be an array")
         selection = _selection_kw(comp, kws)
-        domain = _optional_string_kw(kws, "domain", "POINT", comp.consts)
-        data_type_override = _optional_string_kw(kws, "type", None, comp.consts)
+        domain = _optional_string_kw(kws, "domain", "POINT", comp.compile_time.values)
+        data_type_override = _optional_string_kw(kws, "type", None, comp.compile_time.values)
         return _store_named_attribute_geometry(comp.group, geo, attr_name, value, selection, domain, data_type_override, x, y)
 
     if name == "set_material":
@@ -157,7 +157,7 @@ def compile_call(comp, expr, depth=0):
         geo = comp.compile(expr.args[0])
         reject_compile_time_object(geo, "set_material() geometry")
         try:
-            material = _literal_string(expr.args[1], "set_material() material name", comp.consts)
+            material = _literal_string(expr.args[1], "set_material() material name", comp.compile_time.values)
         except CompileError:
             material = comp.compile(expr.args[1])
             reject_compile_time_object(material, "set_material() material")
@@ -171,7 +171,7 @@ def compile_call(comp, expr, depth=0):
             raise CompileError("cube(size) expects 0 or 1 positional argument")
         size_expr = expr.args[0] if expr.args else kws.get("size", ast.Constant(value=1.0))
         try:
-            size = _const_eval(size_expr, comp.consts)
+            size = _const_eval(size_expr, comp.compile_time.values)
         except CompileError:
             size = comp.compile(size_expr)
         return _cube_geometry(comp.group, size, x, y)
@@ -225,7 +225,7 @@ def compile_call(comp, expr, depth=0):
 def _const_or_compile(comp, expr):
     """Return a compile-time constant when possible, otherwise compile a node value."""
     try:
-        return _const_eval(expr, comp.consts)
+        return _const_eval(expr, comp.compile_time.values)
     except CompileError:
         value = comp.compile(expr)
         reject_compile_time_object(value, "geometry builtin argument")

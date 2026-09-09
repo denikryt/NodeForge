@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from NodeForge.compile_time import CompileTimeSnapshot
+
 from NodeForge.call_resolution import (
     CallableEnvironment,
     CallableKind,
@@ -80,7 +82,7 @@ def _analyze_unresolved(source, *, consts=None):
     from types import MappingProxyType
     from NodeForge.semantic_analysis import SemanticEnvironment, analyze_expression, build_semantic_constant_snapshot
 
-    constants, detached = build_semantic_constant_snapshot(consts or {})
+    constants, detached = build_semantic_constant_snapshot(CompileTimeSnapshot(consts or {}))
     environment = SemanticEnvironment(
         MappingProxyType({}),
         frozenset(),
@@ -216,7 +218,7 @@ def test_object_info_method_syntax_is_classified_by_semantic_analysis():
 
     from NodeForge.semantic_values import ObjectInfoState, ObjectSemanticId, ObjectSemanticSnapshot
 
-    constants, detached = build_semantic_constant_snapshot({})
+    constants, detached = build_semantic_constant_snapshot(CompileTimeSnapshot({}))
     binding_id = BindingId("object-info", 0)
     object_id = ObjectSemanticId(0)
     env = SemanticEnvironment(

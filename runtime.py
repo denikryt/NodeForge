@@ -319,7 +319,7 @@ def _runtime_state_descriptors(comp, stmts):
 def _compile_repeat_iteration_count(group, comp, expr, x=0, y=0):
     """Compile a repeat count while preserving integer constants as Int sockets."""
     try:
-        value = _const_eval(expr, comp.consts)
+        value = _const_eval(expr, comp.compile_time.values)
     except CompileError:
         value = None
     if isinstance(value, int) and not isinstance(value, bool):
@@ -426,7 +426,7 @@ def _repeat_state_assignments(group, comp, iterations, body_stmts, index_name=No
                 comp.bind_runtime_value(name, item)
             else:
                 comp.bind_legacy_structural(name, item)
-            comp.consts.pop(name, None)
+            comp.compile_time.discard(name)
 
     def compile_builder_method(sub, active_frame):
         info = _builder_method_info(comp, sub)

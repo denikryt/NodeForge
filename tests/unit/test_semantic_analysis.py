@@ -6,6 +6,8 @@ from types import MappingProxyType
 
 import pytest
 
+from NodeForge.compile_time import CompileTimeSnapshot
+
 from NodeForge.constants import (
     TYPE_BOOL,
     TYPE_BUNDLE,
@@ -47,7 +49,7 @@ def _env(*, bindings=None, legacy=(), consts=None, labels=None, backend_helpers=
         name: RuntimeBindingSymbol(BindingId("test-owner", index), typ)
         for index, (name, typ) in enumerate((bindings or {}).items())
     }
-    constants, const_eval_values = build_semantic_constant_snapshot(consts or {})
+    constants, const_eval_values = build_semantic_constant_snapshot(CompileTimeSnapshot(consts or {}))
     object_semantics = None
     if object_registry:
         object_ids = {}
@@ -139,10 +141,10 @@ def test_constant_snapshot_is_cycle_safe_and_never_retains_unsupported_object_id
     cyclic.append(cyclic)
     opaque = object()
 
-    constants, const_eval_values = build_semantic_constant_snapshot({
+    constants, const_eval_values = build_semantic_constant_snapshot(CompileTimeSnapshot({
         "cyclic": cyclic,
         "opaque": opaque,
-    })
+    }))
 
     assert constants["cyclic"].kind == "unsupported"
     assert constants["opaque"].kind == "unsupported"
@@ -170,7 +172,7 @@ def test_detached_constant_snapshot_preserves_cycles_aliasing_and_const_eval_sem
     xs.append(xs)
     shared = [2, 3]
     original = {"xs": xs, "left": shared, "right": shared}
-    _, detached = build_semantic_constant_snapshot(original)
+    _, detached = build_semantic_constant_snapshot(CompileTimeSnapshot(original))
 
     assert detached["xs"] is not xs
     assert detached["xs"][1] is detached["xs"]
@@ -189,7 +191,7 @@ def test_detached_constant_snapshot_never_invokes_opaque_deepcopy():
             raise AssertionError("opaque __deepcopy__ must not run")
 
     opaque = Opaque()
-    _, detached = build_semantic_constant_snapshot({"opaque": opaque, "items": [opaque]})
+    _, detached = build_semantic_constant_snapshot(CompileTimeSnapshot({"opaque": opaque, "items": [opaque]}))
     assert detached["opaque"] is not opaque
     assert detached["items"][0] is detached["opaque"]
 
@@ -198,7 +200,7 @@ def test_detached_constant_snapshot_preserves_distinct_opaque_identities():
     """Distinct unsupported leaves must not collapse to one frontend placeholder."""
     x = object()
     y = object()
-    _, detached = build_semantic_constant_snapshot({"x": x, "x_alias": x, "y": y})
+    _, detached = build_semantic_constant_snapshot(CompileTimeSnapshot({"x": x, "x_alias": x, "y": y}))
 
     assert detached["x"] is detached["x_alias"]
     assert detached["x"] is not detached["y"]

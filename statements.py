@@ -74,7 +74,7 @@ def _check_no_extra_keywords(kws, allowed):
 def _string_value_or_literal(comp, expr, context):
     """Return a compile-time string or a runtime String value for a socket argument."""
     try:
-        return _literal_string(expr, context, comp.consts)
+        return _literal_string(expr, context, comp.compile_time.values)
     except CompileError:
         value = comp.compile(expr)
         reject_compile_time_object(value, context)

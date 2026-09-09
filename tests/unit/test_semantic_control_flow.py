@@ -4,6 +4,8 @@ import ast
 
 import pytest
 
+from NodeForge.compile_time import CompileTimeSnapshot
+
 from NodeForge.builtin_call_semantics import IR_CAPABLE_BUILTIN_NAMES, STATEFUL_FALLBACK_BUILTIN_NAMES
 from NodeForge.call_resolution import CallableEnvironment
 from NodeForge.compiler_identities import BindingId, InputDeclarationId
@@ -28,7 +30,7 @@ def _lower(source, *, bindings=None, constants=None, legacy=()):
     return lower_basic_body(
         ast.parse(source, mode="exec").body,
         initial_runtime_bindings=bindings or {},
-        initial_constants=constants or {},
+        initial_compile_time=CompileTimeSnapshot(constants or {}),
         legacy_binding_names=frozenset(legacy),
         reserved_name_labels={},
         callable_environment=_callables(),
@@ -123,8 +125,8 @@ def test_runtime_if_constants_preserve_legacy_true_then_false_threading():
     branch = result.body.statements[2]
     assert isinstance(branch, IRIf)
     assert [merge.source_name for merge in branch.merges] == ["c"]
-    assert result.final_constants["c"] == 3
-    assert result.final_constants["x"] == 13
+    assert result.final_compile_time.values["c"] == 3
+    assert result.final_compile_time.values["x"] == 13
 
 
 def test_runtime_if_runtime_assignment_removes_constant_through_normal_assignment_semantics():
@@ -133,7 +135,7 @@ def test_runtime_if_runtime_assignment_removes_constant_through_normal_assignmen
         'if flag:\n    c = x + 10\n    x = x + 1\nelse:\n    x = x + 2\n'
         'output(x)'
     )
-    assert "c" not in result.final_constants
+    assert "c" not in result.final_compile_time.values
 
 
 def test_repeat_has_explicit_carried_state_and_int_count_literal():
@@ -145,7 +147,7 @@ def test_repeat_has_explicit_carried_state_and_int_count_literal():
     state = repeat.states[0]
     assert state.source_name == "x"
     assert state.publish_to_parent is True
-    assert "x" not in result.final_constants
+    assert "x" not in result.final_compile_time.values
 
 
 def test_repeat_body_can_read_non_carried_outer_binding():

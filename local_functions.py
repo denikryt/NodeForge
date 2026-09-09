@@ -369,8 +369,8 @@ def _resolve_direct_capture(comp, fn, capture_name):
         if isinstance(value, list):
             raise CompileError(f"Local function {fn.name}() cannot capture {capture_name}: arrays are not supported")
         raise CompileError(f"Local function {fn.name}() cannot capture {capture_name}: unsupported binding")
-    if capture_name in comp.consts:
-        value = comp.consts[capture_name]
+    if comp.compile_time.contains(capture_name):
+        value = comp.compile_time.get(capture_name)
         try:
             typ = value_type_for_const(value)
         except CompileError as exc:

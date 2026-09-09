@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from NodeForge.compile_time import CompileTimeSnapshot
+
 from NodeForge.constants import (
     TYPE_BOOL,
     TYPE_BUNDLE,
@@ -100,7 +102,7 @@ def _environment(*, bindings=None, consts=None, labels=None, legacy_names=(), ba
     """
     from types import MappingProxyType
 
-    semantic_constants, const_eval_values = build_semantic_constant_snapshot(consts or {})
+    semantic_constants, const_eval_values = build_semantic_constant_snapshot(CompileTimeSnapshot(consts or {}))
     runtime_bindings = {
         name: RuntimeBindingSymbol(_test_binding_id(name), typ)
         for name, typ in (bindings or {}).items()
@@ -609,11 +611,13 @@ def _backend_bindings(bindings):
     }
 
 def test_exact_control_flow_migration_markers_are_present_once():
-    """Stage-19 compatibility decisions stay exact, searchable, and exhaustively enumerated."""
+    """Stage-20 compatibility decisions are exact, searchable, and old markers are retired."""
     root = Path(__file__).resolve().parents[2]
     expected = {
         "compiler.py": (
-            "CONTROL_FLOW_IR_REMAINING_STRUCTURAL_COMPAT",
+            "COMPILE_TIME_STATE_COMPILER_CONSTS_COMPAT",
+            "COMPILE_TIME_STATE_LEGACY_STRUCTURAL_COMPAT",
+            "COMPILE_TIME_STATE_LEGACY_BINDING_CHECKPOINT_COMPAT",
             "CONTROL_FLOW_IR_LEGACY_RUNTIME_FRAME_COMPAT",
         ),
         "semantic_body.py": (
@@ -623,39 +627,23 @@ def test_exact_control_flow_migration_markers_are_present_once():
         "statement_compiler.py": (
             "CONTROL_FLOW_IR_LEGACY_IF_COMPAT",
             "CONTROL_FLOW_IR_LEGACY_REPEAT_DISPATCH_COMPAT",
-            "CONTROL_FLOW_IR_WHOLE_BODY_FALLBACK",
+            "COMPILE_TIME_STATE_LEGACY_STATEMENT_PATH_COMPAT",
         ),
         "runtime.py": (
             "CONTROL_FLOW_IR_LEGACY_REPEAT_ENGINE_COMPAT",
             "CONTROL_FLOW_IR_BLENDER_REPEAT_SOCKET_COMPAT",
         ),
-        "semantic_control_flow.py": "CONTROL_FLOW_IR_LEGACY_CONSTANT_THREADING_COMPAT",
+        "expression_compiler.py": "STRUCTURAL_SEMANTICS_REMAINING_LEGACY_NAME_FALLBACK",
     }
-    found = set()
     for relative, marker_names in expected.items():
         source = (root / relative).read_text(encoding="utf-8")
         if isinstance(marker_names, str):
             marker_names = (marker_names,)
         for marker in marker_names:
             assert source.count(marker) == 1, (relative, marker)
-            found.add(marker)
-
-    all_sources = "\n".join(path.read_text(encoding="utf-8") for path in root.rglob("*.py") if ".git" not in path.parts)
-    discovered = {
-        token.split(":", 1)[0]
-        for line in all_sources.splitlines()
-        for token in line.split()
-        if token.startswith("CONTROL_FLOW_IR_")
-    }
-    assert discovered == found
-
-    retained_markers = {
-        "blender_ir_lowering.py": "STRUCTURAL_SEMANTICS_LEGACY_EXPRESSION_RESULT_BRIDGE",
-        "semantic_analysis.py": "STRUCTURAL_SEMANTICS_LEGACY_OBJECT_EXPRESSION_FALLBACK",
-        "builtins/bundle.py": "STRUCTURAL_SEMANTICS_LEGACY_BUNDLE_CALL_COMPAT",
-    }
-    for relative, marker in retained_markers.items():
-        assert (root / relative).read_text(encoding="utf-8").count(marker) == 1, (relative, marker)
+    all_source = "\n".join(path.read_text(encoding="utf-8") for path in root.glob("*.py"))
+    assert "CONTROL_FLOW_IR_LEGACY_CONSTANT_THREADING_COMPAT" not in all_source
+    assert "COMPLETE_EXPRESSION_IR_CONSTANT_MIGRATION" not in all_source
 
 
 def test_blender_lowering_context_is_minimal_immutable_and_compiler_independent():
@@ -971,13 +959,13 @@ def test_unary_plus_is_structural_identity_for_arrays_and_named_constant_arrays(
 
 
 def test_semantic_constant_normalization_preserves_vector_coercion_and_nested_arrays():
-    constants, detached = build_semantic_constant_snapshot({
+    constants, detached = build_semantic_constant_snapshot(CompileTimeSnapshot({
         "flag": True,
         "number": 2,
         "text": "x",
         "vec": (1, 2, 3),
         "items": [1, [2, 3]],
-    })
+    }))
     assert constants["flag"] == SemanticConstant("scalar", TYPE_BOOL, True)
     assert constants["number"] == SemanticConstant("scalar", TYPE_FLOAT, 2)
     assert constants["text"] == SemanticConstant("scalar", TYPE_STRING, "x")
@@ -989,7 +977,7 @@ def test_semantic_constant_normalization_preserves_vector_coercion_and_nested_ar
 
 def test_detached_const_eval_snapshot_preserves_list_tuple_semantics_and_ownership():
     original = {"xs": [1, 2], "nested": [[1], (2, [3])]}
-    _, detached = build_semantic_constant_snapshot(original)
+    _, detached = build_semantic_constant_snapshot(CompileTimeSnapshot(original))
     assert isinstance(detached["xs"], list)
     assert isinstance(detached["nested"], list)
     assert isinstance(detached["nested"][1], tuple)

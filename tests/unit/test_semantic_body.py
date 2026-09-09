@@ -5,6 +5,8 @@ from types import MappingProxyType
 
 import pytest
 
+from NodeForge.compile_time import CompileTimeSnapshot
+
 from NodeForge.builtin_call_semantics import IR_CAPABLE_BUILTIN_NAMES, STATEFUL_FALLBACK_BUILTIN_NAMES
 from NodeForge.call_resolution import CallableEnvironment
 from NodeForge.compiler_identities import BindingId, InputDeclarationId
@@ -35,7 +37,7 @@ def _lower(source, *, bindings=None, constants=None, legacy=(), reserved=None, c
     return lower_basic_body(
         _stmts(source),
         initial_runtime_bindings=bindings or {},
-        initial_constants=constants or {},
+        initial_compile_time=CompileTimeSnapshot(constants or {}),
         legacy_binding_names=frozenset(legacy),
         reserved_name_labels=reserved or {},
         callable_environment=callables or _callables(),
@@ -108,10 +110,10 @@ def test_explicit_outputs_are_uniqued_and_final_expression_is_explicit_ir():
 def test_const_state_is_detached_and_updated_without_mutating_input_mapping():
     initial = {"seed": 4}
     result = _lower("x = 2 + 3\noutput(x)", constants=initial)
-    assert dict(result.final_constants)["x"] == 5
+    assert dict(result.final_compile_time.values)["x"] == 5
     assert initial == {"seed": 4}
     with pytest.raises(TypeError):
-        result.final_constants["x"] = 9
+        result.final_compile_time.values["x"] = 9
 
 
 @pytest.mark.parametrize(
@@ -199,7 +201,7 @@ def test_late_unsupported_statement_returns_whole_body_fallback_without_mutation
     result = lower_basic_body(
         _stmts("x = a + 1\nfor i in [1]:\n    x = x + i\nx"),
         initial_runtime_bindings=MappingProxyType(bindings),
-        initial_constants=MappingProxyType(constants),
+        initial_compile_time=CompileTimeSnapshot(MappingProxyType(constants)),
         legacy_binding_names=frozenset(),
         reserved_name_labels={},
         callable_environment=_callables(),
@@ -208,6 +210,101 @@ def test_late_unsupported_statement_returns_whole_body_fallback_without_mutation
     assert result is BODY_UNSUPPORTED
     assert constants == {"k": 3}
     assert bindings == dict([_binding("a", 0)])
+
+
+def test_compile_statements_legacy_fallback_observes_committed_compile_time_state(monkeypatch):
+    """Whole-body fallback begins from committed state after a rejected speculative attempt."""
+    from types import SimpleNamespace
+    from NodeForge.compile_time import CompileTimeState
+    from NodeForge.statement_compiler import GroupBuildContext, compile_statements
+    import NodeForge.statement_compiler as statement_compiler
+
+    committed = CompileTimeState({"c": 2})
+    comp = SimpleNamespace(
+        compile_time=committed,
+        resolved_environment=SimpleNamespace(system_constructors={}),
+        local_functions={},
+        backend_builtins={},
+        imported_library_functions={},
+        function_group_owner_scope="scope",
+        input_declaration_owner="scope",
+        reserved_name_labels={},
+        runtime_bindings_snapshot=lambda: MappingProxyType({}),
+        legacy_structural_binding_names_snapshot=lambda: frozenset(),
+    )
+    observed = []
+
+    def reject_after_speculation(_stmts, *, initial_compile_time, **_kwargs):
+        speculative = CompileTimeState(initial_compile_time.values)
+        speculative.bind("c", 3)
+        speculative.bind("x", 1)
+        return BODY_UNSUPPORTED
+
+    monkeypatch.setattr(statement_compiler, "lower_basic_body", reject_after_speculation)
+    monkeypatch.setattr(
+        statement_compiler,
+        "compile_statement",
+        lambda ctx, *_args, **_kwargs: observed.append(dict(ctx.comp.compile_time.values)),
+    )
+    compile_statements(GroupBuildContext(group=object(), comp=comp, geometry_mode=False), _stmts("pass"))
+
+    assert observed == [{"c": 2}]
+    assert dict(committed.values) == {"c": 2}
+
+
+def test_speculative_body_compile_time_changes_do_not_leak_on_late_fallback():
+    """Late whole-body fallback discards all earlier speculative compile-time bindings."""
+    from NodeForge.compile_time import CompileTimeState
+
+    committed = CompileTimeState({"c": 2})
+    result = lower_basic_body(
+        _stmts("c = 3\nx = 1\nitems = []\nitems.append(x)"),
+        initial_runtime_bindings={},
+        initial_compile_time=committed.snapshot(),
+        legacy_binding_names=frozenset(),
+        reserved_name_labels={},
+        callable_environment=_callables(),
+        owner_scope="scope",
+    )
+    assert result is BODY_UNSUPPORTED
+    assert committed.get("c") == 2
+    assert not committed.contains("x")
+
+
+def test_semantic_body_exception_does_not_mutate_committed_compile_time_owner():
+    """Semantic errors after speculative constant updates cannot publish compile-time state."""
+    from NodeForge.compile_time import CompileTimeState
+
+    committed = CompileTimeState({"c": 2})
+    with pytest.raises(CompileError, match="Unknown name: missing"):
+        lower_basic_body(
+            _stmts("c = 3\nx = missing + 1"),
+            initial_runtime_bindings={},
+            initial_compile_time=committed.snapshot(),
+            legacy_binding_names=frozenset(),
+            reserved_name_labels={},
+            callable_environment=_callables(),
+            owner_scope="scope",
+        )
+    assert committed.get("c") == 2
+
+
+def test_rejected_semantic_body_does_not_mutate_inherited_compile_time_list():
+    """Shallow snapshots preserve aliases while rejected body lowering performs no in-place list mutation."""
+    shared = [1]
+    snapshot = CompileTimeSnapshot({"items": shared})
+    result = lower_basic_body(
+        _stmts("x = 2\nitems.append(x)"),
+        initial_runtime_bindings={},
+        initial_compile_time=snapshot,
+        legacy_binding_names=frozenset(),
+        reserved_name_labels={},
+        callable_environment=_callables(),
+        owner_scope="scope",
+    )
+    assert result is BODY_UNSUPPORTED
+    assert snapshot.values["items"] is shared
+    assert shared == [1]
 
 
 def test_structural_and_dynamic_categories_reject_entire_body():
@@ -305,9 +402,9 @@ def test_accepted_compile_statements_route_never_publishes_body_local_values_to_
     root = Path(__file__).resolve().parents[2]
     source = (root / "statement_compiler.py").read_text(encoding="utf-8")
     function = source[source.index("def compile_statements("):]
-    marker = function.index("# CONTROL_FLOW_IR_WHOLE_BODY_FALLBACK:")
+    marker = function.index("# COMPILE_TIME_STATE_LEGACY_STATEMENT_PATH_COMPAT:")
     accepted = function[:marker]
-    after_legacy_loop = function.index("    comp.consts.clear()", marker)
+    after_legacy_loop = function.index("    comp.compile_time.replace(body_compilation.final_compile_time)", marker)
     accepted += function[after_legacy_loop:]
     assert "comp.bind_runtime_value(" not in accepted
     assert "comp.bind_legacy_structural(" not in accepted
@@ -646,8 +743,8 @@ def test_tuple_unpack_clears_stale_compile_time_constants():
         bindings=bindings,
         constants={"a": 10.0, "b": 20.0},
     )
-    assert "a" not in result.final_constants
-    assert "b" not in result.final_constants
+    assert "a" not in result.final_compile_time.values
+    assert "b" not in result.final_compile_time.values
 
 
 def test_partial_object_info_configuration_merges_before_resolution():

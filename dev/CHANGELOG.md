@@ -207,3 +207,6 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.51.2
 
 - Moved ordinary runtime `if` and `repeat_range()` into structured Semantic IR with compiler-owned branch/repeat state, lexical iteration identities, deterministic carried-state ordering, and recursive Blender lowering while preserving legacy topology, Int/Float Repeat behavior, durable input-declaration identity, and whole-body fallback for builder/array/stateful/dynamic categories.
+## 0.51.3
+
+- Separated const-evaluable compile-time bindings from runtime semantic and backend state with explicit snapshot/fork ownership, preserving whole-body fallback atomicity, control-flow constant threading, legacy structural fallback, and generated Geometry Nodes behavior.

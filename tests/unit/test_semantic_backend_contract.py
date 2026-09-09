@@ -7,6 +7,8 @@ from types import MappingProxyType, ModuleType, SimpleNamespace
 
 import pytest
 
+from NodeForge.compile_time import CompileTimeSnapshot, CompileTimeState
+
 from NodeForge import blender_ir_lowering
 from NodeForge.constants import (
     TYPE_BOOL,
@@ -133,7 +135,7 @@ def _environment(bindings, *, object_registry=True):
         name: RuntimeBindingSymbol(BindingId("backend-contract", index), typ)
         for index, (name, typ) in enumerate(bindings.items())
     }
-    semantic_constants, const_eval_values = build_semantic_constant_snapshot({})
+    semantic_constants, const_eval_values = build_semantic_constant_snapshot(CompileTimeSnapshot({}))
     object_semantics = None
     if object_registry:
         object_ids = {}
@@ -286,7 +288,7 @@ def test_successful_semantic_analysis_commits_to_ir_backend_without_legacy_retry
         monkeypatch.setattr(expression_compiler, "_math", legacy_math)
 
         comp = SimpleNamespace(
-            consts={},
+            compile_time=CompileTimeState(),
             reserved_name_labels={},
             group=object(),
             resolved_environment=SimpleNamespace(system_constructors={}),
@@ -336,7 +338,7 @@ def test_vector_literal_uses_real_combine_xyz_helper_contract():
     from NodeForge.semantic_analysis import build_semantic_constant_snapshot
 
     expr = _expr("vec")
-    constants, const_eval_values = build_semantic_constant_snapshot({"vec": (1, 2, 3)})
+    constants, const_eval_values = build_semantic_constant_snapshot(CompileTimeSnapshot({"vec": (1, 2, 3)}))
     environment = SemanticEnvironment(
         MappingProxyType({}), frozenset(), constants, const_eval_values, MappingProxyType({}),
         callable_environment=CallableEnvironment(frozenset(IR_CAPABLE_BUILTIN_NAMES), {}, {}, frozenset(), {}),

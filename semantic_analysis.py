@@ -46,6 +46,7 @@ from .constants import (
     _COMPARE_OPS,
 )
 from .consteval import ConstVector, _const_eval, _is_const_vector
+from .compile_time import CompileTimeSnapshot
 from .errors import CompileError
 from .nf_types import NFType, NUMERIC_NF_TYPES
 from .runtime_bindings import RuntimeBindingSymbol
@@ -295,13 +296,16 @@ def _detached_const_eval_mapping(constants):
     return copy.deepcopy(dict(constants), memo)
 
 
-def build_semantic_constant_snapshot(constants):
-    """Build detached semantic and const-eval mappings from legacy constant storage."""
+def build_semantic_constant_snapshot(compile_time: CompileTimeSnapshot):
+    """Build detached semantic and const-eval mappings from one compile-time snapshot."""
+    if not isinstance(compile_time, CompileTimeSnapshot):
+        raise TypeError("compile_time must be a CompileTimeSnapshot")
+    values = compile_time.values
     semantic = {
         name: _normalize_semantic_constant(value)
-        for name, value in constants.items()
+        for name, value in values.items()
     }
-    const_eval_values = _detached_const_eval_mapping(constants)
+    const_eval_values = _detached_const_eval_mapping(values)
     return MappingProxyType(semantic), MappingProxyType(const_eval_values)
 
 
@@ -338,7 +342,7 @@ def build_semantic_environment(
     *,
     runtime_bindings,
     legacy_binding_names,
-    constants,
+    compile_time,
     reserved_name_labels,
     callable_environment,
     structural_bindings=None,
@@ -368,7 +372,7 @@ def build_semantic_environment(
                     raise CompileError("Internal error: active Object binding references missing ObjectInfoState")
             elif binding_id in object_ids:
                 raise CompileError("Internal error: non-Object binding has ObjectSemanticId")
-    semantic_constants, const_eval_values = build_semantic_constant_snapshot(constants)
+    semantic_constants, const_eval_values = build_semantic_constant_snapshot(compile_time)
     return SemanticEnvironment(
         runtime_bindings=MappingProxyType(runtime_bindings),
         legacy_binding_names=frozenset(legacy_binding_names),

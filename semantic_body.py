@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import Mapping
 
 from .builtin_call_semantics import (
@@ -21,6 +20,7 @@ from .builtin_call_semantics import (
 from .compiler_identities import BindingId, InputDeclarationId
 from .constants import TYPE_OBJECT
 from .consteval import _const_eval
+from .compile_time import CompileTimeSnapshot, CompileTimeState
 from .errors import CompileError
 from .nf_types import NFType
 from .parsing import _literal_string
@@ -78,14 +78,15 @@ BODY_UNSUPPORTED = _BodyUnsupported()
 
 @dataclass(frozen=True)
 class BasicBodyCompilation:
-    """Return one accepted body plus its detached final compile-time constant state."""
+    """Return one accepted body plus its detached final compile-time state."""
 
     body: IRBody
-    final_constants: Mapping[str, object]
+    final_compile_time: CompileTimeSnapshot
 
     def __post_init__(self) -> None:
-        """Freeze the final constant mapping exposed to orchestration."""
-        object.__setattr__(self, "final_constants", MappingProxyType(dict(self.final_constants)))
+        """Require an immutable detached compile-time snapshot."""
+        if not isinstance(self.final_compile_time, CompileTimeSnapshot):
+            raise TypeError("final_compile_time must be a CompileTimeSnapshot")
 
 
 @dataclass(frozen=True)
@@ -244,19 +245,17 @@ class _BodySemanticState:
 
     runtime_bindings: dict[str, RuntimeBindingSymbol]
     structural_bindings: dict[str, StructuralBindingSymbol]
-    constants: dict[str, object]
     object_ids_by_binding: dict[BindingId, ObjectSemanticId]
     object_states: dict[ObjectSemanticId, ObjectInfoState]
     identities: _BodyIdentityAllocator
     changed_runtime_ids: set[BindingId]
     lexical_iteration_ids: set[BindingId]
 
-    def fork(self, *, constants=None) -> "_BodySemanticState":
+    def fork(self) -> "_BodySemanticState":
         """Copy active state while retaining the shared non-rewinding allocator."""
         return _BodySemanticState(
             dict(self.runtime_bindings),
             dict(self.structural_bindings),
-            dict(self.constants if constants is None else constants),
             dict(self.object_ids_by_binding),
             dict(self.object_states),
             self.identities,
@@ -268,7 +267,6 @@ class _BodySemanticState:
         """Replace active state from one successfully analyzed lexical path."""
         self.runtime_bindings = dict(other.runtime_bindings)
         self.structural_bindings = dict(other.structural_bindings)
-        self.constants = dict(other.constants)
         self.object_ids_by_binding = dict(other.object_ids_by_binding)
         self.object_states = dict(other.object_states)
         self.changed_runtime_ids.update(other.changed_runtime_ids)
@@ -302,7 +300,7 @@ def lower_basic_body(
     stmts,
     *,
     initial_runtime_bindings: Mapping[str, RuntimeBindingSymbol],
-    initial_constants: Mapping[str, object],
+    initial_compile_time: CompileTimeSnapshot,
     legacy_binding_names,
     reserved_name_labels: Mapping[str, str],
     callable_environment,
@@ -325,8 +323,11 @@ def lower_basic_body(
         structural_reservations={},
         input_declaration_ordinals={},
     )
+    if not isinstance(initial_compile_time, CompileTimeSnapshot):
+        raise TypeError("initial_compile_time must be a CompileTimeSnapshot")
+    compile_time = CompileTimeState(initial_compile_time.values)
     state = _BodySemanticState(
-        dict(initial_runtime_bindings), {}, dict(initial_constants), {}, {}, identities, set(), set()
+        dict(initial_runtime_bindings), {}, {}, {}, identities, set(), set()
     )
     for symbol in state.runtime_bindings.values():
         if symbol.typ is TYPE_OBJECT:
@@ -394,12 +395,12 @@ def lower_basic_body(
         active.structural_bindings[name] = symbol
         return symbol
 
-    def analyze_runtime_expression(expr, active: _BodySemanticState):
+    def analyze_runtime_expression(expr, active: _BodySemanticState, active_compile_time: CompileTimeState):
         environment = build_semantic_environment(
             runtime_bindings=active.runtime_bindings,
             structural_bindings=active.structural_bindings,
             legacy_binding_names=legacy_binding_names,
-            constants=active.constants,
+            compile_time=active_compile_time.snapshot(),
             reserved_name_labels=reserved_name_labels,
             callable_environment=callable_environment,
             object_semantics=active.object_snapshot(),
@@ -417,8 +418,8 @@ def lower_basic_body(
         program = lower_analyzed_expression(expr, analysis)
         return _AnalyzedBodyExpression(program, analysis.facts[expr].result_shape, analysis.object_semantics)
 
-    def accept_expression(expr, active: _BodySemanticState):
-        analyzed = analyze_runtime_expression(expr, active)
+    def accept_expression(expr, active: _BodySemanticState, active_compile_time: CompileTimeState):
+        analyzed = analyze_runtime_expression(expr, active, active_compile_time)
         if analyzed is BODY_UNSUPPORTED:
             return BODY_UNSUPPORTED
         active.adopt_object_snapshot(analyzed.object_semantics)
@@ -433,7 +434,7 @@ def lower_basic_body(
         # already lowered IRIf/IRRepeat. Remove this fallback when all supported nested body categories are IR.
         return BODY_UNSUPPORTED
 
-    def lower_statements(source_stmts, active: _BodySemanticState, *, control_policy=None, repeat_merge_ids=None, root=False):
+    def lower_statements(source_stmts, active: _BodySemanticState, active_compile_time: CompileTimeState, *, control_policy=None, repeat_merge_ids=None, root=False):
         statements = []
         for index, stmt in enumerate(source_stmts):
             is_final = root and index == len(source_stmts) - 1
@@ -444,11 +445,19 @@ def lower_basic_body(
                 # runtime branch and can affect carried-state topology. Preserve that contextual difference.
                 if control_policy is not BranchMergePolicy.REPEAT:
                     try:
-                        const_branch = stmt.body if bool(_const_eval(stmt.test, active.constants)) else stmt.orelse
-                        trial = active.fork(constants=dict(active.constants))
-                        folded = lower_statements(const_branch, trial, control_policy=control_policy, root=False)
+                        const_branch = stmt.body if bool(_const_eval(stmt.test, active_compile_time.values)) else stmt.orelse
+                        trial = active.fork()
+                        trial_compile_time = active_compile_time.fork()
+                        folded = lower_statements(
+                            const_branch,
+                            trial,
+                            trial_compile_time,
+                            control_policy=control_policy,
+                            root=False,
+                        )
                         if folded is not BODY_UNSUPPORTED:
                             active.adopt(trial)
+                            active_compile_time.replace(trial_compile_time)
                             statements.extend(folded.statements)
                             continue
                     except CompileError:
@@ -458,10 +467,18 @@ def lower_basic_body(
                 result = lower_runtime_if(
                     stmt,
                     base_state=active,
+                    compile_time=active_compile_time,
                     policy=policy,
-                    analyze_condition=lambda expr, branch_state: accept_expression(expr, branch_state),
-                    lower_branch=lambda branch, branch_state, branch_policy: lower_statements(
-                        branch, branch_state, control_policy=branch_policy, repeat_merge_ids=repeat_merge_ids, root=False
+                    analyze_condition=lambda expr, branch_state, branch_compile_time: accept_expression(
+                        expr, branch_state, branch_compile_time
+                    ),
+                    lower_branch=lambda branch, branch_state, branch_compile_time, branch_policy: lower_statements(
+                        branch,
+                        branch_state,
+                        branch_compile_time,
+                        control_policy=branch_policy,
+                        repeat_merge_ids=repeat_merge_ids,
+                        root=False,
                     ),
                     unsupported_sentinel=BODY_UNSUPPORTED,
                     merge_binding_ids=repeat_merge_ids,
@@ -469,8 +486,8 @@ def lower_basic_body(
                 if result is BODY_UNSUPPORTED:
                     return nested_control_flow_fallback()
                 statements.append(result.statement)
-                active.constants = dict(result.false_state.constants)
-                # Runtime merge publication is independent of the legacy-compatible constant map.
+                active_compile_time.replace(result.false_compile_time)
+                # Runtime merge publication is independent of compile-time state.
                 for merge in result.statement.merges:
                     active.runtime_bindings[merge.source_name] = RuntimeBindingSymbol(merge.binding_id, merge.typ)
                     active.structural_bindings.pop(merge.source_name, None)
@@ -486,8 +503,9 @@ def lower_basic_body(
                 if iteration_name in legacy_binding_names:
                     return BODY_UNSUPPORTED
                 validate_runtime_binding_target(iteration_name, reserved_name_labels)
+                repeat_compile_time = active_compile_time.fork()
                 try:
-                    repeat_count_constant = _const_eval(iterations_expr, active.constants)
+                    repeat_count_constant = _const_eval(iterations_expr, repeat_compile_time.values)
                 except CompileError:
                     repeat_count_constant = None
                 if isinstance(repeat_count_constant, int) and not isinstance(repeat_count_constant, bool):
@@ -498,7 +516,7 @@ def lower_basic_body(
                         active.object_snapshot(),
                     )
                 else:
-                    iterations = accept_expression(iterations_expr, active)
+                    iterations = accept_expression(iterations_expr, active, active_compile_time)
                     if iterations is BODY_UNSUPPORTED:
                         return BODY_UNSUPPORTED
                     if not isinstance(iterations.result_shape, RuntimeResultShape) or iterations.result_shape.typ is not NFType.INT:
@@ -542,7 +560,7 @@ def lower_basic_body(
                     raise CompileError("repeat_range loop index name cannot also be a state variable")
 
                 iteration_binding_id = identities.allocate_binding_id()
-                repeat_state = active.fork(constants=dict(active.constants))
+                repeat_state = active.fork()
                 repeat_state.runtime_bindings = dict(active.runtime_bindings)
                 repeat_state.structural_bindings = dict(active.structural_bindings)
                 repeat_state.object_ids_by_binding = dict(active.object_ids_by_binding)
@@ -553,6 +571,7 @@ def lower_basic_body(
                 repeat_ir_body = lower_statements(
                     repeat_body,
                     repeat_state,
+                    repeat_compile_time,
                     control_policy=BranchMergePolicy.REPEAT,
                     repeat_merge_ids=tuple(record.binding_id for record in state_records),
                     root=False,
@@ -566,7 +585,7 @@ def lower_basic_body(
                     require_repeat_state_assignment(record.source_name, record.input_type, exit_symbol.typ)
                 repeat = IRRepeat(iterations.program, iteration_binding_id, iteration_name, tuple(state_records), repeat_ir_body)
                 statements.append(repeat)
-                active.constants = dict(repeat_state.constants)
+                active_compile_time.replace(repeat_compile_time)
                 for record in state_records:
                     if not record.publish_to_parent:
                         continue
@@ -585,7 +604,7 @@ def lower_basic_body(
                         return BODY_UNSUPPORTED
                     for name in names:
                         validate_runtime_binding_target(name, reserved_name_labels)
-                    analyzed = accept_expression(stmt.value, active)
+                    analyzed = accept_expression(stmt.value, active, active_compile_time)
                     if analyzed is BODY_UNSUPPORTED:
                         return BODY_UNSUPPORTED
                     if not isinstance(analyzed.result_shape, TupleResultShape) or not isinstance(analyzed.program.result, IRTuple):
@@ -596,7 +615,7 @@ def lower_basic_body(
                         raise CompileError(f"Tuple unpacking expected {len(names)} values, got {len(analyzed.result_shape.items)}")
                     bindings = []
                     for name, source, shape in zip(names, analyzed.program.result.items, analyzed.result_shape.items):
-                        active.constants.pop(name, None)
+                        active_compile_time.discard(name)
                         symbol = bind_runtime(active, name, shape, changed=True)
                         bindings.append(IRLeafBinding(source, symbol.binding_id, shape.typ))
                     statements.append(IRBindLeaves(analyzed.program, tuple(bindings)))
@@ -610,9 +629,9 @@ def lower_basic_body(
 
                 input_call = _direct_input_call(stmt.value)
                 if input_call is not None:
-                    active.constants.pop(target, None)
+                    active_compile_time.discard(target)
                     try:
-                        input_semantics = analyze_input_declaration_call(input_call, active.constants)
+                        input_semantics = analyze_input_declaration_call(input_call, active_compile_time.values)
                     except ValueError:
                         input_semantics = None
                     if input_semantics is not None:
@@ -635,16 +654,16 @@ def lower_basic_body(
                     return BODY_UNSUPPORTED
                 if control_policy is BranchMergePolicy.REPEAT:
                     # Legacy Repeat assignments are runtime-state operations: compile_runtime_stmt()
-                    # always invalidates the assigned name in comp.consts instead of publishing a
+                    # always invalidates the assigned name in Compiler.compile_time instead of publishing a
                     # newly const-evaluated value. Preserve that contextual contract so a carried
                     # state cannot become a stale compile-time constant after Repeat construction.
-                    active.constants.pop(target, None)
+                    active_compile_time.discard(target)
                 else:
                     try:
-                        active.constants[target] = _const_eval(stmt.value, active.constants)
+                        active_compile_time.bind(target, _const_eval(stmt.value, active_compile_time.values))
                     except CompileError:
-                        active.constants.pop(target, None)
-                analyzed = accept_expression(stmt.value, active)
+                        active_compile_time.discard(target)
+                analyzed = accept_expression(stmt.value, active, active_compile_time)
                 if analyzed is BODY_UNSUPPORTED:
                     return BODY_UNSUPPORTED
                 if isinstance(analyzed.result_shape, RuntimeResultShape) and isinstance(analyzed.program.result, IRValue):
@@ -672,12 +691,12 @@ def lower_basic_body(
                 if current is None:
                     raise CompileError(f"Unknown name for augmented assignment: {target}")
                 bin_expr = ast.BinOp(left=ast.Name(id=target, ctx=ast.Load()), op=stmt.op, right=stmt.value)
-                analyzed = accept_expression(bin_expr, active)
+                analyzed = accept_expression(bin_expr, active, active_compile_time)
                 if analyzed is BODY_UNSUPPORTED:
                     return BODY_UNSUPPORTED
                 if not isinstance(analyzed.result_shape, RuntimeResultShape) or not isinstance(analyzed.program.result, IRValue):
                     return _reject_remaining_legacy_structural_binding()
-                active.constants.pop(target, None)
+                active_compile_time.discard(target)
                 symbol = bind_runtime(active, target, analyzed.result_shape, changed=True)
                 statements.append(IRAssign(symbol.binding_id, target, analyzed.program))
                 continue
@@ -694,17 +713,17 @@ def lower_basic_body(
                             raise CompileError("output() cannot mix positional and keyword arguments")
                         if "value" not in kws:
                             raise CompileError('output(name="Name", value=value) expects value=...')
-                        out_name = _unique_output_name(output_names, _literal_string(kws["name"], "output() name", active.constants)) if "name" in kws else _unique_output_name(output_names, "out")
+                        out_name = _unique_output_name(output_names, _literal_string(kws["name"], "output() name", active_compile_time.values)) if "name" in kws else _unique_output_name(output_names, "out")
                         value_expr = kws["value"]
                     elif len(call.args) == 1:
                         out_name = _unique_output_name(output_names, "out")
                         value_expr = call.args[0]
                     elif len(call.args) == 2:
-                        out_name = _unique_output_name(output_names, _literal_string(call.args[0], "output() name", active.constants))
+                        out_name = _unique_output_name(output_names, _literal_string(call.args[0], "output() name", active_compile_time.values))
                         value_expr = call.args[1]
                     else:
                         raise CompileError('output(value), output("Name", value), or output(name="Name", value=value) expected')
-                    analyzed = accept_expression(value_expr, active)
+                    analyzed = accept_expression(value_expr, active, active_compile_time)
                     if analyzed is BODY_UNSUPPORTED:
                         return BODY_UNSUPPORTED
                     if not isinstance(analyzed.result_shape, RuntimeResultShape) or not isinstance(analyzed.program.result, IRValue):
@@ -719,7 +738,7 @@ def lower_basic_body(
                 if isinstance(stmt.value, ast.Call) and isinstance(stmt.value.func, ast.Attribute):
                     if stmt.value.func.attr != "info":
                         return BODY_UNSUPPORTED
-                    analyzed = accept_expression(stmt.value, active)
+                    analyzed = accept_expression(stmt.value, active, active_compile_time)
                     if analyzed is BODY_UNSUPPORTED:
                         return BODY_UNSUPPORTED
                     if not isinstance(analyzed.result_shape, RuntimeResultShape) or analyzed.result_shape.typ is not TYPE_OBJECT:
@@ -728,7 +747,7 @@ def lower_basic_body(
                     continue
                 if not is_final:
                     return BODY_UNSUPPORTED
-                analyzed = accept_expression(stmt.value, active)
+                analyzed = accept_expression(stmt.value, active, active_compile_time)
                 if analyzed is BODY_UNSUPPORTED:
                     return BODY_UNSUPPORTED
                 if not isinstance(analyzed.result_shape, RuntimeResultShape) or not isinstance(analyzed.program.result, IRValue):
@@ -739,10 +758,10 @@ def lower_basic_body(
             return BODY_UNSUPPORTED
         return IRBody(tuple(statements))
 
-    body = lower_statements(stmts, state, root=True)
+    body = lower_statements(stmts, state, compile_time, root=True)
     if body is BODY_UNSUPPORTED:
         return BODY_UNSUPPORTED
-    return BasicBodyCompilation(body, state.constants)
+    return BasicBodyCompilation(body, compile_time.snapshot())
 
 
 __all__ = ["BODY_UNSUPPORTED", "BasicBodyCompilation", "lower_basic_body", "validate_input_declaration_placement"]
