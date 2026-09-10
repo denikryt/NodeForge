@@ -3,10 +3,17 @@
 from .constants import TYPE_GEOMETRY
 from .compile_time import CompileTimeObject, reject_compile_time_object
 from .errors import CompileError
+from .semantic_geometry_builder import validate_geometry_builder_constructor
 from .geometry import _empty_geometry, _join_geometry
 from .values import Value
 
 
+# GEOMETRY_BUILDER_LEGACY_BACKEND_COMPAT: Frontend semantic body state owns GeometryBuilder for
+# accepted core builder bodies. Keep this backend Value-carrying class only because a complete body
+# selected by another legacy compatibility category can still contain geometry_builder syntax and
+# must preserve historical behavior through statement_compiler/runtime.py. New semantic builder code
+# must not instantiate or inspect this class. Remove this class when whole-body compatibility no
+# longer needs to execute builder syntax through the legacy AST/backend compiler.
 class GeometryBuilder(CompileTimeObject):
     """Script-local procedural Geometry accumulator.
 
@@ -103,13 +110,6 @@ def is_geometry_builder(value):
     """Return True when *value* is a GeometryBuilder instance."""
     return isinstance(value, GeometryBuilder)
 
-
-def validate_geometry_builder_constructor(call):
-    """Reject unsupported geometry_builder(...) constructor arguments."""
-    if call.args:
-        raise CompileError("geometry_builder() expects no arguments")
-    if call.keywords:
-        raise CompileError("geometry_builder() does not support keyword arguments")
 
 
 __all__ = ["GeometryBuilder", "is_geometry_builder", "validate_geometry_builder_constructor"]

@@ -308,13 +308,37 @@ def test_compile_statements_production_routing_distinguishes_migrated_and_deferr
     assert legacy_statements == []
 
     semantic_lowerings.clear()
+    migrated_builder = GroupBuildContext(group=object(), comp=FakeComp(), geometry_mode=False)
+    compile_statements(
+        migrated_builder,
+        _stmts('builder = geometry_builder()\nbuilder.add(cube(1.0))\noutput("Geometry", builder.geometry)'),
+    )
+    assert len(semantic_lowerings) == 1
+    assert legacy_statements == []
+
+    semantic_lowerings.clear()
+    migrated_builder = GroupBuildContext(group=object(), comp=FakeComp(), geometry_mode=False)
+    compile_statements(
+        migrated_builder,
+        _stmts(
+            "builder = geometry_builder()\n"
+            "builder.add(cube(1.0))\n"
+            "for i in repeat_range(2):\n"
+            "    builder.add(cube(0.5))\n"
+            "output(\"Geometry\", builder.geometry)"
+        ),
+    )
+    assert len(semantic_lowerings) == 1
+    assert legacy_statements == []
+
+    semantic_lowerings.clear()
     deferred = GroupBuildContext(group=object(), comp=FakeComp(), geometry_mode=False)
     compile_statements(
         deferred,
-        _stmts("builder = geometry_builder()\nitems = [1.0]\nitems.append(2.0)\nfor item in items:\n    x = item"),
+        _stmts("builder = geometry_builder()\nx = grid(2, 2)\noutput(x)"),
     )
     assert semantic_lowerings == []
-    assert [type(stmt).__name__ for stmt in legacy_statements] == ["Assign", "Assign", "Expr", "For"]
+    assert [type(stmt).__name__ for stmt in legacy_statements] == ["Assign", "Assign", "Expr"]
 
 
 def test_compile_statements_routes_legacy_flat_unpack_append_case_as_one_legacy_body(monkeypatch):
@@ -442,7 +466,7 @@ def test_speculative_body_compile_time_changes_do_not_leak_on_late_fallback():
 
     committed = CompileTimeState({"c": 2})
     result = lower_basic_body(
-        _stmts("c = 3\nx = 1\nbuilder = geometry_builder()\nbuilder"),
+        _stmts("c = 3\nx = 1\ny = grid(2, 2)"),
         initial_runtime_bindings={},
         initial_compile_time=committed.snapshot(),
         legacy_binding_names=frozenset(),
@@ -497,7 +521,9 @@ def test_migrated_arrays_and_loops_are_accepted_while_remaining_dynamic_categori
     assert array_result is not BODY_UNSUPPORTED
     with pytest.raises(CompileError, match="Cannot unpack scalar result into 2 names"):
         _lower("a, b = pair", bindings=dict([_binding("pair", 0)]))
-    assert _lower("builder = geometry_builder()\nbuilder") is BODY_UNSUPPORTED
+    assert _lower('builder = geometry_builder()\noutput("Geometry", builder.geometry)') is not BODY_UNSUPPORTED
+    with pytest.raises(CompileError, match="geometry_builder cannot escape script scope"):
+        _lower("builder = geometry_builder()\nbuilder")
     assert _lower("x = grid(2, 2)\nx") is BODY_UNSUPPORTED
     assert _lower("if True:\n    x = 1") is not BODY_UNSUPPORTED
     assert _lower("for i in [1]:\n    x = i") is not BODY_UNSUPPORTED

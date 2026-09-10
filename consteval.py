@@ -389,12 +389,8 @@ def _handle_compile_time_stmt(
                 raise
             out_stmts.append(stmt)
             return
-        if _contains_builder_method_stmt(stmt.body):
-            # STRUCTURAL_ARRAYS_GEOMETRY_BUILDER_LOOP_COMPAT: The migrated frontend owns structural-array and ordinary
-            # compile-time loop unrolling, but GeometryBuilder remains a later frontend-migration boundary. Keep the
-            # original for-statement intact when its body mutates a builder so the complete body can use the
-            # existing GeometryBuilder compatibility route. Do not partially unroll the loop here. Remove this
-            # marker when GeometryBuilder mutation is frontend-owned and builder loops can lower semantically.
+        if _contains_builder_method_stmt(stmt.body) and not isinstance(stmt.target, ast.Name):
+            # Preserve the historical flat builder-loop target for Semantic Body's explicit frontend rule.
             out_stmts.append(stmt)
             return
         if not isinstance(iterable, (list, tuple)):

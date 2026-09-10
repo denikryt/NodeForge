@@ -98,6 +98,11 @@ def compile_expr(comp, expr, depth=0):
 
     if isinstance(expr, ast.Attribute):
         base = compile_expr(comp, expr.value, depth + 1)
+        # GEOMETRY_BUILDER_LEGACY_EXPRESSION_COMPAT: Accepted Semantic Body paths resolve builder.geometry
+        # from frontend builder identity/state and lower only ordinary Geometry BindingIds. Keep this
+        # GeometryBuilder object branch solely for complete bodies already routed through legacy statement
+        # compatibility because of another unsupported category. Remove it when legacy whole-body execution
+        # can no longer produce GeometryBuilder objects.
         if isinstance(base, GeometryBuilder):
             if expr.attr == "geometry":
                 return base.geometry_value(comp, x, y)

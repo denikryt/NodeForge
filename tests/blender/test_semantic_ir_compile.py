@@ -5,7 +5,8 @@ from helpers import *
 import ast
 from types import MappingProxyType, SimpleNamespace
 
-from NodeForge import expression_compiler, statement_compiler
+from NodeForge import expression_compiler, statement_compiler, semantic_body, runtime as runtime_module
+from NodeForge import geometry_builder as geometry_builder_module
 from NodeForge.blender_ir_lowering import BlenderIRLoweringContext, lower_expression as lower_ir_program
 from NodeForge.constants import (
     TYPE_BOOL, TYPE_BUNDLE, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_MATERIAL,
@@ -764,58 +765,65 @@ def test_structural_arrays_runtime_dependent_flat_unpack_preserves_legacy_routin
     bpy.data.node_groups.remove(group)
 
 
-def test_structural_arrays_mixed_geometry_builder_body_uses_whole_legacy_route_and_expression_result_bridge(monkeypatch):
-    """Deferred GeometryBuilder bodies keep arrays/append/for on one legacy route while semantic expressions bridge normally."""
-    legacy_statements = []
-    expression_results = []
-    original_statement = statement_compiler.compile_statement
-    original_expression_lowering = expression_compiler.lower_ir_expression
+def test_frontend_geometry_builder_core_route_forbids_legacy_builder_execution(monkeypatch):
+    """Accepted core builder bodies lower through Semantic Body even with legacy builder hooks forbidden."""
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("accepted core GeometryBuilder body reached legacy builder execution")
 
-    def forbidden_body_lowering(*_args, **_kwargs):
-        raise AssertionError("deferred GeometryBuilder body unexpectedly entered Semantic Body Blender lowering")
+    monkeypatch.setattr(statement_compiler, "_compile_builder_method", forbidden)
+    monkeypatch.setattr(geometry_builder_module.GeometryBuilder, "materialize", forbidden)
+    monkeypatch.setattr(geometry_builder_module.GeometryBuilder, "add_value", forbidden)
+    monkeypatch.setattr(geometry_builder_module.GeometryBuilder, "extend_values", forbidden)
+    monkeypatch.setattr(geometry_builder_module.GeometryBuilder, "geometry_value", forbidden)
+    monkeypatch.setattr(runtime_module, "BuilderStateDescriptor", forbidden)
+
+    group = compile_group(
+        'builder = geometry_builder()\n'
+        'items = [cube(1.0), cube(2.0)]\n'
+        'for item in items:\n'
+        '    builder.add(item)\n'
+        'for i in repeat_range(2):\n'
+        '    builder.add(cube(0.5))\n'
+        'output("Geometry", builder.geometry)',
+        "NFTest_frontend_builder_core_route",
+    )
+    check(len(_nodes(group, "GeometryNodeJoinGeometry")) >= 1, "frontend builder route lost Join Geometry topology")
+    check(len(_nodes(group, "GeometryNodeRepeatInput")) == 1, "frontend builder Repeat did not create one Repeat Input")
+    bpy.data.node_groups.remove(group)
+
+
+def test_geometry_builder_mixed_fallback_uses_legacy_only_after_independent_category(monkeypatch):
+    """An independently unsupported grid body may still execute builder syntax on the marked whole-body compatibility route."""
+    legacy_statements = []
+    original_statement = statement_compiler.compile_statement
 
     def wrapped_statement(ctx, stmt, *args, **kwargs):
         legacy_statements.append(type(stmt).__name__)
         return original_statement(ctx, stmt, *args, **kwargs)
 
-    def wrapped_expression(context, program, base_depth=0):
-        expression_results.append(type(program.result).__name__)
-        return original_expression_lowering(context, program, base_depth)
-
-    monkeypatch.setattr(statement_compiler, "lower_ir_body", forbidden_body_lowering)
     monkeypatch.setattr(statement_compiler, "compile_statement", wrapped_statement)
-    monkeypatch.setattr(expression_compiler, "lower_ir_expression", wrapped_expression)
-
     group = compile_group(
-        'a = input_float("A", default=1.0)\n'
-        "builder = geometry_builder()\n"
-        "items = [a]\n"
-        "items.append(a, ignored=missing)\n"
-        "for item in items:\n"
-        "    builder.add(cube(item))\n"
-        'parts = node("ShaderNodeSeparateXYZ", inputs={"Vector": vector(1.0, 2.0, 3.0)}, outputs={"X": Float, "Y": Float})\n'
-        "selected = parts.X\n"
-        "builder.add(cube(selected))\n"
+        'builder = geometry_builder()\n'
+        'builder.add(cube(1.0))\n'
+        'grid_geo = grid(2, 2)\n'
         'output("Geometry", builder.geometry)',
-        "NFTest_structural_arrays_mixed_builder_legacy_routing",
+        "NFTest_builder_independent_grid_fallback",
     )
-
-    check(legacy_statements[:5] == ["Assign", "Assign", "Assign", "Expr", "For"], f"mixed body did not route input/builder/array/append/for through legacy statements: {legacy_statements}")
-    check("IRNamedOutputs" in expression_results, f"legacy dynamic structural assignment did not use the semantic expression-result bridge: {expression_results}")
-    check(len(_nodes(group, "GeometryNodeMeshCube")) == 3, "mixed compatibility body changed cube topology")
-    check(len(_nodes(group, "GeometryNodeJoinGeometry")) == 1, "GeometryBuilder compatibility topology changed")
+    check(legacy_statements, "independent grid fallback did not select the legacy whole-body route")
+    check(len(_nodes(group, "GeometryNodeMeshCube")) == 1, "mixed compatibility body changed builder cube topology")
     bpy.data.node_groups.remove(group)
 
 
-def test_semantic_environment_preserves_legacy_geometry_builder_binding(monkeypatch):
+def test_semantic_environment_exports_frontend_geometry_builder_binding(monkeypatch):
+    """Accepted builder expressions see only frontend hidden BindingId metadata, never a backend builder object."""
     environments = []
-    original = expression_compiler.analyze_expression
+    original = semantic_body.analyze_expression
 
     def wrapped(expr, environment):
         environments.append(environment)
         return original(expr, environment)
 
-    monkeypatch.setattr(expression_compiler, "analyze_expression", wrapped)
+    monkeypatch.setattr(semantic_body, "analyze_expression", wrapped)
     group = compile_group(
         """
 builder = geometry_builder()
@@ -823,15 +831,17 @@ builder.add(cube(1.0))
 result = builder.geometry
 output("Geometry", result)
 """,
-        "NFTest_semantic_legacy_builder_binding",
+        "NFTest_semantic_frontend_builder_binding",
     )
-    check(_nodes(group, "GeometryNodeMeshCube"), "GeometryBuilder legacy expression behavior changed")
-    builder_envs = [env for env in environments if "builder" in env.legacy_binding_names]
-    check(builder_envs, "GeometryBuilder name was not exported as a known legacy binding")
+    check(_nodes(group, "GeometryNodeMeshCube"), "GeometryBuilder semantic expression behavior changed")
+    builder_envs = [env for env in environments if "builder" in env.builder_bindings]
+    check(builder_envs, "GeometryBuilder hidden BindingId was not exported to semantic expression analysis")
     from NodeForge.runtime_bindings import RuntimeBindingSymbol
 
     for environment in builder_envs:
-        check("builder" not in environment.runtime_bindings, "GeometryBuilder leaked into runtime types")
+        check("builder" not in environment.runtime_bindings, "GeometryBuilder leaked into ordinary runtime binding names")
+        check("builder" not in environment.legacy_binding_names, "accepted frontend GeometryBuilder leaked into legacy bindings")
+        check(isinstance(environment.builder_bindings["builder"], BindingId), "builder semantic environment lacks BindingId identity")
         check(
             all(isinstance(symbol, RuntimeBindingSymbol) for symbol in environment.runtime_bindings.values()),
             "semantic runtime environment carried a backend Value instead of frontend binding metadata",
@@ -840,7 +850,6 @@ output("Geometry", result)
             all(not hasattr(symbol, "socket") for symbol in environment.runtime_bindings.values()),
             "semantic runtime binding metadata leaked a Blender socket",
         )
-        check(all(isinstance(name, str) for name in environment.legacy_binding_names), "legacy snapshot carried non-name values")
 
 
 def test_semantic_environment_exports_constant_metadata_without_legacy_containers():

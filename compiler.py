@@ -231,21 +231,22 @@ class Compiler:
         # when all supported bodies, interface/stateful input publication, and runtime control-flow
         # lowering pass backend binding materializations directly into body lowering.
         self._runtime_binding_values: dict[BindingId, Value] = {}
-        # STRUCTURAL_ARRAYS_LEGACY_STRUCTURAL_COMPAT: Accepted Semantic Body IR now owns mutable source arrays
-        # through StructuralArrayId/state and never publishes them here. GeometryBuilder/CompileTimeObject
-        # state, dynamic structural call results, and arrays reconstructed only while an entire body is on a
-        # separately marked legacy compatibility route may still use this store. Never read this mapping from
-        # new semantic-array code. Remove it when remaining structural categories and compatibility-only
-        # compile_statement() bodies no longer require compiler/backend container objects by source name.
+        # LEGACY_STRUCTURAL_BINDINGS_COMPAT: Accepted Semantic Body paths own structural arrays and
+        # GeometryBuilder through Blender-independent frontend identity/state and never publish them here.
+        # Keep this backend/container store for dynamic structural results and for complete bodies selected
+        # by another marked compatibility route; those legacy bodies may still create historical Python-list,
+        # TupleValue, or GeometryBuilder objects. New semantic code must not read or write this mapping.
+        # Remove it when remaining compatibility bodies no longer require backend structural objects by
+        # source name.
         self._legacy_structural_bindings: dict[str, object] = {}
         self._interface_inputs_by_identifier = {}
         self._interface_inputs_by_socket_pointer = {}
         self._panel_input_memberships = {}
-        # CONTROL_FLOW_IR_LEGACY_RUNTIME_FRAME_COMPAT: Migrated IRIf/IRRepeat use semantic lexical state and
-        # body-local BindingId -> Value maps and must never read or mutate this Compiler frame stack. Keep it
-        # only for whole-body legacy repeat_range() fallback, especially GeometryBuilder and dynamic-call
-        # cases still implemented by runtime.py's AST/Compiler path. Remove the stack and its accessors when
-        # no supported production Repeat is lowered through the legacy runtime control-flow implementation.
+        # CONTROL_FLOW_IR_LEGACY_RUNTIME_FRAME_COMPAT: Migrated IRIf/IRRepeat, including frontend-owned
+        # GeometryBuilder state, use semantic BindingIds and recursive Blender IR lowering and must never read
+        # or mutate this Compiler frame stack. Keep it only for complete bodies already routed to the legacy
+        # runtime control-flow engine by another compatibility category. Remove the stack and its accessors
+        # when no supported production Repeat is lowered through runtime.py's AST/Compiler implementation.
         self._runtime_state_frames = []
         self.depth = 0
 

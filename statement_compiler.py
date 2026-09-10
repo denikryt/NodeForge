@@ -74,6 +74,12 @@ def _check_runtime_binding(comp, name):
     validate_runtime_binding_target(name, getattr(comp, "reserved_name_labels", {}))
 
 
+# GEOMETRY_BUILDER_LEGACY_STATEMENT_COMPAT: Semantic Body owns geometry_builder construction,
+# add()/extend(), .geometry snapshots, compile-time loops, and structured runtime control flow for
+# accepted core bodies. Keep these AST/Compiler/backend helpers only when another compatibility
+# category has already routed the complete original body through compile_statement(). Do not call
+# them from Semantic IR construction or Blender IR lowering. Remove them when supported fallback
+# bodies no longer require legacy execution of geometry_builder syntax.
 def _is_geometry_builder_constructor(expr):
     """Return True for a direct geometry_builder(...) constructor call."""
     return isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) and expr.func.id == "geometry_builder"
@@ -600,7 +606,7 @@ def compile_statements(ctx, stmts):
     )
     ctx.explicit_outputs.extend(result.explicit_outputs)
     ctx.output_names.update(name for name, _ in result.explicit_outputs)
-    ctx.auto_final_output = result.auto_output
+    ctx.auto_final_output = None if body_compilation.clear_auto_final_output else result.auto_output
     return ctx
 
 

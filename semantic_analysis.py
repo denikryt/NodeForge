@@ -113,6 +113,7 @@ class SemanticEnvironment:
     callable_environment: CallableEnvironment
     structural_bindings: Mapping[str, StructuralBindingSymbol] = field(default_factory=lambda: MappingProxyType({}))
     structural_arrays: StructuralArraySnapshot = field(default_factory=lambda: StructuralArraySnapshot({}, {}))
+    builder_bindings: Mapping[str, BindingId] = field(default_factory=lambda: MappingProxyType({}))
     object_semantics: ObjectSemanticSnapshot | None = None
 
 
@@ -362,6 +363,7 @@ def build_semantic_environment(
     callable_environment,
     structural_bindings=None,
     structural_arrays=None,
+    builder_bindings=None,
     object_semantics=None,
 ):
     """Build one immutable expression environment from detached compiler-owned snapshots."""
@@ -370,7 +372,10 @@ def build_semantic_environment(
     if not isinstance(structural_arrays, StructuralArraySnapshot):
         raise TypeError("structural_arrays must be a StructuralArraySnapshot")
     runtime_bindings = dict(runtime_bindings)
-    ownership_sets = (set(runtime_bindings), set(structural_bindings), set(structural_arrays.bindings))
+    builder_bindings = {} if builder_bindings is None else dict(builder_bindings)
+    if not all(isinstance(value, BindingId) for value in builder_bindings.values()):
+        raise TypeError("builder_bindings values must be BindingId records")
+    ownership_sets = (set(runtime_bindings), set(structural_bindings), set(structural_arrays.bindings), set(builder_bindings))
     if any(ownership_sets[i] & ownership_sets[j] for i in range(len(ownership_sets)) for j in range(i + 1, len(ownership_sets))):
         raise CompileError("Internal error: source name is active in multiple semantic binding domains")
     if object_semantics is not None and not isinstance(object_semantics, ObjectSemanticSnapshot):
@@ -401,6 +406,7 @@ def build_semantic_environment(
         callable_environment=callable_environment,
         structural_bindings=MappingProxyType(structural_bindings),
         structural_arrays=structural_arrays,
+        builder_bindings=MappingProxyType(builder_bindings),
         object_semantics=object_semantics,
     )
 
@@ -519,6 +525,8 @@ def analyze_expression(expr, environment):
                     array_id=array_id,
                 )
                 return record(node, ExpressionFact(shape, resolved_name=resolved, array_id=array_id))
+            if node.id in environment.builder_bindings:
+                raise CompileError("geometry_builder cannot escape script scope")
             # COMPLETE_EXPRESSION_IR_LEGACY_BINDING_FALLBACK: Non-Value compiler bindings still
             # have no frontend-owned semantic result shape. Keep the complete enclosing expression
             # on the legacy dispatcher when one is reached; do not carry the compiler object into IR.
@@ -556,6 +564,17 @@ def analyze_expression(expr, environment):
             return record(node, ExpressionFact(ArrayResultShape(tuple(items))))
 
         if isinstance(node, ast.Attribute):
+            if isinstance(node.value, ast.Name) and node.value.id in environment.builder_bindings:
+                if node.attr != "geometry":
+                    raise CompileError("geometry_builder supports only .geometry")
+                binding_id = environment.builder_bindings[node.value.id]
+                resolved = ResolvedName(
+                    "runtime_binding",
+                    TYPE_GEOMETRY,
+                    name=node.value.id,
+                    binding_id=binding_id,
+                )
+                return record(node, runtime_fact(TYPE_GEOMETRY, resolved_name=resolved))
             base = analyze(node.value)
             if base is UNSUPPORTED:
                 return UNSUPPORTED

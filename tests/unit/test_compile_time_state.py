@@ -132,21 +132,9 @@ def test_frontend_compile_time_modules_do_not_import_bpy():
         assert "from bpy" not in source, relative
 
 
-def test_compile_time_state_source_contracts_have_one_owner_and_exact_markers():
-    """Searchable compatibility boundaries stay exact and old state ownership does not return."""
+def test_compile_time_state_source_contracts_have_one_owner():
+    """Compile-time ownership stays centralized without depending on compatibility comment text."""
     root = Path(__file__).resolve().parents[2]
-    expected = {
-        "compiler.py": (
-            "COMPILE_TIME_STATE_COMPILER_CONSTS_COMPAT",
-            "STRUCTURAL_ARRAYS_LEGACY_STRUCTURAL_COMPAT",
-            "COMPILE_TIME_STATE_LEGACY_BINDING_CHECKPOINT_COMPAT",
-        ),
-        "statement_compiler.py": ("COMPILE_TIME_STATE_LEGACY_STATEMENT_PATH_COMPAT",),
-    }
-    for relative, markers in expected.items():
-        source = (root / relative).read_text(encoding="utf-8")
-        for marker in markers:
-            assert marker in source, (relative, marker)
 
     production_files = [
         path for path in root.rglob("*.py")

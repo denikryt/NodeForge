@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
 
+from .compiler_identities import BindingId
 from .errors import CompileError
 from .nf_types import NFType
 from .semantic_ir import IRBranchMerge, IRIf
@@ -108,6 +109,19 @@ def repeat_mutation_names(stmts) -> tuple[str, ...]:
         if isinstance(stmt, ast.AugAssign):
             add_target(stmt.target)
             return
+        if isinstance(stmt, ast.Expr):
+            call = stmt.value
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr in {"add", "extend"}
+                and isinstance(call.func.value, ast.Name)
+            ):
+                name = call.func.value.id
+                if name not in seen:
+                    seen.add(name)
+                    names.append(name)
+                return
         if isinstance(stmt, ast.If):
             for child in list(stmt.body) + list(stmt.orelse):
                 visit(child)
@@ -124,6 +138,15 @@ def repeat_mutation_names(stmts) -> tuple[str, ...]:
     for stmt in stmts:
         visit(stmt)
     return tuple(names)
+
+
+@dataclass(frozen=True)
+class RuntimeMergeSymbol:
+    """Describe one runtime slot eligible for control-flow merging."""
+
+    binding_id: BindingId
+    source_name: str
+    typ: NFType
 
 
 @dataclass(frozen=True)
@@ -147,6 +170,8 @@ def lower_runtime_if(
     lower_branch: Callable,
     unsupported_sentinel,
     merge_binding_ids=None,
+    merge_symbols=(),
+    identity_assignment_merge_eligible: Callable[[object, object], bool] | None = None,
 ):
     """Construct one runtime IRIf using caller-owned semantic state operations.
 
@@ -185,6 +210,19 @@ def lower_runtime_if(
 
     if policy is BranchMergePolicy.TOP_LEVEL:
         changed_ids = true_state.changed_runtime_ids & false_state.changed_runtime_ids
+        if identity_assignment_merge_eligible is not None and identity_assignment_merge_eligible(true_state, false_state):
+            # GEOMETRY_BUILDER_BRANCH_LOCAL_IDENTITY_ASSIGNMENT_MERGE_COMPAT: Legacy top-level
+            # runtime-if accepted a branch-local GeometryBuilder alongside a common assignment
+            # target even when one branch assigned that target to its existing binding identity
+            # (for example ``value = value``). The caller enables this only after branch lowering
+            # confirms that a fresh builder identity actually survives in one fork; dead constructor
+            # syntax must not change runtime-if merge eligibility. Remove this marker when the
+            # remaining legacy runtime-if compatibility contract is retired or represented by a
+            # general frontend assignment/merge model.
+            changed_ids |= (
+                true_state.explicitly_assigned_runtime_ids
+                & false_state.explicitly_assigned_runtime_ids
+            )
         if not changed_ids:
             raise CompileError("runtime if branches must assign at least one common variable")
     else:
@@ -192,11 +230,16 @@ def lower_runtime_if(
         if merge_binding_ids is not None:
             changed_ids &= set(merge_binding_ids)
 
+    symbol_by_id = {symbol.binding_id: symbol for symbol in merge_symbols}
     by_name = {}
     for state in (true_state, false_state):
         for name, symbol in state.runtime_bindings.items():
             if symbol.binding_id in changed_ids:
                 by_name.setdefault(name, symbol.binding_id)
+    for binding_id in changed_ids:
+        merge_symbol = symbol_by_id.get(binding_id)
+        if merge_symbol is not None:
+            by_name.setdefault(merge_symbol.source_name, binding_id)
 
     if policy is BranchMergePolicy.REPEAT and merge_binding_ids is not None:
         name_by_binding_id = {binding_id: name for name, binding_id in by_name.items()}
@@ -213,10 +256,13 @@ def lower_runtime_if(
         binding_id = by_name[name]
         true_symbol = next((symbol for symbol in true_state.runtime_bindings.values() if symbol.binding_id == binding_id), None)
         false_symbol = next((symbol for symbol in false_state.runtime_bindings.values() if symbol.binding_id == binding_id), None)
-        if true_symbol is None or false_symbol is None:
+        merge_symbol = symbol_by_id.get(binding_id)
+        if true_symbol is None and merge_symbol is None:
             continue
-        true_type = true_symbol.typ
-        false_type = false_symbol.typ
+        if false_symbol is None and merge_symbol is None:
+            continue
+        true_type = true_symbol.typ if true_symbol is not None else merge_symbol.typ
+        false_type = false_symbol.typ if false_symbol is not None else merge_symbol.typ
         false_coerce = None
         true_coerce = None
         if true_type is not false_type:
@@ -242,6 +288,7 @@ def lower_runtime_if(
 __all__ = [
     "BranchMergePolicy",
     "RuntimeIfResult",
+    "RuntimeMergeSymbol",
     "lower_runtime_if",
     "parse_repeat_range_for",
     "repeat_body_has_nonruntime_for",

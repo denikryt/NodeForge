@@ -192,6 +192,12 @@ class OrdinaryStateDescriptor:
         return TYPE_FLOAT if self.old_type == TYPE_INT else self.old_type
 
 
+# GEOMETRY_BUILDER_LEGACY_REPEAT_COMPAT: Frontend Semantic Body now represents builder Repeat state
+# with ordinary Geometry BindingIds, IRRepeatState, and IRIf merges. Keep BuilderStateDescriptor and
+# RuntimeStateFrame builder handling only for complete bodies already using the legacy Repeat engine
+# because of another compatibility category. New IRRepeat lowering must never create or query these
+# descriptors. Remove this builder descriptor path when no supported fallback Repeat executes
+# geometry_builder mutation through runtime.py's AST/Compiler semantic engine.
 class BuilderStateDescriptor:
     """Repeat Zone Geometry state descriptor owned by one GeometryBuilder binding."""
 
@@ -244,9 +250,9 @@ def _builder_method_info(comp, sub):
 
 # CONTROL_FLOW_IR_LEGACY_REPEAT_ENGINE_COMPAT: Migrated ordinary repeat_range() semantics are owned by
 # typed IRRepeat and recursive Blender IR lowering. Keep this AST/Compiler/RuntimeStateFrame engine only
-# for whole-body fallback categories such as GeometryBuilder and dynamic legacy expressions. New IR
-# lowering may reuse backend-only Repeat Zone helpers from this module but must not call this legacy
-# semantic engine. Remove it when every supported Repeat body has frontend-owned state semantics.
+# for whole-body fallback categories such as dynamic/contextual legacy expressions. Mixed fallback
+# bodies may still contain GeometryBuilder after another category selects this route. New IR lowering
+# may reuse backend-only Repeat Zone helpers from this module but must not call this legacy semantic engine. Remove it when every supported Repeat body has frontend-owned state semantics.
 def _runtime_state_descriptors(comp, stmts):
     """Collect ordinary and builder Repeat Zone states in first mutation order."""
     descriptors = []

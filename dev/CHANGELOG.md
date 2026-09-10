@@ -214,3 +214,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.51.4
 
 - Moved mutable structural arrays and ordinary compile-time/array `for` unrolling into Blender-independent semantic body state with explicit array identity, alias-preserving immutable snapshots, recursive persistent leaves, and atomic speculative compile-time loop rollback while preserving legacy compatibility boundaries and Geometry Nodes behavior.
+
+## 0.51.5
+
+- Moved accepted core `GeometryBuilder` construction, accumulation, snapshots, compile-time iteration, runtime-if branch-local state, and Repeat carried state into Blender-independent semantic body ownership using existing typed Geometry Call/control-flow IR, while preserving historical behavior/topology (including legacy-accepted branch-local runtime-if cases with identity assignments such as `value = value`) and isolating the legacy backend builder path to separately selected compatibility bodies.

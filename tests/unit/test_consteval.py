@@ -351,8 +351,8 @@ def test_preprocess_still_rejects_flat_unpack_for_without_legacy_compatibility_b
             "    total = x + y\n"
         )
 
-def test_geometry_builder_loop_preprocessing_stays_intact_for_legacy_builder_route():
-    """This structural-array and compile-time unrolling refactor must retain builder loops exactly once for the later builder migration boundary."""
+def test_geometry_builder_simple_name_loop_has_no_builder_specific_preprocess_route():
+    """Builder loops use ordinary preprocessing; Semantic Body owns retained runtime statements."""
     retained, _consts = _preprocess_source(
         "builder = geometry_builder()\n"
         "for i in range(3):\n"
@@ -361,7 +361,8 @@ def test_geometry_builder_loop_preprocessing_stays_intact_for_legacy_builder_rou
     )
     loops = [stmt for stmt in retained if isinstance(stmt, ast.For)]
     assert len(loops) == 1
-    assert ast.unparse(loops[0]) == "for i in range(3):\n    builder.add(cube(i + 1))"
+    assert isinstance(loops[0].target, ast.Name)
+    assert loops[0].target.id == "i"
 
 
 def test_compile_time_append_journal_savepoint_rolls_back_only_its_suffix():

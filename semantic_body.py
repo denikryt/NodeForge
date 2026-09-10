@@ -55,6 +55,12 @@ from .semantic_control_flow import (
     repeat_mutation_names,
     repeat_state_output_type,
     require_repeat_state_assignment,
+    RuntimeMergeSymbol,
+)
+from .semantic_geometry_builder import (
+    GeometryBuilderState,
+    join_binding_program as builder_join_binding_program,
+    validate_geometry_builder_constructor,
 )
 from .semantic_values import (
     ArrayResultShape,
@@ -90,6 +96,7 @@ class BasicBodyCompilation:
     body: IRBody
     final_compile_time: CompileTimeSnapshot
     final_structural_arrays: StructuralArraySnapshot
+    clear_auto_final_output: bool = False
 
     def __post_init__(self) -> None:
         """Require immutable detached frontend snapshots."""
@@ -97,6 +104,8 @@ class BasicBodyCompilation:
             raise TypeError("final_compile_time must be a CompileTimeSnapshot")
         if not isinstance(self.final_structural_arrays, StructuralArraySnapshot):
             raise TypeError("final_structural_arrays must be a StructuralArraySnapshot")
+        if not isinstance(self.clear_auto_final_output, bool):
+            raise TypeError("clear_auto_final_output must be a bool")
 
 
 @dataclass(frozen=True)
@@ -181,12 +190,12 @@ def validate_input_declaration_placement(stmts) -> None:
 
 def _reject_remaining_legacy_structural_binding():
     """Return whole-body fallback for intentionally out-of-scope structural categories."""
-    # STRUCTURAL_ARRAYS_REMAINING_BODY_FALLBACK: Mutable structural arrays and ordinary compile-time
-    # iterable loops are frontend-owned after structural-array migration. GeometryBuilder state, contextual group
-    # statements (panel/store/set_position), grid/grid_uv state, and dynamic callable/result categories
-    # still reject the complete root body before Blender lowering. Do not put AST/backend objects into
-    # Semantic IR to bypass this boundary. Remove this marker when those remaining core categories have
-    # permanent frontend semantics and the core whole-body compile_statement() fallback is removed.
+    # REMAINING_CORE_BODY_FALLBACK_COMPAT: Structural arrays, ordinary compile-time loops, and
+    # GeometryBuilder are frontend-owned. Contextual group statements (panel/store/set_position),
+    # grid/grid_uv state, and dynamic callable/result categories can still reject the complete root body
+    # before Blender lowering. Do not route migrated builder semantics through this boundary. Remove this
+    # marker when those remaining categories have permanent frontend semantics or an explicitly isolated
+    # extension compatibility route.
     return BODY_UNSUPPORTED
 
 
@@ -207,6 +216,23 @@ def _ordinary_for_target_names(target_node) -> list[str]:
     if isinstance(target_node, ast.Name):
         return [target_node.id]
     raise CompileError("Only simple compile-time for targets are supported")
+
+
+def _builder_loop_target_names(target_node, body) -> list[str] | None:
+    """Return historical flat tuple/list targets only for loops that mutate a builder."""
+    if not isinstance(target_node, (ast.Tuple, ast.List)):
+        return None
+    has_builder_method = any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"add", "extend"}
+        and isinstance(node.func.value, ast.Name)
+        for statement in body
+        for node in ast.walk(statement)
+    )
+    if not has_builder_method:
+        return None
+    return _tuple_target_names(target_node)
 
 
 @dataclass
@@ -272,11 +298,14 @@ class _BodySemanticState:
     structural_bindings: dict[str, StructuralBindingSymbol]
     array_bindings: dict[str, StructuralArrayId]
     array_states: dict[StructuralArrayId, StructuralArrayState]
+    builder_states: dict[str, GeometryBuilderState]
     object_ids_by_binding: dict[BindingId, ObjectSemanticId]
     object_states: dict[ObjectSemanticId, ObjectInfoState]
     identities: _BodyIdentityAllocator
     changed_runtime_ids: set[BindingId]
+    explicitly_assigned_runtime_ids: set[BindingId]
     lexical_iteration_ids: set[BindingId]
+    clear_auto_final_output: bool
 
     def fork(self) -> "_BodySemanticState":
         """Copy active state while retaining the shared non-rewinding allocator."""
@@ -285,11 +314,14 @@ class _BodySemanticState:
             dict(self.structural_bindings),
             dict(self.array_bindings),
             dict(self.array_states),
+            dict(self.builder_states),
             dict(self.object_ids_by_binding),
             dict(self.object_states),
             self.identities,
             set(),
+            set(),
             set(self.lexical_iteration_ids),
+            self.clear_auto_final_output,
         )
 
     def adopt(self, other: "_BodySemanticState") -> None:
@@ -298,10 +330,13 @@ class _BodySemanticState:
         self.structural_bindings = dict(other.structural_bindings)
         self.array_bindings = dict(other.array_bindings)
         self.array_states = dict(other.array_states)
+        self.builder_states = dict(other.builder_states)
         self.object_ids_by_binding = dict(other.object_ids_by_binding)
         self.object_states = dict(other.object_states)
         self.changed_runtime_ids.update(other.changed_runtime_ids)
+        self.explicitly_assigned_runtime_ids.update(other.explicitly_assigned_runtime_ids)
         self.lexical_iteration_ids = set(other.lexical_iteration_ids)
+        self.clear_auto_final_output = other.clear_auto_final_output
 
     def array_snapshot(self) -> StructuralArraySnapshot:
         """Build one detached expression-facing structural-array snapshot."""
@@ -362,7 +397,7 @@ def lower_basic_body(
         raise TypeError("initial_compile_time must be a CompileTimeSnapshot")
     compile_time = CompileTimeState(initial_compile_time.values)
     state = _BodySemanticState(
-        dict(initial_runtime_bindings), {}, {}, {}, {}, {}, identities, set(), set()
+        dict(initial_runtime_bindings), {}, {}, {}, {}, {}, {}, identities, set(), set(), set(), False
     )
     for symbol in state.runtime_bindings.values():
         if symbol.typ is TYPE_OBJECT:
@@ -374,6 +409,112 @@ def lower_basic_body(
 
     def clear_binding_object(active: _BodySemanticState, binding_id: BindingId) -> None:
         active.object_ids_by_binding.pop(binding_id, None)
+
+    def _clear_nonbuilder_name_ownership(active: _BodySemanticState, name: str) -> None:
+        """Remove non-builder semantic ownership for one source name."""
+        runtime = active.runtime_bindings.pop(name, None)
+        if runtime is not None:
+            clear_binding_object(active, runtime.binding_id)
+        structural = active.structural_bindings.pop(name, None)
+        if structural is not None:
+            for leaf in structural.leaves:
+                clear_binding_object(active, leaf.binding_id)
+        active.array_bindings.pop(name, None)
+
+    def _commit_builder_construction(active: _BodySemanticState, active_compile_time: CompileTimeState, name: str) -> None:
+        """Publish one fully validated fresh frontend-only builder state atomically."""
+        binding_id = identities.allocate_binding_id()
+        _clear_nonbuilder_name_ownership(active, name)
+        active_compile_time.discard(name)
+        active.builder_states[name] = GeometryBuilderState(binding_id)
+
+    def _builder_read_names(node, active: _BodySemanticState) -> tuple[str, ...]:
+        """Return deterministic builder names reached through legal ``.geometry`` reads."""
+        names = []
+        seen = set()
+        for child in ast.walk(node):
+            if (
+                isinstance(child, ast.Attribute)
+                and child.attr == "geometry"
+                and isinstance(child.value, ast.Name)
+                and child.value.id in active.builder_states
+                and child.value.id not in seen
+            ):
+                seen.add(child.value.id)
+                names.append(child.value.id)
+        return tuple(names)
+
+    def _builder_constructor_targets(stmts) -> set[str]:
+        """Return source names directly rebound to fresh builders in a statement region."""
+        targets = set()
+        for statement in stmts:
+            for child in ast.walk(statement):
+                if (
+                    isinstance(child, ast.Assign)
+                    and len(child.targets) == 1
+                    and isinstance(child.targets[0], ast.Name)
+                    and isinstance(child.value, ast.Call)
+                    and isinstance(child.value.func, ast.Name)
+                    and child.value.func.id == "geometry_builder"
+                ):
+                    targets.add(child.targets[0].id)
+        return targets
+
+    def ensure_builder_current(active: _BodySemanticState, name: str, statement_sink: list) -> BindingId:
+        """Materialize one frontend builder snapshot into its stable hidden Geometry slot."""
+        state_record = active.builder_states.get(name)
+        if state_record is None:
+            raise CompileError(f"Unknown name: {name}")
+        if state_record.has_current:
+            return state_record.state_binding_id
+        program = builder_join_binding_program(state_record.pending_binding_ids)
+        if not isinstance(program.result, IRValue):
+            raise CompileError("Internal error: GeometryBuilder snapshot did not produce Geometry")
+        statement_sink.append(
+            IRBindLeaves(
+                program,
+                (IRLeafBinding(program.result, state_record.state_binding_id, NFType.GEOMETRY),),
+            )
+        )
+        active.builder_states[name] = state_record.current()
+        return state_record.state_binding_id
+
+    def _persist_builder_geometry_argument(
+        active: _BodySemanticState,
+        analyzed: _AnalyzedBodyExpression,
+        statement_sink: list,
+        *,
+        diagnostic: str,
+    ) -> BindingId:
+        """Persist one validated Geometry expression into a hidden frontend-owned binding."""
+        if not isinstance(analyzed.result_shape, RuntimeResultShape) or analyzed.result_shape.typ is not NFType.GEOMETRY:
+            raise CompileError(diagnostic)
+        if not isinstance(analyzed.program.result, IRValue):
+            raise CompileError(diagnostic)
+        binding_id = identities.allocate_binding_id()
+        statement_sink.append(
+            IRBindLeaves(
+                analyzed.program,
+                (IRLeafBinding(analyzed.program.result, binding_id, NFType.GEOMETRY),),
+            )
+        )
+        active.adopt_object_snapshot(analyzed.object_semantics)
+        return binding_id
+
+    def _append_builder_binding(active: _BodySemanticState, name: str, binding_id: BindingId, statement_sink: list) -> None:
+        """Apply one builder contribution while preserving pre/post-snapshot Join topology."""
+        state_record = active.builder_states[name]
+        if not state_record.has_current:
+            active.builder_states[name] = state_record.with_pending(binding_id)
+            return
+        program = builder_join_binding_program((state_record.state_binding_id, binding_id))
+        statement_sink.append(
+            IRBindLeaves(
+                program,
+                (IRLeafBinding(program.result, state_record.state_binding_id, NFType.GEOMETRY),),
+            )
+        )
+        active.changed_runtime_ids.add(state_record.state_binding_id)
 
     def bind_runtime(active: _BodySemanticState, name: str, shape: RuntimeResultShape, *, changed=True) -> RuntimeBindingSymbol:
         current = active.runtime_bindings.get(name)
@@ -670,9 +811,30 @@ def lower_basic_body(
         name: str,
         item,
         temp_binding_id: BindingId,
+        *,
+        materialize_literal: bool = False,
     ):
         """Bind one compile-time/structural iteration item and return optional runtime publication IR."""
         validate_runtime_binding_target(name, reserved_name_labels)
+        if materialize_literal and isinstance(item, (bool, int, float, str)):
+            # Historical flat tuple/list-target loops that mutate GeometryBuilder compiled each
+            # unpacked scalar through the runtime expression path before entering the body. Preserve
+            # those literal nodes even when a target is unused; the characterization topology is a
+            # public compatibility contract for this narrow builder-loop surface.
+            if isinstance(item, bool):
+                typ = NFType.BOOL
+            elif isinstance(item, (int, float)):
+                typ = NFType.FLOAT
+            else:
+                typ = NFType.STRING
+            _clear_name_runtime_structural(active, name)
+            active.array_bindings.pop(name, None)
+            active_compile_time.discard(name)
+            active.runtime_bindings[name] = RuntimeBindingSymbol(temp_binding_id, typ)
+            clear_binding_object(active, temp_binding_id)
+            result = IRValue(0, typ)
+            program = IRProgram((IRLiteral(result, 0, item),), result)
+            return IRBindLeaves(program, (IRLeafBinding(result, temp_binding_id, typ),))
         if isinstance(item, StructuralRuntimeLeaf):
             return _bind_loop_runtime_leaf(active, active_compile_time, name, item, temp_binding_id)
         if isinstance(item, StructuralBindingSymbol):
@@ -710,11 +872,14 @@ def lower_basic_body(
         raise CompileError("for loop requires a compile-time iterable, an array, or repeat_range(...)")
 
 
-    def analyze_runtime_expression(expr, active: _BodySemanticState, active_compile_time: CompileTimeState):
+    def analyze_runtime_expression(expr, active: _BodySemanticState, active_compile_time: CompileTimeState, statement_sink: list):
+        for builder_name in _builder_read_names(expr, active):
+            ensure_builder_current(active, builder_name, statement_sink)
         environment = build_semantic_environment(
             runtime_bindings=active.runtime_bindings,
             structural_bindings=active.structural_bindings,
             structural_arrays=active.array_snapshot(),
+            builder_bindings={name: state_record.state_binding_id for name, state_record in active.builder_states.items()},
             legacy_binding_names=legacy_binding_names,
             compile_time=active_compile_time.snapshot(),
             reserved_name_labels=reserved_name_labels,
@@ -739,8 +904,8 @@ def lower_basic_body(
             analysis,
         )
 
-    def accept_expression(expr, active: _BodySemanticState, active_compile_time: CompileTimeState):
-        analyzed = analyze_runtime_expression(expr, active, active_compile_time)
+    def accept_expression(expr, active: _BodySemanticState, active_compile_time: CompileTimeState, statement_sink: list):
+        analyzed = analyze_runtime_expression(expr, active, active_compile_time, statement_sink)
         if analyzed is BODY_UNSUPPORTED:
             return BODY_UNSUPPORTED
         active.adopt_object_snapshot(analyzed.object_semantics)
@@ -752,13 +917,27 @@ def lower_basic_body(
         # frontend-unrolled non-mutating structural loops where the current DSL already accepts them.
         # Structural-array mutation/rebinding under runtime control flow has its own explicit compatibility
         # markers; ordinary non-repeat for-loops inside repeat_range remain a controlled source error. Nested
-        # GeometryBuilder/contextual/grid/dynamic categories still require atomic whole-body fallback. Never
+        # contextual/grid/dynamic categories still require atomic whole-body fallback; GeometryBuilder itself is
+        # frontend-owned. Never
         # splice compile_statement() into accepted IRIf/IRRepeat. Remove this marker when every supported
         # nested core-body category is frontend-owned.
         return BODY_UNSUPPORTED
 
-    def lower_statements(source_stmts, active: _BodySemanticState, active_compile_time: CompileTimeState, *, control_policy=None, repeat_merge_ids=None, root=False):
+    def lower_statements(source_stmts, active: _BodySemanticState, active_compile_time: CompileTimeState, *, control_policy=None, repeat_merge_ids=None, repeat_merge_symbols=(), runtime_if_builder_baseline=None, root=False):
         statements = []
+
+        def emit(statement):
+            """Append executable IR and make its backend auto-output result authoritative."""
+            statements.append(statement)
+            active.clear_auto_final_output = False
+
+        def emit_many(items):
+            """Append executable IR while preserving a frontend-only clear across an empty batch."""
+            items = tuple(items)
+            statements.extend(items)
+            if items:
+                active.clear_auto_final_output = False
+
         for index, stmt in enumerate(source_stmts):
             is_final = root and index == len(source_stmts) - 1
 
@@ -776,6 +955,9 @@ def lower_basic_body(
                             trial,
                             trial_compile_time,
                             control_policy=control_policy,
+                            repeat_merge_ids=repeat_merge_ids,
+                            repeat_merge_symbols=repeat_merge_symbols,
+                            runtime_if_builder_baseline=runtime_if_builder_baseline,
                             root=False,
                         )
                         if folded is not BODY_UNSUPPORTED:
@@ -787,13 +969,33 @@ def lower_basic_body(
                         pass
 
                 policy = control_policy or BranchMergePolicy.TOP_LEVEL
+                if policy is BranchMergePolicy.TOP_LEVEL:
+                    branch_region = tuple(stmt.body) + tuple(stmt.orelse)
+                    replaced_names = _builder_constructor_targets(branch_region)
+                    module = ast.Module(body=list(branch_region), type_ignores=[])
+                    for builder_name in _builder_read_names(module, active):
+                        if builder_name not in replaced_names:
+                            ensure_builder_current(active, builder_name, statements)
+                branch_builder_baseline = {
+                    name: state_record.state_binding_id
+                    for name, state_record in active.builder_states.items()
+                }
+                def branch_has_fresh_builder_identity(branch_state: _BodySemanticState) -> bool:
+                    if policy is not BranchMergePolicy.TOP_LEVEL:
+                        return False
+                    for builder_name, state_record in branch_state.builder_states.items():
+                        inherited_id = branch_builder_baseline.get(builder_name)
+                        if inherited_id is None or state_record.state_binding_id != inherited_id:
+                            return True
+                    return False
+
                 result = lower_runtime_if(
                     stmt,
                     base_state=active,
                     compile_time=active_compile_time,
                     policy=policy,
                     analyze_condition=lambda expr, branch_state, branch_compile_time: accept_expression(
-                        expr, branch_state, branch_compile_time
+                        expr, branch_state, branch_compile_time, statements
                     ),
                     lower_branch=lambda branch, branch_state, branch_compile_time, branch_policy: lower_statements(
                         branch,
@@ -801,41 +1003,70 @@ def lower_basic_body(
                         branch_compile_time,
                         control_policy=branch_policy,
                         repeat_merge_ids=repeat_merge_ids,
+                        repeat_merge_symbols=repeat_merge_symbols,
+                        runtime_if_builder_baseline=branch_builder_baseline,
                         root=False,
                     ),
                     unsupported_sentinel=BODY_UNSUPPORTED,
                     merge_binding_ids=repeat_merge_ids,
+                    merge_symbols=repeat_merge_symbols,
+                    identity_assignment_merge_eligible=lambda true_state, false_state: (
+                        branch_has_fresh_builder_identity(true_state)
+                        or branch_has_fresh_builder_identity(false_state)
+                    ),
                 )
                 if result is BODY_UNSUPPORTED:
                     return nested_control_flow_fallback()
-                statements.append(result.statement)
+
+                # A builder identity created/replaced independently in both runtime branches was
+                # historically a common changed compile-time object and therefore failed at the
+                # legacy branch merge. Preserve that diagnostic instead of silently treating two
+                # fresh branch-local identities as mergeable or discardable. One-sided branch-local
+                # construction remains compatible and is discarded with its branch state.
+                if policy is BranchMergePolicy.TOP_LEVEL:
+                    common_builder_names = set(result.true_state.builder_states) & set(result.false_state.builder_states)
+                    for builder_name in sorted(common_builder_names):
+                        inherited_id = branch_builder_baseline.get(builder_name)
+                        true_id = result.true_state.builder_states[builder_name].state_binding_id
+                        false_id = result.false_state.builder_states[builder_name].state_binding_id
+                        true_is_local = inherited_id is None or true_id != inherited_id
+                        false_is_local = inherited_id is None or false_id != inherited_id
+                        if true_is_local and false_is_local:
+                            raise CompileError("geometry_builder cannot escape script scope")
+
+                emit(result.statement)
                 active_compile_time.replace(result.false_compile_time)
                 # Runtime merge publication is independent of compile-time state.
                 for merge in result.statement.merges:
+                    builder_state = active.builder_states.get(merge.source_name)
+                    if builder_state is not None and builder_state.state_binding_id == merge.binding_id:
+                        active.changed_runtime_ids.add(merge.binding_id)
+                        continue
                     active.runtime_bindings[merge.source_name] = RuntimeBindingSymbol(merge.binding_id, merge.typ)
                     active.structural_bindings.pop(merge.source_name, None)
                     active.changed_runtime_ids.add(merge.binding_id)
+                    active.explicitly_assigned_runtime_ids.add(merge.binding_id)
                     clear_binding_object(active, merge.binding_id)
                 continue
 
             if isinstance(stmt, ast.For):
                 parsed = parse_repeat_range_for(stmt)
                 if parsed is None:
-                    if not isinstance(stmt.target, ast.Name):
-                        # STRUCTURAL_ARRAYS_NON_NAME_FOR_BODY_FALLBACK_COMPAT: In v0.51.3, any ordinary-for
-                        # non-name target that survived compile-time preprocessing was handled by the legacy
-                        # statement compiler, including runtime-dependent tuple/list unpack and the direct-append
-                        # retention case. Keep the root body atomic and return BODY_UNSUPPORTED before iterable
-                        # analysis, target binding, IR publication, or structural mutation. Remove this marker when
-                        # all previously accepted non-name ordinary-for targets have permanent frontend semantics
-                        # or the legacy ordinary-for compatibility route is intentionally retired.
+                    builder_target_names = _builder_loop_target_names(stmt.target, stmt.body)
+                    if not isinstance(stmt.target, ast.Name) and builder_target_names is None:
+                        # STRUCTURAL_ARRAYS_NON_NAME_FOR_BODY_FALLBACK_COMPAT: Non-builder ordinary-for
+                        # tuple/list targets that survive preprocessing still belong to the narrow legacy
+                        # compatibility route. Keep the root body atomic before iterable analysis or mutation.
+                        # Remove this marker when generic tuple/list ordinary-for targets gain frontend semantics.
                         return BODY_UNSUPPORTED
                     iterable_items = _iterable_items(stmt.iter, active, active_compile_time)
-                    target_names = _ordinary_for_target_names(stmt.target)
+                    target_names = builder_target_names or _ordinary_for_target_names(stmt.target)
                     if any(name in legacy_binding_names for name in target_names):
                         return BODY_UNSUPPORTED
                     for name in target_names:
                         validate_runtime_binding_target(name, reserved_name_labels)
+                        if name in active.builder_states:
+                            raise CompileError("Cannot assign over geometry_builder binding")
 
                     lexical_snapshots = {
                         name: _snapshot_lexical_name(active, active_compile_time, name)
@@ -863,7 +1094,14 @@ def lower_basic_body(
 
                     try:
                         for item in iterable_items:
-                            assignments = (item,)
+                            if len(target_names) == 1:
+                                assignments = (item,)
+                            else:
+                                if not isinstance(item, (list, tuple)):
+                                    raise CompileError(f"Cannot unpack scalar compile-time loop item into {len(target_names)} names")
+                                if len(item) != len(target_names):
+                                    raise CompileError(f"Tuple unpacking expected {len(target_names)} values, got {len(item)}")
+                                assignments = tuple(item)
                             prelude = []
                             for name, value in zip(target_names, assignments):
                                 bound = _bind_loop_item(
@@ -872,16 +1110,19 @@ def lower_basic_body(
                                     name,
                                     value,
                                     temp_binding_ids[name],
+                                    materialize_literal=builder_target_names is not None,
                                 )
                                 if bound is not None:
                                     prelude.append(bound)
-                            statements.extend(prelude)
+                            emit_many(prelude)
                             lowered = lower_statements(
                                 stmt.body,
                                 active,
                                 active_compile_time,
                                 control_policy=control_policy,
                                 repeat_merge_ids=repeat_merge_ids,
+                                repeat_merge_symbols=repeat_merge_symbols,
+                                runtime_if_builder_baseline=runtime_if_builder_baseline,
                                 root=False,
                             )
                             if lowered is BODY_UNSUPPORTED:
@@ -926,7 +1167,7 @@ def lower_basic_body(
                         active.object_snapshot(),
                     )
                 else:
-                    iterations = accept_expression(iterations_expr, active, active_compile_time)
+                    iterations = accept_expression(iterations_expr, active, active_compile_time, statements)
                     if iterations is BODY_UNSUPPORTED:
                         return BODY_UNSUPPORTED
                     if not isinstance(iterations.result_shape, RuntimeResultShape) or iterations.result_shape.typ is not NFType.INT:
@@ -936,18 +1177,30 @@ def lower_basic_body(
                     # Preserve the current Repeat grammar as a controlled frontend diagnostic.
                     repeat_mutation_names(repeat_body)
                     raise CompileError("repeat_range body supports assignments, builder methods, if blocks, and nested repeat_range loops")
+                repeat_region = ast.Module(body=list(repeat_body), type_ignores=[])
+                for builder_name in _builder_read_names(repeat_region, active):
+                    ensure_builder_current(active, builder_name, statements)
                 candidate_names = repeat_mutation_names(repeat_body)
-                if any(
-                    isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)
-                    and node.func.attr in {"add", "extend"}
-                    for sub in repeat_body
-                    for node in ast.walk(sub)
-                ):
-                    return BODY_UNSUPPORTED
                 state_records = []
                 entry_symbols = dict(active.runtime_bindings)
+                builder_state_ids = set()
                 for name in candidate_names:
+                    builder_state = active.builder_states.get(name)
+                    if builder_state is not None:
+                        ensure_builder_current(active, name, statements)
+                        builder_state = active.builder_states[name]
+                        builder_state_ids.add(builder_state.state_binding_id)
+                        state_records.append(
+                            IRRepeatState(
+                                builder_state.state_binding_id,
+                                name,
+                                NFType.GEOMETRY,
+                                NFType.GEOMETRY,
+                                len(state_records),
+                                True,
+                            )
+                        )
+                        continue
                     symbol = entry_symbols.get(name)
                     if symbol is None:
                         continue
@@ -977,7 +1230,10 @@ def lower_basic_body(
                 repeat_state.structural_bindings = dict(active.structural_bindings)
                 repeat_state.object_ids_by_binding = dict(active.object_ids_by_binding)
                 for record in state_records:
-                    repeat_state.runtime_bindings[record.source_name] = RuntimeBindingSymbol(record.binding_id, record.input_type)
+                    if record.binding_id in builder_state_ids:
+                        repeat_state.builder_states[record.source_name] = GeometryBuilderState(record.binding_id, (), True)
+                    else:
+                        repeat_state.runtime_bindings[record.source_name] = RuntimeBindingSymbol(record.binding_id, record.input_type)
                 repeat_state.runtime_bindings[iteration_name] = RuntimeBindingSymbol(iteration_binding_id, NFType.INT)
                 repeat_state.lexical_iteration_ids.add(iteration_binding_id)
                 repeat_ir_body = lower_statements(
@@ -986,20 +1242,33 @@ def lower_basic_body(
                     repeat_compile_time,
                     control_policy=BranchMergePolicy.REPEAT,
                     repeat_merge_ids=tuple(record.binding_id for record in state_records),
+                    repeat_merge_symbols=tuple(
+                        RuntimeMergeSymbol(record.binding_id, record.source_name, record.input_type)
+                        for record in state_records
+                    ),
                     root=False,
                 )
                 if repeat_ir_body is BODY_UNSUPPORTED:
                     return nested_control_flow_fallback()
                 for record in state_records:
+                    if record.binding_id in builder_state_ids:
+                        exit_builder = repeat_state.builder_states.get(record.source_name)
+                        if exit_builder is None or exit_builder.state_binding_id != record.binding_id:
+                            raise CompileError(f"Internal error: missing GeometryBuilder Repeat state {record.source_name!r} after semantic body")
+                        continue
                     exit_symbol = repeat_state.runtime_bindings.get(record.source_name)
                     if exit_symbol is None:
                         raise CompileError(f"Internal error: missing Repeat state {record.source_name!r} after semantic body")
                     require_repeat_state_assignment(record.source_name, record.input_type, exit_symbol.typ)
                 repeat = IRRepeat(iterations.program, iteration_binding_id, iteration_name, tuple(state_records), repeat_ir_body)
-                statements.append(repeat)
+                emit(repeat)
                 active_compile_time.replace(repeat_compile_time)
                 for record in state_records:
                     if not record.publish_to_parent:
+                        continue
+                    if record.binding_id in builder_state_ids:
+                        active.builder_states[record.source_name] = GeometryBuilderState(record.binding_id, (), True)
+                        active.changed_runtime_ids.add(record.binding_id)
                         continue
                     active.runtime_bindings[record.source_name] = RuntimeBindingSymbol(record.binding_id, record.output_type)
                     active.changed_runtime_ids.add(record.binding_id)
@@ -1016,7 +1285,9 @@ def lower_basic_body(
                         return BODY_UNSUPPORTED
                     for name in names:
                         validate_runtime_binding_target(name, reserved_name_labels)
-                    analyzed = accept_expression(stmt.value, active, active_compile_time)
+                        if name in active.builder_states:
+                            raise CompileError("Cannot assign over geometry_builder binding")
+                    analyzed = accept_expression(stmt.value, active, active_compile_time, statements)
                     if analyzed is BODY_UNSUPPORTED:
                         return BODY_UNSUPPORTED
                     if not isinstance(analyzed.result_shape, TupleResultShape) or not isinstance(analyzed.program.result, IRTuple):
@@ -1030,7 +1301,7 @@ def lower_basic_body(
                         active_compile_time.discard(name)
                         symbol = bind_runtime(active, name, shape, changed=True)
                         bindings.append(IRLeafBinding(source, symbol.binding_id, shape.typ))
-                    statements.append(IRBindLeaves(analyzed.program, tuple(bindings)))
+                    emit(IRBindLeaves(analyzed.program, tuple(bindings)))
                     continue
                 if not isinstance(target_node, ast.Name):
                     raise CompileError("Only simple assignments like name = value are supported")
@@ -1047,6 +1318,14 @@ def lower_basic_body(
                     # rebinding semantics without adding arrays to IRBranchMerge or IRRepeatState.
                     return BODY_UNSUPPORTED
 
+                is_builder_constructor = (
+                    isinstance(stmt.value, ast.Call)
+                    and isinstance(stmt.value.func, ast.Name)
+                    and stmt.value.func.id == "geometry_builder"
+                )
+                if target in active.builder_states and not is_builder_constructor:
+                    raise CompileError("Cannot assign over geometry_builder binding")
+
                 input_call = _direct_input_call(stmt.value)
                 if input_call is not None:
                     active_compile_time.discard(target)
@@ -1056,7 +1335,7 @@ def lower_basic_body(
                         input_semantics = None
                     if input_semantics is not None:
                         symbol = bind_input(active, target, input_semantics.typ)
-                        statements.append(
+                        emit(
                             IRInputDeclaration(
                                 target_binding_id=symbol.binding_id,
                                 declaration_id=identities.allocate_input_declaration_id(target),
@@ -1068,8 +1347,16 @@ def lower_basic_body(
                         )
                         continue
 
-                if isinstance(stmt.value, ast.Call) and isinstance(stmt.value.func, ast.Name) and stmt.value.func.id == "geometry_builder":
-                    return BODY_UNSUPPORTED
+                if is_builder_constructor:
+                    validate_geometry_builder_constructor(stmt.value)
+                    if control_policy is BranchMergePolicy.REPEAT:
+                        if target in active.builder_states:
+                            raise CompileError("Cannot assign over geometry_builder binding")
+                        raise CompileError("geometry_builder() must be assigned to a simple name")
+                    _commit_builder_construction(active, active_compile_time, target)
+                    # Constructor is frontend-only but historically clears implicit final-output selection.
+                    active.clear_auto_final_output = True
+                    continue
                 if control_policy is BranchMergePolicy.REPEAT:
                     # Legacy Repeat assignments are runtime-state operations: compile_runtime_stmt()
                     # always invalidates the assigned name in Compiler.compile_time instead of publishing a
@@ -1081,7 +1368,7 @@ def lower_basic_body(
                         active_compile_time.bind(target, _const_eval(stmt.value, active_compile_time.values))
                     except CompileError:
                         active_compile_time.discard(target)
-                analyzed = analyze_runtime_expression(stmt.value, active, active_compile_time)
+                analyzed = analyze_runtime_expression(stmt.value, active, active_compile_time, statements)
                 if analyzed is BODY_UNSUPPORTED:
                     return BODY_UNSUPPORTED
                 if isinstance(analyzed.result_shape, ArrayResultShape):
@@ -1094,7 +1381,7 @@ def lower_basic_body(
                     active_compile_time.discard(target)
                     bind_array_alias(active, target, array_id)
                     if bind_statement is not None:
-                        statements.append(bind_statement)
+                        emit(bind_statement)
                     continue
 
                 active.adopt_object_snapshot(analyzed.object_semantics)
@@ -1102,13 +1389,14 @@ def lower_basic_body(
                     existing = active.runtime_bindings.get(target)
                     unchanged = existing is not None and _program_is_binding_identity(analyzed.program, existing.binding_id)
                     symbol = bind_runtime(active, target, analyzed.result_shape, changed=not unchanged)
-                    statements.append(IRAssign(symbol.binding_id, target, analyzed.program))
+                    active.explicitly_assigned_runtime_ids.add(symbol.binding_id)
+                    emit(IRAssign(symbol.binding_id, target, analyzed.program))
                     continue
                 if isinstance(analyzed.result_shape, (TupleResultShape, NamedOutputsResultShape)) and isinstance(analyzed.program.result, (IRTuple, IRNamedOutputs)):
                     structural = bind_structural(active, target, analyzed.result_shape)
                     sources = analyzed.program.result.items if isinstance(analyzed.program.result, IRTuple) else tuple(value for _name, value in analyzed.program.result.items)
                     bindings = tuple(IRLeafBinding(source, leaf.binding_id, leaf.typ) for source, leaf in zip(sources, structural.leaves))
-                    statements.append(IRBindLeaves(analyzed.program, bindings))
+                    emit(IRBindLeaves(analyzed.program, bindings))
                     continue
                 return _reject_remaining_legacy_structural_binding()
 
@@ -1123,14 +1411,15 @@ def lower_basic_body(
                 if current is None:
                     raise CompileError(f"Unknown name for augmented assignment: {target}")
                 bin_expr = ast.BinOp(left=ast.Name(id=target, ctx=ast.Load()), op=stmt.op, right=stmt.value)
-                analyzed = accept_expression(bin_expr, active, active_compile_time)
+                analyzed = accept_expression(bin_expr, active, active_compile_time, statements)
                 if analyzed is BODY_UNSUPPORTED:
                     return BODY_UNSUPPORTED
                 if not isinstance(analyzed.result_shape, RuntimeResultShape) or not isinstance(analyzed.program.result, IRValue):
                     return _reject_remaining_legacy_structural_binding()
                 active_compile_time.discard(target)
                 symbol = bind_runtime(active, target, analyzed.result_shape, changed=True)
-                statements.append(IRAssign(symbol.binding_id, target, analyzed.program))
+                active.explicitly_assigned_runtime_ids.add(symbol.binding_id)
+                emit(IRAssign(symbol.binding_id, target, analyzed.program))
                 continue
 
             if isinstance(stmt, ast.Expr):
@@ -1155,14 +1444,73 @@ def lower_basic_body(
                         value_expr = call.args[1]
                     else:
                         raise CompileError('output(value), output("Name", value), or output(name="Name", value=value) expected')
-                    analyzed = accept_expression(value_expr, active, active_compile_time)
+                    analyzed = accept_expression(value_expr, active, active_compile_time, statements)
                     if analyzed is BODY_UNSUPPORTED:
                         return BODY_UNSUPPORTED
                     if isinstance(analyzed.result_shape, ArrayResultShape):
                         raise CompileError("output() cannot output an array directly; use join(array) or index it")
                     if not isinstance(analyzed.result_shape, RuntimeResultShape) or not isinstance(analyzed.program.result, IRValue):
                         return _reject_remaining_legacy_structural_binding()
-                    statements.append(IROutput(out_name, analyzed.program))
+                    emit(IROutput(out_name, analyzed.program))
+                    continue
+
+                if (
+                    isinstance(stmt.value, ast.Call)
+                    and isinstance(stmt.value.func, ast.Attribute)
+                    and isinstance(stmt.value.func.value, ast.Name)
+                    and stmt.value.func.value.id in active.builder_states
+                ):
+                    method_call = stmt.value
+                    builder_name = method_call.func.value.id
+                    method = method_call.func.attr
+                    state_record = active.builder_states[builder_name]
+                    if method not in {"add", "extend"}:
+                        raise CompileError("geometry_builder supports only add(), extend(), and .geometry")
+                    if control_policy is BranchMergePolicy.TOP_LEVEL and runtime_if_builder_baseline is not None:
+                        inherited_id = runtime_if_builder_baseline.get(builder_name)
+                        if inherited_id is not None and inherited_id == state_record.state_binding_id:
+                            raise CompileError("geometry_builder mutations inside runtime if are supported only inside repeat_range(...)")
+                    if len(method_call.args) != 1 or method_call.keywords:
+                        if method == "add":
+                            raise CompileError("builder.add(...) expects one positional Geometry argument")
+                        raise CompileError("builder.extend(...) expects one positional array argument")
+                    if method == "add":
+                        analyzed = analyze_runtime_expression(method_call.args[0], active, active_compile_time, statements)
+                        if analyzed is BODY_UNSUPPORTED:
+                            return BODY_UNSUPPORTED
+                        binding_id = _persist_builder_geometry_argument(
+                            active, analyzed, statements, diagnostic="builder.add(...) expects Geometry"
+                        )
+                        _append_builder_binding(active, builder_name, binding_id, statements)
+                    else:
+                        analyzed = analyze_runtime_expression(method_call.args[0], active, active_compile_time, statements)
+                        if analyzed is BODY_UNSUPPORTED:
+                            return BODY_UNSUPPORTED
+                        if not isinstance(analyzed.result_shape, ArrayResultShape) or not isinstance(analyzed.program.result, IRArray):
+                            raise CompileError("builder.extend(...) expects an array of Geometry values")
+                        if len(analyzed.result_shape.items) != len(analyzed.program.result.items):
+                            raise CompileError("Internal error: builder.extend array shape mismatch")
+                        for item_shape, item_result in zip(analyzed.result_shape.items, analyzed.program.result.items):
+                            if not isinstance(item_shape, RuntimeResultShape) or item_shape.typ is not NFType.GEOMETRY or not isinstance(item_result, IRValue):
+                                raise CompileError("builder.extend(...) expects an array of Geometry values")
+                        # Validate the complete array before publishing any builder mutation.
+                        bindings = []
+                        for item_result in analyzed.program.result.items:
+                            binding_id = identities.allocate_binding_id()
+                            bindings.append((item_result, binding_id))
+                        if bindings:
+                            emit(
+                                IRBindLeaves(
+                                    analyzed.program,
+                                    tuple(IRLeafBinding(result, binding_id, NFType.GEOMETRY) for result, binding_id in bindings),
+                                )
+                            )
+                        active.adopt_object_snapshot(analyzed.object_semantics)
+                        for _result, binding_id in bindings:
+                            _append_builder_binding(active, builder_name, binding_id, statements)
+                    # Legacy builder mutation clears implicit final-output selection even when no
+                    # executable IR is needed (for example, extend([])).
+                    active.clear_auto_final_output = True
                     continue
 
                 if call is not None and call.func.id in {"panel", "store", "set_position"}:
@@ -1200,7 +1548,7 @@ def lower_basic_body(
                         # plan defines source-order/branch visibility for append without runtime array sockets.
                         return BODY_UNSUPPORTED
 
-                    analyzed = analyze_runtime_expression(append_call.args[0], active, active_compile_time)
+                    analyzed = analyze_runtime_expression(append_call.args[0], active, active_compile_time, statements)
                     if analyzed is BODY_UNSUPPORTED:
                         return BODY_UNSUPPORTED
                     planned_states = {}
@@ -1231,28 +1579,28 @@ def lower_basic_body(
                     active.object_ids_by_binding.update(object_updates)
                     active_compile_time.discard(array_name)
                     if bind_statement is not None:
-                        statements.append(bind_statement)
+                        emit(bind_statement)
                     continue
                 if isinstance(stmt.value, ast.Call) and isinstance(stmt.value.func, ast.Attribute):
                     if stmt.value.func.attr != "info":
                         return BODY_UNSUPPORTED
-                    analyzed = accept_expression(stmt.value, active, active_compile_time)
+                    analyzed = accept_expression(stmt.value, active, active_compile_time, statements)
                     if analyzed is BODY_UNSUPPORTED:
                         return BODY_UNSUPPORTED
                     if not isinstance(analyzed.result_shape, RuntimeResultShape) or analyzed.result_shape.typ is not TYPE_OBJECT:
                         return BODY_UNSUPPORTED
-                    statements.append(IRDiscardExpression(analyzed.program))
+                    emit(IRDiscardExpression(analyzed.program))
                     continue
                 if not is_final:
                     return BODY_UNSUPPORTED
-                analyzed = accept_expression(stmt.value, active, active_compile_time)
+                analyzed = accept_expression(stmt.value, active, active_compile_time, statements)
                 if analyzed is BODY_UNSUPPORTED:
                     return BODY_UNSUPPORTED
                 if isinstance(analyzed.result_shape, ArrayResultShape):
                     raise CompileError("A final expression cannot be an array; use join(array) or index it")
                 if not isinstance(analyzed.result_shape, RuntimeResultShape) or not isinstance(analyzed.program.result, IRValue):
                     return _reject_remaining_legacy_structural_binding()
-                statements.append(IRFinalExpression(analyzed.program))
+                emit(IRFinalExpression(analyzed.program))
                 continue
 
             return BODY_UNSUPPORTED
@@ -1261,7 +1609,12 @@ def lower_basic_body(
     body = lower_statements(stmts, state, compile_time, root=True)
     if body is BODY_UNSUPPORTED:
         return BODY_UNSUPPORTED
-    return BasicBodyCompilation(body, compile_time.snapshot(), state.array_snapshot())
+    return BasicBodyCompilation(
+        body,
+        compile_time.snapshot(),
+        state.array_snapshot(),
+        clear_auto_final_output=state.clear_auto_final_output,
+    )
 
 
 __all__ = ["BODY_UNSUPPORTED", "BasicBodyCompilation", "lower_basic_body", "validate_input_declaration_placement"]

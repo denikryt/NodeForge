@@ -316,3 +316,72 @@ output("Geometry", builder.geometry)
     check(_same_positions(vertices, [(0, 0, 0), (1, 0, 0)]), f"nested builder.geometry read missed nearest frame: {vertices}")
     check(edges == [], f"nested builder.geometry read should create no edges: {edges}")
     check(polygons == [], f"nested builder.geometry read should create no polygons: {polygons}")
+
+
+def test_geometry_builder_runtime_if_branch_local_constructor_preserves_legacy_scope():
+    group = compile_group(
+        """
+flag = input_bool("Flag", default=True)
+if flag:
+    local = geometry_builder()
+    local.add(cube(1.0))
+    geometry = local.geometry
+else:
+    geometry = cube(2.0)
+output("Geometry", geometry)
+""",
+        "NFTest_geometry_builder_runtime_if_branch_local",
+    )
+    check(len(_nodes(group, "GeometryNodeJoinGeometry")) == 0, "single branch-local builder add should remain identity topology")
+    check(len(_nodes(group, "GeometryNodeSwitch")) == 1, "branch-local Geometry result should use the ordinary runtime-if switch")
+
+
+def test_geometry_builder_runtime_if_one_sided_replacement_restores_parent_builder():
+    group = compile_group(
+        """
+builder = geometry_builder()
+builder.add(cube(1.0))
+flag = input_bool("Flag", default=True)
+value = input_float("Value", default=0.0)
+if flag:
+    builder = geometry_builder()
+    builder.add(cube(2.0))
+    value = value + 1.0
+else:
+    value = value + 0.0
+output("Geometry", builder.geometry)
+""",
+        "NFTest_geometry_builder_runtime_if_replacement_restore",
+    )
+    check(len(_nodes(group, "GeometryNodeMeshCube")) == 2, "branch-local replacement should still evaluate its branch-local cube")
+    check(len(_nodes(group, "GeometryNodeSwitch")) == 1, "ordinary merged Value should retain one runtime-if switch")
+
+
+def test_geometry_builder_branch_local_identity_assignment_uses_semantic_runtime_if(monkeypatch):
+    """Exact coordinator case stays Semantic Body-owned and emits one ordinary runtime-if Switch."""
+    from NodeForge import geometry_builder as geometry_builder_module
+    from NodeForge import statement_compiler
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("branch-local GeometryBuilder compatibility case reached legacy execution")
+
+    monkeypatch.setattr(statement_compiler, "compile_statement", forbidden)
+    monkeypatch.setattr(statement_compiler, "_compile_builder_method", forbidden)
+    monkeypatch.setattr(geometry_builder_module.GeometryBuilder, "materialize", forbidden)
+    monkeypatch.setattr(geometry_builder_module.GeometryBuilder, "add_value", forbidden)
+    monkeypatch.setattr(geometry_builder_module.GeometryBuilder, "extend_values", forbidden)
+    monkeypatch.setattr(geometry_builder_module.GeometryBuilder, "geometry_value", forbidden)
+
+    group = compile_group(
+        'value = input_float("Value", default=0.0)\n'
+        'flag = input_bool("Flag", default=True)\n'
+        'if flag:\n'
+        '    value = value + 1\n'
+        '    unused = geometry_builder()\n'
+        'else:\n'
+        '    value = value\n'
+        'output("Value", value)',
+        "NFTest_geometry_builder_branch_local_identity_assignment",
+    )
+    check(len(_nodes(group, "GeometryNodeSwitch")) == 1, "expected one ordinary runtime-if Switch")
+    check(len([node for node in group.nodes if getattr(node, "bl_idname", "") == "ShaderNodeMath" and getattr(node, "operation", "") == "ADD"]) == 1, "expected one ADD in the true branch")

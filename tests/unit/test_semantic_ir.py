@@ -617,58 +617,22 @@ def _backend_bindings(bindings):
         for name, value in bindings.items()
     }
 
-def test_structural_arrays_compatibility_markers_are_searchable_and_obsolete_array_markers_are_retired():
-    """Temporary structural-array routes stay named without brittle full-comment/count assertions."""
+def test_obsolete_structural_array_fallback_markers_are_retired():
+    """Removed structural-array fallback categories do not reappear as production mechanisms."""
     root = Path(__file__).resolve().parents[2]
-    expected = {
-        "compiler.py": (
-            "COMPILE_TIME_STATE_COMPILER_CONSTS_COMPAT",
-            "STRUCTURAL_ARRAYS_LEGACY_STRUCTURAL_COMPAT",
-            "COMPILE_TIME_STATE_LEGACY_BINDING_CHECKPOINT_COMPAT",
-            "CONTROL_FLOW_IR_LEGACY_RUNTIME_FRAME_COMPAT",
-        ),
-        "semantic_body.py": (
-            "STRUCTURAL_ARRAYS_COMPILETIME_PROMOTION_COMPAT",
-            "STRUCTURAL_ARRAYS_REMAINING_BODY_FALLBACK",
-            "STRUCTURAL_ARRAYS_NESTED_REMAINING_FALLBACK",
-            "STRUCTURAL_ARRAYS_RUNTIME_REBIND_COMPAT",
-            "STRUCTURAL_ARRAYS_RUNTIME_APPEND_COMPAT",
-            "STRUCTURAL_ARRAYS_NON_NAME_FOR_BODY_FALLBACK_COMPAT",
-        ),
-        "statement_compiler.py": (
-            "STRUCTURAL_ARRAYS_LEGACY_ASSIGNMENT_COMPAT",
-            "STRUCTURAL_ARRAYS_LEGACY_APPEND_COMPAT",
-            "STRUCTURAL_ARRAYS_LEGACY_FOR_COMPAT",
-            "CONTROL_FLOW_IR_LEGACY_IF_COMPAT",
-            "CONTROL_FLOW_IR_LEGACY_REPEAT_DISPATCH_COMPAT",
-            "COMPILE_TIME_STATE_LEGACY_STATEMENT_PATH_COMPAT",
-        ),
-        "consteval.py": (
-            "STRUCTURAL_ARRAYS_GEOMETRY_BUILDER_LOOP_COMPAT",
-            "STRUCTURAL_ARRAYS_TUPLE_APPEND_PREPROCESS_COMPAT",
-        ),
-        "runtime.py": (
-            "CONTROL_FLOW_IR_LEGACY_REPEAT_ENGINE_COMPAT",
-            "CONTROL_FLOW_IR_BLENDER_REPEAT_SOCKET_COMPAT",
-        ),
-        "expression_compiler.py": ("STRUCTURAL_SEMANTICS_REMAINING_LEGACY_NAME_FALLBACK",),
-        "blender_ir_lowering.py": ("STRUCTURAL_SEMANTICS_LEGACY_EXPRESSION_RESULT_BRIDGE",),
-    }
-    for relative, marker_names in expected.items():
-        source = (root / relative).read_text(encoding="utf-8")
-        for marker in marker_names:
-            assert marker in source, (relative, marker)
-    replaced = {
-        "compiler.py": ("COMPILE_TIME_STATE_LEGACY_STRUCTURAL_COMPAT",),
+    obsolete = {
+        "compiler.py": ("COMPILE_TIME_STATE_LEGACY_STRUCTURAL_COMPAT", "STRUCTURAL_ARRAYS_LEGACY_STRUCTURAL_COMPAT"),
         "semantic_body.py": (
             "CONTROL_FLOW_IR_BODY_REMAINING_FALLBACK",
             "CONTROL_FLOW_IR_NESTED_ATOMIC_FALLBACK",
         ),
+        "consteval.py": ("STRUCTURAL_ARRAYS_GEOMETRY_BUILDER_LOOP_COMPAT",),
     }
-    for relative, marker_names in replaced.items():
+    for relative, marker_names in obsolete.items():
         source = (root / relative).read_text(encoding="utf-8")
         for marker in marker_names:
             assert marker not in source, (relative, marker)
+
 
 def test_blender_lowering_context_is_minimal_immutable_and_compiler_independent():
     from dataclasses import FrozenInstanceError, fields

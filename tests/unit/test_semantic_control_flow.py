@@ -271,14 +271,16 @@ def test_repeat_local_constant_bool_stays_runtime_irif_like_legacy_repeat_engine
     assert isinstance(repeat, IRRepeat)
     assert isinstance(repeat.body.statements[0], IRIf)
 
-def test_builder_repeat_remains_whole_body_fallback():
+def test_builder_repeat_is_owned_by_semantic_ir():
     result = _lower(
         'builder = geometry_builder()\n'
         'for i in repeat_range(2):\n    builder.add(cube(1))\n'
         'builder.geometry',
         legacy=(),
     )
-    assert result is BODY_UNSUPPORTED
+    assert result is not BODY_UNSUPPORTED
+    repeat = next(statement for statement in result.body.statements if isinstance(statement, IRRepeat))
+    assert [state.source_name for state in repeat.states] == ["builder"]
 
 
 def test_top_level_runtime_if_preserves_missing_else_and_common_change_errors():

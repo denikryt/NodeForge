@@ -141,4 +141,5 @@
 - `tests/blender/test_semantic_body_ir.py`: runtime-if IR routing, Switch topology, compile-time-if no-Switch behavior, and distinct branch declaration metadata.
 - `tests/blender/test_runtime_range_state.py`: ordinary/nested Repeat IR routing, state item order/socket types, lexical iteration restoration, Repeat-local runtime-if behavior, Int physical-item versus Float logical-exit behavior, Bundle state, and evaluated nested results.
 - `tests/blender/test_update_group.py`: transactional preservation of branch-declared input identities, user overrides, and external links across recompilation.
-- `tests/blender/test_geometry_builder.py`: retained whole-body legacy Repeat path for `GeometryBuilder` state.
+- `tests/unit/test_semantic_geometry_builder.py`: pure frontend builder state, pending/current topology rules, branch-local runtime-if construction (including legacy-compatible identity-assignment merge eligibility), inherited-builder rejection, Repeat hidden Geometry state, compile-time loop ownership, and backend-independence.
+- `tests/blender/test_geometry_builder.py`: real-Blender behavior/topology regression for `GeometryBuilder`, including Semantic Body production routing for the branch-local `value = value` runtime-if compatibility case, with legacy execution retained only when another compatibility category selects whole-body fallback.
