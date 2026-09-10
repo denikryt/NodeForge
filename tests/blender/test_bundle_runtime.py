@@ -369,7 +369,7 @@ def test_bundle_errors_are_controlled():
 
 
 def test_straight_line_bundle_body_uses_call_ir_not_legacy_ast_handler(monkeypatch):
-    """Stage-18 structural changes keep stateless Bundle calls on the migrated IRBody route."""
+    """Structural/Object/Bundle semantics migration structural changes keep stateless Bundle calls on the migrated IRBody route."""
     from NodeForge.builtins import bundle as bundle_builtin
 
     def forbidden_legacy_call(*_args, **_kwargs):

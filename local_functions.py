@@ -541,7 +541,7 @@ def compile_local_function_call(comp, expr, depth=0, modifiers=None):
     const_args = {}
     param_types = {}
     used = set()
-    # REUSABLE_CALL_IR_MIGRATION: This stage moves shared/unique materialization policy
+    # REUSABLE_CALL_IR_MIGRATION: this migration moves shared/unique materialization policy
     # into compiler-owned IR only. Local call argument evaluation, specialization-type
     # discovery, captures, and return realization still use the legacy Value/socket path.
     # Remove this boundary when reusable call arguments/results have Blender-independent

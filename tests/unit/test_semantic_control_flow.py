@@ -1,4 +1,4 @@
-"""Pure coverage for stage-19 structured runtime control-flow Semantic IR."""
+"""Pure coverage for Runtime Control-Flow IR migration structured runtime control-flow Semantic IR."""
 
 import ast
 
@@ -230,12 +230,20 @@ def test_repeat_local_if_merge_order_follows_repeat_state_order():
     "source",
     [
         'items = [1]\nflag = input_bool("Flag")\nif flag:\n    items.append(2)\nelse:\n    items.append(3)',
-        'x = 0\nfor i in repeat_range(2):\n    for j in [1, 2]:\n        x = x + j',
         'x = 0\nflag = input_bool("Flag")\nif flag:\n    store("a", x)\n    x = x + 1\nelse:\n    x = x + 2',
     ],
 )
 def test_remaining_nested_control_flow_categories_fallback_whole_body(source):
     assert _lower(source) is BODY_UNSUPPORTED
+
+
+def test_ordinary_for_inside_repeat_range_keeps_controlled_repeat_body_diagnostic():
+    """This structural-array and compile-time unrolling refactor must not broaden Repeat grammar while migrating ordinary structural loops."""
+    with pytest.raises(
+        CompileError,
+        match="repeat_range body supports assignments, builder methods, if blocks, and nested repeat_range loops",
+    ):
+        _lower("x = 0\nfor i in repeat_range(2):\n    for j in [1, 2]:\n        x = x + j")
 
 
 def test_repeat_pre_scan_does_not_consume_input_declaration_ordinals():

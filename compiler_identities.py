@@ -1,4 +1,4 @@
-"""Canonical compiler-owned identities used across NodeForge compiler stages.
+"""Canonical compiler-owned identities used across NodeForge compiler phases.
 
 These records separate in-memory compiler identity from source spelling and
 Blender persistence. ``BindingId`` and ``CallSiteId`` are compilation-local

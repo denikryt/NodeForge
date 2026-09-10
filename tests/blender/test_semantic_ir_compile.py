@@ -98,15 +98,22 @@ output("Comparison", cmp)
 
 
 
-def test_semantic_ir_child_reached_through_legacy_parent_preserves_nonzero_base_depth(monkeypatch):
+def test_structural_array_parent_uses_semantic_body_and_preserves_nested_expression_topology(monkeypatch):
     calls = []
-    original = expression_compiler.lower_ir_expression
+    original = statement_compiler.lower_ir_body
 
-    def wrapped(comp, program, base_depth=0):
-        calls.append((base_depth, tuple(type(operation).__name__ for operation in program.operations)))
-        return original(comp, program, base_depth)
+    def wrapped(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):
+        for program in _body_programs(body):
+            calls.append((base_depth, tuple(type(operation).__name__ for operation in program.operations)))
+        return original(
+            context, body, initial_runtime_bindings, base_depth, group_input=group_input
+        )
 
-    monkeypatch.setattr(expression_compiler, "lower_ir_expression", wrapped)
+    def forbidden_legacy_statement(*_args, **_kwargs):
+        raise AssertionError("migrated structural array entered legacy compile_statement()")
+
+    monkeypatch.setattr(statement_compiler, "lower_ir_body", wrapped)
+    monkeypatch.setattr(statement_compiler, "compile_statement", forbidden_legacy_statement)
     group = compile_group(
         """
 a = input_float("A", default=2.0)
@@ -114,11 +121,11 @@ items = [a * 2]
 result = items[0]
 output("Result", result)
 """,
-        "NFTest_semantic_ir_legacy_parent_depth",
+        "NFTest_semantic_ir_structural_array_parent",
     )
 
-    nested_calls = [entry for entry in calls if entry[0] > 0 and "IRBinary" in entry[1]]
-    check(nested_calls, "IR-owned child under a legacy list parent did not enter with non-zero base depth")
+    semantic_calls = [entry for entry in calls if entry[0] > 0 and "IRBinary" in entry[1]]
+    check(semantic_calls, "nested array expression did not reach Semantic Body lowering")
     multiplies = _nodes(group, "ShaderNodeMath", "MULTIPLY")
     check(len(multiplies) == 1, f"expected one nested MULTIPLY, got {len(multiplies)}")
 
@@ -675,6 +682,131 @@ def test_semantic_backend_dispatch_signatures_realize_on_blender_rna():
 
 
 
+
+
+def test_structural_arrays_flat_unpack_append_loop_preserves_legacy_routing_and_topology(monkeypatch):
+    """The v0.51.3 flat-unpack/direct-append loop stays on one legacy body with identical graph shape."""
+    legacy_statements = []
+    original_statement = statement_compiler.compile_statement
+
+    def forbidden_body_lowering(*_args, **_kwargs):
+        raise AssertionError("flat-unpack append compatibility body unexpectedly entered Semantic Body lowering")
+
+    def wrapped_statement(ctx, stmt, *args, **kwargs):
+        legacy_statements.append(type(stmt).__name__)
+        return original_statement(ctx, stmt, *args, **kwargs)
+
+    monkeypatch.setattr(statement_compiler, "lower_ir_body", forbidden_body_lowering)
+    monkeypatch.setattr(statement_compiler, "compile_statement", wrapped_statement)
+
+    group = compile_group(
+        "items = []\n"
+        "for x, y in [[1.0, 2.0]]:\n"
+        "    items.append(x + y)\n"
+        'output("Value", items[0])',
+        "NFTest_structural_arrays_flat_unpack_append_legacy_routing",
+    )
+
+    check(legacy_statements == ["Assign", "For", "Expr", "Expr"], f"flat-unpack append body did not remain wholly legacy: {legacy_statements}")
+    check(len(_nodes(group, "ShaderNodeValue")) == 2, "flat-unpack append constant topology changed")
+    check(len(_nodes(group, "ShaderNodeMath", "ADD")) == 1, "flat-unpack append add topology changed")
+    check(not _nodes(group, "GeometryNodeRepeatInput"), "ordinary compatibility loop created a Repeat Zone input")
+    check(not _nodes(group, "GeometryNodeRepeatOutput"), "ordinary compatibility loop created a Repeat Zone output")
+    outputs = [
+        item.name
+        for item in group.interface.items_tree
+        if getattr(item, "item_type", "") == "SOCKET" and getattr(item, "in_out", "") == "OUTPUT"
+    ]
+    check(outputs == ["Value"], f"flat-unpack append output interface changed: {outputs}")
+    bpy.data.node_groups.remove(group)
+
+
+def test_structural_arrays_runtime_dependent_flat_unpack_preserves_legacy_routing_and_topology(monkeypatch):
+    """Runtime-valued structural iterable preserves the v0.51.3 flat-unpack graph through legacy routing."""
+    legacy_statements = []
+    original_statement = statement_compiler.compile_statement
+
+    def forbidden_body_lowering(*_args, **_kwargs):
+        raise AssertionError("runtime-dependent flat unpack unexpectedly entered Semantic Body Blender lowering")
+
+    def wrapped_statement(ctx, stmt, *args, **kwargs):
+        legacy_statements.append(type(stmt).__name__)
+        return original_statement(ctx, stmt, *args, **kwargs)
+
+    monkeypatch.setattr(statement_compiler, "lower_ir_body", forbidden_body_lowering)
+    monkeypatch.setattr(statement_compiler, "compile_statement", wrapped_statement)
+
+    group = compile_group(
+        'a = input_float("A", default=1.0)\n'
+        'pairs = [[a, a]]\n'
+        'for x, y in pairs:\n'
+        '    result = x + y\n'
+        'output("Result", result)',
+        "NFTest_structural_arrays_runtime_dependent_flat_unpack_legacy_routing",
+    )
+
+    check(legacy_statements == ["Assign", "Assign", "For", "Assign", "Expr"], f"runtime-dependent flat-unpack body did not remain wholly legacy: {legacy_statements}")
+    inputs = [
+        item.name for item in group.interface.items_tree
+        if getattr(item, "item_type", "") == "SOCKET" and getattr(item, "in_out", "") == "INPUT"
+    ]
+    outputs = [
+        item.name for item in group.interface.items_tree
+        if getattr(item, "item_type", "") == "SOCKET" and getattr(item, "in_out", "") == "OUTPUT"
+    ]
+    check(inputs == ["A"], f"runtime-dependent flat-unpack input interface changed: {inputs}")
+    check(outputs == ["Result"], f"runtime-dependent flat-unpack output interface changed: {outputs}")
+    check(len(_nodes(group, "ShaderNodeMath", "ADD")) == 1, "runtime-dependent flat unpack changed ADD topology")
+    check(len(group.nodes) == 3, f"runtime-dependent flat unpack changed node count: {len(group.nodes)}")
+    check(len(group.links) == 3, f"runtime-dependent flat unpack changed link count: {len(group.links)}")
+    check(not _nodes(group, "GeometryNodeRepeatInput"), "ordinary compatibility loop created a Repeat Zone input")
+    check(not _nodes(group, "GeometryNodeRepeatOutput"), "ordinary compatibility loop created a Repeat Zone output")
+    bpy.data.node_groups.remove(group)
+
+
+def test_structural_arrays_mixed_geometry_builder_body_uses_whole_legacy_route_and_expression_result_bridge(monkeypatch):
+    """Deferred GeometryBuilder bodies keep arrays/append/for on one legacy route while semantic expressions bridge normally."""
+    legacy_statements = []
+    expression_results = []
+    original_statement = statement_compiler.compile_statement
+    original_expression_lowering = expression_compiler.lower_ir_expression
+
+    def forbidden_body_lowering(*_args, **_kwargs):
+        raise AssertionError("deferred GeometryBuilder body unexpectedly entered Semantic Body Blender lowering")
+
+    def wrapped_statement(ctx, stmt, *args, **kwargs):
+        legacy_statements.append(type(stmt).__name__)
+        return original_statement(ctx, stmt, *args, **kwargs)
+
+    def wrapped_expression(context, program, base_depth=0):
+        expression_results.append(type(program.result).__name__)
+        return original_expression_lowering(context, program, base_depth)
+
+    monkeypatch.setattr(statement_compiler, "lower_ir_body", forbidden_body_lowering)
+    monkeypatch.setattr(statement_compiler, "compile_statement", wrapped_statement)
+    monkeypatch.setattr(expression_compiler, "lower_ir_expression", wrapped_expression)
+
+    group = compile_group(
+        'a = input_float("A", default=1.0)\n'
+        "builder = geometry_builder()\n"
+        "items = [a]\n"
+        "items.append(a, ignored=missing)\n"
+        "for item in items:\n"
+        "    builder.add(cube(item))\n"
+        'parts = node("ShaderNodeSeparateXYZ", inputs={"Vector": vector(1.0, 2.0, 3.0)}, outputs={"X": Float, "Y": Float})\n'
+        "selected = parts.X\n"
+        "builder.add(cube(selected))\n"
+        'output("Geometry", builder.geometry)',
+        "NFTest_structural_arrays_mixed_builder_legacy_routing",
+    )
+
+    check(legacy_statements[:5] == ["Assign", "Assign", "Assign", "Expr", "For"], f"mixed body did not route input/builder/array/append/for through legacy statements: {legacy_statements}")
+    check("IRNamedOutputs" in expression_results, f"legacy dynamic structural assignment did not use the semantic expression-result bridge: {expression_results}")
+    check(len(_nodes(group, "GeometryNodeMeshCube")) == 3, "mixed compatibility body changed cube topology")
+    check(len(_nodes(group, "GeometryNodeJoinGeometry")) == 1, "GeometryBuilder compatibility topology changed")
+    bpy.data.node_groups.remove(group)
+
+
 def test_semantic_environment_preserves_legacy_geometry_builder_binding(monkeypatch):
     environments = []
     original = expression_compiler.analyze_expression
@@ -980,7 +1112,7 @@ output("Mask", mask)
 
 
 def test_semantic_call_ir_raw_mixed_invalid_prefers_frontend_operand_error():
-    """Stage-15 explicitly permits operand diagnostics before independent Blender raw-node errors."""
+    """Semantic Call IR migration explicitly permits operand diagnostics before independent Blender raw-node errors."""
     try:
         compile_group(
             '''

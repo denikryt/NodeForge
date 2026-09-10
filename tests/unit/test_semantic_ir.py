@@ -4,6 +4,7 @@ import ast
 import dataclasses
 import sys
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
@@ -67,6 +68,11 @@ from NodeForge.semantic_values import (
     ObjectSemanticId,
     ObjectSemanticSnapshot,
     RuntimeResultShape,
+    StructuralArrayId,
+    StructuralArrayRef,
+    StructuralArraySnapshot,
+    StructuralArrayState,
+    StructuralRuntimeLeaf,
 )
 from NodeForge.semantic_lowering import lower_analyzed_expression
 
@@ -93,7 +99,7 @@ def _expr(source):
     return ast.parse(source, mode="eval").body
 
 
-def _environment(*, bindings=None, consts=None, labels=None, legacy_names=(), backend_helpers=(), builtins=None, systems=None, local_functions=None, imported_functions=None, object_registry=True):
+def _environment(*, bindings=None, consts=None, labels=None, legacy_names=(), backend_helpers=(), builtins=None, systems=None, local_functions=None, imported_functions=None, object_registry=True, structural_arrays=None):
     """Build one immutable semantic environment for pure IR tests.
 
     Object-focused frontend tests opt into the same persistent registry that
@@ -129,12 +135,13 @@ def _environment(*, bindings=None, consts=None, labels=None, legacy_names=(), ba
             frozenset(IR_CAPABLE_BUILTIN_NAMES | STATEFUL_FALLBACK_BUILTIN_NAMES) if builtins is None else frozenset(builtins),
             systems or {}, local_functions or {}, frozenset(backend_helpers), imported_functions or {},
         ),
+        structural_arrays=structural_arrays or StructuralArraySnapshot({}, {}),
         object_semantics=object_semantics,
     )
 
 
 def _lower(source, *, bindings=None, consts=None, labels=None, legacy_names=(), backend_helpers=(), builtins=None, systems=None, local_functions=None, imported_functions=None, object_registry=True):
-    """Analyze and lower one source expression through the pure frontend stages."""
+    """Analyze and lower one source expression through the pure frontend phases."""
     expr = _expr(source)
     analysis = analyze_expression(
         expr,
@@ -610,41 +617,58 @@ def _backend_bindings(bindings):
         for name, value in bindings.items()
     }
 
-def test_exact_control_flow_migration_markers_are_present_once():
-    """Stage-20 compatibility decisions are exact, searchable, and old markers are retired."""
+def test_structural_arrays_compatibility_markers_are_searchable_and_obsolete_array_markers_are_retired():
+    """Temporary structural-array routes stay named without brittle full-comment/count assertions."""
     root = Path(__file__).resolve().parents[2]
     expected = {
         "compiler.py": (
             "COMPILE_TIME_STATE_COMPILER_CONSTS_COMPAT",
-            "COMPILE_TIME_STATE_LEGACY_STRUCTURAL_COMPAT",
+            "STRUCTURAL_ARRAYS_LEGACY_STRUCTURAL_COMPAT",
             "COMPILE_TIME_STATE_LEGACY_BINDING_CHECKPOINT_COMPAT",
             "CONTROL_FLOW_IR_LEGACY_RUNTIME_FRAME_COMPAT",
         ),
         "semantic_body.py": (
-            "CONTROL_FLOW_IR_BODY_REMAINING_FALLBACK",
-            "CONTROL_FLOW_IR_NESTED_ATOMIC_FALLBACK",
+            "STRUCTURAL_ARRAYS_COMPILETIME_PROMOTION_COMPAT",
+            "STRUCTURAL_ARRAYS_REMAINING_BODY_FALLBACK",
+            "STRUCTURAL_ARRAYS_NESTED_REMAINING_FALLBACK",
+            "STRUCTURAL_ARRAYS_RUNTIME_REBIND_COMPAT",
+            "STRUCTURAL_ARRAYS_RUNTIME_APPEND_COMPAT",
+            "STRUCTURAL_ARRAYS_NON_NAME_FOR_BODY_FALLBACK_COMPAT",
         ),
         "statement_compiler.py": (
+            "STRUCTURAL_ARRAYS_LEGACY_ASSIGNMENT_COMPAT",
+            "STRUCTURAL_ARRAYS_LEGACY_APPEND_COMPAT",
+            "STRUCTURAL_ARRAYS_LEGACY_FOR_COMPAT",
             "CONTROL_FLOW_IR_LEGACY_IF_COMPAT",
             "CONTROL_FLOW_IR_LEGACY_REPEAT_DISPATCH_COMPAT",
             "COMPILE_TIME_STATE_LEGACY_STATEMENT_PATH_COMPAT",
+        ),
+        "consteval.py": (
+            "STRUCTURAL_ARRAYS_GEOMETRY_BUILDER_LOOP_COMPAT",
+            "STRUCTURAL_ARRAYS_TUPLE_APPEND_PREPROCESS_COMPAT",
         ),
         "runtime.py": (
             "CONTROL_FLOW_IR_LEGACY_REPEAT_ENGINE_COMPAT",
             "CONTROL_FLOW_IR_BLENDER_REPEAT_SOCKET_COMPAT",
         ),
-        "expression_compiler.py": "STRUCTURAL_SEMANTICS_REMAINING_LEGACY_NAME_FALLBACK",
+        "expression_compiler.py": ("STRUCTURAL_SEMANTICS_REMAINING_LEGACY_NAME_FALLBACK",),
+        "blender_ir_lowering.py": ("STRUCTURAL_SEMANTICS_LEGACY_EXPRESSION_RESULT_BRIDGE",),
     }
     for relative, marker_names in expected.items():
         source = (root / relative).read_text(encoding="utf-8")
-        if isinstance(marker_names, str):
-            marker_names = (marker_names,)
         for marker in marker_names:
-            assert source.count(marker) == 1, (relative, marker)
-    all_source = "\n".join(path.read_text(encoding="utf-8") for path in root.glob("*.py"))
-    assert "CONTROL_FLOW_IR_LEGACY_CONSTANT_THREADING_COMPAT" not in all_source
-    assert "COMPLETE_EXPRESSION_IR_CONSTANT_MIGRATION" not in all_source
-
+            assert marker in source, (relative, marker)
+    replaced = {
+        "compiler.py": ("COMPILE_TIME_STATE_LEGACY_STRUCTURAL_COMPAT",),
+        "semantic_body.py": (
+            "CONTROL_FLOW_IR_BODY_REMAINING_FALLBACK",
+            "CONTROL_FLOW_IR_NESTED_ATOMIC_FALLBACK",
+        ),
+    }
+    for relative, marker_names in replaced.items():
+        source = (root / relative).read_text(encoding="utf-8")
+        for marker in marker_names:
+            assert marker not in source, (relative, marker)
 
 def test_blender_lowering_context_is_minimal_immutable_and_compiler_independent():
     from dataclasses import FrozenInstanceError, fields
@@ -1171,7 +1195,7 @@ def test_raw_named_output_selection_preserves_attribute_and_string_subscript_dia
 
 
 def test_mixed_core_calls_stay_on_ir_path_and_dynamic_categories_remain_fallback():
-    """Stage 15 owns stateless core calls inside parent expressions but not dynamic extension calls."""
+    """Semantic Call IR migration owns stateless core calls inside parent expressions but not dynamic extension calls."""
     from types import SimpleNamespace
 
     core_cases = [
@@ -1205,3 +1229,42 @@ def test_stateful_builtins_take_fixed_builtin_fallback_not_dynamic_resolution():
     """Stateful calls are still resolved as builtins but deliberately remain unsupported by Semantic IR."""
     for source in ("grid(4, 3)", "grid_uv()"):
         assert _lower(source) is None
+
+
+def test_stored_structural_array_lowers_recursively_to_irbinding_leaves():
+    """Semantic lowering reconstructs stored arrays from BindingIds without backend values."""
+    inner = StructuralArrayId(0)
+    outer = StructuralArrayId(1)
+    x_id = _test_binding_id("stored_x")
+    y_id = _test_binding_id("stored_y")
+    snapshot = StructuralArraySnapshot(
+        {"items": outer},
+        {
+            inner: StructuralArrayState((StructuralRuntimeLeaf(y_id, TYPE_VECTOR),)),
+            outer: StructuralArrayState((
+                StructuralRuntimeLeaf(x_id, TYPE_FLOAT),
+                StructuralArrayRef(inner),
+            )),
+        },
+    )
+    expr = _expr("items")
+    environment = SemanticEnvironment(
+        MappingProxyType({
+            "stored_x": RuntimeBindingSymbol(x_id, TYPE_FLOAT),
+            "stored_y": RuntimeBindingSymbol(y_id, TYPE_VECTOR),
+        }),
+        frozenset(),
+        MappingProxyType({}),
+        MappingProxyType({}),
+        MappingProxyType({}),
+        callable_environment=_empty_callable_environment(),
+        structural_arrays=snapshot,
+        object_semantics=ObjectSemanticSnapshot({}, {}, 0),
+    )
+    analysis = analyze_expression(expr, environment)
+    program = lower_analyzed_expression(expr, analysis)
+    assert isinstance(program.result, IRArray)
+    assert isinstance(program.result.items[0], IRValue)
+    assert isinstance(program.result.items[1], IRArray)
+    bindings = [operation for operation in program.operations if isinstance(operation, IRBinding)]
+    assert [operation.binding_id for operation in bindings] == [x_id, y_id]

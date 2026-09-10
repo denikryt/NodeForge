@@ -9,7 +9,17 @@ from .nf_types import NFType
 from .call_resolution import CallableKind, NamedOutputsCallResult, RuntimeCallResult, TupleCallResult
 from .errors import CompileError
 from .semantic_analysis import ExpressionAnalysis, SemanticConstant
-from .semantic_values import ArrayResultShape, NamedOutputsResultShape, RuntimeResultShape, StructuralBindingKind, TupleResultShape
+from .semantic_values import (
+    ArrayResultShape,
+    NamedOutputsResultShape,
+    RuntimeResultShape,
+    StructuralArrayId,
+    StructuralArrayRef,
+    StructuralBindingKind,
+    StructuralBindingSymbol,
+    StructuralRuntimeLeaf,
+    TupleResultShape,
+)
 from .semantic_ir import (
     IRArray,
     IRCall,
@@ -96,6 +106,39 @@ def lower_analyzed_expression(expr, analysis):
             return IRArray(tuple(emit_constant(item, depth) for item in constant.items))
         raise CompileError("Unsupported compile-time value in runtime expression")
 
+    def emit_structural_binding(structural, depth):
+        """Emit one fixed structural binding from persistent BindingId leaves."""
+        emitted = []
+        for leaf in structural.leaves:
+            result = builder.new_value(leaf.typ)
+            emitted.append(builder.emit(IRBinding(result, depth, leaf.binding_id)))
+        if structural.kind is StructuralBindingKind.TUPLE:
+            return IRTuple(tuple(emitted))
+        return IRNamedOutputs(
+            tuple((leaf.projection_key[1], value) for leaf, value in zip(structural.leaves, emitted))
+        )
+
+    def emit_structural_array(array_id: StructuralArrayId, depth, active=frozenset()):
+        """Reconstruct one stored structural array from the immutable expression snapshot."""
+        if array_id in active:
+            raise CompileError("recursive structural arrays are not supported")
+        state = analysis.structural_arrays.states.get(array_id)
+        if state is None:
+            raise CompileError("Internal error: structural array lowering references missing state")
+        items = []
+        next_active = active | frozenset({array_id})
+        for item in state.items:
+            if isinstance(item, StructuralRuntimeLeaf):
+                result = builder.new_value(item.typ)
+                items.append(builder.emit(IRBinding(result, depth, item.binding_id)))
+            elif isinstance(item, StructuralBindingSymbol):
+                items.append(emit_structural_binding(item, depth))
+            elif isinstance(item, StructuralArrayRef):
+                items.append(emit_structural_array(item.array_id, depth, next_active))
+            else:
+                raise CompileError("Internal error: unsupported structural array item")
+        return IRArray(tuple(items))
+
     def emit(node, depth):
         node_fact = fact(node)
 
@@ -116,15 +159,11 @@ def lower_analyzed_expression(expr, analysis):
                 structural = resolved.structural_binding
                 if structural is None:
                     raise CompileError("Internal error: resolved structural binding has no descriptor")
-                emitted = []
-                for leaf in structural.leaves:
-                    result = builder.new_value(leaf.typ)
-                    emitted.append(builder.emit(IRBinding(result, depth, leaf.binding_id)))
-                if structural.kind is StructuralBindingKind.TUPLE:
-                    return IRTuple(tuple(emitted))
-                return IRNamedOutputs(
-                    tuple((leaf.projection_key[1], value) for leaf, value in zip(structural.leaves, emitted))
-                )
+                return emit_structural_binding(structural, depth)
+            if resolved.kind == "structural_array":
+                if resolved.array_id is None:
+                    raise CompileError("Internal error: resolved structural array has no StructuralArrayId")
+                return emit_structural_array(resolved.array_id, depth)
             if resolved.kind == "semantic_constant":
                 if not isinstance(resolved.value, SemanticConstant):
                     raise CompileError("Internal error: semantic constant resolution has invalid payload")
@@ -172,12 +211,19 @@ def lower_analyzed_expression(expr, analysis):
             return builder.emit(IRVectorComponent(result, depth, value, node_fact.operation))
 
         if isinstance(node, ast.Subscript):
+            if node_fact.array_id is not None:
+                return emit_structural_array(node_fact.array_id, depth)
             if node_fact.resolved_name is not None and node_fact.resolved_name.kind == "runtime_binding":
                 resolved = node_fact.resolved_name
                 if resolved.binding_id is None:
                     raise CompileError("Internal error: structural projection has no BindingId")
                 result = builder.new_value(runtime_type(node_fact))
                 return builder.emit(IRBinding(result, depth, resolved.binding_id))
+            if node_fact.resolved_name is not None and node_fact.resolved_name.kind == "structural_binding":
+                structural = node_fact.resolved_name.structural_binding
+                if structural is None:
+                    raise CompileError("Internal error: selected fixed structural result has no descriptor")
+                return emit_structural_binding(structural, depth)
             base = emit(node.value, depth + 1)
             if isinstance(base, IRArray):
                 try:
@@ -300,7 +346,7 @@ def lower_analyzed_expression(expr, analysis):
             comparisons = []
             left_expr = node.left
             # SEMANTIC_IR_VALUE_MIGRATION: Re-lower the shared middle source expression for
-            # each comparison pair so this behavior-preserving stage emits distinct IR values
+            # each comparison pair so this behavior-preserving phase emits distinct IR values
             # and preserves the current duplicated Geometry Nodes topology. Remove this rule
             # only in a dedicated topology-changing plan that defines IR value reuse and
             # updates the corresponding graph-shape contract tests.

@@ -446,12 +446,7 @@ class IRFinalExpression:
 
 
 def _bindable_runtime_result_leaves(result: IRResult) -> tuple[IRValue, ...]:
-    """Return stage-18 leaves accepted by ``IRBindLeaves``.
-
-    Mutable/source-array semantics remain a whole-body legacy category in this
-    stage.  Leaf binding therefore accepts only scalar runtime values and the
-    fixed structural result forms whose frontend semantics are already owned.
-    """
+    """Return runtime leaves recursively bindable by ``IRBindLeaves`` in source order."""
     if isinstance(result, IRValue):
         return (result,)
     if isinstance(result, IRTuple):
@@ -459,7 +454,10 @@ def _bindable_runtime_result_leaves(result: IRResult) -> tuple[IRValue, ...]:
     if isinstance(result, IRNamedOutputs):
         return tuple(value for _name, value in result.items)
     if isinstance(result, IRArray):
-        raise TypeError("IRBindLeaves does not accept IRArray results")
+        leaves = []
+        for item in result.items:
+            leaves.extend(_bindable_runtime_result_leaves(item))
+        return tuple(leaves)
     raise TypeError("unsupported IR result")
 
 

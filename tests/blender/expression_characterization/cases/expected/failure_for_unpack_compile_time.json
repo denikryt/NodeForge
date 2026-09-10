@@ -1,0 +1,5 @@
+{
+  "exception": "CompileError",
+  "kind": "compile_error",
+  "message": "Only simple compile-time for targets are supported"
+}

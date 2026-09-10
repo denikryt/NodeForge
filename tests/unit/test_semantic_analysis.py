@@ -1,4 +1,4 @@
-"""Unit coverage for the semantic-analysis stage before Semantic IR emission."""
+"""Unit coverage for the semantic-analysis phase before Semantic IR emission."""
 
 import ast
 import dataclasses
@@ -23,7 +23,16 @@ from NodeForge.errors import CompileError
 from NodeForge.consteval import _const_eval
 from NodeForge.compiler_identities import BindingId
 from NodeForge.call_resolution import CallableEnvironment
-from NodeForge.semantic_values import ObjectInfoState, ObjectSemanticId, ObjectSemanticSnapshot
+from NodeForge.semantic_values import (
+    ObjectInfoState,
+    ObjectSemanticId,
+    ObjectSemanticSnapshot,
+    StructuralArrayId,
+    StructuralArrayRef,
+    StructuralArraySnapshot,
+    StructuralArrayState,
+    StructuralRuntimeLeaf,
+)
 from NodeForge.semantic_analysis import (
     ArrayResultShape, RuntimeBindingSymbol, RuntimeResultShape, SemanticEnvironment,
     analyze_expression, build_semantic_constant_snapshot,
@@ -43,7 +52,7 @@ def _expr(source):
     return ast.parse(source, mode="eval").body
 
 
-def _env(*, bindings=None, legacy=(), consts=None, labels=None, backend_helpers=(), builtins=(), systems=None, local_functions=None, imported_functions=None, object_registry=True, **_ignored):
+def _env(*, bindings=None, legacy=(), consts=None, labels=None, backend_helpers=(), builtins=(), systems=None, local_functions=None, imported_functions=None, object_registry=True, structural_arrays=None, **_ignored):
     """Construct the immutable semantic snapshot used by analyzer tests."""
     runtime_bindings = {
         name: RuntimeBindingSymbol(BindingId("test-owner", index), typ)
@@ -75,6 +84,7 @@ def _env(*, bindings=None, legacy=(), consts=None, labels=None, backend_helpers=
             frozenset(backend_helpers),
             imported_functions or {},
         ),
+        structural_arrays=structural_arrays or StructuralArraySnapshot({}, {}),
         object_semantics=object_semantics,
     )
 
@@ -87,6 +97,49 @@ def _typ(fact):
 def _analyze(source, **kwargs):
     """Analyze one parsed expression with a compact semantic environment."""
     return analyze_expression(_expr(source), _env(**kwargs))
+
+
+def test_join_named_structural_array_normalizes_to_ordered_runtime_operands():
+    array_id = StructuralArrayId(0)
+    snapshot = StructuralArraySnapshot(
+        {"items": array_id},
+        {
+            array_id: StructuralArrayState(
+                (
+                    StructuralRuntimeLeaf(BindingId("test-owner", 7), TYPE_GEOMETRY),
+                    StructuralRuntimeLeaf(BindingId("test-owner", 8), TYPE_GEOMETRY),
+                )
+            )
+        },
+    )
+    analysis = _analyze(
+        "join(items)",
+        builtins={"join"},
+        structural_arrays=snapshot,
+    )
+    root_fact = analysis.facts[analysis.root]
+    assert [operand.typ for operand in root_fact.analyzed_call.runtime_operands] == [
+        TYPE_GEOMETRY,
+        TYPE_GEOMETRY,
+    ]
+    assert len(root_fact.call_operand_nodes) == 2
+    assert all(isinstance(node, ast.Subscript) for node in root_fact.call_operand_nodes)
+
+
+def test_join_empty_named_structural_array_preserves_zero_operand_call():
+    array_id = StructuralArrayId(0)
+    snapshot = StructuralArraySnapshot(
+        {"items": array_id},
+        {array_id: StructuralArrayState(())},
+    )
+    analysis = _analyze(
+        "join(items)",
+        builtins={"join"},
+        structural_arrays=snapshot,
+    )
+    root_fact = analysis.facts[analysis.root]
+    assert root_fact.analyzed_call.runtime_operands == ()
+    assert root_fact.call_operand_nodes == ()
 
 
 def test_environment_mapping_and_set_contract_is_structurally_immutable():
@@ -323,3 +376,78 @@ def test_only_calls_and_legacy_bindings_remain_planned_fallbacks():
     assert isinstance(array.facts[array.root].result_shape, ArrayResultShape)
     with pytest.raises(CompileError, match="indexing is supported"):
         _analyze("a[0]", bindings={"a": TYPE_FLOAT})
+
+
+def test_snapshot_backed_structural_array_analysis_preserves_index_and_nested_identity():
+    """Stored arrays reconstruct shapes and carry nested StructuralArrayId through projection facts."""
+    first_binding = BindingId("test-owner", 0)
+    second_binding = BindingId("test-owner", 1)
+    inner_id = StructuralArrayId(0)
+    outer_id = StructuralArrayId(1)
+    snapshot = StructuralArraySnapshot(
+        {"outer": outer_id},
+        {
+            inner_id: StructuralArrayState((StructuralRuntimeLeaf(first_binding, TYPE_FLOAT),)),
+            outer_id: StructuralArrayState((
+                StructuralArrayRef(inner_id),
+                StructuralRuntimeLeaf(second_binding, TYPE_VECTOR),
+            )),
+        },
+    )
+    env = SemanticEnvironment(
+        MappingProxyType({
+            "first": RuntimeBindingSymbol(first_binding, TYPE_FLOAT),
+            "second": RuntimeBindingSymbol(second_binding, TYPE_VECTOR),
+        }),
+        frozenset(),
+        MappingProxyType({}),
+        MappingProxyType({}),
+        MappingProxyType({}),
+        callable_environment=_empty_callable_environment(),
+        structural_arrays=snapshot,
+        object_semantics=ObjectSemanticSnapshot({}, {}, 0),
+    )
+
+    outer = analyze_expression(_expr("outer"), env)
+    assert isinstance(outer.facts[outer.root].result_shape, ArrayResultShape)
+    assert outer.facts[outer.root].array_id == outer_id
+
+    nested = analyze_expression(_expr("outer[0]"), env)
+    assert nested.facts[nested.root].array_id == inner_id
+    assert isinstance(nested.facts[nested.root].result_shape, ArrayResultShape)
+
+    leaf = analyze_expression(_expr("outer[0][0]"), env)
+    assert leaf.facts[leaf.root].result_shape == RuntimeResultShape(TYPE_FLOAT)
+    assert leaf.facts[leaf.root].array_id is None
+
+    negative = analyze_expression(_expr("outer[-1]"), env)
+    assert negative.facts[negative.root].result_shape == RuntimeResultShape(TYPE_VECTOR)
+
+    with pytest.raises(CompileError, match="array index out of range"):
+        analyze_expression(_expr("outer[5]"), env)
+
+
+def test_structural_array_provenance_survives_identity_expression_result_not_only_resolved_name():
+    """Array identity is attached to the common expression fact so aliasing survives projection plus unary plus."""
+    binding = BindingId("test-owner", 0)
+    inner_id = StructuralArrayId(0)
+    outer_id = StructuralArrayId(1)
+    snapshot = StructuralArraySnapshot(
+        {"outer": outer_id},
+        {
+            inner_id: StructuralArrayState((StructuralRuntimeLeaf(binding, TYPE_FLOAT),)),
+            outer_id: StructuralArrayState((StructuralArrayRef(inner_id),)),
+        },
+    )
+    env = SemanticEnvironment(
+        MappingProxyType({"x": RuntimeBindingSymbol(binding, TYPE_FLOAT)}),
+        frozenset(),
+        MappingProxyType({}),
+        MappingProxyType({}),
+        MappingProxyType({}),
+        callable_environment=_empty_callable_environment(),
+        structural_arrays=snapshot,
+        object_semantics=ObjectSemanticSnapshot({}, {}, 0),
+    )
+    analysis = analyze_expression(_expr("+outer[0]"), env)
+    assert analysis.facts[analysis.root].array_id == inner_id

@@ -58,7 +58,11 @@ from .semantic_values import (
     ObjectSemanticSnapshot,
     RuntimeResultShape,
     SemanticResultShape,
+    StructuralArrayId,
+    StructuralArrayRef,
+    StructuralArraySnapshot,
     StructuralBindingSymbol,
+    StructuralRuntimeLeaf,
     TupleResultShape,
 )
 
@@ -108,6 +112,7 @@ class SemanticEnvironment:
     reserved_name_labels: Mapping[str, str]
     callable_environment: CallableEnvironment
     structural_bindings: Mapping[str, StructuralBindingSymbol] = field(default_factory=lambda: MappingProxyType({}))
+    structural_arrays: StructuralArraySnapshot = field(default_factory=lambda: StructuralArraySnapshot({}, {}))
     object_semantics: ObjectSemanticSnapshot | None = None
 
 
@@ -121,11 +126,19 @@ class ResolvedName:
     value: object | None = None
     binding_id: BindingId | None = None
     structural_binding: StructuralBindingSymbol | None = None
+    array_id: StructuralArrayId | None = None
 
     def __post_init__(self):
-        """Reject non-canonical runtime type identities when a type is present."""
+        """Reject inconsistent canonical source-name resolution metadata."""
         if self.typ is not None and not isinstance(self.typ, NFType):
             raise TypeError("typ must be an NFType or None")
+        if self.kind == "structural_array":
+            if self.typ is not None or not isinstance(self.array_id, StructuralArrayId):
+                raise ValueError("structural_array resolution requires array_id and no runtime type")
+            if self.binding_id is not None or self.structural_binding is not None:
+                raise ValueError("structural_array resolution cannot carry runtime/fixed structural binding metadata")
+        elif self.array_id is not None:
+            raise ValueError("array_id is valid only for structural_array resolution")
 
 
 @dataclass(frozen=True)
@@ -140,20 +153,22 @@ class ExpressionFact:
     analyzed_call: AnalyzedCall | None = None
     call_operand_nodes: tuple[ast.expr, ...] = ()
     object_info_state: ObjectInfoState | None = None
+    array_id: StructuralArrayId | None = None
 
 
 @dataclass(frozen=True)
 class ExpressionAnalysis:
-    """Ephemeral AST-associated semantic facts plus detached Object semantic state."""
+    """Ephemeral AST-associated semantic facts plus detached frontend semantic snapshots."""
 
     root: ast.expr
     facts: Mapping[ast.AST, ExpressionFact]
     object_semantics: ObjectSemanticSnapshot | None = None
+    structural_arrays: StructuralArraySnapshot = field(default_factory=lambda: StructuralArraySnapshot({}, {}))
 
 
 @dataclass(frozen=True)
 class _Unsupported:
-    """Internal result indicating that this migration stage does not own a path."""
+    """Internal result indicating that this migration boundary does not own a path."""
 
 
 UNSUPPORTED = _Unsupported()
@@ -346,14 +361,18 @@ def build_semantic_environment(
     reserved_name_labels,
     callable_environment,
     structural_bindings=None,
+    structural_arrays=None,
     object_semantics=None,
 ):
     """Build one immutable expression environment from detached compiler-owned snapshots."""
     structural_bindings = {} if structural_bindings is None else dict(structural_bindings)
+    structural_arrays = StructuralArraySnapshot({}, {}) if structural_arrays is None else structural_arrays
+    if not isinstance(structural_arrays, StructuralArraySnapshot):
+        raise TypeError("structural_arrays must be a StructuralArraySnapshot")
     runtime_bindings = dict(runtime_bindings)
-    overlap = set(runtime_bindings) & set(structural_bindings)
-    if overlap:
-        raise CompileError("Internal error: source name is both runtime and structural binding")
+    ownership_sets = (set(runtime_bindings), set(structural_bindings), set(structural_arrays.bindings))
+    if any(ownership_sets[i] & ownership_sets[j] for i in range(len(ownership_sets)) for j in range(i + 1, len(ownership_sets))):
+        raise CompileError("Internal error: source name is active in multiple semantic binding domains")
     if object_semantics is not None and not isinstance(object_semantics, ObjectSemanticSnapshot):
         raise TypeError("object_semantics must be an ObjectSemanticSnapshot or None")
     if object_semantics is not None:
@@ -381,6 +400,7 @@ def build_semantic_environment(
         reserved_name_labels=MappingProxyType(dict(reserved_name_labels)),
         callable_environment=callable_environment,
         structural_bindings=MappingProxyType(structural_bindings),
+        structural_arrays=structural_arrays,
         object_semantics=object_semantics,
     )
 
@@ -488,6 +508,17 @@ def analyze_expression(expr, environment):
                     structural_binding=structural,
                 )
                 return record(node, ExpressionFact(shape, resolved_name=resolved))
+            if node.id in environment.structural_arrays.bindings:
+                array_id = environment.structural_arrays.bindings[node.id]
+                object_map = {} if object_ids_by_binding is None else object_ids_by_binding
+                shape = environment.structural_arrays.result_shape(array_id, object_map)
+                resolved = ResolvedName(
+                    "structural_array",
+                    None,
+                    name=node.id,
+                    array_id=array_id,
+                )
+                return record(node, ExpressionFact(shape, resolved_name=resolved, array_id=array_id))
             # COMPLETE_EXPRESSION_IR_LEGACY_BINDING_FALLBACK: Non-Value compiler bindings still
             # have no frontend-owned semantic result shape. Keep the complete enclosing expression
             # on the legacy dispatcher when one is reached; do not carry the compiler object into IR.
@@ -653,7 +684,48 @@ def analyze_expression(expr, environment):
                     selected_shape = base.result_shape.items[index]
                 except IndexError as exc:
                     raise CompileError("array index out of range") from exc
-                return record(node, ExpressionFact(selected_shape, operation="array_index", literal_value=index))
+                resolved_name = None
+                selected_array_id = None
+                if base.array_id is not None:
+                    array_state = environment.structural_arrays.states.get(base.array_id)
+                    if array_state is None:
+                        raise CompileError("Internal error: analyzed array provenance references missing state")
+                    try:
+                        selected_item = array_state.items[index]
+                    except IndexError as exc:
+                        raise CompileError("Internal error: analyzed array index became invalid") from exc
+                    if isinstance(selected_item, StructuralArrayRef):
+                        selected_array_id = selected_item.array_id
+                        resolved_name = ResolvedName(
+                            "structural_array",
+                            None,
+                            name=base.resolved_name.name if base.resolved_name is not None else None,
+                            array_id=selected_array_id,
+                        )
+                    elif isinstance(selected_item, StructuralRuntimeLeaf):
+                        resolved_name = ResolvedName(
+                            "runtime_binding",
+                            selected_item.typ,
+                            name=base.resolved_name.name if base.resolved_name is not None else None,
+                            binding_id=selected_item.binding_id,
+                        )
+                    elif isinstance(selected_item, StructuralBindingSymbol):
+                        resolved_name = ResolvedName(
+                            "structural_binding",
+                            None,
+                            name=base.resolved_name.name if base.resolved_name is not None else None,
+                            structural_binding=selected_item,
+                        )
+                return record(
+                    node,
+                    ExpressionFact(
+                        selected_shape,
+                        operation="array_index",
+                        literal_value=index,
+                        resolved_name=resolved_name,
+                        array_id=selected_array_id,
+                    ),
+                )
             base_typ = _require_runtime_type(base, "subscript")
             if base_typ == TYPE_VECTOR:
                 if index not in (0, 1, 2):
@@ -679,7 +751,7 @@ def analyze_expression(expr, environment):
             if operand is UNSUPPORTED:
                 return UNSUPPORTED
             if isinstance(node.op, ast.UAdd):
-                return record(node, ExpressionFact(operand.result_shape, operation="+"))
+                return record(node, ExpressionFact(operand.result_shape, operation="+", array_id=operand.array_id))
             operand_typ = _require_runtime_type(operand, "unary expression")
             if isinstance(node.op, ast.USub):
                 if _is_number_type(operand_typ):
@@ -855,6 +927,45 @@ def analyze_expression(expr, environment):
                     raise CompileError(f"Internal error: unclassified callable builtin {name!r}")
                 runtime_nodes = []
 
+                # join(array) is an existing compiler-structural calling form: normalize a
+                # stored semantic array into the same ordered scalar runtime operands used by
+                # join(geo_a, geo_b, ...). IRCallArgument remains runtime-scalar only.
+                if name == "join" and len(cleaned_call.args) == 1 and not isinstance(
+                    cleaned_call.args[0], (ast.List, ast.Tuple)
+                ):
+                    source_array = cleaned_call.args[0]
+                    source_fact = analyze(source_array)
+                    if source_fact is UNSUPPORTED:
+                        return UNSUPPORTED
+                    if isinstance(source_fact.result_shape, ArrayResultShape):
+                        if source_fact.result_shape.items:
+                            expanded = []
+                            for index in range(len(source_fact.result_shape.items)):
+                                selector = ast.Subscript(
+                                    value=source_array,
+                                    slice=ast.Constant(value=index),
+                                    ctx=ast.Load(),
+                                )
+                                ast.copy_location(selector, source_array)
+                                expanded.append(selector)
+                            cleaned_call = ast.Call(
+                                func=cleaned_call.func,
+                                args=expanded,
+                                keywords=list(cleaned_call.keywords),
+                            )
+                            ast.copy_location(cleaned_call, node)
+                        else:
+                            # Preserve join([]): a single empty literal is the established
+                            # syntax that normalizes to zero Geometry operands.
+                            empty = ast.List(elts=[], ctx=ast.Load())
+                            ast.copy_location(empty, source_array)
+                            cleaned_call = ast.Call(
+                                func=cleaned_call.func,
+                                args=[empty],
+                                keywords=list(cleaned_call.keywords),
+                            )
+                            ast.copy_location(cleaned_call, node)
+
                 def add_runtime(child, parameter_name, context):
                     child_fact = analyze(child)
                     if child_fact is UNSUPPORTED:
@@ -912,7 +1023,12 @@ def analyze_expression(expr, environment):
         snapshot = None
     else:
         snapshot = ObjectSemanticSnapshot(object_ids_by_binding, object_states, next_object_id)
-    return ExpressionAnalysis(expr, MappingProxyType(dict(facts)), snapshot)
+    return ExpressionAnalysis(
+        expr,
+        MappingProxyType(dict(facts)),
+        snapshot,
+        environment.structural_arrays,
+    )
 
 
 __all__ = [

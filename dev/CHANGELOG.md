@@ -210,3 +210,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.51.3
 
 - Separated const-evaluable compile-time bindings from runtime semantic and backend state with explicit snapshot/fork ownership, preserving whole-body fallback atomicity, control-flow constant threading, legacy structural fallback, and generated Geometry Nodes behavior.
+
+## 0.51.4
+
+- Moved mutable structural arrays and ordinary compile-time/array `for` unrolling into Blender-independent semantic body state with explicit array identity, alias-preserving immutable snapshots, recursive persistent leaves, and atomic speculative compile-time loop rollback while preserving legacy compatibility boundaries and Geometry Nodes behavior.

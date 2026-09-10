@@ -5,7 +5,7 @@ ROOT = Path(__file__).resolve().parents[3]
 DOC = ROOT / "NodeForge" / "dev" / "ARCHITECTURE_LAYERS.md"
 
 
-def test_architecture_layers_doc_exists_with_stage_entry_contract():
+def test_architecture_layers_doc_exists_with_entry_contract():
     text = DOC.read_text(encoding="utf-8")
 
     assert "# Architecture Layers" in text

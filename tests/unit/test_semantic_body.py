@@ -1,4 +1,4 @@
-"""Pure tests for stage-17 straight-line Semantic Body IR."""
+"""Pure tests for Semantic Body IR migration straight-line Semantic Body IR."""
 
 import ast
 from types import MappingProxyType
@@ -13,8 +13,12 @@ from NodeForge.compiler_identities import BindingId, InputDeclarationId
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
 from NodeForge.runtime_bindings import RuntimeBindingSymbol
+from NodeForge.semantic_values import StructuralArrayRef, StructuralRuntimeLeaf
 from NodeForge.semantic_body import BODY_UNSUPPORTED, lower_basic_body
-from NodeForge.semantic_ir import IRAssign, IRArray, IRBody, IRFinalExpression, IRInputDeclaration, IROutput, IRProgram, IRValue
+from NodeForge.semantic_ir import (
+    IRAssign, IRArray, IRBindLeaves, IRBody, IRFinalExpression, IRIf,
+    IRInputDeclaration, IROutput, IRProgram, IRRepeat, IRValue,
+)
 
 
 def _callables(**overrides):
@@ -199,7 +203,7 @@ def test_late_unsupported_statement_returns_whole_body_fallback_without_mutation
     bindings = dict([_binding("a", 0)])
     constants = {"k": 3}
     result = lower_basic_body(
-        _stmts("x = a + 1\nfor i in [1]:\n    x = x + i\nx"),
+        _stmts('x = a + 1\nstore("a", x)\nx'),
         initial_runtime_bindings=MappingProxyType(bindings),
         initial_compile_time=CompileTimeSnapshot(MappingProxyType(constants)),
         legacy_binding_names=frozenset(),
@@ -252,13 +256,193 @@ def test_compile_statements_legacy_fallback_observes_committed_compile_time_stat
     assert dict(committed.values) == {"c": 2}
 
 
+
+
+def test_compile_statements_production_routing_distinguishes_migrated_and_deferred_bodies(monkeypatch):
+    """Production cutover uses Semantic Body for migrated arrays and whole legacy routing for deferred bodies."""
+    from types import SimpleNamespace
+    from NodeForge.compile_time import CompileTimeState
+    from NodeForge.statement_compiler import GroupBuildContext, compile_statements
+    import NodeForge.statement_compiler as statement_compiler
+
+    class FakeComp:
+        def __init__(self):
+            self.compile_time = CompileTimeState({})
+            self.resolved_environment = SimpleNamespace(system_constructors={})
+            self.local_functions = {}
+            self.backend_builtins = {}
+            self.imported_library_functions = {}
+            self.function_group_owner_scope = "scope"
+            self.input_declaration_owner = "scope"
+            self.reserved_name_labels = {}
+            self.group_input = None
+
+        def runtime_bindings_snapshot(self):
+            return MappingProxyType({})
+
+        def backend_runtime_values_snapshot(self):
+            return {}
+
+        def legacy_structural_binding_names_snapshot(self):
+            return frozenset()
+
+    semantic_lowerings = []
+    legacy_statements = []
+
+    def record_lowering(_context, body, _bindings, **_kwargs):
+        semantic_lowerings.append(body)
+        return SimpleNamespace(explicit_outputs=[], auto_output=None)
+
+    def record_legacy(_ctx, stmt, *_args, **_kwargs):
+        legacy_statements.append(stmt)
+
+    monkeypatch.setattr(statement_compiler, "lower_ir_body", record_lowering)
+    monkeypatch.setattr(statement_compiler, "compile_statement", record_legacy)
+
+    migrated = GroupBuildContext(group=object(), comp=FakeComp(), geometry_mode=False)
+    compile_statements(
+        migrated,
+        _stmts("items = [1.0]\nitems.append(2.0)\nfor item in items:\n    x = item\nx"),
+    )
+    assert len(semantic_lowerings) == 1
+    assert legacy_statements == []
+
+    semantic_lowerings.clear()
+    deferred = GroupBuildContext(group=object(), comp=FakeComp(), geometry_mode=False)
+    compile_statements(
+        deferred,
+        _stmts("builder = geometry_builder()\nitems = [1.0]\nitems.append(2.0)\nfor item in items:\n    x = item"),
+    )
+    assert semantic_lowerings == []
+    assert [type(stmt).__name__ for stmt in legacy_statements] == ["Assign", "Assign", "Expr", "For"]
+
+
+def test_compile_statements_routes_legacy_flat_unpack_append_case_as_one_legacy_body(monkeypatch):
+    """Production routing preserves v0.51.3 flat-unpack append loops through compile_statement()."""
+    from types import SimpleNamespace
+    from NodeForge.compile_time import CompileTimeState
+    from NodeForge.statement_compiler import GroupBuildContext, compile_statements
+    import NodeForge.statement_compiler as statement_compiler
+
+    class FakeComp:
+        def __init__(self):
+            self.compile_time = CompileTimeState({})
+            self.resolved_environment = SimpleNamespace(system_constructors={})
+            self.local_functions = {}
+            self.backend_builtins = {}
+            self.imported_library_functions = {}
+            self.function_group_owner_scope = "scope"
+            self.input_declaration_owner = "scope"
+            self.reserved_name_labels = {}
+            self.group_input = None
+
+        def runtime_bindings_snapshot(self):
+            return MappingProxyType({})
+
+        def backend_runtime_values_snapshot(self):
+            return {}
+
+        def legacy_structural_binding_names_snapshot(self):
+            return frozenset()
+
+    lowered = []
+    legacy = []
+
+    def forbidden_lowering(*_args, **_kwargs):
+        lowered.append(True)
+        raise AssertionError("flat-unpack append compatibility body entered Semantic Body lowering")
+
+    def record_legacy(_ctx, stmt, *_args, **_kwargs):
+        legacy.append(type(stmt).__name__)
+
+    monkeypatch.setattr(statement_compiler, "lower_ir_body", forbidden_lowering)
+    monkeypatch.setattr(statement_compiler, "compile_statement", record_legacy)
+
+    from NodeForge.consteval import _preprocess_compile_time
+
+    source_stmts = _stmts(
+        "items = []\n"
+        "for x, y in [[1.0, 2.0]]:\n"
+        "    items.append(x + y)\n"
+        "output(items[0])"
+    )
+    retained, compile_time = _preprocess_compile_time(source_stmts)
+    comp = FakeComp()
+    comp.compile_time.replace(compile_time)
+    compile_statements(
+        GroupBuildContext(group=object(), comp=comp, geometry_mode=False),
+        retained,
+    )
+    assert lowered == []
+    assert legacy == ["Assign", "For", "Expr"]
+
+
+def test_compile_statements_routes_runtime_dependent_flat_unpack_as_one_legacy_body(monkeypatch):
+    """A non-name ordinary-for target that survives preprocessing keeps the v0.51.3 legacy route."""
+    from types import SimpleNamespace
+    from NodeForge.compile_time import CompileTimeState
+    from NodeForge.consteval import _preprocess_compile_time
+    from NodeForge.statement_compiler import GroupBuildContext, compile_statements
+    import NodeForge.statement_compiler as statement_compiler
+
+    class FakeComp:
+        def __init__(self):
+            self.compile_time = CompileTimeState({})
+            self.resolved_environment = SimpleNamespace(system_constructors={})
+            self.local_functions = {}
+            self.backend_builtins = {}
+            self.imported_library_functions = {}
+            self.function_group_owner_scope = "scope"
+            self.input_declaration_owner = "scope"
+            self.reserved_name_labels = {}
+            self.group_input = None
+
+        def runtime_bindings_snapshot(self):
+            return MappingProxyType({})
+
+        def backend_runtime_values_snapshot(self):
+            return {}
+
+        def legacy_structural_binding_names_snapshot(self):
+            return frozenset()
+
+    lowered = []
+    legacy = []
+
+    def forbidden_lowering(*_args, **_kwargs):
+        lowered.append(True)
+        raise AssertionError("runtime-dependent flat unpack unexpectedly entered Semantic Body lowering")
+
+    def record_legacy(_ctx, stmt, *_args, **_kwargs):
+        legacy.append(type(stmt).__name__)
+
+    monkeypatch.setattr(statement_compiler, "lower_ir_body", forbidden_lowering)
+    monkeypatch.setattr(statement_compiler, "compile_statement", record_legacy)
+
+    retained, compile_time = _preprocess_compile_time(_stmts(
+        'a = input_float("A", default=1.0)\n'
+        'pairs = [[a, a]]\n'
+        'for x, y in pairs:\n'
+        '    result = x + y\n'
+        'output("Result", result)'
+    ))
+    assert any(isinstance(stmt, ast.For) for stmt in retained)
+
+    comp = FakeComp()
+    comp.compile_time.replace(compile_time)
+    compile_statements(GroupBuildContext(group=object(), comp=comp, geometry_mode=False), retained)
+
+    assert lowered == []
+    assert legacy == ["Assign", "Assign", "For", "Expr"]
+
+
 def test_speculative_body_compile_time_changes_do_not_leak_on_late_fallback():
     """Late whole-body fallback discards all earlier speculative compile-time bindings."""
     from NodeForge.compile_time import CompileTimeState
 
     committed = CompileTimeState({"c": 2})
     result = lower_basic_body(
-        _stmts("c = 3\nx = 1\nitems = []\nitems.append(x)"),
+        _stmts("c = 3\nx = 1\nbuilder = geometry_builder()\nbuilder"),
         initial_runtime_bindings={},
         initial_compile_time=committed.snapshot(),
         legacy_binding_names=frozenset(),
@@ -307,14 +491,16 @@ def test_rejected_semantic_body_does_not_mutate_inherited_compile_time_list():
     assert shared == [1]
 
 
-def test_structural_and_dynamic_categories_reject_entire_body():
-    assert _lower("items = [a]\nitems", bindings=dict([_binding("a", 0)])) is BODY_UNSUPPORTED
+def test_migrated_arrays_and_loops_are_accepted_while_remaining_dynamic_categories_fallback():
+    """This structural-array and compile-time unrolling refactor removes arrays/ordinary for from the list of whole-body fallback reasons."""
+    array_result = _lower("items = [a]\nitems[0]", bindings=dict([_binding("a", 0)]))
+    assert array_result is not BODY_UNSUPPORTED
     with pytest.raises(CompileError, match="Cannot unpack scalar result into 2 names"):
         _lower("a, b = pair", bindings=dict([_binding("pair", 0)]))
     assert _lower("builder = geometry_builder()\nbuilder") is BODY_UNSUPPORTED
     assert _lower("x = grid(2, 2)\nx") is BODY_UNSUPPORTED
     assert _lower("if True:\n    x = 1") is not BODY_UNSUPPORTED
-    assert _lower("for i in [1]:\n    x = i") is BODY_UNSUPPORTED
+    assert _lower("for i in [1]:\n    x = i") is not BODY_UNSUPPORTED
     assert _lower("panel('P', a)", bindings=dict([_binding("a", 0)])) is BODY_UNSUPPORTED
     assert _lower("store(a, 'x', a)", bindings=dict([_binding("a", 0)])) is BODY_UNSUPPORTED
     assert _lower("set_position(a)", bindings=dict([_binding("a", 0)])) is BODY_UNSUPPORTED
@@ -368,7 +554,7 @@ def test_body_entry_allocator_invariant_is_structurally_guaranteed_before_first_
 
 
 def test_basic_body_frontend_has_no_backend_dependencies_or_compiler_mutation():
-    """The body semantic stage remains pure and cannot publish backend Values."""
+    """The body semantic phase remains pure and cannot publish backend Values."""
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2]
@@ -801,3 +987,271 @@ def test_stored_tuple_negative_index_selects_existing_leaf_binding():
     selected = output.value.operations[-1]
     assert isinstance(selected, IRBinding)
     assert selected.binding_id == stored.bindings[-1].destination
+
+
+def test_structural_array_alias_append_reassignment_and_nested_identity_are_frontend_owned():
+    """Array names share identity on alias, observe append, and detach on reassignment."""
+    bindings = dict([_binding("x", 0), _binding("y", 1), _binding("z", 2)])
+    result = _lower(
+        "a = [x]\n"
+        "b = a\n"
+        "b.append(y)\n"
+        "c = [a]\n"
+        "a = [z]\n"
+        "old = c[0][1]\n"
+        "new = a[0]\n"
+        "output(old + new)",
+        bindings=bindings,
+    )
+    arrays = result.final_structural_arrays
+    assert arrays.bindings["a"] != arrays.bindings["b"]
+    assert arrays.bindings["b"] == arrays.states[arrays.bindings["c"]].items[0].array_id
+    assert len(arrays.states[arrays.bindings["b"]].items) == 2
+    assert len(arrays.states[arrays.bindings["a"]].items) == 1
+    assert result is not BODY_UNSUPPORTED
+
+
+def test_nested_projection_alias_keeps_array_identity_for_later_append():
+    """Assigning outer[0] preserves StructuralArrayId provenance through the expression result."""
+    bindings = dict([_binding("x", 0), _binding("y", 1)])
+    result = _lower(
+        "inner = [x]\n"
+        "outer = [inner]\n"
+        "alias = outer[0]\n"
+        "alias.append(y)\n"
+        "picked = inner[1]\n"
+        "output(picked)",
+        bindings=bindings,
+    )
+    arrays = result.final_structural_arrays
+    assert arrays.bindings["alias"] == arrays.bindings["inner"]
+    assert len(arrays.states[arrays.bindings["inner"]].items) == 2
+
+
+def test_array_assignment_emits_one_recursive_bind_leaves_and_empty_array_emits_none():
+    """Persistent runtime leaves are published once while empty arrays remain pure frontend state."""
+    result = _lower("empty = []\nitems = [x, [y]]\noutput(items[1][0])", bindings=dict([_binding("x", 0), _binding("y", 1)]))
+    bind_records = [statement for statement in result.body.statements if isinstance(statement, IRBindLeaves)]
+    assert len(bind_records) == 1
+    assert [binding.source.typ for binding in bind_records[0].bindings] == [NFType.FLOAT, NFType.FLOAT]
+    assert result.final_structural_arrays.states[result.final_structural_arrays.bindings["empty"]].items == ()
+
+
+def test_structural_array_cycle_creation_is_rejected_before_statement_publication():
+    """Direct and indirect recursive array mutation fail before producing accepted body state."""
+    with pytest.raises(CompileError, match="recursive structural arrays are not supported"):
+        _lower("a = []\na.append(a)")
+    with pytest.raises(CompileError, match="recursive structural arrays are not supported"):
+        _lower("a = []\nb = [a]\na.append(b)")
+
+
+def test_structural_array_final_expression_and_malformed_append_keep_controlled_diagnostics():
+    """Array-specific user diagnostics remain controlled and occur before backend effects."""
+    with pytest.raises(CompileError, match=r"A final expression cannot be an array; use join\(array\) or index it"):
+        _lower("items = []\nitems")
+    with pytest.raises(CompileError, match=r"append must look like items\.append\(value\)"):
+        _lower("items = []\nitems.append()")
+    with pytest.raises(CompileError, match="x is not an array"):
+        _lower("x = 1\nx.append(2)")
+
+
+def test_ordinary_for_unrolls_source_compile_time_iterables_without_irrepeat():
+    """List, tuple, and range loops become repeated body IR and never runtime Repeat IR."""
+    cases = (
+        "total = x\nfor i in [1, 2]:\n    total = total + i\noutput(total)",
+        "total = x\nfor i in (1, 2):\n    total = total + i\noutput(total)",
+        "total = x\nfor i in range(2):\n    total = total + i\noutput(total)",
+    )
+    for source in cases:
+        result = _lower(source, bindings=dict([_binding("x", 0)]))
+        assert result is not BODY_UNSUPPORTED
+        assert not any(isinstance(statement, IRRepeat) for statement in result.body.statements)
+
+
+def test_ordinary_for_unrolls_named_structural_array_and_restores_runtime_target():
+    """Array iteration uses fresh lexical slots and restores the pre-loop runtime binding."""
+    bindings = dict([_binding("x", 0), _binding("a", 1), _binding("b", 2)])
+    result = _lower(
+        "items = [a, b]\n"
+        "for x in items:\n"
+        "    y = x\n"
+        "output(x)",
+        bindings=bindings,
+    )
+    assert result is not BODY_UNSUPPORTED
+    assert result.body.statements[-1].value.result.typ is NFType.FLOAT
+    assert not any(isinstance(statement, IRRepeat) for statement in result.body.statements)
+
+
+def test_ordinary_for_restores_outer_array_alias_after_loop_target_shadowing():
+    """Loop-target shadowing of an array name does not replace the outer source binding."""
+    bindings = dict([_binding("a", 0), _binding("b", 1)])
+    result = _lower(
+        "items = [a]\n"
+        "loops = [[b]]\n"
+        "for items in loops:\n"
+        "    inside = items[0]\n"
+        "after = items[0]\n"
+        "output(after)",
+        bindings=bindings,
+    )
+    arrays = result.final_structural_arrays
+    assert len(arrays.states[arrays.bindings["items"]].items) == 1
+
+
+def test_direct_semantic_body_defers_retained_flat_loop_target_to_legacy():
+    """A non-name ordinary-for target reaching Semantic Body is wholly legacy-owned."""
+    result = _lower(
+        "pairs = [[a, b], [b, a]]\n"
+        "for x, y in pairs:\n"
+        "    total = x + y\n",
+        bindings=dict([_binding("a", 0), _binding("b", 1)]),
+    )
+    assert result is BODY_UNSUPPORTED
+
+
+def test_flat_loop_target_with_direct_append_requests_whole_body_legacy_compatibility():
+    """The exact v0.51.3 flat-unpack/direct-append case defers before emitting Semantic Body IR."""
+    source = (
+        "items = []\n"
+        "for x, y in [[1.0, 2.0]]:\n"
+        "    items.append(x + y)\n"
+        "output(items[0])"
+    )
+    result = lower_basic_body(
+        _stmts(source),
+        initial_runtime_bindings={},
+        initial_compile_time=CompileTimeSnapshot({}),
+        legacy_binding_names=frozenset(),
+        reserved_name_labels={},
+        callable_environment=_callables(),
+        owner_scope="scope",
+    )
+    assert result is BODY_UNSUPPORTED
+
+def test_runtime_range_keeps_repeat_range_guidance():
+    """Ordinary range with runtime arguments stays rejected with the established guidance."""
+    with pytest.raises(CompileError, match=r"range\(\.\.\.\) requires compile-time integer arguments; use repeat_range"):
+        _lower('count = input_int("Count")\nfor i in range(count):\n    x = i')
+
+
+def test_read_only_array_and_nonmutating_unrolled_loop_are_allowed_inside_runtime_if():
+    """Runtime branches may read structural arrays and unroll ordinary loops without merging arrays."""
+    source = (
+        'items = [x]\nflag = input_bool("Flag")\ny = x\n'
+        'if flag:\n'
+        '    for item in items:\n'
+        '        y = item + 1\n'
+        'else:\n'
+        '    y = items[0] + 2\n'
+        'output(y)'
+    )
+    result = _lower(source, bindings=dict([_binding("x", 0)]))
+    branch = next(statement for statement in result.body.statements if isinstance(statement, IRIf))
+    assert branch is not None
+    assert not any(isinstance(statement, IRRepeat) for statement in branch.true_body.statements)
+
+
+def test_runtime_control_flow_array_mutation_and_rebind_keep_named_compatibility_boundary():
+    """Array mutation/rebinding inside runtime control flow remains whole-body compatibility-only."""
+    append = _lower(
+        'items = []\nflag = input_bool("Flag")\n'
+        'if flag:\n    items.append(1)\nelse:\n    items.append(2)'
+    )
+    assert append is BODY_UNSUPPORTED
+    rebind = _lower(
+        'items = []\nflag = input_bool("Flag")\n'
+        'if flag:\n    items = [x]\nelse:\n    items = [x]',
+        bindings=dict([_binding("x", 0)]),
+    )
+    assert rebind is BODY_UNSUPPORTED
+
+
+def test_array_heap_statement_failure_does_not_publish_partial_object_or_array_state():
+    """Cycle/leaf validation fails before a statement can mutate visible body-owned semantic state."""
+    # The absence of a returned BasicBodyCompilation is the public atomicity signal; this also
+    # exercises Object-leaf planning before the cyclic graph is rejected.
+    with pytest.raises(CompileError, match="recursive structural arrays are not supported"):
+        _lower(
+            "a = []\n"
+            "nested = [a]\n"
+            "a.append(nested)\n",
+        )
+
+
+def test_array_items_preserve_bundle_object_and_fixed_structural_shapes():
+    """Arrays keep runtime Bundle/Object leaves and fixed tuple/named-output structure distinct."""
+    bundle_result = _lower(
+        "items = [bundle]\nselected = items[0]",
+        bindings=dict([_binding("bundle", 0, NFType.BUNDLE)]),
+    )
+    bundle_state = bundle_result.final_structural_arrays.states[bundle_result.final_structural_arrays.bindings["items"]]
+    assert isinstance(bundle_state.items[0], StructuralRuntimeLeaf)
+    assert bundle_state.items[0].typ is NFType.BUNDLE
+
+    object_result = _lower(
+        'obj = input_object("Object")\nitems = [obj]\nalias = items[0]\nalias.info(as_instance=False)\noutput("Geometry", alias.geometry)'
+    )
+    assert object_result.body.statements[-1].value.result.typ is NFType.GEOMETRY
+
+    fixed = _lower(
+        "pair = capture_attribute(geo, value)\n"
+        "items = [pair]\n"
+        "output('Captured', items[0][1])",
+        bindings=dict([_binding("geo", 0, NFType.GEOMETRY), _binding("value", 1, NFType.FLOAT)]),
+    )
+    assert fixed is not BODY_UNSUPPORTED
+
+    named = _lower(
+        'parts = node("ShaderNodeSeparateXYZ", outputs={"X": Float, "Y": Float})\n'
+        'items = [parts]\n'
+        'output("Y", items[0].Y)'
+    )
+    assert named is not BODY_UNSUPPORTED
+
+
+def test_loop_target_restoration_preserves_object_provenance():
+    """Shadowing an Object source name during unrolling restores its ObjectSemanticId mapping."""
+    result = _lower(
+        'obj = input_object("Object")\n'
+        'for obj in [1, 2]:\n'
+        '    temp = obj\n'
+        'output("Geometry", obj.geometry)'
+    )
+    assert result.body.statements[-1].value.result.typ is NFType.GEOMETRY
+
+
+def test_semantic_structural_append_preserves_legacy_ignored_keyword_compatibility():
+    """Body-owned array append ignores keywords just as the v0.51.3 legacy append branch did."""
+    result = _lower(
+        "items = [x]\nitems.append(y, ignored=missing)\noutput(items[1])",
+        bindings=dict([_binding("x", 0), _binding("y", 1)]),
+    )
+    assert result is not BODY_UNSUPPORTED
+    state = result.final_structural_arrays.states[result.final_structural_arrays.bindings["items"]]
+    assert len(state.items) == 2
+
+
+def test_nonempty_compile_time_list_dynamic_append_keeps_marker1_whole_body_boundary():
+    """This structural-array and compile-time unrolling refactor does not implicitly promote a folded non-empty compile-time list."""
+    result = _lower(
+        "items.append(x)",
+        constants={"items": [1]},
+        bindings=dict([_binding("x", 0)]),
+    )
+    assert result is BODY_UNSUPPORTED
+
+def test_ordinary_for_rejects_generic_python_iteration_protocol():
+    """Semantic ordinary-for accepts only the explicitly supported compile-time sequence categories."""
+    class CustomIterable:
+        def __iter__(self):
+            return iter((1, 2, 3))
+
+    with pytest.raises(
+        CompileError,
+        match=r"for loop requires a compile-time iterable, an array, or repeat_range",
+    ):
+        _lower(
+            "for item in custom:\n    x = item\n",
+            constants={"custom": CustomIterable()},
+        )

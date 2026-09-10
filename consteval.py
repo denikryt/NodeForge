@@ -247,6 +247,21 @@ def _can_defer_range_error(expr, env):
     return False
 
 
+def _contains_direct_array_append_stmt(stmts):
+    """Return True when the immediate loop body contains a legacy array append statement."""
+    for stmt in stmts:
+        if not isinstance(stmt, ast.Expr):
+            continue
+        call = stmt.value
+        if (
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "append"
+        ):
+            return True
+    return False
+
+
 def _contains_builder_method_stmt(stmts):
     """Return True if a statement list contains geometry_builder mutation syntax."""
     for stmt in stmts:
@@ -267,7 +282,29 @@ def _contains_builder_method_stmt(stmts):
                 return True
     return False
 
-def _handle_compile_time_stmt(stmt, state: CompileTimeState, out_stmts, preserve_names=None):
+CompileTimeListAppendJournal = list[tuple[list, int]]
+
+
+def _compile_time_list_append_savepoint(journal: CompileTimeListAppendJournal) -> int:
+    """Return the current rollback boundary for speculative compile-time list appends."""
+    return len(journal)
+
+
+def _rollback_compile_time_list_appends_to(journal: CompileTimeListAppendJournal, savepoint: int) -> None:
+    """Undo speculative list appends recorded after *savepoint* in reverse order."""
+    while len(journal) > savepoint:
+        target, old_len = journal.pop()
+        del target[old_len:]
+
+
+def _handle_compile_time_stmt(
+    stmt,
+    state: CompileTimeState,
+    out_stmts,
+    preserve_names=None,
+    *,
+    list_append_journal: CompileTimeListAppendJournal | None = None,
+):
     """Fold one statement into explicit compile-time state when current semantics allow it."""
     preserve_names = preserve_names or set()
     env = state.values
@@ -317,10 +354,14 @@ def _handle_compile_time_stmt(stmt, state: CompileTimeState, out_stmts, preserve
             current = state.get(list_name)
             if isinstance(current, list):
                 try:
-                    current.append(_const_eval(call.args[0], env))
-                    return
+                    append_value = _const_eval(call.args[0], env)
                 except CompileError:
                     pass
+                else:
+                    if list_append_journal is not None:
+                        list_append_journal.append((current, len(current)))
+                    current.append(append_value)
+                    return
             out_stmts.append(stmt)
             return
         out_stmts.append(stmt)
@@ -332,7 +373,13 @@ def _handle_compile_time_stmt(stmt, state: CompileTimeState, out_stmts, preserve
             out_stmts.append(stmt)
             return
         for sub in branch:
-            _handle_compile_time_stmt(sub, state, out_stmts, preserve_names)
+            _handle_compile_time_stmt(
+                sub,
+                state,
+                out_stmts,
+                preserve_names,
+                list_append_journal=list_append_journal,
+            )
         return
     if isinstance(stmt, ast.For):
         try:
@@ -343,24 +390,62 @@ def _handle_compile_time_stmt(stmt, state: CompileTimeState, out_stmts, preserve
             out_stmts.append(stmt)
             return
         if _contains_builder_method_stmt(stmt.body):
+            # STRUCTURAL_ARRAYS_GEOMETRY_BUILDER_LOOP_COMPAT: The migrated frontend owns structural-array and ordinary
+            # compile-time loop unrolling, but GeometryBuilder remains a later frontend-migration boundary. Keep the
+            # original for-statement intact when its body mutates a builder so the complete body can use the
+            # existing GeometryBuilder compatibility route. Do not partially unroll the loop here. Remove this
+            # marker when GeometryBuilder mutation is frontend-owned and builder loops can lower semantically.
             out_stmts.append(stmt)
             return
-        for sub in stmt.body:
-            if isinstance(sub, ast.Expr) and isinstance(sub.value, ast.Call) and isinstance(sub.value.func, ast.Attribute) and sub.value.func.attr == "append":
+        if not isinstance(iterable, (list, tuple)):
+            out_stmts.append(stmt)
+            return
+        if not isinstance(stmt.target, ast.Name):
+            if isinstance(stmt.target, (ast.Tuple, ast.List)) and _contains_direct_array_append_stmt(stmt.body):
+                # STRUCTURAL_ARRAYS_TUPLE_APPEND_PREPROCESS_COMPAT: v0.51.3 retained an ordinary compile-time
+                # for-loop before validating its flat tuple/list target when the immediate body contained .append().
+                # Preserve that exact source boundary so Semantic Body can route the complete body to the legacy
+                # statement compiler; do not broaden tuple-target acceptance here. Remove this marker when the
+                # legacy ordinary-for compatibility route is removed or frontend tuple-target semantics explicitly
+                # cover every previously accepted append-loop case.
                 out_stmts.append(stmt)
                 return
-        if not isinstance(stmt.target, ast.Name):
             raise CompileError("Only simple compile-time for targets are supported")
-        had_old = state.contains(stmt.target.id)
-        old = state.get(stmt.target.id)
-        for item in iterable:
-            state.bind(stmt.target.id, item)
-            for sub in stmt.body:
-                _handle_compile_time_stmt(sub, state, out_stmts, preserve_names)
-        if had_old:
-            state.bind(stmt.target.id, old)
-        else:
-            state.discard(stmt.target.id)
+
+        owns_journal = list_append_journal is None
+        journal = [] if owns_journal else list_append_journal
+        savepoint = _compile_time_list_append_savepoint(journal)
+        trial_state = state.fork()
+        trial_out = []
+        had_old = trial_state.contains(stmt.target.id)
+        old = trial_state.get(stmt.target.id)
+        try:
+            for item in iterable:
+                trial_state.bind(stmt.target.id, item)
+                for sub in stmt.body:
+                    _handle_compile_time_stmt(
+                        sub,
+                        trial_state,
+                        trial_out,
+                        preserve_names,
+                        list_append_journal=journal,
+                    )
+            if had_old:
+                trial_state.bind(stmt.target.id, old)
+            else:
+                trial_state.discard(stmt.target.id)
+        except Exception:
+            _rollback_compile_time_list_appends_to(journal, savepoint)
+            raise
+
+        if trial_out:
+            _rollback_compile_time_list_appends_to(journal, savepoint)
+            out_stmts.append(stmt)
+            return
+
+        state.replace(trial_state)
+        if owns_journal:
+            journal.clear()
         return
     out_stmts.append(stmt)
 

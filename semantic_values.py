@@ -24,6 +24,47 @@ class ObjectSemanticId:
             raise ValueError("ObjectSemanticId.local_id must be a non-negative integer")
 
 
+
+
+@dataclass(frozen=True, order=True)
+class StructuralArrayId:
+    """Identify one mutable compiler-structural array within one body-analysis attempt."""
+
+    local_id: int
+
+    def __post_init__(self) -> None:
+        """Require a non-negative monotonic local identifier."""
+        if not isinstance(self.local_id, int) or isinstance(self.local_id, bool) or self.local_id < 0:
+            raise ValueError("StructuralArrayId.local_id must be a non-negative integer")
+
+
+@dataclass(frozen=True)
+class StructuralRuntimeLeaf:
+    """Store one persistent runtime leaf referenced by a structural array."""
+
+    binding_id: BindingId
+    typ: NFType
+
+    def __post_init__(self) -> None:
+        """Require canonical body binding and runtime type identities."""
+        if not isinstance(self.binding_id, BindingId):
+            raise TypeError("binding_id must be a BindingId")
+        if not isinstance(self.typ, NFType):
+            raise TypeError("typ must be an NFType")
+
+
+@dataclass(frozen=True)
+class StructuralArrayRef:
+    """Reference one body-owned nested structural-array identity."""
+
+    array_id: StructuralArrayId
+
+    def __post_init__(self) -> None:
+        """Require a canonical structural-array identity."""
+        if not isinstance(self.array_id, StructuralArrayId):
+            raise TypeError("array_id must be a StructuralArrayId")
+
+
 @dataclass(frozen=True)
 class RuntimeResultShape:
     """Describe one runtime result leaf and its Object provenance when applicable."""
@@ -201,6 +242,103 @@ class StructuralBindingSymbol:
         raise CompileError(f"Unknown raw node output {name!r}; declared outputs are: {known}")
 
 
+StructuralArrayItem: TypeAlias = StructuralRuntimeLeaf | StructuralBindingSymbol | StructuralArrayRef
+
+
+@dataclass(frozen=True)
+class StructuralArrayState:
+    """Store one immutable body-owned structural array payload."""
+
+    items: tuple[StructuralArrayItem, ...]
+
+    def __post_init__(self) -> None:
+        """Freeze and validate structural array members."""
+        object.__setattr__(self, "items", tuple(self.items))
+        allowed = (StructuralRuntimeLeaf, StructuralBindingSymbol, StructuralArrayRef)
+        if not all(isinstance(item, allowed) for item in self.items):
+            raise TypeError("StructuralArrayState contains an unsupported item")
+
+    def result_shape(
+        self,
+        states: Mapping[StructuralArrayId, "StructuralArrayState"],
+        object_ids_by_binding: Mapping[BindingId, ObjectSemanticId],
+        *,
+        active: frozenset[StructuralArrayId] = frozenset(),
+    ) -> ArrayResultShape:
+        """Reconstruct the recursive semantic result shape with cycle detection."""
+        items: list[SemanticResultShape] = []
+        for item in self.items:
+            if isinstance(item, StructuralRuntimeLeaf):
+                object_id = object_ids_by_binding.get(item.binding_id)
+                if item.typ is NFType.OBJECT:
+                    if not isinstance(object_id, ObjectSemanticId):
+                        raise CompileError("Internal error: Object array leaf has no ObjectSemanticId")
+                    items.append(RuntimeResultShape(item.typ, object_id))
+                else:
+                    if object_id is not None:
+                        raise CompileError("Internal error: non-Object array leaf has ObjectSemanticId")
+                    items.append(RuntimeResultShape(item.typ))
+            elif isinstance(item, StructuralBindingSymbol):
+                items.append(item.result_shape(object_ids_by_binding))
+            else:
+                if item.array_id in active:
+                    raise CompileError("recursive structural arrays are not supported")
+                nested = states.get(item.array_id)
+                if nested is None:
+                    raise CompileError("Internal error: structural array references missing state")
+                items.append(
+                    nested.result_shape(
+                        states,
+                        object_ids_by_binding,
+                        active=active | frozenset({item.array_id}),
+                    )
+                )
+        return ArrayResultShape(tuple(items))
+
+
+@dataclass(frozen=True)
+class StructuralArraySnapshot:
+    """Provide an immutable detached view of body-owned structural arrays."""
+
+    bindings: Mapping[str, StructuralArrayId]
+    states: Mapping[StructuralArrayId, StructuralArrayState]
+
+    def __post_init__(self) -> None:
+        """Copy then freeze both mappings so the snapshot cannot observe later mutation."""
+        bindings = dict(self.bindings)
+        states = dict(self.states)
+        if any(not isinstance(name, str) or not name for name in bindings):
+            raise TypeError("structural array binding names must be non-empty strings")
+        if any(not isinstance(array_id, StructuralArrayId) for array_id in bindings.values()):
+            raise TypeError("structural array bindings must reference StructuralArrayId")
+        if any(
+            not isinstance(array_id, StructuralArrayId) or not isinstance(state, StructuralArrayState)
+            for array_id, state in states.items()
+        ):
+            raise TypeError("structural array state table contains invalid records")
+        if any(array_id not in states for array_id in bindings.values()):
+            raise ValueError("structural array binding references missing state")
+        object.__setattr__(self, "bindings", MappingProxyType(bindings))
+        object.__setattr__(self, "states", MappingProxyType(states))
+
+    def result_shape(
+        self,
+        array_id: StructuralArrayId,
+        object_ids_by_binding: Mapping[BindingId, ObjectSemanticId],
+    ) -> ArrayResultShape:
+        """Reconstruct one array result shape without exposing mutable body state."""
+        if not isinstance(array_id, StructuralArrayId):
+            raise TypeError("array_id must be a StructuralArrayId")
+        state = self.states.get(array_id)
+        if state is None:
+            raise CompileError("Internal error: unknown structural array identity")
+        return state.result_shape(
+            self.states,
+            object_ids_by_binding,
+            active=frozenset({array_id}),
+        )
+
+
 @dataclass(frozen=True)
 class ObjectInfoState:
     """Store frontend-owned Object Info configuration and resolution lock state."""
@@ -255,8 +393,14 @@ __all__ = [
     "ObjectSemanticSnapshot",
     "RuntimeResultShape",
     "SemanticResultShape",
+    "StructuralArrayId",
+    "StructuralArrayItem",
+    "StructuralArrayRef",
+    "StructuralArraySnapshot",
+    "StructuralArrayState",
     "StructuralBindingKind",
     "StructuralBindingSymbol",
     "StructuralLeafBinding",
+    "StructuralRuntimeLeaf",
     "TupleResultShape",
 ]

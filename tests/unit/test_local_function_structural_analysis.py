@@ -1,4 +1,4 @@
-"""Unit-level checks for Stage 18 local-function capture analysis."""
+"""Unit-level checks for Structural/Object/Bundle semantics migration local-function capture analysis."""
 
 import ast
 import sys
@@ -52,7 +52,7 @@ class _CaptureComp:
         return None
 
 
-def test_stage18_allowed_compile_time_constants_are_not_hidden_captures(monkeypatch):
+def test_structural_allowed_compile_time_constants_are_not_hidden_captures(monkeypatch):
     local_functions = _import_local_functions_with_stubbed_bpy(monkeypatch)
     fn = ast.parse("def f(x):\n    return x * pi + tau - e\n").body[0]
 
@@ -65,7 +65,7 @@ def test_stage18_allowed_compile_time_constants_are_not_hidden_captures(monkeypa
 
 
 
-def test_stage18_same_name_runtime_capture_wins_over_compile_time(monkeypatch):
+def test_structural_same_name_runtime_capture_wins_over_compile_time(monkeypatch):
     """Runtime capture keeps precedence when compile-time state has the same source name."""
     local_functions = _import_local_functions_with_stubbed_bpy(monkeypatch)
     from NodeForge.constants import TYPE_FLOAT
@@ -82,7 +82,7 @@ def test_stage18_same_name_runtime_capture_wins_over_compile_time(monkeypatch):
 
     assert captures == (("a", runtime_value, True, TYPE_FLOAT),)
 
-def test_stage18_nested_local_function_calls_forward_outer_captures(monkeypatch):
+def test_structural_nested_local_function_calls_forward_outer_captures(monkeypatch):
     local_functions = _import_local_functions_with_stubbed_bpy(monkeypatch)
     from NodeForge.constants import TYPE_FLOAT
 
@@ -111,7 +111,7 @@ def f(x):
     assert captures[0][2] is True
 
 
-def test_stage18_helper_namespace_fragment_preserves_distinct_parent_identities(monkeypatch):
+def test_structural_helper_namespace_fragment_preserves_distinct_parent_identities(monkeypatch):
     local_functions = _import_local_functions_with_stubbed_bpy(monkeypatch)
 
     assert local_functions._helper_namespace_fragment("A_B") == "A_B"

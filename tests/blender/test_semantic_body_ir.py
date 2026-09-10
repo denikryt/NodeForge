@@ -1,4 +1,4 @@
-"""Blender integration coverage for stage-17 straight-line Semantic Body IR."""
+"""Blender integration coverage for Semantic Body IR migration straight-line Semantic Body IR."""
 
 from helpers import *
 
@@ -299,3 +299,111 @@ output(x)
     switches = [node for node in group.nodes if getattr(node, "bl_idname", "") == "GeometryNodeSwitch"]
     check(not switches, f"compile-time if unexpectedly created Switch nodes: {len(switches)}")
     bpy.data.node_groups.remove(group)
+
+@pytest.mark.parametrize(
+    "source,name",
+    [
+        (
+            'items = []\nitems.append(cube(1))\noutput("Geometry", join(items))',
+            "empty_append_join",
+        ),
+        (
+            'size = input_float("Size", default=1.0)\n'
+            'items = [cube(size), cube(2)]\n'
+            'output("Geometry", join(items))',
+            "mixed_literal_runtime",
+        ),
+        (
+            'items = [cube(1)]\nalias = items\nalias.append(cube(2))\n'
+            'output("Geometry", join(items))',
+            "alias_append",
+        ),
+        (
+            'inner = [cube(1)]\nouter = [inner]\n'
+            'output("Geometry", outer[0][0])',
+            "nested_index",
+        ),
+        (
+            'items = [cube(1), cube(2)]\nparts = []\n'
+            'for item in items:\n    parts.append(item)\n'
+            'output("Geometry", join(parts))',
+            "named_array_for",
+        ),
+        (
+            'COUNT = 3\nparts = []\n'
+            'for i in range(COUNT):\n'
+            '    part = transform(cube(1), translation=vector(i, 0, 0))\n'
+            '    parts.append(part)\n'
+            'output("Geometry", join(parts))',
+            "range_constant_runtime_body",
+        ),
+        (
+            'flag = input_bool("Flag")\nx = 0.0\nitems = [1.0, 2.0]\n'
+            'if flag:\n'
+            '    for item in items:\n'
+            '        x = x + item\n'
+            'else:\n'
+            '    x = x + 10.0\n'
+            'output("X", x)',
+            "ordinary_for_in_runtime_if",
+        ),
+    ],
+)
+def test_structural_arrays_structural_array_bodies_never_enter_legacy_statement_lowering(monkeypatch, source, name):
+    """Migrated structural arrays and ordinary compile-time loops use production Semantic Body routing."""
+    def forbidden_legacy_statement(*_args, **_kwargs):
+        raise AssertionError("structural-array migration migrated fixture entered legacy compile_statement()")
+
+    monkeypatch.setattr(statement_compiler, "compile_statement", forbidden_legacy_statement)
+    group = compile_group(source, f"NFTest_structural_arrays_{name}")
+    check(
+        not [node for node in group.nodes if node.bl_idname in {"GeometryNodeRepeatInput", "GeometryNodeRepeatOutput"}],
+        f"{name} unexpectedly created a Repeat Zone",
+    )
+    bpy.data.node_groups.remove(group)
+
+
+def test_structural_arrays_alias_append_preserves_join_topology_without_repeat_zone(monkeypatch):
+    """Alias-visible append keeps the existing two-cube/one-Join graph shape on the Semantic Body path."""
+    monkeypatch.setattr(
+        statement_compiler,
+        "compile_statement",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("alias/append unexpectedly entered legacy statement lowering")
+        ),
+    )
+    group = compile_group(
+        'items = [cube(1)]\nalias = items\nalias.append(cube(2))\n'
+        'output("Geometry", join(items))',
+        "NFTest_structural_arrays_alias_append_topology",
+    )
+    check(len([node for node in group.nodes if node.bl_idname == "GeometryNodeMeshCube"]) == 2, "cube count changed")
+    check(len([node for node in group.nodes if node.bl_idname == "GeometryNodeJoinGeometry"]) == 1, "Join Geometry count changed")
+    check(not [node for node in group.nodes if node.bl_idname == "GeometryNodeRepeatOutput"], "ordinary array flow created Repeat")
+    bpy.data.node_groups.remove(group)
+
+
+def test_structural_arrays_ordinary_for_inside_repeat_range_fails_before_legacy_or_blender_effects(monkeypatch):
+    """The migrated ordinary-for frontend preserves Repeat grammar without fallback or leaked groups."""
+    monkeypatch.setattr(
+        statement_compiler,
+        "compile_statement",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid nested ordinary for unexpectedly entered legacy lowering")
+        ),
+    )
+    before = {group.as_pointer() for group in bpy.data.node_groups}
+    with pytest.raises(
+        CompileError,
+        match="repeat_range body supports assignments, builder methods, if blocks, and nested repeat_range loops",
+    ):
+        compiler.create_expression_group(
+            "x = 0\n"
+            "for i in repeat_range(2):\n"
+            "    for j in [1, 2]:\n"
+            "        x = x + j\n"
+            'output("X", x)',
+            "NFTest_structural_arrays_repeat_nested_ordinary_rejected",
+        )
+    leaked = [group.name for group in bpy.data.node_groups if group.as_pointer() not in before]
+    check(not leaked, f"invalid nested ordinary for leaked Blender groups: {leaked}")

@@ -227,7 +227,7 @@ def test_transform_validates_runtime_options_in_backend_order_after_compiling_al
 
 
 def test_bundle_semantics_remain_opaque_runtime_type_without_schema_inference():
-    """Stage 18 keeps Bundle as one ordinary runtime leaf and requires explicit get typing."""
+    """Structural/Object/Bundle semantics migration keeps Bundle as one ordinary runtime leaf and requires explicit get typing."""
     from NodeForge.nf_types import NFType
 
     assert TYPE_BUNDLE is NFType.BUNDLE

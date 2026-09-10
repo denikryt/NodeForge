@@ -493,5 +493,66 @@
       "attribute",
       "targeted"
     ]
+  },
+  {
+    "id": "for_unpack_runtime_array_compat",
+    "outcome": "graph",
+    "description": "Runtime-valued structural iterable preserves legacy flat tuple unpack topology",
+    "tags": [
+      "array",
+      "for",
+      "tuple-unpack",
+      "legacy-boundary",
+      "structural_arrays"
+    ]
+  },
+  {
+    "id": "for_unpack_append_compat",
+    "outcome": "graph",
+    "description": "Direct append body preserves legacy flat tuple unpack topology",
+    "tags": [
+      "array",
+      "append",
+      "for",
+      "tuple-unpack",
+      "legacy-boundary",
+      "structural_arrays"
+    ]
+  },
+  {
+    "id": "failure_for_unpack_compile_time",
+    "outcome": "compile_error",
+    "description": "Known compile-time iterable without a legacy escape keeps the simple-target diagnostic",
+    "tags": [
+      "array",
+      "for",
+      "tuple-unpack",
+      "failure",
+      "structural_arrays"
+    ]
+  },
+  {
+    "id": "for_unpack_geometry_builder_compat",
+    "outcome": "graph",
+    "description": "GeometryBuilder loop preserves legacy flat tuple unpack topology",
+    "tags": [
+      "geometry-builder",
+      "for",
+      "tuple-unpack",
+      "legacy-boundary",
+      "structural_arrays"
+    ]
+  },
+  {
+    "id": "array_append_ignored_keyword_compat",
+    "outcome": "graph",
+    "description": "Structural append preserves v0.51.3 ignored-keyword compatibility",
+    "tags": [
+      "array",
+      "append",
+      "keyword",
+      "compatibility",
+      "structural_arrays"
+    ]
   }
 ]

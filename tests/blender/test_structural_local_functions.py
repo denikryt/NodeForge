@@ -22,7 +22,7 @@ def _single_local_helper(prefix):
     return bpy.data.node_groups[names[0]]
 
 
-def test_stage18_local_function_captures_runtime_and_const_values():
+def test_structural_local_function_captures_runtime_and_const_values():
     group = compile_group('''
 scale_max = input_float("Scale Max", default=2.0)
 bias = 1.5
@@ -32,16 +32,16 @@ def scale0(g):
 
 s = scale0(3.0)
 output("s", s)
-''', 'NFTest_stage18_capture_runtime_const')
-    helper = _single_local_helper('NodeForge.local.NFTest_stage18_capture_runtime_const.scale0.')
+''', 'NFTest_structural_capture_runtime_const')
+    helper = _single_local_helper('NodeForge.local.NFTest_structural_capture_runtime_const.scale0.')
     inputs = [item.name for item in helper.interface.items_tree if getattr(item, 'in_out', None) == 'INPUT']
     check(inputs[:3] == ['g', 'scale_max', 'bias'], f'capture inputs were not explicit-then-hidden: {inputs}')
     check(helper.get('nodeforge_generated_kind') == 'local_function_helper', 'local helper ownership marker missing')
-    check(helper.get('nodeforge_local_function_namespace') == 'NFTest_stage18_capture_runtime_const', 'local helper namespace marker mismatch')
+    check(helper.get('nodeforge_local_function_namespace') == 'NFTest_structural_capture_runtime_const', 'local helper namespace marker mismatch')
     check(getattr(group, 'bl_idname', None) == 'GeometryNodeTree', 'parent group did not compile')
 
 
-def test_stage18_nested_local_function_call_preserves_outer_capture():
+def test_structural_nested_local_function_call_preserves_outer_capture():
     group = compile_group('''a = input_float("A", default=2.0)
 
 def g(x):
@@ -52,9 +52,9 @@ def f(x):
 
 y = f(1.0)
 output("y", y)
-''', 'NFTest_stage18_nested_capture_success')
-    f_helper = _single_local_helper('NodeForge.local.NFTest_stage18_nested_capture_success.f.')
-    g_helper = _single_local_helper('NodeForge.local.NFTest_stage18_nested_capture_success.g.')
+''', 'NFTest_structural_nested_capture_success')
+    f_helper = _single_local_helper('NodeForge.local.NFTest_structural_nested_capture_success.f.')
+    g_helper = _single_local_helper('NodeForge.local.NFTest_structural_nested_capture_success.g.')
     f_inputs = [item.name for item in f_helper.interface.items_tree if getattr(item, 'in_out', None) == 'INPUT']
     g_inputs = [item.name for item in g_helper.interface.items_tree if getattr(item, 'in_out', None) == 'INPUT']
     check(f_inputs == ['x', 'a'], f'nested caller did not forward outer capture: {f_inputs}')
@@ -62,21 +62,21 @@ output("y", y)
     check(getattr(group, 'bl_idname', None) == 'GeometryNodeTree', 'parent group did not compile')
 
 
-def test_stage18_local_function_allows_builtin_compile_time_constants_without_hidden_inputs():
+def test_structural_local_function_allows_builtin_compile_time_constants_without_hidden_inputs():
     group = compile_group('''
 def f(x):
     return x * pi + tau - e
 
 y = f(1.0)
 output("y", y)
-''', 'NFTest_stage18_local_const_pi')
-    helper = _single_local_helper('NodeForge.local.NFTest_stage18_local_const_pi.f.')
+''', 'NFTest_structural_local_const_pi')
+    helper = _single_local_helper('NodeForge.local.NFTest_structural_local_const_pi.f.')
     inputs = [item.name for item in helper.interface.items_tree if getattr(item, 'in_out', None) == 'INPUT']
     check(inputs == ['x'], f'compile-time constants should not become hidden inputs: {inputs}')
     check(getattr(group, 'bl_idname', None) == 'GeometryNodeTree', 'parent group did not compile')
 
 
-def test_stage18_registered_names_rejected_before_compile_time_preprocessing():
+def test_structural_registered_names_rejected_before_compile_time_preprocessing():
     cases = (
         """
 def f(store):
@@ -97,30 +97,30 @@ output("x", Float)
 """,
     )
     for index, source in enumerate(cases):
-        expect_compile_error(source, f'NFTest_stage18_reserved_name_{index}')
+        expect_compile_error(source, f'NFTest_structural_reserved_name_{index}')
 
 
-def test_stage18_top_level_builtin_and_constant_shadowing_remains_compatible():
+def test_structural_top_level_builtin_and_constant_shadowing_remains_compatible():
     group = compile_group("""
 length = input_float("Length", default=1.0)
 e = length + 1.0
 grid = e + 2.0
 output("grid", grid)
-""", 'NFTest_stage18_legacy_shadowing')
+""", 'NFTest_structural_legacy_shadowing')
     check(getattr(group, 'bl_idname', None) == 'GeometryNodeTree', 'legacy top-level builtin/constant shadowing did not compile')
 
 
 
 
-def test_stage18_local_helper_namespace_is_stable_across_parent_update():
+def test_structural_local_helper_namespace_is_stable_across_parent_update():
     group = compile_group('''
 def f(x):
     return x + 1.0
 
 y = f(1.0)
 output("y", y)
-''', 'NFTest_stage18_namespace')
-    helper_before = _single_local_helper('NodeForge.local.NFTest_stage18_namespace.f.')
+''', 'NFTest_structural_namespace')
+    helper_before = _single_local_helper('NodeForge.local.NFTest_structural_namespace.f.')
     compiler.update_expression_group(group, '''
 def f(x):
     return x + 2.0
@@ -128,13 +128,13 @@ def f(x):
 y = f(1.0)
 output("y", y)
 ''')
-    helper_after = _single_local_helper('NodeForge.local.NFTest_stage18_namespace.f.')
+    helper_after = _single_local_helper('NodeForge.local.NFTest_structural_namespace.f.')
     check(helper_after is helper_before, 'parent update did not reuse the stable local helper')
-    replacement_helpers = _local_helper_names('NodeForge.local.NodeForge_replacement_NFTest_stage18_namespace')
+    replacement_helpers = _local_helper_names('NodeForge.local.NodeForge_replacement_NFTest_structural_namespace')
     check(not replacement_helpers, f'replacement-namespaced helpers leaked: {replacement_helpers}')
 
 
-def test_stage18_local_helper_readable_name_ignores_unrelated_datablock():
+def test_structural_local_helper_readable_name_ignores_unrelated_datablock():
     collision = bpy.data.node_groups.new("F", "ShaderNodeTree")
     try:
         group = compile_group("""
@@ -143,10 +143,10 @@ def f(x):
 
 y = f(1.0)
 output("y", y)
-""", "NFTest_stage18_collision")
+""", "NFTest_structural_collision")
         helper = next(
             g for g in bpy.data.node_groups
-            if g.get("nodeforge_local_function_namespace") == "NFTest_stage18_collision"
+            if g.get("nodeforge_local_function_namespace") == "NFTest_structural_collision"
             and g.get("nodeforge_local_function_name") == "f"
         )
         check(helper.name.startswith("F"), f"helper did not use readable name: {helper.name}")
@@ -156,7 +156,7 @@ output("y", y)
             bpy.data.node_groups.remove(collision, do_unlink=True)
 
 
-def test_stage18_created_nested_helpers_roll_back_after_parent_failure():
+def test_structural_created_nested_helpers_roll_back_after_parent_failure():
     expect_compile_error('''
 a = input_float("A")
 
@@ -169,14 +169,14 @@ def f(x):
 u = f(1.0)
 bad = definitely_missing_function()
 output("bad", bad)
-''', 'NFTest_stage18_nested_failure')
-    leaked = _local_helper_names('NodeForge.local.NFTest_stage18_nested_failure.')
+''', 'NFTest_structural_nested_failure')
+    leaked = _local_helper_names('NodeForge.local.NFTest_structural_nested_failure.')
     check(not leaked, f'newly created nested local helpers leaked after failed parent build: {leaked}')
 
 
 
 
-def test_stage18_local_helper_namespace_is_collision_safe_for_sanitized_names():
+def test_structural_local_helper_namespace_is_collision_safe_for_sanitized_names():
     source_one = '''
 def f(x):
     return x + 1.0
@@ -191,13 +191,13 @@ def f(x):
 y = f(1.0)
 output("y", y)
 '''
-    group_one = compile_group(source_one, 'NFTest_stage18_A.B')
-    group_two = compile_group(source_two, 'NFTest_stage18_A_B')
+    group_one = compile_group(source_one, 'NFTest_structural_A.B')
+    group_two = compile_group(source_two, 'NFTest_structural_A_B')
 
-    helpers = [g for g in bpy.data.node_groups if g.get('nodeforge_local_function_name') == 'f' and g.get('nodeforge_local_function_namespace') in {'NFTest_stage18_A.B', 'NFTest_stage18_A_B'}]
+    helpers = [g for g in bpy.data.node_groups if g.get('nodeforge_local_function_name') == 'f' and g.get('nodeforge_local_function_namespace') in {'NFTest_structural_A.B', 'NFTest_structural_A_B'}]
     helper_names = sorted(g.name for g in helpers)
     check(len(helper_names) == 2, f'expected distinct helper groups for colliding namespaces, got {helper_names}')
     namespaces = sorted(g.get('nodeforge_local_function_namespace') for g in helpers)
-    check(namespaces == ['NFTest_stage18_A.B', 'NFTest_stage18_A_B'], f'raw helper namespaces were not distinct: {namespaces}')
+    check(namespaces == ['NFTest_structural_A.B', 'NFTest_structural_A_B'], f'raw helper namespaces were not distinct: {namespaces}')
     check(getattr(group_one, 'bl_idname', None) == 'GeometryNodeTree', 'first parent group did not compile')
     check(getattr(group_two, 'bl_idname', None) == 'GeometryNodeTree', 'second parent group did not compile')

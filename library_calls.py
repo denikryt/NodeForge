@@ -102,7 +102,7 @@ def compile_library_function_call(comp, expr, depth=0, function_name=None, names
         materialization = comp.resolve_reusable_function_materialization(function_id, modifiers)
     cache_key = ("catalog", namespace, name)
     # REUSABLE_CALL_IR_MIGRATION: Local catalog entries keep their existing materialization
-    # semantics in this behavior-preserving stage because the current namespace="local"
+    # semantics in this behavior-preserving phase because the current namespace="local"
     # path does not assign durable per-occurrence instance keys/owner scopes for __unique__.
     # Remove this exclusion only after Local catalog shared/unique ownership is explicitly
     # specified, compatibility-tested, and migrated as its own semantic contract.
@@ -129,7 +129,7 @@ def compile_library_function_call(comp, expr, depth=0, function_name=None, names
 
     # REUSABLE_CALL_IR_MIGRATION: Imported callable identity/materialization policy is
     # compiler-owned, but argument names/types are still discovered from the materialized
-    # Blender node-group interface. Keep this probe behavior unchanged in this stage.
+    # Blender node-group interface. Keep this probe behavior unchanged in this migration.
     # Remove it when imported functions expose a Blender-independent callable signature
     # that semantic analysis can validate before function-group materialization.
     probe = comp.group.nodes.new("GeometryNodeGroup")

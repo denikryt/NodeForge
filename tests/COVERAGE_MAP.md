@@ -37,7 +37,7 @@
 ## Local function helper identity and titles
 
 - `tests/blender/test_local_function_multi_return.py`: metadata-based helper identity for long signatures, no false truncation collision, complete long-signature interfaces, readable helper datablock names and call-node titles, and legacy-name migration without datablock replacement.
-- `tests/blender/test_local_functions.py`, `tests/blender/test_stage18_local_functions.py`, and `tests/blender/test_update_group.py`: legacy short-name compatibility, real collision handling, rollback, and stable helper identity across updates.
+- `tests/blender/test_local_functions.py`, `tests/blender/test_structural_local_functions.py`, and `tests/blender/test_update_group.py`: legacy short-name compatibility, real collision handling, rollback, and stable helper identity across updates.
 
 ## Unique function-group instances
 
@@ -92,7 +92,7 @@
 
 - `tests/unit/test_call_resolution.py`: immutable callable-environment snapshots, exact builtin/system/local/helper/library precedence, canonical imported `FunctionId`, detached `__unique__` parsing, unresolved diagnostic precedence, and pure-resolution dependency boundaries.
 - `tests/unit/test_builtin_call_semantics.py`: exhaustive stateless-vs-stateful builtin classification, Blender-independent arity/type/keyword analysis, const-vs-runtime normalization, tuple results, raw single/named output modes, and explicit `geometry_builder()` expression diagnostics.
-- `tests/unit/test_semantic_analysis.py` and `tests/unit/test_semantic_ir.py`: mixed expressions with core calls remain on the Semantic IR path, dynamic extension/stateful builtin fallbacks stay explicit, `IRCall`/`IRTuple`/`IRNamedOutputs` invariants, raw attribute/string-subscript selection, canonical `NFType` call operands/results, and exact stage-15 migration-marker contracts.
+- `tests/unit/test_semantic_analysis.py` and `tests/unit/test_semantic_ir.py`: mixed expressions with core calls remain on the Semantic IR path, dynamic extension/stateful builtin fallbacks stay explicit, `IRCall`/`IRTuple`/`IRNamedOutputs` invariants, raw attribute/string-subscript selection, canonical `NFType` call operands/results, and exact Semantic Call IR migration-marker contracts.
 - `tests/blender/test_semantic_ir_compile.py`: core Call IR realization, depth-based node placement, raw-node dependency-first insertion-order exception, one-entry named-output structure, tuple selection, mixed-invalid raw-node error ordering, and stateful `grid`/`grid_uv` fallback behavior plus the corrected one-call/one-socket explicit-input contract.
 
 ## Blender group transaction backend
@@ -128,7 +128,7 @@
 
 - `tests/unit/test_semantic_structures.py`: detached tuple/named-output leaf descriptors, strict per-leaf Object provenance, Bundle leaf genericity, `IRBindLeaves` invariants, discarded-expression IR, forbidden aggregate `NFType` variants, and Blender-independent semantic-layer contracts.
 - `tests/unit/test_semantic_body.py`: IRBody tuple assignment/projection/unpack, stored raw named outputs, standalone `Object.info()` discard semantics, Object alias/pass-through identity and configuration lock, scalar rebinding with stale body-local Object state, and remaining whole-body fallback boundaries.
-- `tests/unit/test_semantic_analysis.py` and `tests/unit/test_semantic_ir.py`: body-owned versus legacy Object semantic ownership, exact Object Info configuration in IR, no migrated Object-info backend call, and exact Stage-18 compatibility markers.
+- `tests/unit/test_semantic_analysis.py` and `tests/unit/test_semantic_ir.py`: body-owned versus legacy Object semantic ownership, exact Object Info configuration in IR, no migrated Object-info backend call, and exact Structural/Object/Bundle semantics migration compatibility markers.
 - `tests/unit/test_semantic_backend_contract.py`: explicit Object Info configuration reaches the centralized Blender helper while legacy `ObjectValue` semantic fields remain untouched on the migrated path.
 - `tests/unit/test_builtin_call_semantics.py` and `tests/unit/test_bundle_type.py`: Bundle remains `NFType.BUNDLE`, runtime String bundle paths remain typed, and no structural schema/type layer is introduced.
 - `tests/blender/test_semantic_body_ir.py`, `tests/blender/test_raw_nodes.py`, `tests/blender/test_object_inputs.py`, `tests/blender/test_bundle_runtime.py`, and `tests/blender/test_local_function_multi_return.py`: real-Blender topology/behavior regression targets for tuple/named-output body IR, Object Info, Bundle routing, and intentionally retained dynamic multi-return fallback.
@@ -136,7 +136,7 @@
 ## Structured runtime control-flow Semantic IR
 
 - `tests/unit/test_semantic_control_flow.py`: pure runtime-if construction, top-level versus Repeat-local policy, legacy constant threading, deterministic Repeat mutation/state order, Int/Float state contracts, lexical iteration ownership, non-publishing nested carried state, durable branch input ordinals, and atomic fallback classification.
-- `tests/unit/test_semantic_ir.py`: immutable `IRBranchMerge` / `IRIf` / `IRRepeatState` / `IRRepeat` structural invariants plus exact stage-19 compatibility-marker contracts.
+- `tests/unit/test_semantic_ir.py`: immutable `IRBranchMerge` / `IRIf` / `IRRepeatState` / `IRRepeat` structural invariants plus exact Runtime Control-Flow IR migration compatibility-marker contracts.
 - `tests/unit/test_input_declaration_identity.py`: deterministic non-rewinding `InputDeclarationId` stable keys across opposite runtime branches.
 - `tests/blender/test_semantic_body_ir.py`: runtime-if IR routing, Switch topology, compile-time-if no-Switch behavior, and distinct branch declaration metadata.
 - `tests/blender/test_runtime_range_state.py`: ordinary/nested Repeat IR routing, state item order/socket types, lexical iteration restoration, Repeat-local runtime-if behavior, Int physical-item versus Float logical-exit behavior, Bundle state, and evaluated nested results.

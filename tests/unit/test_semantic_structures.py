@@ -1,4 +1,4 @@
-"""Stage-18 compiler-owned structural and Object semantic contracts."""
+"""Structural/Object/Bundle semantics migration compiler-owned structural and Object semantic contracts."""
 
 import ast
 from pathlib import Path
@@ -23,7 +23,13 @@ from NodeForge.semantic_values import (
     ObjectInfoState,
     ObjectSemanticId,
     ObjectSemanticSnapshot,
+    ArrayResultShape,
     RuntimeResultShape,
+    StructuralArrayId,
+    StructuralArrayRef,
+    StructuralArraySnapshot,
+    StructuralArrayState,
+    StructuralRuntimeLeaf,
     StructuralBindingKind,
     StructuralBindingSymbol,
     StructuralLeafBinding,
@@ -144,14 +150,24 @@ def test_ir_bind_leaves_requires_exact_typed_unique_result_leaves():
         )
 
 
-def test_ir_bind_leaves_rejects_irarray_results():
-    value = IRValue(0, NFType.FLOAT)
-    program = IRProgram((), IRArray((value,)))
+def test_ir_bind_leaves_recursively_accepts_irarray_results_in_source_order():
+    """Array leaves participate in the existing exact leaf-binding contract recursively."""
+    first = IRValue(0, NFType.FLOAT)
+    second = IRValue(1, NFType.VECTOR)
+    third = IRValue(2, NFType.INT)
+    program = IRProgram((), IRArray((first, IRArray((second, third)))))
+    bindings = (
+        IRLeafBinding(first, BindingId("dest", 0), NFType.FLOAT),
+        IRLeafBinding(second, BindingId("dest", 1), NFType.VECTOR),
+        IRLeafBinding(third, BindingId("dest", 2), NFType.INT),
+    )
+    record = IRBindLeaves(program, bindings)
+    assert record.bindings == bindings
 
-    with pytest.raises(TypeError, match="does not accept IRArray"):
+    with pytest.raises(ValueError, match="exact runtime leaf"):
         IRBindLeaves(
             program,
-            (IRLeafBinding(value, BindingId("dest", 0), NFType.FLOAT),),
+            (IRLeafBinding(IRValue(9, NFType.FLOAT), BindingId("dest", 3), NFType.FLOAT),),
         )
 
 
@@ -184,3 +200,86 @@ def test_ir_structural_records_do_not_embed_backend_containers_or_mutable_fields
     assert all(field.name not in {"tuple_value", "node_result"} for field in __import__("dataclasses").fields(IRBindLeaves))
     assert NodeResult is not IRNamedOutputs
     assert TupleValue is not IRTuple
+
+
+def test_structural_array_records_validate_identity_immutability_and_detached_snapshot():
+    """Structural-array records are canonical, immutable, and detached from source mappings."""
+    with pytest.raises(ValueError, match="non-negative"):
+        StructuralArrayId(-1)
+    with pytest.raises(TypeError, match="BindingId"):
+        StructuralRuntimeLeaf(object(), NFType.FLOAT)
+    with pytest.raises(TypeError, match="NFType"):
+        StructuralRuntimeLeaf(BindingId("owner", 0), "FLOAT")
+
+    array_id = StructuralArrayId(0)
+    state = StructuralArrayState((StructuralRuntimeLeaf(BindingId("owner", 0), NFType.FLOAT),))
+    source_bindings = {"items": array_id}
+    source_states = {array_id: state}
+    snapshot = StructuralArraySnapshot(source_bindings, source_states)
+    source_bindings["other"] = array_id
+    source_states[array_id] = StructuralArrayState(())
+    assert set(snapshot.bindings) == {"items"}
+    assert snapshot.states[array_id] is state
+    with pytest.raises(TypeError):
+        snapshot.bindings["x"] = array_id
+    with pytest.raises(TypeError):
+        snapshot.states[array_id] = StructuralArrayState(())
+
+
+def test_structural_array_shape_reconstruction_preserves_nested_fixed_and_object_provenance():
+    """Recursive heap reconstruction reuses fixed structures and Object identity by BindingId."""
+    float_binding = BindingId("owner", 0)
+    object_binding = BindingId("owner", 1)
+    tuple_binding = BindingId("owner", 2)
+    object_id = ObjectSemanticId(7)
+    inner_id = StructuralArrayId(0)
+    outer_id = StructuralArrayId(1)
+    fixed = StructuralBindingSymbol(
+        StructuralBindingKind.TUPLE,
+        (StructuralLeafBinding(("index", 0), tuple_binding, NFType.BUNDLE),),
+    )
+    states = {
+        inner_id: StructuralArrayState((StructuralRuntimeLeaf(object_binding, NFType.OBJECT),)),
+        outer_id: StructuralArrayState((
+            StructuralRuntimeLeaf(float_binding, NFType.FLOAT),
+            StructuralArrayRef(inner_id),
+            fixed,
+        )),
+    }
+    snapshot = StructuralArraySnapshot({"outer": outer_id}, states)
+    shape = snapshot.result_shape(outer_id, {object_binding: object_id})
+    assert isinstance(shape, ArrayResultShape)
+    assert shape.items[0] == RuntimeResultShape(NFType.FLOAT)
+    assert shape.items[1].items[0] == RuntimeResultShape(NFType.OBJECT, object_id)
+    assert shape.items[2].items[0] == RuntimeResultShape(NFType.BUNDLE)
+
+
+def test_structural_array_shape_reconstruction_rejects_direct_and_indirect_cycles():
+    """Recursive structural-array graphs fail with the controlled cycle diagnostic."""
+    first = StructuralArrayId(0)
+    second = StructuralArrayId(1)
+    direct = StructuralArraySnapshot(
+        {"a": first},
+        {first: StructuralArrayState((StructuralArrayRef(first),))},
+    )
+    with pytest.raises(Exception, match="recursive structural arrays are not supported"):
+        direct.result_shape(first, {})
+
+    indirect = StructuralArraySnapshot(
+        {"a": first},
+        {
+            first: StructuralArrayState((StructuralArrayRef(second),)),
+            second: StructuralArrayState((StructuralArrayRef(first),)),
+        },
+    )
+    with pytest.raises(Exception, match="recursive structural arrays are not supported"):
+        indirect.result_shape(first, {})
+
+
+def test_structural_array_dataclasses_do_not_embed_backend_or_ast_payload_fields():
+    """Frontend array records expose only semantic identities, types, and immutable structure."""
+    import dataclasses
+
+    forbidden = {"value", "socket", "node", "ast", "ir_value", "backend"}
+    for record_type in (StructuralArrayId, StructuralRuntimeLeaf, StructuralArrayRef, StructuralArrayState, StructuralArraySnapshot):
+        assert forbidden.isdisjoint(field.name for field in dataclasses.fields(record_type))

@@ -252,6 +252,11 @@ def compile_statement(
             comp.compile_time.bind(target, _const_eval(stmt.value, comp.compile_time.values))
         except CompileError:
             comp.compile_time.discard(target)
+        # STRUCTURAL_ARRAYS_LEGACY_ASSIGNMENT_COMPAT: Accepted Semantic Body IR now owns source array
+        # construction, persistent leaves, and alias identity. Keep this Python-list/backend construction
+        # only when a separately marked non-array category has already routed the complete body through the
+        # legacy statement engine. Do not call this branch from Semantic IR lowering. Remove it when no
+        # supported compatibility body containing array assignment is compiled by compile_statement().
         if isinstance(stmt.value, (ast.List, ast.Tuple)):
             if isinstance(stmt.value, ast.List) and not stmt.value.elts:
                 comp.compile_time.discard(target)
@@ -308,6 +313,11 @@ def compile_statement(
             comp.compile(expr)
             ctx.auto_final_output = None
             return
+        # STRUCTURAL_ARRAYS_LEGACY_APPEND_COMPAT: Accepted Semantic Body IR now owns append mutation through
+        # StructuralArrayId/state. Keep this in-place Python-list append only for complete legacy compatibility
+        # bodies selected because of another unmigrated category. Do not share these list objects with the new
+        # semantic array heap. Remove this branch when no supported compatibility body containing append is
+        # compiled by compile_statement().
         if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute) and expr.func.attr == "append":
             if not isinstance(expr.func.value, ast.Name) or len(expr.args) != 1:
                 raise CompileError("append must look like items.append(value)")
@@ -353,6 +363,11 @@ def compile_statement(
                 ctx.auto_final_output = (last_name, results[last_name])
             return
 
+        # STRUCTURAL_ARRAYS_LEGACY_FOR_COMPAT: Accepted Semantic Body IR now unrolls ordinary for-loops over
+        # body-owned arrays and compile-time list/tuple/range iterables before Blender lowering. Keep this
+        # Compiler/backend unroller only for complete legacy compatibility bodies selected by another
+        # unmigrated category. It must never be entered after IRBody acceptance. Remove it when no supported
+        # compatibility body containing an ordinary structural for-loop uses compile_statement().
         iter_values = None
         if isinstance(stmt.iter, ast.Name):
             iter_values = _as_array_iter_value(comp.legacy_structural_binding(stmt.iter.id))

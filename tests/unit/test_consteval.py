@@ -284,3 +284,103 @@ output("x", x)
     )
 
     assert _infer_input_types(stmts).get("inner_count") == TYPE_INT
+
+
+def test_preprocess_failed_runtime_loop_trial_retains_original_for_without_partial_ast():
+    """Any retained runtime statement makes preprocessing keep the original loop exactly once."""
+    retained, consts = _preprocess_source(
+        "items = []\n"
+        "for i in range(2):\n"
+        "    value = input_float('X')\n"
+        "    items.append(i)\n"
+        "output('x', 1)\n"
+    )
+    loops = [stmt for stmt in retained if isinstance(stmt, ast.For)]
+    assert len(loops) == 1
+    assert ast.unparse(loops[0]).startswith("for i in range(2):")
+    assert "i" not in consts
+
+
+def test_compile_time_append_preserves_legacy_ignored_keyword_compatibility():
+    """Compile-time list append keeps the v0.51.3 behavior of ignoring keyword arguments."""
+    retained, constants = _preprocess_source(
+        "items = [1]\n"
+        "items.append(2, ignored=missing)\n"
+    )
+    assert retained == []
+    assert constants["items"] == [1, 2]
+
+
+def test_nested_speculative_loop_append_journal_rolls_back_to_outer_savepoint():
+    """Successful inner trials remain rollback-visible when a later outer statement rejects the trial."""
+    from NodeForge.consteval import _handle_compile_time_stmt
+
+    shared = []
+    state = CompileTimeState({"items": shared})
+    stmt = ast.parse(
+        "for i in range(2):\n"
+        "    for j in range(1):\n"
+        "        items.append(j)\n"
+        "    runtime_statement()\n"
+    ).body[0]
+    out = []
+    _handle_compile_time_stmt(stmt, state, out)
+    assert out == [stmt]
+    assert shared == []
+    assert state.get("items") is shared
+
+
+def test_preprocess_preserves_flat_unpack_for_on_legacy_direct_append_path():
+    """v0.51.3's direct-append loop boundary retains flat unpack for whole-body legacy routing."""
+    retained, _consts = _preprocess_source(
+        "items = []\n"
+        "for x, y in [[1, 2]]:\n"
+        "    items.append(x + y)\n"
+        "output(items[0])\n"
+    )
+    loops = [stmt for stmt in retained if isinstance(stmt, ast.For)]
+    assert len(loops) == 1
+    assert isinstance(loops[0].target, ast.Tuple)
+
+
+def test_preprocess_still_rejects_flat_unpack_for_without_legacy_compatibility_body():
+    """Flat unpack remains rejected when v0.51.3 preprocessing would have validated the target."""
+    with pytest.raises(CompileError, match="Only simple compile-time for targets are supported"):
+        _preprocess_source(
+            "for x, y in [[1, 2]]:\n"
+            "    total = x + y\n"
+        )
+
+def test_geometry_builder_loop_preprocessing_stays_intact_for_legacy_builder_route():
+    """This structural-array and compile-time unrolling refactor must retain builder loops exactly once for the later builder migration boundary."""
+    retained, _consts = _preprocess_source(
+        "builder = geometry_builder()\n"
+        "for i in range(3):\n"
+        "    builder.add(cube(i + 1))\n"
+        "builder.geometry\n"
+    )
+    loops = [stmt for stmt in retained if isinstance(stmt, ast.For)]
+    assert len(loops) == 1
+    assert ast.unparse(loops[0]) == "for i in range(3):\n    builder.add(cube(i + 1))"
+
+
+def test_compile_time_append_journal_savepoint_rolls_back_only_its_suffix():
+    """Nested speculative transactions preserve parent journal entries below their savepoint."""
+    from NodeForge.consteval import (
+        _compile_time_list_append_savepoint,
+        _rollback_compile_time_list_appends_to,
+    )
+
+    outer = []
+    inner = []
+    journal = [(outer, 0)]
+    outer.append("outer")
+    savepoint = _compile_time_list_append_savepoint(journal)
+    journal.append((inner, 0))
+    inner.append("inner")
+
+    _rollback_compile_time_list_appends_to(journal, savepoint)
+
+    assert outer == ["outer"]
+    assert inner == []
+    assert journal == [(outer, 0)]

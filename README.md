@@ -249,7 +249,7 @@ Use `input_bundle("State")` to expose a Bundle group input. Bundle values may cr
 
 `bundle_get()` requires an explicit `typ=` token because an opaque Bundle input does not carry a compiler-side schema. The path may be a string literal or a runtime `String` value. `bundle_set()` infers the stored item type from its runtime value.
 
-NodeForge arrays/lists remain compile-time containers used to generate graph structure. They may contain Bundle values, but an array is not itself a Bundle item. Bundle is a Blender runtime socket value carried through node links.
+NodeForge arrays/lists remain compiler-side structural containers used to generate graph structure. They may contain runtime values such as Bundle values, but an array is not itself a Blender socket value. Ordinary `for` over an array or compile-time list/tuple/range is expanded while compiling and does not create a Repeat Zone; use `repeat_range(...)` for runtime Repeat Zone loops. Bundle remains a Blender runtime socket value carried through node links.
 
 
 ### Object inputs

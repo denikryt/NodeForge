@@ -69,7 +69,7 @@ from .blender_group_backend import BlenderGroupBackend, BlenderGroupBuildTransac
 from .resolved_environment import ResolvedEnvironment, resolve_environment
 
 # BLENDER_TRANSACTION_LEGACY_ALIAS_MIGRATION: Keep the historical transaction class
-# names importable from compiler.py for one compatibility stage after physical Blender
+# names importable from compiler.py for one compatibility phase after physical Blender
 # transaction ownership moves to blender_group_backend.py. New production code must
 # import BlenderGroupBuildTransaction from the Blender group backend module and must not
 # depend on these aliases. Remove them after the next compatibility sweep confirms no
@@ -231,12 +231,12 @@ class Compiler:
         # when all supported bodies, interface/stateful input publication, and runtime control-flow
         # lowering pass backend binding materializations directly into body lowering.
         self._runtime_binding_values: dict[BindingId, Value] = {}
-        # COMPILE_TIME_STATE_LEGACY_STRUCTURAL_COMPAT: CompileTimeState now owns only const-evaluable
-        # source bindings. Mutable runtime-value arrays, GeometryBuilder/CompileTimeObject state, and
-        # dynamic structural call results are neither compile-time constants nor migrated runtime-semantic
-        # bindings, so they remain quarantined in this compatibility store and force whole-body fallback.
-        # Never move these backend/compiler objects into CompileTimeState merely to unify name storage.
-        # Remove this store when every remaining structural category has explicit frontend semantics.
+        # STRUCTURAL_ARRAYS_LEGACY_STRUCTURAL_COMPAT: Accepted Semantic Body IR now owns mutable source arrays
+        # through StructuralArrayId/state and never publishes them here. GeometryBuilder/CompileTimeObject
+        # state, dynamic structural call results, and arrays reconstructed only while an entire body is on a
+        # separately marked legacy compatibility route may still use this store. Never read this mapping from
+        # new semantic-array code. Remove it when remaining structural categories and compatibility-only
+        # compile_statement() bodies no longer require compiler/backend container objects by source name.
         self._legacy_structural_bindings: dict[str, object] = {}
         self._interface_inputs_by_identifier = {}
         self._interface_inputs_by_socket_pointer = {}
