@@ -1,242 +1,70 @@
 # NodeForge
 
-NodeForge is a Blender add-on that compiles a small Python-like DSL into Geometry Nodes node groups.
+NodeForge is a Blender add-on for describing Geometry Nodes logic in a Python-like language. The source is compiled into a native Geometry Nodes group, so the result inside Blender is an ordinary node graph with the expected sockets, links and parameters.
 
-The DSL is written as text, compiled into a `GeometryNodeTree`, and inserted or updated inside Blender. It is designed for procedural geometry scripts that benefit from readable source code while still producing normal Blender node groups.
+The language is intended to make procedural logic easier to express and maintain as the graph grows. Mathematical relationships can be written directly as expressions, while Geometry Nodes operations are available through functions that fit naturally into Python-like code. The source therefore stays close to the logic of the setup and can remain readable even when the generated node graph becomes large.
 
-## Main concepts
+NodeForge also works well with AI-generated code. An AI model can describe the Geometry Nodes logic in the same high-level language, while NodeForge handles the Blender-specific work needed to build the final node graph. This keeps generated code simpler and gives the AI fewer Blender API details to get wrong.
 
-### DSL source
+NodeForge scripts can call reusable functions and can be extended through installable third-party packages. This allows project-specific operations and larger procedural components to become part of the language used by other scripts.
 
-A NodeForge script describes a node group. The script declares inputs, builds geometry and field expressions, and writes one or more outputs.
+The syntax follows Python as closely as the Geometry Nodes model allows. NodeForge adds a set of functions and language rules for concepts that are specific to Geometry Nodes, while ordinary expressions and control flow retain familiar Python syntax.
+
+The built-in function library currently covers only part of Geometry Nodes. When a dedicated NodeForge function is not available yet, `node(...)` can create the Blender node directly. It accepts the Blender node type together with its inputs, properties and output declaration, so the same language can still reach nodes that do not yet have a dedicated wrapper.
+
+For example, the Transform Geometry node can be written through the dedicated `transform(...)` function:
 
 ```python
-resolution = input_int("Resolution", default=120)
-max_iter = input_int("Max Iter", default=32)
+size = input_float("Size", default=2.0)
+height = input_float("Height", default=1.0)
 
-from examples import mandelbrot
-
-geo = mandelbrot(resolution=resolution, max_iter=max_iter)
+geo = transform(cube(size), translation=vector(0, 0, height))
 output("Geometry", geo)
 ```
 
-### Built-ins
-
-Built-ins are the primitive operations of the DSL. They live in `builtins/` and are registered through `builtins/registry.py`.
-
-Built-ins cover input sockets, scalar math, vector math, field inputs, geometry primitives, attributes, materials, instancing, and runtime loops. They form the compiler-level vocabulary used by scripts and library functions.
-
-### Runtime Repeat Zones
-
-Use `repeat_range()` when a loop count is a runtime Int value and the loop must execute inside Geometry Nodes. Nested `repeat_range()` loops lower to nested Blender Repeat Zones, and loop-carried state flows from the enclosing Repeat Zone into the inner zone and back out again.
+The same Blender node can be created through `node(...)`:
 
 ```python
-x = 0
-outer_count = input_int("Outer Count", default=2)
-inner_count = input_int("Inner Count", default=3)
+size = input_float("Size", default=2.0)
+height = input_float("Height", default=1.0)
 
-for i in repeat_range(outer_count):
-    for j in repeat_range(inner_count):
-        x = x + 1
+geo = cube(size)
 
-output("Count", x)
+geo = node(
+    "GeometryNodeTransform",
+    inputs={
+        "Geometry": geo,
+        "Translation": vector(0, 0, height),
+    },
+    output="Geometry",
+    typ=Geometry,
+)
+
+output("Geometry", geo)
 ```
 
-Each loop index is scoped to its own loop body. Existing scalar, vector, Boolean, Geometry, and `geometry_builder()` Repeat state can be carried through nested loops.
+The dedicated function is the more convenient form when NodeForge provides one. `node(...)` keeps the rest of Geometry Nodes available while the built-in library continues to grow.
 
-### Interface panels
+### How the compiler works
 
-Use the top-level `panel()` declaration to organize existing group inputs into native Blender interface panels. Members are simple variable names that already resolve to inputs of the current node group. The list order is the socket order inside the panel, and `collapsed=True` makes the native Blender panel closed by default.
-
-```python
-stem_length = input_float("Stem Length", default=0.5)
-stem_radius = input_float("Stem Radius", default=0.05)
-branch_angle = input_float("Branch Angle", default=48.0)
-
-panel([stem_length, stem_radius], name="Stem")
-panel([branch_angle], name="Branching", collapsed=True)
-
-output("Length", stem_length)
-```
-
-`panel()` is an interface declaration and is written directly in the group body. Each input can belong to one panel. Inputs omitted from all `panel()` declarations remain at the root of the group interface. The initial DSL surface creates root-level panels; native nested panels are still preserved when NodeForge updates an existing Blender interface.
-
-
-### Script library catalogs
-
-NodeForge has three explicit script-library catalogs. Reusable helpers live in `functions/`, bundled demonstrations live in `examples/`, and user-owned scripts are exposed through the Local catalog. The managed Local catalog lives in Blender user data; additional external source folders can be linked by path. Catalog entries are callable only after a source-local import.
-
-```python
-from functions import sierpinski_carpet
-from examples import mandelbrot as mb
-from local import my_custom_script
-```
-
-`from functions import *`, `from examples import *`, and `from local import *` expand only the selected catalog for the current source file. They do not mutate the global DSL built-in namespace.
-
-Managed and linked Local source roots may contain folders for organization, for example `math/noise.nf`, but import names remain flat: use `from local import noise`, not `from local.math import noise`.
-
-Each new compilation materializes fresh Local dependency groups. Blender keeps the logical base name and assigns its normal `.001`, `.002`, and later suffixes when earlier versions already exist. Existing generated node groups therefore keep their original Local dependencies, while a newly compiled group receives a new set. Repeated calls to the same Local script within one group build share that build's single fresh backing group. Select an existing NodeForge library group and use **Reload from Source** to rebuild it from the current catalog source while keeping the selected root group datablock, node input overrides, and external links. Use **Update Selected NodeGroup** for the manual Blender Text workflow.
-
-Compiled NodeForge node groups remain usable when the add-on is disabled or uninstalled. Generated Blender resources referenced by a live compiled group are preserved with the `.blend`; NodeForge only cleans resources that are proven orphaned or replaced by a later successful build.
-
-The managed Local catalog is stored in Blender's user data directory rather than inside the installed NodeForge add-on. Everything inside this managed root is treated as NodeForge-managed storage. The Local panel presents it as a small file browser: click a row to select it, use the arrow on a folder row to enter that folder, and use the back button to return to its parent. **New Folder** creates a directory in the current managed location, **Save** writes the selected Blender Text script into that location, **Delete File** removes a selected managed script, and **Delete Folder** removes a selected managed folder when it is empty.
-
-**Add Folder...** attaches one external directory as a live, read-only Local root. Imported roots cannot overlap the managed Local root or another imported root. Their files and subfolders can be browsed and used but are never deleted or overwritten by Local browser actions. **Remove from Local** detaches an imported root without changing anything on disk; the same action remains available for a missing imported root and for legacy individually linked-file registrations created by older NodeForge versions. New individual-file imports are not created.
-
-Folder paths organize the UI only; Local import names remain flat. Independent managed/imported roots may contain scripts with the same public stem. The browser continues to address those files by their concrete paths, while `from local import <name>` reports a controlled duplicate-source error until the language-level name is unambiguous.
-
-### Python backend helpers
-
-Reusable function packages may use `functions/<name>/function.py`. Example packages may use `examples/<name>/backend.py` only as a private implementation detail behind `source.nf`. User-owned Local scripts are DSL-only and do not load `function.py` or `backend.py`.
-
-Package-local backend helpers can expose `BACKEND_BUILTINS`. These helpers are visible while compiling that package's `source.nf` and stay scoped to that package.
-
-Use backend helpers for package-specific Blender API work such as constructing a custom shader material. Keep generic node operations in DSL built-ins.
-
-## Project layout
+Internally, NodeForge parses the source, resolves its types and operations, builds a semantic intermediate representation, and lowers that representation into Blender nodes. The compiler owns the translation from source-level logic to the final `GeometryNodeTree`, keeping the language-facing part of the system separate from Blender graph construction.
 
 ```text
-NodeForge/
-├── __init__.py              # Blender add-on entry point
-├── ui.py                    # NodeForge sidebar, operators, library UI
-├── compiler.py              # DSL compiler orchestration
-├── parsing.py               # Python AST parsing and source inspection
-├── consteval.py             # Compile-time expression evaluation
-├── statements.py            # Top-level statement compilation helpers
-├── runtime.py               # repeat_range / Repeat Zone state handling
-├── geometry.py              # Low-level Geometry Nodes construction helpers
-├── nodes.py                 # Node creation and link utilities
-├── values.py                # Typed socket wrappers
-├── compile_time.py          # Compile-time-only object guards
-├── interface.py             # Node group interface sockets and defaults
-├── library.py               # Catalog discovery, local saves, materialization
-├── builtins/                # DSL primitive registry and category modules
-├── systems/                 # Registry for systems supplied by installed packages
-├── functions/               # Reusable NodeForge functions
-├── examples/                # Bundled demo/showcase scripts
-├── local/                   # Compatibility placeholder; user Local sources live outside the add-on
-└── docs/                    # Architecture and authoring documentation
+NodeForge source
+    ↓
+Python AST
+    ↓
+semantic analysis and NFType checking
+    ↓
+typed Semantic IR
+    ↓
+Blender lowering and materialization
+    ↓
+GeometryNodeTree
 ```
 
-## Documentation
+### Learn more in the documentation: 
+https://denikryt.github.io/NodeForgeDocs/
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — responsibility boundaries between DSL core, built-ins, function library, and Python backends.
-- [`docs/WRITING_FUNCTIONS.md`](docs/WRITING_FUNCTIONS.md) — guide for adding functions under `functions/`.
-- [`docs/BUILTINS.md`](docs/BUILTINS.md) — reference for DSL built-ins.
-- [`docs/TESTING.md`](docs/TESTING.md) — commands for running unit and Blender tests.
-
-
-## NodeForge packages
-
-NodeForge supports installable package/library directories and zip archives. Packages contain `nodeforge_package.json` plus declared `functions`, `examples`, and/or `systems` roots. Installed packages extend the existing `functions` and `examples` catalogs and unqualified system constructor namespace. See `docs/PACKAGES.md` for the package format and safety rules.
-
-## Material inputs
-
-Use `input_material()` to expose a Material socket on the generated node group. The material can be selected in the Geometry Nodes modifier or connected from another node group.
-
-```python
-grass_material = input_material("Grass Material")
-geo = set_material(cube(1.0), grass_material)
-output("Geometry", geo)
-```
-
-`set_material()` accepts either a runtime `Material` value or a compile-time material name:
-
-```python
-geo = set_material(geo, "Grass")
-```
-
-The `Material` type token is supported by local functions, library function group sockets, and compatible raw node inputs and outputs.
-
-## String inputs
-
-Use `input_string(name, default="")` to expose a runtime String socket. String values can be passed through local functions, installed library functions, compatible raw Blender node sockets, outputs, and runtime `if` expressions.
-
-```python
-attribute_name = input_string("Attribute", default="Weight_A")
-
-weight = node(
-    "GeometryNodeInputNamedAttribute",
-    props={"data_type": "FLOAT"},
-    inputs={"Name": attribute_name},
-    output="Attribute",
-    typ=Float,
-)
-
-geo = store_named_attribute(
-    geo,
-    attribute_name,
-    weight,
-    domain="POINT",
-    type="FLOAT",
-)
-```
-
-The statement form accepts the same runtime String name:
-
-```python
-attribute_name = input_string("Attribute", default="Weight_A")
-store(attribute_name, position().x, domain="POINT", type="FLOAT")
-```
-
-`String` is a runtime socket type. Configuration arguments such as `domain=`, `type=`, raw-node `props=`, node identifiers, and socket names remain compile-time values. String is not a supported stored attribute data type; `store()` and `store_named_attribute()` continue to store Float, Int, Vector, Color, or Bool values.
-
-
-## Bundle values
-
-Use `Bundle` when several heterogeneous runtime values should travel through one Geometry Nodes socket. `bundle(...)` creates a Blender Combine Bundle node, `bundle_get(...)` reads one path, and `bundle_set(...)` writes or replaces one path.
-
-```python
-state = bundle(
-    name=input_string("Name", default="leaf_tip"),
-    translation=input_vector("Translation"),
-    enabled=input_bool("Enabled"),
-)
-
-translation = bundle_get(state, "translation", typ=Vector)
-state = bundle_set(state, "translation", translation * 2.0)
-output("State", state)
-```
-
-Use `input_bundle("State")` to expose a Bundle group input. Bundle values may cross local-function and installed library-function boundaries, may be nested inside another Bundle, and may be used as native Switch or Repeat Zone state where Blender provides Bundle sockets.
-
-`bundle_get()` requires an explicit `typ=` token because an opaque Bundle input does not carry a compiler-side schema. The path may be a string literal or a runtime `String` value. `bundle_set()` infers the stored item type from its runtime value.
-
-NodeForge arrays/lists remain compile-time containers used to generate graph structure. They may contain Bundle values, but an array is not itself a Bundle item. Bundle is a Blender runtime socket value carried through node links.
-
-
-### Object inputs
-
-Create an Object socket with `input_object(name)`. Configure the lazy Object Info reader before accessing object data:
-
-```python
-source = input_object("Source")
-source.info(transform_space="RELATIVE", as_instance=False)
-output("Geometry", source.geometry)
-```
-
-`source.geometry`, `source.location`, `source.rotation`, and `source.scale` share one lazily created Object Info node. `source.info()` accepts `transform_space="ORIGINAL"|"RELATIVE"` and `as_instance=True|False`; the defaults are `ORIGINAL` and `True`. Configure it before the first property access. Object values remain Object sockets when passed to raw nodes, local functions, and installed library functions.
-
-## Local function node titles
-
-Local-function call nodes and their backing helper node groups use the function identifier as a short readable title. For example, `mix_biomes()` is shown as **Mix Biomes** and `generate_chunk()` as **Generate Chunk**. Helper identity and reuse are determined by ownership metadata for the namespace, function name, parameter signature, source, and return shape, not by the Blender datablock name.
-
-## Local function return values
-
-A script-local function may return one runtime value or a fixed flat tuple of runtime values. A tuple return creates one output socket per element on the reusable helper group.
-
-```python
-def split_values(value: Float):
-    doubled = value * 2
-    tripled = value * 3
-    return doubled, tripled
-
-first, second = split_values(input_float("Value"))
-result = split_values(input_float("Other Value"))
-last = result[-1]
-```
-
-Tuple results are compiler-side containers. Store them in one variable, unpack them into a flat tuple or list target, or select an element with a compile-time integer index. Arithmetic, `output()`, runtime indexing, nested tuples, starred unpacking, tuple parameters, and list returns require selecting or unpacking an individual value first.
-
-Local-function positional parameters accept simple NodeForge type annotations: `Float`, `Int`, `Bool`, `Vector`, `Geometry`, `Material`, `Object`, `String`, and `Bundle`. An annotation constrains the helper input socket type; unannotated parameters retain call-site type inference.
+### Support the developer:
+https://www.patreon.com/c/nachitima
