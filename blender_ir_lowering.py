@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
-from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_INT, TYPE_VECTOR
+from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR
 from .errors import CompileError
 from .compiler_identities import BindingId
+from .group_context import GroupContextSlot
 from .nodes import _boolean_math, _combine_xyz_mixed, _compare, _int_value, _math, _separate_xyz, _string_value, _switch, _value, _vector_math
 from .geometry import (
     _capture_attribute_geometry,
@@ -17,6 +18,7 @@ from .geometry import (
     _instance_on_points,
     _join_geometry,
     _line_geometry,
+    _grid_geometry,
     _point_geometry,
     _points_geometry,
     _polyline_geometry,
@@ -41,6 +43,8 @@ from .semantic_ir import (
     IRCompare,
     IRArray,
     IRConditional,
+    IRContextRead,
+    IRContextWrite,
     IRLiteral,
     IRObjectProperty,
     IRUnary,
@@ -55,9 +59,10 @@ from .semantic_ir import (
     IRDiscardExpression,
     IRIf,
     IRRepeat,
+    IRPanelDeclaration,
 )
 from .values import NodeResult, ObjectValue, TupleValue, Value
-from .interface import _create_group_input_socket
+from .interface import _create_group_input_socket, _create_interface_panel, interface_item_for_group_input_value
 from .runtime import _create_repeat_zone, _socket_by_name
 
 
@@ -72,10 +77,15 @@ class BlenderIRLoweringContext:
 
     group: object
     runtime_bindings: Mapping[BindingId, Value]
+    group_context_values: Mapping[GroupContextSlot, Value] = None
 
     def __post_init__(self):
-        """Freeze the binding container while retaining exact backend Value identity."""
+        """Freeze runtime bindings and detach mutable contextual backend state."""
         object.__setattr__(self, "runtime_bindings", MappingProxyType(dict(self.runtime_bindings)))
+        initial = {} if self.group_context_values is None else dict(self.group_context_values)
+        if not all(isinstance(slot, GroupContextSlot) and isinstance(value, Value) for slot, value in initial.items()):
+            raise TypeError("group_context_values must map GroupContextSlot to Value")
+        object.__setattr__(self, "group_context_values", initial)
 
 
 def _position(depth):
@@ -309,6 +319,14 @@ def _lower_builtin_call(context, operation, operands, x, y):
     if name == "line":
         slots = options["slots"]
         return _line_geometry(group, _slot_value(slots[0], operands), _slot_value(slots[1], operands), x, y)
+    if name == "grid":
+        slots = options["slots"]
+        result = _grid_geometry(group, _slot_value(slots[0], operands), _slot_value(slots[1], operands), x, y)
+        if not isinstance(result, tuple) or len(result) != 2:
+            raise CompileError("Internal error: grid backend must return Geometry and UV values")
+        if result[0].typ is not TYPE_GEOMETRY or result[1].typ is not TYPE_VECTOR:
+            raise CompileError("Internal error: grid backend result types do not match Call IR")
+        return result
     if name == "set_position":
         selection = operands[2] if len(operands) > 2 else None
         return _set_position_geometry(group, operands[0], operands[1], selection=selection, x=x, y=y)
@@ -460,6 +478,16 @@ def _execute_operation(context, operation, materialized, base_depth, runtime_bin
     if isinstance(operation, IRCall):
         _lower_call(context, operation, materialized, x, y)
         return
+    if isinstance(operation, IRContextRead):
+        value = context.group_context_values.get(operation.slot)
+        if not isinstance(value, Value):
+            raise CompileError(f"Internal error: unavailable backend group context {operation.slot.value}")
+        _store_result(materialized, operation.result, value)
+        return
+    if isinstance(operation, IRContextWrite):
+        value = _materialized_value(materialized, operation.value)
+        context.group_context_values[operation.slot] = value
+        return
     raise CompileError(f"Internal error: unsupported Semantic IR operation {type(operation).__name__}")
 
 
@@ -496,10 +524,12 @@ class BodyLoweringResult:
     explicit_outputs: tuple[tuple[str, Value], ...]
     auto_output: tuple[str, Value] | None
     runtime_bindings: Mapping[BindingId, Value]
+    group_context_values: Mapping[GroupContextSlot, Value]
 
     def __post_init__(self) -> None:
-        """Freeze the backend binding view returned to the enclosing lowering scope."""
+        """Freeze detached backend binding and contextual-state snapshots."""
         object.__setattr__(self, "runtime_bindings", MappingProxyType(dict(self.runtime_bindings)))
+        object.__setattr__(self, "group_context_values", MappingProxyType(dict(self.group_context_values)))
 
 
 def _coerce_branch_value(value: Value, target_type):
@@ -573,6 +603,19 @@ def _lower_body_internal(
                 statement.value.result.typ,
             )
             auto_output = ("out", value)
+            continue
+        if isinstance(statement, IRPanelDeclaration):
+            if group_input is None:
+                raise CompileError("Internal error: panel declaration requires Group Input context")
+            sockets = []
+            for binding_id in statement.member_binding_ids:
+                value = runtime_bindings.get(binding_id)
+                iface_item = interface_item_for_group_input_value(context.group, group_input, value)
+                if iface_item is None:
+                    raise CompileError("Internal error: semantic panel member is not a physical Group Input")
+                sockets.append(iface_item)
+            _create_interface_panel(context.group, sockets, statement.name, collapsed=statement.collapsed)
+            auto_output = None
             continue
         if isinstance(statement, IRIf):
             condition = _require_body_value_type(
@@ -674,7 +717,12 @@ def _lower_body_internal(
                     auto_output = (state.source_name, output_value)
             continue
         raise CompileError(f"Internal error: unsupported IRBody statement {type(statement).__name__}")
-    return BodyLoweringResult(tuple(explicit_outputs), auto_output, runtime_bindings)
+    return BodyLoweringResult(
+        tuple(explicit_outputs),
+        auto_output,
+        runtime_bindings,
+        context.group_context_values,
+    )
 
 
 def lower_body(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):

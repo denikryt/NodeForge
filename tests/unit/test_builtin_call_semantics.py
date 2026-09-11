@@ -12,12 +12,15 @@ from NodeForge.builtin_call_semantics import (
     analyze_builtin_call,
 )
 from NodeForge.builtins.registry import CALLABLE_BUILTIN_NAMES
-from NodeForge.call_resolution import NamedOutputsCallResult, RuntimeCallResult, TupleCallResult
+from NodeForge.call_resolution import (
+    ContextReadCallResult, NamedOutputsCallResult, ProjectedCallResult, RuntimeCallResult, TupleCallResult,
+)
 from NodeForge.constants import (
     TYPE_BOOL, TYPE_BUNDLE, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_MATERIAL,
     TYPE_STRING, TYPE_VECTOR,
 )
 from NodeForge.errors import CompileError
+from NodeForge.group_context import GroupContextSlot
 
 
 pytestmark = pytest.mark.unit
@@ -45,7 +48,8 @@ def _analyze(name, source, types=None, consts=None):
 def test_every_callable_builtin_is_explicitly_ir_capable_or_stateful_fallback():
     assert IR_CAPABLE_BUILTIN_NAMES.isdisjoint(STATEFUL_FALLBACK_BUILTIN_NAMES)
     assert IR_CAPABLE_BUILTIN_NAMES | STATEFUL_FALLBACK_BUILTIN_NAMES == frozenset(CALLABLE_BUILTIN_NAMES)
-    assert {"grid", "grid_uv", "input_float", "input_bundle"} <= STATEFUL_FALLBACK_BUILTIN_NAMES
+    assert {"grid", "grid_uv"} <= IR_CAPABLE_BUILTIN_NAMES
+    assert {"input_float", "input_bundle"} <= STATEFUL_FALLBACK_BUILTIN_NAMES
 
 
 def test_raw_output_mode_is_syntax_driven_not_cardinality_driven():
@@ -85,9 +89,19 @@ def test_capture_attribute_has_explicit_tuple_result_shape():
     assert analyzed.result.types == (TYPE_GEOMETRY, TYPE_VECTOR)
 
 
-def test_stateful_builtin_is_not_accepted_by_stateless_semantic_analyzer():
-    with pytest.raises(KeyError):
-        analyze_builtin_call("grid", _call("grid(4, 3)"), {}, lambda *_: TYPE_FLOAT)
+def test_grid_and_grid_uv_have_explicit_contextual_semantic_contracts():
+    grid = _analyze("grid", "grid(4, 3)")
+    assert isinstance(grid.result, ProjectedCallResult)
+    assert grid.result.types == (TYPE_GEOMETRY, TYPE_VECTOR)
+    assert grid.result.exposed_index == 0
+    assert grid.result.context_writes == ((GroupContextSlot.GRID_UV, 1),)
+    assert dict(grid.options)["slots"] == (("const", 4), ("const", 3))
+    assert grid.operands == ()
+
+    uv = _analyze("grid_uv", "grid_uv()")
+    assert isinstance(uv.result, ContextReadCallResult)
+    assert uv.result.slot is GroupContextSlot.GRID_UV
+    assert uv.result.typ is TYPE_VECTOR
 
 
 def test_raw_outputs_reject_empty_named_mode():
@@ -172,6 +186,30 @@ def test_migrated_builtin_families_preserve_relevant_public_failures(name, sourc
         _analyze(name, source, types=types)
 
 
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "expected"),
+    [
+        (
+            "store_named_attribute",
+            "store_named_attribute(geo, bad=1)",
+            "Unsupported keyword argument(s): bad",
+        ),
+        (
+            "set_position",
+            "set_position(geo, weird=1)",
+            "Unsupported keyword argument(s): weird",
+        ),
+    ],
+)
+def test_expression_store_and_set_position_preserve_keyword_before_arity_precedence(name, source, expected):
+    """Expression-form normalization keeps the pre-refactor unsupported-keyword precedence."""
+    with pytest.raises(CompileError) as exc_info:
+        _analyze(name, source, types={"geo": TYPE_GEOMETRY})
+    assert str(exc_info.value) == expected
+
+
 def test_geometry_builder_expression_contract_remains_compile_time_only():
     with pytest.raises(CompileError, match="must be assigned to a simple name"):
         _analyze("geometry_builder", "geometry_builder()")
@@ -243,3 +281,26 @@ def test_bundle_semantics_remain_opaque_runtime_type_without_schema_inference():
     assert runtime_path.result.typ is TYPE_VECTOR
     with pytest.raises(CompileError):
         _analyze("bundle_get", "bundle_get(b, path)", types={"b": TYPE_BUNDLE, "path": TYPE_STRING})
+
+
+@pytest.mark.parametrize("typ", [TYPE_INT, TYPE_FLOAT])
+def test_grid_runtime_numeric_arguments_use_runtime_slots(typ):
+    analyzed = _analyze("grid", "grid(width, height)", {"width": typ, "height": typ})
+    assert [operand.typ for operand in analyzed.operands] == [typ, typ]
+    assert dict(analyzed.options)["slots"] == (("runtime", 0), ("runtime", 1))
+
+
+@pytest.mark.parametrize("value", [2, 2.75])
+def test_grid_compile_time_numeric_arguments_preserve_raw_const_slots(value):
+    analyzed = _analyze("grid", f"grid({value!r}, {value!r})")
+    assert analyzed.operands == ()
+    assert dict(analyzed.options)["slots"] == (("const", value), ("const", value))
+
+
+def test_grid_rejects_compile_time_bool_and_preserves_arity_keyword_diagnostics():
+    with pytest.raises(CompileError, match=r"grid\(\) width expects Float/Int"):
+        _analyze("grid", "grid(True, 2)")
+    with pytest.raises(CompileError, match=r"grid\(width, height\) expects two Int arguments"):
+        _analyze("grid", "grid(2)")
+    with pytest.raises(CompileError, match=r"grid\(\) does not support keyword arguments"):
+        _analyze("grid", "grid(width=2, height=2)")

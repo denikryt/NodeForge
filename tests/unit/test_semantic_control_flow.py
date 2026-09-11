@@ -26,7 +26,7 @@ def _callables():
     )
 
 
-def _lower(source, *, bindings=None, constants=None, legacy=()):
+def _lower(source, *, bindings=None, constants=None, legacy=(), geometry_mode=False):
     return lower_basic_body(
         ast.parse(source, mode="exec").body,
         initial_runtime_bindings=bindings or {},
@@ -35,6 +35,7 @@ def _lower(source, *, bindings=None, constants=None, legacy=()):
         reserved_name_labels={},
         callable_environment=_callables(),
         owner_scope="scope",
+        geometry_mode=geometry_mode,
     )
 
 
@@ -230,7 +231,6 @@ def test_repeat_local_if_merge_order_follows_repeat_state_order():
     "source",
     [
         'items = [1]\nflag = input_bool("Flag")\nif flag:\n    items.append(2)\nelse:\n    items.append(3)',
-        'x = 0\nflag = input_bool("Flag")\nif flag:\n    store("a", x)\n    x = x + 1\nelse:\n    x = x + 2',
     ],
 )
 def test_remaining_nested_control_flow_categories_fallback_whole_body(source):
@@ -321,3 +321,14 @@ def test_repeat_local_int_float_branch_merge_is_explicitly_promoted():
     assert isinstance(branch, IRIf)
     assert branch.merges[0].typ is NFType.FLOAT
     assert branch.merges[0].false_coerce_to is NFType.FLOAT
+
+
+def test_contextual_store_inside_runtime_if_no_longer_forces_whole_body_fallback():
+    result = _lower(
+        'x = 0\nflag = input_bool("Flag")\n'
+        'if flag:\n    store("a", x)\n    x = x + 1\nelse:\n    x = x + 2',
+        geometry_mode=True,
+    )
+    assert result is not BODY_UNSUPPORTED
+    branch = next(stmt for stmt in result.body.statements if isinstance(stmt, IRIf))
+    assert branch.merges and branch.merges[0].source_name == "x"

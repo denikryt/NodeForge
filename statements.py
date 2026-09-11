@@ -85,7 +85,7 @@ def _string_value_or_literal(comp, expr, context):
         return value
 
 def _store_named_attribute(group, geometry_socket, attr_name, value, selection=None, domain="POINT", data_type_override=None, x=0, y=0):
-    """Function `_store_named_attribute` used by the NodeForge addon."""
+    """Build the shared Store Named Attribute backend primitive for legacy and Call IR paths."""
     if data_type_override:
         data_type = _ALLOWED_STORE_TYPES.get(data_type_override.upper())
         if data_type is None:
@@ -114,6 +114,12 @@ def _store_named_attribute(group, geometry_socket, attr_name, value, selection=N
     group.links.new(value.socket, node.inputs[3])
     return node.outputs[0]
 
+# CONTEXTUAL_GROUP_LEGACY_SET_POSITION_NODE_HELPER_COMPAT: Migrated contextual
+# statement-form set_position() uses the existing expression/backend geometry path.
+# Retain this legacy statement-specific node helper only for
+# CONTEXTUAL_GROUP_LEGACY_GEOMETRY_STATEMENT_COMPAT bodies that already entered
+# compile_statement(). Remove it when that legacy statement branch is no longer
+# reachable for supported sources.
 def _set_position_node(group, geometry_socket, pos, selection=None, x=0, y=0):
     """Function `_set_position_node` used by the NodeForge addon."""
     if pos.typ != TYPE_VECTOR:

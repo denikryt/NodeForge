@@ -5,6 +5,8 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from NodeForge.compiler_identities import (
+    InterfaceInputOrigin,
+    InputDeclarationId,
     BindingId,
     CallSiteId,
     CORE_PACKAGE_ID,
@@ -185,3 +187,8 @@ def test_compiler_materialization_resolution_preserves_unique_only_occurrence_se
         assert compiler.resolve_reusable_function_materialization(first, unique).call_site == CallSiteId(other_owner, first, 0)
     finally:
         _cleanup_compiler_imports(before)
+
+
+def test_interface_input_origin_is_exact_binding_or_input_declaration_union():
+    """Panel provenance reuses existing physical declaration identities without another allocator."""
+    assert InterfaceInputOrigin == (BindingId | InputDeclarationId)

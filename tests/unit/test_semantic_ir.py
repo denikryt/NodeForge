@@ -22,6 +22,7 @@ from NodeForge.constants import (
     TYPE_VECTOR,
 )
 from NodeForge.errors import CompileError
+from NodeForge.group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
 from NodeForge.compiler_identities import BindingId, CallSiteId, local_function_id
 from NodeForge.semantic_ir import (
     IRArray,
@@ -39,6 +40,8 @@ from NodeForge.semantic_ir import (
     IRBoolBinary,
     IRCompare,
     IRConditional,
+    IRContextRead,
+    IRContextWrite,
     IRDiscardExpression,
     IRLiteral,
     IRObjectProperty,
@@ -54,7 +57,7 @@ from NodeForge.semantic_ir import (
     IRVectorLiteral,
 )
 from NodeForge.builtin_call_semantics import IR_CAPABLE_BUILTIN_NAMES, STATEFUL_FALLBACK_BUILTIN_NAMES
-from NodeForge.call_resolution import CallableEnvironment
+from NodeForge.call_resolution import CallableEnvironment, ContextReadCallResult, ProjectedCallResult
 from NodeForge.semantic_analysis import (
     RuntimeBindingSymbol,
     SemanticConstant,
@@ -642,7 +645,7 @@ def test_blender_lowering_context_is_minimal_immutable_and_compiler_independent(
     value = Value(object(), TYPE_FLOAT)
     source_bindings = {_test_binding_id("a"): value}
     context = backend.BlenderIRLoweringContext(object(), source_bindings)
-    assert tuple(field.name for field in fields(context)) == ("group", "runtime_bindings")
+    assert tuple(field.name for field in fields(context)) == ("group", "runtime_bindings", "group_context_values")
     assert context.runtime_bindings[_test_binding_id("a")] is value
     source_bindings[_test_binding_id("a")] = Value(object(), TYPE_VECTOR)
     assert context.runtime_bindings[_test_binding_id("a")] is value
@@ -1189,10 +1192,19 @@ def test_mixed_core_calls_stay_on_ir_path_and_dynamic_categories_remain_fallback
     assert _lower("backend_helper(x) + 1.0", bindings={"x": TYPE_FLOAT}, backend_helpers={"backend_helper"}) is None
 
 
-def test_stateful_builtins_take_fixed_builtin_fallback_not_dynamic_resolution():
-    """Stateful calls are still resolved as builtins but deliberately remain unsupported by Semantic IR."""
-    for source in ("grid(4, 3)", "grid_uv()"):
-        assert _lower(source) is None
+def test_grid_is_semantic_ir_capable_and_grid_uv_requires_available_context():
+    """Grid writes explicit hidden UV context instead of selecting stateful fallback."""
+    grid = _lower("grid(4, 3)")
+    assert grid is not None
+    calls = _operations(grid, IRCall)
+    assert len(calls) == 1
+    assert tuple(value.typ for value in calls[0].results) == (TYPE_GEOMETRY, TYPE_VECTOR)
+    writes = _operations(grid, IRContextWrite)
+    assert len(writes) == 1 and writes[0].slot is GroupContextSlot.GRID_UV
+    assert grid.result.typ is TYPE_GEOMETRY
+
+    with pytest.raises(CompileError, match=r"grid_uv\(\) requires a preceding grid\(width, height\) call"):
+        _lower("grid_uv()")
 
 
 def test_stored_structural_array_lowers_recursively_to_irbinding_leaves():
@@ -1232,3 +1244,36 @@ def test_stored_structural_array_lowers_recursively_to_irbinding_leaves():
     assert isinstance(program.result.items[1], IRArray)
     bindings = [operation for operation in program.operations if isinstance(operation, IRBinding)]
     assert [operation.binding_id for operation in bindings] == [x_id, y_id]
+
+
+def test_group_context_ir_and_call_contract_invariants():
+    """Context slots and projected calls reject type/index drift before backend lowering."""
+    assert GROUP_CONTEXT_SPECS[GroupContextSlot.CURRENT_GEOMETRY].typ is TYPE_GEOMETRY
+    assert GROUP_CONTEXT_SPECS[GroupContextSlot.GRID_UV].typ is TYPE_VECTOR
+
+    geometry = IRValue(0, TYPE_GEOMETRY)
+    vector = IRValue(1, TYPE_VECTOR)
+    assert IRContextRead(geometry, 0, GroupContextSlot.CURRENT_GEOMETRY).result is geometry
+    assert IRContextWrite(0, GroupContextSlot.GRID_UV, vector).value is vector
+    with pytest.raises(TypeError):
+        IRContextRead(vector, 0, GroupContextSlot.CURRENT_GEOMETRY)
+    with pytest.raises(TypeError):
+        IRContextWrite(0, GroupContextSlot.CURRENT_GEOMETRY, vector)
+    with pytest.raises(ValueError):
+        IRContextRead(geometry, -1, GroupContextSlot.CURRENT_GEOMETRY)
+    with pytest.raises(ValueError):
+        IRContextWrite(-1, GroupContextSlot.GRID_UV, vector)
+
+    projected = ProjectedCallResult(
+        (TYPE_GEOMETRY, TYPE_VECTOR), 0, ((GroupContextSlot.GRID_UV, 1),)
+    )
+    assert projected.exposed_index == 0
+    with pytest.raises(ValueError):
+        ProjectedCallResult((TYPE_GEOMETRY,), 1)
+    with pytest.raises(ValueError):
+        ProjectedCallResult((TYPE_GEOMETRY,), 0, ((GroupContextSlot.CURRENT_GEOMETRY, 1),))
+    with pytest.raises(TypeError):
+        ProjectedCallResult((TYPE_GEOMETRY,), 0, ((GroupContextSlot.GRID_UV, 0),))
+    assert ContextReadCallResult(GroupContextSlot.GRID_UV, TYPE_VECTOR).typ is TYPE_VECTOR
+    with pytest.raises(TypeError):
+        ContextReadCallResult(GroupContextSlot.GRID_UV, TYPE_FLOAT)

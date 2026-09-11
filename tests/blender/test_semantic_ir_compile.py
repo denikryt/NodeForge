@@ -6,6 +6,8 @@ import ast
 from types import MappingProxyType, SimpleNamespace
 
 from NodeForge import expression_compiler, statement_compiler, semantic_body, runtime as runtime_module
+from NodeForge import compiler as compiler_module
+from NodeForge.builtins import geometry as legacy_geometry_builtins
 from NodeForge import geometry_builder as geometry_builder_module
 from NodeForge.blender_ir_lowering import BlenderIRLoweringContext, lower_expression as lower_ir_program
 from NodeForge.constants import (
@@ -792,25 +794,23 @@ def test_frontend_geometry_builder_core_route_forbids_legacy_builder_execution(m
     bpy.data.node_groups.remove(group)
 
 
-def test_geometry_builder_mixed_fallback_uses_legacy_only_after_independent_category(monkeypatch):
-    """An independently unsupported grid body may still execute builder syntax on the marked whole-body compatibility route."""
-    legacy_statements = []
-    original_statement = statement_compiler.compile_statement
+def test_geometry_builder_and_grid_share_semantic_body_route(monkeypatch):
+    """Grid no longer forces an otherwise migrated GeometryBuilder body through legacy statements."""
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("builder + grid core body entered compile_statement()")
 
-    def wrapped_statement(ctx, stmt, *args, **kwargs):
-        legacy_statements.append(type(stmt).__name__)
-        return original_statement(ctx, stmt, *args, **kwargs)
-
-    monkeypatch.setattr(statement_compiler, "compile_statement", wrapped_statement)
+    monkeypatch.setattr(statement_compiler, "compile_statement", forbidden)
     group = compile_group(
         'builder = geometry_builder()\n'
         'builder.add(cube(1.0))\n'
         'grid_geo = grid(2, 2)\n'
-        'output("Geometry", builder.geometry)',
-        "NFTest_builder_independent_grid_fallback",
+        'uv = grid_uv()\n'
+        'output("Geometry", builder.geometry)\n'
+        'output("UV", uv)',
+        "NFTest_builder_grid_semantic_route",
     )
-    check(legacy_statements, "independent grid fallback did not select the legacy whole-body route")
-    check(len(_nodes(group, "GeometryNodeMeshCube")) == 1, "mixed compatibility body changed builder cube topology")
+    check(len(_nodes(group, "GeometryNodeMeshCube")) == 1, "builder + grid route changed cube topology")
+    check(len(_nodes(group, "GeometryNodeMeshGrid")) == 1, "builder + grid route duplicated Mesh Grid")
     bpy.data.node_groups.remove(group)
 
 
@@ -1136,8 +1136,8 @@ output("X", x)
         raise AssertionError("mixed-invalid raw node unexpectedly compiled")
 
 
-def test_semantic_call_ir_stateful_builtin_fallback_preserves_grid_state_and_fresh_input_sockets():
-    """Legacy grid state stays shared while explicit input labels no longer imply socket reuse."""
+def test_semantic_call_ir_grid_context_preserves_shared_mesh_and_fresh_input_sockets():
+    """Semantic grid context keeps one Mesh Grid while explicit input labels remain independent."""
     group = compile_group(
         '''
 geo = grid(4, 3)
@@ -1148,9 +1148,9 @@ output("Geometry", geo)
 output("UV", uv)
 output("Sum", a + b)
 ''',
-        "NFTest_semantic_call_ir_stateful_fallback",
+        "NFTest_semantic_call_ir_grid_context",
     )
-    check(len(_nodes(group, "GeometryNodeMeshGrid")) == 1, "grid/grid_uv fallback lost shared grid state")
+    check(len(_nodes(group, "GeometryNodeMeshGrid")) == 1, "grid/grid_uv Semantic IR lost shared grid state")
     scale_items = [item for item in group.interface.items_tree if getattr(item, "item_type", "") == "SOCKET" and item.name == "Scale"]
     check(len(scale_items) == 2, f"repeated input_float did not create two Scale sockets: {len(scale_items)}")
     bpy.data.node_groups.remove(group)
@@ -1168,4 +1168,38 @@ output("Captured", captured)
         "NFTest_semantic_call_ir_capture_tuple",
     )
     check(len(_nodes(group, "GeometryNodeCaptureAttribute")) == 1, "capture_attribute Call IR node missing")
+    bpy.data.node_groups.remove(group)
+
+
+def test_contextual_group_semantic_route_preserves_store_set_position_and_grid_topology(monkeypatch):
+    """Accepted contextual core syntax avoids legacy statements while preserving physical node topology."""
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("accepted contextual core body entered compile_statement()")
+
+    monkeypatch.setattr(statement_compiler, "compile_statement", forbidden)
+    monkeypatch.setattr(statement_compiler, "_compile_panel_statement", forbidden)
+    monkeypatch.setattr(statement_compiler, "_set_position_node", forbidden)
+    monkeypatch.setattr(legacy_geometry_builtins, "compile_call", forbidden)
+    monkeypatch.setattr(compiler_module.Compiler, "interface_input_for_value", forbidden)
+    monkeypatch.setattr(compiler_module.Compiler, "interface_input_identity_for_value", forbidden)
+    group = compile_group(
+        'scale = input_float("Scale")\n'
+        'geo = grid(scale, 3)\n'
+        'uv = grid_uv()\n'
+        'store("first", uv.x)\n'
+        'set_position(position() + vector(0, 0, 1))\n'
+        'store("second", uv.y)\n'
+        'output("Grid", geo)\n'
+        'output("UV", uv)',
+        "NFTest_contextual_group_semantic_route",
+    )
+    grids = _nodes(group, "GeometryNodeMeshGrid")
+    stores = _nodes(group, "GeometryNodeStoreNamedAttribute")
+    positions = _nodes(group, "GeometryNodeSetPosition")
+    check(len(grids) == 1, f"expected one Mesh Grid, got {len(grids)}")
+    check(len(stores) == 2, f"expected two Store Named Attribute nodes, got {len(stores)}")
+    check(len(positions) == 1, f"expected one Set Position node, got {len(positions)}")
+    check(grids[0].inputs["Vertices Y"].default_value == 3, "constant grid height was not written as a socket default")
+    value_nodes = _nodes(group, "ShaderNodeValue") + _nodes(group, "FunctionNodeInputInt")
+    check(not any(getattr(node, "label", "") in {"3", "3.0"} for node in value_nodes), "grid constant created a standalone Value node")
     bpy.data.node_groups.remove(group)

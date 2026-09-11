@@ -26,6 +26,19 @@ from .semantic_lowering import lower_analyzed_expression
 from .blender_ir_lowering import BlenderIRLoweringContext, lower_expression as lower_ir_expression
 
 
+def _contains_resolved_core_grid_call(expr, callable_environment):
+    """Return whether *expr* contains a resolved core grid/grid_uv builtin call."""
+    for node in ast.walk(expr):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+            continue
+        if node.func.id not in {"grid", "grid_uv"}:
+            continue
+        resolved = resolve_simple_callable(node.func.id, callable_environment)
+        if resolved is not UNRESOLVED and resolved.kind is CallableKind.BUILTIN:
+            return True
+    return False
+
+
 def compile_expr(comp, expr, depth=0):
     """Compile one AST expression into the active node group context."""
     runtime_bindings = comp.runtime_bindings_snapshot()
@@ -50,7 +63,18 @@ def compile_expr(comp, expr, depth=0):
         reserved_name_labels=getattr(comp, "reserved_name_labels", {}),
         callable_environment=callable_environment,
     )
-    analysis = analyze_expression(expr, environment)
+    # CONTEXTUAL_GROUP_LEGACY_GRID_EXPRESSION_ROUTE_COMPAT: A whole-body compatibility route
+    # compiles statements one by one, but migrated grid()/grid_uv() normally keep GRID_UV only in
+    # one Semantic IR lowering context. When compile_statements() has selected legacy whole-body
+    # execution, route only expressions containing resolved core grid/grid_uv builtins through the
+    # existing legacy dispatcher so they continue sharing comp.grid_context. Other expressions in
+    # the same fallback body remain semantic-first. Remove this branch together with
+    # CONTEXTUAL_GROUP_LEGACY_GRID_CONTEXT_COMPAT when legacy fallback bodies no longer need it.
+    force_legacy_grid_expression = (
+        getattr(comp, "_legacy_contextual_grid_expression_routing_active", False)
+        and _contains_resolved_core_grid_call(expr, callable_environment)
+    )
+    analysis = None if force_legacy_grid_expression else analyze_expression(expr, environment)
     # SEMANTIC_CALL_IR_FALLBACK: Stateless compiler-owned calls now lower through Semantic IR,
     # but resolved dynamic extension calls, explicitly stateful compiler-owned builtins, and
     # legacy non-Value compiler bindings can still make analysis unsupported. Preserve legacy

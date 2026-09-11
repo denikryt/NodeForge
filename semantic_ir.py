@@ -8,6 +8,7 @@ from typing import TypeAlias
 
 from .compiler_identities import BindingId, CallSiteId, FunctionId, InputDeclarationId
 from .nf_types import NFType
+from .group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
 
 
 def _is_ir_option_value(value) -> bool:
@@ -230,6 +231,46 @@ class IRCall:
                     raise ValueError("NAMED_OUTPUTS raw node IRCall cannot carry single-output metadata")
         elif self.raw_output_mode is not None:
             raise ValueError("raw output mode is valid only for node() builtin calls")
+
+
+@dataclass(frozen=True)
+class IRContextRead:
+    """Produce one typed value from compiler-owned contextual group state."""
+
+    result: IRValue
+    depth: int
+    slot: GroupContextSlot
+
+    def __post_init__(self) -> None:
+        """Validate slot type and expression depth before backend lowering."""
+        if not isinstance(self.result, IRValue):
+            raise TypeError("IRContextRead.result must be an IRValue")
+        if not isinstance(self.depth, int) or isinstance(self.depth, bool) or self.depth < 0:
+            raise ValueError("IRContextRead.depth must be a non-negative integer")
+        if not isinstance(self.slot, GroupContextSlot):
+            raise TypeError("IRContextRead.slot must be a GroupContextSlot")
+        if self.result.typ is not GROUP_CONTEXT_SPECS[self.slot].typ:
+            raise TypeError("IRContextRead result type does not match context slot")
+
+
+@dataclass(frozen=True)
+class IRContextWrite:
+    """Replace one compiler-owned contextual group value without a source result."""
+
+    depth: int
+    slot: GroupContextSlot
+    value: IRValue
+
+    def __post_init__(self) -> None:
+        """Validate slot type and expression depth before backend lowering."""
+        if not isinstance(self.depth, int) or isinstance(self.depth, bool) or self.depth < 0:
+            raise ValueError("IRContextWrite.depth must be a non-negative integer")
+        if not isinstance(self.slot, GroupContextSlot):
+            raise TypeError("IRContextWrite.slot must be a GroupContextSlot")
+        if not isinstance(self.value, IRValue):
+            raise TypeError("IRContextWrite.value must be an IRValue")
+        if self.value.typ is not GROUP_CONTEXT_SPECS[self.slot].typ:
+            raise TypeError("IRContextWrite value type does not match context slot")
 
 
 @dataclass(frozen=True)
@@ -520,6 +561,27 @@ class IRDiscardExpression:
 
 
 @dataclass(frozen=True)
+class IRPanelDeclaration:
+    """Declare one source-ordered native interface panel using runtime binding identities."""
+
+    member_binding_ids: tuple[BindingId, ...]
+    name: str
+    collapsed: bool
+
+    def __post_init__(self) -> None:
+        """Validate detached panel declaration metadata."""
+        object.__setattr__(self, "member_binding_ids", tuple(self.member_binding_ids))
+        if not self.member_binding_ids or not all(isinstance(item, BindingId) for item in self.member_binding_ids):
+            raise TypeError("IRPanelDeclaration requires one or more BindingId members")
+        if len(self.member_binding_ids) != len(set(self.member_binding_ids)):
+            raise ValueError("IRPanelDeclaration member BindingIds must be unique")
+        if not isinstance(self.name, str) or not self.name:
+            raise ValueError("IRPanelDeclaration name must be a non-empty string")
+        if not isinstance(self.collapsed, bool):
+            raise TypeError("IRPanelDeclaration.collapsed must be bool")
+
+
+@dataclass(frozen=True)
 class IRBranchMerge:
     """Describe one typed runtime binding merged at a structured branch exit."""
 
@@ -643,7 +705,7 @@ class IRRepeat:
 
 
 IRBodyStatement: TypeAlias = (
-    IRAssign | IRInputDeclaration | IROutput | IRFinalExpression | IRBindLeaves | IRDiscardExpression | IRIf | IRRepeat
+    IRAssign | IRInputDeclaration | IROutput | IRFinalExpression | IRBindLeaves | IRDiscardExpression | IRPanelDeclaration | IRIf | IRRepeat
 )
 
 
@@ -656,7 +718,7 @@ class IRBody:
     def __post_init__(self) -> None:
         """Freeze statement order and reject non-body records."""
         object.__setattr__(self, "statements", tuple(self.statements))
-        allowed = (IRAssign, IRInputDeclaration, IROutput, IRFinalExpression, IRBindLeaves, IRDiscardExpression, IRIf, IRRepeat)
+        allowed = (IRAssign, IRInputDeclaration, IROutput, IRFinalExpression, IRBindLeaves, IRDiscardExpression, IRPanelDeclaration, IRIf, IRRepeat)
         if not all(isinstance(statement, allowed) for statement in self.statements):
             raise TypeError("IRBody contains an unsupported statement record")
 
@@ -676,6 +738,8 @@ __all__ = [
     "IRResult",
     "IROperation",
     "IRProgram",
+    "IRContextRead",
+    "IRContextWrite",
     "IRLiteral",
     "IRBinding",
     "IRUnary",
@@ -693,6 +757,7 @@ __all__ = [
     "IRLeafBinding",
     "IRBindLeaves",
     "IRDiscardExpression",
+    "IRPanelDeclaration",
     "IRBranchMerge",
     "IRIf",
     "IRRepeatState",

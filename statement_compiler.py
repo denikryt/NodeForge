@@ -29,6 +29,8 @@ from .builtin_call_semantics import (
     analyze_input_declaration_call,
 )
 from .compiler_identities import InputDeclarationId
+from .group_context import GroupContextSlot
+from .nf_types import NFType
 from .semantic_body import BODY_UNSUPPORTED, lower_basic_body
 from .blender_ir_lowering import BlenderIRLoweringContext, lower_body as lower_ir_body
 from .runtime_bindings import validate_runtime_binding_target
@@ -122,6 +124,11 @@ def _compile_builder_method(comp, builder, method, call, x=0, y=0):
     raise CompileError("geometry_builder supports only add(), extend(), and .geometry")
 
 
+# CONTEXTUAL_GROUP_LEGACY_PANEL_COMPAT: Accepted core panel() declarations are frontend-validated
+# IRPanelDeclaration records and are realized through centralized interface helpers during Blender IR
+# lowering. Keep this AST/Compiler/socket-identity panel path only for complete bodies already selected
+# by another marked whole-body compatibility category. New Semantic Body code must not call it. Remove
+# this path when supported compatibility bodies can no longer contain/re-enter core panel() handling.
 def _compile_panel_statement(ctx, call):
     """Validate and lower one root-level panel() interface declaration."""
     comp = ctx.comp
@@ -484,6 +491,12 @@ def compile_statement(
             ctx.auto_final_output = (last_target, comp.runtime_value(last_target))
         return
 
+    # CONTEXTUAL_GROUP_LEGACY_GEOMETRY_STATEMENT_COMPAT: Accepted core store() and one-argument
+    # statement set_position() now read/write explicit compiler-owned CURRENT_GEOMETRY context through
+    # Semantic IR and reuse typed builtin Call IR. Keep these direct GroupBuildContext.geometry_socket
+    # mutations only for complete bodies already selected by another marked compatibility category. Do
+    # not call them from Semantic Body or Blender IR lowering. Remove them when supported compatibility
+    # bodies no longer execute core contextual geometry statements through compile_statement().
     if call and call.func.id == "store":
         if ctx.geometry_socket is None:
             raise CompileError("Internal error: store() requires geometry mode")
@@ -552,7 +565,7 @@ def compile_statement(
     raise CompileError("Unsupported statement")
 
 
-def compile_statements(ctx, stmts):
+def compile_statements(ctx, stmts, initial_interface_input_origins=None):
     """Compile one body through Semantic Body IR or one whole legacy fallback route."""
     comp = ctx.comp
     runtime_bindings = comp.runtime_bindings_snapshot()
@@ -573,29 +586,44 @@ def compile_statements(ctx, stmts):
         callable_environment=callable_environment,
         owner_scope=comp.function_group_owner_scope,
         declaration_owner=comp.input_declaration_owner,
+        geometry_mode=ctx.geometry_mode,
+        initial_interface_input_origins=initial_interface_input_origins or {},
     )
     if body_compilation is BODY_UNSUPPORTED:
-        # COMPILE_TIME_STATE_LEGACY_STATEMENT_PATH_COMPAT: Whole-body fallback still executes the legacy
-        # AST/Compiler statement engine for arrays, GeometryBuilder, stateful statements, and dynamic
-        # result categories. The preceding Semantic Body attempt runs on a detached speculative
-        # CompileTimeState, so BODY_UNSUPPORTED reaches this branch with Compiler.compile_time unchanged.
-        # This legacy engine then mutates only the committed Compiler.compile_time owner; it must not
-        # resurrect comp.consts as a second state owner. Remove this marker with the whole-body legacy
-        # statement path when all supported statement categories are Semantic-IR owned.
-        for idx, stmt in enumerate(stmts):
-            compile_statement(
-                ctx,
-                stmt,
-                idx,
-                allow_final_expr=(idx == len(stmts) - 1),
-                allow_interface_directives=True,
-            )
+        # CORE_WHOLE_BODY_LEGACY_COMPAT: Semantic Body owns ordinary expressions/statements, structured
+        # arrays, GeometryBuilder, runtime control flow, compile-time/runtime state, and core contextual group
+        # semantics. Keep this atomic original-AST statement engine only for independently unsupported dynamic
+        # or Python-extension categories that still require Compiler/backend execution. The semantic attempt
+        # is detached and must create no Blender state before BODY_UNSUPPORTED selects this route. Remove this
+        # compatibility path only after those remaining categories have compiler-owned contracts or an isolated
+        # extension API that cannot re-enter core legacy statement compilation.
+        previous_grid_expression_routing = getattr(
+            comp, "_legacy_contextual_grid_expression_routing_active", False
+        )
+        comp._legacy_contextual_grid_expression_routing_active = True
+        try:
+            for idx, stmt in enumerate(stmts):
+                compile_statement(
+                    ctx,
+                    stmt,
+                    idx,
+                    allow_final_expr=(idx == len(stmts) - 1),
+                    allow_interface_directives=True,
+                )
+        finally:
+            comp._legacy_contextual_grid_expression_routing_active = previous_grid_expression_routing
         return ctx
 
     comp.compile_time.replace(body_compilation.final_compile_time)
+    initial_group_context_values = {}
+    if ctx.geometry_mode:
+        if ctx.geometry_socket is None:
+            raise CompileError("Internal error: geometry mode requires Geometry input socket")
+        initial_group_context_values[GroupContextSlot.CURRENT_GEOMETRY] = Value(ctx.geometry_socket, NFType.GEOMETRY)
     backend_context = BlenderIRLoweringContext(
         group=ctx.group,
         runtime_bindings=comp.backend_runtime_values_snapshot(),
+        group_context_values=initial_group_context_values,
     )
     result = lower_ir_body(
         backend_context,
@@ -607,6 +635,11 @@ def compile_statements(ctx, stmts):
     ctx.explicit_outputs.extend(result.explicit_outputs)
     ctx.output_names.update(name for name, _ in result.explicit_outputs)
     ctx.auto_final_output = None if body_compilation.clear_auto_final_output else result.auto_output
+    if ctx.geometry_mode:
+        final_geometry = result.group_context_values.get(GroupContextSlot.CURRENT_GEOMETRY)
+        if not isinstance(final_geometry, Value) or final_geometry.typ is not NFType.GEOMETRY:
+            raise CompileError("Internal error: final CURRENT_GEOMETRY did not materialize as Geometry")
+        ctx.geometry_socket = final_geometry.socket
     return ctx
 
 

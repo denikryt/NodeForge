@@ -187,12 +187,12 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.50.17
 
 - Added compiler-owned semantic callable resolution and typed Call IR for stateless core expression calls, with canonical imported identity validated before native module execution and explicit whole-expression/stateful/dynamic compatibility fallbacks preserving existing public DSL behavior.
+
 ## 0.50.18
 
 - Moved ordinary runtime source bindings to compiler-owned `BindingId`/`NFType` metadata with separate Blender `Value` materializations, preserving existing DSL behavior while removing the heterogeneous `Compiler.vars` binding store.
 - Preserved package-system compile-time state assignment by accepting the generic `CompileTimeObject` extension protocol in the temporary structural binding store, with resolved-system regression coverage.
 - Fixed `repeat_range()` local multi-return assignment so temporary `TupleValue` bindings remain structural compiler state instead of being routed through ordinary runtime `Value` bindings.
-
 
 ## 0.51.0
 
@@ -204,9 +204,11 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.51.1
 
 - Moved fixed tuple/raw named-output body bindings and migrated Object Info configuration/alias locking into compiler-owned semantic state, while preserving legacy whole-body fallback behavior and keeping Bundle as the existing opaque runtime type.
+
 ## 0.51.2
 
 - Moved ordinary runtime `if` and `repeat_range()` into structured Semantic IR with compiler-owned branch/repeat state, lexical iteration identities, deterministic carried-state ordering, and recursive Blender lowering while preserving legacy topology, Int/Float Repeat behavior, durable input-declaration identity, and whole-body fallback for builder/array/stateful/dynamic categories.
+
 ## 0.51.3
 
 - Separated const-evaluable compile-time bindings from runtime semantic and backend state with explicit snapshot/fork ownership, preserving whole-body fallback atomicity, control-flow constant threading, legacy structural fallback, and generated Geometry Nodes behavior.
@@ -218,3 +220,13 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.51.5
 
 - Moved accepted core `GeometryBuilder` construction, accumulation, snapshots, compile-time iteration, runtime-if branch-local state, and Repeat carried state into Blender-independent semantic body ownership using existing typed Geometry Call/control-flow IR, while preserving historical behavior/topology (including legacy-accepted branch-local runtime-if cases with identity assignments such as `value = value`) and isolating the legacy backend builder path to separately selected compatibility bodies.
+
+## 0.51.6
+
+- Moved core contextual group semantics for statement `store()` / `set_position()`, `grid()` / `grid_uv()`, and `panel()` into compiler-owned Semantic Body/IR state, preserving existing Geometry Nodes topology, interface behavior, traversal-order context semantics, and the isolated whole-body compatibility route for dynamic Python extensions, including a scoped legacy `grid/grid_uv` expression bridge for mixed fallback bodies.
+- Fixed contextual Semantic Body compatibility by preserving legacy statement-form `store()` / `set_position()` diagnostics and per-argument `grid()` type diagnostics, and by restoring p
+nel input provenance when compile-time loop targets temporarily shadow runtime structural-array leaves.
+- Restored contextual-group diagnostic compatibility for expression keyword/arity precedence and fixed tuple operands in statement-form `store()` / `set_position()`, with exact regressio
+ coverage against the retained legacy path.
+- Restored legacy `NodeResult` diagnostics when raw named-output results are passed directly to statement-form `store()` or `set_position()`, with byte-for-byte migrated-vs-legacy regres
+ion coverage.

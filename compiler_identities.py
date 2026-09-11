@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import TypeAlias
 
 CORE_PACKAGE_ID = "__nodeforge_core__"
 _LOCAL_FUNCTION_KIND = "LOCAL_DEF"
@@ -67,6 +68,9 @@ class InputDeclarationId:
             "target_name": self.target_name,
             "declaration_ordinal": self.declaration_ordinal,
         })
+
+
+InterfaceInputOrigin: TypeAlias = BindingId | InputDeclarationId
 
 
 @dataclass(frozen=True)
@@ -151,6 +155,7 @@ __all__ = [
     "CORE_PACKAGE_ID",
     "FunctionId",
     "InputDeclarationId",
+    "InterfaceInputOrigin",
     "library_function_id",
     "local_function_id",
     "normalize_library_package_id",

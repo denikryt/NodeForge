@@ -6,7 +6,14 @@ import ast
 
 from .constants import TYPE_BOOL, TYPE_OBJECT
 from .nf_types import NFType
-from .call_resolution import CallableKind, NamedOutputsCallResult, RuntimeCallResult, TupleCallResult
+from .call_resolution import (
+    CallableKind,
+    ContextReadCallResult,
+    NamedOutputsCallResult,
+    ProjectedCallResult,
+    RuntimeCallResult,
+    TupleCallResult,
+)
 from .errors import CompileError
 from .semantic_analysis import ExpressionAnalysis, SemanticConstant
 from .semantic_values import (
@@ -31,6 +38,8 @@ from .semantic_ir import (
     IRBoolBinary,
     IRCompare,
     IRConditional,
+    IRContextRead,
+    IRContextWrite,
     IRLiteral,
     IRNamedOutputs,
     IRObjectProperty,
@@ -272,6 +281,12 @@ def lower_analyzed_expression(expr, analysis):
             else:
                 raise CompileError("Internal error: dynamic callable reached Semantic Call IR lowering")
 
+            if isinstance(analyzed.result, ContextReadCallResult):
+                if arguments:
+                    raise CompileError("Internal error: context-read call cannot have runtime arguments")
+                result = builder.new_value(analyzed.result.typ)
+                builder.emit_operation(IRContextRead(result, depth, analyzed.result.slot))
+                return result
             if isinstance(analyzed.result, RuntimeCallResult):
                 results = (builder.new_value(analyzed.result.typ),)
                 structural_result = results[0]
@@ -283,6 +298,9 @@ def lower_analyzed_expression(expr, analysis):
                 structural_result = IRNamedOutputs(
                     tuple((name, value) for (name, _), value in zip(analyzed.result.items, results))
                 )
+            elif isinstance(analyzed.result, ProjectedCallResult):
+                results = tuple(builder.new_value(typ) for typ in analyzed.result.types)
+                structural_result = results[analyzed.result.exposed_index]
             else:
                 raise CompileError("Internal error: unsupported analyzed call result")
 
@@ -307,6 +325,9 @@ def lower_analyzed_expression(expr, analysis):
                     raw_output_mode=raw_mode,
                 )
             )
+            if isinstance(analyzed.result, ProjectedCallResult):
+                for slot, result_index in analyzed.result.context_writes:
+                    builder.emit_operation(IRContextWrite(depth, slot, results[result_index]))
             return structural_result
 
         if isinstance(node, ast.BinOp):

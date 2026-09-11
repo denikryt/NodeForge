@@ -85,6 +85,11 @@ def compile_call(comp, expr, depth=0):
             reject_compile_time_object(count, "points() count")
         return _points_geometry(comp.group, count, x, y)
 
+    # CONTEXTUAL_GROUP_LEGACY_GRID_CONTEXT_COMPAT: Accepted core grid()/grid_uv() expressions now use
+    # projected typed Call IR plus explicit GRID_UV context writes/reads and never store semantic state on
+    # Compiler. Keep comp.grid_context only for whole-expression/body execution already selected by another
+    # marked legacy compatibility category. Remove this branch-local Compiler state when supported fallback
+    # bodies no longer execute core grid/grid_uv through the legacy builtin compiler.
     if name == "grid":
         if kws:
             raise CompileError("grid() does not support keyword arguments")

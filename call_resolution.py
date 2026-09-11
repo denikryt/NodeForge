@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 from .compiler_identities import FunctionId, library_function_id
+from .group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
 from .nf_types import NFType
 
 
@@ -105,6 +106,57 @@ class TupleCallResult:
 
 
 @dataclass(frozen=True)
+class ProjectedCallResult:
+    """Describe a physical multi-result call with one source-visible projection."""
+
+    types: tuple[NFType, ...]
+    exposed_index: int
+    context_writes: tuple[tuple[GroupContextSlot, int], ...] = ()
+
+    def __post_init__(self) -> None:
+        """Validate projected result indices and contextual result types."""
+        object.__setattr__(self, "types", tuple(self.types))
+        object.__setattr__(self, "context_writes", tuple(self.context_writes))
+        if not self.types or not all(isinstance(typ, NFType) for typ in self.types):
+            raise TypeError("projected call results require one or more NFType members")
+        if not isinstance(self.exposed_index, int) or isinstance(self.exposed_index, bool):
+            raise TypeError("exposed_index must be an integer")
+        if not 0 <= self.exposed_index < len(self.types):
+            raise ValueError("exposed_index is out of range")
+        slots = []
+        for item in self.context_writes:
+            if not isinstance(item, tuple) or len(item) != 2:
+                raise TypeError("context_writes must contain (GroupContextSlot, result_index) pairs")
+            slot, result_index = item
+            if not isinstance(slot, GroupContextSlot):
+                raise TypeError("context write slot must be a GroupContextSlot")
+            if not isinstance(result_index, int) or isinstance(result_index, bool) or not 0 <= result_index < len(self.types):
+                raise ValueError("context write result index is out of range")
+            if self.types[result_index] is not GROUP_CONTEXT_SPECS[slot].typ:
+                raise TypeError("context write result type does not match slot type")
+            slots.append(slot)
+        if len(slots) != len(set(slots)):
+            raise ValueError("one context slot may be written at most once per projected call")
+
+
+@dataclass(frozen=True)
+class ContextReadCallResult:
+    """Describe a source call that reads one compiler-owned group-context slot."""
+
+    slot: GroupContextSlot
+    typ: NFType
+
+    def __post_init__(self) -> None:
+        """Require the result type to match the contextual slot contract."""
+        if not isinstance(self.slot, GroupContextSlot):
+            raise TypeError("slot must be a GroupContextSlot")
+        if not isinstance(self.typ, NFType):
+            raise TypeError("typ must be an NFType")
+        if self.typ is not GROUP_CONTEXT_SPECS[self.slot].typ:
+            raise TypeError("context read type does not match slot type")
+
+
+@dataclass(frozen=True)
 class NamedOutputsCallResult:
     """Describe raw ``outputs=`` structural results in declared source order."""
 
@@ -122,7 +174,7 @@ class NamedOutputsCallResult:
             raise TypeError("named output types must be NFType members")
 
 
-CallResultSpec = RuntimeCallResult | TupleCallResult | NamedOutputsCallResult
+CallResultSpec = RuntimeCallResult | TupleCallResult | NamedOutputsCallResult | ProjectedCallResult | ContextReadCallResult
 
 
 @dataclass(frozen=True)
@@ -142,7 +194,7 @@ class AnalyzedCall:
         object.__setattr__(self, "options", tuple(self.options))
         if not all(isinstance(item, AnalyzedCallOperand) for item in self.runtime_operands):
             raise TypeError("runtime_operands must contain AnalyzedCallOperand records")
-        if not isinstance(self.result, (RuntimeCallResult, TupleCallResult, NamedOutputsCallResult)):
+        if not isinstance(self.result, (RuntimeCallResult, TupleCallResult, NamedOutputsCallResult, ProjectedCallResult, ContextReadCallResult)):
             raise TypeError("result must be a call result specification")
 
     def option_map(self) -> Mapping[str, object]:
@@ -191,6 +243,8 @@ __all__ = [
     "CallableEnvironment",
     "CallableKind",
     "NamedOutputsCallResult",
+    "ProjectedCallResult",
+    "ContextReadCallResult",
     "ResolvedCallable",
     "RuntimeCallResult",
     "TupleCallResult",

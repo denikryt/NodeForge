@@ -421,3 +421,161 @@ def test_object_info_frontend_state_is_embedded_in_property_ir_without_mutating_
     assert obj._info_as_instance is True
     assert obj._info_resolved is False
     assert obj._object_info_cache_config == ("RELATIVE", False)
+
+
+def test_scoped_grid_compat_routes_entire_nested_expression_through_legacy_dispatch(monkeypatch):
+    """Nested grid/grid_uv expressions share legacy Compiler state once whole-body fallback is selected."""
+    before_modules = set(sys.modules)
+    monkeypatch.setitem(sys.modules, "bpy", ModuleType("bpy"))
+    expression_compiler = importlib.import_module("NodeForge.expression_compiler")
+    try:
+        expr = ast.parse("(grid(2, 2), grid_uv())[1]", mode="eval").body
+        analysis_calls = []
+        legacy_calls = []
+
+        def forbidden_analysis(node, environment):
+            analysis_calls.append(ast.dump(node))
+            raise AssertionError("grid compatibility expression reached semantic analysis")
+
+        def legacy_builtin(comp, call, depth):
+            name = call.func.id
+            legacy_calls.append(name)
+            if name == "grid":
+                comp.grid_context = {"uv": "legacy-uv"}
+                return "legacy-geometry"
+            if name == "grid_uv":
+                assert comp.grid_context == {"uv": "legacy-uv"}
+                return comp.grid_context["uv"]
+            raise AssertionError(name)
+
+        monkeypatch.setattr(expression_compiler, "analyze_expression", forbidden_analysis)
+        monkeypatch.setattr(expression_compiler.builtin_registry, "compile_call", legacy_builtin)
+        comp = SimpleNamespace(
+            compile_time=CompileTimeState(),
+            reserved_name_labels={},
+            group=object(),
+            resolved_environment=SimpleNamespace(system_constructors={}),
+            local_functions={},
+            backend_builtins={},
+            imported_library_functions={},
+            runtime_bindings_snapshot=lambda: MappingProxyType({}),
+            backend_runtime_values_snapshot=lambda: MappingProxyType({}),
+            legacy_structural_binding_names_snapshot=lambda: frozenset(),
+            _legacy_contextual_grid_expression_routing_active=True,
+        )
+
+        result = expression_compiler.compile_expr(comp, expr)
+        assert result == "legacy-uv"
+        assert legacy_calls == ["grid", "grid_uv"]
+        assert analysis_calls == []
+    finally:
+        for name in set(sys.modules) - before_modules:
+            if name == "bpy" or name.startswith("NodeForge."):
+                sys.modules.pop(name, None)
+
+
+def test_scoped_grid_compat_keeps_non_grid_expressions_semantic_first(monkeypatch):
+    """The fallback policy does not disable Semantic IR for unrelated expressions in the same body."""
+    before_modules = set(sys.modules)
+    monkeypatch.setitem(sys.modules, "bpy", ModuleType("bpy"))
+    expression_compiler = importlib.import_module("NodeForge.expression_compiler")
+    try:
+        expr = ast.parse("position()", mode="eval").body
+        analyzed = object()
+        ir = object()
+        result = object()
+        calls = []
+
+        def analyze(node, environment):
+            calls.append("analyze")
+            return analyzed
+
+        monkeypatch.setattr(expression_compiler, "analyze_expression", analyze)
+        monkeypatch.setattr(expression_compiler, "lower_analyzed_expression", lambda node, value: calls.append("ir") or ir)
+        monkeypatch.setattr(expression_compiler, "lower_ir_expression", lambda context, program, depth: calls.append("backend") or result)
+        monkeypatch.setattr(
+            expression_compiler.builtin_registry,
+            "compile_call",
+            lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("ordinary builtin reached legacy dispatch")),
+        )
+        comp = SimpleNamespace(
+            compile_time=CompileTimeState(),
+            reserved_name_labels={},
+            group=object(),
+            resolved_environment=SimpleNamespace(system_constructors={}),
+            local_functions={},
+            backend_builtins={},
+            imported_library_functions={},
+            runtime_bindings_snapshot=lambda: MappingProxyType({}),
+            backend_runtime_values_snapshot=lambda: MappingProxyType({}),
+            legacy_structural_binding_names_snapshot=lambda: frozenset(),
+            _legacy_contextual_grid_expression_routing_active=True,
+        )
+
+        assert expression_compiler.compile_expr(comp, expr) is result
+        assert calls == ["analyze", "ir", "backend"]
+    finally:
+        for name in set(sys.modules) - before_modules:
+            if name == "bpy" or name.startswith("NodeForge."):
+                sys.modules.pop(name, None)
+
+
+def test_compiler_grid_compatibility_routing_state_is_instance_local(monkeypatch):
+    """Separate Compiler sessions do not share contextual grid routing or legacy grid state."""
+    monkeypatch.setitem(sys.modules, "bpy", ModuleType("bpy"))
+    compiler_module = importlib.import_module("NodeForge.compiler")
+    environment = SimpleNamespace(system_constructors={})
+    monkeypatch.setattr(compiler_module, "_new_group_backend", lambda _environment: object())
+
+    first = compiler_module.Compiler(SimpleNamespace(name="First"), object(), resolved_environment=environment)
+    second = compiler_module.Compiler(SimpleNamespace(name="Second"), object(), resolved_environment=environment)
+    first._legacy_contextual_grid_expression_routing_active = True
+    first.grid_context = {"uv": object()}
+
+    assert second._legacy_contextual_grid_expression_routing_active is False
+    assert not hasattr(second, "grid_context")
+
+
+def test_scoped_grid_compat_separate_expressions_share_legacy_grid_context(monkeypatch):
+    """Separate grid() and grid_uv() expressions share Compiler state while the scoped fallback mode is active."""
+    before_modules = set(sys.modules)
+    monkeypatch.setitem(sys.modules, "bpy", ModuleType("bpy"))
+    expression_compiler = importlib.import_module("NodeForge.expression_compiler")
+    try:
+        semantic_calls = []
+
+        def fail_semantic(node, environment):
+            semantic_calls.append(ast.dump(node))
+            raise AssertionError("scoped grid compatibility expression reached semantic analysis")
+
+        def legacy_builtin(comp, call, depth):
+            if call.func.id == "grid":
+                comp.grid_context = {"uv": "shared-uv"}
+                return "geometry"
+            if call.func.id == "grid_uv":
+                return comp.grid_context["uv"]
+            raise AssertionError(call.func.id)
+
+        monkeypatch.setattr(expression_compiler, "analyze_expression", fail_semantic)
+        monkeypatch.setattr(expression_compiler.builtin_registry, "compile_call", legacy_builtin)
+        comp = SimpleNamespace(
+            compile_time=CompileTimeState(),
+            reserved_name_labels={},
+            group=object(),
+            resolved_environment=SimpleNamespace(system_constructors={}),
+            local_functions={},
+            backend_builtins={},
+            imported_library_functions={},
+            runtime_bindings_snapshot=lambda: MappingProxyType({}),
+            backend_runtime_values_snapshot=lambda: MappingProxyType({}),
+            legacy_structural_binding_names_snapshot=lambda: frozenset(),
+            _legacy_contextual_grid_expression_routing_active=True,
+        )
+
+        assert expression_compiler.compile_expr(comp, ast.parse("grid(2, 2)", mode="eval").body) == "geometry"
+        assert expression_compiler.compile_expr(comp, ast.parse("grid_uv()", mode="eval").body) == "shared-uv"
+        assert semantic_calls == []
+    finally:
+        for name in set(sys.modules) - before_modules:
+            if name == "bpy" or name.startswith("NodeForge."):
+                sys.modules.pop(name, None)

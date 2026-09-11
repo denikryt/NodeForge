@@ -285,3 +285,29 @@ def test_copy_interface_preserves_nested_native_panel_hierarchy():
     check(bool(panels["Inner"].default_closed) is True, "nested default_closed was not copied")
     inputs = _interface_inputs(destination)
     check(int(inputs["Nested"].default_value) == 7, "nested socket default was not copied")
+
+
+def test_interface_panel_accepts_exact_input_alias_and_rejects_switch_or_repeat_outputs():
+    """Frontend provenance follows physical Group Input identity and clears after control-flow materialization."""
+    alias_group = compile_group(
+        'x = input_float("X")\ny = x\npanel([y], name="Alias")\noutput("Y", y)',
+        "NFTest_panel_alias",
+    )
+    inputs = _interface_inputs(alias_group)
+    check(_parent_name(inputs["X"]) == "Alias", "exact input alias did not retain panel eligibility")
+    bpy.data.node_groups.remove(alias_group)
+
+    _expect_message(
+        'x = input_float("X")\nflag = input_bool("Flag")\n'
+        'if flag:\n    y = x\nelse:\n    y = x\n'
+        'panel([y], name="Bad")\noutput("Y", y)',
+        "panel() item y is not a group input",
+        "NFTest_panel_switch_alias",
+    )
+    _expect_message(
+        'x = input_float("X")\n'
+        'for i in repeat_range(1):\n    x = x\n'
+        'panel([x], name="Bad")\noutput("X", x)',
+        "panel() item x is not a group input",
+        "NFTest_panel_repeat_alias",
+    )

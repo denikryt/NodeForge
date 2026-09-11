@@ -13,7 +13,9 @@ from typing import Callable
 
 from .call_resolution import (
     AnalyzedCallOperand,
+    ContextReadCallResult,
     NamedOutputsCallResult,
+    ProjectedCallResult,
     RuntimeCallResult,
     TupleCallResult,
 )
@@ -35,6 +37,7 @@ from .constants import (
 from .consteval import ConstVector, _as_float_const, _const_eval, _is_const_vector
 from .errors import CompileError
 from .nf_types import NFType, NUMERIC_NF_TYPES
+from .group_context import GroupContextSlot
 
 
 INPUT_DECLARATION_PLACEMENT_ERROR = (
@@ -42,8 +45,6 @@ INPUT_DECLARATION_PLACEMENT_ERROR = (
 )
 
 STATEFUL_FALLBACK_BUILTIN_NAMES = frozenset({
-    "grid",
-    "grid_uv",
     "input_geometry",
     "input_float",
     "input_int",
@@ -66,6 +67,8 @@ IR_CAPABLE_BUILTIN_NAMES = frozenset(
     | set(_VECTOR_MATH_VECTOR_OUTPUT_2)
     | {"position", "normal", "index", "id"}
     | {
+        "grid",
+        "grid_uv",
         "empty_geometry",
         "points",
         "point",
@@ -95,7 +98,7 @@ class BuiltinCallSemantics:
 
     operands: tuple[AnalyzedCallOperand, ...]
     options: tuple[tuple[str, object], ...]
-    result: RuntimeCallResult | TupleCallResult | NamedOutputsCallResult
+    result: RuntimeCallResult | TupleCallResult | NamedOutputsCallResult | ProjectedCallResult | ContextReadCallResult
 
 
 
@@ -551,6 +554,43 @@ def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: Runtime
             RuntimeCallResult(result_type),
         )
 
+    if name == "grid":
+        kws = _kw_dict(expr)
+        if kws:
+            raise CompileError("grid() does not support keyword arguments")
+        if len(expr.args) != 2:
+            raise CompileError("grid(width, height) expects two Int arguments")
+        slots = []
+        for child, label in zip(expr.args, ("width", "height")):
+            diagnostic = f"grid() {label} expects Float/Int"
+            try:
+                value = _const_eval(child, consts)
+            except CompileError:
+                typ = runtime(child, label, f"grid() {label}")
+                _require_type(typ, NUMERIC_NF_TYPES, diagnostic)
+                slots.append(("runtime", len(operands) - 1))
+            else:
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise CompileError(diagnostic)
+                slots.append(("const", value))
+        return BuiltinCallSemantics(
+            tuple(operands),
+            (("slots", tuple(slots)),),
+            ProjectedCallResult(
+                (TYPE_GEOMETRY, TYPE_VECTOR),
+                0,
+                ((GroupContextSlot.GRID_UV, 1),),
+            ),
+        )
+
+    if name == "grid_uv":
+        kws = _kw_dict(expr)
+        if kws:
+            raise CompileError("grid_uv() does not support keyword arguments")
+        if expr.args:
+            raise CompileError("grid_uv() expects no arguments")
+        return BuiltinCallSemantics((), (), ContextReadCallResult(GroupContextSlot.GRID_UV, TYPE_VECTOR))
+
     if name == "empty_geometry":
         kws = _kw_dict(expr)
         if kws:
@@ -603,39 +643,42 @@ def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: Runtime
         _check_extra(kws, {"selection"})
         if len(expr.args) != 2:
             raise CompileError("set_position(geo, position, selection=...) expects Geometry and Vector")
-        geo = runtime(expr.args[0], "geometry", "set_position() geometry")
-        pos = runtime(expr.args[1], "position", "set_position() position")
-        selection = runtime(kws["selection"], "selection", "selection= expression") if "selection" in kws else None
-        _require_type(geo, {TYPE_GEOMETRY}, "set_position(geo, position) first argument must be Geometry")
-        _require_type(pos, {TYPE_VECTOR}, "set_position(geo, position) second argument must be Vector")
-        if selection is not None:
-            _require_type(selection, {TYPE_BOOL}, "set_position(..., selection=...) expects Bool selection")
-        return BuiltinCallSemantics(tuple(operands), (), RuntimeCallResult(TYPE_GEOMETRY))
+        return _analyze_set_position_operation(
+            expr.args[0],
+            expr.args[1],
+            list(expr.keywords),
+            add_runtime,
+            geometry_error="set_position(geo, position) first argument must be Geometry",
+            position_error="set_position(geo, position) second argument must be Vector",
+            selection_error="set_position(..., selection=...) expects Bool selection",
+        )
 
-    if name in {"capture_attribute", "store_named_attribute"}:
+    if name == "store_named_attribute":
         kws = _kw_dict(expr)
         _check_extra(kws, {"selection", "domain", "type"})
-        expected = 2 if name == "capture_attribute" else 3
-        if len(expr.args) != expected:
-            if name == "capture_attribute":
-                raise CompileError('capture_attribute(geometry, value, selection=..., domain="POINT", type=...) expects 2 positional arguments')
+        if len(expr.args) != 3:
             raise CompileError('store_named_attribute(geometry, name, value, selection=..., domain="POINT", type=...) expects 3 positional arguments')
-        geo_typ = runtime(expr.args[0], "geometry", f"{name}() geometry")
+        return _analyze_store_operation(
+            expr.args[0],
+            expr.args[1],
+            expr.args[2],
+            list(expr.keywords),
+            consts,
+            add_runtime,
+            call_name="store_named_attribute",
+            name_context="store_named_attribute() name",
+            value_context="store_named_attribute() value",
+            geometry_type_error="store_named_attribute() first argument must be Geometry",
+        )
+
+    if name == "capture_attribute":
+        kws = _kw_dict(expr)
+        _check_extra(kws, {"selection", "domain", "type"})
+        if len(expr.args) != 2:
+            raise CompileError('capture_attribute(geometry, value, selection=..., domain="POINT", type=...) expects 2 positional arguments')
+        geo_typ = runtime(expr.args[0], "geometry", "capture_attribute() geometry")
         options = []
-        if name == "store_named_attribute":
-            try:
-                attr_name = _literal_string(expr.args[1], consts, "store_named_attribute() name")
-            except CompileError:
-                attr_typ = runtime(expr.args[1], "name", "store_named_attribute() name")
-                if attr_typ != TYPE_STRING:
-                    raise CompileError(f"store_named_attribute() name must be a compile-time string or runtime String, got {attr_typ}")
-                options.append(("name_mode", ("runtime", len(operands) - 1)))
-            else:
-                options.append(("name_mode", ("const", attr_name)))
-            value_expr = expr.args[2]
-        else:
-            value_expr = expr.args[1]
-        value_typ = runtime(value_expr, "value", f"{name}() value")
+        value_typ = runtime(expr.args[1], "value", "capture_attribute() value")
         if "selection" in kws:
             selection_typ = runtime(kws["selection"], "selection", "selection= expression")
             if selection_typ != TYPE_BOOL:
@@ -648,11 +691,9 @@ def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: Runtime
             data_type = _literal_string(kws["type"], consts, "type=")
         options.extend((("domain", domain), ("data_type", data_type)))
         if geo_typ != TYPE_GEOMETRY:
-            raise CompileError("capture_attribute() expects Geometry" if name == "capture_attribute" else "store_named_attribute() first argument must be Geometry")
-        if name == "capture_attribute":
-            result_typ = _capture_result_type(value_typ, data_type)
-            return BuiltinCallSemantics(tuple(operands), tuple(options), TupleCallResult((TYPE_GEOMETRY, result_typ)))
-        return BuiltinCallSemantics(tuple(operands), tuple(options), RuntimeCallResult(TYPE_GEOMETRY))
+            raise CompileError("capture_attribute() expects Geometry")
+        result_typ = _capture_result_type(value_typ, data_type)
+        return BuiltinCallSemantics(tuple(operands), tuple(options), TupleCallResult((TYPE_GEOMETRY, result_typ)))
 
     if name == "set_material":
         kws = _kw_dict(expr)
@@ -902,6 +943,120 @@ def _capture_result_type(value_typ: NFType, data_type: str | None) -> NFType:
     return result
 
 
+def _analyze_store_operation(
+    geometry_expr: ast.expr,
+    name_expr: ast.expr,
+    value_expr: ast.expr,
+    keywords: list[ast.keyword],
+    consts,
+    add_runtime: RuntimeAnalyzer,
+    *,
+    call_name: str,
+    name_context: str,
+    value_context: str,
+    geometry_type_error: str,
+) -> BuiltinCallSemantics:
+    """Normalize one store operation while preserving caller-specific diagnostics."""
+    operands: list[AnalyzedCallOperand] = []
+
+    def runtime(child, parameter_name, context):
+        typ = add_runtime(child, parameter_name, context)
+        operands.append(AnalyzedCallOperand(parameter_name, typ))
+        return typ
+
+    kws = _kw_dict(ast.Call(func=ast.Name(id=call_name, ctx=ast.Load()), args=[], keywords=keywords))
+    _check_extra(kws, {"selection", "domain", "type"})
+    geo_typ = runtime(geometry_expr, "geometry", f"{call_name}() geometry")
+    options = []
+    try:
+        attr_name = _literal_string(name_expr, consts, name_context)
+    except CompileError:
+        attr_typ = runtime(name_expr, "name", name_context)
+        if attr_typ != TYPE_STRING:
+            raise CompileError(f"{name_context} must be a compile-time string or runtime String, got {attr_typ}")
+        options.append(("name_mode", ("runtime", len(operands) - 1)))
+    else:
+        options.append(("name_mode", ("const", attr_name)))
+    runtime(value_expr, "value", value_context)
+    if "selection" in kws:
+        selection_typ = runtime(kws["selection"], "selection", "selection= expression")
+        if selection_typ != TYPE_BOOL:
+            raise CompileError("selection= must be a Bool expression")
+    domain = "POINT"
+    if "domain" in kws:
+        domain = _literal_string(kws["domain"], consts, "domain=")
+    data_type = None
+    if "type" in kws:
+        data_type = _literal_string(kws["type"], consts, "type=")
+    options.extend((("domain", domain), ("data_type", data_type)))
+    if geo_typ != TYPE_GEOMETRY:
+        raise CompileError(geometry_type_error)
+    return BuiltinCallSemantics(tuple(operands), tuple(options), RuntimeCallResult(TYPE_GEOMETRY))
+
+
+def _analyze_set_position_operation(
+    geometry_expr: ast.expr,
+    position_expr: ast.expr,
+    keywords: list[ast.keyword],
+    add_runtime: RuntimeAnalyzer,
+    *,
+    geometry_error: str,
+    position_error: str,
+    selection_error: str,
+) -> BuiltinCallSemantics:
+    """Normalize one set-position operation while preserving caller-specific diagnostics."""
+    operands: list[AnalyzedCallOperand] = []
+
+    def runtime(child, parameter_name, context):
+        typ = add_runtime(child, parameter_name, context)
+        operands.append(AnalyzedCallOperand(parameter_name, typ))
+        return typ
+
+    kws = _kw_dict(ast.Call(func=ast.Name(id="set_position", ctx=ast.Load()), args=[], keywords=keywords))
+    _check_extra(kws, {"selection"})
+    geo = runtime(geometry_expr, "geometry", "set_position() geometry")
+    pos = runtime(position_expr, "position", "set_position() position")
+    selection = runtime(kws["selection"], "selection", "selection= expression") if "selection" in kws else None
+    _require_type(geo, {TYPE_GEOMETRY}, geometry_error)
+    _require_type(pos, {TYPE_VECTOR}, position_error)
+    if selection is not None:
+        _require_type(selection, {TYPE_BOOL}, selection_error)
+    return BuiltinCallSemantics(tuple(operands), (), RuntimeCallResult(TYPE_GEOMETRY))
+
+
+def analyze_contextual_store_call(expr: ast.Call, consts, add_runtime: RuntimeAnalyzer) -> BuiltinCallSemantics:
+    """Normalize statement-form ``store`` while preserving its public diagnostics."""
+    if len(expr.args) != 2:
+        raise CompileError('store(attribute_name, value, selection=..., domain="POINT", type="FLOAT") expects 2 positional arguments')
+    return _analyze_store_operation(
+        ast.Name(id="__nodeforge_current_geometry__", ctx=ast.Load()),
+        expr.args[0],
+        expr.args[1],
+        list(expr.keywords),
+        consts,
+        add_runtime,
+        call_name="store",
+        name_context="store() attribute name",
+        value_context="store() value",
+        geometry_type_error="Internal error: store() requires Geometry context",
+    )
+
+
+def analyze_contextual_set_position_call(expr: ast.Call, consts, add_runtime: RuntimeAnalyzer) -> BuiltinCallSemantics:
+    """Normalize statement-form ``set_position`` while preserving its public diagnostics."""
+    if len(expr.args) != 1:
+        raise CompileError("set_position(position_vector, selection=...) expects exactly one positional argument")
+    return _analyze_set_position_operation(
+        ast.Name(id="__nodeforge_current_geometry__", ctx=ast.Load()),
+        expr.args[0],
+        list(expr.keywords),
+        add_runtime,
+        geometry_error="Internal error: set_position() requires Geometry context",
+        position_error="set_position() expects a Vector argument",
+        selection_error="selection= must be a Bool expression",
+    )
+
+
 __all__ = [
     "BuiltinCallSemantics",
     "IR_CAPABLE_BUILTIN_NAMES",
@@ -909,4 +1064,6 @@ __all__ = [
     "INPUT_DECLARATION_BUILTIN_NAMES",
     "INPUT_DECLARATION_PLACEMENT_ERROR",
     "analyze_builtin_call",
+    "analyze_contextual_store_call",
+    "analyze_contextual_set_position_call",
 ]

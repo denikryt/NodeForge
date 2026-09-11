@@ -239,6 +239,11 @@ class Compiler:
         # Remove it when remaining compatibility bodies no longer require backend structural objects by
         # source name.
         self._legacy_structural_bindings: dict[str, object] = {}
+        # CONTEXTUAL_GROUP_LEGACY_PANEL_SOCKET_MAP_COMPAT: Semantic panel() ownership uses frontend
+        # InterfaceInputOrigin provenance and IRPanelDeclaration; it must not infer semantics from Blender
+        # socket/interface identity. Keep these backend lookup/membership maps only for the legacy panel path
+        # reached after another marked whole-body compatibility category selects compile_statement(). Remove
+        # the maps and their lookup methods when CONTEXTUAL_GROUP_LEGACY_PANEL_COMPAT is no longer reachable.
         self._interface_inputs_by_identifier = {}
         self._interface_inputs_by_socket_pointer = {}
         self._panel_input_memberships = {}
@@ -248,6 +253,14 @@ class Compiler:
         # runtime control-flow engine by another compatibility category. Remove the stack and its accessors
         # when no supported production Repeat is lowered through runtime.py's AST/Compiler implementation.
         self._runtime_state_frames = []
+        # CONTEXTUAL_GROUP_LEGACY_GRID_EXPRESSION_ROUTE_COMPAT: Whole-body compatibility
+        # compilation still re-enters compile_expr() one expression at a time. While that route is
+        # active, expressions containing the core grid()/grid_uv() builtins must use the legacy
+        # expression dispatcher so both calls share Compiler.grid_context exactly as before this
+        # migration. Keep this flag compilation-local and scoped by compile_statements(); do not use
+        # it for other expressions. Remove it together with CONTEXTUAL_GROUP_LEGACY_GRID_CONTEXT_COMPAT
+        # when supported fallback bodies no longer execute grid/grid_uv through legacy compilation.
+        self._legacy_contextual_grid_expression_routing_active = False
         self.depth = 0
 
     # COMPILE_TIME_STATE_COMPILER_CONSTS_COMPAT: Compile-time bindings are now owned by
@@ -900,6 +913,7 @@ def _populate_group(
         resolved_environment=resolved_environment,
     )
 
+    initial_interface_input_origins = {}
     implicit_iface_by_identifier = {
         getattr(item, "identifier", None): item
         for item in group.interface.items_tree
@@ -922,6 +936,10 @@ def _populate_group(
                 raise CompileError(f'Internal error: implicit input socket "{socket.name}" has no interface item')
             comp._register_interface_input(socket, iface_item)
             comp.bind_runtime_value(socket.name, make_value(socket, input_types.get(socket.name, TYPE_FLOAT)))
+            symbol = comp.runtime_binding(socket.name)
+            if symbol is None:
+                raise CompileError(f'Internal error: implicit input "{socket.name}" has no runtime binding')
+            initial_interface_input_origins[symbol.binding_id] = symbol.binding_id
 
     geometry_socket = None
     if geometry_mode:
@@ -942,7 +960,7 @@ def _populate_group(
         trace_cm = function_compilation_trace.group(function_definition_identity or function_group_owner_scope or group.name, own_inputs)
         frame = trace_cm.__enter__()
     try:
-        compile_statements(ctx, stmts)
+        compile_statements(ctx, stmts, initial_interface_input_origins)
     finally:
         if frame is not None:
             trace_cm.__exit__(None, None, None)

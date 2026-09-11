@@ -9,20 +9,23 @@ Blender lowering begins.
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass, replace
 from typing import Mapping
 
 from .builtin_call_semantics import (
     INPUT_DECLARATION_BUILTIN_NAMES,
     INPUT_DECLARATION_PLACEMENT_ERROR,
     analyze_input_declaration_call,
+    analyze_contextual_store_call,
+    analyze_contextual_set_position_call,
 )
-from .compiler_identities import BindingId, InputDeclarationId
+from .compiler_identities import BindingId, InputDeclarationId, InterfaceInputOrigin
 from .constants import TYPE_OBJECT
 from .consteval import _const_eval
 from .compile_time import CompileTimeSnapshot, CompileTimeState
 from .errors import CompileError
 from .nf_types import NFType
+from .group_context import GroupContextAvailabilityCursor, GroupContextSlot
 from .parsing import _literal_string
 from .runtime_bindings import RuntimeBindingSymbol, validate_runtime_binding_target
 from .semantic_analysis import analyze_expression, build_semantic_environment
@@ -31,6 +34,13 @@ from .semantic_ir import (
     IRBindLeaves,
     IRBody,
     IRDiscardExpression,
+    IRContextRead,
+    IRContextWrite,
+    IRCall,
+    IRCallArgument,
+    IRCallableKind,
+    IRCallableTarget,
+    IRPanelDeclaration,
     IRArray,
     IRFinalExpression,
     IRInputDeclaration,
@@ -301,6 +311,9 @@ class _BodySemanticState:
     builder_states: dict[str, GeometryBuilderState]
     object_ids_by_binding: dict[BindingId, ObjectSemanticId]
     object_states: dict[ObjectSemanticId, ObjectInfoState]
+    interface_input_origins: dict[BindingId, InterfaceInputOrigin]
+    panel_member_origins: dict[InterfaceInputOrigin, str]
+    panel_names: set[str]
     identities: _BodyIdentityAllocator
     changed_runtime_ids: set[BindingId]
     explicitly_assigned_runtime_ids: set[BindingId]
@@ -317,6 +330,11 @@ class _BodySemanticState:
             dict(self.builder_states),
             dict(self.object_ids_by_binding),
             dict(self.object_states),
+            dict(self.interface_input_origins),
+            # panel declarations are root-only; branch states share the attempt-owned
+            # membership/name registries instead of forking semantic panel ownership.
+            self.panel_member_origins,
+            self.panel_names,
             self.identities,
             set(),
             set(),
@@ -333,6 +351,11 @@ class _BodySemanticState:
         self.builder_states = dict(other.builder_states)
         self.object_ids_by_binding = dict(other.object_ids_by_binding)
         self.object_states = dict(other.object_states)
+        self.interface_input_origins = dict(other.interface_input_origins)
+        # Root-only panel registries are attempt-owned shared objects; nested semantic
+        # states cannot declare panels and therefore never publish branch-local copies.
+        if self.panel_member_origins is not other.panel_member_origins or self.panel_names is not other.panel_names:
+            raise CompileError("Internal error: panel semantic registries were forked")
         self.changed_runtime_ids.update(other.changed_runtime_ids)
         self.explicitly_assigned_runtime_ids.update(other.explicitly_assigned_runtime_ids)
         self.lexical_iteration_ids = set(other.lexical_iteration_ids)
@@ -365,6 +388,44 @@ def _program_is_binding_identity(program: IRProgram, binding_id: BindingId) -> b
     return operation.binding_id == binding_id and program.result == operation.result
 
 
+def _program_binding_source(program: IRProgram) -> BindingId | None:
+    """Return the exact forwarded BindingId for a one-operation identity program."""
+    if len(program.operations) != 1 or not isinstance(program.operations[0], IRBinding):
+        return None
+    operation = program.operations[0]
+    return operation.binding_id if program.result == operation.result else None
+
+
+def _rebase_ir_data(value, offset: int):
+    """Rebase program-local IRValue IDs while preserving all other semantic identities."""
+    if isinstance(value, IRValue):
+        return IRValue(value.id + offset, value.typ)
+    if isinstance(value, tuple):
+        return tuple(_rebase_ir_data(item, offset) for item in value)
+    if isinstance(value, list):
+        return [_rebase_ir_data(item, offset) for item in value]
+    if is_dataclass(value) and value.__class__.__module__ == IRValue.__module__:
+        changes = {field.name: _rebase_ir_data(getattr(value, field.name), offset) for field in fields(value)}
+        return replace(value, **changes)
+    return value
+
+
+def _program_value_extent(program: IRProgram) -> int:
+    """Return one plus the largest program-local IRValue id in *program*."""
+    ids = []
+    def visit(value):
+        if isinstance(value, IRValue):
+            ids.append(value.id)
+        elif isinstance(value, tuple):
+            for item in value:
+                visit(item)
+        elif is_dataclass(value) and value.__class__.__module__ == IRValue.__module__:
+            for field in fields(value):
+                visit(getattr(value, field.name))
+    visit(program)
+    return max(ids, default=-1) + 1
+
+
 
 def lower_basic_body(
     stmts,
@@ -376,6 +437,8 @@ def lower_basic_body(
     callable_environment,
     owner_scope: str,
     declaration_owner: str | None = None,
+    geometry_mode: bool = False,
+    initial_interface_input_origins: Mapping[BindingId, InterfaceInputOrigin] | None = None,
 ):
     """Lower one whole eligible source body to compiler-owned structured Semantic IR."""
     validate_input_declaration_placement(stmts)
@@ -384,6 +447,12 @@ def lower_basic_body(
     local_ids = [symbol.binding_id.local_id for symbol in initial_runtime_bindings.values()]
     if len(local_ids) != len(set(local_ids)):
         raise CompileError("Internal error: duplicate body-entry BindingId")
+    initial_interface_input_origins = dict(initial_interface_input_origins or {})
+    initial_binding_ids = {symbol.binding_id for symbol in initial_runtime_bindings.values()}
+    if any(binding_id not in initial_binding_ids for binding_id in initial_interface_input_origins):
+        raise CompileError("Internal error: interface-input provenance references a non-entry binding")
+    if not all(isinstance(origin, (BindingId, InputDeclarationId)) for origin in initial_interface_input_origins.values()):
+        raise TypeError("interface-input provenance must use InterfaceInputOrigin identities")
 
     identities = _BodyIdentityAllocator(
         owner_scope=owner_scope,
@@ -397,7 +466,11 @@ def lower_basic_body(
         raise TypeError("initial_compile_time must be a CompileTimeSnapshot")
     compile_time = CompileTimeState(initial_compile_time.values)
     state = _BodySemanticState(
-        dict(initial_runtime_bindings), {}, {}, {}, {}, {}, {}, identities, set(), set(), set(), False
+        dict(initial_runtime_bindings), {}, {}, {}, {}, {}, {},
+        dict(initial_interface_input_origins), {}, set(), identities, set(), set(), set(), False
+    )
+    group_context_cursor = GroupContextAvailabilityCursor(
+        {GroupContextSlot.CURRENT_GEOMETRY} if geometry_mode else set()
     )
     for symbol in state.runtime_bindings.values():
         if symbol.typ is TYPE_OBJECT:
@@ -415,6 +488,7 @@ def lower_basic_body(
         runtime = active.runtime_bindings.pop(name, None)
         if runtime is not None:
             clear_binding_object(active, runtime.binding_id)
+            active.interface_input_origins.pop(runtime.binding_id, None)
         structural = active.structural_bindings.pop(name, None)
         if structural is not None:
             for leaf in structural.leaves:
@@ -527,6 +601,7 @@ def lower_basic_body(
         symbol = RuntimeBindingSymbol(binding_id, shape.typ)
         active.runtime_bindings[name] = symbol
         clear_binding_object(active, binding_id)
+        active.interface_input_origins.pop(binding_id, None)
         if shape.typ is TYPE_OBJECT:
             active.object_ids_by_binding[binding_id] = shape.object_id
         if changed:
@@ -545,6 +620,7 @@ def lower_basic_body(
         runtime = active.runtime_bindings.pop(name, None)
         if runtime is not None:
             clear_binding_object(active, runtime.binding_id)
+            active.interface_input_origins.pop(runtime.binding_id, None)
         previous = active.structural_bindings.get(name)
         previous_by_key = {} if previous is None else {leaf.projection_key: leaf for leaf in previous.leaves}
         if isinstance(shape, TupleResultShape):
@@ -578,6 +654,7 @@ def lower_basic_body(
         runtime = active.runtime_bindings.pop(name, None)
         if runtime is not None:
             clear_binding_object(active, runtime.binding_id)
+            active.interface_input_origins.pop(runtime.binding_id, None)
         structural = active.structural_bindings.pop(name, None)
         if structural is not None:
             for leaf in structural.leaves:
@@ -756,6 +833,11 @@ def lower_basic_body(
             for binding_id in binding_ids
             if binding_id in active.object_ids_by_binding
         }
+        runtime_origin = (
+            active.interface_input_origins.get(runtime.binding_id)
+            if runtime is not None
+            else None
+        )
         return (
             runtime,
             structural,
@@ -763,16 +845,24 @@ def lower_basic_body(
             active_compile_time.contains(name),
             active_compile_time.get(name),
             object_bindings,
+            runtime_origin,
         )
 
     def _restore_lexical_name(active: _BodySemanticState, active_compile_time: CompileTimeState, name: str, snapshot) -> None:
         """Restore one loop-target name without disturbing non-target loop mutations."""
-        runtime, structural, array_id, had_const, const_value, object_bindings = snapshot
+        runtime, structural, array_id, had_const, const_value, object_bindings, runtime_origin = snapshot
+        current_runtime = active.runtime_bindings.get(name)
+        if current_runtime is not None:
+            active.interface_input_origins.pop(current_runtime.binding_id, None)
         active.runtime_bindings.pop(name, None)
         active.structural_bindings.pop(name, None)
         active.array_bindings.pop(name, None)
         if runtime is not None:
             active.runtime_bindings[name] = runtime
+            if runtime_origin is not None:
+                active.interface_input_origins[runtime.binding_id] = runtime_origin
+            else:
+                active.interface_input_origins.pop(runtime.binding_id, None)
         elif structural is not None:
             active.structural_bindings[name] = structural
         elif array_id is not None:
@@ -795,6 +885,11 @@ def lower_basic_body(
         active.array_bindings.pop(name, None)
         active_compile_time.discard(name)
         active.runtime_bindings[name] = RuntimeBindingSymbol(temp_binding_id, item.typ)
+        source_origin = active.interface_input_origins.get(item.binding_id)
+        if source_origin is not None:
+            active.interface_input_origins[temp_binding_id] = source_origin
+        else:
+            active.interface_input_origins.pop(temp_binding_id, None)
         clear_binding_object(active, temp_binding_id)
         if item.typ is TYPE_OBJECT:
             object_id = active.object_ids_by_binding.get(item.binding_id)
@@ -885,6 +980,7 @@ def lower_basic_body(
             reserved_name_labels=reserved_name_labels,
             callable_environment=callable_environment,
             object_semantics=active.object_snapshot(),
+            available_group_context_slots=group_context_cursor.snapshot(),
         )
         analysis = analyze_expression(expr, environment)
         if analysis is None:
@@ -897,6 +993,7 @@ def lower_basic_body(
         if analysis.object_semantics is None:
             raise CompileError("Internal error: body expression analysis lost Object semantic registry")
         program = lower_analyzed_expression(expr, analysis)
+        group_context_cursor.replace(analysis.available_group_context_slots)
         return _AnalyzedBodyExpression(
             program,
             analysis.facts[expr].result_shape,
@@ -911,6 +1008,75 @@ def lower_basic_body(
         active.adopt_object_snapshot(analyzed.object_semantics)
         return analyzed
 
+    def build_contextual_call_program(call, active, active_compile_time, statement_sink, *, builtin_name):
+        """Build one contextual geometry statement from existing typed builtin semantics."""
+        runtime_sources = []
+
+        def add_runtime(child, parameter_name, context):
+            if isinstance(child, ast.Name) and child.id == "__nodeforge_current_geometry__":
+                runtime_sources.append(None)
+                return NFType.GEOMETRY
+            analyzed = analyze_runtime_expression(child, active, active_compile_time, statement_sink)
+            if analyzed is BODY_UNSUPPORTED:
+                raise _ContextualOperandUnsupported
+            if not isinstance(analyzed.result_shape, RuntimeResultShape) or not isinstance(analyzed.program.result, IRValue):
+                if isinstance(analyzed.result_shape, TupleResultShape):
+                    raise CompileError(
+                        f"{context} received a tuple of {len(analyzed.result_shape.items)} values; "
+                        "unpack it or select an element by a compile-time index"
+                    )
+                if isinstance(analyzed.result_shape, NamedOutputsResultShape):
+                    raise CompileError(f"NodeResult is compile-time only and cannot be used in {context}")
+                if context == "store() value" and isinstance(analyzed.result_shape, ArrayResultShape):
+                    raise CompileError("store() value cannot be an array")
+                raise CompileError(f"{context} requires a runtime value")
+            active.adopt_object_snapshot(analyzed.object_semantics)
+            runtime_sources.append(analyzed.program)
+            return analyzed.result_shape.typ
+
+        try:
+            if builtin_name == "store_named_attribute":
+                semantics = analyze_contextual_store_call(call, active_compile_time.values, add_runtime)
+            else:
+                semantics = analyze_contextual_set_position_call(call, active_compile_time.values, add_runtime)
+        except _ContextualOperandUnsupported:
+            return BODY_UNSUPPORTED
+        operations = []
+        arguments = []
+        next_id = 0
+        for operand_meta, source in zip(semantics.operands, runtime_sources):
+            if source is None:
+                value = IRValue(next_id, NFType.GEOMETRY)
+                next_id += 1
+                operations.append(IRContextRead(value, 1, GroupContextSlot.CURRENT_GEOMETRY))
+            else:
+                rebased = _rebase_ir_data(source, next_id)
+                operations.extend(rebased.operations)
+                value = rebased.result
+                if not isinstance(value, IRValue):
+                    raise CompileError("Internal error: contextual builtin operand lowered to structural result")
+                next_id += _program_value_extent(source)
+            if value.typ is not operand_meta.typ:
+                raise CompileError("Internal error: contextual builtin operand type changed during lowering")
+            arguments.append(IRCallArgument(operand_meta.parameter_name, value))
+        if not hasattr(semantics.result, "typ") or semantics.result.typ is not NFType.GEOMETRY:
+            raise CompileError("Internal error: contextual geometry builtin must return Geometry")
+        result = IRValue(next_id, NFType.GEOMETRY)
+        operations.append(
+            IRCall(
+                (result,),
+                0,
+                IRCallableTarget(IRCallableKind.BUILTIN, builtin_name),
+                tuple(arguments),
+                tuple(semantics.options),
+            )
+        )
+        operations.append(IRContextWrite(0, GroupContextSlot.CURRENT_GEOMETRY, result))
+        return IRProgram(tuple(operations), result)
+
+    class _ContextualOperandUnsupported(Exception):
+        """Abort contextual statement ownership when an operand still requires compatibility fallback."""
+
     def nested_control_flow_fallback():
         """Reject one unsupported nested control-flow region atomically at the root body."""
         # STRUCTURAL_ARRAYS_NESTED_REMAINING_FALLBACK: IRIf may now contain body-owned array reads and
@@ -920,7 +1086,7 @@ def lower_basic_body(
         # contextual/grid/dynamic categories still require atomic whole-body fallback; GeometryBuilder itself is
         # frontend-owned. Never
         # splice compile_statement() into accepted IRIf/IRRepeat. Remove this marker when every supported
-        # nested core-body category is frontend-owned.
+        # nested dynamic/extension compatibility category is frontend-owned or isolated.
         return BODY_UNSUPPORTED
 
     def lower_statements(source_stmts, active: _BodySemanticState, active_compile_time: CompileTimeState, *, control_policy=None, repeat_merge_ids=None, repeat_merge_symbols=(), runtime_if_builder_baseline=None, root=False):
@@ -946,6 +1112,7 @@ def lower_basic_body(
                 # Repeat's dedicated legacy compile_if() does not: even a constant Bool is a Repeat-local
                 # runtime branch and can affect carried-state topology. Preserve that contextual difference.
                 if control_policy is not BranchMergePolicy.REPEAT:
+                    context_availability_before_trial = group_context_cursor.snapshot()
                     try:
                         const_branch = stmt.body if bool(_const_eval(stmt.test, active_compile_time.values)) else stmt.orelse
                         trial = active.fork()
@@ -965,8 +1132,9 @@ def lower_basic_body(
                             active_compile_time.replace(trial_compile_time)
                             statements.extend(folded.statements)
                             continue
+                        group_context_cursor.replace(context_availability_before_trial)
                     except CompileError:
-                        pass
+                        group_context_cursor.replace(context_availability_before_trial)
 
                 policy = control_policy or BranchMergePolicy.TOP_LEVEL
                 if policy is BranchMergePolicy.TOP_LEVEL:
@@ -1047,6 +1215,7 @@ def lower_basic_body(
                     active.changed_runtime_ids.add(merge.binding_id)
                     active.explicitly_assigned_runtime_ids.add(merge.binding_id)
                     clear_binding_object(active, merge.binding_id)
+                    active.interface_input_origins.pop(merge.binding_id, None)
                 continue
 
             if isinstance(stmt, ast.For):
@@ -1273,6 +1442,7 @@ def lower_basic_body(
                     active.runtime_bindings[record.source_name] = RuntimeBindingSymbol(record.binding_id, record.output_type)
                     active.changed_runtime_ids.add(record.binding_id)
                     clear_binding_object(active, record.binding_id)
+                    active.interface_input_origins.pop(record.binding_id, None)
                 continue
 
             if isinstance(stmt, ast.Assign):
@@ -1335,10 +1505,12 @@ def lower_basic_body(
                         input_semantics = None
                     if input_semantics is not None:
                         symbol = bind_input(active, target, input_semantics.typ)
+                        declaration_id = identities.allocate_input_declaration_id(target)
+                        active.interface_input_origins[symbol.binding_id] = declaration_id
                         emit(
                             IRInputDeclaration(
                                 target_binding_id=symbol.binding_id,
-                                declaration_id=identities.allocate_input_declaration_id(target),
+                                declaration_id=declaration_id,
                                 target_name=target,
                                 display_name=input_semantics.display_name,
                                 typ=input_semantics.typ,
@@ -1387,8 +1559,12 @@ def lower_basic_body(
                 active.adopt_object_snapshot(analyzed.object_semantics)
                 if isinstance(analyzed.result_shape, RuntimeResultShape) and isinstance(analyzed.program.result, IRValue):
                     existing = active.runtime_bindings.get(target)
+                    source_binding_id = _program_binding_source(analyzed.program)
+                    source_origin = active.interface_input_origins.get(source_binding_id) if source_binding_id is not None else None
                     unchanged = existing is not None and _program_is_binding_identity(analyzed.program, existing.binding_id)
                     symbol = bind_runtime(active, target, analyzed.result_shape, changed=not unchanged)
+                    if source_origin is not None:
+                        active.interface_input_origins[symbol.binding_id] = source_origin
                     active.explicitly_assigned_runtime_ids.add(symbol.binding_id)
                     emit(IRAssign(symbol.binding_id, target, analyzed.program))
                     continue
@@ -1513,8 +1689,68 @@ def lower_basic_body(
                     active.clear_auto_final_output = True
                     continue
 
-                if call is not None and call.func.id in {"panel", "store", "set_position"}:
-                    return BODY_UNSUPPORTED
+                if call is not None and call.func.id == "panel":
+                    if not root:
+                        raise CompileError("panel() is a top-level interface declaration")
+                    if len(call.args) != 1:
+                        raise CompileError("panel() expects exactly one positional list or tuple of group inputs")
+                    members_expr = call.args[0]
+                    if not isinstance(members_expr, (ast.List, ast.Tuple)):
+                        raise CompileError("panel() first argument must be a list or tuple of input variable names")
+                    if not members_expr.elts:
+                        raise CompileError("panel() requires at least one input")
+                    if not all(isinstance(member, ast.Name) for member in members_expr.elts):
+                        raise CompileError("panel() items must be simple input variable names")
+                    kws = _kw_dict(call)
+                    _check_no_extra_keywords(kws, {"name", "collapsed"})
+                    if "name" not in kws:
+                        raise CompileError("panel() requires name=")
+                    panel_name = _literal_string(kws["name"], "panel() name", active_compile_time.values)
+                    collapsed = False
+                    if "collapsed" in kws:
+                        try:
+                            collapsed = _const_eval(kws["collapsed"], active_compile_time.values)
+                        except CompileError as exc:
+                            raise CompileError("panel() collapsed= must be a compile-time bool") from exc
+                        if not isinstance(collapsed, bool):
+                            raise CompileError("panel() collapsed= must be a compile-time bool")
+                    if panel_name in active.panel_names:
+                        raise CompileError(f"panel() duplicate panel name: {panel_name}")
+                    member_binding_ids = []
+                    member_origins = []
+                    seen_origins = set()
+                    for member in members_expr.elts:
+                        name = member.id
+                        symbol = active.runtime_bindings.get(name)
+                        origin = active.interface_input_origins.get(symbol.binding_id) if symbol is not None else None
+                        if origin is None:
+                            raise CompileError(f"panel() item {name} is not a group input")
+                        if origin in seen_origins:
+                            raise CompileError(f"panel() duplicate input: {name}")
+                        existing_panel = active.panel_member_origins.get(origin)
+                        if existing_panel is not None:
+                            raise CompileError(f'panel() item {name} already belongs to panel "{existing_panel}"')
+                        seen_origins.add(origin)
+                        member_origins.append(origin)
+                        member_binding_ids.append(symbol.binding_id)
+                    active.panel_names.add(panel_name)
+                    for origin in member_origins:
+                        active.panel_member_origins[origin] = panel_name
+                    emit(IRPanelDeclaration(tuple(member_binding_ids), panel_name, collapsed))
+                    active.clear_auto_final_output = True
+                    continue
+                if call is not None and call.func.id in {"store", "set_position"}:
+                    if GroupContextSlot.CURRENT_GEOMETRY not in group_context_cursor.available_slots:
+                        raise CompileError(f"Internal error: {call.func.id}() requires geometry mode")
+                    builtin_name = "store_named_attribute" if call.func.id == "store" else "set_position"
+                    program = build_contextual_call_program(
+                        call, active, active_compile_time, statements, builtin_name=builtin_name
+                    )
+                    if program is BODY_UNSUPPORTED:
+                        return BODY_UNSUPPORTED
+                    emit(IRDiscardExpression(program))
+                    active.clear_auto_final_output = True
+                    continue
                 if call is not None and call.func.id.startswith("input_"):
                     return BODY_UNSUPPORTED
                 if (

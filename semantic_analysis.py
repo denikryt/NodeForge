@@ -14,7 +14,9 @@ from .call_resolution import (
     AnalyzedCallOperand,
     CallableEnvironment,
     CallableKind,
+    ContextReadCallResult,
     NamedOutputsCallResult,
+    ProjectedCallResult,
     ResolvedCallable,
     RuntimeCallResult,
     TupleCallResult,
@@ -50,6 +52,7 @@ from .compile_time import CompileTimeSnapshot
 from .errors import CompileError
 from .nf_types import NFType, NUMERIC_NF_TYPES
 from .runtime_bindings import RuntimeBindingSymbol
+from .group_context import GroupContextSlot
 from .semantic_values import (
     ArrayResultShape,
     NamedOutputsResultShape,
@@ -115,6 +118,7 @@ class SemanticEnvironment:
     structural_arrays: StructuralArraySnapshot = field(default_factory=lambda: StructuralArraySnapshot({}, {}))
     builder_bindings: Mapping[str, BindingId] = field(default_factory=lambda: MappingProxyType({}))
     object_semantics: ObjectSemanticSnapshot | None = None
+    available_group_context_slots: frozenset[GroupContextSlot] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -164,6 +168,7 @@ class ExpressionAnalysis:
     root: ast.expr
     facts: Mapping[ast.AST, ExpressionFact]
     object_semantics: ObjectSemanticSnapshot | None = None
+    available_group_context_slots: frozenset[GroupContextSlot] = frozenset()
     structural_arrays: StructuralArraySnapshot = field(default_factory=lambda: StructuralArraySnapshot({}, {}))
 
 
@@ -342,6 +347,10 @@ def _call_result_types(result):
         return tuple(result.types)
     if isinstance(result, NamedOutputsCallResult):
         return tuple(typ for _name, typ in result.items)
+    if isinstance(result, ProjectedCallResult):
+        return tuple(result.types)
+    if isinstance(result, ContextReadCallResult):
+        return (result.typ,)
     raise CompileError("Internal error: unsupported analyzed call result contract")
 
 
@@ -365,6 +374,7 @@ def build_semantic_environment(
     structural_arrays=None,
     builder_bindings=None,
     object_semantics=None,
+    available_group_context_slots=frozenset(),
 ):
     """Build one immutable expression environment from detached compiler-owned snapshots."""
     structural_bindings = {} if structural_bindings is None else dict(structural_bindings)
@@ -408,6 +418,7 @@ def build_semantic_environment(
         structural_arrays=structural_arrays,
         builder_bindings=MappingProxyType(builder_bindings),
         object_semantics=object_semantics,
+        available_group_context_slots=frozenset(available_group_context_slots),
     )
 
 
@@ -416,6 +427,9 @@ def analyze_expression(expr, environment):
     facts = {}
     if not isinstance(environment, SemanticEnvironment):
         raise TypeError("environment must be a SemanticEnvironment")
+    available_group_context_slots = set(environment.available_group_context_slots)
+    if not all(isinstance(slot, GroupContextSlot) for slot in available_group_context_slots):
+        raise TypeError("available_group_context_slots must contain GroupContextSlot values")
     if environment.object_semantics is None:
         object_ids_by_binding = None
         object_states = None
@@ -470,6 +484,10 @@ def analyze_expression(expr, environment):
             return TupleResultShape(shapes)
         if isinstance(result, NamedOutputsCallResult):
             return NamedOutputsResultShape(tuple((name, shape) for (name, _), shape in zip(result.items, shapes)))
+        if isinstance(result, ProjectedCallResult):
+            return shapes[result.exposed_index]
+        if isinstance(result, ContextReadCallResult):
+            return shapes[0]
         raise CompileError("Internal error: unsupported analyzed call result contract")
 
     def analyze(node):
@@ -999,6 +1017,11 @@ def analyze_expression(expr, environment):
                     )
                 except _BuiltinOperandUnsupported:
                     return UNSUPPORTED
+                if isinstance(builtin.result, ContextReadCallResult):
+                    if builtin.result.slot not in available_group_context_slots:
+                        if builtin.result.slot is GroupContextSlot.GRID_UV:
+                            raise CompileError("grid_uv() requires a preceding grid(width, height) call")
+                        raise CompileError("Internal error: unavailable group-context slot read")
                 analyzed_call = AnalyzedCall(
                     target=resolved,
                     runtime_operands=builtin.operands,
@@ -1008,6 +1031,9 @@ def analyze_expression(expr, environment):
                 result_shape = call_result_shape(builtin.result)
                 if result_shape is UNSUPPORTED:
                     return UNSUPPORTED
+                if isinstance(builtin.result, ProjectedCallResult):
+                    for slot, _result_index in builtin.result.context_writes:
+                        available_group_context_slots.add(slot)
                 return record(
                     node,
                     ExpressionFact(
@@ -1046,6 +1072,7 @@ def analyze_expression(expr, environment):
         expr,
         MappingProxyType(dict(facts)),
         snapshot,
+        frozenset(available_group_context_slots),
         environment.structural_arrays,
     )
 
