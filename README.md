@@ -1,6 +1,36 @@
 # NodeForge
 
+> **Disclaimer:** NodeForge is a vibe-coded project.
+
 NodeForge is a Blender add-on for describing Geometry Nodes logic in a Python-like language. The source is compiled into a native Geometry Nodes group, so the result inside Blender is an ordinary node graph with the expected sockets, links and parameters.
+
+## Installation
+
+1. Download the `NodeForge-v<version>-blender.zip` file from the **Assets** section of the latest GitHub release.
+2. In Blender, open **Edit → Preferences → Add-ons**.
+3. Open the Add-ons menu, choose **Install from Disk...**, and select the downloaded ZIP file.
+4. Enable **NodeForge** in the add-on list.
+
+## Quick start
+
+1. Select a mesh object and open the **Geometry Node Editor**.
+2. Click **New** to create a Geometry Nodes modifier and node tree for the object.
+3. Press `N` and open the **NodeForge** tab in the sidebar.
+4. Open a **Text Editor**, click **New**, and enter this script:
+
+```python
+size = input_float("Size", default=2.0)
+geo = cube(size=size)
+output("Geometry", geo)
+```
+
+5. Return to the NodeForge sidebar and select the new text in **Text Script**.
+6. Click **Compile Script**. NodeForge adds the generated group node to the current Geometry Nodes tree.
+7. Connect the generated node's **Geometry** output to the **Group Output** node to display the cube.
+
+To change the generated group, edit the text, select the generated group node, and click **Update Selected NodeGroup**. NodeForge recompiles the script into the same node group and preserves compatible links and input values.
+
+See the [Get Started guide](https://denikryt.github.io/NodeForgeDocs/GET_STARTED/) for the complete beginner workflow.
 
 The language is intended to make procedural logic easier to express and maintain as the graph grows. Mathematical relationships can be written directly as expressions, while Geometry Nodes operations are available through functions that fit naturally into Python-like code. The source therefore stays close to the logic of the setup and can remain readable even when the generated node graph becomes large.
 
