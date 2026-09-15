@@ -230,3 +230,7 @@ nel input provenance when compile-time loop targets temporarily shadow runtime s
  coverage against the retained legacy path.
 - Restored legacy `NodeResult` diagnostics when raw named-output results are passed directly to statement-form `store()` or `set_position()`, with byte-for-byte migrated-vs-legacy regres
 ion coverage.
+
+## 0.52.0
+
+- Moved named scalar-math callable-to-Blender-operation ownership into `nodeforge.math`, removed the legacy core math-call CTFE allowlist and historical `count_zero()` evaluator, and kept source-language arithmetic plus structural/core compile-time helpers owned by NodeForge.

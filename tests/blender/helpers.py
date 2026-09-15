@@ -17,7 +17,6 @@ import pytest
 
 import NodeForge
 from NodeForge import compiler, library, blender_group_backend
-from NodeForge.constants import _FLOAT_FUNCS_1, _FLOAT_FUNCS_2
 from NodeForge.errors import CompileError
 from NodeForge import generated_resources
 from NodeForge.builtins import fields, geometry, instancing, io, vector, registry

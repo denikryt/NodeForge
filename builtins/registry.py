@@ -1,8 +1,8 @@
 """Central dispatch table for NodeForge DSL built-ins."""
 
-from . import vector, fields, geometry, geometry_builder, layout, instancing, io, raw_nodes, node_wrappers, bundle, runtime
+from . import vector, fields, geometry, geometry_builder, instancing, io, raw_nodes, node_wrappers, bundle, runtime
 
-_MODULES = (vector, fields, geometry, geometry_builder, layout, instancing, io, raw_nodes, node_wrappers, bundle)
+_MODULES = (vector, fields, geometry, geometry_builder, instancing, io, raw_nodes, node_wrappers, bundle)
 _RUNTIME_NAMES = set(runtime.NAMES)
 
 _HANDLERS = {}
