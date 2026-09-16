@@ -1,8 +1,8 @@
 """Pure semantic analysis for compiler-owned NodeForge builtin calls.
 
-The module classifies every callable builtin as either Semantic-IR capable or an
-explicit stateful compatibility fallback.  It normalizes source call syntax and
-compile-time options without importing Blender-facing builtin implementations.
+The module classifies compiler-owned callable builtins and input declarations.
+It normalizes source call syntax and compile-time options without importing
+Blender-facing builtin implementations.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ INPUT_DECLARATION_PLACEMENT_ERROR = (
     "input_*() may only be used as the complete right-hand side of a simple assignment"
 )
 
-STATEFUL_FALLBACK_BUILTIN_NAMES = frozenset({
+INPUT_DECLARATION_BUILTIN_NAMES = frozenset({
     "input_geometry",
     "input_float",
     "input_int",
@@ -55,10 +55,6 @@ STATEFUL_FALLBACK_BUILTIN_NAMES = frozenset({
     "input_string",
     "input_bundle",
 })
-
-INPUT_DECLARATION_BUILTIN_NAMES = frozenset(
-    name for name in STATEFUL_FALLBACK_BUILTIN_NAMES if name.startswith("input_")
-)
 
 IR_CAPABLE_BUILTIN_NAMES = frozenset(
     {"vector"}
@@ -1060,7 +1056,6 @@ def analyze_contextual_set_position_call(expr: ast.Call, consts, add_runtime: Ru
 __all__ = [
     "BuiltinCallSemantics",
     "IR_CAPABLE_BUILTIN_NAMES",
-    "STATEFUL_FALLBACK_BUILTIN_NAMES",
     "INPUT_DECLARATION_BUILTIN_NAMES",
     "INPUT_DECLARATION_PLACEMENT_ERROR",
     "analyze_builtin_call",

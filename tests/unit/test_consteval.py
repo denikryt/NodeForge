@@ -369,21 +369,19 @@ def test_nested_speculative_loop_append_journal_rolls_back_to_outer_savepoint():
     assert state.get("items") is shared
 
 
-def test_preprocess_preserves_flat_unpack_for_on_legacy_direct_append_path():
-    """v0.51.3's direct-append loop boundary retains flat unpack for whole-body legacy routing."""
-    retained, _consts = _preprocess_source(
-        "items = []\n"
-        "for x, y in [[1, 2]]:\n"
-        "    items.append(x + y)\n"
-        "output(items[0])\n"
-    )
-    loops = [stmt for stmt in retained if isinstance(stmt, ast.For)]
-    assert len(loops) == 1
-    assert isinstance(loops[0].target, ast.Tuple)
+def test_preprocess_rejects_flat_unpack_for_even_when_body_contains_append():
+    """Generic tuple/list compile-time loop targets no longer escape preprocessing for legacy routing."""
+    with pytest.raises(CompileError, match="Only simple compile-time for targets are supported"):
+        _preprocess_source(
+            "items = []\n"
+            "for x, y in [[1, 2]]:\n"
+            "    items.append(x + y)\n"
+            "output(items[0])\n"
+        )
 
 
-def test_preprocess_still_rejects_flat_unpack_for_without_legacy_compatibility_body():
-    """Flat unpack remains rejected when v0.51.3 preprocessing would have validated the target."""
+def test_preprocess_rejects_flat_unpack_for_without_builder_specific_semantics():
+    """Generic flat unpack is rejected uniformly outside the builder-specific retained rule."""
     with pytest.raises(CompileError, match="Only simple compile-time for targets are supported"):
         _preprocess_source(
             "for x, y in [[1, 2]]:\n"

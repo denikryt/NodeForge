@@ -224,42 +224,32 @@ class Compiler:
         self.reserved_name_labels = dict(reserved_name_labels or {})
         self._function_occurrence_counts = {}
         self._runtime_bindings = FrontendRuntimeBindings(self.function_group_owner_scope)
-        # BASIC_BODY_IR_LEGACY_BACKEND_BINDING_BRIDGE: IRBody lowering now owns values created by
-        # migrated inter-statement assignments, but legacy whole-body lowering and current body-entry
-        # input/state seeding still require compiler-session BindingId -> Value materializations.
-        # Never publish IRBody-created local assignment Values back into this map. Remove this bridge
-        # when all supported bodies, interface/stateful input publication, and runtime control-flow
-        # lowering pass backend binding materializations directly into body lowering.
+        # BASIC_BODY_IR_LEGACY_BACKEND_BINDING_BRIDGE: IRBody lowering owns values created by
+        # inter-statement assignments, while body-entry input/state seeding and retained legacy helpers still
+        # require compiler-session BindingId -> Value materializations. Never publish IRBody-created local
+        # assignment Values back into this map. Remove this bridge when all supported body-entry/stateful
+        # publication passes backend materializations directly into body lowering and legacy helpers are removed.
         self._runtime_binding_values: dict[BindingId, Value] = {}
-        # LEGACY_STRUCTURAL_BINDINGS_COMPAT: Accepted Semantic Body paths own structural arrays and
-        # GeometryBuilder through Blender-independent frontend identity/state and never publish them here.
-        # Keep this backend/container store for dynamic structural results and for complete bodies selected
-        # by another marked compatibility route; those legacy bodies may still create historical Python-list,
-        # TupleValue, or GeometryBuilder objects. New semantic code must not read or write this mapping.
-        # Remove it when remaining compatibility bodies no longer require backend structural objects by
-        # source name.
+        # LEGACY_STRUCTURAL_BINDINGS_COMPAT: Semantic Body owns structural arrays and GeometryBuilder
+        # through Blender-independent frontend identity/state and never publishes them here. This backend
+        # container store remains only for the frozen legacy implementation and direct characterization;
+        # production root compilation must not read or write it.
         self._legacy_structural_bindings: dict[str, object] = {}
         # CONTEXTUAL_GROUP_LEGACY_PANEL_SOCKET_MAP_COMPAT: Semantic panel() ownership uses frontend
-        # InterfaceInputOrigin provenance and IRPanelDeclaration; it must not infer semantics from Blender
-        # socket/interface identity. Keep these backend lookup/membership maps only for the legacy panel path
-        # reached after another marked whole-body compatibility category selects compile_statement(). Remove
-        # the maps and their lookup methods when CONTEXTUAL_GROUP_LEGACY_PANEL_COMPAT is no longer reachable.
+        # InterfaceInputOrigin provenance and IRPanelDeclaration rather than Blender socket identity. These
+        # lookup/membership maps remain only with the frozen legacy panel implementation for characterization
+        # and pending deletion; production root compilation must not depend on them.
         self._interface_inputs_by_identifier = {}
         self._interface_inputs_by_socket_pointer = {}
         self._panel_input_memberships = {}
-        # CONTROL_FLOW_IR_LEGACY_RUNTIME_FRAME_COMPAT: Migrated IRIf/IRRepeat, including frontend-owned
-        # GeometryBuilder state, use semantic BindingIds and recursive Blender IR lowering and must never read
-        # or mutate this Compiler frame stack. Keep it only for complete bodies already routed to the legacy
-        # runtime control-flow engine by another compatibility category. Remove the stack and its accessors
-        # when no supported production Repeat is lowered through runtime.py's AST/Compiler implementation.
+        # CONTROL_FLOW_IR_LEGACY_RUNTIME_FRAME_COMPAT: IRIf/IRRepeat, including frontend-owned
+        # GeometryBuilder state, use semantic BindingIds and recursive Blender IR lowering and never read or
+        # mutate this Compiler frame stack. The stack remains only with the frozen legacy runtime implementation
+        # for direct characterization and pending deletion.
         self._runtime_state_frames = []
-        # CONTEXTUAL_GROUP_LEGACY_GRID_EXPRESSION_ROUTE_COMPAT: Whole-body compatibility
-        # compilation still re-enters compile_expr() one expression at a time. While that route is
-        # active, expressions containing the core grid()/grid_uv() builtins must use the legacy
-        # expression dispatcher so both calls share Compiler.grid_context exactly as before this
-        # migration. Keep this flag compilation-local and scoped by compile_statements(); do not use
-        # it for other expressions. Remove it together with CONTEXTUAL_GROUP_LEGACY_GRID_CONTEXT_COMPAT
-        # when supported fallback bodies no longer execute grid/grid_uv through legacy compilation.
+        # CONTEXTUAL_GROUP_LEGACY_GRID_EXPRESSION_ROUTE_COMPAT: This flag belongs only to the frozen
+        # legacy expression implementation so direct characterization can reproduce historical grid()/grid_uv()
+        # behavior. Production root compilation never enables it; remove it with the retained legacy grid path.
         self._legacy_contextual_grid_expression_routing_active = False
         self.depth = 0
 
@@ -315,6 +305,10 @@ class Compiler:
         """Compile one AST expression into this group's node tree."""
         self.depth += 1
         try:
+            # TODO(nodeforge-migration): Compiler.compile() remains the legacy AST-expression entry point only
+            # for pending callable/extension migrations and direct characterization tests. Root-body compilation
+            # must never use it as a fallback after Semantic Body rejection. Remove this method and marker when no
+            # supported production caller depends on legacy AST-expression compilation.
             return expression_compiler.compile_expr(self, expr, self.depth)
         finally:
             self.depth -= 1
@@ -475,11 +469,10 @@ class Compiler:
             self._legacy_structural_bindings,
         )
 
-    # COMPILE_TIME_STATE_LEGACY_BINDING_CHECKPOINT_COMPAT: Legacy statement/runtime lowering still
-    # snapshots runtime symbols, backend Value materializations, and legacy structural bindings while
-    # compiling speculative branches/loops. Compile-time state is intentionally excluded and is owned
-    # separately by Compiler.compile_time, preserving the existing branch-order semantics explicitly.
-    # Remove these binding checkpoints when no supported body uses legacy speculative AST lowering.
+    # COMPILE_TIME_STATE_LEGACY_BINDING_CHECKPOINT_COMPAT: The frozen legacy statement/runtime
+    # implementation snapshots runtime symbols, backend Value materializations, and legacy structural bindings
+    # while compiling speculative branches/loops. Production root compilation does not use these checkpoints;
+    # remove them with the retained legacy implementation.
     def _snapshot_binding_state(self) -> _CompilerBindingState:
         """Capture a detached shallow checkpoint of all active binding maps."""
         self._validate_binding_state()

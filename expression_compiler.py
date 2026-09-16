@@ -19,7 +19,6 @@ from .builtin_call_semantics import (
     INPUT_DECLARATION_BUILTIN_NAMES,
     INPUT_DECLARATION_PLACEMENT_ERROR,
     IR_CAPABLE_BUILTIN_NAMES,
-    STATEFUL_FALLBACK_BUILTIN_NAMES,
 )
 from .semantic_analysis import analyze_expression, build_semantic_environment
 from .semantic_lowering import lower_analyzed_expression
@@ -50,7 +49,7 @@ def compile_expr(comp, expr, depth=0):
     # category has frontend-owned semantic metadata and no name-only legacy structural set is needed.
     legacy_binding_names = comp.legacy_structural_binding_names_snapshot()
     callable_environment = CallableEnvironment(
-        callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | STATEFUL_FALLBACK_BUILTIN_NAMES),
+        callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
         system_constructors=comp.resolved_environment.system_constructors,
         local_functions=comp.local_functions,
         backend_helper_names=frozenset(comp.backend_builtins),
@@ -332,18 +331,18 @@ def compile_expr(comp, expr, depth=0):
                 )
             raise CompileError(f"{name}() is only supported as a top-level call")
 
-        # SEMANTIC_CALL_IR_LEGACY_DISPATCH: Remaining dynamic extension calls, explicitly stateful
-        # builtins, and IR-capable wrapper builtins whose nested operand forced the already-active
+        # SEMANTIC_CALL_IR_LEGACY_DISPATCH: Remaining dynamic extension calls and IR-capable
+        # wrapper builtins whose nested operand forced the already-active
         # whole-expression fallback still consume ast.Call and compiler/backend state here. Dispatch
         # only the already-resolved callable category; an IR-capable BUILTIN is permitted here only
         # because this branch is unreachable unless semantic analysis returned unsupported for the
         # enclosing expression. Do not repeat source-name precedence. Remove this branch when dynamic
-        # extensions, stateful builtins, and legacy non-Value operands all have permanent frontend-owned
+        # extensions and legacy non-Value operands all have permanent frontend-owned
         # typed/runtime contracts and whole-expression fallback is gone.
         if resolved.kind is CallableKind.BUILTIN:
             if name in INPUT_DECLARATION_BUILTIN_NAMES:
                 raise CompileError(INPUT_DECLARATION_PLACEMENT_ERROR)
-            if name not in STATEFUL_FALLBACK_BUILTIN_NAMES and name not in IR_CAPABLE_BUILTIN_NAMES:
+            if name not in IR_CAPABLE_BUILTIN_NAMES:
                 raise CompileError(f"Internal error: unclassified builtin {name!r} reached legacy call dispatch")
             if function_modifiers.unique_was_explicit:
                 raise unsupported_unique(name)

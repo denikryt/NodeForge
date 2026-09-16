@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from NodeForge.builtin_call_semantics import IR_CAPABLE_BUILTIN_NAMES, STATEFUL_FALLBACK_BUILTIN_NAMES
+from NodeForge.builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
 from NodeForge.call_resolution import CallableEnvironment
 from NodeForge.compile_time import CompileTimeSnapshot
 from NodeForge.compiler_identities import BindingId
@@ -18,7 +18,7 @@ from NodeForge.semantic_ir import IRBindLeaves, IRCall, IRIf, IROutput, IRRepeat
 
 def _callables():
     return CallableEnvironment(
-        callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | STATEFUL_FALLBACK_BUILTIN_NAMES),
+        callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
         system_constructors={},
         local_functions={},
         backend_helper_names=frozenset(),

@@ -93,9 +93,13 @@ from .semantic_values import (
 
 @dataclass(frozen=True)
 class _BodyUnsupported:
-    """Sentinel proving the entire body must stay on the legacy statement route."""
+    """Sentinel for an unexpected semantic-body gap that must fail closed at the root."""
 
 
+# TODO(nodeforge-migration): BODY_UNSUPPORTED no longer authorizes legacy compilation. Keep this
+# sentinel only as a fail-closed internal tripwire while remaining propagation plumbing and physically
+# retained legacy code are removed. Every known user-source case must raise a permanent or explicitly
+# marked migration diagnostic first. Remove this sentinel together with the retained legacy compiler.
 BODY_UNSUPPORTED = _BodyUnsupported()
 
 
@@ -196,17 +200,6 @@ def validate_input_declaration_placement(stmts) -> None:
             continue
         if node.func.id in INPUT_DECLARATION_BUILTIN_NAMES and id(node) not in allowed_call_ids:
             raise CompileError(INPUT_DECLARATION_PLACEMENT_ERROR)
-
-
-def _reject_remaining_legacy_structural_binding():
-    """Return whole-body fallback for intentionally out-of-scope structural categories."""
-    # REMAINING_CORE_BODY_FALLBACK_COMPAT: Structural arrays, ordinary compile-time loops, and
-    # GeometryBuilder are frontend-owned. Contextual group statements (panel/store/set_position),
-    # grid/grid_uv state, and dynamic callable/result categories can still reject the complete root body
-    # before Blender lowering. Do not route migrated builder semantics through this boundary. Remove this
-    # marker when those remaining categories have permanent frontend semantics or an explicitly isolated
-    # extension compatibility route.
-    return BODY_UNSUPPORTED
 
 
 def _tuple_target_names(target_node: ast.Tuple | ast.List) -> list[str]:
@@ -984,11 +977,9 @@ def lower_basic_body(
         )
         analysis = analyze_expression(expr, environment)
         if analysis is None:
-            # BASIC_BODY_IR_EXPRESSION_FALLBACK: Body IR accepts only expressions already fully owned
-            # by the semantic expression pipeline. A dynamic/stateful call or legacy structural binding
-            # therefore rejects the whole body instead of embedding AST/backend payloads or lowering one
-            # statement early. Remove this branch when expression semantic analysis has no supported
-            # production fallback categories left.
+            # Expression-only legacy state can still report an unsupported sentinel while the old
+            # compiler remains physically present. Supported root source must never rely on this path;
+            # propagate it only to the root fail-closed tripwire.
             return BODY_UNSUPPORTED
         if analysis.object_semantics is None:
             raise CompileError("Internal error: body expression analysis lost Object semantic registry")
@@ -1075,18 +1066,10 @@ def lower_basic_body(
         return IRProgram(tuple(operations), result)
 
     class _ContextualOperandUnsupported(Exception):
-        """Abort contextual statement ownership when an operand still requires compatibility fallback."""
+        """Abort contextual statement ownership when an operand hits an internal semantic gap."""
 
-    def nested_control_flow_fallback():
-        """Reject one unsupported nested control-flow region atomically at the root body."""
-        # STRUCTURAL_ARRAYS_NESTED_REMAINING_FALLBACK: IRIf may now contain body-owned array reads and
-        # frontend-unrolled non-mutating structural loops where the current DSL already accepts them.
-        # Structural-array mutation/rebinding under runtime control flow has its own explicit compatibility
-        # markers; ordinary non-repeat for-loops inside repeat_range remain a controlled source error. Nested
-        # contextual/grid/dynamic categories still require atomic whole-body fallback; GeometryBuilder itself is
-        # frontend-owned. Never
-        # splice compile_statement() into accepted IRIf/IRRepeat. Remove this marker when every supported
-        # nested dynamic/extension compatibility category is frontend-owned or isolated.
+    def nested_control_flow_unsupported():
+        """Propagate an unexpected nested semantic gap to the root fail-closed tripwire."""
         return BODY_UNSUPPORTED
 
     def lower_statements(source_stmts, active: _BodySemanticState, active_compile_time: CompileTimeState, *, control_policy=None, repeat_merge_ids=None, repeat_merge_symbols=(), runtime_if_builder_baseline=None, root=False):
@@ -1112,29 +1095,36 @@ def lower_basic_body(
                 # Repeat's dedicated legacy compile_if() does not: even a constant Bool is a Repeat-local
                 # runtime branch and can affect carried-state topology. Preserve that contextual difference.
                 if control_policy is not BranchMergePolicy.REPEAT:
-                    context_availability_before_trial = group_context_cursor.snapshot()
                     try:
-                        const_branch = stmt.body if bool(_const_eval(stmt.test, active_compile_time.values)) else stmt.orelse
+                        const_condition = bool(_const_eval(stmt.test, active_compile_time.values))
+                    except CompileError:
+                        pass
+                    else:
+                        context_availability_before_trial = group_context_cursor.snapshot()
+                        const_branch = stmt.body if const_condition else stmt.orelse
                         trial = active.fork()
                         trial_compile_time = active_compile_time.fork()
-                        folded = lower_statements(
-                            const_branch,
-                            trial,
-                            trial_compile_time,
-                            control_policy=control_policy,
-                            repeat_merge_ids=repeat_merge_ids,
-                            repeat_merge_symbols=repeat_merge_symbols,
-                            runtime_if_builder_baseline=runtime_if_builder_baseline,
-                            root=False,
-                        )
-                        if folded is not BODY_UNSUPPORTED:
-                            active.adopt(trial)
-                            active_compile_time.replace(trial_compile_time)
-                            statements.extend(folded.statements)
-                            continue
-                        group_context_cursor.replace(context_availability_before_trial)
-                    except CompileError:
-                        group_context_cursor.replace(context_availability_before_trial)
+                        try:
+                            folded = lower_statements(
+                                const_branch,
+                                trial,
+                                trial_compile_time,
+                                control_policy=control_policy,
+                                repeat_merge_ids=repeat_merge_ids,
+                                repeat_merge_symbols=repeat_merge_symbols,
+                                runtime_if_builder_baseline=runtime_if_builder_baseline,
+                                root=False,
+                            )
+                        except CompileError:
+                            group_context_cursor.replace(context_availability_before_trial)
+                            raise
+                        if folded is BODY_UNSUPPORTED:
+                            group_context_cursor.replace(context_availability_before_trial)
+                            return BODY_UNSUPPORTED
+                        active.adopt(trial)
+                        active_compile_time.replace(trial_compile_time)
+                        statements.extend(folded.statements)
+                        continue
 
                 policy = control_policy or BranchMergePolicy.TOP_LEVEL
                 if policy is BranchMergePolicy.TOP_LEVEL:
@@ -1184,7 +1174,7 @@ def lower_basic_body(
                     ),
                 )
                 if result is BODY_UNSUPPORTED:
-                    return nested_control_flow_fallback()
+                    return nested_control_flow_unsupported()
 
                 # A builder identity created/replaced independently in both runtime branches was
                 # historically a common changed compile-time object and therefore failed at the
@@ -1222,12 +1212,6 @@ def lower_basic_body(
                 parsed = parse_repeat_range_for(stmt)
                 if parsed is None:
                     builder_target_names = _builder_loop_target_names(stmt.target, stmt.body)
-                    if not isinstance(stmt.target, ast.Name) and builder_target_names is None:
-                        # STRUCTURAL_ARRAYS_NON_NAME_FOR_BODY_FALLBACK_COMPAT: Non-builder ordinary-for
-                        # tuple/list targets that survive preprocessing still belong to the narrow legacy
-                        # compatibility route. Keep the root body atomic before iterable analysis or mutation.
-                        # Remove this marker when generic tuple/list ordinary-for targets gain frontend semantics.
-                        return BODY_UNSUPPORTED
                     iterable_items = _iterable_items(stmt.iter, active, active_compile_time)
                     target_names = builder_target_names or _ordinary_for_target_names(stmt.target)
                     if any(name in legacy_binding_names for name in target_names):
@@ -1418,7 +1402,7 @@ def lower_basic_body(
                     root=False,
                 )
                 if repeat_ir_body is BODY_UNSUPPORTED:
-                    return nested_control_flow_fallback()
+                    return nested_control_flow_unsupported()
                 for record in state_records:
                     if record.binding_id in builder_state_ids:
                         exit_builder = repeat_state.builder_states.get(record.source_name)
@@ -1461,9 +1445,7 @@ def lower_basic_body(
                     if analyzed is BODY_UNSUPPORTED:
                         return BODY_UNSUPPORTED
                     if not isinstance(analyzed.result_shape, TupleResultShape) or not isinstance(analyzed.program.result, IRTuple):
-                        if isinstance(analyzed.result_shape, (NamedOutputsResultShape, RuntimeResultShape)):
-                            raise CompileError(f"Cannot unpack scalar result into {len(names)} names")
-                        return _reject_remaining_legacy_structural_binding()
+                        raise CompileError(f"Cannot unpack scalar result into {len(names)} names")
                     if len(analyzed.result_shape.items) != len(names):
                         raise CompileError(f"Tuple unpacking expected {len(names)} values, got {len(analyzed.result_shape.items)}")
                     bindings = []
@@ -1480,13 +1462,7 @@ def lower_basic_body(
                 if target in legacy_binding_names:
                     return BODY_UNSUPPORTED
                 if control_policy is not None and target in active.array_bindings:
-                    # STRUCTURAL_ARRAYS_RUNTIME_REBIND_COMPAT: Legacy runtime-control-flow snapshots can expose
-                    # source-visible behavior when an already-existing mutable array name is rebound inside a runtime
-                    # if/repeat region. The structural-array migration does not redefine that merge/discard contract. Route the complete body
-                    # through the existing atomic compatibility path before mutating semantic array state. Remove this
-                    # marker only after a dedicated control-flow structural-mutation plan defines and tests array-name
-                    # rebinding semantics without adding arrays to IRBranchMerge or IRRepeatState.
-                    return BODY_UNSUPPORTED
+                    raise CompileError("Structural array rebinding inside runtime control flow is not supported")
 
                 is_builder_constructor = (
                     isinstance(stmt.value, ast.Call)
@@ -1574,16 +1550,20 @@ def lower_basic_body(
                     bindings = tuple(IRLeafBinding(source, leaf.binding_id, leaf.typ) for source, leaf in zip(sources, structural.leaves))
                     emit(IRBindLeaves(analyzed.program, bindings))
                     continue
-                return _reject_remaining_legacy_structural_binding()
+                raise CompileError("Internal error: unsupported semantic assignment result shape")
 
             if isinstance(stmt, ast.AugAssign):
                 if not isinstance(stmt.target, ast.Name):
                     raise CompileError("Only simple augmented assignments like name += value are supported")
                 target = stmt.target.id
                 validate_runtime_binding_target(target, reserved_name_labels)
-                if target in legacy_binding_names or target in active.structural_bindings:
+                if target in legacy_binding_names:
                     return BODY_UNSUPPORTED
                 current = active.runtime_bindings.get(target)
+                if current is None and (target in active.structural_bindings or target in active.array_bindings):
+                    bin_expr = ast.BinOp(left=ast.Name(id=target, ctx=ast.Load()), op=stmt.op, right=stmt.value)
+                    accept_expression(bin_expr, active, active_compile_time, statements)
+                    raise CompileError("Internal error: structural augmented assignment unexpectedly produced a runtime value")
                 if current is None:
                     raise CompileError(f"Unknown name for augmented assignment: {target}")
                 bin_expr = ast.BinOp(left=ast.Name(id=target, ctx=ast.Load()), op=stmt.op, right=stmt.value)
@@ -1591,7 +1571,7 @@ def lower_basic_body(
                 if analyzed is BODY_UNSUPPORTED:
                     return BODY_UNSUPPORTED
                 if not isinstance(analyzed.result_shape, RuntimeResultShape) or not isinstance(analyzed.program.result, IRValue):
-                    return _reject_remaining_legacy_structural_binding()
+                    raise CompileError("Internal error: augmented assignment lowered to a structural result")
                 active_compile_time.discard(target)
                 symbol = bind_runtime(active, target, analyzed.result_shape, changed=True)
                 active.explicitly_assigned_runtime_ids.add(symbol.binding_id)
@@ -1602,7 +1582,7 @@ def lower_basic_body(
                 call = _top_level_simple_call(stmt)
                 if call is not None and call.func.id == "output":
                     if not root:
-                        return BODY_UNSUPPORTED
+                        raise CompileError("output() is only supported as a top-level call")
                     if call.keywords:
                         kws = _kw_dict(call)
                         _check_no_extra_keywords(kws, {"name", "value"})
@@ -1626,7 +1606,14 @@ def lower_basic_body(
                     if isinstance(analyzed.result_shape, ArrayResultShape):
                         raise CompileError("output() cannot output an array directly; use join(array) or index it")
                     if not isinstance(analyzed.result_shape, RuntimeResultShape) or not isinstance(analyzed.program.result, IRValue):
-                        return _reject_remaining_legacy_structural_binding()
+                        if isinstance(analyzed.result_shape, TupleResultShape):
+                            raise CompileError(
+                                f"output() value received a tuple of {len(analyzed.result_shape.items)} values; "
+                                "unpack it or select an element by a compile-time index"
+                            )
+                        if isinstance(analyzed.result_shape, NamedOutputsResultShape):
+                            raise CompileError("NodeResult is compile-time only and cannot be used in output() value")
+                        raise CompileError("output() value requires a runtime value")
                     emit(IROutput(out_name, analyzed.program))
                     continue
 
@@ -1751,8 +1738,6 @@ def lower_basic_body(
                     emit(IRDiscardExpression(program))
                     active.clear_auto_final_output = True
                     continue
-                if call is not None and call.func.id.startswith("input_"):
-                    return BODY_UNSUPPORTED
                 if (
                     isinstance(stmt.value, ast.Call)
                     and isinstance(stmt.value.func, ast.Attribute)
@@ -1766,23 +1751,10 @@ def lower_basic_body(
                     if array_id is None:
                         compile_time_value = active_compile_time.get(array_name)
                         if isinstance(compile_time_value, list):
-                            # STRUCTURAL_ARRAYS_COMPILETIME_PROMOTION_COMPAT: The structural-array migration does not implicitly promote a
-                            # non-empty list/tuple that preprocessing already committed to CompileTimeState into the new
-                            # mutable structural-array heap when a later append becomes runtime-dependent. Such promotion
-                            # requires explicit alias/cycle semantics across CompileTimeState and StructuralArrayId ownership.
-                            # Preserve the current whole-body compatibility route for this narrow case. Remove this marker
-                            # only after a dedicated plan defines compile-time-container promotion or proves the source form
-                            # is outside the supported DSL contract and replaces the fallback with a controlled diagnostic.
-                            return BODY_UNSUPPORTED
+                            raise CompileError("append() cannot promote a compile-time list to a runtime structural array")
                         raise CompileError(f"{array_name} is not an array")
                     if control_policy is not None:
-                        # STRUCTURAL_ARRAYS_RUNTIME_APPEND_COMPAT: Legacy runtime-control-flow compilation uses shallow
-                        # structural snapshots, so append mutation of an array can be observable through shared Python-list
-                        # identity while branches are compiled. The structural-array migration must not approximate that behavior with new merge
-                        # rules. Route the complete body through the existing atomic compatibility path before changing the
-                        # semantic array heap. Remove this marker only after a dedicated control-flow structural-mutation
-                        # plan defines source-order/branch visibility for append without runtime array sockets.
-                        return BODY_UNSUPPORTED
+                        raise CompileError("Structural array append inside runtime control flow is not supported")
 
                     analyzed = analyze_runtime_expression(append_call.args[0], active, active_compile_time, statements)
                     if analyzed is BODY_UNSUPPORTED:
@@ -1819,27 +1791,36 @@ def lower_basic_body(
                     continue
                 if isinstance(stmt.value, ast.Call) and isinstance(stmt.value.func, ast.Attribute):
                     if stmt.value.func.attr != "info":
-                        return BODY_UNSUPPORTED
+                        raise CompileError("Object values support only the .info() method")
                     analyzed = accept_expression(stmt.value, active, active_compile_time, statements)
                     if analyzed is BODY_UNSUPPORTED:
                         return BODY_UNSUPPORTED
                     if not isinstance(analyzed.result_shape, RuntimeResultShape) or analyzed.result_shape.typ is not TYPE_OBJECT:
-                        return BODY_UNSUPPORTED
+                        raise CompileError(".info() can only be used on Object values")
                     emit(IRDiscardExpression(analyzed.program))
                     continue
                 if not is_final:
-                    return BODY_UNSUPPORTED
+                    raise CompileError(
+                        "Only assignments, array append, for/if blocks, store(), set_position() and output() may appear before the final expression"
+                    )
                 analyzed = accept_expression(stmt.value, active, active_compile_time, statements)
                 if analyzed is BODY_UNSUPPORTED:
                     return BODY_UNSUPPORTED
                 if isinstance(analyzed.result_shape, ArrayResultShape):
                     raise CompileError("A final expression cannot be an array; use join(array) or index it")
                 if not isinstance(analyzed.result_shape, RuntimeResultShape) or not isinstance(analyzed.program.result, IRValue):
-                    return _reject_remaining_legacy_structural_binding()
+                    if isinstance(analyzed.result_shape, TupleResultShape):
+                        raise CompileError(
+                            f"final expression received a tuple of {len(analyzed.result_shape.items)} values; "
+                            "unpack it or select an element by a compile-time index"
+                        )
+                    if isinstance(analyzed.result_shape, NamedOutputsResultShape):
+                        raise CompileError("NodeResult is compile-time only and cannot be used in final expression")
+                    raise CompileError("final expression requires a runtime value")
                 emit(IRFinalExpression(analyzed.program))
                 continue
 
-            return BODY_UNSUPPORTED
+            raise CompileError("Unsupported statement")
         return IRBody(tuple(statements))
 
     body = lower_statements(stmts, state, compile_time, root=True)

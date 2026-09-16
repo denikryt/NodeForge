@@ -234,3 +234,9 @@ ion coverage.
 ## 0.52.0
 
 - Moved named scalar-math callable-to-Blender-operation ownership into `nodeforge.math`, removed the legacy core math-call CTFE allowlist and historical `count_zero()` evaluator, and kept source-language arithmetic plus structural/core compile-time helpers owned by NodeForge.
+
+## 0.53.0
+
+- Disabled whole-body legacy compiler fallback for production root compilation. Semantic Body is now the sole root-body route; known unsupported source forms fail with controlled diagnostics and unexpected residual `BODY_UNSUPPORTED` reaches a fail-closed internal tripwire.
+- Temporarily blocked local/imported source calls and v1 Python extension callables at the semantic boundary until their typed callable and declarative extension contracts are migrated, without adding a replacement compatibility compiler.
+- Made compile-time `if` diagnostics authoritative to the selected branch so errors are not swallowed and reinterpreted as runtime control flow.

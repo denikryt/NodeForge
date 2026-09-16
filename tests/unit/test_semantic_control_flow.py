@@ -6,7 +6,7 @@ import pytest
 
 from NodeForge.compile_time import CompileTimeSnapshot
 
-from NodeForge.builtin_call_semantics import IR_CAPABLE_BUILTIN_NAMES, STATEFUL_FALLBACK_BUILTIN_NAMES
+from NodeForge.builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
 from NodeForge.call_resolution import CallableEnvironment
 from NodeForge.compiler_identities import BindingId, InputDeclarationId
 from NodeForge.errors import CompileError
@@ -18,7 +18,7 @@ from NodeForge.semantic_ir import IRBranchMerge, IRIf, IRInputDeclaration, IRRep
 
 def _callables():
     return CallableEnvironment(
-        callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | STATEFUL_FALLBACK_BUILTIN_NAMES),
+        callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
         system_constructors={},
         local_functions={},
         backend_helper_names=frozenset(),
@@ -227,14 +227,10 @@ def test_repeat_local_if_merge_order_follows_repeat_state_order():
     assert [merge.source_name for merge in branch.merges] == ["z", "a"]
 
 
-@pytest.mark.parametrize(
-    "source",
-    [
-        'items = [1]\nflag = input_bool("Flag")\nif flag:\n    items.append(2)\nelse:\n    items.append(3)',
-    ],
-)
-def test_remaining_nested_control_flow_categories_fallback_whole_body(source):
-    assert _lower(source) is BODY_UNSUPPORTED
+def test_runtime_if_structural_array_append_has_direct_diagnostic():
+    source = 'items = [1]\nflag = input_bool("Flag")\nif flag:\n    items.append(2)\nelse:\n    items.append(3)'
+    with pytest.raises(CompileError, match="Structural array append inside runtime control flow is not supported"):
+        _lower(source)
 
 
 def test_ordinary_for_inside_repeat_range_keeps_controlled_repeat_body_diagnostic():

@@ -177,39 +177,22 @@ def test_structural_store_accepts_package_compile_time_subclass_without_losing_r
     assert compiler.legacy_structural_binding("state") is package_state
 
 
-def test_assignment_accepts_compile_time_object_from_resolved_system_constructor(monkeypatch):
-    """Resolved package systems may return assignable CompileTimeObject subclasses unchanged."""
+def test_legacy_assignment_characterization_accepts_compile_time_object(monkeypatch):
+    """The retained legacy assignment helper can still store a pre-resolved CompileTimeObject."""
     import ast
-    import types
 
     from NodeForge.compile_time import CompileTimeObject
     from NodeForge.statement_compiler import GroupBuildContext, compile_statement
-    from NodeForge.systems import registry as systems_registry
 
     class PackageState(CompileTimeObject):
-        """Synthetic compile-time object returned by a resolved package system."""
+        """Synthetic compile-time object supplied below the semantic callable boundary."""
 
-    module, compiler = _load_compiler(monkeypatch)
-    binding = types.SimpleNamespace(name="package_state")
-    compiler.resolved_environment = types.SimpleNamespace(system_constructors={"package_state": binding})
-    compiler.imported_library_functions = {}
-    compiler.local_functions = {}
-    compiler.backend_builtins = {}
+    _module, compiler = _load_compiler(monkeypatch)
     compiler.consts = {}
     compiler.reserved_name_labels = {}
     compiler.group = object()
-    compiler.depth = 0
     state = PackageState()
-
-    def compile_resolved_call(received_comp, expr, received_binding, depth=0):
-        assert received_comp is compiler
-        assert received_binding is binding
-        assert expr.func.id == "package_state"
-        return state
-
-    monkeypatch.setattr(systems_registry, "compile_resolved_call", compile_resolved_call)
-    from NodeForge import expression_compiler
-    monkeypatch.setattr(expression_compiler.systems_registry, "compile_resolved_call", compile_resolved_call)
+    monkeypatch.setattr(compiler, "compile", lambda _expr: state)
     ctx = GroupBuildContext(group=compiler.group, comp=compiler, geometry_mode=False)
     stmt = ast.parse("state = package_state()").body[0]
 
@@ -217,6 +200,7 @@ def test_assignment_accepts_compile_time_object_from_resolved_system_constructor
 
     assert compiler.legacy_structural_binding("state") is state
     assert compiler.runtime_binding("state") is None
+
 
 def test_runtime_binding_module_has_no_blender_dependency():
     """Frontend binding ownership remains independent of values.py and Blender modules."""

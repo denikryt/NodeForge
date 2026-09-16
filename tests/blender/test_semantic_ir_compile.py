@@ -101,6 +101,85 @@ output("Comparison", cmp)
 
 
 
+def test_supported_core_root_matrix_never_enters_legacy_statement_compiler(monkeypatch):
+    """Representative supported core bodies stay on the Semantic Body root route."""
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("supported core body entered legacy compile_statement()")
+
+    monkeypatch.setattr(statement_compiler, "compile_statement", forbidden)
+    cases = [
+        (
+            "expression",
+            'a = input_float("A", default=2.0)\nresult = a * 2.0 + 1.0\noutput("Result", result)',
+        ),
+        (
+            "runtime_if",
+            'flag = input_bool("Flag", default=True)\n'
+            'a = input_float("A", default=2.0)\n'
+            'if flag:\n'
+            '    result = a\n'
+            'else:\n'
+            '    result = a * 2.0\n'
+            'output("Result", result)',
+        ),
+        (
+            "repeat",
+            'value = input_float("Value", default=0.0)\n'
+            'for i in repeat_range(2):\n'
+            '    value = value + 1.0\n'
+            'output("Value", value)',
+        ),
+        (
+            "array",
+            'value = input_float("Value", default=1.0)\n'
+            'items = [value, value * 2.0]\n'
+            'result = items[1]\n'
+            'output("Result", result)',
+        ),
+        (
+            "builder",
+            'builder = geometry_builder()\n'
+            'builder.add(cube(1.0))\n'
+            'for i in repeat_range(2):\n'
+            '    builder.add(cube(0.5))\n'
+            'output("Geometry", builder.geometry)',
+        ),
+        (
+            "contextual",
+            'scale = input_float("Scale", default=2.0)\n'
+            'geo = grid(scale, 3)\n'
+            'uv = grid_uv()\n'
+            'store("uv_x", uv.x)\n'
+            'set_position(position() + vector(0, 0, 1))\n'
+            'output("Grid", geo)\n'
+            'output("UV", uv)',
+        ),
+        (
+            "panel",
+            'value = input_float("Value", default=1.0)\n'
+            'panel([value], name="Inputs")\n'
+            'output("Value", value)',
+        ),
+        (
+            "object_bundle",
+            'obj = input_object("Object")\n'
+            'obj.info(as_instance=False)\n'
+            'state = bundle(value=obj.location.x)\n'
+            'value = bundle_get(state, "value", typ=Float)\n'
+            'output("Value", value)',
+        ),
+    ]
+
+    groups = []
+    try:
+        for suffix, source in cases:
+            groups.append(compile_group(source, f"NFTest_core_root_matrix_{suffix}"))
+    finally:
+        for group in groups:
+            if group.name in bpy.data.node_groups:
+                bpy.data.node_groups.remove(group)
+
+
 def test_structural_array_parent_uses_semantic_body_and_preserves_nested_expression_topology(monkeypatch):
     calls = []
     original = statement_compiler.lower_ir_body
@@ -687,85 +766,50 @@ def test_semantic_backend_dispatch_signatures_realize_on_blender_rna():
 
 
 
-def test_structural_arrays_flat_unpack_append_loop_preserves_legacy_routing_and_topology(monkeypatch):
-    """The v0.51.3 flat-unpack/direct-append loop stays on one legacy body with identical graph shape."""
-    legacy_statements = []
-    original_statement = statement_compiler.compile_statement
-
-    def forbidden_body_lowering(*_args, **_kwargs):
-        raise AssertionError("flat-unpack append compatibility body unexpectedly entered Semantic Body lowering")
-
-    def wrapped_statement(ctx, stmt, *args, **kwargs):
-        legacy_statements.append(type(stmt).__name__)
-        return original_statement(ctx, stmt, *args, **kwargs)
-
-    monkeypatch.setattr(statement_compiler, "lower_ir_body", forbidden_body_lowering)
-    monkeypatch.setattr(statement_compiler, "compile_statement", wrapped_statement)
-
-    group = compile_group(
-        "items = []\n"
-        "for x, y in [[1.0, 2.0]]:\n"
-        "    items.append(x + y)\n"
-        'output("Value", items[0])',
-        "NFTest_structural_arrays_flat_unpack_append_legacy_routing",
+def test_structural_arrays_flat_unpack_append_loop_fails_before_legacy_routing(monkeypatch):
+    """Flat ordinary-for unpacking is rejected directly and cannot enter the legacy statement compiler."""
+    monkeypatch.setattr(
+        statement_compiler,
+        "compile_statement",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("legacy statement compiler was called")),
     )
+    before = set(bpy.data.node_groups)
+    try:
+        compile_group(
+            "items = []\n"
+            "for x, y in [[1.0, 2.0]]:\n"
+            "    items.append(x + y)\n"
+            'output("Value", items[0])',
+            "NFTest_structural_arrays_flat_unpack_rejected",
+        )
+    except CompileError as exc:
+        check(str(exc) == "Only simple compile-time for targets are supported", f"unexpected flat-unpack diagnostic: {exc}")
+    else:
+        raise AssertionError("flat ordinary-for unpacking unexpectedly compiled")
+    check(set(bpy.data.node_groups) == before, "failed flat-unpack compilation leaked a generated node group")
 
-    check(legacy_statements == ["Assign", "For", "Expr", "Expr"], f"flat-unpack append body did not remain wholly legacy: {legacy_statements}")
-    check(len(_nodes(group, "ShaderNodeValue")) == 2, "flat-unpack append constant topology changed")
-    check(len(_nodes(group, "ShaderNodeMath", "ADD")) == 1, "flat-unpack append add topology changed")
-    check(not _nodes(group, "GeometryNodeRepeatInput"), "ordinary compatibility loop created a Repeat Zone input")
-    check(not _nodes(group, "GeometryNodeRepeatOutput"), "ordinary compatibility loop created a Repeat Zone output")
-    outputs = [
-        item.name
-        for item in group.interface.items_tree
-        if getattr(item, "item_type", "") == "SOCKET" and getattr(item, "in_out", "") == "OUTPUT"
-    ]
-    check(outputs == ["Value"], f"flat-unpack append output interface changed: {outputs}")
-    bpy.data.node_groups.remove(group)
-
-
-def test_structural_arrays_runtime_dependent_flat_unpack_preserves_legacy_routing_and_topology(monkeypatch):
-    """Runtime-valued structural iterable preserves the v0.51.3 flat-unpack graph through legacy routing."""
-    legacy_statements = []
-    original_statement = statement_compiler.compile_statement
-
-    def forbidden_body_lowering(*_args, **_kwargs):
-        raise AssertionError("runtime-dependent flat unpack unexpectedly entered Semantic Body Blender lowering")
-
-    def wrapped_statement(ctx, stmt, *args, **kwargs):
-        legacy_statements.append(type(stmt).__name__)
-        return original_statement(ctx, stmt, *args, **kwargs)
-
-    monkeypatch.setattr(statement_compiler, "lower_ir_body", forbidden_body_lowering)
-    monkeypatch.setattr(statement_compiler, "compile_statement", wrapped_statement)
-
-    group = compile_group(
-        'a = input_float("A", default=1.0)\n'
-        'pairs = [[a, a]]\n'
-        'for x, y in pairs:\n'
-        '    result = x + y\n'
-        'output("Result", result)',
-        "NFTest_structural_arrays_runtime_dependent_flat_unpack_legacy_routing",
+def test_structural_arrays_runtime_dependent_flat_unpack_fails_before_legacy_routing(monkeypatch):
+    """Runtime-valued flat ordinary-for unpacking is rejected directly without legacy execution."""
+    monkeypatch.setattr(
+        statement_compiler,
+        "compile_statement",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("legacy statement compiler was called")),
     )
-
-    check(legacy_statements == ["Assign", "Assign", "For", "Assign", "Expr"], f"runtime-dependent flat-unpack body did not remain wholly legacy: {legacy_statements}")
-    inputs = [
-        item.name for item in group.interface.items_tree
-        if getattr(item, "item_type", "") == "SOCKET" and getattr(item, "in_out", "") == "INPUT"
-    ]
-    outputs = [
-        item.name for item in group.interface.items_tree
-        if getattr(item, "item_type", "") == "SOCKET" and getattr(item, "in_out", "") == "OUTPUT"
-    ]
-    check(inputs == ["A"], f"runtime-dependent flat-unpack input interface changed: {inputs}")
-    check(outputs == ["Result"], f"runtime-dependent flat-unpack output interface changed: {outputs}")
-    check(len(_nodes(group, "ShaderNodeMath", "ADD")) == 1, "runtime-dependent flat unpack changed ADD topology")
-    check(len(group.nodes) == 3, f"runtime-dependent flat unpack changed node count: {len(group.nodes)}")
-    check(len(group.links) == 3, f"runtime-dependent flat unpack changed link count: {len(group.links)}")
-    check(not _nodes(group, "GeometryNodeRepeatInput"), "ordinary compatibility loop created a Repeat Zone input")
-    check(not _nodes(group, "GeometryNodeRepeatOutput"), "ordinary compatibility loop created a Repeat Zone output")
-    bpy.data.node_groups.remove(group)
-
+    before = set(bpy.data.node_groups)
+    try:
+        compile_group(
+            'a = input_float("A", default=1.0)\n'
+            'pairs = [[a, a]]\n'
+            'for x, y in pairs:\n'
+            '    result = x + y\n'
+            'output("Result", result)',
+            "NFTest_structural_arrays_runtime_dependent_flat_unpack_rejected",
+        )
+    except CompileError as exc:
+        check(str(exc) == "Only simple compile-time for targets are supported", f"unexpected runtime flat-unpack diagnostic: {exc}")
+    else:
+        raise AssertionError("runtime-valued flat ordinary-for unpacking unexpectedly compiled")
+    check(set(bpy.data.node_groups) == before, "failed runtime flat-unpack compilation leaked a generated node group")
 
 def test_frontend_geometry_builder_core_route_forbids_legacy_builder_execution(monkeypatch):
     """Accepted core builder bodies lower through Semantic Body even with legacy builder hooks forbidden."""

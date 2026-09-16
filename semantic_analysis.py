@@ -27,7 +27,6 @@ from .builtin_call_semantics import (
     IR_CAPABLE_BUILTIN_NAMES,
     INPUT_DECLARATION_BUILTIN_NAMES,
     INPUT_DECLARATION_PLACEMENT_ERROR,
-    STATEFUL_FALLBACK_BUILTIN_NAMES,
     analyze_builtin_call,
 )
 from .function_instances import extract_function_call_modifiers, unsupported_unique
@@ -181,7 +180,7 @@ UNSUPPORTED = _Unsupported()
 
 
 class _BuiltinOperandUnsupported(Exception):
-    """Abort semantic call ownership when one runtime operand still requires legacy fallback."""
+    """Abort one builtin analysis when a child still exposes an internal unsupported sentinel."""
 
 
 
@@ -443,13 +442,11 @@ def analyze_expression(expr, environment):
         """Return whether this expression runs with persistent body-owned Object semantics."""
         # STRUCTURAL_SEMANTICS_LEGACY_OBJECT_EXPRESSION_FALLBACK: Object semantics are stateful across
         # expressions. Only lower_basic_body() supplies the persistent frontend Object registry required
-        # to own Object identity, Object.info() configuration, aliases, and post-resolution locking. When
-        # expression-only semantic analysis runs from the legacy compile_expr() path without that registry,
-        # reject Object bindings/results, Object.info(), Object properties, and Object-preserving projections
-        # as UNSUPPORTED so compile_expr() reaches the existing ObjectValue legacy implementation. Remove
-        # this fallback only when legacy body compilation no longer routes Object expressions through
-        # compile_expr(), or every remaining legacy body route has an explicitly planned persistent frontend
-        # Object semantic context with one unambiguous owner.
+        # to own Object identity, Object.info() configuration, aliases, and post-resolution locking. Direct
+        # legacy expression characterization can still call semantic analysis without that registry, so Object
+        # bindings/results, Object.info(), Object properties, and Object-preserving projections remain an
+        # internal UNSUPPORTED result in that expression-only mode. Production root bodies always supply the
+        # body-owned registry. Remove this sentinel bridge with the retained legacy expression compiler.
         return object_ids_by_binding is not None and object_states is not None
 
     def allocate_object_id():
@@ -545,11 +542,10 @@ def analyze_expression(expr, environment):
                 return record(node, ExpressionFact(shape, resolved_name=resolved, array_id=array_id))
             if node.id in environment.builder_bindings:
                 raise CompileError("geometry_builder cannot escape script scope")
-            # COMPLETE_EXPRESSION_IR_LEGACY_BINDING_FALLBACK: Non-Value compiler bindings still
-            # have no frontend-owned semantic result shape. Keep the complete enclosing expression
-            # on the legacy dispatcher when one is reached; do not carry the compiler object into IR.
-            # Remove this fallback when those binding categories are represented semantically and
-            # Blender/materialization objects are no longer required to determine their meaning.
+            # COMPLETE_EXPRESSION_IR_LEGACY_BINDING_FALLBACK: Non-Value bindings retained only by
+            # the legacy expression implementation have no frontend-owned semantic result shape. Report an
+            # internal UNSUPPORTED result for direct legacy characterization; production root bodies must not
+            # depend on these bindings. Remove this bridge when the retained legacy compiler is deleted.
             if node.id in environment.legacy_binding_names:
                 return UNSUPPORTED
             if node.id in environment.constants:
@@ -647,7 +643,7 @@ def analyze_expression(expr, environment):
                 if base_typ != TYPE_VECTOR:
                     raise CompileError(".x/.y/.z can only be used on Vector values")
                 return record(node, runtime_fact(TYPE_FLOAT, operation=node.attr))
-            return UNSUPPORTED
+            raise CompileError("Only .x, .y and .z vector attributes are supported")
 
         if isinstance(node, ast.Subscript):
             base = analyze(node.value)
@@ -867,7 +863,7 @@ def analyze_expression(expr, environment):
             if false_typ != true_typ:
                 raise CompileError("select() true/false values must have same type")
             if false_typ not in _SWITCH_TYPES:
-                return UNSUPPORTED
+                raise CompileError("select() result type is not supported")
             return record(node, runtime_fact(true_typ, operation="select"))
 
         if isinstance(node, ast.Call):
@@ -954,12 +950,6 @@ def analyze_expression(expr, environment):
                     raise unsupported_unique(name)
                 if name in INPUT_DECLARATION_BUILTIN_NAMES:
                     raise CompileError(INPUT_DECLARATION_PLACEMENT_ERROR)
-                if name in STATEFUL_FALLBACK_BUILTIN_NAMES:
-                    # BASIC_BODY_IR_REMAINING_STATEFUL_CALL_FALLBACK: grid/grid_uv still depend on
-                    # compilation-scoped state. Keep those calls on whole-body legacy fallback until
-                    # they have permanent compiler-owned semantic operations; input_* is declaration-only
-                    # language syntax and is rejected before reaching this fallback.
-                    return UNSUPPORTED
                 if name not in IR_CAPABLE_BUILTIN_NAMES:
                     raise CompileError(f"Internal error: unclassified callable builtin {name!r}")
                 runtime_nodes = []
@@ -1042,24 +1032,35 @@ def analyze_expression(expr, environment):
                         call_operand_nodes=tuple(runtime_nodes),
                     ),
                 )
-            if resolved.kind in {
-                CallableKind.SYSTEM,
-                CallableKind.LOCAL_FUNCTION,
-                CallableKind.BACKEND_HELPER,
-                CallableKind.LIBRARY,
-            }:
-                if resolved.kind in {CallableKind.SYSTEM, CallableKind.BACKEND_HELPER} and modifiers.unique_was_explicit:
+            if resolved.kind is CallableKind.LOCAL_FUNCTION:
+                # TODO(nodeforge-migration): Local-function calls are intentionally unavailable while their
+                # callable/result contracts still depend on legacy Compiler/materialized-group execution. The
+                # source-backed callable-contract migration restores them through semantic group contracts and
+                # typed Call IR. Remove this marker once supported local calls no longer require legacy compilation or Blender probes.
+                raise CompileError(
+                    f"{name}() is temporarily unavailable while source-backed callable contracts are being migrated"
+                )
+            if resolved.kind is CallableKind.LIBRARY:
+                # TODO(nodeforge-migration): Imported library calls are intentionally blocked instead of entering
+                # whole-body legacy compilation. Source-backed .nf entries are restored by semantic callable
+                # contracts; native compile_call/backend extension entries are restored by the declarative
+                # extension API. Remove this marker when every supported library call has a typed non-legacy route.
+                raise CompileError(
+                    f"{name}() is temporarily unavailable while imported callable contracts are being migrated"
+                )
+            if resolved.kind in {CallableKind.SYSTEM, CallableKind.BACKEND_HELPER}:
+                if modifiers.unique_was_explicit:
                     raise unsupported_unique(name)
-                # STRUCTURAL_SEMANTICS_DYNAMIC_RESULT_FALLBACK: Fixed tuple/named-output structures are frontend-owned
-                # only when the resolved callable already provides a typed semantic result contract. Local/imported/
-                # system/backend/native call categories that still derive result shape or behavior from dynamic
-                # compilation/execution remain whole-expression/body fallback. Do not probe Blender interfaces,
-                # execute Python helpers, or invent opaque tuple signatures during semantic analysis. Remove this
-                # fallback when those callable categories expose compiler-owned typed result/signature contracts.
-                return UNSUPPORTED
+                # TODO(nodeforge-migration): V1 SYSTEM/BACKEND_HELPER execution is intentionally disabled instead
+                # of preserving an AST/Compiler fallback lane. These callables currently execute Python handlers
+                # that may inspect source AST and mutate compiler/Blender state. The declarative extension API restores
+                # supported extension calls; remove this marker once those calls no longer require the v1 execution path.
+                raise CompileError(
+                    f"{name}() is temporarily unavailable while Python extension callables are being migrated"
+                )
             raise CompileError(f"Internal error: unsupported resolved callable category {resolved.kind}")
 
-        return UNSUPPORTED
+        raise CompileError(f"Unsupported expression element: {type(node).__name__}")
 
     result = analyze(expr)
     if result is UNSUPPORTED:

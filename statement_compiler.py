@@ -24,8 +24,8 @@ from .interface import _create_interface_panel
 from .geometry_builder import GeometryBuilder, validate_geometry_builder_constructor
 from .call_resolution import CallableEnvironment
 from .builtin_call_semantics import (
+    INPUT_DECLARATION_BUILTIN_NAMES,
     IR_CAPABLE_BUILTIN_NAMES,
-    STATEFUL_FALLBACK_BUILTIN_NAMES,
     analyze_input_declaration_call,
 )
 from .compiler_identities import InputDeclarationId
@@ -77,11 +77,9 @@ def _check_runtime_binding(comp, name):
 
 
 # GEOMETRY_BUILDER_LEGACY_STATEMENT_COMPAT: Semantic Body owns geometry_builder construction,
-# add()/extend(), .geometry snapshots, compile-time loops, and structured runtime control flow for
-# accepted core bodies. Keep these AST/Compiler/backend helpers only when another compatibility
-# category has already routed the complete original body through compile_statement(). Do not call
-# them from Semantic IR construction or Blender IR lowering. Remove them when supported fallback
-# bodies no longer require legacy execution of geometry_builder syntax.
+# add()/extend(), .geometry snapshots, compile-time loops, and structured runtime control flow.
+# These AST/Compiler/backend helpers are retained only with the frozen legacy implementation for
+# direct characterization and pending physical deletion; production root compilation must not call them.
 def _is_geometry_builder_constructor(expr):
     """Return True for a direct geometry_builder(...) constructor call."""
     return isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) and expr.func.id == "geometry_builder"
@@ -126,9 +124,8 @@ def _compile_builder_method(comp, builder, method, call, x=0, y=0):
 
 # CONTEXTUAL_GROUP_LEGACY_PANEL_COMPAT: Accepted core panel() declarations are frontend-validated
 # IRPanelDeclaration records and are realized through centralized interface helpers during Blender IR
-# lowering. Keep this AST/Compiler/socket-identity panel path only for complete bodies already selected
-# by another marked whole-body compatibility category. New Semantic Body code must not call it. Remove
-# this path when supported compatibility bodies can no longer contain/re-enter core panel() handling.
+# lowering. This AST/Compiler/socket-identity path is retained only with the frozen legacy implementation
+# for direct characterization and pending physical deletion; production root compilation must not call it.
 def _compile_panel_statement(ctx, call):
     """Validate and lower one root-level panel() interface declaration."""
     comp = ctx.comp
@@ -190,6 +187,10 @@ def compile_statement(
     allow_interface_directives=False,
 ):
     """Compile one statement, optionally allowing root-only interface directives."""
+    # TODO(nodeforge-migration): compile_statement() is no longer a production root-body compiler. Keep
+    # this implementation physically present only while source-backed callable and extension contracts
+    # are migrated and the retained legacy implementation is prepared for deletion. Do not add new DSL
+    # semantics or compatibility behavior here; remove this function and its legacy-only helpers once no supported production caller remains.
     comp = ctx.comp
     group = ctx.group
     call = _is_top_level_call(stmt)
@@ -265,11 +266,10 @@ def compile_statement(
             comp.compile_time.bind(target, _const_eval(stmt.value, comp.compile_time.values))
         except CompileError:
             comp.compile_time.discard(target)
-        # STRUCTURAL_ARRAYS_LEGACY_ASSIGNMENT_COMPAT: Accepted Semantic Body IR now owns source array
-        # construction, persistent leaves, and alias identity. Keep this Python-list/backend construction
-        # only when a separately marked non-array category has already routed the complete body through the
-        # legacy statement engine. Do not call this branch from Semantic IR lowering. Remove it when no
-        # supported compatibility body containing array assignment is compiled by compile_statement().
+        # STRUCTURAL_ARRAYS_LEGACY_ASSIGNMENT_COMPAT: Semantic Body IR owns source array construction,
+        # persistent leaves, and alias identity. This Python-list/backend branch remains only in the frozen
+        # legacy implementation for direct characterization and pending deletion; production root compilation
+        # must not call it.
         if isinstance(stmt.value, (ast.List, ast.Tuple)):
             if isinstance(stmt.value, ast.List) and not stmt.value.elts:
                 comp.compile_time.discard(target)
@@ -326,11 +326,10 @@ def compile_statement(
             comp.compile(expr)
             ctx.auto_final_output = None
             return
-        # STRUCTURAL_ARRAYS_LEGACY_APPEND_COMPAT: Accepted Semantic Body IR now owns append mutation through
-        # StructuralArrayId/state. Keep this in-place Python-list append only for complete legacy compatibility
-        # bodies selected because of another unmigrated category. Do not share these list objects with the new
-        # semantic array heap. Remove this branch when no supported compatibility body containing append is
-        # compiled by compile_statement().
+        # STRUCTURAL_ARRAYS_LEGACY_APPEND_COMPAT: Semantic Body IR owns append mutation through
+        # StructuralArrayId/state. This in-place Python-list branch remains only in the frozen legacy
+        # implementation for direct characterization and pending deletion; do not share these list objects
+        # with the semantic array heap.
         if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute) and expr.func.attr == "append":
             if not isinstance(expr.func.value, ast.Name) or len(expr.args) != 1:
                 raise CompileError("append must look like items.append(value)")
@@ -357,10 +356,9 @@ def compile_statement(
             return
 
     if isinstance(stmt, ast.For):
-        # CONTROL_FLOW_IR_LEGACY_REPEAT_DISPATCH_COMPAT: Ordinary repeat_range() is now represented by
-        # IRRepeat. Keep this AST dispatch only for whole-body legacy fallback, including GeometryBuilder and
-        # dynamic-call bodies not yet representable in Semantic IR. Do not invoke it after IRBody lowering has
-        # started. Remove it when no supported repeat_range() body depends on legacy statement compilation.
+        # CONTROL_FLOW_IR_LEGACY_REPEAT_DISPATCH_COMPAT: Ordinary repeat_range() is represented by IRRepeat.
+        # This AST dispatch remains only in the frozen legacy implementation for direct characterization and
+        # pending deletion; production root compilation must not invoke it.
         if isinstance(stmt.iter, ast.Call) and isinstance(stmt.iter.func, ast.Name) and stmt.iter.func.id == "repeat_range":
             for target_name in _target_names(stmt.target):
                 _check_runtime_binding(comp, target_name)
@@ -376,11 +374,10 @@ def compile_statement(
                 ctx.auto_final_output = (last_name, results[last_name])
             return
 
-        # STRUCTURAL_ARRAYS_LEGACY_FOR_COMPAT: Accepted Semantic Body IR now unrolls ordinary for-loops over
-        # body-owned arrays and compile-time list/tuple/range iterables before Blender lowering. Keep this
-        # Compiler/backend unroller only for complete legacy compatibility bodies selected by another
-        # unmigrated category. It must never be entered after IRBody acceptance. Remove it when no supported
-        # compatibility body containing an ordinary structural for-loop uses compile_statement().
+        # STRUCTURAL_ARRAYS_LEGACY_FOR_COMPAT: Semantic Body IR unrolls ordinary for-loops over body-owned
+        # arrays and compile-time list/tuple/range iterables before Blender lowering. This Compiler/backend
+        # unroller remains only in the frozen legacy implementation for direct characterization and pending
+        # deletion; production root compilation must not invoke it.
         iter_values = None
         if isinstance(stmt.iter, ast.Name):
             iter_values = _as_array_iter_value(comp.legacy_structural_binding(stmt.iter.id))
@@ -417,10 +414,9 @@ def compile_statement(
             raise CompileError("range(...) requires compile-time integer arguments; use repeat_range(...) for Repeat Zone loops")
         raise CompileError("for loop requires a compile-time iterable, an array, or repeat_range(...)")
 
-    # CONTROL_FLOW_IR_LEGACY_IF_COMPAT: Ordinary runtime if is now represented by IRIf and lowered by
-    # blender_ir_lowering. Keep this AST/Compiler/backend implementation only because remaining whole-body
-    # fallback categories can still contain legacy if statements. New Semantic IR paths must never call
-    # this branch. Remove it when compile_statement() is no longer a production path for supported bodies.
+    # CONTROL_FLOW_IR_LEGACY_IF_COMPAT: Ordinary runtime if is represented by IRIf and lowered by
+    # blender_ir_lowering. This AST/Compiler/backend branch remains only in the frozen legacy implementation
+    # for direct characterization and pending deletion; production root compilation must not invoke it.
     if isinstance(stmt, ast.If):
         try:
             branch = stmt.body if bool(_const_eval(stmt.test, comp.compile_time.values)) else stmt.orelse
@@ -491,12 +487,10 @@ def compile_statement(
             ctx.auto_final_output = (last_target, comp.runtime_value(last_target))
         return
 
-    # CONTEXTUAL_GROUP_LEGACY_GEOMETRY_STATEMENT_COMPAT: Accepted core store() and one-argument
-    # statement set_position() now read/write explicit compiler-owned CURRENT_GEOMETRY context through
-    # Semantic IR and reuse typed builtin Call IR. Keep these direct GroupBuildContext.geometry_socket
-    # mutations only for complete bodies already selected by another marked compatibility category. Do
-    # not call them from Semantic Body or Blender IR lowering. Remove them when supported compatibility
-    # bodies no longer execute core contextual geometry statements through compile_statement().
+    # CONTEXTUAL_GROUP_LEGACY_GEOMETRY_STATEMENT_COMPAT: Core store() and one-argument statement
+    # set_position() read/write compiler-owned CURRENT_GEOMETRY through Semantic IR and typed Call IR.
+    # These direct GroupBuildContext.geometry_socket mutations remain only in the frozen legacy implementation
+    # for direct characterization and pending deletion; production root compilation must not invoke them.
     if call and call.func.id == "store":
         if ctx.geometry_socket is None:
             raise CompileError("Internal error: store() requires geometry mode")
@@ -566,11 +560,11 @@ def compile_statement(
 
 
 def compile_statements(ctx, stmts, initial_interface_input_origins=None):
-    """Compile one body through Semantic Body IR or one whole legacy fallback route."""
+    """Compile one root body through Semantic Body IR and fail closed on internal gaps."""
     comp = ctx.comp
     runtime_bindings = comp.runtime_bindings_snapshot()
     callable_environment = CallableEnvironment(
-        callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | STATEFUL_FALLBACK_BUILTIN_NAMES),
+        callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
         system_constructors=comp.resolved_environment.system_constructors,
         local_functions=comp.local_functions,
         backend_helper_names=frozenset(comp.backend_builtins),
@@ -590,29 +584,9 @@ def compile_statements(ctx, stmts, initial_interface_input_origins=None):
         initial_interface_input_origins=initial_interface_input_origins or {},
     )
     if body_compilation is BODY_UNSUPPORTED:
-        # CORE_WHOLE_BODY_LEGACY_COMPAT: Semantic Body owns ordinary expressions/statements, structured
-        # arrays, GeometryBuilder, runtime control flow, compile-time/runtime state, and core contextual group
-        # semantics. Keep this atomic original-AST statement engine only for independently unsupported dynamic
-        # or Python-extension categories that still require Compiler/backend execution. The semantic attempt
-        # is detached and must create no Blender state before BODY_UNSUPPORTED selects this route. Remove this
-        # compatibility path only after those remaining categories have compiler-owned contracts or an isolated
-        # extension API that cannot re-enter core legacy statement compilation.
-        previous_grid_expression_routing = getattr(
-            comp, "_legacy_contextual_grid_expression_routing_active", False
+        raise CompileError(
+            "Internal error: Semantic Body reached an unplanned legacy fallback after whole-body fallback is disabled"
         )
-        comp._legacy_contextual_grid_expression_routing_active = True
-        try:
-            for idx, stmt in enumerate(stmts):
-                compile_statement(
-                    ctx,
-                    stmt,
-                    idx,
-                    allow_final_expr=(idx == len(stmts) - 1),
-                    allow_interface_directives=True,
-                )
-        finally:
-            comp._legacy_contextual_grid_expression_routing_active = previous_grid_expression_routing
-        return ctx
 
     comp.compile_time.replace(body_compilation.final_compile_time)
     initial_group_context_values = {}

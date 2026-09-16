@@ -387,8 +387,8 @@ def test_reserved_name_labels_use_snapshot_system_names(monkeypatch):
     assert labels["snapshot_marker"] == "embedded-system constructor"
 
 
-def test_expression_dispatch_passes_exact_resolved_system_binding(monkeypatch):
-    """Expression dispatch forwards the environment-owned system record unchanged."""
+def test_expression_dispatch_rejects_resolved_system_binding_before_legacy_handler(monkeypatch):
+    """Resolved SYSTEM calls stop at the semantic migration boundary and never invoke the legacy handler."""
     compiler = _import_compiler_with_fake_bpy(monkeypatch)
     from NodeForge import expression_compiler
 
@@ -405,20 +405,83 @@ def test_expression_dispatch_passes_exact_resolved_system_binding(monkeypatch):
         backend_runtime_values_snapshot=lambda: MappingProxyType({}),
         legacy_structural_binding_names_snapshot=lambda: frozenset(),
     )
-    observed = {}
+    observed = []
 
-    def compile_resolved_call(received_comp, expr, received_binding, depth=0):
-        observed.update(comp=received_comp, expr=expr, binding=received_binding, depth=depth)
-        return "selected"
-
-    monkeypatch.setattr(systems_registry, "compile_resolved_call", compile_resolved_call)
+    monkeypatch.setattr(
+        systems_registry,
+        "compile_resolved_call",
+        lambda *_args, **_kwargs: observed.append(True),
+    )
     expr = ast.parse("snapshot_marker()", mode="eval").body
 
-    assert expression_compiler.compile_expr(comp, expr, 7) == "selected"
-    assert observed["comp"] is comp
-    assert observed["binding"] is binding
-    assert observed["depth"] == 7
-    assert observed["expr"].func.id == "snapshot_marker"
+    with pytest.raises(
+        CompileError,
+        match=r"snapshot_marker\(\) is temporarily unavailable while Python extension callables are being migrated",
+    ):
+        expression_compiler.compile_expr(comp, expr, 7)
+    assert observed == []
+
+
+def test_dynamic_callable_migration_errors_precede_legacy_dispatch_and_library_probing(monkeypatch):
+    """Pending callable categories fail at semantics before any retained legacy execution hook."""
+    compiler = _import_compiler_with_fake_bpy(monkeypatch)
+    from NodeForge import expression_compiler, library_calls, local_functions
+    from NodeForge.compile_time import CompileTimeState
+
+    record = types.SimpleNamespace(
+        namespace="functions",
+        name="imported_fn",
+        source_path=Path("/selected/imported_fn.nf"),
+        module_path=Path("/selected/imported_fn.py"),
+        package_id="vendor.selected",
+        package_version="2.0.0",
+    )
+    comp = types.SimpleNamespace(
+        resolved_environment=types.SimpleNamespace(system_constructors={}),
+        imported_library_functions={
+            "imported_fn": compiler.LibraryBinding("functions", "imported_fn", record),
+        },
+        local_functions={"local_fn": object()},
+        backend_builtins={"backend_helper": object()},
+        compile_time=CompileTimeState(),
+        reserved_name_labels={},
+        runtime_bindings_snapshot=lambda: MappingProxyType({}),
+        backend_runtime_values_snapshot=lambda: MappingProxyType({}),
+        legacy_structural_binding_names_snapshot=lambda: frozenset(),
+    )
+    observed = {"local": 0, "backend": 0, "library": 0, "native_probe": 0}
+
+    monkeypatch.setattr(
+        local_functions,
+        "compile_local_function_call",
+        lambda *_a, **_k: observed.__setitem__("local", observed["local"] + 1),
+    )
+    monkeypatch.setattr(
+        local_functions,
+        "compile_backend_builtin_call",
+        lambda *_a, **_k: observed.__setitem__("backend", observed["backend"] + 1),
+    )
+    monkeypatch.setattr(
+        library_calls,
+        "compile_library_function_call",
+        lambda *_a, **_k: observed.__setitem__("library", observed["library"] + 1),
+    )
+    monkeypatch.setattr(
+        library_calls,
+        "has_native_compile_call_for_record",
+        lambda *_a, **_k: observed.__setitem__("native_probe", observed["native_probe"] + 1),
+    )
+
+    expected = {
+        "local_fn": r"local_fn\(\) is temporarily unavailable while source-backed callable contracts are being migrated",
+        "imported_fn": r"imported_fn\(\) is temporarily unavailable while imported callable contracts are being migrated",
+        "backend_helper": r"backend_helper\(\) is temporarily unavailable while Python extension callables are being migrated",
+    }
+    for name, message in expected.items():
+        with pytest.raises(CompileError, match=message):
+            expression_compiler.compile_expr(comp, ast.parse(f"{name}()", mode="eval").body, 1)
+
+    assert observed == {"local": 0, "backend": 0, "library": 0, "native_probe": 0}
 
 
 def test_library_call_uses_binding_record_without_live_discovery(monkeypatch):

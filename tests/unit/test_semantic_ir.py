@@ -56,7 +56,7 @@ from NodeForge.semantic_ir import (
     IRVectorComponent,
     IRVectorLiteral,
 )
-from NodeForge.builtin_call_semantics import IR_CAPABLE_BUILTIN_NAMES, STATEFUL_FALLBACK_BUILTIN_NAMES
+from NodeForge.builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
 from NodeForge.call_resolution import CallableEnvironment, ContextReadCallResult, ProjectedCallResult
 from NodeForge.semantic_analysis import (
     RuntimeBindingSymbol,
@@ -135,7 +135,7 @@ def _environment(*, bindings=None, consts=None, labels=None, legacy_names=(), ba
         const_eval_values,
         MappingProxyType(dict(labels or {})),
         callable_environment=CallableEnvironment(
-            frozenset(IR_CAPABLE_BUILTIN_NAMES | STATEFUL_FALLBACK_BUILTIN_NAMES) if builtins is None else frozenset(builtins),
+            frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES) if builtins is None else frozenset(builtins),
             systems or {}, local_functions or {}, frozenset(backend_helpers), imported_functions or {},
         ),
         structural_arrays=structural_arrays or StructuralArraySnapshot({}, {}),
@@ -435,8 +435,10 @@ def test_conditional_validation_and_backend_ownership_order():
         _lower("a if cond else b", bindings={"cond": TYPE_FLOAT, "a": TYPE_FLOAT, "b": TYPE_FLOAT})
     with pytest.raises(CompileError, match="same type"):
         _lower("a if flag else b", bindings={"flag": TYPE_BOOL, "a": TYPE_FLOAT, "b": TYPE_VECTOR})
-    assert _lower("a if flag else b", bindings={"flag": TYPE_BOOL, "a": TYPE_MATERIAL, "b": TYPE_MATERIAL}) is None
-    assert _lower("a if flag else b", bindings={"flag": TYPE_BOOL, "a": TYPE_OBJECT, "b": TYPE_OBJECT}) is None
+    with pytest.raises(CompileError, match=r"select\(\) result type is not supported"):
+        _lower("a if flag else b", bindings={"flag": TYPE_BOOL, "a": TYPE_MATERIAL, "b": TYPE_MATERIAL})
+    with pytest.raises(CompileError, match=r"select\(\) result type is not supported"):
+        _lower("a if flag else b", bindings={"flag": TYPE_BOOL, "a": TYPE_OBJECT, "b": TYPE_OBJECT})
     with pytest.raises(CompileError, match="cond must be Bool"):
         _lower("a if cond else b", bindings={"cond": TYPE_FLOAT, "a": TYPE_MATERIAL, "b": TYPE_MATERIAL})
 
@@ -458,19 +460,31 @@ def test_vector_component_and_object_property_semantics_are_owned():
         _lower("obj.x", bindings={"obj": TYPE_OBJECT})
 
 
-def test_mixed_fallback_and_diagnostic_boundaries_are_preserved():
-    assert _lower("legacy_call() + (True + 1)", backend_helpers={"legacy_call"}) is None
+def test_migration_and_permanent_diagnostic_precedence_is_preserved():
+    with pytest.raises(
+        CompileError,
+        match=r"legacy_call\(\) is temporarily unavailable while Python extension callables are being migrated",
+    ):
+        _lower("legacy_call() + (True + 1)", backend_helpers={"legacy_call"})
     with pytest.raises(CompileError, match="Unsupported operation between BOOL and FLOAT"):
         _lower("(True + 1) + legacy_call()", backend_helpers={"legacy_call"})
     with pytest.raises(CompileError, match="Unsupported operation between BOOL and FLOAT"):
         _lower("(True + 1) if 1 else 2")
-    assert _lower("1 < legacy_call() < (True + 1)", backend_helpers={"legacy_call"}) is None
+    with pytest.raises(
+        CompileError,
+        match=r"legacy_call\(\) is temporarily unavailable while Python extension callables are being migrated",
+    ):
+        _lower("1 < legacy_call() < (True + 1)", backend_helpers={"legacy_call"})
 
 
-def test_unknown_calls_are_diagnosed_and_dynamic_calls_remain_explicit_fallbacks():
+def test_unknown_calls_and_extension_migration_calls_have_distinct_diagnostics():
     with pytest.raises(CompileError, match="Unsupported function: foo"):
         _lower("foo()")
-    assert _lower("legacy_call(a)", bindings={"a": TYPE_FLOAT}, backend_helpers={"legacy_call"}) is None
+    with pytest.raises(
+        CompileError,
+        match=r"legacy_call\(\) is temporarily unavailable while Python extension callables are being migrated",
+    ):
+        _lower("legacy_call(a)", bindings={"a": TYPE_FLOAT}, backend_helpers={"legacy_call"})
 
 
 def test_object_info_is_frontend_state_effect_without_backend_call_ir():
@@ -1161,8 +1175,8 @@ def test_raw_named_output_selection_preserves_attribute_and_string_subscript_dia
         _lower('node("ShaderNodeSeparateXYZ", outputs={"X": Float})[""]')
 
 
-def test_mixed_core_calls_stay_on_ir_path_and_dynamic_categories_remain_fallback():
-    """Semantic Call IR migration owns stateless core calls inside parent expressions but not dynamic extension calls."""
+def test_mixed_core_calls_stay_on_ir_path_and_pending_callable_categories_fail_directly():
+    """Semantic Call IR owns core calls while pending callable categories fail before legacy execution."""
     from types import SimpleNamespace
 
     core_cases = [
@@ -1186,14 +1200,35 @@ def test_mixed_core_calls_stay_on_ir_path_and_dynamic_categories_remain_fallback
 
     record = SimpleNamespace(package_id="vendor.pkg", namespace="functions", name="imported_fn")
     binding = SimpleNamespace(namespace="functions", canonical_name="imported_fn", record=record)
-    assert _lower("local_fn(x) + 1.0", bindings={"x": TYPE_FLOAT}, local_functions={"local_fn": object()}) is None
-    assert _lower("imported_fn(x) + 1.0", bindings={"x": TYPE_FLOAT}, imported_functions={"imported_fn": binding}) is None
-    assert _lower("system_constructor() + 1.0", systems={"system_constructor": object()}) is None
-    assert _lower("backend_helper(x) + 1.0", bindings={"x": TYPE_FLOAT}, backend_helpers={"backend_helper"}) is None
+    cases = [
+        (
+            "local_fn(x) + 1.0",
+            {"bindings": {"x": TYPE_FLOAT}, "local_functions": {"local_fn": object()}},
+            r"local_fn\(\) is temporarily unavailable while source-backed callable contracts are being migrated",
+        ),
+        (
+            "imported_fn(x) + 1.0",
+            {"bindings": {"x": TYPE_FLOAT}, "imported_functions": {"imported_fn": binding}},
+            r"imported_fn\(\) is temporarily unavailable while imported callable contracts are being migrated",
+        ),
+        (
+            "system_constructor() + 1.0",
+            {"systems": {"system_constructor": object()}},
+            r"system_constructor\(\) is temporarily unavailable while Python extension callables are being migrated",
+        ),
+        (
+            "backend_helper(x) + 1.0",
+            {"bindings": {"x": TYPE_FLOAT}, "backend_helpers": {"backend_helper"}},
+            r"backend_helper\(\) is temporarily unavailable while Python extension callables are being migrated",
+        ),
+    ]
+    for source, kwargs, diagnostic in cases:
+        with pytest.raises(CompileError, match=diagnostic):
+            _lower(source, **kwargs)
 
 
 def test_grid_is_semantic_ir_capable_and_grid_uv_requires_available_context():
-    """Grid writes explicit hidden UV context instead of selecting stateful fallback."""
+    """Grid writes explicit hidden UV context through the permanent semantic path."""
     grid = _lower("grid(4, 3)")
     assert grid is not None
     calls = _operations(grid, IRCall)

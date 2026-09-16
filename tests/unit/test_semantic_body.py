@@ -7,7 +7,7 @@ import pytest
 
 from NodeForge.compile_time import CompileTimeSnapshot
 
-from NodeForge.builtin_call_semantics import IR_CAPABLE_BUILTIN_NAMES, STATEFUL_FALLBACK_BUILTIN_NAMES
+from NodeForge.builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
 from NodeForge.call_resolution import CallableEnvironment
 from NodeForge.compiler_identities import BindingId, InputDeclarationId
 from NodeForge.errors import CompileError
@@ -24,7 +24,7 @@ from NodeForge.semantic_ir import (
 
 def _callables(**overrides):
     data = dict(
-        callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | STATEFUL_FALLBACK_BUILTIN_NAMES),
+        callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
         system_constructors={},
         local_functions={},
         backend_helper_names=frozenset(),
@@ -205,25 +205,27 @@ def test_same_label_different_input_types_are_independent():
     assert second.typ is NFType.VECTOR
 
 
-def test_late_unsupported_statement_returns_whole_body_fallback_without_mutation():
+def test_late_extension_migration_error_does_not_mutate_input_semantic_state():
     bindings = dict([_binding("a", 0)])
     constants = {"k": 3}
-    result = lower_basic_body(
-        _stmts('x = a + 1\nbackend_helper(x)\nx'),
-        initial_runtime_bindings=MappingProxyType(bindings),
-        initial_compile_time=CompileTimeSnapshot(MappingProxyType(constants)),
-        legacy_binding_names=frozenset(),
-        reserved_name_labels={},
-        callable_environment=_callables(backend_helper_names=frozenset({"backend_helper"})),
-        owner_scope="scope",
-    )
-    assert result is BODY_UNSUPPORTED
+    with pytest.raises(
+        CompileError,
+        match=r"backend_helper\(\) is temporarily unavailable while Python extension callables are being migrated",
+    ):
+        lower_basic_body(
+            _stmts('x = a + 1\ny = backend_helper(x)\nx'),
+            initial_runtime_bindings=MappingProxyType(bindings),
+            initial_compile_time=CompileTimeSnapshot(MappingProxyType(constants)),
+            legacy_binding_names=frozenset(),
+            reserved_name_labels={},
+            callable_environment=_callables(backend_helper_names=frozenset({"backend_helper"})),
+            owner_scope="scope",
+        )
     assert constants == {"k": 3}
     assert bindings == dict([_binding("a", 0)])
 
-
-def test_compile_statements_legacy_fallback_observes_committed_compile_time_state(monkeypatch):
-    """Whole-body fallback begins from committed state after a rejected speculative attempt."""
+def test_compile_statements_internal_tripwire_preserves_committed_compile_time_state(monkeypatch):
+    """An unexpected semantic sentinel fails closed without publishing speculative state or legacy execution."""
     from types import SimpleNamespace
     from NodeForge.compile_time import CompileTimeState
     from NodeForge.statement_compiler import GroupBuildContext, compile_statements
@@ -242,8 +244,6 @@ def test_compile_statements_legacy_fallback_observes_committed_compile_time_stat
         runtime_bindings_snapshot=lambda: MappingProxyType({}),
         legacy_structural_binding_names_snapshot=lambda: frozenset(),
     )
-    observed = []
-
     def reject_after_speculation(_stmts, *, initial_compile_time, **_kwargs):
         speculative = CompileTimeState(initial_compile_time.values)
         speculative.bind("c", 3)
@@ -254,18 +254,21 @@ def test_compile_statements_legacy_fallback_observes_committed_compile_time_stat
     monkeypatch.setattr(
         statement_compiler,
         "compile_statement",
-        lambda ctx, *_args, **_kwargs: observed.append(dict(ctx.comp.compile_time.values)),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("legacy statement compiler was called")),
     )
-    compile_statements(GroupBuildContext(group=object(), comp=comp, geometry_mode=False), _stmts("pass"))
+    with pytest.raises(
+        CompileError,
+        match="Internal error: Semantic Body reached an unplanned legacy fallback after whole-body fallback is disabled",
+    ):
+        compile_statements(GroupBuildContext(group=object(), comp=comp, geometry_mode=False), _stmts("pass"))
 
-    assert observed == [{"c": 2}]
     assert dict(committed.values) == {"c": 2}
 
 
 
 
-def test_compile_statements_production_routing_distinguishes_migrated_and_deferred_bodies(monkeypatch):
-    """Production cutover uses Semantic Body for migrated arrays and whole legacy routing for deferred bodies."""
+def test_compile_statements_routes_supported_core_only_through_semantic_body(monkeypatch):
+    """Supported core bodies lower through Semantic IR while pending extensions fail before legacy routing."""
     from types import SimpleNamespace
     from NodeForge.compile_time import CompileTimeState
     from NodeForge.statement_compiler import GroupBuildContext, compile_statements
@@ -309,6 +312,47 @@ def test_compile_statements_production_routing_distinguishes_migrated_and_deferr
     monkeypatch.setattr(statement_compiler, "lower_ir_body", record_lowering)
     monkeypatch.setattr(statement_compiler, "compile_statement", record_legacy)
 
+    migrated = GroupBuildContext(group=object(), comp=FakeComp(), geometry_mode=False)
+    compile_statements(migrated, _stmts("x = 1.0 + 2.0\noutput(x)"))
+    assert len(semantic_lowerings) == 1
+    assert legacy_statements == []
+
+    semantic_lowerings.clear()
+    migrated_control_flow = GroupBuildContext(group=object(), comp=FakeComp(), geometry_mode=False)
+    compile_statements(
+        migrated_control_flow,
+        _stmts(
+            'condition = input_bool("Condition")\n'
+            'if condition:\n'
+            '    x = 1.0\n'
+            'else:\n'
+            '    x = 2.0\n'
+            'output(x)'
+        ),
+    )
+    assert len(semantic_lowerings) == 1
+    assert legacy_statements == []
+
+    semantic_lowerings.clear()
+    migrated_object = GroupBuildContext(group=object(), comp=FakeComp(), geometry_mode=False)
+    compile_statements(
+        migrated_object,
+        _stmts(
+            'obj = input_object("Object")\n'
+            'obj.info(as_instance=False)\n'
+            'output("Location", obj.location)'
+        ),
+    )
+    assert len(semantic_lowerings) == 1
+    assert legacy_statements == []
+
+    semantic_lowerings.clear()
+    migrated_bundle = GroupBuildContext(group=object(), comp=FakeComp(), geometry_mode=False)
+    compile_statements(migrated_bundle, _stmts('b = bundle(value=1.0)\noutput("Bundle", b)'))
+    assert len(semantic_lowerings) == 1
+    assert legacy_statements == []
+
+    semantic_lowerings.clear()
     migrated = GroupBuildContext(group=object(), comp=FakeComp(), geometry_mode=False)
     compile_statements(
         migrated,
@@ -367,73 +411,36 @@ def test_compile_statements_production_routing_distinguishes_migrated_and_deferr
     deferred_comp = FakeComp()
     deferred_comp.resolved_environment = SimpleNamespace(system_constructors={"system_constructor": object()})
     deferred = GroupBuildContext(group=object(), comp=deferred_comp, geometry_mode=False)
-    compile_statements(deferred, _stmts("system_constructor()"))
+    with pytest.raises(
+        CompileError,
+        match=r"system_constructor\(\) is temporarily unavailable while Python extension callables are being migrated",
+    ):
+        compile_statements(deferred, _stmts("system_constructor()"))
     assert semantic_lowerings == []
-    assert [type(stmt).__name__ for stmt in legacy_statements] == ["Expr"]
+    assert legacy_statements == []
 
 
-def test_compile_statements_routes_legacy_flat_unpack_append_case_as_one_legacy_body(monkeypatch):
-    """Production routing preserves v0.51.3 flat-unpack append loops through compile_statement()."""
-    from types import SimpleNamespace
-    from NodeForge.compile_time import CompileTimeState
-    from NodeForge.statement_compiler import GroupBuildContext, compile_statements
+def test_compile_time_flat_unpack_append_loop_is_rejected_before_legacy_routing(monkeypatch):
+    """The removed preprocessing escape cannot route flat tuple/list targets into the old compiler."""
+    from NodeForge.consteval import _preprocess_compile_time
     import NodeForge.statement_compiler as statement_compiler
 
-    class FakeComp:
-        def __init__(self):
-            self.compile_time = CompileTimeState({})
-            self.resolved_environment = SimpleNamespace(system_constructors={})
-            self.local_functions = {}
-            self.backend_builtins = {}
-            self.imported_library_functions = {}
-            self.function_group_owner_scope = "scope"
-            self.input_declaration_owner = "scope"
-            self.reserved_name_labels = {}
-            self.group_input = None
-
-        def runtime_bindings_snapshot(self):
-            return MappingProxyType({})
-
-        def backend_runtime_values_snapshot(self):
-            return {}
-
-        def legacy_structural_binding_names_snapshot(self):
-            return frozenset()
-
-    lowered = []
-    legacy = []
-
-    def forbidden_lowering(*_args, **_kwargs):
-        lowered.append(True)
-        raise AssertionError("flat-unpack append compatibility body entered Semantic Body lowering")
-
-    def record_legacy(_ctx, stmt, *_args, **_kwargs):
-        legacy.append(type(stmt).__name__)
-
-    monkeypatch.setattr(statement_compiler, "lower_ir_body", forbidden_lowering)
-    monkeypatch.setattr(statement_compiler, "compile_statement", record_legacy)
-
-    from NodeForge.consteval import _preprocess_compile_time
-
-    source_stmts = _stmts(
-        "items = []\n"
-        "for x, y in [[1.0, 2.0]]:\n"
-        "    items.append(x + y)\n"
-        "output(items[0])"
+    monkeypatch.setattr(
+        statement_compiler,
+        "compile_statement",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("legacy statement compiler was called")),
     )
-    retained, compile_time = _preprocess_compile_time(source_stmts)
-    comp = FakeComp()
-    comp.compile_time.replace(compile_time)
-    compile_statements(
-        GroupBuildContext(group=object(), comp=comp, geometry_mode=False),
-        retained,
-    )
-    assert lowered == []
-    assert legacy == ["Assign", "For", "Expr"]
+    with pytest.raises(CompileError, match="Only simple compile-time for targets are supported"):
+        _preprocess_compile_time(_stmts(
+            "items = []\n"
+            "for x, y in [[1.0, 2.0]]:\n"
+            "    items.append(x + y)\n"
+            "output(items[0])"
+        ))
 
 
-def test_compile_statements_routes_runtime_dependent_flat_unpack_as_one_legacy_body(monkeypatch):
-    """A non-name ordinary-for target that survives preprocessing keeps the v0.51.3 legacy route."""
+def test_runtime_dependent_flat_unpack_loop_is_a_direct_semantic_error(monkeypatch):
+    """A surviving generic non-name ordinary-for target fails directly without statement fallback."""
     from types import SimpleNamespace
     from NodeForge.compile_time import CompileTimeState
     from NodeForge.consteval import _preprocess_compile_time
@@ -461,19 +468,11 @@ def test_compile_statements_routes_runtime_dependent_flat_unpack_as_one_legacy_b
         def legacy_structural_binding_names_snapshot(self):
             return frozenset()
 
-    lowered = []
-    legacy = []
-
-    def forbidden_lowering(*_args, **_kwargs):
-        lowered.append(True)
-        raise AssertionError("runtime-dependent flat unpack unexpectedly entered Semantic Body lowering")
-
-    def record_legacy(_ctx, stmt, *_args, **_kwargs):
-        legacy.append(type(stmt).__name__)
-
-    monkeypatch.setattr(statement_compiler, "lower_ir_body", forbidden_lowering)
-    monkeypatch.setattr(statement_compiler, "compile_statement", record_legacy)
-
+    monkeypatch.setattr(
+        statement_compiler,
+        "compile_statement",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("legacy statement compiler was called")),
+    )
     retained, compile_time = _preprocess_compile_time(_stmts(
         'a = input_float("A", default=1.0)\n'
         'pairs = [[a, a]]\n'
@@ -485,30 +484,30 @@ def test_compile_statements_routes_runtime_dependent_flat_unpack_as_one_legacy_b
 
     comp = FakeComp()
     comp.compile_time.replace(compile_time)
-    compile_statements(GroupBuildContext(group=object(), comp=comp, geometry_mode=False), retained)
-
-    assert lowered == []
-    assert legacy == ["Assign", "Assign", "For", "Expr"]
+    with pytest.raises(CompileError, match="Only simple compile-time for targets are supported"):
+        compile_statements(GroupBuildContext(group=object(), comp=comp, geometry_mode=False), retained)
 
 
-def test_speculative_body_compile_time_changes_do_not_leak_on_late_fallback():
-    """Late whole-body fallback discards all earlier speculative compile-time bindings."""
+def test_extension_migration_error_does_not_publish_speculative_compile_time_changes():
+    """A direct migration diagnostic cannot publish speculative compile-time bindings."""
     from NodeForge.compile_time import CompileTimeState
 
     committed = CompileTimeState({"c": 2})
-    result = lower_basic_body(
-        _stmts("c = 3\nx = 1\nbackend_helper()"),
-        initial_runtime_bindings={},
-        initial_compile_time=committed.snapshot(),
-        legacy_binding_names=frozenset(),
-        reserved_name_labels={},
-        callable_environment=_callables(backend_helper_names=frozenset({"backend_helper"})),
-        owner_scope="scope",
-    )
-    assert result is BODY_UNSUPPORTED
+    with pytest.raises(
+        CompileError,
+        match=r"backend_helper\(\) is temporarily unavailable while Python extension callables are being migrated",
+    ):
+        lower_basic_body(
+            _stmts("c = 3\nx = 1\ny = backend_helper()\nx"),
+            initial_runtime_bindings={},
+            initial_compile_time=committed.snapshot(),
+            legacy_binding_names=frozenset(),
+            reserved_name_labels={},
+            callable_environment=_callables(backend_helper_names=frozenset({"backend_helper"})),
+            owner_scope="scope",
+        )
     assert committed.get("c") == 2
     assert not committed.contains("x")
-
 
 def test_semantic_body_exception_does_not_mutate_committed_compile_time_owner():
     """Semantic errors after speculative constant updates cannot publish compile-time state."""
@@ -529,25 +528,27 @@ def test_semantic_body_exception_does_not_mutate_committed_compile_time_owner():
 
 
 def test_rejected_semantic_body_does_not_mutate_inherited_compile_time_list():
-    """Shallow snapshots preserve aliases while rejected body lowering performs no in-place list mutation."""
+    """A rejected compile-time-list promotion leaves the inherited list unchanged."""
     shared = [1]
     snapshot = CompileTimeSnapshot({"items": shared})
-    result = lower_basic_body(
-        _stmts("x = 2\nitems.append(x)"),
-        initial_runtime_bindings={},
-        initial_compile_time=snapshot,
-        legacy_binding_names=frozenset(),
-        reserved_name_labels={},
-        callable_environment=_callables(),
-        owner_scope="scope",
-    )
-    assert result is BODY_UNSUPPORTED
+    with pytest.raises(
+        CompileError,
+        match=r"append\(\) cannot promote a compile-time list to a runtime structural array",
+    ):
+        lower_basic_body(
+            _stmts("x = 2\nitems.append(x)"),
+            initial_runtime_bindings={},
+            initial_compile_time=snapshot,
+            legacy_binding_names=frozenset(),
+            reserved_name_labels={},
+            callable_environment=_callables(),
+            owner_scope="scope",
+        )
     assert snapshot.values["items"] is shared
     assert shared == [1]
 
-
-def test_migrated_arrays_and_loops_are_accepted_while_remaining_dynamic_categories_fallback():
-    """This structural-array and compile-time unrolling refactor removes arrays/ordinary for from the list of whole-body fallback reasons."""
+def test_migrated_arrays_and_loops_are_accepted_while_pending_local_calls_fail_directly():
+    """Permanent body constructs stay accepted while pending local calls raise their migration diagnostic."""
     array_result = _lower("items = [a]\nitems[0]", bindings=dict([_binding("a", 0)]))
     assert array_result is not BODY_UNSUPPORTED
     with pytest.raises(CompileError, match="Cannot unpack scalar result into 2 names"):
@@ -565,10 +566,11 @@ def test_migrated_arrays_and_loops_are_accepted_while_remaining_dynamic_categori
     with pytest.raises(CompileError, match=r"input_\*\(\) may only be used as the complete right-hand side of a simple assignment"):
         _lower("x = input_float('X') + 1")
     local_callables = _callables(local_functions={"foo": object()})
-    assert _lower("x = foo()\nx", callables=local_callables) is BODY_UNSUPPORTED
-
-
-
+    with pytest.raises(
+        CompileError,
+        match=r"foo\(\) is temporarily unavailable while source-backed callable contracts are being migrated",
+    ):
+        _lower("x = foo()\nx", callables=local_callables)
 
 @pytest.mark.parametrize(
     "source",
@@ -588,6 +590,27 @@ def test_input_builtins_are_declaration_only_and_never_fallback(source):
         match=r"input_\*\(\) may only be used as the complete right-hand side of a simple assignment",
     ):
         _lower(source)
+
+
+def test_unknown_input_prefixed_name_uses_normal_callable_resolution():
+    """An unknown input_-prefixed name is not classified as an input declaration."""
+    with pytest.raises(CompileError, match="Unsupported function: input_not_registered"):
+        _lower("input_not_registered()")
+
+
+def test_statement_grammar_errors_are_direct_and_never_request_legacy_routing():
+    """Known invalid statement placements receive permanent source diagnostics."""
+    with pytest.raises(CompileError, match=r"output\(\) is only supported as a top-level call"):
+        _lower("if True:\n    output(1)")
+    with pytest.raises(
+        CompileError,
+        match=r"Only assignments, array append, for/if blocks, store\(\), set_position\(\) and output\(\) may appear before the final expression",
+    ):
+        _lower("position()\nx = 1")
+    with pytest.raises(CompileError, match="Unsupported statement"):
+        _lower("while True:\n    pass")
+    with pytest.raises(CompileError, match=r"Object values support only the \.info\(\) method"):
+        _lower("position().other()")
 
 
 def test_reserved_target_validation_is_shared_language_semantics():
@@ -639,21 +662,16 @@ def test_basic_body_frontend_has_no_backend_dependencies_or_compiler_mutation():
         assert forbidden not in code_only
 
 
-def test_accepted_compile_statements_route_never_publishes_body_local_values_to_compiler():
-    """Only the whole-body fallback may execute legacy binding publication APIs."""
+def test_compile_statements_route_never_uses_legacy_binding_publication_or_statement_compilation():
+    """The production root route consumes Semantic Body output without legacy publication APIs."""
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2]
     source = (root / "statement_compiler.py").read_text(encoding="utf-8")
     function = source[source.index("def compile_statements("):]
-    marker = function.index("# CORE_WHOLE_BODY_LEGACY_COMPAT:")
-    accepted = function[:marker]
-    after_legacy_loop = function.index("    comp.compile_time.replace(body_compilation.final_compile_time)", marker)
-    accepted += function[after_legacy_loop:]
-    assert "comp.bind_runtime_value(" not in accepted
-    assert "comp.bind_legacy_structural(" not in accepted
-    assert "compile_statement(" not in accepted
-
+    assert "comp.bind_runtime_value(" not in function
+    assert "comp.bind_legacy_structural(" not in function
+    assert "compile_statement(" not in function
 
 def test_body_lowerer_is_ast_free():
     """Blender body lowering consumes only IR and compiler identities, never source AST."""
@@ -1157,35 +1175,34 @@ def test_ordinary_for_restores_outer_array_alias_after_loop_target_shadowing():
     assert len(arrays.states[arrays.bindings["items"]].items) == 1
 
 
-def test_direct_semantic_body_defers_retained_flat_loop_target_to_legacy():
-    """A non-name ordinary-for target reaching Semantic Body is wholly legacy-owned."""
-    result = _lower(
-        "pairs = [[a, b], [b, a]]\n"
-        "for x, y in pairs:\n"
-        "    total = x + y\n",
-        bindings=dict([_binding("a", 0), _binding("b", 1)]),
-    )
-    assert result is BODY_UNSUPPORTED
+def test_direct_semantic_body_rejects_non_name_ordinary_for_target():
+    """A non-name ordinary-for target receives the permanent source diagnostic."""
+    with pytest.raises(CompileError, match="Only simple compile-time for targets are supported"):
+        _lower(
+            "pairs = [[a, b], [b, a]]\n"
+            "for x, y in pairs:\n"
+            "    total = x + y\n",
+            bindings=dict([_binding("a", 0), _binding("b", 1)]),
+        )
 
-
-def test_flat_loop_target_with_direct_append_requests_whole_body_legacy_compatibility():
-    """The exact v0.51.3 flat-unpack/direct-append case defers before emitting Semantic Body IR."""
+def test_flat_loop_target_with_direct_append_is_rejected_before_body_fallback():
+    """Flat ordinary-for unpacking is a controlled source error even when the body mutates an array."""
     source = (
         "items = []\n"
         "for x, y in [[1.0, 2.0]]:\n"
         "    items.append(x + y)\n"
         "output(items[0])"
     )
-    result = lower_basic_body(
-        _stmts(source),
-        initial_runtime_bindings={},
-        initial_compile_time=CompileTimeSnapshot({}),
-        legacy_binding_names=frozenset(),
-        reserved_name_labels={},
-        callable_environment=_callables(),
-        owner_scope="scope",
-    )
-    assert result is BODY_UNSUPPORTED
+    with pytest.raises(CompileError, match="Only simple compile-time for targets are supported"):
+        lower_basic_body(
+            _stmts(source),
+            initial_runtime_bindings={},
+            initial_compile_time=CompileTimeSnapshot({}),
+            legacy_binding_names=frozenset(),
+            reserved_name_labels={},
+            callable_environment=_callables(),
+            owner_scope="scope",
+        )
 
 def test_runtime_range_keeps_repeat_range_guidance():
     """Ordinary range with runtime arguments stays rejected with the established guidance."""
@@ -1210,20 +1227,19 @@ def test_read_only_array_and_nonmutating_unrolled_loop_are_allowed_inside_runtim
     assert not any(isinstance(statement, IRRepeat) for statement in branch.true_body.statements)
 
 
-def test_runtime_control_flow_array_mutation_and_rebind_keep_named_compatibility_boundary():
-    """Array mutation/rebinding inside runtime control flow remains whole-body compatibility-only."""
-    append = _lower(
-        'items = []\nflag = input_bool("Flag")\n'
-        'if flag:\n    items.append(1)\nelse:\n    items.append(2)'
-    )
-    assert append is BODY_UNSUPPORTED
-    rebind = _lower(
-        'items = []\nflag = input_bool("Flag")\n'
-        'if flag:\n    items = [x]\nelse:\n    items = [x]',
-        bindings=dict([_binding("x", 0)]),
-    )
-    assert rebind is BODY_UNSUPPORTED
-
+def test_runtime_control_flow_array_mutation_and_rebind_have_permanent_diagnostics():
+    """Runtime structural-array mutation and rebinding fail directly instead of requesting fallback."""
+    with pytest.raises(CompileError, match="Structural array append inside runtime control flow is not supported"):
+        _lower(
+            'items = []\nflag = input_bool("Flag")\n'
+            'if flag:\n    items.append(1)\nelse:\n    items.append(2)'
+        )
+    with pytest.raises(CompileError, match="Structural array rebinding inside runtime control flow is not supported"):
+        _lower(
+            'items = []\nflag = input_bool("Flag")\n'
+            'if flag:\n    items = [x]\nelse:\n    items = [x]',
+            bindings=dict([_binding("x", 0)]),
+        )
 
 def test_array_heap_statement_failure_does_not_publish_partial_object_or_array_state():
     """Cycle/leaf validation fails before a statement can mutate visible body-owned semantic state."""
@@ -1290,14 +1306,17 @@ def test_semantic_structural_append_preserves_legacy_ignored_keyword_compatibili
     assert len(state.items) == 2
 
 
-def test_nonempty_compile_time_list_dynamic_append_keeps_marker1_whole_body_boundary():
-    """This structural-array and compile-time unrolling refactor does not implicitly promote a folded non-empty compile-time list."""
-    result = _lower(
-        "items.append(x)",
-        constants={"items": [1]},
-        bindings=dict([_binding("x", 0)]),
-    )
-    assert result is BODY_UNSUPPORTED
+def test_nonempty_compile_time_list_dynamic_append_has_permanent_promotion_error():
+    """A folded compile-time list cannot be silently promoted to a runtime structural array."""
+    with pytest.raises(
+        CompileError,
+        match=r"append\(\) cannot promote a compile-time list to a runtime structural array",
+    ):
+        _lower(
+            "items.append(x)",
+            constants={"items": [1]},
+            bindings=dict([_binding("x", 0)]),
+        )
 
 def test_ordinary_for_rejects_generic_python_iteration_protocol():
     """Semantic ordinary-for accepts only the explicitly supported compile-time sequence categories."""
@@ -1457,29 +1476,147 @@ def test_same_expression_grid_then_grid_uv_uses_ordered_context_availability():
     assert not any(type(op).__name__ == "IRLiteral" for op in operations[:write_index])
 
 
-def test_rejected_constant_if_trial_restores_context_availability_before_runtime_if(monkeypatch):
+def test_constant_false_branch_error_is_authoritative_and_dead_branch_is_not_analyzed(monkeypatch):
+    """A known-false condition lowers only the else branch and preserves its direct diagnostic."""
     import NodeForge.semantic_body as semantic_body_module
 
-    observed_condition_slots = []
     original = semantic_body_module.analyze_expression
+    dead_dict_seen = []
 
     def wrapped(expr, environment):
-        if isinstance(expr, ast.Constant) and expr.value is True:
-            observed_condition_slots.append(environment.available_group_context_slots)
+        if isinstance(expr, ast.Dict):
+            dead_dict_seen.append(True)
         return original(expr, environment)
 
     monkeypatch.setattr(semantic_body_module, "analyze_expression", wrapped)
     callables = _callables(backend_helper_names=frozenset({"backend_helper"}))
-    result = _lower(
-        'if True:\n    geo = grid(2, 2)\n    backend_helper()\nelse:\n    value = 0',
-        callables=callables,
+    with pytest.raises(
+        CompileError,
+        match=r"backend_helper\(\) is temporarily unavailable while Python extension callables are being migrated",
+    ):
+        _lower(
+            'if False:\n    x = {"dead": 1}\nelse:\n    x = backend_helper()',
+            callables=callables,
+        )
+    assert dead_dict_seen == []
+
+
+def test_constant_true_branch_error_is_authoritative_and_dead_branch_is_not_analyzed(monkeypatch):
+    """A known-true condition lowers only the body and preserves its direct diagnostic."""
+    import NodeForge.semantic_body as semantic_body_module
+
+    original = semantic_body_module.analyze_expression
+    dead_dict_seen = []
+
+    def wrapped(expr, environment):
+        if isinstance(expr, ast.Dict):
+            dead_dict_seen.append(True)
+        return original(expr, environment)
+
+    monkeypatch.setattr(semantic_body_module, "analyze_expression", wrapped)
+    callables = _callables(backend_helper_names=frozenset({"backend_helper"}))
+    with pytest.raises(
+        CompileError,
+        match=r"backend_helper\(\) is temporarily unavailable while Python extension callables are being migrated",
+    ):
+        _lower(
+            'if True:\n    x = backend_helper()\nelse:\n    x = {"dead": 1}',
+            callables=callables,
+        )
+    assert dead_dict_seen == []
+
+def test_constant_branch_internal_sentinel_reaches_root_tripwire_without_dead_branch_retry(monkeypatch):
+    """A selected constant branch sentinel rolls back trial state before the root tripwire."""
+    from types import SimpleNamespace
+    from NodeForge.compile_time import CompileTimeState
+    from NodeForge.group_context import GroupContextAvailabilityCursor, GroupContextSlot
+    from NodeForge.statement_compiler import GroupBuildContext, compile_statements
+    import NodeForge.semantic_body as semantic_body_module
+    import NodeForge.statement_compiler as statement_compiler
+
+    original_analyze = semantic_body_module.analyze_expression
+    original_context_replace = GroupContextAvailabilityCursor.replace
+    original_compile_time_replace = CompileTimeState.replace
+    dead_dict_seen = []
+    context_replacements = []
+    compile_time_replacements = []
+
+    def wrapped_analyze(expr, environment):
+        if isinstance(expr, ast.Name) and expr.id == "chosen_internal_gap":
+            return None
+        if isinstance(expr, ast.Dict):
+            dead_dict_seen.append(True)
+        return original_analyze(expr, environment)
+
+    def recording_context_replace(self, slots):
+        snapshot = frozenset(slots)
+        context_replacements.append(snapshot)
+        return original_context_replace(self, snapshot)
+
+    def recording_compile_time_replace(self, snapshot_or_state):
+        if isinstance(snapshot_or_state, CompileTimeState):
+            values = snapshot_or_state.values
+        elif isinstance(snapshot_or_state, CompileTimeSnapshot):
+            values = snapshot_or_state.values
+        else:
+            values = snapshot_or_state
+        compile_time_replacements.append(dict(values))
+        return original_compile_time_replace(self, snapshot_or_state)
+
+    class FakeComp:
+        def __init__(self):
+            self.compile_time = CompileTimeState({"seed": 1})
+            self.resolved_environment = SimpleNamespace(system_constructors={})
+            self.local_functions = {}
+            self.backend_builtins = {}
+            self.imported_library_functions = {}
+            self.function_group_owner_scope = "scope"
+            self.input_declaration_owner = "scope"
+            self.reserved_name_labels = {}
+            self.group_input = None
+
+        def runtime_bindings_snapshot(self):
+            return MappingProxyType({})
+
+        def backend_runtime_values_snapshot(self):
+            return MappingProxyType({})
+
+        def legacy_structural_binding_names_snapshot(self):
+            return frozenset()
+
+    monkeypatch.setattr(semantic_body_module, "analyze_expression", wrapped_analyze)
+    monkeypatch.setattr(GroupContextAvailabilityCursor, "replace", recording_context_replace)
+    monkeypatch.setattr(CompileTimeState, "replace", recording_compile_time_replace)
+    monkeypatch.setattr(
+        statement_compiler,
+        "compile_statement",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("legacy statement compiler was called")),
     )
-    assert result is BODY_UNSUPPORTED
-    assert observed_condition_slots
-    assert all(not slots for slots in observed_condition_slots)
+    comp = FakeComp()
+    source = (
+        'if False:\n'
+        '    x = {"dead": 1}\n'
+        'else:\n'
+        '    geo = grid(2, 2)\n'
+        '    trial_only = 17\n'
+        '    x = chosen_internal_gap'
+    )
+    with pytest.raises(
+        CompileError,
+        match="Internal error: Semantic Body reached an unplanned legacy fallback after whole-body fallback is disabled",
+    ):
+        compile_statements(
+            GroupBuildContext(group=object(), comp=comp, geometry_mode=False),
+            _stmts(source),
+        )
+    assert dead_dict_seen == []
+    assert frozenset({GroupContextSlot.GRID_UV}) in context_replacements
+    assert context_replacements[-1] == frozenset()
+    assert all("trial_only" not in values for values in compile_time_replacements)
+    assert dict(comp.compile_time.values) == {"seed": 1}
 
 
-def test_mixed_dynamic_fallback_keeps_contextual_core_atomic_until_route_selection(monkeypatch):
+def test_extension_migration_error_keeps_contextual_core_atomic_and_never_calls_legacy(monkeypatch):
     from types import SimpleNamespace
     from NodeForge.compile_time import CompileTimeState
     from NodeForge.statement_compiler import GroupBuildContext, compile_statements
@@ -1506,9 +1643,11 @@ def test_mixed_dynamic_fallback_keeps_contextual_core_atomic_until_route_selecti
         def legacy_structural_binding_names_snapshot(self):
             return frozenset()
 
-    legacy = []
-    monkeypatch.setattr(statement_compiler, "lower_ir_body", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("fallback lowered IR")))
-    monkeypatch.setattr(statement_compiler, "compile_statement", lambda _ctx, stmt, *_a, **_k: legacy.append(type(stmt).__name__))
+    monkeypatch.setattr(
+        statement_compiler,
+        "compile_statement",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("legacy statement compiler was called")),
+    )
     comp = FakeComp()
     ctx = GroupBuildContext(group=object(), comp=comp, geometry_mode=True, geometry_socket=object())
     source = (
@@ -1516,17 +1655,20 @@ def test_mixed_dynamic_fallback_keeps_contextual_core_atomic_until_route_selecti
         'panel([x], name="P")\n'
         'geo = grid(2, 2)\nuv = grid_uv()\n'
         'store("a", x)\nset_position(position())\n'
-        'dynamic_system()'
+        'result = dynamic_system()\nresult'
     )
-    compile_statements(ctx, _stmts(source))
-    assert legacy == ["Assign", "Expr", "Assign", "Assign", "Expr", "Expr", "Expr"]
+    with pytest.raises(
+        CompileError,
+        match=r"dynamic_system\(\) is temporarily unavailable while Python extension callables are being migrated",
+    ):
+        compile_statements(ctx, _stmts(source))
     assert dict(comp.compile_time.values) == {"seed": 1}
     assert not hasattr(comp, "grid_context")
     assert not hasattr(comp, "_interface_input_binding_ids")
 
-
-def test_whole_body_fallback_scopes_legacy_grid_expression_routing_and_restores_on_success(monkeypatch):
-    """Whole-body compatibility enables grid-only legacy expression routing only inside the fallback loop."""
+@pytest.mark.parametrize("initial_state", [False, True])
+def test_extension_migration_error_preserves_legacy_grid_routing_state(monkeypatch, initial_state):
+    """A direct migration diagnostic leaves retained legacy routing state unchanged."""
     from types import SimpleNamespace
     from NodeForge.compile_time import CompileTimeState
     from NodeForge.statement_compiler import GroupBuildContext, compile_statements
@@ -1543,7 +1685,7 @@ def test_whole_body_fallback_scopes_legacy_grid_expression_routing_and_restores_
             self.input_declaration_owner = "scope"
             self.reserved_name_labels = {}
             self.group_input = None
-            self._legacy_contextual_grid_expression_routing_active = False
+            self._legacy_contextual_grid_expression_routing_active = initial_state
 
         def runtime_bindings_snapshot(self):
             return MappingProxyType({})
@@ -1554,59 +1696,21 @@ def test_whole_body_fallback_scopes_legacy_grid_expression_routing_and_restores_
         def legacy_structural_binding_names_snapshot(self):
             return frozenset()
 
-    observed = []
-
-    def record_statement(ctx, _stmt, *_args, **_kwargs):
-        observed.append(ctx.comp._legacy_contextual_grid_expression_routing_active)
-
-    monkeypatch.setattr(statement_compiler, "compile_statement", record_statement)
+    monkeypatch.setattr(
+        statement_compiler,
+        "compile_statement",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("legacy statement compiler was called")),
+    )
     comp = FakeComp()
-    compile_statements(GroupBuildContext(group=object(), comp=comp, geometry_mode=False), _stmts("dynamic_system()"))
-
-    assert observed == [True]
-    assert comp._legacy_contextual_grid_expression_routing_active is False
-
-
-def test_whole_body_fallback_restores_legacy_grid_expression_routing_after_compile_error(monkeypatch):
-    """A failed compatibility statement cannot leak the scoped grid-routing policy."""
-    from types import SimpleNamespace
-    from NodeForge.compile_time import CompileTimeState
-    from NodeForge.errors import CompileError
-    from NodeForge.statement_compiler import GroupBuildContext, compile_statements
-    import NodeForge.statement_compiler as statement_compiler
-
-    class FakeComp:
-        def __init__(self):
-            self.compile_time = CompileTimeState({})
-            self.resolved_environment = SimpleNamespace(system_constructors={"dynamic_system": object()})
-            self.local_functions = {}
-            self.backend_builtins = {}
-            self.imported_library_functions = {}
-            self.function_group_owner_scope = "scope"
-            self.input_declaration_owner = "scope"
-            self.reserved_name_labels = {}
-            self.group_input = None
-            self._legacy_contextual_grid_expression_routing_active = False
-
-        def runtime_bindings_snapshot(self):
-            return MappingProxyType({})
-
-        def backend_runtime_values_snapshot(self):
-            return {}
-
-        def legacy_structural_binding_names_snapshot(self):
-            return frozenset()
-
-    comp = FakeComp()
-
-    def fail_statement(ctx, _stmt, *_args, **_kwargs):
-        assert ctx.comp._legacy_contextual_grid_expression_routing_active is True
-        raise CompileError("controlled fallback failure")
-
-    monkeypatch.setattr(statement_compiler, "compile_statement", fail_statement)
-    with pytest.raises(CompileError, match="controlled fallback failure"):
-        compile_statements(GroupBuildContext(group=object(), comp=comp, geometry_mode=False), _stmts("dynamic_system()"))
-    assert comp._legacy_contextual_grid_expression_routing_active is False
+    with pytest.raises(
+        CompileError,
+        match=r"dynamic_system\(\) is temporarily unavailable while Python extension callables are being migrated",
+    ):
+        compile_statements(
+            GroupBuildContext(group=object(), comp=comp, geometry_mode=False),
+            _stmts("result = dynamic_system()\nresult"),
+        )
+    assert comp._legacy_contextual_grid_expression_routing_active is initial_state
 
 
 def test_contextual_statement_diagnostics_match_legacy_statement_contract():

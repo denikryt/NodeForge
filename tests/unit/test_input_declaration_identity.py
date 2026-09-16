@@ -14,7 +14,7 @@ from NodeForge.compiler_identities import InputDeclarationId
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
 from NodeForge import interface, update
-from NodeForge.builtin_call_semantics import IR_CAPABLE_BUILTIN_NAMES, STATEFUL_FALLBACK_BUILTIN_NAMES
+from NodeForge.builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
 from NodeForge.call_resolution import CallableEnvironment
 from NodeForge.semantic_body import lower_basic_body
 from NodeForge.semantic_ir import IRIf, IRInputDeclaration
@@ -188,7 +188,7 @@ def test_legacy_live_state_migrates_only_when_replacement_correspondence_is_unam
 def _control_flow_declaration_keys(source):
     """Return deterministic declaration stable keys from one pure root-body analysis."""
     callables = CallableEnvironment(
-        callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | STATEFUL_FALLBACK_BUILTIN_NAMES),
+        callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
         system_constructors={},
         local_functions={},
         backend_helper_names=frozenset(),

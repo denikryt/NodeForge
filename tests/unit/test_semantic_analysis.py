@@ -282,8 +282,12 @@ def test_type_token_diagnostic_is_preserved():
         _analyze("Float")
 
 
-def test_unsupported_left_short_circuits_before_unknown_right():
-    assert _analyze("legacy_call() + unknown_name", backend_helpers={"legacy_call"}) is None
+def test_extension_migration_error_short_circuits_before_unknown_right():
+    with pytest.raises(
+        CompileError,
+        match=r"legacy_call\(\) is temporarily unavailable while Python extension callables are being migrated",
+    ):
+        _analyze("legacy_call() + unknown_name", backend_helpers={"legacy_call"})
     with pytest.raises(CompileError, match="Unknown name: unknown_name"):
         _analyze("a + unknown_name", bindings={"a": TYPE_FLOAT})
 
@@ -349,7 +353,8 @@ def test_conditional_validation_and_switch_supported_boundary():
         _analyze("a if flag else b", bindings={"flag": TYPE_FLOAT, "a": TYPE_FLOAT, "b": TYPE_FLOAT})
     with pytest.raises(CompileError, match="same type"):
         _analyze("a if flag else b", bindings={"flag": TYPE_BOOL, "a": TYPE_FLOAT, "b": TYPE_VECTOR})
-    assert _analyze("a if flag else b", bindings={"flag": TYPE_BOOL, "a": TYPE_MATERIAL, "b": TYPE_MATERIAL}) is None
+    with pytest.raises(CompileError, match=r"select\(\) result type is not supported"):
+        _analyze("a if flag else b", bindings={"flag": TYPE_BOOL, "a": TYPE_MATERIAL, "b": TYPE_MATERIAL})
 
 
 def test_vector_component_and_object_attribute_boundaries():
@@ -369,13 +374,28 @@ def test_legacy_expression_environment_allows_unused_object_but_falls_back_when_
     assert arithmetic is not None
     assert _analyze("obj.geometry", bindings={"obj": TYPE_OBJECT}, object_registry=False) is None
 
-def test_only_calls_and_legacy_bindings_remain_planned_fallbacks():
-    assert _analyze("f()", bindings={"a": TYPE_FLOAT}, backend_helpers={"f"}) is None
+def test_extension_calls_are_explicit_migration_errors_while_legacy_bindings_remain_internal():
+    with pytest.raises(
+        CompileError,
+        match=r"f\(\) is temporarily unavailable while Python extension callables are being migrated",
+    ):
+        _analyze("f()", bindings={"a": TYPE_FLOAT}, backend_helpers={"f"})
     assert _analyze("legacy[0]", legacy={"legacy"}) is None
     array = _analyze("[a]", bindings={"a": TYPE_FLOAT})
     assert isinstance(array.facts[array.root].result_shape, ArrayResultShape)
     with pytest.raises(CompileError, match="indexing is supported"):
         _analyze("a[0]", bindings={"a": TYPE_FLOAT})
+
+
+@pytest.mark.parametrize("source, node_name", [('{"a": 1}', "Dict"), ("[i for i in [1]]", "ListComp")])
+def test_unknown_expression_syntax_is_a_direct_semantic_error(source, node_name):
+    with pytest.raises(CompileError, match=rf"Unsupported expression element: {node_name}"):
+        _analyze(source)
+
+
+def test_unknown_attribute_is_not_routed_to_legacy_expression_compilation():
+    with pytest.raises(CompileError, match=r"Only \.x, \.y and \.z vector attributes are supported"):
+        _analyze("a.w", bindings={"a": TYPE_FLOAT})
 
 
 def test_snapshot_backed_structural_array_analysis_preserves_index_and_nested_identity():

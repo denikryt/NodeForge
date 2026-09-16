@@ -7,8 +7,8 @@ import ast
 import pytest
 
 from NodeForge.builtin_call_semantics import (
+    INPUT_DECLARATION_BUILTIN_NAMES,
     IR_CAPABLE_BUILTIN_NAMES,
-    STATEFUL_FALLBACK_BUILTIN_NAMES,
     analyze_builtin_call,
 )
 from NodeForge.builtins.registry import CALLABLE_BUILTIN_NAMES
@@ -45,11 +45,11 @@ def _analyze(name, source, types=None, consts=None):
     return analyze_builtin_call(name, _call(source), consts or {}, add_runtime)
 
 
-def test_every_callable_builtin_is_explicitly_ir_capable_or_stateful_fallback():
-    assert IR_CAPABLE_BUILTIN_NAMES.isdisjoint(STATEFUL_FALLBACK_BUILTIN_NAMES)
-    assert IR_CAPABLE_BUILTIN_NAMES | STATEFUL_FALLBACK_BUILTIN_NAMES == frozenset(CALLABLE_BUILTIN_NAMES)
+def test_every_callable_builtin_is_explicitly_ir_capable_or_input_declaration():
+    assert IR_CAPABLE_BUILTIN_NAMES.isdisjoint(INPUT_DECLARATION_BUILTIN_NAMES)
+    assert IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES == frozenset(CALLABLE_BUILTIN_NAMES)
     assert {"grid", "grid_uv"} <= IR_CAPABLE_BUILTIN_NAMES
-    assert {"input_float", "input_bundle"} <= STATEFUL_FALLBACK_BUILTIN_NAMES
+    assert {"input_float", "input_bundle"} <= INPUT_DECLARATION_BUILTIN_NAMES
 
 
 def test_raw_output_mode_is_syntax_driven_not_cardinality_driven():

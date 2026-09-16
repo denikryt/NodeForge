@@ -223,21 +223,6 @@ def _can_defer_range_error(expr, env):
     return False
 
 
-def _contains_direct_array_append_stmt(stmts):
-    """Return True when the immediate loop body contains a legacy array append statement."""
-    for stmt in stmts:
-        if not isinstance(stmt, ast.Expr):
-            continue
-        call = stmt.value
-        if (
-            isinstance(call, ast.Call)
-            and isinstance(call.func, ast.Attribute)
-            and call.func.attr == "append"
-        ):
-            return True
-    return False
-
-
 def _contains_builder_method_stmt(stmts):
     """Return True if a statement list contains geometry_builder mutation syntax."""
     for stmt in stmts:
@@ -373,15 +358,6 @@ def _handle_compile_time_stmt(
             out_stmts.append(stmt)
             return
         if not isinstance(stmt.target, ast.Name):
-            if isinstance(stmt.target, (ast.Tuple, ast.List)) and _contains_direct_array_append_stmt(stmt.body):
-                # STRUCTURAL_ARRAYS_TUPLE_APPEND_PREPROCESS_COMPAT: v0.51.3 retained an ordinary compile-time
-                # for-loop before validating its flat tuple/list target when the immediate body contained .append().
-                # Preserve that exact source boundary so Semantic Body can route the complete body to the legacy
-                # statement compiler; do not broaden tuple-target acceptance here. Remove this marker when the
-                # legacy ordinary-for compatibility route is removed or frontend tuple-target semantics explicitly
-                # cover every previously accepted append-loop case.
-                out_stmts.append(stmt)
-                return
             raise CompileError("Only simple compile-time for targets are supported")
 
         owns_journal = list_append_journal is None
