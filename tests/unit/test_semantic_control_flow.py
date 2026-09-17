@@ -337,3 +337,16 @@ def test_contextual_store_inside_runtime_if_no_longer_forces_whole_body_fallback
     assert result is not BODY_UNSUPPORTED
     branch = next(stmt for stmt in result.body.statements if isinstance(stmt, IRIf))
     assert branch.merges and branch.merges[0].source_name == "x"
+
+
+def test_runtime_if_result_exposes_only_authoritative_compile_time_exit():
+    """Branch-local CT exits remain private to lower_runtime_if()."""
+    from dataclasses import fields
+    from NodeForge.semantic_control_flow import RuntimeIfResult
+
+    assert [field.name for field in fields(RuntimeIfResult)] == [
+        "statement",
+        "true_state",
+        "false_state",
+        "merged_compile_time",
+    ]

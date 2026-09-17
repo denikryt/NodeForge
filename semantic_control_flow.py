@@ -157,8 +157,6 @@ class RuntimeIfResult:
     statement: IRIf
     true_state: object
     false_state: object
-    true_compile_time: object
-    false_compile_time: object
     merged_compile_time: object
 
 
@@ -291,8 +289,6 @@ def lower_runtime_if(
         IRIf(analyzed_condition.program, true_body, false_body, tuple(merges)),
         true_state,
         false_state,
-        true_compile_time,
-        false_compile_time,
         merged_compile_time,
     )
 

@@ -41,6 +41,16 @@ def _nodes(group, bl_idname, operation=None):
     return result
 
 
+def _linked_numeric_inputs(group, node):
+    """Return numeric values feeding the first two inputs of one Math node."""
+    values = []
+    for socket in node.inputs[:2]:
+        link = next((item for item in group.links if item.to_node == node and item.to_socket == socket), None)
+        check(link is not None, f"Math input {socket.name!r} is unexpectedly unlinked")
+        values.append(float(link.from_socket.default_value))
+    return sorted(values)
+
+
 def _pointer(value):
     """Return stable in-process identity for a Blender RNA wrapper."""
     try:
@@ -1253,3 +1263,105 @@ def test_contextual_group_semantic_route_preserves_store_set_position_and_grid_t
     value_nodes = _nodes(group, "ShaderNodeValue") + _nodes(group, "FunctionNodeInputInt")
     check(not any(getattr(node, "label", "") in {"3", "3.0"} for node in value_nodes), "grid constant created a standalone Value node")
     bpy.data.node_groups.remove(group)
+
+
+def test_source_ordered_ct_handoff_keeps_future_assignment_out_of_earlier_runtime_rhs():
+    """A later erased CT assignment must not change an earlier residual Math input."""
+    group = compile_group(
+        'a = 1.0\n'
+        'b = a + 1.0\n'
+        'a = 10.0\n'
+        'output("B", b)\n',
+        "NFTest_source_order_future_fact",
+    )
+    adds = _nodes(group, "ShaderNodeMath", "ADD")
+    check(len(adds) == 1, "expected one ADD node for b = a + 1")
+    values = _linked_numeric_inputs(group, adds[0])
+    check(values == [1.0, 1.0], f"earlier b RHS observed a future CT value: {values!r}")
+
+
+def test_source_ordered_ct_handoff_runtime_if_materializes_erased_seed_value():
+    """Runtime branches use the erased source-order seed rather than a residual seed assignment."""
+    group = compile_group(
+        'x = 0.0\n'
+        'flag = input_bool("Flag")\n'
+        'if flag:\n'
+        '    x = x + 1.0\n'
+        'else:\n'
+        '    x = x + 2.0\n'
+        'output("X", x)\n',
+        "NFTest_source_order_runtime_if_seed",
+    )
+    adds = _nodes(group, "ShaderNodeMath", "ADD")
+    check(len(adds) == 2, "expected one ADD node per runtime-if branch")
+    defaults = sorted(
+        tuple(_linked_numeric_inputs(group, node))
+        for node in adds
+    )
+    check(defaults == [(0.0, 1.0), (0.0, 2.0)], f"runtime-if branches lost the erased seed: {defaults!r}")
+    check(len(_nodes(group, "GeometryNodeSwitch")) == 1, "runtime if did not materialize one Switch")
+
+
+def test_source_ordered_ct_handoff_self_reference_uses_old_target_value():
+    """Runtime RHS lowering happens before the assignment publishes its new CT target fact."""
+    group = compile_group(
+        'x = 1.0\n'
+        'x = x + 1.0\n'
+        'output("X", x)\n',
+        "NFTest_source_order_self_reference",
+    )
+    adds = _nodes(group, "ShaderNodeMath", "ADD")
+    check(len(adds) == 1, "expected one ADD node for self-referential assignment")
+    values = _linked_numeric_inputs(group, adds[0])
+    check(values == [1.0, 1.0], f"self-reference observed the post-assignment value: {values!r}")
+
+
+def test_source_ordered_ct_handoff_mutable_state_does_not_mutate_earlier_input_default():
+    """A later erased append cannot change an earlier input declaration default."""
+    group = compile_group(
+        'items = [1]\n'
+        'x = input_float("X", default=len(items))\n'
+        'items.append(2)\n'
+        'output("X", x)\n',
+        "NFTest_source_order_mutable_default",
+    )
+    defaults = [
+        item.default_value
+        for item in group.interface.items_tree
+        if getattr(item, "item_type", None) == "SOCKET"
+        and getattr(item, "in_out", None) == "INPUT"
+        and getattr(item, "name", None) == "X"
+    ]
+    check(defaults == [1.0], f"later append changed earlier input default: {defaults!r}")
+
+
+def test_source_ordered_ct_handoff_compile_time_owned_seed_reaches_runtime_if_branches():
+    """An erased len() seed is materialized as 3 in both runtime-if branches."""
+    group = compile_group(
+        'x = len([1, 2, 3])\n'
+        'flag = input_bool("Flag")\n'
+        'if flag:\n'
+        '    x = x + 1.0\n'
+        'else:\n'
+        '    x = x + 2.0\n'
+        'output("X", x)\n',
+        "NFTest_source_order_ct_owned_seed",
+    )
+    adds = _nodes(group, "ShaderNodeMath", "ADD")
+    check(len(adds) == 2, "expected one ADD node per runtime-if branch")
+    defaults = sorted(tuple(_linked_numeric_inputs(group, node)) for node in adds)
+    check(defaults == [(1.0, 3.0), (2.0, 3.0)], f"len() seed was not replayed in source order: {defaults!r}")
+
+
+def test_source_ordered_ct_handoff_constant_ordinary_if_stays_compile_time_selected():
+    """The Stage-26 constant-if shortcut does not gain an unnecessary runtime Switch."""
+    group = compile_group(
+        'x = 1.0\n'
+        'if True:\n'
+        '    x = 2.0\n'
+        'else:\n'
+        '    x = 3.0\n'
+        'output("X", x)\n',
+        "NFTest_source_order_constant_if",
+    )
+    check(not _nodes(group, "GeometryNodeSwitch"), "constant ordinary if created an unexpected runtime Switch")

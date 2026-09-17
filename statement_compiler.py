@@ -559,7 +559,14 @@ def compile_statement(
     raise CompileError("Unsupported statement")
 
 
-def compile_statements(ctx, stmts, initial_interface_input_origins=None):
+def compile_statements(
+    ctx,
+    stmts,
+    initial_interface_input_origins=None,
+    *,
+    compile_time_effects_before=(),
+    trailing_compile_time_effects=(),
+):
     """Compile one root body through Semantic Body IR and fail closed on internal gaps."""
     comp = ctx.comp
     runtime_bindings = comp.runtime_bindings_snapshot()
@@ -582,6 +589,8 @@ def compile_statements(ctx, stmts, initial_interface_input_origins=None):
         declaration_owner=comp.input_declaration_owner,
         geometry_mode=ctx.geometry_mode,
         initial_interface_input_origins=initial_interface_input_origins or {},
+        compile_time_effects_before=compile_time_effects_before,
+        trailing_compile_time_effects=trailing_compile_time_effects,
     )
     if body_compilation is BODY_UNSUPPORTED:
         raise CompileError(

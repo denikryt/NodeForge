@@ -21,7 +21,14 @@ from .builtin_call_semantics import (
 )
 from .compiler_identities import BindingId, InputDeclarationId, InterfaceInputOrigin
 from .constants import TYPE_OBJECT
-from .consteval import ConstEvalUnavailable, _const_eval, _is_compile_time_owned_assignment_rhs
+from .consteval import (
+    CompileTimeAppendExpression,
+    CompileTimeBindExpression,
+    CompileTimeForEffect,
+    ConstEvalUnavailable,
+    _const_eval,
+    _is_compile_time_owned_assignment_rhs,
+)
 from .compile_time import CompileTimeSnapshot, CompileTimeState
 from .errors import CompileError
 from .nf_types import NFType
@@ -432,6 +439,8 @@ def lower_basic_body(
     declaration_owner: str | None = None,
     geometry_mode: bool = False,
     initial_interface_input_origins: Mapping[BindingId, InterfaceInputOrigin] | None = None,
+    compile_time_effects_before=(),
+    trailing_compile_time_effects=(),
 ):
     """Lower one whole eligible source body to compiler-owned structured Semantic IR."""
     validate_input_declaration_placement(stmts)
@@ -458,6 +467,12 @@ def lower_basic_body(
     if not isinstance(initial_compile_time, CompileTimeSnapshot):
         raise TypeError("initial_compile_time must be a CompileTimeSnapshot")
     compile_time = CompileTimeState(initial_compile_time.values)
+    compile_time_effects_before = tuple(tuple(items) for items in compile_time_effects_before)
+    trailing_compile_time_effects = tuple(trailing_compile_time_effects)
+    if compile_time_effects_before and len(compile_time_effects_before) != len(stmts):
+        raise CompileError("Internal error: compile-time effect/source alignment mismatch")
+    if not compile_time_effects_before:
+        compile_time_effects_before = tuple(() for _ in stmts)
     state = _BodySemanticState(
         dict(initial_runtime_bindings), {}, {}, {}, {}, {}, {},
         dict(initial_interface_input_origins), {}, set(), identities, set(), set(), set(), False
@@ -472,6 +487,66 @@ def lower_basic_body(
             state.object_states[object_id] = ObjectInfoState()
 
     output_names: set[str] = set()
+
+    def replay_compile_time_effect(effect, active_compile_time: CompileTimeState) -> None:
+        """Replay one erased preprocessing action against the current source-order CT state."""
+        if isinstance(effect, CompileTimeBindExpression):
+            try:
+                value = _const_eval(effect.expression, active_compile_time.values)
+            except ConstEvalUnavailable as exc:
+                raise CompileError("Internal error: erased compile-time assignment became unavailable during replay") from exc
+            active_compile_time.bind(effect.name, value)
+            return
+        if isinstance(effect, CompileTimeForEffect):
+            had_old_target = active_compile_time.contains(effect.target)
+            old_target = active_compile_time.get(effect.target)
+            try:
+                try:
+                    iterable = _const_eval(effect.iterable_expression, active_compile_time.values)
+                except ConstEvalUnavailable as exc:
+                    raise CompileError(
+                        "Internal error: erased compile-time loop iterable became unavailable during replay"
+                    ) from exc
+                iterator = iter(iterable)
+                for effects in effect.iteration_effects:
+                    try:
+                        item = next(iterator)
+                    except StopIteration as exc:
+                        raise CompileError(
+                            "Internal error: erased compile-time loop replay produced fewer iterations than preprocessing"
+                        ) from exc
+                    active_compile_time.bind(effect.target, item)
+                    replay_compile_time_effects(effects, active_compile_time)
+                try:
+                    next(iterator)
+                except StopIteration:
+                    pass
+                else:
+                    raise CompileError(
+                        "Internal error: erased compile-time loop replay produced more iterations than preprocessing"
+                    )
+            finally:
+                if had_old_target:
+                    active_compile_time.bind(effect.target, old_target)
+                else:
+                    active_compile_time.discard(effect.target)
+            return
+        if isinstance(effect, CompileTimeAppendExpression):
+            target = active_compile_time.get(effect.name)
+            if not isinstance(target, list):
+                raise CompileError("Internal error: erased compile-time append lost its list target during replay")
+            try:
+                value = _const_eval(effect.expression, active_compile_time.values)
+            except ConstEvalUnavailable as exc:
+                raise CompileError("Internal error: erased compile-time append became unavailable during replay") from exc
+            target.append(value)
+            return
+        raise TypeError(f"unsupported compile-time preprocessing effect: {type(effect).__name__}")
+
+    def replay_compile_time_effects(effects, active_compile_time: CompileTimeState) -> None:
+        """Replay one ordered erased-effect batch without replacing the active CT state."""
+        for effect in effects:
+            replay_compile_time_effect(effect, active_compile_time)
 
     def clear_binding_object(active: _BodySemanticState, binding_id: BindingId) -> None:
         active.object_ids_by_binding.pop(binding_id, None)
@@ -1088,6 +1163,8 @@ def lower_basic_body(
                 active.clear_auto_final_output = False
 
         for index, stmt in enumerate(source_stmts):
+            if root:
+                replay_compile_time_effects(compile_time_effects_before[index], active_compile_time)
             is_final = root and index == len(source_stmts) - 1
 
             if isinstance(stmt, ast.If):
@@ -1506,26 +1583,29 @@ def lower_basic_body(
                     # Constructor is frontend-only but historically clears implicit final-output selection.
                     active.clear_auto_final_output = True
                     continue
+                compile_time_value = None
+                has_compile_time_value = False
                 if control_policy is BranchMergePolicy.REPEAT:
                     # Legacy Repeat assignments are runtime-state operations: compile_runtime_stmt()
                     # always invalidates the assigned name in Compiler.compile_time instead of publishing a
                     # newly const-evaluated value. Preserve that contextual contract so a carried
                     # state cannot become a stale compile-time constant after Repeat construction.
-                    active_compile_time.discard(target)
+                    pass
                 elif isinstance(stmt.value, ast.List) and not stmt.value.elts:
                     # Empty-list declarations establish body-owned structural-array identity.
                     # They are deliberately residual even though CTFE can evaluate the literal.
-                    active_compile_time.discard(target)
+                    pass
                 else:
                     try:
                         compile_time_value = _const_eval(stmt.value, active_compile_time.values)
                     except ConstEvalUnavailable:
-                        active_compile_time.discard(target)
+                        pass
                     except CompileError:
                         raise
                     else:
-                        active_compile_time.bind(target, compile_time_value)
+                        has_compile_time_value = True
                         if _is_compile_time_owned_assignment_rhs(stmt.value):
+                            active_compile_time.bind(target, compile_time_value)
                             continue
                 analyzed = analyze_runtime_expression(stmt.value, active, active_compile_time, statements)
                 if analyzed is BODY_UNSUPPORTED:
@@ -1554,12 +1634,22 @@ def lower_basic_body(
                         active.interface_input_origins[symbol.binding_id] = source_origin
                     active.explicitly_assigned_runtime_ids.add(symbol.binding_id)
                     emit(IRAssign(symbol.binding_id, target, analyzed.program))
+                    if control_policy is BranchMergePolicy.REPEAT or isinstance(stmt.value, ast.List) and not stmt.value.elts:
+                        active_compile_time.discard(target)
+                    elif has_compile_time_value:
+                        active_compile_time.bind(target, compile_time_value)
+                    else:
+                        active_compile_time.discard(target)
                     continue
                 if isinstance(analyzed.result_shape, (TupleResultShape, NamedOutputsResultShape)) and isinstance(analyzed.program.result, (IRTuple, IRNamedOutputs)):
                     structural = bind_structural(active, target, analyzed.result_shape)
                     sources = analyzed.program.result.items if isinstance(analyzed.program.result, IRTuple) else tuple(value for _name, value in analyzed.program.result.items)
                     bindings = tuple(IRLeafBinding(source, leaf.binding_id, leaf.typ) for source, leaf in zip(sources, structural.leaves))
                     emit(IRBindLeaves(analyzed.program, bindings))
+                    if has_compile_time_value:
+                        active_compile_time.bind(target, compile_time_value)
+                    else:
+                        active_compile_time.discard(target)
                     continue
                 raise CompileError("Internal error: unsupported semantic assignment result shape")
 
@@ -1832,6 +1922,8 @@ def lower_basic_body(
                 continue
 
             raise CompileError("Unsupported statement")
+        if root:
+            replay_compile_time_effects(trailing_compile_time_effects, active_compile_time)
         return IRBody(tuple(statements))
 
     body = lower_statements(stmts, state, compile_time, root=True)

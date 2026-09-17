@@ -1,6 +1,7 @@
 """Compile-time expression evaluation and preprocessing helpers."""
 
 import ast
+from dataclasses import dataclass
 from .constants import TYPE_INT, _ALLOWED_CONSTS
 from .errors import CompileError
 from .compile_time import CompileTimeState, ConstVector
@@ -11,6 +12,78 @@ class ConstEvalUnavailable(Exception):
 
 
 NOT_FOLDABLE = object()
+
+
+@dataclass(frozen=True)
+class CompileTimeBindExpression:
+    """Replay one erased source assignment against the current CT state."""
+
+    name: str
+    expression: ast.expr
+
+
+@dataclass(frozen=True)
+class CompileTimeForEffect:
+    """Replay one erased compile-time for-loop with replay-time alias identity."""
+
+    target: str
+    iterable_expression: ast.expr
+    iteration_effects: tuple[tuple["CompileTimeEffect", ...], ...]
+
+
+@dataclass(frozen=True)
+class CompileTimeAppendExpression:
+    """Replay one erased compile-time list append in source order."""
+
+    name: str
+    expression: ast.expr
+
+
+CompileTimeEffect = (
+    CompileTimeBindExpression
+    | CompileTimeForEffect
+    | CompileTimeAppendExpression
+)
+
+
+@dataclass(frozen=True)
+class PreprocessedBody:
+    """Carry residual source plus erased compile-time effects in source order."""
+
+    statements: tuple[ast.stmt, ...]
+    effects_before: tuple[tuple[CompileTimeEffect, ...], ...]
+    trailing_effects: tuple[CompileTimeEffect, ...]
+    initial_compile_time: object
+    final_compile_time: object
+
+
+class _PreprocessRecorder:
+    """Collect retained statements and pending erased CT effects in source order."""
+
+    def __init__(self):
+        self.statements = []
+        self.effects_before = []
+        self.pending_effects = []
+
+    def effect(self, effect: CompileTimeEffect) -> None:
+        """Record one erased CT action before the next retained statement."""
+        self.pending_effects.append(effect)
+
+    def retain(self, stmt: ast.stmt) -> None:
+        """Retain one source statement and attach all earlier erased CT work."""
+        self.statements.append(stmt)
+        self.effects_before.append(tuple(self.pending_effects))
+        self.pending_effects.clear()
+
+    def fork(self) -> "_PreprocessRecorder":
+        """Return an empty recorder for speculative preprocessing."""
+        return _PreprocessRecorder()
+
+    def adopt(self, other: "_PreprocessRecorder") -> None:
+        """Append a successful erased speculative sequence to this recorder."""
+        if other.statements:
+            raise ValueError("cannot adopt speculative preprocessing with retained statements")
+        self.pending_effects.extend(other.pending_effects)
 
 def _is_const_vector(v):
     """Function `_is_const_vector` used by the NodeForge addon."""
@@ -311,24 +384,6 @@ def _collect_preprocessing_written_names(stmts):
     return names
 
 
-def _collect_runtime_if_seed_names(stmts):
-    """Return names whose source assignments seed ordinary runtime-if writes."""
-    names = set()
-
-    def visit_block(block):
-        for stmt in block:
-            if isinstance(stmt, ast.If):
-                names.update(_collect_preprocessing_written_names((*stmt.body, *stmt.orelse)))
-                visit_block(stmt.body)
-                visit_block(stmt.orelse)
-            elif isinstance(stmt, ast.For):
-                visit_block(stmt.body)
-                visit_block(stmt.orelse)
-
-    visit_block(stmts)
-    return names
-
-
 def _contains_builder_method_stmt(stmts):
     """Return True if a statement list contains geometry_builder mutation syntax."""
     for stmt in stmts:
@@ -367,15 +422,13 @@ def _rollback_compile_time_list_appends_to(journal: CompileTimeListAppendJournal
 def _handle_compile_time_stmt(
     stmt,
     state: CompileTimeState,
-    out_stmts,
+    recorder: _PreprocessRecorder,
     preserve_names=None,
     *,
-    runtime_if_seed_names=None,
     list_append_journal: CompileTimeListAppendJournal | None = None,
 ):
     """Fold one statement into explicit compile-time state when current semantics allow it."""
     preserve_names = preserve_names or set()
-    runtime_if_seed_names = runtime_if_seed_names or set()
     env = state.values
     if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
         target = stmt.targets[0]
@@ -383,53 +436,52 @@ def _handle_compile_time_stmt(
             for nested in target.elts:
                 if isinstance(nested, ast.Name):
                     state.discard(nested.id)
-            out_stmts.append(stmt)
+            recorder.retain(stmt)
             return
         if not isinstance(target, ast.Name):
-            out_stmts.append(stmt)
+            recorder.retain(stmt)
             return
         if target.id in preserve_names:
             state.discard(target.id)
-            out_stmts.append(stmt)
+            recorder.retain(stmt)
             return
         if isinstance(stmt.value, ast.List) and not stmt.value.elts:
             state.discard(target.id)
-            out_stmts.append(stmt)
+            recorder.retain(stmt)
             return
         try:
             value = _const_eval(stmt.value, env)
         except ConstEvalUnavailable:
             state.discard(target.id)
-            out_stmts.append(stmt)
+            recorder.retain(stmt)
             return
         except CompileError:
             raise
         state.bind(target.id, value)
-        if target.id in runtime_if_seed_names:
-            out_stmts.append(stmt)
-            return
         if _is_compile_time_owned_assignment_rhs(stmt.value):
+            recorder.effect(CompileTimeBindExpression(target.id, stmt.value))
             return
         replacement = try_runtime_fold(stmt.value, env)
         if replacement is not NOT_FOLDABLE:
             state.bind(target.id, replacement)
+            recorder.effect(CompileTimeBindExpression(target.id, stmt.value))
             return
         # TODO(nodeforge-migration): Known non-foldable runtime-capable RHS values are
         # conservatively retained because this stage has no binding-level runtime-demand analysis.
         # Consumer contracts and typed numeric materialization land first; after those stages,
         # audit whether eager assignment lowering still forces unnecessary runtime form and,
         # if so, replace it with a narrow demand-driven materialization mechanism.
-        out_stmts.append(stmt)
+        recorder.retain(stmt)
         return
     if isinstance(stmt, ast.AugAssign):
         if isinstance(stmt.target, ast.Name):
             state.discard(stmt.target.id)
-        out_stmts.append(stmt)
+        recorder.retain(stmt)
         return
     if isinstance(stmt, ast.AnnAssign):
         if isinstance(stmt.target, ast.Name):
             state.discard(stmt.target.id)
-        out_stmts.append(stmt)
+        recorder.retain(stmt)
         return
     if isinstance(stmt, ast.Expr):
         call = stmt.value
@@ -449,10 +501,11 @@ def _handle_compile_time_stmt(
                     if list_append_journal is not None:
                         list_append_journal.append((current, len(current)))
                     current.append(append_value)
+                    recorder.effect(CompileTimeAppendExpression(list_name, call.args[0]))
                     return
-            out_stmts.append(stmt)
+            recorder.retain(stmt)
             return
-        out_stmts.append(stmt)
+        recorder.retain(stmt)
         return
     if isinstance(stmt, ast.If):
         # TODO(nodeforge-migration): Ordinary if still keeps the pre-existing implicit compile-time
@@ -463,6 +516,7 @@ def _handle_compile_time_stmt(
             branch = stmt.body if bool(_const_eval(stmt.test, env)) else stmt.orelse
         except (ConstEvalUnavailable, CompileError):
             written_names = _collect_preprocessing_written_names((*stmt.body, *stmt.orelse))
+            recorder.retain(stmt)
             # TODO(nodeforge-migration): Preprocessing still carries CompileTimeState across residual
             # runtime control flow, so every retained ordinary if must conservatively discard names
             # that either branch may write before later source transformation. Remove this syntactic
@@ -470,15 +524,13 @@ def _handle_compile_time_stmt(
             # flow, or an equally sound replacement owns that boundary.
             for name in written_names:
                 state.discard(name)
-            out_stmts.append(stmt)
             return
         for sub in branch:
             _handle_compile_time_stmt(
                 sub,
                 state,
-                out_stmts,
+                recorder,
                 preserve_names,
-                runtime_if_seed_names=runtime_if_seed_names,
                 list_append_journal=list_append_journal,
             )
         return
@@ -486,16 +538,16 @@ def _handle_compile_time_stmt(
         try:
             iterable = _const_eval(stmt.iter, env)
         except ConstEvalUnavailable:
-            out_stmts.append(stmt)
+            recorder.retain(stmt)
             return
         except CompileError:
             raise
         if _contains_builder_method_stmt(stmt.body) and not isinstance(stmt.target, ast.Name):
             # Preserve the historical flat builder-loop target for Semantic Body's explicit frontend rule.
-            out_stmts.append(stmt)
+            recorder.retain(stmt)
             return
         if not isinstance(iterable, (list, tuple)):
-            out_stmts.append(stmt)
+            recorder.retain(stmt)
             return
         if not isinstance(stmt.target, ast.Name):
             raise CompileError("Only simple compile-time for targets are supported")
@@ -504,21 +556,26 @@ def _handle_compile_time_stmt(
         journal = [] if owns_journal else list_append_journal
         savepoint = _compile_time_list_append_savepoint(journal)
         trial_state = state.fork()
-        trial_out = []
         had_old = trial_state.contains(stmt.target.id)
         old = trial_state.get(stmt.target.id)
+        iteration_effects = []
         try:
             for item in iterable:
                 trial_state.bind(stmt.target.id, item)
+                iteration_recorder = recorder.fork()
                 for sub in stmt.body:
                     _handle_compile_time_stmt(
                         sub,
                         trial_state,
-                        trial_out,
+                        iteration_recorder,
                         preserve_names,
-                        runtime_if_seed_names=runtime_if_seed_names,
                         list_append_journal=journal,
                     )
+                if iteration_recorder.statements:
+                    _rollback_compile_time_list_appends_to(journal, savepoint)
+                    recorder.retain(stmt)
+                    return
+                iteration_effects.append(tuple(iteration_recorder.pending_effects))
             if had_old:
                 trial_state.bind(stmt.target.id, old)
             else:
@@ -527,16 +584,18 @@ def _handle_compile_time_stmt(
             _rollback_compile_time_list_appends_to(journal, savepoint)
             raise
 
-        if trial_out:
-            _rollback_compile_time_list_appends_to(journal, savepoint)
-            out_stmts.append(stmt)
-            return
-
         state.replace(trial_state)
+        recorder.effect(
+            CompileTimeForEffect(
+                target=stmt.target.id,
+                iterable_expression=stmt.iter,
+                iteration_effects=tuple(iteration_effects),
+            )
+        )
         if owns_journal:
             journal.clear()
         return
-    out_stmts.append(stmt)
+    recorder.retain(stmt)
 
 def _is_repeat_range_for(stmt):
     """Return True for the runtime repeat_range(...) for-loop shape."""
@@ -586,20 +645,25 @@ def _repeat_range_state_names(stmts):
 
 
 def _preprocess_compile_time(stmts):
-    """Preprocess statements and return the explicit compile-time state owner."""
+    """Return residual source plus erased compile-time effects in source order."""
     state = CompileTimeState()
-    out = []
+    initial = state.snapshot()
+    recorder = _PreprocessRecorder()
     preserve = _repeat_range_state_names(stmts)
-    runtime_if_seed_names = _collect_runtime_if_seed_names(stmts)
     for stmt in stmts:
         _handle_compile_time_stmt(
             stmt,
             state,
-            out,
+            recorder,
             preserve,
-            runtime_if_seed_names=runtime_if_seed_names,
         )
-    return out, state
+    return PreprocessedBody(
+        statements=tuple(recorder.statements),
+        effects_before=tuple(recorder.effects_before),
+        trailing_effects=tuple(recorder.pending_effects),
+        initial_compile_time=initial,
+        final_compile_time=state.snapshot(),
+    )
 
 
 def _infer_input_types(stmts):
@@ -630,7 +694,10 @@ __all__ = [
     '_const_range',
     '_const_eval',
     '_is_compile_time_owned_assignment_rhs',
-    '_collect_runtime_if_seed_names',
+    'CompileTimeAppendExpression',
+    'CompileTimeBindExpression',
+    'CompileTimeForEffect',
+    'PreprocessedBody',
     'try_runtime_fold',
     '_handle_compile_time_stmt',
     '_preprocess_compile_time',

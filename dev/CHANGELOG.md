@@ -246,3 +246,9 @@ ion coverage.
 - Separated compile-time evaluation unavailability from hard compiler-owned errors and introduced an explicit closed-world runtime-fold permission boundary, so known runtime-capable expressions are conservatively retained unless graph removal is proven safe.
 - Made runtime-`if` compile-time facts sound by forking both branches from the same incoming snapshot, conservatively joining their exits, invalidating preprocessing facts for names that retained runtime branches may write, and preserving residual source seeds needed to reconstruct incoming runtime branch state.
 - Added late Semantic Body consumption for narrowly compile-time-owned assignment roots when sound control-flow joining recovers the required facts after preprocessing; ordinary `if` branch-selection semantics remain intentionally unchanged pending the dedicated runtime-only migration.
+
+## 0.54.1
+
+- Fixed source-order correctness across compile-time preprocessing and Semantic Body by replaying erased compile-time effects at their original residual positions instead of seeding body analysis from the final preprocessing state; removed the whole-body runtime-if seed prescan and made ordinary assignment RHS analysis observe the pre-assignment compile-time state.
+- Simplified runtime-if semantic results to expose only the authoritative merged compile-time exit and consolidated static-only builtin CTFE diagnostics through the shared `_const()` boundary.
+- Preserved alias identity when replaying erased compile-time `for` loops by replacing copied iteration bindings/discards with one scoped `CompileTimeForEffect` that re-evaluates the iterable in replay state, binds exact yielded objects, restores the exact pre-loop target, and rejects iteration-count drift.

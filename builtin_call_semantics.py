@@ -151,36 +151,32 @@ def analyze_input_declaration_call(expr, consts):
         if default_expr is None:
             default = 0.0
         else:
-            try:
-                default = _as_float_const(_const_eval(default_expr, consts), "input_float default")
-            except ConstEvalUnavailable as exc:
-                raise CompileError("input_float default= must be compile-time") from exc
+            default = _as_float_const(
+                _const(default_expr, consts, "input_float default= must be compile-time"),
+                "input_float default",
+            )
     elif name == "input_int":
         if default_expr is None:
             default = 0
         else:
-            try:
-                default = int(_as_float_const(_const_eval(default_expr, consts), "input_int default"))
-            except ConstEvalUnavailable as exc:
-                raise CompileError("input_int default= must be compile-time") from exc
+            default = int(
+                _as_float_const(
+                    _const(default_expr, consts, "input_int default= must be compile-time"),
+                    "input_int default",
+                )
+            )
     elif name == "input_bool":
         if default_expr is None:
             default = False
         else:
-            try:
-                default = _const_eval(default_expr, consts)
-            except ConstEvalUnavailable as exc:
-                raise CompileError("input_bool default= must be compile-time") from exc
+            default = _const(default_expr, consts, "input_bool default= must be compile-time")
             if type(default) is not bool:
                 raise CompileError("input_bool default= must be a compile-time Bool")
     elif name == "input_vector":
         if default_expr is None:
             default = (0.0, 0.0, 0.0)
         else:
-            try:
-                raw = _const_eval(default_expr, consts)
-            except ConstEvalUnavailable as exc:
-                raise CompileError("input_vector default= must be compile-time") from exc
+            raw = _const(default_expr, consts, "input_vector default= must be compile-time")
             if _is_const_vector(raw):
                 default = tuple(float(item) for item in raw)
             elif isinstance(raw, (tuple, list)) and len(raw) == 3:
@@ -191,10 +187,7 @@ def analyze_input_declaration_call(expr, consts):
         if default_expr is None:
             default = ""
         else:
-            try:
-                default = _const_eval(default_expr, consts)
-            except ConstEvalUnavailable as exc:
-                raise CompileError("input_string default= must be a compile-time string") from exc
+            default = _const(default_expr, consts, "input_string default= must be a compile-time string")
         if not isinstance(default, str):
             raise CompileError("input_string default= must be a compile-time string")
     else:
@@ -224,11 +217,10 @@ def _freeze(value):
 def _const(expr, consts, context):
     """Evaluate and detach one compile-time call expression."""
     try:
-        return _freeze(_const_eval(expr, consts))
-    except CompileError:
-        raise
-    except Exception as exc:
+        value = _const_eval(expr, consts)
+    except ConstEvalUnavailable as exc:
         raise CompileError(context) from exc
+    return _freeze(value)
 
 
 def _literal_string(expr, consts, context):
@@ -461,10 +453,7 @@ def _analyze_raw_node(expr, consts, add_runtime):
             if key in seen:
                 raise CompileError(f"node(...) props= has duplicate key {key!r}")
             seen.add(key)
-            try:
-                value = _const_eval(value_expr, consts)
-            except ConstEvalUnavailable as exc:
-                raise CompileError("node(...) props= values must be compile-time literals") from exc
+            value = _const(value_expr, consts, "node(...) props= values must be compile-time literals")
             prop_items.append((key, _raw_json_value(value, f"node(...) props={key!r}")))
         props = tuple(prop_items)
 
@@ -836,10 +825,7 @@ def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: Runtime
             raise CompileError("polyline() does not support keyword arguments")
         if len(expr.args) != 1:
             raise CompileError("polyline(points) expects one compile-time list of vector points")
-        try:
-            raw = _const_eval(expr.args[0], consts)
-        except ConstEvalUnavailable as exc:
-            raise CompileError("polyline(points) expects one compile-time list of vector points") from exc
+        raw = _const(expr.args[0], consts, "polyline(points) expects one compile-time list of vector points")
         points = _normalize_polyline_points(raw)
         return BuiltinCallSemantics((), (("points", points),), RuntimeCallResult(TYPE_GEOMETRY))
 
@@ -872,10 +858,11 @@ def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: Runtime
                 options.append((key, ("runtime", len(operands) - 1)))
         realize = True
         if "realize" in kws:
-            try:
-                realize = _const_eval(kws["realize"], consts)
-            except ConstEvalUnavailable as exc:
-                raise CompileError("instance_on_points realize= must be a compile-time bool") from exc
+            realize = _const(
+                kws["realize"],
+                consts,
+                "instance_on_points realize= must be a compile-time bool",
+            )
             if type(realize) is not bool:
                 raise CompileError("instance_on_points realize= must be a compile-time bool")
         for key, typ in runtime_option_types:

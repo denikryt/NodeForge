@@ -82,11 +82,11 @@ def test_compile_time_preprocessor_preserves_runtime_unpacking():
     from NodeForge.consteval import _preprocess_compile_time
 
     statements = ast.parse("a = 1\nb = 2\na, b = split(value)").body
-    processed, compile_time = _preprocess_compile_time(statements)
-    assert len(processed) == 1
-    assert isinstance(processed[0].targets[0], ast.Tuple)
-    assert not compile_time.contains("a")
-    assert not compile_time.contains("b")
+    preprocessed = _preprocess_compile_time(statements)
+    assert len(preprocessed.statements) == 1
+    assert isinstance(preprocessed.statements[0].targets[0], ast.Tuple)
+    assert "a" not in preprocessed.final_compile_time.values
+    assert "b" not in preprocessed.final_compile_time.values
 
 
 def test_return_shape_metadata_serializes_historical_type_tokens(monkeypatch):

@@ -18,7 +18,7 @@ from NodeForge.semantic_body import BODY_UNSUPPORTED, lower_basic_body
 from NodeForge.semantic_ir import (
     IRAssign, IRArray, IRBindLeaves, IRBody, IRFinalExpression, IRIf,
     IRContextRead, IRContextWrite, IRDiscardExpression, IRInputDeclaration, IROutput, IRPanelDeclaration,
-    IRProgram, IRRepeat, IRValue,
+    IRBinary, IRLiteral, IRProgram, IRRepeat, IRValue,
 )
 
 
@@ -53,6 +53,25 @@ def _lower(
         geometry_mode=geometry_mode,
         initial_interface_input_origins=input_origins or {},
     )
+
+
+def _preprocessed_lower(source, *, bindings=None, callables=None):
+    """Lower source through the real ordered preprocessing handoff."""
+    from NodeForge.consteval import _preprocess_compile_time
+
+    preprocessed = _preprocess_compile_time(_stmts(source))
+    result = lower_basic_body(
+        list(preprocessed.statements),
+        initial_runtime_bindings=bindings or {},
+        initial_compile_time=preprocessed.initial_compile_time,
+        legacy_binding_names=frozenset(),
+        reserved_name_labels={},
+        callable_environment=callables or _callables(),
+        owner_scope="scope",
+        compile_time_effects_before=preprocessed.effects_before,
+        trailing_compile_time_effects=preprocessed.trailing_effects,
+    )
+    return preprocessed, result
 
 
 def _binding(name, local_id, typ=NFType.FLOAT):
@@ -473,19 +492,24 @@ def test_runtime_dependent_flat_unpack_loop_is_a_direct_semantic_error(monkeypat
         "compile_statement",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("legacy statement compiler was called")),
     )
-    retained, compile_time = _preprocess_compile_time(_stmts(
+    preprocessed = _preprocess_compile_time(_stmts(
         'a = input_float("A", default=1.0)\n'
         'pairs = [[a, a]]\n'
         'for x, y in pairs:\n'
         '    result = x + y\n'
         'output("Result", result)'
     ))
+    retained = list(preprocessed.statements)
     assert any(isinstance(stmt, ast.For) for stmt in retained)
 
     comp = FakeComp()
-    comp.compile_time.replace(compile_time)
     with pytest.raises(CompileError, match="Only simple compile-time for targets are supported"):
-        compile_statements(GroupBuildContext(group=object(), comp=comp, geometry_mode=False), retained)
+        compile_statements(
+            GroupBuildContext(group=object(), comp=comp, geometry_mode=False),
+            retained,
+            compile_time_effects_before=preprocessed.effects_before,
+            trailing_compile_time_effects=preprocessed.trailing_effects,
+        )
 
 
 def test_extension_migration_error_does_not_publish_speculative_compile_time_changes():
@@ -625,7 +649,7 @@ def test_body_entry_allocator_invariant_is_structurally_guaranteed_before_first_
     root = Path(__file__).resolve().parents[2]
     source = (root / "compiler.py").read_text(encoding="utf-8")
     populate = source[source.index("def _populate_group("):]
-    before_body = populate[:populate.index("compile_statements(ctx, stmts, initial_interface_input_origins)")]
+    before_body = populate[:populate.index("compile_statements(\n            ctx,\n            stmts,")]
     compiler_session = before_body[before_body.index("comp = Compiler("):]
     assert "comp.bind_runtime_value(" in compiler_session
     assert "comp.unbind_runtime_binding(" not in compiler_session
@@ -1861,7 +1885,8 @@ def test_late_compile_time_owned_assignment_uses_runtime_if_joined_fact_without_
         '    y = i\n'
         'output(y)\n'
     )
-    retained, compile_time = _preprocess_compile_time(_stmts(source))
+    preprocessed = _preprocess_compile_time(_stmts(source))
+    retained = list(preprocessed.statements)
     assert any(isinstance(stmt, ast.If) for stmt in retained)
     assert any(
         isinstance(stmt, ast.Assign)
@@ -1870,16 +1895,18 @@ def test_late_compile_time_owned_assignment_uses_runtime_if_joined_fact_without_
         for stmt in retained
     )
     assert any(isinstance(stmt, ast.For) for stmt in retained)
-    assert "n" not in compile_time.values
+    assert "n" not in preprocessed.final_compile_time.values
 
     result = lower_basic_body(
         retained,
         initial_runtime_bindings={},
-        initial_compile_time=compile_time.snapshot(),
+        initial_compile_time=preprocessed.initial_compile_time,
         legacy_binding_names=frozenset(),
         reserved_name_labels={},
         callable_environment=_callables(),
         owner_scope="scope",
+        compile_time_effects_before=preprocessed.effects_before,
+        trailing_compile_time_effects=preprocessed.trailing_effects,
     )
 
     assert result is not BODY_UNSUPPORTED
@@ -1916,9 +1943,10 @@ def test_late_compile_time_owned_root_family_consumes_after_runtime_if_join(
         f'    {branch_assignment}\n'
         f'{late_assignment}\n'
     )
-    retained, compile_time = _preprocess_compile_time(_stmts(source))
-    assert "n" not in compile_time.values
-    assert "label" not in compile_time.values
+    preprocessed = _preprocess_compile_time(_stmts(source))
+    retained = list(preprocessed.statements)
+    assert "n" not in preprocessed.final_compile_time.values
+    assert "label" not in preprocessed.final_compile_time.values
     assert any(
         isinstance(stmt, ast.Assign)
         and isinstance(stmt.targets[0], ast.Name)
@@ -1929,11 +1957,13 @@ def test_late_compile_time_owned_root_family_consumes_after_runtime_if_join(
     result = lower_basic_body(
         retained,
         initial_runtime_bindings={},
-        initial_compile_time=compile_time.snapshot(),
+        initial_compile_time=preprocessed.initial_compile_time,
         legacy_binding_names=frozenset(),
         reserved_name_labels={},
         callable_environment=_callables(),
         owner_scope="scope",
+        compile_time_effects_before=preprocessed.effects_before,
+        trailing_compile_time_effects=preprocessed.trailing_effects,
     )
 
     assert result.final_compile_time.values["x"] == expected
@@ -1941,3 +1971,266 @@ def test_late_compile_time_owned_root_family_consumes_after_runtime_if_join(
         isinstance(statement, IRAssign) and statement.source_name == "x"
         for statement in result.body.statements
     )
+
+
+def test_ordered_preprocessing_handoff_does_not_leak_future_fact_backwards():
+    """A later erased assignment cannot change an earlier residual RHS."""
+    preprocessed, result = _preprocessed_lower(
+        "a = 1.0\n"
+        "b = a + 1.0\n"
+        "a = 10.0\n"
+        "output(b)\n"
+    )
+
+    assert [ast.unparse(stmt) for stmt in preprocessed.statements] == ["b = a + 1.0", "output(b)"]
+    assign = next(stmt for stmt in result.body.statements if isinstance(stmt, IRAssign) and stmt.source_name == "b")
+    literal_values = [op.value for op in assign.value.operations if isinstance(op, IRLiteral)]
+    assert literal_values == [1.0, 1.0]
+    assert result.final_compile_time.values["a"] == 10.0
+    assert result.final_compile_time.values["b"] == 2.0
+
+
+def test_ordered_preprocessing_handoff_does_not_publish_future_only_name_earlier():
+    """A future erased binding remains unavailable at an earlier residual source position."""
+    from NodeForge.consteval import _preprocess_compile_time
+
+    preprocessed = _preprocess_compile_time(_stmts("y = x + 1.0\nx = 2.0\noutput(y)\n"))
+    with pytest.raises(CompileError, match="Unknown name: x"):
+        lower_basic_body(
+            list(preprocessed.statements),
+            initial_runtime_bindings={},
+            initial_compile_time=preprocessed.initial_compile_time,
+            legacy_binding_names=frozenset(),
+            reserved_name_labels={},
+            callable_environment=_callables(),
+            owner_scope="scope",
+            compile_time_effects_before=preprocessed.effects_before,
+            trailing_compile_time_effects=preprocessed.trailing_effects,
+        )
+
+
+def test_ordinary_assignment_runtime_rhs_reads_pre_assignment_compile_time_value():
+    """Self-reference analyzes against the old target fact before publishing the new one."""
+    _preprocessed, result = _preprocessed_lower("x = 1.0\nx = x + 1.0\noutput(x)\n")
+
+    assign = next(stmt for stmt in result.body.statements if isinstance(stmt, IRAssign) and stmt.source_name == "x")
+    literal_values = [op.value for op in assign.value.operations if isinstance(op, IRLiteral)]
+    assert literal_values == [1.0, 1.0]
+    assert result.final_compile_time.values["x"] == 2.0
+
+
+def test_runtime_if_uses_erased_compile_time_seed_without_residual_seed_assignment():
+    """Runtime branches materialize the source-ordered CT seed after seed-prescan removal."""
+    preprocessed, result = _preprocessed_lower(
+        'x = 0.0\n'
+        'flag = input_bool("Flag")\n'
+        'if flag:\n'
+        '    x = x + 1.0\n'
+        'else:\n'
+        '    x = x + 2.0\n'
+        'output(x)\n'
+    )
+
+    assert not any(
+        isinstance(stmt, ast.Assign)
+        and isinstance(stmt.targets[0], ast.Name)
+        and stmt.targets[0].id == "x"
+        and isinstance(stmt.value, ast.Constant)
+        for stmt in preprocessed.statements
+    )
+    runtime_if = next(stmt for stmt in result.body.statements if isinstance(stmt, IRIf))
+    true_assign = next(stmt for stmt in runtime_if.true_body.statements if isinstance(stmt, IRAssign))
+    false_assign = next(stmt for stmt in runtime_if.false_body.statements if isinstance(stmt, IRAssign))
+    assert [op.value for op in true_assign.value.operations if isinstance(op, IRLiteral)] == [0.0, 1.0]
+    assert [op.value for op in false_assign.value.operations if isinstance(op, IRLiteral)] == [0.0, 2.0]
+
+
+def test_compile_time_owned_seed_is_visible_to_runtime_if_branches_in_source_order():
+    """An erased len() seed reaches both runtime branches without prepublishing branch targets."""
+    _preprocessed, result = _preprocessed_lower(
+        'x = len([1, 2, 3])\n'
+        'flag = input_bool("Flag")\n'
+        'if flag:\n'
+        '    x = x + 1.0\n'
+        'else:\n'
+        '    x = x + 2.0\n'
+        'output(x)\n'
+    )
+
+    runtime_if = next(stmt for stmt in result.body.statements if isinstance(stmt, IRIf))
+    true_assign = next(stmt for stmt in runtime_if.true_body.statements if isinstance(stmt, IRAssign))
+    false_assign = next(stmt for stmt in runtime_if.false_body.statements if isinstance(stmt, IRAssign))
+    assert [op.value for op in true_assign.value.operations if isinstance(op, IRLiteral)] == [3, 1.0]
+    assert [op.value for op in false_assign.value.operations if isinstance(op, IRLiteral)] == [3, 2.0]
+
+
+def test_mutable_compile_time_effects_do_not_mutate_earlier_input_default():
+    """A later erased append cannot change an earlier input declaration default."""
+    _preprocessed, result = _preprocessed_lower(
+        'items = [1]\n'
+        'x = input_float("X", default=len(items))\n'
+        'items.append(2)\n'
+        'output(x)\n'
+    )
+
+    declaration = next(stmt for stmt in result.body.statements if isinstance(stmt, IRInputDeclaration))
+    assert declaration.default == 1.0
+    assert result.final_compile_time.values["items"] == [1, 2]
+
+
+def test_constant_ordinary_if_does_not_retain_runtime_if_or_seed_assignment():
+    """Stage-26 constant-if shortcut stays source-ordered without seed-prescan artifacts."""
+    preprocessed, result = _preprocessed_lower(
+        'x = 1.0\n'
+        'if True:\n'
+        '    x = 2.0\n'
+        'else:\n'
+        '    x = 3.0\n'
+        'output(x)\n'
+    )
+
+    assert not any(isinstance(stmt, ast.If) for stmt in preprocessed.statements)
+    assert not any(isinstance(stmt, IRIf) for stmt in result.body.statements)
+    assert result.final_compile_time.values["x"] == 2.0
+
+
+def test_erased_compile_time_for_replay_preserves_mutable_iteration_item_alias():
+    """Loop-body mutation targets the exact object yielded by the replay-time iterable."""
+    _preprocessed, result = _preprocessed_lower(
+        'items = [[1]]\n'
+        'for item in items:\n'
+        '    item.append(2)\n'
+        'x = input_int("X", default=len(items[0]))\n'
+        'output(x)\n'
+    )
+
+    declaration = next(stmt for stmt in result.body.statements if isinstance(stmt, IRInputDeclaration))
+    assert declaration.default == 2
+    assert result.final_compile_time.values["items"] == [[1, 2]]
+
+
+def test_erased_compile_time_for_replay_restores_exact_old_mutable_target_alias():
+    """Loop target restoration keeps the exact pre-loop object rather than a copied value."""
+    _preprocessed, result = _preprocessed_lower(
+        'item = [1]\n'
+        'holder = [item]\n'
+        'for item in range(1):\n'
+        '    scratch = 0\n'
+        'item.append(2)\n'
+        'x = input_int("X", default=len(holder[0]))\n'
+        'output(x)\n'
+    )
+
+    declaration = next(stmt for stmt in result.body.statements if isinstance(stmt, IRInputDeclaration))
+    assert declaration.default == 2
+    assert result.final_compile_time.values["item"] is result.final_compile_time.values["holder"][0]
+
+
+def test_erased_compile_time_for_replay_preserves_duplicate_aliases_in_iterable():
+    """Repeated references in the iterable replay as repeated references to the same object."""
+    _preprocessed, result = _preprocessed_lower(
+        'a = [1]\n'
+        'items = [a, a]\n'
+        'for item in items:\n'
+        '    item.append(2)\n'
+        'x = input_int("X", default=len(a))\n'
+        'output(x)\n'
+    )
+
+    declaration = next(stmt for stmt in result.body.statements if isinstance(stmt, IRInputDeclaration))
+    assert declaration.default == 3
+    assert result.final_compile_time.values["items"][0] is result.final_compile_time.values["items"][1]
+
+
+def test_nested_erased_compile_time_for_replay_preserves_alias_identity():
+    """Nested scoped loop effects preserve aliases without a separate replay stack."""
+    _preprocessed, result = _preprocessed_lower(
+        'items = [[1]]\n'
+        'groups = [items]\n'
+        'for group in groups:\n'
+        '    for item in group:\n'
+        '        item.append(2)\n'
+        'x = input_int("X", default=len(items[0]))\n'
+        'output(x)\n'
+    )
+
+    declaration = next(stmt for stmt in result.body.statements if isinstance(stmt, IRInputDeclaration))
+    assert declaration.default == 2
+    assert result.final_compile_time.values["groups"][0] is result.final_compile_time.values["items"]
+
+
+def test_zero_iteration_erased_compile_time_for_restores_old_target_identity():
+    """A zero-iteration loop still restores the exact pre-loop mutable target object."""
+    _preprocessed, result = _preprocessed_lower(
+        'item = [1]\n'
+        'holder = [item]\n'
+        'for item in range(0):\n'
+        '    scratch = 0\n'
+        'item.append(2)\n'
+        'x = input_int("X", default=len(holder[0]))\n'
+        'output(x)\n'
+    )
+
+    declaration = next(stmt for stmt in result.body.statements if isinstance(stmt, IRInputDeclaration))
+    assert declaration.default == 2
+    assert result.final_compile_time.values["item"] is result.final_compile_time.values["holder"][0]
+
+
+def test_erased_compile_time_for_replay_tracks_iterable_growth_consistently():
+    """Replay observes the same list-iterator growth that preprocessing proved."""
+    _preprocessed, result = _preprocessed_lower(
+        'items = [[1]]\n'
+        'for item in items:\n'
+        '    if len(items) == 1:\n'
+        '        items.append([9])\n'
+        'x = input_int("X", default=len(items))\n'
+        'output(x)\n'
+    )
+
+    declaration = next(stmt for stmt in result.body.statements if isinstance(stmt, IRInputDeclaration))
+    assert declaration.default == 2
+    assert result.final_compile_time.values["items"] == [[1], [9]]
+
+
+def test_compile_time_for_effect_replay_rejects_fewer_iterations_than_preprocessing():
+    """Composite loop replay fails closed when the replay iterable ends too early."""
+    from NodeForge.consteval import CompileTimeForEffect
+
+    effect = CompileTimeForEffect(
+        target="item",
+        iterable_expression=ast.parse("[1]", mode="eval").body,
+        iteration_effects=((), ()),
+    )
+    with pytest.raises(CompileError, match="fewer iterations than preprocessing"):
+        lower_basic_body(
+            [],
+            initial_runtime_bindings={},
+            initial_compile_time=CompileTimeSnapshot({}),
+            legacy_binding_names=frozenset(),
+            reserved_name_labels={},
+            callable_environment=_callables(),
+            owner_scope="scope",
+            trailing_compile_time_effects=(effect,),
+        )
+
+
+def test_compile_time_for_effect_replay_rejects_more_iterations_than_preprocessing():
+    """Composite loop replay fails closed when the replay iterable yields an extra item."""
+    from NodeForge.consteval import CompileTimeForEffect
+
+    effect = CompileTimeForEffect(
+        target="item",
+        iterable_expression=ast.parse("[1, 2]", mode="eval").body,
+        iteration_effects=((),),
+    )
+    with pytest.raises(CompileError, match="more iterations than preprocessing"):
+        lower_basic_body(
+            [],
+            initial_runtime_bindings={},
+            initial_compile_time=CompileTimeSnapshot({}),
+            legacy_binding_names=frozenset(),
+            reserved_name_labels={},
+            callable_environment=_callables(),
+            owner_scope="scope",
+            trailing_compile_time_effects=(effect,),
+        )

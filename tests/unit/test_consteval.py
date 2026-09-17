@@ -6,7 +6,6 @@ from NodeForge.consteval import (
     ConstEvalUnavailable,
     NOT_FOLDABLE,
     _collect_preprocessing_written_names,
-    _collect_runtime_if_seed_names,
     _const_eval,
     try_runtime_fold,
 )
@@ -108,9 +107,11 @@ def test_literal_string_and_input_discovery_use_compile_time_fstrings():
     stmts = _parse_source('prefix = "Result"\nvalue = input_float(f"{prefix} Value")\noutput(f"{prefix} Output", value)')
     from NodeForge.consteval import _preprocess_compile_time
 
-    retained, compile_time = _preprocess_compile_time(stmts)
-    assert isinstance(compile_time, CompileTimeState)
-    assert _collect_inputs(retained, consts=compile_time.values) == []
+    preprocessed = _preprocess_compile_time(stmts)
+    assert _collect_inputs(
+        preprocessed.statements,
+        consts=preprocessed.final_compile_time.values,
+    ) == []
 
     retained = _parse_source('output(f"{runtime_name}", 1)')
     assert _collect_inputs(retained, consts={}) == ["runtime_name"]
@@ -128,8 +129,8 @@ def _preprocess_source(source):
     from NodeForge.consteval import _preprocess_compile_time
     from NodeForge.parsing import _parse_source
 
-    retained, compile_time = _preprocess_compile_time(_parse_source(source))
-    return retained, compile_time.values
+    preprocessed = _preprocess_compile_time(_parse_source(source))
+    return list(preprocessed.statements), preprocessed.final_compile_time.values
 
 
 def test_preprocess_preserves_integer_assignments_as_compile_time_range_candidates():
@@ -217,22 +218,13 @@ def test_retained_runtime_if_invalidates_written_names_before_following_preproce
     assert any(isinstance(stmt, ast.For) for stmt in retained)
 
 
-def test_runtime_if_seed_collector_reuses_recursive_binding_writes():
-    stmts = ast.parse(
-        "x = 0\n"
-        "if flag:\n"
-        "    x = 1\n"
-        "    for i in values:\n"
-        "        y = i\n"
-        "else:\n"
-        "    if other:\n"
-        "        z = 2\n"
-        "after = 3\n"
-    ).body
-    assert _collect_runtime_if_seed_names(stmts) == {"x", "i", "y", "z"}
+def test_runtime_if_seed_prescan_is_removed():
+    import NodeForge.consteval as consteval
+
+    assert not hasattr(consteval, "_collect_runtime_if_seed_names")
 
 
-def test_runtime_if_seed_assignment_is_retained_before_write_barrier():
+def test_runtime_if_seed_assignment_is_erased_and_write_barrier_still_invalidates_future_preprocessing():
     retained, consts = _preprocess_source(
         'x = 0.0\n'
         'flag = input_bool("Flag")\n'
@@ -250,9 +242,7 @@ def test_runtime_if_seed_assignment_is_retained_before_write_barrier():
         and isinstance(stmt.targets[0], ast.Name)
         and stmt.targets[0].id == "x"
     ]
-    assert len(assigns) == 1
-    assert isinstance(assigns[0].value, ast.Constant)
-    assert assigns[0].value.value == 0.0
+    assert assigns == []
     assert "x" not in consts
     assert any(isinstance(stmt, ast.If) for stmt in retained)
 
@@ -326,16 +316,16 @@ output("x", 1)
 
 
 def test_handle_stmt_invalidates_integer_candidate_for_preserved_repeat_range_state():
-    from NodeForge.consteval import _handle_compile_time_stmt
+    from NodeForge.consteval import _PreprocessRecorder, _handle_compile_time_stmt
 
     stmt = ast.parse("COUNT = 16").body[0]
     env = {"COUNT": 8}
-    out = []
+    recorder = _PreprocessRecorder()
 
-    _handle_compile_time_stmt(stmt, CompileTimeState(env, adopt_mapping=True), out, preserve_names={"COUNT"})
+    _handle_compile_time_stmt(stmt, CompileTimeState(env, adopt_mapping=True), recorder, preserve_names={"COUNT"})
 
     assert "COUNT" not in env
-    assert out == [stmt]
+    assert recorder.statements == [stmt]
 
 
 def test_preprocess_preserves_mixed_repeat_range_state_initializers():
@@ -487,7 +477,7 @@ def test_compile_time_append_preserves_legacy_ignored_keyword_compatibility():
 
 def test_nested_speculative_loop_append_journal_rolls_back_to_outer_savepoint():
     """Successful inner trials remain rollback-visible when a later outer statement rejects the trial."""
-    from NodeForge.consteval import _handle_compile_time_stmt
+    from NodeForge.consteval import _PreprocessRecorder, _handle_compile_time_stmt
 
     shared = []
     state = CompileTimeState({"items": shared})
@@ -497,9 +487,9 @@ def test_nested_speculative_loop_append_journal_rolls_back_to_outer_savepoint():
         "        items.append(j)\n"
         "    runtime_statement()\n"
     ).body[0]
-    out = []
-    _handle_compile_time_stmt(stmt, state, out)
-    assert out == [stmt]
+    recorder = _PreprocessRecorder()
+    _handle_compile_time_stmt(stmt, state, recorder)
+    assert recorder.statements == [stmt]
     assert shared == []
     assert state.get("items") is shared
 

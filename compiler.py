@@ -854,9 +854,14 @@ def _populate_group(
     )
     _validate_interface_directive_placement(raw_body_stmts)
 
-    stmts, compile_time = _preprocess_compile_time(body_stmts)
+    preprocessed = _preprocess_compile_time(body_stmts)
+    stmts = list(preprocessed.statements)
+    final_preprocess_compile_time = preprocessed.final_compile_time
     callable_names = set(own_imported_library_functions) | set(local_function_defs) | backend_names | set(system_names)
-    input_names = sorted(set(_collect_inputs(stmts, extra_builtin_names=callable_names, consts=compile_time.values)) - set(compile_time.values.keys()))
+    input_names = sorted(
+        set(_collect_inputs(stmts, extra_builtin_names=callable_names, consts=final_preprocess_compile_time.values))
+        - set(final_preprocess_compile_time.values.keys())
+    )
     input_types = _infer_input_types(stmts)
     try:
         group.color_tag = 'CONVERTER'
@@ -887,7 +892,7 @@ def _populate_group(
     comp = Compiler(
         group,
         group_input,
-        compile_time,
+        CompileTimeState(preprocessed.initial_compile_time.values),
         local_functions=local_function_defs,
         local_group_cache=function_group_cache if function_group_cache is not None else {},
         backend_builtins=backend_builtins,
@@ -953,7 +958,13 @@ def _populate_group(
         trace_cm = function_compilation_trace.group(function_definition_identity or function_group_owner_scope or group.name, own_inputs)
         frame = trace_cm.__enter__()
     try:
-        compile_statements(ctx, stmts, initial_interface_input_origins)
+        compile_statements(
+            ctx,
+            stmts,
+            initial_interface_input_origins,
+            compile_time_effects_before=preprocessed.effects_before,
+            trailing_compile_time_effects=preprocessed.trailing_effects,
+        )
     finally:
         if frame is not None:
             trace_cm.__exit__(None, None, None)
