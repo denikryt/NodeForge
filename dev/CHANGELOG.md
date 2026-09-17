@@ -257,3 +257,9 @@ ion coverage.
 
 - Made ordinary statement `if` always use runtime Geometry Nodes control flow. Literal and compile-time-known conditions no longer prune source branches; both branches are semantically validated and follow the normal runtime-if merge rules.
 - Kept ordinary `if` residual through compile-time preprocessing while preserving the conservative branch-write barrier that prevents later preprocessing from observing stale compile-time facts.
+
+## 0.55.1
+
+- Added frontend-only declarative evaluation modes for compile-time-only, runtime-only, and compile-time-or-runtime consumer requirements while keeping runtime folding, semantic typing, and IR representation separate.
+- Migrated input compile-time acquisition plus `instance_on_points()` and `transform()` mixed options to the shared representation selector, moving invalid static option rejection into semantic analysis before Blender realization while preserving existing diagnostics and runtime operand order.
+- Centralized the existing compile-time Number/Vector-like shape predicates for shared frontend/backend validation and retained `set_material()` as an explicit richer consumer-specific fallback boundary.

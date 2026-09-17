@@ -1379,3 +1379,111 @@ def test_source_ordered_ct_handoff_literal_ordinary_if_stays_runtime():
     check(len(switches) == 1, f"expected one literal-if runtime Switch, found {len(switches)}")
     defaults = sorted(tuple(_linked_numeric_inputs(group, node)) for node in adds)
     check(defaults == [(1.0, 1.0), (1.0, 2.0)], f"source-order literal-if seed changed: {defaults!r}")
+
+
+def test_stage28_instance_on_points_static_and_runtime_mixed_options_preserve_backend_shape():
+    static_group = compile_group(
+        '''
+geo = instance_on_points(
+    cube(0.5),
+    points(2),
+    scale=0.5,
+    rotation=vector(0.0, 0.0, 0.25),
+    realize=False,
+)
+output("Geometry", geo)
+''',
+        "NFTest_stage28_instance_static",
+    )
+    static_nodes = _nodes(static_group, "GeometryNodeInstanceOnPoints")
+    check(len(static_nodes) == 1, "expected one static Instance on Points node")
+    static_node = static_nodes[0]
+    check(not static_node.inputs["Scale"].is_linked, "static scale unexpectedly became runtime")
+    check(
+        tuple(round(float(v), 6) for v in static_node.inputs["Scale"].default_value) == (0.5, 0.5, 0.5),
+        "static scale default changed",
+    )
+    check(not static_node.inputs["Rotation"].is_linked, "static rotation unexpectedly became runtime")
+    bpy.data.node_groups.remove(static_group)
+
+    runtime_group = compile_group(
+        '''
+scale = input_float("Scale", default=0.5)
+rotation = input_vector("Rotation", default=(0.0, 0.0, 0.25))
+geo = instance_on_points(cube(0.5), points(2), scale=scale, rotation=rotation, realize=False)
+output("Geometry", geo)
+''',
+        "NFTest_stage28_instance_runtime",
+    )
+    runtime_nodes = _nodes(runtime_group, "GeometryNodeInstanceOnPoints")
+    check(len(runtime_nodes) == 1, "expected one runtime Instance on Points node")
+    runtime_node = runtime_nodes[0]
+    check(runtime_node.inputs["Scale"].is_linked, "runtime scale was not linked")
+    check(runtime_node.inputs["Rotation"].is_linked, "runtime rotation was not linked")
+    bpy.data.node_groups.remove(runtime_group)
+
+
+def test_stage28_transform_static_and_runtime_mixed_options_preserve_backend_shape():
+    static_group = compile_group(
+        '''
+geo = transform(
+    cube(1.0),
+    translation=vector(1.0, 2.0, 3.0),
+    scale=2.0,
+    rotation=vector(0.0, 0.0, 0.25),
+)
+output("Geometry", geo)
+''',
+        "NFTest_stage28_transform_static",
+    )
+    static_nodes = _nodes(static_group, "GeometryNodeTransform")
+    check(len(static_nodes) == 1, "expected one static Transform Geometry node")
+    static_node = static_nodes[0]
+    check(not static_node.inputs["Translation"].is_linked, "static translation unexpectedly became runtime")
+    check(not static_node.inputs["Scale"].is_linked, "static transform scale unexpectedly became runtime")
+    check(not static_node.inputs["Rotation"].is_linked, "static transform rotation unexpectedly became runtime")
+    bpy.data.node_groups.remove(static_group)
+
+    runtime_group = compile_group(
+        '''
+translation = input_vector("Translation", default=(1.0, 2.0, 3.0))
+scale = input_float("Scale", default=2.0)
+rotation = input_vector("Rotation", default=(0.0, 0.0, 0.25))
+geo = transform(cube(1.0), translation=translation, scale=scale, rotation=rotation)
+output("Geometry", geo)
+''',
+        "NFTest_stage28_transform_runtime",
+    )
+    runtime_nodes = _nodes(runtime_group, "GeometryNodeTransform")
+    check(len(runtime_nodes) == 1, "expected one runtime Transform Geometry node")
+    runtime_node = runtime_nodes[0]
+    check(runtime_node.inputs["Translation"].is_linked, "runtime translation was not linked")
+    check(runtime_node.inputs["Scale"].is_linked, "runtime transform scale was not linked")
+    check(runtime_node.inputs["Rotation"].is_linked, "runtime transform rotation was not linked")
+    bpy.data.node_groups.remove(runtime_group)
+
+
+def test_stage28_invalid_static_mixed_options_fail_without_publishing_group():
+    cases = [
+        (
+            'geo = instance_on_points(cube(0.5), points(2), scale="bad", realize=False)\noutput("Geometry", geo)',
+            "NFTest_stage28_invalid_instance_scale",
+            "instance_on_points scale= expects Float/Int or Vector",
+        ),
+        (
+            'geo = transform(cube(1.0), rotation="bad")\noutput("Geometry", geo)',
+            "NFTest_stage28_invalid_transform_rotation",
+            "rotation= must be Vector in radians",
+        ),
+    ]
+    for source, name, message in cases:
+        old = bpy.data.node_groups.get(name)
+        if old is not None:
+            bpy.data.node_groups.remove(old)
+        try:
+            compile_group(source, name)
+        except CompileError as exc:
+            check(str(exc) == message, f"unexpected Stage-28 semantic diagnostic: {exc}")
+        else:
+            raise AssertionError(f"{name} unexpectedly compiled")
+        check(bpy.data.node_groups.get(name) is None, f"failed Stage-28 compile published {name}")

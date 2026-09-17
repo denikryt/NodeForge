@@ -414,3 +414,174 @@ def test_static_builtin_arguments_distinguish_unavailable_from_hard_ctfe_errors(
             "instance_on_points(instance, points, realize=not 1)",
             types={"instance": TYPE_GEOMETRY, "points": TYPE_GEOMETRY},
         )
+
+
+
+def test_input_declaration_compile_time_only_acquisition_uses_known_fact():
+    analyzed = analyze_input_declaration_call(
+        _call('input_float("X", default=d)'),
+        {"d": 0.5},
+    )
+    assert analyzed.display_name == "X"
+    assert analyzed.typ is TYPE_FLOAT
+    assert analyzed.default == 0.5
+
+
+def test_instance_on_points_static_mixed_options_are_validated_before_call_semantics():
+    analyzed = _analyze(
+        "instance_on_points",
+        "instance_on_points(instance, points, scale=2.0, rotation=vector(0, 0, 0), realize=True)",
+        types={"instance": TYPE_GEOMETRY, "points": TYPE_GEOMETRY},
+    )
+    assert [operand.typ for operand in analyzed.operands] == [TYPE_GEOMETRY, TYPE_GEOMETRY]
+    assert dict(analyzed.options) == {
+        "scale": ("const", 2.0),
+        "rotation": ("const", (0.0, 0.0, 0.0)),
+        "realize": True,
+    }
+
+    with pytest.raises(CompileError, match=r"instance_on_points scale= expects Float/Int or Vector"):
+        _analyze(
+            "instance_on_points",
+            'instance_on_points(instance, points, scale="bad")',
+            types={"instance": TYPE_GEOMETRY, "points": TYPE_GEOMETRY},
+        )
+    with pytest.raises(CompileError, match=r"instance_on_points rotation= expects Vector in radians"):
+        _analyze(
+            "instance_on_points",
+            "instance_on_points(instance, points, rotation=1.0)",
+            types={"instance": TYPE_GEOMETRY, "points": TYPE_GEOMETRY},
+        )
+
+
+def test_instance_on_points_mixed_runtime_slots_preserve_direct_runtime_operand_order():
+    calls = []
+    types = {
+        "instance": TYPE_GEOMETRY,
+        "points": TYPE_GEOMETRY,
+        "sel": TYPE_BOOL,
+        "scale": TYPE_FLOAT,
+        "rotation": TYPE_VECTOR,
+    }
+
+    def add_runtime(node, parameter_name, context):
+        key = ast.unparse(node)
+        calls.append((key, parameter_name, context))
+        return types[key]
+
+    analyzed = analyze_builtin_call(
+        "instance_on_points",
+        _call("instance_on_points(instance, points, selection=sel, scale=scale, rotation=rotation, realize=False)"),
+        {},
+        add_runtime,
+    )
+    assert [name for name, _, _ in calls] == ["instance", "points", "sel", "scale", "rotation"]
+    assert [operand.typ for operand in analyzed.operands] == [
+        TYPE_GEOMETRY,
+        TYPE_GEOMETRY,
+        TYPE_BOOL,
+        TYPE_FLOAT,
+        TYPE_VECTOR,
+    ]
+    assert dict(analyzed.options) == {
+        "scale": ("runtime", 3),
+        "rotation": ("runtime", 4),
+        "realize": False,
+    }
+
+
+def test_instance_on_points_mixed_hard_ctfe_error_does_not_acquire_runtime_option():
+    calls = []
+
+    def add_runtime(node, parameter_name, context):
+        calls.append(ast.unparse(node))
+        return TYPE_GEOMETRY
+
+    with pytest.raises(CompileError, match="not expects Bool"):
+        analyze_builtin_call(
+            "instance_on_points",
+            _call("instance_on_points(instance, points, scale=not 1)"),
+            {},
+            add_runtime,
+        )
+    assert calls == ["instance", "points"]
+
+
+def test_transform_mixed_options_validate_static_values_in_frontend():
+    analyzed = _analyze(
+        "transform",
+        "transform(geo, translation=vector(1,2,3), scale=2.0, rotation=vector(0,0,0))",
+        types={"geo": TYPE_GEOMETRY},
+    )
+    assert [operand.typ for operand in analyzed.operands] == [TYPE_GEOMETRY]
+    assert dict(analyzed.options) == {
+        "translation": ("const", (1.0, 2.0, 3.0)),
+        "scale": ("const", 2.0),
+        "rotation": ("const", (0.0, 0.0, 0.0)),
+    }
+
+    for source, message in [
+        ("transform(geo, translation=1.0)", "translation= must be Vector"),
+        ('transform(geo, rotation="bad")', "rotation= must be Vector in radians"),
+        ('transform(geo, scale="bad")', "scale= must be Float/Int or Vector"),
+    ]:
+        with pytest.raises(CompileError, match=message):
+            _analyze("transform", source, types={"geo": TYPE_GEOMETRY})
+
+
+def test_transform_runtime_mixed_options_preserve_visitation_and_operand_slots():
+    calls = []
+    types = {
+        "geo": TYPE_GEOMETRY,
+        "translation": TYPE_VECTOR,
+        "scale": TYPE_INT,
+        "rotation": TYPE_VECTOR,
+    }
+
+    def add_runtime(node, parameter_name, context):
+        key = ast.unparse(node)
+        calls.append((key, parameter_name, context))
+        return types[key]
+
+    analyzed = analyze_builtin_call(
+        "transform",
+        _call("transform(geo, translation=translation, scale=scale, rotation=rotation)"),
+        {},
+        add_runtime,
+    )
+    assert [name for name, _, _ in calls] == ["geo", "translation", "scale", "rotation"]
+    assert [operand.typ for operand in analyzed.operands] == [
+        TYPE_GEOMETRY,
+        TYPE_VECTOR,
+        TYPE_INT,
+        TYPE_VECTOR,
+    ]
+    assert dict(analyzed.options) == {
+        "translation": ("runtime", 1),
+        "scale": ("runtime", 2),
+        "rotation": ("runtime", 3),
+    }
+
+
+def test_set_material_remains_outside_simple_mixed_selector_policy():
+    static = _analyze(
+        "set_material",
+        'set_material(geo, "Stone")',
+        types={"geo": TYPE_GEOMETRY},
+    )
+    assert [operand.typ for operand in static.operands] == [TYPE_GEOMETRY]
+    assert dict(static.options)["material"] == ("const", "Stone")
+
+    runtime_unavailable = _analyze(
+        "set_material",
+        "set_material(geo, material)",
+        types={"geo": TYPE_GEOMETRY, "material": TYPE_MATERIAL},
+    )
+    assert [operand.typ for operand in runtime_unavailable.operands] == [TYPE_GEOMETRY, TYPE_MATERIAL]
+
+    runtime_after_inadmissible_ct = _analyze(
+        "set_material",
+        "set_material(geo, 1)",
+        types={"geo": TYPE_GEOMETRY, "1": TYPE_MATERIAL},
+    )
+    assert [operand.typ for operand in runtime_after_inadmissible_ct.operands] == [TYPE_GEOMETRY, TYPE_MATERIAL]

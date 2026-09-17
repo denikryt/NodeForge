@@ -86,8 +86,23 @@ class _PreprocessRecorder:
         self.pending_effects.extend(other.pending_effects)
 
 def _is_const_vector(v):
-    """Function `_is_const_vector` used by the NodeForge addon."""
+    """Return True for a three-component compiler-owned constant vector."""
     return isinstance(v, ConstVector) and len(v) == 3
+
+
+def _is_const_number(v):
+    """Return True for static scalar numbers, excluding booleans."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _is_const_vector_like(v):
+    """Return True for accepted static three-component vector carriers."""
+    return _is_const_vector(v) or (
+        isinstance(v, (tuple, list))
+        and len(v) == 3
+        and all(_is_const_number(component) for component in v)
+    )
+
 
 def _as_float_const(v, context="value"):
     """Function `_as_float_const` used by the NodeForge addon."""

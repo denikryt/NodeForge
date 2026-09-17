@@ -472,3 +472,26 @@ def test_structural_arrays_ordinary_for_inside_repeat_range_fails_before_legacy_
         )
     leaked = [group.name for group in bpy.data.node_groups if group.as_pointer() not in before]
     check(not leaked, f"invalid nested ordinary for leaked Blender groups: {leaked}")
+
+
+def test_input_default_uses_compile_time_fact_without_erasing_runtime_expression():
+    """Compile-time default consumption does not remove the same expression's runtime graph."""
+    group = compile_group(
+        '''
+d = 1 / 2
+x = input_float("X", default=d)
+y = d * position().x
+output("Y", y)
+''',
+        "NFTest_stage28_input_default_and_runtime_use",
+    )
+    inputs = [item for item in _interface_sockets(group, "INPUT") if item.name == "X"]
+    check(len(inputs) == 1, "expected one explicit X input")
+    check(float(inputs[0].default_value) == 0.5, f"compile-time default changed: {inputs[0].default_value}")
+    divide_nodes = [
+        node for node in group.nodes
+        if getattr(node, "bl_idname", "") == "ShaderNodeMath"
+        and getattr(node, "operation", None) == "DIVIDE"
+    ]
+    check(len(divide_nodes) == 1, "compile-time default acquisition erased runtime DIVIDE")
+    bpy.data.node_groups.remove(group)

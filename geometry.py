@@ -4,7 +4,7 @@ from .constants import *
 from .errors import CompileError
 from .values import Value
 from .nodes import _new_node, _value, _combine_xyz, _combine_xyz_mixed, _is_number_type
-from .consteval import _is_const_vector, _as_float_const
+from .consteval import _as_float_const, _is_const_number, _is_const_vector_like
 from .statements import _attribute_domain
 
 
@@ -114,14 +114,6 @@ def _euler_to_rotation(group, euler_vec, x=0, y=0):
     node = _new_node(group, "FunctionNodeEulerToRotation", x, y)
     group.links.new(euler_vec.socket, node.inputs[0])
     return Value(node.outputs[0], TYPE_ROTATION)
-
-def _is_const_number(v):
-    """Function `_is_const_number` used by the NodeForge addon."""
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
-
-def _is_const_vector_like(v):
-    """Function `_is_const_vector_like` used by the NodeForge addon."""
-    return _is_const_vector(v) or (isinstance(v, (tuple, list)) and len(v) == 3 and all(isinstance(c, (int, float)) and not isinstance(c, bool) for c in v))
 
 def _cube_geometry(group, size, x=0, y=0):
     """Function `_cube_geometry` used by the NodeForge addon."""

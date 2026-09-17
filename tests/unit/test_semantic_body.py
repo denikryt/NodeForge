@@ -168,6 +168,21 @@ def test_direct_input_declarations_are_target_owned_body_effects(call, typ):
     assert not hasattr(statement, "input_binding_id")
 
 
+def test_input_default_can_consume_compile_time_fact_without_making_input_value_compile_time():
+    result = _lower(
+        'd = 1 / 2\n'
+        'x = input_float("X", default=d)\n'
+        'output(x)'
+    )
+    declaration = next(
+        statement for statement in result.body.statements
+        if isinstance(statement, IRInputDeclaration)
+    )
+    assert declaration.default == 0.5
+    assert "x" not in result.final_compile_time.values
+    assert "d" in result.final_compile_time.values
+
+
 def test_duplicate_input_labels_create_distinct_target_bindings_and_preserve_defaults():
     result = _lower(
         'x = input_float("Scale", default=1.0)\n'

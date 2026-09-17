@@ -7,9 +7,11 @@ from NodeForge.consteval import (
     NOT_FOLDABLE,
     _collect_preprocessing_written_names,
     _const_eval,
+    _is_const_number,
+    _is_const_vector_like,
     try_runtime_fold,
 )
-from NodeForge.compile_time import CompileTimeState
+from NodeForge.compile_time import CompileTimeState, ConstVector
 from NodeForge.errors import CompileError
 
 pytestmark = pytest.mark.unit
@@ -559,3 +561,19 @@ def test_compile_time_append_journal_savepoint_rolls_back_only_its_suffix():
     assert outer == ["outer"]
     assert inner == []
     assert journal == [(outer, 0)]
+
+
+def test_shared_static_number_and_vector_like_predicates_preserve_backend_shapes():
+    """Frontend/backend static-shape authority keeps the pre-Stage-29 contract."""
+    assert _is_const_number(1)
+    assert _is_const_number(1.0)
+    assert _is_const_number(_eval_expr("1 / 1.0"))
+    assert not _is_const_number(True)
+    assert not _is_const_number("bad")
+
+    assert _is_const_vector_like(ConstVector((1.0, 2.0, 3.0)))
+    assert _is_const_vector_like((1, 2, 3))
+    assert _is_const_vector_like([1.0, 2, 3])
+    assert not _is_const_vector_like((1, 2))
+    assert not _is_const_vector_like((1, True, 3))
+    assert not _is_const_vector_like("bad")

@@ -35,10 +35,27 @@ from .constants import (
     _VECTOR_MATH_VECTOR_OUTPUT_2,
 )
 from .compile_time import ConstVector
-from .consteval import ConstEvalUnavailable, _as_float_const, _const_eval, _is_const_vector
+from .consteval import (
+    ConstEvalUnavailable,
+    _as_float_const,
+    _const_eval,
+    _is_const_number,
+    _is_const_vector,
+    _is_const_vector_like,
+)
 from .errors import CompileError
+from .evaluation_modes import (
+    CompileTimeSelection,
+    EvaluationMode,
+    RuntimeRequired,
+    resolve_argument_evaluation,
+)
 from .nf_types import NFType, NUMERIC_NF_TYPES
 from .group_context import GroupContextSlot
+
+
+_COMPILE_TIME_ONLY = EvaluationMode.COMPILE_TIME_ONLY
+_COMPILE_TIME_OR_RUNTIME = EvaluationMode.COMPILE_TIME_OR_RUNTIME
 
 
 INPUT_DECLARATION_PLACEMENT_ERROR = (
@@ -215,20 +232,25 @@ def _freeze(value):
 
 
 def _const(expr, consts, context):
-    """Evaluate and detach one compile-time call expression."""
+    """Evaluate and detach one compile-time-only call expression."""
     try:
-        value = _const_eval(expr, consts)
+        selection = resolve_argument_evaluation(expr, consts, _COMPILE_TIME_ONLY)
     except ConstEvalUnavailable as exc:
         raise CompileError(context) from exc
-    return _freeze(value)
+    if not isinstance(selection, CompileTimeSelection):
+        raise TypeError("compile-time-only evaluation unexpectedly selected runtime")
+    return _freeze(selection.value)
 
 
 def _literal_string(expr, consts, context):
     """Return a non-empty detached compile-time string with legacy diagnostics."""
     try:
-        value = _const_eval(expr, consts)
+        selection = resolve_argument_evaluation(expr, consts, _COMPILE_TIME_ONLY)
     except ConstEvalUnavailable as exc:
         raise CompileError(f"Expected a non-empty compile-time string for {context}") from exc
+    if not isinstance(selection, CompileTimeSelection):
+        raise TypeError("compile-time-only string evaluation unexpectedly selected runtime")
+    value = selection.value
     if isinstance(value, str) and value:
         return value
     raise CompileError(f"Expected a non-empty compile-time string for {context}")
@@ -237,9 +259,12 @@ def _literal_string(expr, consts, context):
 def _node_literal_string(expr, consts, context):
     """Return a raw-node compile-time string using raw-node diagnostics."""
     try:
-        value = _const_eval(expr, consts)
+        selection = resolve_argument_evaluation(expr, consts, _COMPILE_TIME_ONLY)
     except ConstEvalUnavailable as exc:
         raise CompileError(f"node(...) {context} must be a non-empty compile-time string") from exc
+    if not isinstance(selection, CompileTimeSelection):
+        raise TypeError("compile-time-only node string evaluation unexpectedly selected runtime")
+    value = selection.value
     if isinstance(value, str) and value:
         return value
     raise CompileError(f"node(...) {context} must be a non-empty compile-time string")
@@ -800,13 +825,22 @@ def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: Runtime
             if child is None:
                 entries.append((key, None))
                 continue
-            try:
-                value = _freeze(_const_eval(child, consts))
-                entries.append((key, ("const", value)))
-            except ConstEvalUnavailable:
-                typ = runtime(child, key, f"transform() {key}")
-                runtime_option_types.append((key, typ))
-                entries.append((key, ("runtime", len(operands) - 1)))
+            selection = resolve_argument_evaluation(child, consts, _COMPILE_TIME_OR_RUNTIME)
+            if isinstance(selection, CompileTimeSelection):
+                value = selection.value
+                if key == "translation" and not _is_const_vector_like(value):
+                    raise CompileError("translation= must be Vector")
+                if key == "rotation" and not _is_const_vector_like(value):
+                    raise CompileError("rotation= must be Vector in radians")
+                if key == "scale" and not (_is_const_number(value) or _is_const_vector_like(value)):
+                    raise CompileError("scale= must be Float/Int or Vector")
+                entries.append((key, ("const", _freeze(value))))
+                continue
+            if not isinstance(selection, RuntimeRequired):
+                raise TypeError("mixed transform evaluation returned an unknown selection")
+            typ = runtime(child, key, f"transform() {key}")
+            runtime_option_types.append((key, typ))
+            entries.append((key, ("runtime", len(operands) - 1)))
         runtime_option_type_map = dict(runtime_option_types)
         translation_typ = runtime_option_type_map.get("translation")
         if translation_typ is not None and translation_typ != TYPE_VECTOR:
@@ -849,13 +883,20 @@ def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: Runtime
                 options.append((key, None))
                 continue
             child = kws[key]
-            try:
-                value = _freeze(_const_eval(child, consts))
-                options.append((key, ("const", value)))
-            except ConstEvalUnavailable:
-                typ = runtime(child, key, "instancing builtin argument")
-                runtime_option_types.append((key, typ))
-                options.append((key, ("runtime", len(operands) - 1)))
+            selection = resolve_argument_evaluation(child, consts, _COMPILE_TIME_OR_RUNTIME)
+            if isinstance(selection, CompileTimeSelection):
+                value = selection.value
+                if key == "scale" and not (_is_const_number(value) or _is_const_vector_like(value)):
+                    raise CompileError("instance_on_points scale= expects Float/Int or Vector")
+                if key == "rotation" and not _is_const_vector_like(value):
+                    raise CompileError("instance_on_points rotation= expects Vector in radians")
+                options.append((key, ("const", _freeze(value))))
+                continue
+            if not isinstance(selection, RuntimeRequired):
+                raise TypeError("mixed instance_on_points evaluation returned an unknown selection")
+            typ = runtime(child, key, "instancing builtin argument")
+            runtime_option_types.append((key, typ))
+            options.append((key, ("runtime", len(operands) - 1)))
         realize = True
         if "realize" in kws:
             realize = _const(
