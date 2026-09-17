@@ -1,14 +1,16 @@
 """Compile-time expression evaluation and preprocessing helpers."""
 
 import ast
-from .constants import *
+from .constants import TYPE_INT, _ALLOWED_CONSTS
 from .errors import CompileError
-from .compile_time import CompileTimeState
+from .compile_time import CompileTimeState, ConstVector
 
 
-class ConstVector(tuple):
-    """Class `ConstVector` used by the NodeForge addon."""
-    pass
+class ConstEvalUnavailable(Exception):
+    """Signal that current compile-time evaluation cannot provide a value."""
+
+
+NOT_FOLDABLE = object()
 
 def _is_const_vector(v):
     """Function `_is_const_vector` used by the NodeForge addon."""
@@ -112,12 +114,51 @@ def _eval_joined_string(expr, env):
         raise CompileError("Unsupported compile-time f-string element")
     return "".join(parts)
 
+
+def _require_compile_time_bool(value, message):
+    """Return an exact compile-time Bool or raise the matching semantic error."""
+    if type(value) is not bool:
+        raise CompileError(message)
+    return value
+
+
+def _is_compile_time_owned_assignment_rhs(expr: ast.AST) -> bool:
+    """Return whether an assignment root belongs to the compile-time metalayer."""
+    if isinstance(expr, (ast.List, ast.Tuple, ast.JoinedStr)):
+        return True
+    return (
+        isinstance(expr, ast.Call)
+        and isinstance(expr.func, ast.Name)
+        and expr.func.id in {"range", "len", "sum"}
+    )
+
+
+def try_runtime_fold(expr, env):
+    """Return a proven runtime replacement or ``NOT_FOLDABLE``.
+
+    The initial policy is intentionally closed-world.  Compile-time value
+    availability alone never authorizes removing Geometry Nodes computation.
+    """
+    if isinstance(expr, ast.Constant) and type(expr.value) in {bool, int, float, str}:
+        return expr.value
+    if isinstance(expr, ast.Name) and expr.id in _ALLOWED_CONSTS:
+        return _ALLOWED_CONSTS[expr.id]
+    if isinstance(expr, (ast.BinOp, ast.Compare)) or (
+        isinstance(expr, ast.UnaryOp) and isinstance(expr.op, (ast.UAdd, ast.USub))
+    ):
+        # TODO(nodeforge-migration): Scalar numeric unary/binary/comparison expressions remain
+        # non-foldable until type-directed numeric semantics defines the shared Int/Float result
+        # and Blender-equivalence policy. Compile-time-only consumers may still use _const_eval();
+        # remove this branch when numeric_semantics is the fold-policy authority.
+        return NOT_FOLDABLE
+    return NOT_FOLDABLE
+
 def _const_eval(expr, env):
-    """Evaluate a supported compile-time AST expression."""
+    """Evaluate one expression when the compiler-owned compile-time layer can."""
     if isinstance(expr, ast.Constant):
-        if isinstance(expr.value, (int, float, bool, str)):
+        if type(expr.value) in {int, float, bool, str}:
             return expr.value
-        raise CompileError("Unsupported compile-time constant")
+        raise ConstEvalUnavailable(f"Unsupported compile-time constant: {type(expr.value).__name__}")
     if isinstance(expr, ast.JoinedStr):
         return _eval_joined_string(expr, env)
     if isinstance(expr, ast.Name):
@@ -125,7 +166,7 @@ def _const_eval(expr, env):
             return env[expr.id]
         if expr.id in _ALLOWED_CONSTS:
             return _ALLOWED_CONSTS[expr.id]
-        raise CompileError(f"Unknown compile-time name: {expr.id}")
+        raise ConstEvalUnavailable(f"No compile-time value for name: {expr.id}")
     if isinstance(expr, ast.List):
         return [_const_eval(e, env) for e in expr.elts]
     if isinstance(expr, ast.Tuple):
@@ -133,11 +174,11 @@ def _const_eval(expr, env):
     if isinstance(expr, ast.Subscript):
         seq = _const_eval(expr.value, env)
         idx = _const_eval(expr.slice, env)
-        if not isinstance(idx, int):
-            idx = int(idx)
+        if type(idx) is not int:
+            raise CompileError("compile-time list indexing requires an integer index")
         try:
             return seq[idx]
-        except Exception as exc:
+        except (IndexError, KeyError, TypeError) as exc:
             raise CompileError("compile-time list indexing failed") from exc
     if isinstance(expr, ast.Attribute):
         base = _const_eval(expr.value, env)
@@ -159,39 +200,60 @@ def _const_eval(expr, env):
                 return vv
             if _is_compile_time_int(v):
                 return v
-            return _as_float_const(v)
+            try:
+                return _as_float_const(v)
+            except CompileError as exc:
+                raise ConstEvalUnavailable("Compile-time unary plus is unavailable") from exc
         if isinstance(expr.op, ast.Not):
-            return not bool(v)
+            return not _require_compile_time_bool(v, "not expects Bool")
+        raise ConstEvalUnavailable(f"Unsupported compile-time unary operator: {type(expr.op).__name__}")
     if isinstance(expr, ast.BinOp):
         a = _const_eval(expr.left, env); b = _const_eval(expr.right, env)
-        if isinstance(expr.op, ast.Add): return _bin_add(a, b)
-        if isinstance(expr.op, ast.Sub): return _bin_sub(a, b)
-        if isinstance(expr.op, ast.Mult): return _bin_mul(a, b)
-        if isinstance(expr.op, ast.Div): return _bin_div(a, b)
-        if isinstance(expr.op, ast.Pow): return a ** b
-        if isinstance(expr.op, ast.Mod): return a % b
+        try:
+            if isinstance(expr.op, ast.Add): return _bin_add(a, b)
+            if isinstance(expr.op, ast.Sub): return _bin_sub(a, b)
+            if isinstance(expr.op, ast.Mult): return _bin_mul(a, b)
+            if isinstance(expr.op, ast.Div): return _bin_div(a, b)
+            if isinstance(expr.op, ast.Pow): return a ** b
+            if isinstance(expr.op, ast.Mod): return a % b
+        except (TypeError, ValueError, ZeroDivisionError, OverflowError) as exc:
+            raise ConstEvalUnavailable("Compile-time numeric operation is unavailable") from exc
+        raise ConstEvalUnavailable(f"Unsupported compile-time binary operator: {type(expr.op).__name__}")
     if isinstance(expr, ast.BoolOp):
         vals = [_const_eval(v, env) for v in expr.values]
-        if isinstance(expr.op, ast.And): return all(bool(v) for v in vals)
-        if isinstance(expr.op, ast.Or): return any(bool(v) for v in vals)
+        if not all(type(value) is bool for value in vals):
+            raise CompileError("Boolean operations expect Bool values")
+        if isinstance(expr.op, ast.And): return all(vals)
+        if isinstance(expr.op, ast.Or): return any(vals)
+        raise ConstEvalUnavailable(f"Unsupported compile-time Boolean operator: {type(expr.op).__name__}")
     if isinstance(expr, ast.Compare):
         if len(expr.ops) != 1 or len(expr.comparators) != 1:
-            raise CompileError("Compile-time chained comparisons are not supported")
+            # Chained comparisons are a supported runtime-language form.  CTFE
+            # does not own their pairwise/rematerialization semantics, so lack
+            # of a compile-time evaluator must not turn accepted runtime source
+            # into a hard language error.
+            raise ConstEvalUnavailable("Compile-time chained comparison evaluation is unavailable")
         a = _const_eval(expr.left, env); b = _const_eval(expr.comparators[0], env); op = expr.ops[0]
-        if isinstance(op, ast.Lt): return a < b
-        if isinstance(op, ast.LtE): return a <= b
-        if isinstance(op, ast.Gt): return a > b
-        if isinstance(op, ast.GtE): return a >= b
-        if isinstance(op, ast.Eq): return a == b
-        if isinstance(op, ast.NotEq): return a != b
-    if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name):
-        # Compile-time call folding only supports positional arguments. Keeping
-        # keyword-bearing calls intact is also required for compiler-reserved
-        # call modifiers such as __unique__, which are validated later by the
-        # normal expression-call dispatcher rather than being swallowed here.
-        if expr.keywords:
-            raise CompileError("compile-time calls do not support keyword arguments")
+        try:
+            if isinstance(op, ast.Lt): return a < b
+            if isinstance(op, ast.LtE): return a <= b
+            if isinstance(op, ast.Gt): return a > b
+            if isinstance(op, ast.GtE): return a >= b
+            if isinstance(op, ast.Eq): return a == b
+            if isinstance(op, ast.NotEq): return a != b
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ConstEvalUnavailable("Compile-time comparison is unavailable") from exc
+        raise ConstEvalUnavailable(f"Unsupported compile-time comparison: {type(op).__name__}")
+    if isinstance(expr, ast.Call):
+        if not isinstance(expr.func, ast.Name):
+            raise ConstEvalUnavailable("Compile-time evaluation does not own this callable")
         name = expr.func.id
+        if name not in {"vector", "range", "len", "sum"}:
+            raise ConstEvalUnavailable(f"Compile-time evaluation does not own callable: {name}")
+        if expr.keywords:
+            if name == "vector":
+                raise ConstEvalUnavailable("Compile-time vector evaluation supports positional arguments only")
+            raise CompileError("compile-time calls do not support keyword arguments")
         args = [_const_eval(a, env) for a in expr.args]
         if name == "vector":
             if len(args) != 3:
@@ -206,21 +268,65 @@ def _const_eval(expr, env):
         if name == "sum":
             if len(args) != 1:
                 raise CompileError("sum() expects one argument")
-            return sum(args[0])
-    raise CompileError(f"Unsupported compile-time expression: {type(expr).__name__}")
-
-
-
-def _can_defer_range_error(expr, env):
-    """Return True when a for iterable error should be reported by statement lowering."""
-    if not (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) and expr.func.id == "range"):
-        return True
-    for arg in expr.args:
         try:
-            _const_eval(arg, env)
-        except CompileError:
-            return True
-    return False
+            return sum(args[0])
+        except (TypeError, ValueError) as exc:
+            raise CompileError("sum() expects one compile-time sequence") from exc
+    raise ConstEvalUnavailable(f"Unsupported compile-time expression: {type(expr).__name__}")
+
+
+def _collect_preprocessing_written_names(stmts):
+    """Return binding names that retained runtime control flow may write."""
+    names = set()
+
+    def add_target(target):
+        if isinstance(target, ast.Name):
+            names.add(target.id)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for item in target.elts:
+                add_target(item)
+
+    def visit(stmt):
+        if isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                add_target(target)
+            return
+        if isinstance(stmt, ast.AnnAssign):
+            add_target(stmt.target)
+            return
+        if isinstance(stmt, ast.AugAssign):
+            add_target(stmt.target)
+            return
+        if isinstance(stmt, ast.If):
+            for child in (*stmt.body, *stmt.orelse):
+                visit(child)
+            return
+        if isinstance(stmt, ast.For):
+            add_target(stmt.target)
+            for child in (*stmt.body, *stmt.orelse):
+                visit(child)
+
+    for stmt in stmts:
+        visit(stmt)
+    return names
+
+
+def _collect_runtime_if_seed_names(stmts):
+    """Return names whose source assignments seed ordinary runtime-if writes."""
+    names = set()
+
+    def visit_block(block):
+        for stmt in block:
+            if isinstance(stmt, ast.If):
+                names.update(_collect_preprocessing_written_names((*stmt.body, *stmt.orelse)))
+                visit_block(stmt.body)
+                visit_block(stmt.orelse)
+            elif isinstance(stmt, ast.For):
+                visit_block(stmt.body)
+                visit_block(stmt.orelse)
+
+    visit_block(stmts)
+    return names
 
 
 def _contains_builder_method_stmt(stmts):
@@ -264,10 +370,12 @@ def _handle_compile_time_stmt(
     out_stmts,
     preserve_names=None,
     *,
+    runtime_if_seed_names=None,
     list_append_journal: CompileTimeListAppendJournal | None = None,
 ):
     """Fold one statement into explicit compile-time state when current semantics allow it."""
     preserve_names = preserve_names or set()
+    runtime_if_seed_names = runtime_if_seed_names or set()
     env = state.values
     if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
         target = stmt.targets[0]
@@ -290,11 +398,28 @@ def _handle_compile_time_stmt(
             return
         try:
             value = _const_eval(stmt.value, env)
-        except CompileError:
+        except ConstEvalUnavailable:
             state.discard(target.id)
             out_stmts.append(stmt)
             return
+        except CompileError:
+            raise
         state.bind(target.id, value)
+        if target.id in runtime_if_seed_names:
+            out_stmts.append(stmt)
+            return
+        if _is_compile_time_owned_assignment_rhs(stmt.value):
+            return
+        replacement = try_runtime_fold(stmt.value, env)
+        if replacement is not NOT_FOLDABLE:
+            state.bind(target.id, replacement)
+            return
+        # TODO(nodeforge-migration): Known non-foldable runtime-capable RHS values are
+        # conservatively retained because this stage has no binding-level runtime-demand analysis.
+        # Consumer contracts and typed numeric materialization land first; after those stages,
+        # audit whether eager assignment lowering still forces unnecessary runtime form and,
+        # if so, replace it with a narrow demand-driven materialization mechanism.
+        out_stmts.append(stmt)
         return
     if isinstance(stmt, ast.AugAssign):
         if isinstance(stmt.target, ast.Name):
@@ -316,8 +441,10 @@ def _handle_compile_time_stmt(
             if isinstance(current, list):
                 try:
                     append_value = _const_eval(call.args[0], env)
-                except CompileError:
+                except ConstEvalUnavailable:
                     pass
+                except CompileError:
+                    raise
                 else:
                     if list_append_journal is not None:
                         list_append_journal.append((current, len(current)))
@@ -328,9 +455,21 @@ def _handle_compile_time_stmt(
         out_stmts.append(stmt)
         return
     if isinstance(stmt, ast.If):
+        # TODO(nodeforge-migration): Ordinary if still keeps the pre-existing implicit compile-time
+        # branch-selection shortcut while CTFE and residualization boundaries are being separated.
+        # The runtime-only ordinary-if migration removes only this compile-time selection behavior;
+        # retained runtime ifs continue to require a sound preprocessing state barrier.
         try:
             branch = stmt.body if bool(_const_eval(stmt.test, env)) else stmt.orelse
-        except CompileError:
+        except (ConstEvalUnavailable, CompileError):
+            written_names = _collect_preprocessing_written_names((*stmt.body, *stmt.orelse))
+            # TODO(nodeforge-migration): Preprocessing still carries CompileTimeState across residual
+            # runtime control flow, so every retained ordinary if must conservatively discard names
+            # that either branch may write before later source transformation. Remove this syntactic
+            # barrier only when preprocessing no longer propagates pre-if facts across runtime control
+            # flow, or an equally sound replacement owns that boundary.
+            for name in written_names:
+                state.discard(name)
             out_stmts.append(stmt)
             return
         for sub in branch:
@@ -339,17 +478,18 @@ def _handle_compile_time_stmt(
                 state,
                 out_stmts,
                 preserve_names,
+                runtime_if_seed_names=runtime_if_seed_names,
                 list_append_journal=list_append_journal,
             )
         return
     if isinstance(stmt, ast.For):
         try:
             iterable = _const_eval(stmt.iter, env)
-        except CompileError:
-            if not _can_defer_range_error(stmt.iter, env):
-                raise
+        except ConstEvalUnavailable:
             out_stmts.append(stmt)
             return
+        except CompileError:
+            raise
         if _contains_builder_method_stmt(stmt.body) and not isinstance(stmt.target, ast.Name):
             # Preserve the historical flat builder-loop target for Semantic Body's explicit frontend rule.
             out_stmts.append(stmt)
@@ -376,6 +516,7 @@ def _handle_compile_time_stmt(
                         trial_state,
                         trial_out,
                         preserve_names,
+                        runtime_if_seed_names=runtime_if_seed_names,
                         list_append_journal=journal,
                     )
             if had_old:
@@ -449,8 +590,15 @@ def _preprocess_compile_time(stmts):
     state = CompileTimeState()
     out = []
     preserve = _repeat_range_state_names(stmts)
+    runtime_if_seed_names = _collect_runtime_if_seed_names(stmts)
     for stmt in stmts:
-        _handle_compile_time_stmt(stmt, state, out, preserve)
+        _handle_compile_time_stmt(
+            stmt,
+            state,
+            out,
+            preserve,
+            runtime_if_seed_names=runtime_if_seed_names,
+        )
     return out, state
 
 
@@ -472,4 +620,19 @@ def _infer_input_types(stmts):
     visit(stmts)
     return result
 
-__all__ = ['ConstVector', '_is_const_vector', '_as_float_const', '_is_compile_time_int', '_const_range', '_const_eval', '_handle_compile_time_stmt', '_preprocess_compile_time', '_infer_input_types']
+__all__ = [
+    'ConstEvalUnavailable',
+    'ConstVector',
+    'NOT_FOLDABLE',
+    '_is_const_vector',
+    '_as_float_const',
+    '_is_compile_time_int',
+    '_const_range',
+    '_const_eval',
+    '_is_compile_time_owned_assignment_rhs',
+    '_collect_runtime_if_seed_names',
+    'try_runtime_fold',
+    '_handle_compile_time_stmt',
+    '_preprocess_compile_time',
+    '_infer_input_types',
+]

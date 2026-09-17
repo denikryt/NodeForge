@@ -989,18 +989,23 @@ def test_detached_const_eval_snapshot_preserves_list_tuple_semantics_and_ownersh
     assert isinstance(detached["nested"][1][1], list)
     original["nested"][0].append(9)
     assert detached["nested"][0] == [1]
-    assert _lower("[a, b][xs == [1, 2]]", bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT}, consts={"xs": [1, 2]}).result.id == 1
+    with pytest.raises(CompileError, match="array/vector indexing currently requires a compile-time integer index"):
+        _lower("[a, b][xs == [1, 2]]", bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT}, consts={"xs": [1, 2]})
     assert _lower("[a, b, c][len(xs + [3]) - 1]", bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT, "c": TYPE_FLOAT}, consts={"xs": [1, 2]}).result.id == 2
     assert _lower("[a, b, c][len(xs + range(1)) - 1]", bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT, "c": TYPE_FLOAT}, consts={"xs": [1, 2]}).result.id == 2
 
     cyclic = [1]
     cyclic.append(cyclic)
-    cyclic_program = _lower(
-        "[a, b][xs[1] == xs]",
-        bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT},
-        consts={"xs": cyclic},
-    )
-    assert cyclic_program.result == cyclic_program.operations[1].result
+    from NodeForge.consteval import _const_eval
+
+    _, cyclic_detached = build_semantic_constant_snapshot(CompileTimeSnapshot({"xs": cyclic}))
+    assert _const_eval(_expr("xs[1] == xs"), cyclic_detached) is True
+    with pytest.raises(CompileError, match="array/vector indexing currently requires a compile-time integer index"):
+        _lower(
+            "[a, b][xs[1] == xs]",
+            bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT},
+            consts={"xs": cyclic},
+        )
 
 
 def test_vector_subscript_normalizes_to_existing_component_ir():

@@ -46,8 +46,8 @@ from .constants import (
     _BOOLEAN_OPS,
     _COMPARE_OPS,
 )
-from .consteval import ConstVector, _const_eval, _is_const_vector
-from .compile_time import CompileTimeSnapshot
+from .consteval import ConstEvalUnavailable, _const_eval, _is_const_vector
+from .compile_time import CompileTimeSnapshot, ConstVector
 from .errors import CompileError
 from .nf_types import NFType, NUMERIC_NF_TYPES
 from .runtime_bindings import RuntimeBindingSymbol
@@ -652,7 +652,7 @@ def analyze_expression(expr, environment):
             if isinstance(base.result_shape, NamedOutputsResultShape):
                 try:
                     key = _const_eval(node.slice, environment.const_eval_values)
-                except CompileError as exc:
+                except ConstEvalUnavailable as exc:
                     raise CompileError("raw node output lookup requires a compile-time string key") from exc
                 if not isinstance(key, str) or not key:
                     raise CompileError("raw node output lookup requires a non-empty string key")
@@ -679,7 +679,7 @@ def analyze_expression(expr, environment):
             if isinstance(base.result_shape, TupleResultShape):
                 try:
                     index = _const_eval(node.slice, environment.const_eval_values)
-                except CompileError as exc:
+                except ConstEvalUnavailable as exc:
                     raise CompileError("tuple result indexing requires a compile-time integer index") from exc
                 if not isinstance(index, int) or isinstance(index, bool):
                     raise CompileError("tuple result indexing requires a compile-time integer index")
@@ -709,9 +709,11 @@ def analyze_expression(expr, environment):
                     ),
                 )
             try:
-                index = int(_const_eval(node.slice, environment.const_eval_values))
-            except (CompileError, TypeError, ValueError, OverflowError) as exc:
+                index = _const_eval(node.slice, environment.const_eval_values)
+            except ConstEvalUnavailable as exc:
                 raise CompileError("array/vector indexing currently requires a compile-time integer index") from exc
+            if type(index) is not int:
+                raise CompileError("array/vector indexing currently requires a compile-time integer index")
             if isinstance(base.result_shape, ArrayResultShape):
                 try:
                     selected_shape = base.result_shape.items[index]
@@ -898,16 +900,16 @@ def analyze_expression(expr, environment):
                 if "transform_space" in kws:
                     try:
                         transform_space = _const_eval(kws["transform_space"], environment.const_eval_values)
-                    except CompileError as exc:
+                    except ConstEvalUnavailable as exc:
                         raise CompileError("Object.info() transform_space must be 'ORIGINAL' or 'RELATIVE'") from exc
                     if transform_space not in {"ORIGINAL", "RELATIVE"}:
                         raise CompileError("Object.info() transform_space must be 'ORIGINAL' or 'RELATIVE'")
                 if "as_instance" in kws:
                     try:
                         as_instance = _const_eval(kws["as_instance"], environment.const_eval_values)
-                    except CompileError as exc:
+                    except ConstEvalUnavailable as exc:
                         raise CompileError("Object.info() as_instance must be a compile-time Bool") from exc
-                    if not isinstance(as_instance, bool):
+                    if type(as_instance) is not bool:
                         raise CompileError("Object.info() as_instance must be a compile-time Bool")
                 new_state = ObjectInfoState(transform_space=transform_space, as_instance=as_instance, resolved=False)
                 object_states[object_id] = new_state

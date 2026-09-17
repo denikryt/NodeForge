@@ -117,8 +117,11 @@ def test_unique_modifier_accepts_only_exact_compile_time_bool():
     _, modifiers = extract_function_call_modifiers(_call("helper(__unique__=flag)"), "helper", {"flag": True})
     assert modifiers.unique is True
     for expr in ("helper(__unique__=1)", "helper(__unique__='yes')", "helper(__unique__=x)"):
-        with pytest.raises(CompileError):
+        with pytest.raises(CompileError, match="__unique__ must be a compile-time Bool"):
             extract_function_call_modifiers(_call(expr), "helper", {})
+
+    with pytest.raises(CompileError, match="not expects Bool"):
+        extract_function_call_modifiers(_call("helper(__unique__=not 1)"), "helper", {})
 
 
 def test_unique_spelling_without_double_underscores_is_user_keyword():

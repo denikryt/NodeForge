@@ -21,7 +21,7 @@ from .builtin_call_semantics import (
 )
 from .compiler_identities import BindingId, InputDeclarationId, InterfaceInputOrigin
 from .constants import TYPE_OBJECT
-from .consteval import _const_eval
+from .consteval import ConstEvalUnavailable, _const_eval, _is_compile_time_owned_assignment_rhs
 from .compile_time import CompileTimeSnapshot, CompileTimeState
 from .errors import CompileError
 from .nf_types import NFType
@@ -951,7 +951,7 @@ def lower_basic_body(
             return tuple(state_record.items)
         try:
             raw = _const_eval(expr, active_compile_time.values)
-        except CompileError:
+        except ConstEvalUnavailable:
             raw = None
         if isinstance(raw, (list, tuple)):
             return tuple(raw)
@@ -1091,13 +1091,14 @@ def lower_basic_body(
             is_final = root and index == len(source_stmts) - 1
 
             if isinstance(stmt, ast.If):
-                # Top-level statement compilation historically const-folds if before runtime lowering.
-                # Repeat's dedicated legacy compile_if() does not: even a constant Bool is a Repeat-local
-                # runtime branch and can affect carried-state topology. Preserve that contextual difference.
                 if control_policy is not BranchMergePolicy.REPEAT:
+                    # TODO(nodeforge-migration): Semantic Body still keeps the pre-existing top-level
+                    # compile-time branch-selection shortcut for ordinary if. The runtime-only ordinary-if
+                    # migration removes this shortcut so every ordinary if reaches structured runtime IR;
+                    # do not extend this path with new fold, typing, callable, or backend rules.
                     try:
                         const_condition = bool(_const_eval(stmt.test, active_compile_time.values))
-                    except CompileError:
+                    except (ConstEvalUnavailable, CompileError):
                         pass
                     else:
                         context_availability_before_trial = group_context_cursor.snapshot()
@@ -1193,7 +1194,7 @@ def lower_basic_body(
                             raise CompileError("geometry_builder cannot escape script scope")
 
                 emit(result.statement)
-                active_compile_time.replace(result.false_compile_time)
+                active_compile_time.replace(result.merged_compile_time)
                 # Runtime merge publication is independent of compile-time state.
                 for merge in result.statement.merges:
                     builder_state = active.builder_states.get(merge.source_name)
@@ -1310,7 +1311,7 @@ def lower_basic_body(
                 repeat_compile_time = active_compile_time.fork()
                 try:
                     repeat_count_constant = _const_eval(iterations_expr, repeat_compile_time.values)
-                except CompileError:
+                except ConstEvalUnavailable:
                     repeat_count_constant = None
                 if isinstance(repeat_count_constant, int) and not isinstance(repeat_count_constant, bool):
                     count_value = IRValue(0, NFType.INT)
@@ -1511,11 +1512,21 @@ def lower_basic_body(
                     # newly const-evaluated value. Preserve that contextual contract so a carried
                     # state cannot become a stale compile-time constant after Repeat construction.
                     active_compile_time.discard(target)
+                elif isinstance(stmt.value, ast.List) and not stmt.value.elts:
+                    # Empty-list declarations establish body-owned structural-array identity.
+                    # They are deliberately residual even though CTFE can evaluate the literal.
+                    active_compile_time.discard(target)
                 else:
                     try:
-                        active_compile_time.bind(target, _const_eval(stmt.value, active_compile_time.values))
-                    except CompileError:
+                        compile_time_value = _const_eval(stmt.value, active_compile_time.values)
+                    except ConstEvalUnavailable:
                         active_compile_time.discard(target)
+                    except CompileError:
+                        raise
+                    else:
+                        active_compile_time.bind(target, compile_time_value)
+                        if _is_compile_time_owned_assignment_rhs(stmt.value):
+                            continue
                 analyzed = analyze_runtime_expression(stmt.value, active, active_compile_time, statements)
                 if analyzed is BODY_UNSUPPORTED:
                     return BODY_UNSUPPORTED
@@ -1697,9 +1708,9 @@ def lower_basic_body(
                     if "collapsed" in kws:
                         try:
                             collapsed = _const_eval(kws["collapsed"], active_compile_time.values)
-                        except CompileError as exc:
+                        except ConstEvalUnavailable as exc:
                             raise CompileError("panel() collapsed= must be a compile-time bool") from exc
-                        if not isinstance(collapsed, bool):
+                        if type(collapsed) is not bool:
                             raise CompileError("panel() collapsed= must be a compile-time bool")
                     if panel_name in active.panel_names:
                         raise CompileError(f"panel() duplicate panel name: {panel_name}")

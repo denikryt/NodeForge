@@ -240,3 +240,9 @@ ion coverage.
 - Disabled whole-body legacy compiler fallback for production root compilation. Semantic Body is now the sole root-body route; known unsupported source forms fail with controlled diagnostics and unexpected residual `BODY_UNSUPPORTED` reaches a fail-closed internal tripwire.
 - Temporarily blocked local/imported source calls and v1 Python extension callables at the semantic boundary until their typed callable and declarative extension contracts are migrated, without adding a replacement compatibility compiler.
 - Made compile-time `if` diagnostics authoritative to the selected branch so errors are not swallowed and reinterpreted as runtime control flow.
+
+## 0.54.0
+
+- Separated compile-time evaluation unavailability from hard compiler-owned errors and introduced an explicit closed-world runtime-fold permission boundary, so known runtime-capable expressions are conservatively retained unless graph removal is proven safe.
+- Made runtime-`if` compile-time facts sound by forking both branches from the same incoming snapshot, conservatively joining their exits, invalidating preprocessing facts for names that retained runtime branches may write, and preserving residual source seeds needed to reconstruct incoming runtime branch state.
+- Added late Semantic Body consumption for narrowly compile-time-owned assignment roots when sound control-flow joining recovers the required facts after preprocessing; ordinary `if` branch-selection semantics remain intentionally unchanged pending the dedicated runtime-only migration.

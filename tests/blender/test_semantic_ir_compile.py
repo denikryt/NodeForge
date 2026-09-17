@@ -22,7 +22,7 @@ from NodeForge.compile_time import CompileTimeSnapshot
 from NodeForge.semantic_analysis import RuntimeBindingSymbol, SemanticEnvironment, analyze_expression, build_semantic_constant_snapshot
 from NodeForge.semantic_lowering import lower_analyzed_expression
 from NodeForge.semantic_ir import (
-    IRArray, IRBinary, IRBinding, IRBoolBinary, IRCompare, IRConditional, IRLiteral, IRObjectProperty, IRUnary,
+    IRArray, IRBinary, IRBinding, IRBoolBinary, IRCall, IRCompare, IRConditional, IRLiteral, IRObjectProperty, IRUnary,
     IRVectorComponent, IRVectorLiteral,
 )
 from NodeForge.values import Value, make_value
@@ -959,7 +959,13 @@ def test_complete_expression_ir_production_routing_covers_new_forms_and_excludes
 
     programs.clear()
     compile_and_remove('v = vector(1, 2, 3)\noutput("Result", v)', "NFTest_complete_ir_route_vector_literal")
-    check(any(any(isinstance(op, IRVectorLiteral) for op in program.operations) for program in programs), "named Vector constant did not reach IR backend")
+    vector_calls = [
+        op
+        for program in programs
+        for op in program.operations
+        if isinstance(op, IRCall) and op.target.name == "vector"
+    ]
+    check(vector_calls, "known vector() assignment did not remain on the runtime Semantic Call IR route")
 
     programs.clear()
     compile_and_remove('obj = input_object("Source")\noutput("Result", obj.location)', "NFTest_complete_ir_route_object_property")

@@ -168,3 +168,73 @@ def test_replace_accepts_state_and_snapshot_without_swapping_mapping():
     assert backing == {"b": 2}
     state.replace(CompileTimeSnapshot({"c": 3}))
     assert backing == {"c": 3}
+
+
+def test_const_vector_has_one_compile_time_owner_class_identity():
+    """consteval re-exports the compile-time owner's exact ConstVector class."""
+    from NodeForge.compile_time import ConstVector as OwnedConstVector
+    from NodeForge.consteval import ConstVector as ReexportedConstVector
+
+    assert ReexportedConstVector is OwnedConstVector
+
+
+def test_runtime_if_compile_time_merge_is_conservative_by_value_and_identity():
+    """Only stable scalar equality and inherited object identity survive runtime joins."""
+    from NodeForge.compile_time import ConstVector, merge_runtime_if_compile_time
+
+    shared = ["same"]
+    replaced = ["replacement"]
+    base = CompileTimeState({
+        "same_bool": True,
+        "same_int": 3,
+        "same_str": "x",
+        "float": 1.0,
+        "vector": ConstVector((1.0, 2.0, 3.0)),
+        "alias": shared,
+        "conflict": 1,
+        "one_side": 4,
+        "bool_int": True,
+        "replaced": shared,
+    })
+    true_state = base.fork()
+    false_state = base.fork()
+    true_state.bind("conflict", 2)
+    false_state.bind("conflict", 3)
+    false_state.discard("one_side")
+    false_state.bind("bool_int", 1)
+    false_state.bind("replaced", replaced)
+
+    merged = merge_runtime_if_compile_time(base.snapshot(), true_state, false_state)
+
+    assert dict(merged.values) == {
+        "same_bool": True,
+        "same_int": 3,
+        "same_str": "x",
+        "alias": shared,
+    }
+    assert merged.values["alias"] is shared
+
+
+def test_runtime_if_compile_time_merge_discards_unstable_or_unproven_value_categories():
+    """Float/vector equality and one-sided/conflicting facts are not published at joins."""
+    from NodeForge.compile_time import ConstVector, merge_runtime_if_compile_time
+
+    base = CompileTimeState({"stable": 7, "signed_zero": 0.0})
+    true_state = base.fork()
+    false_state = base.fork()
+
+    true_state.bind("float_equal", 1.0)
+    false_state.bind("float_equal", 1.0)
+    true_state.bind("signed_zero", 0.0)
+    false_state.bind("signed_zero", -0.0)
+    true_state.bind("vector_equal", ConstVector((1.0, 2.0, 3.0)))
+    false_state.bind("vector_equal", ConstVector((1.0, 2.0, 3.0)))
+    true_state.bind("vector_conflict", ConstVector((1.0, 2.0, 3.0)))
+    false_state.bind("vector_conflict", ConstVector((1.0, 2.0, 4.0)))
+    true_state.bind("one_sided", 9)
+    true_state.bind("conflict", 1)
+    false_state.bind("conflict", 2)
+
+    merged = merge_runtime_if_compile_time(base.snapshot(), true_state, false_state)
+
+    assert dict(merged.values) == {"stable": 7}

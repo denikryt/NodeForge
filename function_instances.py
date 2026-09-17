@@ -75,9 +75,9 @@ def extract_function_call_modifiers(expr: ast.Call, function_name: str, const_ev
         if kw.arg is None:
             raise CompileError(f"{function_name}() does not support **kwargs")
         try:
-            from .consteval import _const_eval
+            from .consteval import ConstEvalUnavailable, _const_eval
             value = _const_eval(kw.value, const_eval_values)
-        except CompileError as exc:
+        except ConstEvalUnavailable as exc:
             raise CompileError(f"{function_name}() __unique__ must be a compile-time Bool") from exc
         if type(value) is not bool:
             raise CompileError(f"{function_name}() __unique__ must be a compile-time Bool")

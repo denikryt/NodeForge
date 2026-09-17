@@ -471,3 +471,64 @@ def test_structural_array_provenance_survives_identity_expression_result_not_onl
     )
     analysis = analyze_expression(_expr("+outer[0]"), env)
     assert analysis.facts[analysis.root].array_id == inner_id
+
+
+def test_compile_time_required_projection_probes_distinguish_unavailable_from_hard_errors():
+    """Static projection contracts contextualize only genuine CTFE unavailability."""
+    named_bindings = {"key": TYPE_STRING}
+    with pytest.raises(CompileError, match="raw node output lookup requires a compile-time string key"):
+        _analyze(
+            'node("ShaderNodeSeparateXYZ", outputs={"X": Float})[key]',
+            bindings=named_bindings,
+            builtins={"node"},
+        )
+    with pytest.raises(CompileError, match="not expects Bool"):
+        _analyze(
+            'node("ShaderNodeSeparateXYZ", outputs={"X": Float})[not 1]',
+            builtins={"node"},
+        )
+
+    tuple_bindings = {"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT, "idx": TYPE_INT}
+    with pytest.raises(CompileError, match="tuple result indexing requires a compile-time integer index"):
+        _analyze(
+            "capture_attribute(geo, value)[idx]",
+            bindings=tuple_bindings,
+            builtins={"capture_attribute"},
+        )
+    with pytest.raises(CompileError, match="not expects Bool"):
+        _analyze(
+            "capture_attribute(geo, value)[not 1]",
+            bindings={"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT},
+            builtins={"capture_attribute"},
+        )
+
+    with pytest.raises(CompileError, match="array/vector indexing currently requires a compile-time integer index"):
+        _analyze("v[idx]", bindings={"v": TYPE_VECTOR, "idx": TYPE_INT})
+    with pytest.raises(CompileError, match="not expects Bool"):
+        _analyze("v[not 1]", bindings={"v": TYPE_VECTOR})
+
+
+@pytest.mark.parametrize("index", ["True", "1.5"])
+def test_array_vector_index_requires_exact_compile_time_int(index):
+    """Python Bool/subclass or float coercion cannot satisfy the language index contract."""
+    with pytest.raises(CompileError, match="array/vector indexing currently requires a compile-time integer index"):
+        _analyze(f"v[{index}]", bindings={"v": TYPE_VECTOR})
+
+
+def test_object_info_static_options_distinguish_unavailable_from_hard_errors():
+    """Object.info maps runtime dependence to its static diagnostic without swallowing CTFE errors."""
+    with pytest.raises(CompileError, match="transform_space must be 'ORIGINAL' or 'RELATIVE'"):
+        _analyze(
+            "obj.info(transform_space=space)",
+            bindings={"obj": TYPE_OBJECT, "space": TYPE_STRING},
+        )
+    with pytest.raises(CompileError, match="not expects Bool"):
+        _analyze("obj.info(transform_space=not 1)", bindings={"obj": TYPE_OBJECT})
+
+    with pytest.raises(CompileError, match="as_instance must be a compile-time Bool"):
+        _analyze(
+            "obj.info(as_instance=flag)",
+            bindings={"obj": TYPE_OBJECT, "flag": TYPE_BOOL},
+        )
+    with pytest.raises(CompileError, match="not expects Bool"):
+        _analyze("obj.info(as_instance=not 1)", bindings={"obj": TYPE_OBJECT})

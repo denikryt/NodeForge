@@ -10,6 +10,7 @@ from NodeForge.builtin_call_semantics import (
     INPUT_DECLARATION_BUILTIN_NAMES,
     IR_CAPABLE_BUILTIN_NAMES,
     analyze_builtin_call,
+    analyze_input_declaration_call,
 )
 from NodeForge.builtins.registry import CALLABLE_BUILTIN_NAMES
 from NodeForge.call_resolution import (
@@ -304,3 +305,112 @@ def test_grid_rejects_compile_time_bool_and_preserves_arity_keyword_diagnostics(
         _analyze("grid", "grid(2)")
     with pytest.raises(CompileError, match=r"grid\(\) does not support keyword arguments"):
         _analyze("grid", "grid(width=2, height=2)")
+
+
+def test_const_or_runtime_builtin_falls_back_only_on_consteval_unavailability():
+    """Genuine CTFE unavailability may select the existing runtime representation."""
+    analyzed = _analyze("grid", "grid(width, 2)", types={"width": TYPE_INT})
+    assert [operand.typ for operand in analyzed.operands] == [TYPE_INT]
+    assert dict(analyzed.options)["slots"] == (("runtime", 0), ("const", 2))
+
+
+def test_const_or_runtime_builtin_hard_ctfe_error_does_not_reinterpret_as_runtime():
+    """A compiler-owned CTFE error remains authoritative instead of selecting runtime."""
+    calls = []
+
+    def add_runtime(node, parameter_name, context):
+        calls.append((ast.unparse(node), parameter_name, context))
+        return TYPE_INT
+
+    with pytest.raises(CompileError, match="not expects Bool"):
+        analyze_builtin_call("grid", _call("grid(not 1, 2)"), {}, add_runtime)
+    assert calls == []
+
+
+def test_raw_node_input_uses_runtime_only_for_genuine_ctfe_unavailability():
+    """Raw-node socket values distinguish unavailable CTFE from hard CTFE failure."""
+    runtime = _analyze(
+        "node",
+        'node("ShaderNodeValue", inputs={"Value": value}, output="Value", typ=Float)',
+        types={"value": TYPE_FLOAT},
+    )
+    assert [operand.typ for operand in runtime.operands] == [TYPE_FLOAT]
+
+    calls = []
+
+    def add_runtime(node, parameter_name, context):
+        calls.append(ast.unparse(node))
+        return TYPE_FLOAT
+
+    with pytest.raises(CompileError, match="not expects Bool"):
+        analyze_builtin_call(
+            "node",
+            _call('node("ShaderNodeValue", inputs={"Value": not 1}, output="Value", typ=Float)'),
+            {},
+            add_runtime,
+        )
+    assert calls == []
+
+
+def test_set_material_and_store_preserve_declared_static_or_runtime_contracts():
+    """Known non-static kinds use runtime checking only where the public API already permits it."""
+    material = _analyze(
+        "set_material",
+        "set_material(geo, material)",
+        types={"geo": TYPE_GEOMETRY, "material": TYPE_MATERIAL},
+    )
+    assert [operand.typ for operand in material.operands] == [TYPE_GEOMETRY, TYPE_MATERIAL]
+
+    material_from_known_non_string = _analyze(
+        "set_material",
+        "set_material(geo, 1)",
+        types={"geo": TYPE_GEOMETRY, "1": TYPE_MATERIAL},
+    )
+    assert [operand.typ for operand in material_from_known_non_string.operands] == [TYPE_GEOMETRY, TYPE_MATERIAL]
+
+    store = _analyze(
+        "store_named_attribute",
+        "store_named_attribute(geo, name, value)",
+        types={"geo": TYPE_GEOMETRY, "name": TYPE_STRING, "value": TYPE_FLOAT},
+    )
+    assert [operand.typ for operand in store.operands] == [TYPE_GEOMETRY, TYPE_STRING, TYPE_FLOAT]
+
+    store_from_known_non_string = _analyze(
+        "store_named_attribute",
+        "store_named_attribute(geo, 1, value)",
+        types={"geo": TYPE_GEOMETRY, "1": TYPE_STRING, "value": TYPE_FLOAT},
+    )
+    assert [operand.typ for operand in store_from_known_non_string.operands] == [TYPE_GEOMETRY, TYPE_STRING, TYPE_FLOAT]
+
+
+def test_static_builtin_arguments_distinguish_unavailable_from_hard_ctfe_errors():
+    """Static configuration maps only unavailability to contextual diagnostics."""
+    with pytest.raises(CompileError, match="input_float default= must be compile-time"):
+        analyze_input_declaration_call(_call('input_float("X", default=runtime_default)'), {})
+    with pytest.raises(CompileError, match="not expects Bool"):
+        analyze_input_declaration_call(_call('input_float("X", default=not 1)'), {})
+
+    with pytest.raises(CompileError, match=r"node\(\.\.\.\) props= values must be compile-time literals"):
+        _analyze(
+            "node",
+            'node("ShaderNodeValue", props={"operation": runtime_prop}, output="Value", typ=Float)',
+            types={"runtime_prop": TYPE_STRING},
+        )
+    with pytest.raises(CompileError, match="not expects Bool"):
+        _analyze(
+            "node",
+            'node("ShaderNodeValue", props={"operation": not 1}, output="Value", typ=Float)',
+        )
+
+    with pytest.raises(CompileError, match="realize= must be a compile-time bool"):
+        _analyze(
+            "instance_on_points",
+            "instance_on_points(instance, points, realize=runtime_flag)",
+            types={"instance": TYPE_GEOMETRY, "points": TYPE_GEOMETRY, "runtime_flag": TYPE_BOOL},
+        )
+    with pytest.raises(CompileError, match="not expects Bool"):
+        _analyze(
+            "instance_on_points",
+            "instance_on_points(instance, points, realize=not 1)",
+            types={"instance": TYPE_GEOMETRY, "points": TYPE_GEOMETRY},
+        )

@@ -177,29 +177,27 @@ def test_structural_store_accepts_package_compile_time_subclass_without_losing_r
     assert compiler.legacy_structural_binding("state") is package_state
 
 
-def test_legacy_assignment_characterization_accepts_compile_time_object(monkeypatch):
-    """The retained legacy assignment helper can still store a pre-resolved CompileTimeObject."""
+def test_retained_legacy_assignment_is_not_upgraded_to_new_consteval_fallback_protocol(monkeypatch):
+    """Retained legacy callers do not receive a bridge for the new CTFE outcome signal."""
     import ast
 
-    from NodeForge.compile_time import CompileTimeObject
+    from NodeForge.consteval import ConstEvalUnavailable
     from NodeForge.statement_compiler import GroupBuildContext, compile_statement
-
-    class PackageState(CompileTimeObject):
-        """Synthetic compile-time object supplied below the semantic callable boundary."""
 
     _module, compiler = _load_compiler(monkeypatch)
     compiler.consts = {}
     compiler.reserved_name_labels = {}
     compiler.group = object()
-    state = PackageState()
-    monkeypatch.setattr(compiler, "compile", lambda _expr: state)
+    monkeypatch.setattr(
+        compiler,
+        "compile",
+        lambda _expr: pytest.fail("retained legacy compile fallback must not be adapted for CTFE parity"),
+    )
     ctx = GroupBuildContext(group=compiler.group, comp=compiler, geometry_mode=False)
     stmt = ast.parse("state = package_state()").body[0]
 
-    compile_statement(ctx, stmt)
-
-    assert compiler.legacy_structural_binding("state") is state
-    assert compiler.runtime_binding("state") is None
+    with pytest.raises(ConstEvalUnavailable, match="does not own callable: package_state"):
+        compile_statement(ctx, stmt)
 
 
 def test_runtime_binding_module_has_no_blender_dependency():

@@ -291,13 +291,13 @@
   },
   {
     "id": "const_list_equality_index",
-    "description": "Compile-time list equality determines array index",
+    "description": "Compile-time list equality is rejected as a non-integer array index",
     "tags": [
       "const",
       "array",
       "subscript"
     ],
-    "outcome": "graph"
+    "outcome": "compile_error"
   },
   {
     "id": "const_list_concat_index",

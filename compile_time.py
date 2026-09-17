@@ -7,6 +7,10 @@ from typing import Mapping
 from .errors import CompileError
 
 
+class ConstVector(tuple):
+    """Immutable three-component compile-time vector carrier."""
+
+
 @dataclass(frozen=True)
 class CompileTimeSnapshot:
     """Detached shallow snapshot of const-evaluable source bindings."""
@@ -75,6 +79,45 @@ class CompileTimeState:
         self._values.update(replacement)
 
 
+def merge_runtime_if_compile_time(
+    base_snapshot: CompileTimeSnapshot,
+    true_state: CompileTimeState,
+    false_state: CompileTimeState,
+) -> CompileTimeSnapshot:
+    """Conservatively join compile-time facts from two runtime branch exits.
+
+    Only value categories whose equality contract is already stable are
+    merged by value.  Alias-sensitive values may survive only when both branch
+    exits still reference the exact object inherited from the incoming snapshot.
+    """
+    base_values = base_snapshot.values
+    true_values = true_state.values
+    false_values = false_state.values
+    merged = {}
+
+    for name in true_values.keys() & false_values.keys():
+        true_value = true_values[name]
+        false_value = false_values[name]
+
+        if type(true_value) is type(false_value) and type(true_value) in {bool, int, str}:
+            if true_value == false_value:
+                merged[name] = true_value
+            continue
+
+        # Float and ConstVector equivalence intentionally remains undefined until
+        # canonical numeric semantics owns representation-aware equality.
+        if isinstance(true_value, (float, ConstVector)) or isinstance(false_value, (float, ConstVector)):
+            continue
+
+        if name not in base_values:
+            continue
+        inherited = base_values[name]
+        if true_value is inherited and false_value is inherited:
+            merged[name] = inherited
+
+    return CompileTimeSnapshot(merged)
+
+
 @dataclass(frozen=True)
 class CompileTimeObject:
     """Base class for compiler-only non-runtime objects.
@@ -119,9 +162,11 @@ def reject_compile_time_object(value, context: str):
 
 
 __all__ = [
+    "ConstVector",
     "CompileTimeObject",
     "CompileTimeSnapshot",
     "CompileTimeState",
     "is_compile_time_object",
+    "merge_runtime_if_compile_time",
     "reject_compile_time_object",
 ]

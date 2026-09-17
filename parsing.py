@@ -4,7 +4,7 @@ import ast
 from dataclasses import dataclass
 
 from .constants import _ALLOWED_CONSTS, TYPE_TOKEN_NAMES
-from .consteval import _const_eval
+from .consteval import ConstEvalUnavailable, _const_eval
 from .errors import CompileError
 
 
@@ -263,7 +263,7 @@ def _collect_external_names(node, assigned, names, extra_builtin_names=None, con
     if isinstance(node, ast.JoinedStr):
         try:
             _const_eval(node, consts)
-        except CompileError:
+        except ConstEvalUnavailable:
             pass
         else:
             return
@@ -295,7 +295,7 @@ def _literal_string(expr, context="argument", consts=None):
     """Return a non-empty string from a supported compile-time expression."""
     try:
         value = _const_eval(expr, consts or {})
-    except CompileError as exc:
+    except ConstEvalUnavailable as exc:
         raise CompileError(f"Expected a non-empty compile-time string for {context}") from exc
     if isinstance(value, str) and value:
         return value

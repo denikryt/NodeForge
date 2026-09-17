@@ -13,6 +13,7 @@ from enum import Enum
 from typing import Callable
 
 from .compiler_identities import BindingId
+from .compile_time import merge_runtime_if_compile_time
 from .errors import CompileError
 from .nf_types import NFType
 from .semantic_ir import IRBranchMerge, IRIf
@@ -151,13 +152,14 @@ class RuntimeMergeSymbol:
 
 @dataclass(frozen=True)
 class RuntimeIfResult:
-    """Return one constructed IRIf plus explicit runtime and compile-time branch exits."""
+    """Return one IRIf plus runtime exits and the authoritative merged CT exit."""
 
     statement: IRIf
     true_state: object
     false_state: object
     true_compile_time: object
     false_compile_time: object
+    merged_compile_time: object
 
 
 def lower_runtime_if(
@@ -189,17 +191,15 @@ def lower_runtime_if(
         message = "repeat_range if condition must be Bool" if policy is BranchMergePolicy.REPEAT else "select(cond, true, false): cond must be Bool"
         raise CompileError(message)
 
+    base_compile_time = compile_time.snapshot()
     true_state = base_state.fork()
     true_compile_time = compile_time.fork()
     true_body = lower_branch(stmt.body, true_state, true_compile_time, policy)
     if true_body is unsupported_sentinel:
         return unsupported_sentinel
 
-    # Preserve the established deterministic compile-time branch order explicitly:
-    # the false branch observes the true-branch compile-time exit and its exit becomes
-    # the post-if compile-time state. Runtime branch state remains independently forked.
     false_state = base_state.fork()
-    false_compile_time = true_compile_time.fork()
+    false_compile_time = compile_time.fork()
     false_body = (
         lower_branch(stmt.orelse, false_state, false_compile_time, policy)
         if stmt.orelse
@@ -282,7 +282,19 @@ def lower_runtime_if(
     if policy is BranchMergePolicy.TOP_LEVEL and not merges:
         raise CompileError("runtime if branches must assign at least one common variable")
 
-    return RuntimeIfResult(IRIf(analyzed_condition.program, true_body, false_body, tuple(merges)), true_state, false_state, true_compile_time, false_compile_time)
+    merged_compile_time = merge_runtime_if_compile_time(
+        base_compile_time,
+        true_compile_time,
+        false_compile_time,
+    )
+    return RuntimeIfResult(
+        IRIf(analyzed_condition.program, true_body, false_body, tuple(merges)),
+        true_state,
+        false_state,
+        true_compile_time,
+        false_compile_time,
+        merged_compile_time,
+    )
 
 
 __all__ = [

@@ -34,7 +34,8 @@ from .constants import (
     _VECTOR_MATH_VECTOR_OUTPUT_1,
     _VECTOR_MATH_VECTOR_OUTPUT_2,
 )
-from .consteval import ConstVector, _as_float_const, _const_eval, _is_const_vector
+from .compile_time import ConstVector
+from .consteval import ConstEvalUnavailable, _as_float_const, _const_eval, _is_const_vector
 from .errors import CompileError
 from .nf_types import NFType, NUMERIC_NF_TYPES
 from .group_context import GroupContextSlot
@@ -147,16 +148,39 @@ def analyze_input_declaration_call(expr, consts):
     if name in {"input_geometry", "input_material", "input_object", "input_bundle"}:
         default = None
     elif name == "input_float":
-        default = 0.0 if default_expr is None else _as_float_const(_const_eval(default_expr, consts), "input_float default")
+        if default_expr is None:
+            default = 0.0
+        else:
+            try:
+                default = _as_float_const(_const_eval(default_expr, consts), "input_float default")
+            except ConstEvalUnavailable as exc:
+                raise CompileError("input_float default= must be compile-time") from exc
     elif name == "input_int":
-        default = 0 if default_expr is None else int(_as_float_const(_const_eval(default_expr, consts), "input_int default"))
+        if default_expr is None:
+            default = 0
+        else:
+            try:
+                default = int(_as_float_const(_const_eval(default_expr, consts), "input_int default"))
+            except ConstEvalUnavailable as exc:
+                raise CompileError("input_int default= must be compile-time") from exc
     elif name == "input_bool":
-        default = False if default_expr is None else bool(_const_eval(default_expr, consts))
+        if default_expr is None:
+            default = False
+        else:
+            try:
+                default = _const_eval(default_expr, consts)
+            except ConstEvalUnavailable as exc:
+                raise CompileError("input_bool default= must be compile-time") from exc
+            if type(default) is not bool:
+                raise CompileError("input_bool default= must be a compile-time Bool")
     elif name == "input_vector":
         if default_expr is None:
             default = (0.0, 0.0, 0.0)
         else:
-            raw = _const_eval(default_expr, consts)
+            try:
+                raw = _const_eval(default_expr, consts)
+            except ConstEvalUnavailable as exc:
+                raise CompileError("input_vector default= must be compile-time") from exc
             if _is_const_vector(raw):
                 default = tuple(float(item) for item in raw)
             elif isinstance(raw, (tuple, list)) and len(raw) == 3:
@@ -164,7 +188,13 @@ def analyze_input_declaration_call(expr, consts):
             else:
                 raise CompileError("input_vector default= must be vector(x,y,z) or a 3-number tuple/list")
     elif name == "input_string":
-        default = "" if default_expr is None else _const_eval(default_expr, consts)
+        if default_expr is None:
+            default = ""
+        else:
+            try:
+                default = _const_eval(default_expr, consts)
+            except ConstEvalUnavailable as exc:
+                raise CompileError("input_string default= must be a compile-time string") from exc
         if not isinstance(default, str):
             raise CompileError("input_string default= must be a compile-time string")
     else:
@@ -205,7 +235,7 @@ def _literal_string(expr, consts, context):
     """Return a non-empty detached compile-time string with legacy diagnostics."""
     try:
         value = _const_eval(expr, consts)
-    except CompileError as exc:
+    except ConstEvalUnavailable as exc:
         raise CompileError(f"Expected a non-empty compile-time string for {context}") from exc
     if isinstance(value, str) and value:
         return value
@@ -216,7 +246,7 @@ def _node_literal_string(expr, consts, context):
     """Return a raw-node compile-time string using raw-node diagnostics."""
     try:
         value = _const_eval(expr, consts)
-    except CompileError as exc:
+    except ConstEvalUnavailable as exc:
         raise CompileError(f"node(...) {context} must be a non-empty compile-time string") from exc
     if isinstance(value, str) and value:
         return value
@@ -253,7 +283,7 @@ def _const_or_runtime(expr, consts, add_runtime, name, context):
     try:
         value = _freeze(_const_eval(expr, consts))
         return ("const", value), None
-    except CompileError:
+    except ConstEvalUnavailable:
         typ = add_runtime(expr, name, context)
         return ("runtime", None), typ
 
@@ -433,7 +463,7 @@ def _analyze_raw_node(expr, consts, add_runtime):
             seen.add(key)
             try:
                 value = _const_eval(value_expr, consts)
-            except CompileError as exc:
+            except ConstEvalUnavailable as exc:
                 raise CompileError("node(...) props= values must be compile-time literals") from exc
             prop_items.append((key, _raw_json_value(value, f"node(...) props={key!r}")))
         props = tuple(prop_items)
@@ -462,7 +492,7 @@ def _analyze_raw_node(expr, consts, add_runtime):
                 continue
             try:
                 literal = _const_eval(value_expr, consts)
-            except CompileError:
+            except ConstEvalUnavailable:
                 typ_i = add_runtime(value_expr, key, f"node() input {key!r}")
                 ref = len(operands)
                 operands.append(AnalyzedCallOperand(key, typ_i))
@@ -512,13 +542,20 @@ def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: Runtime
         runtime_component_types = []
         for index, child in enumerate(_ordered_vector_args(expr)):
             try:
-                value = _as_float_const(_const_eval(child, consts), "vector component")
-            except CompileError:
+                raw_value = _const_eval(child, consts)
+            except ConstEvalUnavailable:
                 typ = runtime(child, ("x", "y", "z")[index], "vector() component")
                 runtime_component_types.append(typ)
                 components.append(("runtime", len(operands) - 1))
             else:
-                components.append(("const", float(value)))
+                try:
+                    value = _as_float_const(raw_value, "vector component")
+                except CompileError:
+                    typ = runtime(child, ("x", "y", "z")[index], "vector() component")
+                    runtime_component_types.append(typ)
+                    components.append(("runtime", len(operands) - 1))
+                else:
+                    components.append(("const", float(value)))
         for typ in runtime_component_types:
             _require_type(typ, NUMERIC_NF_TYPES, "vector(x, y, z) expects numeric arguments")
         return BuiltinCallSemantics(tuple(operands), (("components", tuple(components)),), RuntimeCallResult(TYPE_VECTOR))
@@ -561,7 +598,7 @@ def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: Runtime
             diagnostic = f"grid() {label} expects Float/Int"
             try:
                 value = _const_eval(child, consts)
-            except CompileError:
+            except ConstEvalUnavailable:
                 typ = runtime(child, label, f"grid() {label}")
                 _require_type(typ, NUMERIC_NF_TYPES, diagnostic)
                 slots.append(("runtime", len(operands) - 1))
@@ -608,7 +645,7 @@ def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: Runtime
         for child, label in zip(expr.args, labels):
             try:
                 value = _freeze(_const_eval(child, consts))
-            except CompileError:
+            except ConstEvalUnavailable:
                 typ = runtime(child, label, f"{name}() {label}")
                 runtime_slot_types.append((label, typ))
                 slots.append(("runtime", len(operands) - 1))
@@ -626,7 +663,7 @@ def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: Runtime
             raise CompileError("points(count) expects one Int argument")
         try:
             value = _freeze(_const_eval(expr.args[0], consts))
-        except CompileError:
+        except ConstEvalUnavailable:
             typ = runtime(expr.args[0], "count", "points() count")
             _require_type(typ, NUMERIC_NF_TYPES, "points(count) expects an Int count")
             slot = ("runtime", 0)
@@ -699,14 +736,20 @@ def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: Runtime
             raise CompileError('set_material(geometry, material) expects Geometry and Material or a compile-time material name')
         geo_typ = runtime(expr.args[0], "geometry", "set_material() geometry")
         try:
-            material = _literal_string(expr.args[1], consts, "set_material() material name")
-        except CompileError:
+            material = _const_eval(expr.args[1], consts)
+        except ConstEvalUnavailable:
             material_typ = runtime(expr.args[1], "material", "set_material() material")
             if material_typ != TYPE_MATERIAL:
                 raise CompileError("set_material() second argument must be Material or a compile-time material name")
             mode = ("runtime", len(operands) - 1)
         else:
-            mode = ("const", material)
+            if isinstance(material, str) and material:
+                mode = ("const", material)
+            else:
+                material_typ = runtime(expr.args[1], "material", "set_material() material")
+                if material_typ != TYPE_MATERIAL:
+                    raise CompileError("set_material() second argument must be Material or a compile-time material name")
+                mode = ("runtime", len(operands) - 1)
         if geo_typ != TYPE_GEOMETRY:
             raise CompileError("set_material() first argument must be Geometry")
         return BuiltinCallSemantics(tuple(operands), (("material", mode),), RuntimeCallResult(TYPE_GEOMETRY))
@@ -729,7 +772,7 @@ def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: Runtime
         try:
             value = _freeze(_const_eval(size_expr, consts))
             slot = ("const", value)
-        except CompileError:
+        except ConstEvalUnavailable:
             typ = runtime(size_expr, "size", "cube() size")
             if typ not in NUMERIC_NF_TYPES and typ != TYPE_VECTOR:
                 raise CompileError("cube(size) expects Float/Int or Vector size")
@@ -771,7 +814,7 @@ def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: Runtime
             try:
                 value = _freeze(_const_eval(child, consts))
                 entries.append((key, ("const", value)))
-            except CompileError:
+            except ConstEvalUnavailable:
                 typ = runtime(child, key, f"transform() {key}")
                 runtime_option_types.append((key, typ))
                 entries.append((key, ("runtime", len(operands) - 1)))
@@ -795,7 +838,7 @@ def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: Runtime
             raise CompileError("polyline(points) expects one compile-time list of vector points")
         try:
             raw = _const_eval(expr.args[0], consts)
-        except CompileError as exc:
+        except ConstEvalUnavailable as exc:
             raise CompileError("polyline(points) expects one compile-time list of vector points") from exc
         points = _normalize_polyline_points(raw)
         return BuiltinCallSemantics((), (("points", points),), RuntimeCallResult(TYPE_GEOMETRY))
@@ -823,16 +866,18 @@ def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: Runtime
             try:
                 value = _freeze(_const_eval(child, consts))
                 options.append((key, ("const", value)))
-            except CompileError:
+            except ConstEvalUnavailable:
                 typ = runtime(child, key, "instancing builtin argument")
                 runtime_option_types.append((key, typ))
                 options.append((key, ("runtime", len(operands) - 1)))
         realize = True
         if "realize" in kws:
             try:
-                realize = bool(_const_eval(kws["realize"], consts))
-            except CompileError as exc:
+                realize = _const_eval(kws["realize"], consts)
+            except ConstEvalUnavailable as exc:
                 raise CompileError("instance_on_points realize= must be a compile-time bool") from exc
+            if type(realize) is not bool:
+                raise CompileError("instance_on_points realize= must be a compile-time bool")
         for key, typ in runtime_option_types:
             if key == "rotation" and typ != TYPE_VECTOR:
                 raise CompileError("rotation= must be Vector in radians")
@@ -965,14 +1010,20 @@ def _analyze_store_operation(
     geo_typ = runtime(geometry_expr, "geometry", f"{call_name}() geometry")
     options = []
     try:
-        attr_name = _literal_string(name_expr, consts, name_context)
-    except CompileError:
+        attr_name = _const_eval(name_expr, consts)
+    except ConstEvalUnavailable:
         attr_typ = runtime(name_expr, "name", name_context)
         if attr_typ != TYPE_STRING:
             raise CompileError(f"{name_context} must be a compile-time string or runtime String, got {attr_typ}")
         options.append(("name_mode", ("runtime", len(operands) - 1)))
     else:
-        options.append(("name_mode", ("const", attr_name)))
+        if isinstance(attr_name, str) and attr_name:
+            options.append(("name_mode", ("const", attr_name)))
+        else:
+            attr_typ = runtime(name_expr, "name", name_context)
+            if attr_typ != TYPE_STRING:
+                raise CompileError(f"{name_context} must be a compile-time string or runtime String, got {attr_typ}")
+            options.append(("name_mode", ("runtime", len(operands) - 1)))
     runtime(value_expr, "value", value_context)
     if "selection" in kws:
         selection_typ = runtime(kws["selection"], "selection", "selection= expression")

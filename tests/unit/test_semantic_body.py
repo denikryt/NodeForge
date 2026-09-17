@@ -356,7 +356,7 @@ def test_compile_statements_routes_supported_core_only_through_semantic_body(mon
     migrated = GroupBuildContext(group=object(), comp=FakeComp(), geometry_mode=False)
     compile_statements(
         migrated,
-        _stmts("items = [1.0]\nitems.append(2.0)\nfor item in items:\n    x = item\nx"),
+        _stmts("items = [position()]\nitems.append(position())\nfor item in items:\n    x = item\nx"),
     )
     assert len(semantic_lowerings) == 1
     assert legacy_statements == []
@@ -1843,3 +1843,101 @@ def test_compile_time_loop_does_not_leak_temporary_input_origin_to_prior_noninpu
             'x = input_float("X")\ny = 1.0\nitems = [x]\nfor y in items:\n    z = y\npanel([y], name="P")'
         )
     assert str(exc_info.value) == "panel() item y is not a group input"
+
+
+def test_late_compile_time_owned_assignment_uses_runtime_if_joined_fact_without_runtime_range_ir():
+    """A retained CT-owned root can finish after runtime-if CT knowledge is soundly recovered."""
+    from NodeForge.consteval import _preprocess_compile_time
+
+    source = (
+        'n = 2\n'
+        'flag = input_bool("Flag")\n'
+        'if flag:\n'
+        '    n = 2\n'
+        'else:\n'
+        '    n = 2\n'
+        'xs = range(n)\n'
+        'for i in xs:\n'
+        '    y = i\n'
+        'output(y)\n'
+    )
+    retained, compile_time = _preprocess_compile_time(_stmts(source))
+    assert any(isinstance(stmt, ast.If) for stmt in retained)
+    assert any(
+        isinstance(stmt, ast.Assign)
+        and isinstance(stmt.targets[0], ast.Name)
+        and stmt.targets[0].id == "xs"
+        for stmt in retained
+    )
+    assert any(isinstance(stmt, ast.For) for stmt in retained)
+    assert "n" not in compile_time.values
+
+    result = lower_basic_body(
+        retained,
+        initial_runtime_bindings={},
+        initial_compile_time=compile_time.snapshot(),
+        legacy_binding_names=frozenset(),
+        reserved_name_labels={},
+        callable_environment=_callables(),
+        owner_scope="scope",
+    )
+
+    assert result is not BODY_UNSUPPORTED
+    assert result.final_compile_time.values["n"] == 2
+    assert result.final_compile_time.values["xs"] == [0, 1]
+    assert not any(
+        isinstance(statement, IRAssign) and statement.source_name == "xs"
+        for statement in result.body.statements
+    )
+    assert any(isinstance(statement, IRIf) for statement in result.body.statements)
+
+
+@pytest.mark.parametrize(
+    "branch_assignment, late_assignment, expected",
+    [
+        ("n = 2", "x = len([n, n])", 2),
+        ("n = 2", "x = sum([n, n])", 4),
+        ("n = 2", "x = [n, n]", [2, 2]),
+        ("n = 2", "x = (n, n)", (2, 2)),
+        ('label = "ok"', 'x = f"{label}"', "ok"),
+    ],
+)
+def test_late_compile_time_owned_root_family_consumes_after_runtime_if_join(
+    branch_assignment, late_assignment, expected
+):
+    """Shared CT-owned roots may finish after structured control flow recovers their inputs."""
+    from NodeForge.consteval import _preprocess_compile_time
+
+    source = (
+        'flag = input_bool("Flag")\n'
+        'if flag:\n'
+        f'    {branch_assignment}\n'
+        'else:\n'
+        f'    {branch_assignment}\n'
+        f'{late_assignment}\n'
+    )
+    retained, compile_time = _preprocess_compile_time(_stmts(source))
+    assert "n" not in compile_time.values
+    assert "label" not in compile_time.values
+    assert any(
+        isinstance(stmt, ast.Assign)
+        and isinstance(stmt.targets[0], ast.Name)
+        and stmt.targets[0].id == "x"
+        for stmt in retained
+    )
+
+    result = lower_basic_body(
+        retained,
+        initial_runtime_bindings={},
+        initial_compile_time=compile_time.snapshot(),
+        legacy_binding_names=frozenset(),
+        reserved_name_labels={},
+        callable_environment=_callables(),
+        owner_scope="scope",
+    )
+
+    assert result.final_compile_time.values["x"] == expected
+    assert not any(
+        isinstance(statement, IRAssign) and statement.source_name == "x"
+        for statement in result.body.statements
+    )

@@ -117,7 +117,7 @@ def test_runtime_if_object_identity_watermark_is_shared_and_non_rewinding(monkey
     assert [(before, after) for before, after, _ in object_allocations] == [(0, 1), (1, 2)]
 
 
-def test_runtime_if_constants_preserve_legacy_true_then_false_threading():
+def test_runtime_if_compile_time_branches_join_from_the_same_incoming_snapshot():
     result = _lower(
         'c = 1\nflag = input_bool("Flag")\n'
         'if flag:\n    c = 2\nelse:\n    c = 3\n'
@@ -126,8 +126,17 @@ def test_runtime_if_constants_preserve_legacy_true_then_false_threading():
     branch = result.body.statements[2]
     assert isinstance(branch, IRIf)
     assert [merge.source_name for merge in branch.merges] == ["c"]
-    assert result.final_compile_time.values["c"] == 3
-    assert result.final_compile_time.values["x"] == 13
+    assert "c" not in result.final_compile_time.values
+    assert "x" not in result.final_compile_time.values
+
+
+def test_runtime_if_compile_time_join_recovers_equal_stable_scalar_values():
+    result = _lower(
+        'n = 1\nflag = input_bool("Flag")\n'
+        'if flag:\n    n = 2\nelse:\n    n = 2\n'
+        'output(n)'
+    )
+    assert result.final_compile_time.values["n"] == 2
 
 
 def test_runtime_if_runtime_assignment_removes_constant_through_normal_assignment_semantics():
@@ -228,7 +237,7 @@ def test_repeat_local_if_merge_order_follows_repeat_state_order():
 
 
 def test_runtime_if_structural_array_append_has_direct_diagnostic():
-    source = 'items = [1]\nflag = input_bool("Flag")\nif flag:\n    items.append(2)\nelse:\n    items.append(3)'
+    source = 'items = [position()]\nflag = input_bool("Flag")\nif flag:\n    items.append(position())\nelse:\n    items.append(position())'
     with pytest.raises(CompileError, match="Structural array append inside runtime control flow is not supported"):
         _lower(source)
 

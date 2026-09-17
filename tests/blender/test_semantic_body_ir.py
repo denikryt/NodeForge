@@ -55,6 +55,39 @@ x
     bpy.data.node_groups.remove(group)
 
 
+
+def test_known_numeric_assignment_is_not_erased_without_runtime_fold_proof():
+    """Known numeric CTFE does not erase the permanent runtime DIVIDE graph."""
+    group = compile_group(
+        """
+d = 1 / 2
+output("D", d)
+""",
+        "NFTest_ctfe_known_numeric_keeps_runtime_divide",
+    )
+    divides = [
+        node
+        for node in group.nodes
+        if getattr(node, "bl_idname", "") == "ShaderNodeMath"
+        and getattr(node, "operation", None) == "DIVIDE"
+    ]
+    check(len(divides) == 1, f"known numeric assignment lost runtime DIVIDE topology: {len(divides)}")
+    bpy.data.node_groups.remove(group)
+
+
+def test_fold_safe_literal_assignment_creates_no_math_node():
+    """A fold-safe scalar literal does not create an unnecessary Math node."""
+    group = compile_group(
+        """
+x = 1.0
+output("X", x)
+""",
+        "NFTest_ctfe_literal_fold_no_math",
+    )
+    math_nodes = [node for node in group.nodes if getattr(node, "bl_idname", "") == "ShaderNodeMath"]
+    check(not math_nodes, f"literal assignment unexpectedly created Math nodes: {len(math_nodes)}")
+    bpy.data.node_groups.remove(group)
+
 def test_basic_body_explicit_output_order_and_augassign_are_preserved():
     """Output order/name semantics and frontend-desugared augmented assignment remain unchanged."""
     group = compile_group(
