@@ -51,9 +51,37 @@ def test_runtime_if_is_structured_ir_with_exact_common_merge():
     assert branch.merges == (IRBranchMerge(BindingId("scope", 0), "x", NFType.FLOAT),)
 
 
-def test_constant_if_is_folded_without_irif():
-    result = _lower('x = 1.0\nif True:\n    x = x + 1\nelse:\n    x = x + 100\noutput(x)')
-    assert not any(isinstance(statement, IRIf) for statement in result.body.statements)
+@pytest.mark.parametrize("condition", ["True", "False"])
+def test_literal_bool_ordinary_if_is_structured_runtime_ir(condition):
+    result = _lower(
+        f'x = 1.0\nif {condition}:\n    x = x + 1\nelse:\n    x = x + 100\noutput(x)'
+    )
+    branch = next(statement for statement in result.body.statements if isinstance(statement, IRIf))
+    assert branch.condition.result.typ is NFType.BOOL
+    assert branch.true_body.statements
+    assert branch.false_body.statements
+    assert branch.merges == (IRBranchMerge(BindingId("scope", 0), "x", NFType.FLOAT),)
+    assert "x" not in result.final_compile_time.values
+
+
+def test_literal_bool_ordinary_if_uses_runtime_missing_else_diagnostic():
+    with pytest.raises(CompileError, match="runtime if currently requires an else branch"):
+        _lower('x = 0.0\nif True:\n    x = 1.0\noutput(x)')
+
+
+def test_compile_time_known_non_bool_ordinary_if_uses_runtime_bool_diagnostic():
+    with pytest.raises(CompileError, match=r"select\(cond, true, false\): cond must be Bool"):
+        _lower('x = 0.0\nif 1:\n    x = 1.0\nelse:\n    x = 2.0\noutput(x)')
+
+
+def test_literal_condition_ordinary_if_keeps_common_change_requirement():
+    with pytest.raises(CompileError, match="runtime if branches must assign at least one common variable"):
+        _lower('x = 0.0\ny = 0.0\nif True:\n    x = 1.0\nelse:\n    y = 2.0\noutput(x)')
+
+
+def test_literal_condition_ordinary_if_keeps_exact_branch_type_requirement():
+    with pytest.raises(CompileError, match="runtime if branch values for x have different types"):
+        _lower('x = 0.0\nif False:\n    x = 1.0\nelse:\n    x = True\noutput(x)')
 
 
 def test_runtime_if_identity_assignment_does_not_count_as_change():

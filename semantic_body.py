@@ -1168,42 +1168,6 @@ def lower_basic_body(
             is_final = root and index == len(source_stmts) - 1
 
             if isinstance(stmt, ast.If):
-                if control_policy is not BranchMergePolicy.REPEAT:
-                    # TODO(nodeforge-migration): Semantic Body still keeps the pre-existing top-level
-                    # compile-time branch-selection shortcut for ordinary if. The runtime-only ordinary-if
-                    # migration removes this shortcut so every ordinary if reaches structured runtime IR;
-                    # do not extend this path with new fold, typing, callable, or backend rules.
-                    try:
-                        const_condition = bool(_const_eval(stmt.test, active_compile_time.values))
-                    except (ConstEvalUnavailable, CompileError):
-                        pass
-                    else:
-                        context_availability_before_trial = group_context_cursor.snapshot()
-                        const_branch = stmt.body if const_condition else stmt.orelse
-                        trial = active.fork()
-                        trial_compile_time = active_compile_time.fork()
-                        try:
-                            folded = lower_statements(
-                                const_branch,
-                                trial,
-                                trial_compile_time,
-                                control_policy=control_policy,
-                                repeat_merge_ids=repeat_merge_ids,
-                                repeat_merge_symbols=repeat_merge_symbols,
-                                runtime_if_builder_baseline=runtime_if_builder_baseline,
-                                root=False,
-                            )
-                        except CompileError:
-                            group_context_cursor.replace(context_availability_before_trial)
-                            raise
-                        if folded is BODY_UNSUPPORTED:
-                            group_context_cursor.replace(context_availability_before_trial)
-                            return BODY_UNSUPPORTED
-                        active.adopt(trial)
-                        active_compile_time.replace(trial_compile_time)
-                        statements.extend(folded.statements)
-                        continue
-
                 policy = control_policy or BranchMergePolicy.TOP_LEVEL
                 if policy is BranchMergePolicy.TOP_LEVEL:
                     branch_region = tuple(stmt.body) + tuple(stmt.orelse)

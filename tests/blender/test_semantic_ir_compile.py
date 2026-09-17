@@ -133,6 +133,15 @@ def test_supported_core_root_matrix_never_enters_legacy_statement_compiler(monke
             'output("Result", result)',
         ),
         (
+            "literal_if",
+            'a = input_float("A", default=2.0)\n'
+            'if True:\n'
+            '    result = a + 1.0\n'
+            'else:\n'
+            '    result = a + 2.0\n'
+            'output("Result", result)',
+        ),
+        (
             "repeat",
             'value = input_float("Value", default=0.0)\n'
             'for i in repeat_range(2):\n'
@@ -1353,15 +1362,20 @@ def test_source_ordered_ct_handoff_compile_time_owned_seed_reaches_runtime_if_br
     check(defaults == [(1.0, 3.0), (2.0, 3.0)], f"len() seed was not replayed in source order: {defaults!r}")
 
 
-def test_source_ordered_ct_handoff_constant_ordinary_if_stays_compile_time_selected():
-    """The Stage-26 constant-if shortcut does not gain an unnecessary runtime Switch."""
+def test_source_ordered_ct_handoff_literal_ordinary_if_stays_runtime():
+    """Source-ordered compile-time knowledge does not prune an ordinary literal-condition if."""
     group = compile_group(
         'x = 1.0\n'
         'if True:\n'
-        '    x = 2.0\n'
+        '    x = x + 1.0\n'
         'else:\n'
-        '    x = 3.0\n'
+        '    x = x + 2.0\n'
         'output("X", x)\n',
-        "NFTest_source_order_constant_if",
+        "NFTest_source_order_literal_if_runtime",
     )
-    check(not _nodes(group, "GeometryNodeSwitch"), "constant ordinary if created an unexpected runtime Switch")
+    adds = _nodes(group, "ShaderNodeMath", "ADD")
+    switches = _nodes(group, "GeometryNodeSwitch")
+    check(len(adds) == 2, f"expected both literal-if branch ADD nodes, found {len(adds)}")
+    check(len(switches) == 1, f"expected one literal-if runtime Switch, found {len(switches)}")
+    defaults = sorted(tuple(_linked_numeric_inputs(group, node)) for node in adds)
+    check(defaults == [(1.0, 1.0), (1.0, 2.0)], f"source-order literal-if seed changed: {defaults!r}")

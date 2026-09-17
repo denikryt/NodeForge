@@ -252,3 +252,8 @@ ion coverage.
 - Fixed source-order correctness across compile-time preprocessing and Semantic Body by replaying erased compile-time effects at their original residual positions instead of seeding body analysis from the final preprocessing state; removed the whole-body runtime-if seed prescan and made ordinary assignment RHS analysis observe the pre-assignment compile-time state.
 - Simplified runtime-if semantic results to expose only the authoritative merged compile-time exit and consolidated static-only builtin CTFE diagnostics through the shared `_const()` boundary.
 - Preserved alias identity when replaying erased compile-time `for` loops by replacing copied iteration bindings/discards with one scoped `CompileTimeForEffect` that re-evaluates the iterable in replay state, binds exact yielded objects, restores the exact pre-loop target, and rejects iteration-count drift.
+
+## 0.55.0
+
+- Made ordinary statement `if` always use runtime Geometry Nodes control flow. Literal and compile-time-known conditions no longer prune source branches; both branches are semantically validated and follow the normal runtime-if merge rules.
+- Kept ordinary `if` residual through compile-time preprocessing while preserving the conservative branch-write barrier that prevents later preprocessing from observing stale compile-time facts.

@@ -316,21 +316,53 @@ output("X", x)
     bpy.data.node_groups.remove(group)
 
 
-def test_compile_time_if_still_creates_no_switch():
-    """Compile-time conditional selection remains outside runtime control-flow materialization."""
+def test_literal_condition_if_materializes_both_branches_and_switch():
+    """Literal conditions use the same runtime topology as every ordinary statement if."""
     group = compile_group(
         '''
-x = 1.0
+x = input_float("X", default=1.0)
 if True:
     x = x + 1
 else:
     x = x + 100
-output(x)
+output("X", x)
 ''',
-        "NFTest_compile_time_if_no_switch",
+        "NFTest_literal_if_runtime_switch",
     )
+    adds = [
+        node for node in group.nodes
+        if getattr(node, "bl_idname", "") == "ShaderNodeMath" and getattr(node, "operation", None) == "ADD"
+    ]
     switches = [node for node in group.nodes if getattr(node, "bl_idname", "") == "GeometryNodeSwitch"]
-    check(not switches, f"compile-time if unexpectedly created Switch nodes: {len(switches)}")
+    check(len(adds) == 2, f"expected both literal-if branch ADD nodes, found {len(adds)}")
+    check(len(switches) == 1, f"expected one literal-if runtime Switch, found {len(switches)}")
+    outputs = [node for node in group.nodes if getattr(node, "bl_idname", "") == "NodeGroupOutput"]
+    result_links = [
+        link for link in group.links
+        if link.to_node in outputs and link.to_socket.name == "X"
+    ]
+    check(len(result_links) == 1, f"expected one X output link, found {len(result_links)}")
+    check(result_links[0].from_node == switches[0], "literal-if output is not driven by the runtime Switch")
+    bpy.data.node_groups.remove(group)
+
+
+def test_literal_condition_if_discovers_inputs_from_both_branches():
+    """Both literal-condition branches contribute implicit runtime input dependencies."""
+    group = compile_group(
+        '''
+x = 0.0
+if True:
+    x = a
+else:
+    x = b
+output("X", x)
+''',
+        "NFTest_literal_if_both_branch_inputs",
+    )
+    input_names = [item.name for item in _interface_sockets(group, "INPUT")]
+    check(input_names == ["a", "b"], f"literal-if branch input discovery changed: {input_names}")
+    switches = [node for node in group.nodes if getattr(node, "bl_idname", "") == "GeometryNodeSwitch"]
+    check(len(switches) == 1, f"expected one literal-if Switch, found {len(switches)}")
     bpy.data.node_groups.remove(group)
 
 @pytest.mark.parametrize(

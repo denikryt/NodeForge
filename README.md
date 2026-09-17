@@ -63,6 +63,8 @@ Blender lowering and materialization
 GeometryNodeTree
 ```
 
+Ordinary statement `if` is Geometry Nodes runtime control flow. Its condition must be a runtime `Bool`, both branches are semantically valid runtime branches and both contribute to the generated graph and interface dependencies. A compile-time-known or literal condition such as `True` or `False` does not remove either branch. Top-level ordinary `if` currently requires an explicit `else` and follows the normal runtime merge rules.
+
 ### Learn more in the documentation: 
 https://denikryt.github.io/NodeForgeDocs/
 

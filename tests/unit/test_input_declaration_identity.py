@@ -228,3 +228,15 @@ def test_control_flow_input_declaration_ordinals_are_monotonic_and_rebuild_stabl
         InputDeclarationId("owner", "x", 0).stable_key(),
         InputDeclarationId("owner", "x", 1).stable_key(),
     ]
+
+
+def test_literal_condition_input_declaration_ordinals_visit_both_runtime_branches():
+    """Literal conditions allocate declarations exactly like dynamic runtime branches."""
+    source = (
+        'if True:\n    x = input_float("A")\nelse:\n    x = input_float("B")\n'
+        'output(x)'
+    )
+    assert _control_flow_declaration_keys(source) == [
+        InputDeclarationId("owner", "x", 0).stable_key(),
+        InputDeclarationId("owner", "x", 1).stable_key(),
+    ]

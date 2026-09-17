@@ -272,16 +272,6 @@ def test_existing_builder_replacement_directly_inside_repeat_preserves_legacy_re
         )
 
 
-def test_compile_time_selected_builder_constructor_remains_straight_line():
-    result = _lower(
-        'if True:\n'
-        '    builder = geometry_builder()\n'
-        'builder.add(cube(1.0))\n'
-        'output("Geometry", builder.geometry)'
-    )
-    assert result is not BODY_UNSUPPORTED
-
-
 def test_top_level_runtime_if_preserves_legacy_rejection_for_two_branch_builder_identity_merge():
     with pytest.raises(CompileError, match="geometry_builder cannot escape script scope"):
         _lower(
@@ -514,37 +504,3 @@ def test_identity_assignments_without_branch_local_builder_keep_existing_runtime
             '    value = value\n'
             'output("Value", value)'
         )
-
-
-def test_dead_compile_time_builder_constructor_does_not_enable_identity_assignment_merge():
-    """Dead builder syntax must not widen the top-level runtime-if compatibility contract."""
-    with pytest.raises(CompileError, match="runtime if branches must assign at least one common variable"):
-        _lower(
-            'value = input_float("Value", default=0.0)\n'
-            'flag = input_bool("Flag", default=True)\n'
-            'if flag:\n'
-            '    value = value + 1\n'
-            '    if False:\n'
-            '        unused = geometry_builder()\n'
-            'else:\n'
-            '    value = value\n'
-            'output("Value", value)'
-        )
-
-
-def test_selected_compile_time_builder_constructor_enables_identity_assignment_merge():
-    """A constructor actually committed after compile-time folding retains the approved compatibility merge."""
-    result = _lower(
-        'value = input_float("Value", default=0.0)\n'
-        'flag = input_bool("Flag", default=True)\n'
-        'if flag:\n'
-        '    value = value + 1\n'
-        '    if True:\n'
-        '        unused = geometry_builder()\n'
-        'else:\n'
-        '    value = value\n'
-        'output("Value", value)'
-    )
-    runtime_ifs = [statement for statement in result.body.statements if isinstance(statement, IRIf)]
-    assert len(runtime_ifs) == 1
-    assert [(merge.source_name, merge.typ) for merge in runtime_ifs[0].merges] == [("value", NFType.FLOAT)]

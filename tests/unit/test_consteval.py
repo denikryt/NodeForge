@@ -218,6 +218,18 @@ def test_retained_runtime_if_invalidates_written_names_before_following_preproce
     assert any(isinstance(stmt, ast.For) for stmt in retained)
 
 
+@pytest.mark.parametrize("condition", ["True", "False"])
+def test_preprocess_retains_literal_ordinary_if_and_invalidates_branch_writes(condition):
+    retained, consts = _preprocess_source(
+        f'x = 1\nif {condition}:\n    x = 2\nelse:\n    x = 3\nfor i in range(x):\n    y = i\n'
+    )
+    branches = [stmt for stmt in retained if isinstance(stmt, ast.If)]
+    assert len(branches) == 1
+    assert ast.unparse(branches[0].test) == condition
+    assert "x" not in consts
+    assert any(isinstance(stmt, ast.For) for stmt in retained)
+
+
 def test_runtime_if_seed_prescan_is_removed():
     import NodeForge.consteval as consteval
 

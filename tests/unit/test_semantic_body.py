@@ -581,7 +581,7 @@ def test_migrated_arrays_and_loops_are_accepted_while_pending_local_calls_fail_d
     with pytest.raises(CompileError, match="geometry_builder cannot escape script scope"):
         _lower("builder = geometry_builder()\nbuilder")
     assert _lower("x = grid(2, 2)\nx") is not BODY_UNSUPPORTED
-    assert _lower("if True:\n    x = 1") is not BODY_UNSUPPORTED
+    assert _lower("if True:\n    x = 1\nelse:\n    x = 2") is not BODY_UNSUPPORTED
     assert _lower("for i in [1]:\n    x = i") is not BODY_UNSUPPORTED
     with pytest.raises(CompileError, match=r"panel\(\) expects exactly one positional list or tuple of group inputs"):
         _lower("panel('P', a)", bindings=dict([_binding("a", 0)]))
@@ -625,7 +625,7 @@ def test_unknown_input_prefixed_name_uses_normal_callable_resolution():
 def test_statement_grammar_errors_are_direct_and_never_request_legacy_routing():
     """Known invalid statement placements receive permanent source diagnostics."""
     with pytest.raises(CompileError, match=r"output\(\) is only supported as a top-level call"):
-        _lower("if True:\n    output(1)")
+        _lower("if True:\n    output(1)\nelse:\n    x = 1")
     with pytest.raises(
         CompileError,
         match=r"Only assignments, array append, for/if blocks, store\(\), set_position\(\) and output\(\) may appear before the final expression",
@@ -1258,6 +1258,12 @@ def test_runtime_control_flow_array_mutation_and_rebind_have_permanent_diagnosti
             'items = []\nflag = input_bool("Flag")\n'
             'if flag:\n    items.append(1)\nelse:\n    items.append(2)'
         )
+
+    with pytest.raises(CompileError, match="Structural array append inside runtime control flow is not supported"):
+        _lower(
+            'items = []\n'
+            'if True:\n    items.append(1)\nelse:\n    items.append(2)'
+        )
     with pytest.raises(CompileError, match="Structural array rebinding inside runtime control flow is not supported"):
         _lower(
             'items = []\nflag = input_bool("Flag")\n'
@@ -1500,144 +1506,46 @@ def test_same_expression_grid_then_grid_uv_uses_ordered_context_availability():
     assert not any(type(op).__name__ == "IRLiteral" for op in operations[:write_index])
 
 
-def test_constant_false_branch_error_is_authoritative_and_dead_branch_is_not_analyzed(monkeypatch):
-    """A known-false condition lowers only the else branch and preserves its direct diagnostic."""
-    import NodeForge.semantic_body as semantic_body_module
+def test_literal_false_still_analyzes_true_branch_semantic_error():
+    """Both ordinary-if branches are authoritative even when the condition is a literal."""
+    with pytest.raises(CompileError, match="not expects Bool"):
+        _lower(
+            'x = 0.0\n'
+            'if False:\n'
+            '    x = not 1\n'
+            'else:\n'
+            '    x = 2.0\n'
+            'output(x)'
+        )
 
-    original = semantic_body_module.analyze_expression
-    dead_dict_seen = []
 
-    def wrapped(expr, environment):
-        if isinstance(expr, ast.Dict):
-            dead_dict_seen.append(True)
-        return original(expr, environment)
+def test_literal_true_still_analyzes_false_branch_semantic_error():
+    """A valid true branch does not suppress semantic validation of the false runtime branch."""
+    with pytest.raises(CompileError, match="not expects Bool"):
+        _lower(
+            'x = 0.0\n'
+            'if True:\n'
+            '    x = 2.0\n'
+            'else:\n'
+            '    x = not 1\n'
+            'output(x)'
+        )
 
-    monkeypatch.setattr(semantic_body_module, "analyze_expression", wrapped)
+
+def test_literal_false_does_not_bypass_existing_extension_migration_diagnostic():
+    """Both literal-condition branches expose the existing extension migration boundary."""
     callables = _callables(backend_helper_names=frozenset({"backend_helper"}))
     with pytest.raises(
         CompileError,
         match=r"backend_helper\(\) is temporarily unavailable while Python extension callables are being migrated",
     ):
         _lower(
-            'if False:\n    x = {"dead": 1}\nelse:\n    x = backend_helper()',
+            'if False:\n'
+            '    x = backend_helper()\n'
+            'else:\n'
+            '    x = 1.0',
             callables=callables,
         )
-    assert dead_dict_seen == []
-
-
-def test_constant_true_branch_error_is_authoritative_and_dead_branch_is_not_analyzed(monkeypatch):
-    """A known-true condition lowers only the body and preserves its direct diagnostic."""
-    import NodeForge.semantic_body as semantic_body_module
-
-    original = semantic_body_module.analyze_expression
-    dead_dict_seen = []
-
-    def wrapped(expr, environment):
-        if isinstance(expr, ast.Dict):
-            dead_dict_seen.append(True)
-        return original(expr, environment)
-
-    monkeypatch.setattr(semantic_body_module, "analyze_expression", wrapped)
-    callables = _callables(backend_helper_names=frozenset({"backend_helper"}))
-    with pytest.raises(
-        CompileError,
-        match=r"backend_helper\(\) is temporarily unavailable while Python extension callables are being migrated",
-    ):
-        _lower(
-            'if True:\n    x = backend_helper()\nelse:\n    x = {"dead": 1}',
-            callables=callables,
-        )
-    assert dead_dict_seen == []
-
-def test_constant_branch_internal_sentinel_reaches_root_tripwire_without_dead_branch_retry(monkeypatch):
-    """A selected constant branch sentinel rolls back trial state before the root tripwire."""
-    from types import SimpleNamespace
-    from NodeForge.compile_time import CompileTimeState
-    from NodeForge.group_context import GroupContextAvailabilityCursor, GroupContextSlot
-    from NodeForge.statement_compiler import GroupBuildContext, compile_statements
-    import NodeForge.semantic_body as semantic_body_module
-    import NodeForge.statement_compiler as statement_compiler
-
-    original_analyze = semantic_body_module.analyze_expression
-    original_context_replace = GroupContextAvailabilityCursor.replace
-    original_compile_time_replace = CompileTimeState.replace
-    dead_dict_seen = []
-    context_replacements = []
-    compile_time_replacements = []
-
-    def wrapped_analyze(expr, environment):
-        if isinstance(expr, ast.Name) and expr.id == "chosen_internal_gap":
-            return None
-        if isinstance(expr, ast.Dict):
-            dead_dict_seen.append(True)
-        return original_analyze(expr, environment)
-
-    def recording_context_replace(self, slots):
-        snapshot = frozenset(slots)
-        context_replacements.append(snapshot)
-        return original_context_replace(self, snapshot)
-
-    def recording_compile_time_replace(self, snapshot_or_state):
-        if isinstance(snapshot_or_state, CompileTimeState):
-            values = snapshot_or_state.values
-        elif isinstance(snapshot_or_state, CompileTimeSnapshot):
-            values = snapshot_or_state.values
-        else:
-            values = snapshot_or_state
-        compile_time_replacements.append(dict(values))
-        return original_compile_time_replace(self, snapshot_or_state)
-
-    class FakeComp:
-        def __init__(self):
-            self.compile_time = CompileTimeState({"seed": 1})
-            self.resolved_environment = SimpleNamespace(system_constructors={})
-            self.local_functions = {}
-            self.backend_builtins = {}
-            self.imported_library_functions = {}
-            self.function_group_owner_scope = "scope"
-            self.input_declaration_owner = "scope"
-            self.reserved_name_labels = {}
-            self.group_input = None
-
-        def runtime_bindings_snapshot(self):
-            return MappingProxyType({})
-
-        def backend_runtime_values_snapshot(self):
-            return MappingProxyType({})
-
-        def legacy_structural_binding_names_snapshot(self):
-            return frozenset()
-
-    monkeypatch.setattr(semantic_body_module, "analyze_expression", wrapped_analyze)
-    monkeypatch.setattr(GroupContextAvailabilityCursor, "replace", recording_context_replace)
-    monkeypatch.setattr(CompileTimeState, "replace", recording_compile_time_replace)
-    monkeypatch.setattr(
-        statement_compiler,
-        "compile_statement",
-        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("legacy statement compiler was called")),
-    )
-    comp = FakeComp()
-    source = (
-        'if False:\n'
-        '    x = {"dead": 1}\n'
-        'else:\n'
-        '    geo = grid(2, 2)\n'
-        '    trial_only = 17\n'
-        '    x = chosen_internal_gap'
-    )
-    with pytest.raises(
-        CompileError,
-        match="Internal error: Semantic Body reached an unplanned legacy fallback after whole-body fallback is disabled",
-    ):
-        compile_statements(
-            GroupBuildContext(group=object(), comp=comp, geometry_mode=False),
-            _stmts(source),
-        )
-    assert dead_dict_seen == []
-    assert frozenset({GroupContextSlot.GRID_UV}) in context_replacements
-    assert context_replacements[-1] == frozenset()
-    assert all("trial_only" not in values for values in compile_time_replacements)
-    assert dict(comp.compile_time.values) == {"seed": 1}
 
 
 def test_extension_migration_error_keeps_contextual_core_atomic_and_never_calls_legacy(monkeypatch):
@@ -2078,8 +1986,8 @@ def test_mutable_compile_time_effects_do_not_mutate_earlier_input_default():
     assert result.final_compile_time.values["items"] == [1, 2]
 
 
-def test_constant_ordinary_if_does_not_retain_runtime_if_or_seed_assignment():
-    """Stage-26 constant-if shortcut stays source-ordered without seed-prescan artifacts."""
+def test_literal_ordinary_if_is_retained_and_uses_conservative_runtime_join():
+    """Literal conditions remain residual and do not publish branch-specific compile-time facts."""
     preprocessed, result = _preprocessed_lower(
         'x = 1.0\n'
         'if True:\n'
@@ -2089,9 +1997,9 @@ def test_constant_ordinary_if_does_not_retain_runtime_if_or_seed_assignment():
         'output(x)\n'
     )
 
-    assert not any(isinstance(stmt, ast.If) for stmt in preprocessed.statements)
-    assert not any(isinstance(stmt, IRIf) for stmt in result.body.statements)
-    assert result.final_compile_time.values["x"] == 2.0
+    assert any(isinstance(stmt, ast.If) for stmt in preprocessed.statements)
+    assert any(isinstance(stmt, IRIf) for stmt in result.body.statements)
+    assert "x" not in result.final_compile_time.values
 
 
 def test_erased_compile_time_for_replay_preserves_mutable_iteration_item_alias():
@@ -2176,20 +2084,22 @@ def test_zero_iteration_erased_compile_time_for_restores_old_target_identity():
     assert result.final_compile_time.values["item"] is result.final_compile_time.values["holder"][0]
 
 
-def test_erased_compile_time_for_replay_tracks_iterable_growth_consistently():
-    """Replay observes the same list-iterator growth that preprocessing proved."""
+def test_compile_time_unrolled_for_keeps_nested_literal_ordinary_if_runtime():
+    """Unrolling a structural for does not restore implicit static branching for nested ordinary if."""
     _preprocessed, result = _preprocessed_lower(
-        'items = [[1]]\n'
-        'for item in items:\n'
-        '    if len(items) == 1:\n'
-        '        items.append([9])\n'
-        'x = input_int("X", default=len(items))\n'
+        'x = input_float("X")\n'
+        'for i in [1, 2]:\n'
+        '    if True:\n'
+        '        x = x + 1\n'
+        '    else:\n'
+        '        x = x + 2\n'
         'output(x)\n'
     )
 
-    declaration = next(stmt for stmt in result.body.statements if isinstance(stmt, IRInputDeclaration))
-    assert declaration.default == 2
-    assert result.final_compile_time.values["items"] == [[1], [9]]
+    branches = [stmt for stmt in result.body.statements if isinstance(stmt, IRIf)]
+    assert len(branches) == 2
+    assert all(branch.condition.result.typ is NFType.BOOL for branch in branches)
+    assert all(branch.true_body.statements and branch.false_body.statements for branch in branches)
 
 
 def test_compile_time_for_effect_replay_rejects_fewer_iterations_than_preprocessing():

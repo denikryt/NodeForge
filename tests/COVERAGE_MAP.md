@@ -135,13 +135,14 @@
 
 ## Structured runtime control-flow Semantic IR
 
-- `tests/unit/test_semantic_control_flow.py`: pure runtime-if construction, top-level versus Repeat-local policy, legacy constant threading, deterministic Repeat mutation/state order, Int/Float state contracts, lexical iteration ownership, non-publishing nested carried state, durable branch input ordinals, and atomic fallback classification.
+- `tests/unit/test_semantic_control_flow.py`: pure runtime-if construction, literal- and dynamic-condition runtime `IRIf` routing, top-level versus Repeat-local policy, both-branch semantic validation, conservative post-branch compile-time joins, deterministic Repeat mutation/state order, Int/Float state contracts, lexical iteration ownership, non-publishing nested carried state, durable branch input ordinals, and atomic fallback classification.
 - `tests/unit/test_semantic_ir.py`: immutable `IRBranchMerge` / `IRIf` / `IRRepeatState` / `IRRepeat` structural invariants plus exact Runtime Control-Flow IR migration compatibility-marker contracts.
-- `tests/unit/test_input_declaration_identity.py`: deterministic non-rewinding `InputDeclarationId` stable keys across opposite runtime branches.
-- `tests/blender/test_semantic_body_ir.py`: runtime-if IR routing, Switch topology, compile-time-if no-Switch behavior, and distinct branch declaration metadata.
-- `tests/blender/test_runtime_range_state.py`: ordinary/nested Repeat IR routing, state item order/socket types, lexical iteration restoration, Repeat-local runtime-if behavior, Int physical-item versus Float logical-exit behavior, Bundle state, and evaluated nested results.
+- `tests/unit/test_consteval.py`: ordinary `ast.If` is retained during preprocessing even for literal conditions, while the retained write-set barrier invalidates names either branch may write before later source transformations.
+- `tests/unit/test_input_declaration_identity.py`: deterministic non-rewinding `InputDeclarationId` stable keys across opposite runtime branches, including literal-condition branches.
+- `tests/blender/test_semantic_body_ir.py`: runtime-if IR routing, literal-condition Switch topology with both branch subgraphs, both-branch implicit-input discovery, and distinct branch declaration metadata.
+- `tests/blender/test_runtime_range_state.py`: ordinary/nested Repeat IR routing, state item order/socket types, lexical iteration restoration, Repeat-local runtime-if behavior including constant-Bool conditions, Int physical-item versus Float logical-exit behavior, Bundle state, and evaluated nested results.
 - `tests/blender/test_update_group.py`: transactional preservation of branch-declared input identities, user overrides, and external links across recompilation.
-- `tests/unit/test_semantic_geometry_builder.py`: pure frontend builder state, pending/current topology rules, branch-local runtime-if construction (including legacy-compatible identity-assignment merge eligibility), inherited-builder rejection, Repeat hidden Geometry state, compile-time loop ownership, and backend-independence.
+- `tests/unit/test_semantic_geometry_builder.py`: pure frontend builder state, pending/current topology rules, branch-local runtime-if construction (including legacy-compatible identity-assignment merge eligibility), inherited-builder rejection, Repeat hidden Geometry state, compile-time loop ownership, and backend-independence without a builder-specific static-if path.
 - `tests/blender/test_geometry_builder.py`: real-Blender behavior/topology regression for `GeometryBuilder`, including Semantic Body production routing for the branch-local `value = value` runtime-if compatibility case; root compilation no longer falls back to the legacy statement engine.
 
 ## Contextual group Semantic IR

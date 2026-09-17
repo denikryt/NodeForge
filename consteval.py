@@ -508,31 +508,15 @@ def _handle_compile_time_stmt(
         recorder.retain(stmt)
         return
     if isinstance(stmt, ast.If):
-        # TODO(nodeforge-migration): Ordinary if still keeps the pre-existing implicit compile-time
-        # branch-selection shortcut while CTFE and residualization boundaries are being separated.
-        # The runtime-only ordinary-if migration removes only this compile-time selection behavior;
-        # retained runtime ifs continue to require a sound preprocessing state barrier.
-        try:
-            branch = stmt.body if bool(_const_eval(stmt.test, env)) else stmt.orelse
-        except (ConstEvalUnavailable, CompileError):
-            written_names = _collect_preprocessing_written_names((*stmt.body, *stmt.orelse))
-            recorder.retain(stmt)
-            # TODO(nodeforge-migration): Preprocessing still carries CompileTimeState across residual
-            # runtime control flow, so every retained ordinary if must conservatively discard names
-            # that either branch may write before later source transformation. Remove this syntactic
-            # barrier only when preprocessing no longer propagates pre-if facts across runtime control
-            # flow, or an equally sound replacement owns that boundary.
-            for name in written_names:
-                state.discard(name)
-            return
-        for sub in branch:
-            _handle_compile_time_stmt(
-                sub,
-                state,
-                recorder,
-                preserve_names,
-                list_append_journal=list_append_journal,
-            )
+        written_names = _collect_preprocessing_written_names((*stmt.body, *stmt.orelse))
+        recorder.retain(stmt)
+        # TODO(nodeforge-migration): Preprocessing still carries CompileTimeState across residual
+        # runtime control flow, so every retained ordinary if must conservatively discard names
+        # that either branch may write before later source transformation. Remove this syntactic
+        # barrier only when preprocessing no longer propagates pre-if facts across runtime control
+        # flow, or an equally sound replacement owns that boundary.
+        for name in written_names:
+            state.discard(name)
         return
     if isinstance(stmt, ast.For):
         try:
