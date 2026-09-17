@@ -24,6 +24,45 @@ def _eval_expr(source, env=None):
     return _const_eval(ast.parse(source, mode="eval").body, env or {})
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "sin(0.5)",
+        "abs(-3)",
+        "floor(1.9)",
+        "ln(2.0)",
+        "count_zero(0, 1, 0)",
+        "pow(2, 3)",
+        "mod(5, 2)",
+    ],
+)
+def test_core_consteval_does_not_own_named_package_math_calls(source):
+    with pytest.raises(CompileError, match="Unsupported compile-time expression: Call"):
+        _eval_expr(source)
+
+
+def test_core_consteval_retains_structural_helpers_and_constants():
+    from math import e, pi, tau
+
+    assert _eval_expr("range(1, 4)") == [1, 2, 3]
+    assert _eval_expr("len([1, 2, 3])") == 3
+    assert _eval_expr("sum([1, 2, 3])") == 6
+    assert tuple(_eval_expr("vector(1, 2, 3)")) == (1.0, 2.0, 3.0)
+    assert _eval_expr("pi") == pi
+    assert _eval_expr("tau") == tau
+    assert _eval_expr("e") == e
+
+
+def test_core_consteval_keeps_operator_ownership_separate_from_named_math_calls():
+    assert _eval_expr("2 ** 3") == 8
+    assert _eval_expr("5 % 2") == 1
+
+    with pytest.raises(CompileError, match="Unsupported compile-time expression: Call"):
+        _eval_expr("pow(2, 3)")
+    with pytest.raises(CompileError, match="Unsupported compile-time expression: Call"):
+        _eval_expr("mod(5, 2)")
+
+
 def test_compile_time_f_string_accepts_only_string_fragments():
     assert _eval_expr('f"A{part}B"', {"part": "X"}) == "AXB"
     assert _eval_expr('f"{{{part}}}"', {"part": "X"}) == "{X}"

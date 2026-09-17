@@ -111,3 +111,7 @@ Fixed transactional node-group updates for capture_attribute() by preserving Ble
 ## 0.49.78
 
 - Added first-class runtime `Bundle` values with `input_bundle()`, `bundle()`, `bundle_get()`, `bundle_set()`, Bundle sockets across raw/local/library calls, native Switch/Repeat state, and transactional dynamic-item preservation.
+
+## 0.50.0
+
+- Moved named scalar-math callable-to-Blender-operation ownership into `nodeforge.math`, removed the legacy core math-call compile-time evaluator and historical `count_zero()` helper, and kept source-language arithmetic plus structural compile-time helpers owned by NodeForge.

@@ -4,24 +4,6 @@ import ast
 from .constants import *
 from .errors import CompileError
 
-_ALLOWED_MATH_FUNCS = {
-    "sin": __import__("math").sin,
-    "cos": __import__("math").cos,
-    "tan": __import__("math").tan,
-    "asin": __import__("math").asin,
-    "acos": __import__("math").acos,
-    "atan": __import__("math").atan,
-    "sqrt": __import__("math").sqrt,
-    "floor": __import__("math").floor,
-    "ceil": __import__("math").ceil,
-    "round": round,
-    "abs": abs,
-    "radians": __import__("math").radians,
-    "degrees": __import__("math").degrees,
-    "exp": __import__("math").exp,
-    "ln": __import__("math").log,
-}
-
 
 class ConstVector(tuple):
     """Class `ConstVector` used by the NodeForge addon."""
@@ -210,8 +192,6 @@ def _const_eval(expr, env):
             return ConstVector((_as_float_const(args[0]), _as_float_const(args[1]), _as_float_const(args[2])))
         if name == "range":
             return _const_range(args)
-        if name == "count_zero":
-            return sum(1 for a in args if a == 0)
         if name == "len":
             if len(args) != 1:
                 raise CompileError("len() expects one argument")
@@ -220,10 +200,6 @@ def _const_eval(expr, env):
             if len(args) != 1:
                 raise CompileError("sum() expects one argument")
             return sum(args[0])
-        if name in _ALLOWED_MATH_FUNCS:
-            if len(args) != 1:
-                raise CompileError(f"{name}() expects one argument")
-            return _ALLOWED_MATH_FUNCS[name](args[0])
     raise CompileError(f"Unsupported compile-time expression: {type(expr).__name__}")
 
 
