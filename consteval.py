@@ -2,9 +2,24 @@
 
 import ast
 from dataclasses import dataclass
-from .constants import TYPE_INT, _ALLOWED_CONSTS
+from .constants import TYPE_INT, _ALLOWED_CONSTS, _BIN_OPS, _COMPARE_OPS
 from .errors import CompileError
 from .compile_time import CompileTimeState, ConstVector
+from .nf_types import NFType
+from .numeric_semantics import (
+    INT_MIN,
+    evaluate_float_basic,
+    evaluate_float_comparison,
+    evaluate_float_divide,
+    evaluate_float_floor_divide,
+    evaluate_float_floored_modulo,
+    evaluate_float_negate,
+    evaluate_int_floor_divide,
+    evaluate_int_floored_modulo,
+    normalize_float_constant,
+    normalize_int_constant,
+    resolve_numeric_binary,
+)
 
 
 class ConstEvalUnavailable(Exception):
@@ -92,7 +107,7 @@ def _is_const_vector(v):
 
 def _is_const_number(v):
     """Return True for static scalar numbers, excluding booleans."""
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    return type(v) in {int, float}
 
 
 def _is_const_vector_like(v):
@@ -105,23 +120,22 @@ def _is_const_vector_like(v):
 
 
 def _as_float_const(v, context="value"):
-    """Function `_as_float_const` used by the NodeForge addon."""
-    if isinstance(v, bool):
-        return 1.0 if v else 0.0
-    if isinstance(v, (int, float)):
-        return float(v)
+    """Return one compile-time Number as a canonical NodeForge Float."""
+    if type(v) in {int, float}:
+        return normalize_float_constant(v)
     raise CompileError(f"Expected numeric compile-time {context}")
 
+
 def _const_len(value):
-    """Return the length of a compile-time sequence."""
+    """Return the signed-32 NodeForge Int length of a compile-time sequence."""
     if isinstance(value, (list, tuple, str)):
-        return len(value)
+        return normalize_int_constant(len(value))
     raise CompileError("len() expects a compile-time list/tuple/string")
 
 
 def _is_compile_time_int(value):
     """Return True for integer compile-time range bounds, excluding booleans."""
-    return isinstance(value, int) and not isinstance(value, bool)
+    return type(value) is int
 
 
 def _const_range(args):
@@ -130,58 +144,169 @@ def _const_range(args):
         raise CompileError("range() expects 1-3 arguments")
     if not all(_is_compile_time_int(arg) for arg in args):
         raise CompileError("range() arguments must be compile-time integers")
-    if len(args) == 3 and args[2] == 0:
+    normalized = [normalize_int_constant(arg) for arg in args]
+    if len(normalized) == 3 and normalized[2] == 0:
         raise CompileError("range() step must not be zero")
-    return list(range(*args))
+    return list(range(*normalized))
 
 
 def _is_num(v):
     """Return True for compile-time scalar numbers, excluding booleans."""
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    return type(v) in {int, float}
 
 
 def _vec(v):
-    """Normalize a compile-time vector-like value to ConstVector."""
+    """Normalize a compile-time vector-like value to canonical Float components."""
     if _is_const_vector(v):
-        return v
+        return ConstVector(tuple(normalize_float_constant(component) for component in v))
     if isinstance(v, (tuple, list)) and len(v) == 3 and all(_is_num(c) for c in v):
-        return ConstVector((float(v[0]), float(v[1]), float(v[2])))
+        return ConstVector(tuple(normalize_float_constant(component) for component in v))
     return None
 
 
+def _numeric_type_for_value(value):
+    """Return the semantic scalar numeric type encoded by one CT carrier."""
+    if type(value) is int:
+        return NFType.INT
+    if type(value) is float:
+        return NFType.FLOAT
+    return None
+
+
+def _float_result_or_unavailable(value, operation):
+    """Return one finite target-equivalent Float result or signal CTFE unavailability."""
+    if value is None:
+        raise ConstEvalUnavailable(f"Compile-time {operation} overflow is unavailable")
+    return value
+
+
+def _eval_scalar_binary(operation, left, right):
+    """Evaluate one typed scalar numeric binary operation with canonical NodeForge semantics."""
+    left_type = _numeric_type_for_value(left)
+    right_type = _numeric_type_for_value(right)
+    result_type = resolve_numeric_binary(operation, left_type, right_type) if left_type and right_type else None
+    if result_type is None:
+        raise CompileError("Numeric operation expects Int or Float operands")
+
+    if result_type is NFType.INT:
+        a = normalize_int_constant(left)
+        b = normalize_int_constant(right)
+        if operation == "ADD":
+            return normalize_int_constant(a + b)
+        if operation == "SUBTRACT":
+            return normalize_int_constant(a - b)
+        if operation == "MULTIPLY":
+            return normalize_int_constant(a * b)
+        if operation == "FLOOR_DIVIDE":
+            return evaluate_int_floor_divide(a, b)
+        if operation == "MODULO":
+            return evaluate_int_floored_modulo(a, b)
+        raise CompileError(f"Unsupported Int operation: {operation}")
+
+    if operation == "POWER":
+        raise ConstEvalUnavailable("Compile-time POWER evaluation is unavailable")
+    if operation in {"ADD", "SUBTRACT", "MULTIPLY"}:
+        return _float_result_or_unavailable(
+            evaluate_float_basic(operation, left, right),
+            operation,
+        )
+    if operation == "DIVIDE":
+        return _float_result_or_unavailable(evaluate_float_divide(left, right), operation)
+    if operation == "FLOOR_DIVIDE":
+        return _float_result_or_unavailable(evaluate_float_floor_divide(left, right), operation)
+    if operation == "MODULO":
+        return _float_result_or_unavailable(evaluate_float_floored_modulo(left, right), operation)
+    raise ConstEvalUnavailable(f"Compile-time numeric operation {operation} is unavailable")
+
+
 def _bin_add(a, b):
-    """Evaluate compile-time addition, including vector addition."""
+    """Evaluate compile-time addition, including canonical Vector addition."""
     av = _vec(a); bv = _vec(b)
     if av is not None and bv is not None:
-        return ConstVector((av[0] + bv[0], av[1] + bv[1], av[2] + bv[2]))
+        components = tuple(
+            _float_result_or_unavailable(evaluate_float_basic("ADD", left, right), "Vector ADD")
+            for left, right in zip(av, bv)
+        )
+        return ConstVector(components)
+    if _is_num(a) and _is_num(b):
+        return _eval_scalar_binary("ADD", a, b)
+    if type(a) is bool or type(b) is bool:
+        raise CompileError("Numeric operation expects Int or Float operands")
     return a + b
 
 
 def _bin_sub(a, b):
-    """Evaluate compile-time subtraction, including vector subtraction."""
+    """Evaluate compile-time subtraction, including canonical Vector subtraction."""
     av = _vec(a); bv = _vec(b)
     if av is not None and bv is not None:
-        return ConstVector((av[0] - bv[0], av[1] - bv[1], av[2] - bv[2]))
+        components = tuple(
+            _float_result_or_unavailable(evaluate_float_basic("SUBTRACT", left, right), "Vector SUBTRACT")
+            for left, right in zip(av, bv)
+        )
+        return ConstVector(components)
+    if _is_num(a) and _is_num(b):
+        return _eval_scalar_binary("SUBTRACT", a, b)
+    if type(a) is bool or type(b) is bool:
+        raise CompileError("Numeric operation expects Int or Float operands")
     return a - b
 
 
 def _bin_mul(a, b):
-    """Evaluate compile-time multiplication, including vector-scalar multiplication."""
+    """Evaluate compile-time multiplication, including canonical Vector scaling."""
     av = _vec(a); bv = _vec(b)
     if av is not None and _is_num(b):
-        return ConstVector((av[0] * b, av[1] * b, av[2] * b))
+        return ConstVector(tuple(
+            _float_result_or_unavailable(evaluate_float_basic("MULTIPLY", component, b), "Vector MULTIPLY")
+            for component in av
+        ))
     if bv is not None and _is_num(a):
-        return ConstVector((a * bv[0], a * bv[1], a * bv[2]))
+        return ConstVector(tuple(
+            _float_result_or_unavailable(evaluate_float_basic("MULTIPLY", a, component), "Vector MULTIPLY")
+            for component in bv
+        ))
+    if av is not None and bv is not None:
+        return ConstVector(tuple(
+            _float_result_or_unavailable(evaluate_float_basic("MULTIPLY", left, right), "Vector MULTIPLY")
+            for left, right in zip(av, bv)
+        ))
+    if _is_num(a) and _is_num(b):
+        return _eval_scalar_binary("MULTIPLY", a, b)
+    if type(a) is bool or type(b) is bool:
+        raise CompileError("Numeric operation expects Int or Float operands")
     return a * b
 
 
 def _bin_div(a, b):
-    """Evaluate compile-time division, including vector-scalar division."""
+    """Evaluate division, mirroring Vector reciprocal-plus-SCALE runtime topology."""
     av = _vec(a)
     if av is not None and _is_num(b):
-        return ConstVector((av[0] / b, av[1] / b, av[2] / b))
+        inverse = _float_result_or_unavailable(evaluate_float_divide(1.0, b), "Vector DIVIDE")
+        return ConstVector(tuple(
+            _float_result_or_unavailable(
+                evaluate_float_basic("MULTIPLY", component, inverse),
+                "Vector DIVIDE",
+            )
+            for component in av
+        ))
+    if _is_num(a) and _is_num(b):
+        return _eval_scalar_binary("DIVIDE", a, b)
+    if type(a) is bool or type(b) is bool:
+        raise CompileError("Numeric operation expects Int or Float operands")
     return a / b
 
+
+def _const_sum(value):
+    """Reduce a compile-time sequence left-to-right with NodeForge ADD semantics."""
+    if not isinstance(value, (list, tuple)):
+        raise CompileError("sum() expects one compile-time sequence")
+    acc = 0
+    for item in value:
+        if type(item) is bool:
+            raise CompileError("sum() does not accept Bool values")
+        if type(item) not in {int, float}:
+            raise CompileError("sum() expects one compile-time numeric sequence")
+        acc = _eval_scalar_binary("ADD", acc, item)
+    return acc
 
 
 def _eval_joined_string(expr, env):
@@ -224,36 +349,46 @@ def _is_compile_time_owned_assignment_rhs(expr: ast.AST) -> bool:
 def try_runtime_fold(expr, env):
     """Return a proven runtime replacement or ``NOT_FOLDABLE``.
 
-    The initial policy is intentionally closed-world.  Compile-time value
-    availability alone never authorizes removing Geometry Nodes computation.
+    The policy remains intentionally closed-world. Compile-time value availability
+    alone never authorizes removing Geometry Nodes computation.
     """
     if isinstance(expr, ast.Constant) and type(expr.value) in {bool, int, float, str}:
-        return expr.value
+        return _const_eval(expr, env)
     if isinstance(expr, ast.Name) and expr.id in _ALLOWED_CONSTS:
-        return _ALLOWED_CONSTS[expr.id]
+        return _const_eval(expr, env)
     if isinstance(expr, (ast.BinOp, ast.Compare)) or (
         isinstance(expr, ast.UnaryOp) and isinstance(expr.op, (ast.UAdd, ast.USub))
     ):
-        # TODO(nodeforge-migration): Scalar numeric unary/binary/comparison expressions remain
-        # non-foldable until type-directed numeric semantics defines the shared Int/Float result
-        # and Blender-equivalence policy. Compile-time-only consumers may still use _const_eval();
-        # remove this branch when numeric_semantics is the fold-policy authority.
+        # Numeric runtime-capable expressions remain fail-closed for graph substitution.
+        # Type-directed semantics defines their values here, but runtime folding is a separate
+        # optimization and is intentionally not expanded by this stage.
         return NOT_FOLDABLE
     return NOT_FOLDABLE
 
 def _const_eval(expr, env):
     """Evaluate one expression when the compiler-owned compile-time layer can."""
     if isinstance(expr, ast.Constant):
-        if type(expr.value) in {int, float, bool, str}:
+        if type(expr.value) is bool or isinstance(expr.value, str):
             return expr.value
+        if type(expr.value) is int:
+            return normalize_int_constant(expr.value)
+        if type(expr.value) is float:
+            return normalize_float_constant(expr.value)
         raise ConstEvalUnavailable(f"Unsupported compile-time constant: {type(expr.value).__name__}")
     if isinstance(expr, ast.JoinedStr):
         return _eval_joined_string(expr, env)
     if isinstance(expr, ast.Name):
         if expr.id in env:
-            return env[expr.id]
+            value = env[expr.id]
+            if type(value) is int:
+                return normalize_int_constant(value)
+            if type(value) is float:
+                return normalize_float_constant(value)
+            if _is_const_vector(value):
+                return _vec(value)
+            return value
         if expr.id in _ALLOWED_CONSTS:
-            return _ALLOWED_CONSTS[expr.id]
+            return normalize_float_constant(_ALLOWED_CONSTS[expr.id])
         raise ConstEvalUnavailable(f"No compile-time value for name: {expr.id}")
     if isinstance(expr, ast.List):
         return [_const_eval(e, env) for e in expr.elts]
@@ -275,63 +410,105 @@ def _const_eval(expr, env):
             return v[{"x": 0, "y": 1, "z": 2}[expr.attr]]
         raise CompileError(f"Unsupported compile-time attribute .{expr.attr}")
     if isinstance(expr, ast.UnaryOp):
-        v = _const_eval(expr.operand, env)
-        vv = _vec(v)
+        if (
+            isinstance(expr.op, ast.USub)
+            and isinstance(expr.operand, ast.Constant)
+            and type(expr.operand.value) is int
+            and expr.operand.value == -INT_MIN
+        ):
+            return INT_MIN
+        value = _const_eval(expr.operand, env)
+        vector = _vec(value)
         if isinstance(expr.op, ast.USub):
-            if vv is not None:
-                return ConstVector((-vv[0], -vv[1], -vv[2]))
-            if _is_compile_time_int(v):
-                return -v
-            return -_as_float_const(v)
+            if vector is not None:
+                return ConstVector(tuple(
+                    _float_result_or_unavailable(
+                        evaluate_float_basic("MULTIPLY", component, -1.0),
+                        "Vector NEGATE",
+                    )
+                    for component in vector
+                ))
+            if type(value) is int:
+                return normalize_int_constant(-normalize_int_constant(value))
+            if type(value) is float:
+                return _float_result_or_unavailable(evaluate_float_negate(value), "Float NEGATE")
+            raise CompileError("Unary minus expects Int, Float or Vector")
         if isinstance(expr.op, ast.UAdd):
-            if vv is not None:
-                return vv
-            if _is_compile_time_int(v):
-                return v
-            try:
-                return _as_float_const(v)
-            except CompileError as exc:
-                raise ConstEvalUnavailable("Compile-time unary plus is unavailable") from exc
+            if vector is not None:
+                return vector
+            if type(value) is int:
+                return normalize_int_constant(value)
+            if type(value) is float:
+                return normalize_float_constant(value)
+            raise ConstEvalUnavailable("Compile-time unary plus is unavailable")
         if isinstance(expr.op, ast.Not):
-            return not _require_compile_time_bool(v, "not expects Bool")
+            return not _require_compile_time_bool(value, "not expects Bool")
         raise ConstEvalUnavailable(f"Unsupported compile-time unary operator: {type(expr.op).__name__}")
     if isinstance(expr, ast.BinOp):
-        a = _const_eval(expr.left, env); b = _const_eval(expr.right, env)
+        left = _const_eval(expr.left, env)
+        right = _const_eval(expr.right, env)
+        operation = _BIN_OPS.get(type(expr.op))
+        if operation is None:
+            raise ConstEvalUnavailable(f"Unsupported compile-time binary operator: {type(expr.op).__name__}")
         try:
-            if isinstance(expr.op, ast.Add): return _bin_add(a, b)
-            if isinstance(expr.op, ast.Sub): return _bin_sub(a, b)
-            if isinstance(expr.op, ast.Mult): return _bin_mul(a, b)
-            if isinstance(expr.op, ast.Div): return _bin_div(a, b)
-            if isinstance(expr.op, ast.Pow): return a ** b
-            if isinstance(expr.op, ast.Mod): return a % b
+            if operation == "ADD":
+                return _bin_add(left, right)
+            if operation == "SUBTRACT":
+                return _bin_sub(left, right)
+            if operation == "MULTIPLY":
+                return _bin_mul(left, right)
+            if operation == "DIVIDE":
+                return _bin_div(left, right)
+            if operation in {"FLOOR_DIVIDE", "MODULO", "POWER"}:
+                return _eval_scalar_binary(operation, left, right)
         except (TypeError, ValueError, ZeroDivisionError, OverflowError) as exc:
             raise ConstEvalUnavailable("Compile-time numeric operation is unavailable") from exc
-        raise ConstEvalUnavailable(f"Unsupported compile-time binary operator: {type(expr.op).__name__}")
+        raise ConstEvalUnavailable(f"Unsupported compile-time numeric operation: {operation}")
     if isinstance(expr, ast.BoolOp):
         vals = [_const_eval(v, env) for v in expr.values]
         if not all(type(value) is bool for value in vals):
             raise CompileError("Boolean operations expect Bool values")
-        if isinstance(expr.op, ast.And): return all(vals)
-        if isinstance(expr.op, ast.Or): return any(vals)
+        if isinstance(expr.op, ast.And):
+            return all(vals)
+        if isinstance(expr.op, ast.Or):
+            return any(vals)
         raise ConstEvalUnavailable(f"Unsupported compile-time Boolean operator: {type(expr.op).__name__}")
     if isinstance(expr, ast.Compare):
         if len(expr.ops) != 1 or len(expr.comparators) != 1:
-            # Chained comparisons are a supported runtime-language form.  CTFE
-            # does not own their pairwise/rematerialization semantics, so lack
-            # of a compile-time evaluator must not turn accepted runtime source
-            # into a hard language error.
+            # Chained comparisons are a supported runtime-language form. CTFE
+            # deliberately leaves their pairwise/runtime semantics to the frontend.
             raise ConstEvalUnavailable("Compile-time chained comparison evaluation is unavailable")
-        a = _const_eval(expr.left, env); b = _const_eval(expr.comparators[0], env); op = expr.ops[0]
+        left = _const_eval(expr.left, env)
+        right = _const_eval(expr.comparators[0], env)
+        op_node = expr.ops[0]
+        operation = _COMPARE_OPS.get(type(op_node))
+        if operation is None:
+            raise ConstEvalUnavailable(f"Unsupported compile-time comparison: {type(op_node).__name__}")
+        left_type = _numeric_type_for_value(left)
+        right_type = _numeric_type_for_value(right)
+        if left_type is not None or right_type is not None:
+            if left_type is None or right_type is None:
+                raise CompileError("Comparison inputs must both be numeric, both Bool, or both Vector")
+            if left_type is NFType.INT and right_type is NFType.INT:
+                a = normalize_int_constant(left)
+                b = normalize_int_constant(right)
+                if operation == "LESS_THAN": return a < b
+                if operation == "LESS_EQUAL": return a <= b
+                if operation == "GREATER_THAN": return a > b
+                if operation == "GREATER_EQUAL": return a >= b
+                if operation == "EQUAL": return a == b
+                if operation == "NOT_EQUAL": return a != b
+            return evaluate_float_comparison(operation, left, right)
         try:
-            if isinstance(op, ast.Lt): return a < b
-            if isinstance(op, ast.LtE): return a <= b
-            if isinstance(op, ast.Gt): return a > b
-            if isinstance(op, ast.GtE): return a >= b
-            if isinstance(op, ast.Eq): return a == b
-            if isinstance(op, ast.NotEq): return a != b
+            if isinstance(op_node, ast.Lt): return left < right
+            if isinstance(op_node, ast.LtE): return left <= right
+            if isinstance(op_node, ast.Gt): return left > right
+            if isinstance(op_node, ast.GtE): return left >= right
+            if isinstance(op_node, ast.Eq): return left == right
+            if isinstance(op_node, ast.NotEq): return left != right
         except (TypeError, ValueError, OverflowError) as exc:
             raise ConstEvalUnavailable("Compile-time comparison is unavailable") from exc
-        raise ConstEvalUnavailable(f"Unsupported compile-time comparison: {type(op).__name__}")
+        raise ConstEvalUnavailable(f"Unsupported compile-time comparison: {type(op_node).__name__}")
     if isinstance(expr, ast.Call):
         if not isinstance(expr.func, ast.Name):
             raise ConstEvalUnavailable("Compile-time evaluation does not own this callable")
@@ -346,7 +523,7 @@ def _const_eval(expr, env):
         if name == "vector":
             if len(args) != 3:
                 raise CompileError("compile-time vector(x,y,z) expects 3 arguments")
-            return ConstVector((_as_float_const(args[0]), _as_float_const(args[1]), _as_float_const(args[2])))
+            return ConstVector(tuple(_as_float_const(value, "vector component") for value in args))
         if name == "range":
             return _const_range(args)
         if name == "len":
@@ -356,10 +533,7 @@ def _const_eval(expr, env):
         if name == "sum":
             if len(args) != 1:
                 raise CompileError("sum() expects one argument")
-        try:
-            return sum(args[0])
-        except (TypeError, ValueError) as exc:
-            raise CompileError("sum() expects one compile-time sequence") from exc
+            return _const_sum(args[0])
     raise ConstEvalUnavailable(f"Unsupported compile-time expression: {type(expr).__name__}")
 
 

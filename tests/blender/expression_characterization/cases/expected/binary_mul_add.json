@@ -43,7 +43,7 @@
       {
         "from": [
           "n2",
-          "Value"
+          "Integer"
         ],
         "to": [
           "n3",
@@ -83,10 +83,10 @@
         "properties": {}
       },
       {
-        "bl_idname": "ShaderNodeValue",
+        "bl_idname": "FunctionNodeInputInt",
         "id": "n2",
         "payload": {
-          "value": 2.0
+          "value": 2
         },
         "properties": {}
       },

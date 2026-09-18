@@ -339,6 +339,9 @@ def lower_analyzed_expression(expr, analysis):
             return builder.emit(IRBinary(result, depth, node_fact.operation, left, right))
 
         if isinstance(node, ast.UnaryOp):
+            if node_fact.operation == "SIGNED_INT_LITERAL":
+                result = builder.new_value(runtime_type(node_fact))
+                return builder.emit(IRLiteral(result, depth, node_fact.literal_value))
             operand = emit(node.operand, depth + 1)
             if isinstance(node.op, ast.UAdd):
                 return operand

@@ -180,7 +180,7 @@ def test_reached_name_resolution_precedence_is_exact():
 
 
 def test_semantic_constant_resolution_uses_detached_records():
-    cases = [(True, TYPE_BOOL), (7, TYPE_FLOAT), (1.5, TYPE_FLOAT), ("s", TYPE_STRING)]
+    cases = [(True, TYPE_BOOL), (7, TYPE_INT), (1.5, TYPE_FLOAT), ("s", TYPE_STRING)]
     for value, typ in cases:
         analysis = _analyze("k", consts={"k": value})
         fact = analysis.facts[analysis.root]
@@ -215,7 +215,7 @@ def test_constant_snapshot_is_cycle_safe_and_never_retains_unsupported_object_id
         callable_environment=_empty_callable_environment(),
     )
     analysis = analyze_expression(_expr("1"), environment)
-    assert _typ(analysis.facts[analysis.root]) == TYPE_FLOAT
+    assert _typ(analysis.facts[analysis.root]) == TYPE_INT
 
 
 
@@ -295,7 +295,7 @@ def test_extension_migration_error_short_circuits_before_unknown_right():
 def test_binary_validation_and_normalization_match_current_matrix():
     cases = [
         ("a + b", TYPE_FLOAT, TYPE_FLOAT, "ADD", TYPE_FLOAT),
-        ("a + b", TYPE_INT, TYPE_INT, "ADD", TYPE_FLOAT),
+        ("a + b", TYPE_INT, TYPE_INT, "ADD", TYPE_INT),
         ("a + b", TYPE_VECTOR, TYPE_VECTOR, "ADD", TYPE_VECTOR),
         ("a * b", TYPE_VECTOR, TYPE_FLOAT, "MULTIPLY", TYPE_VECTOR),
         ("a * b", TYPE_FLOAT, TYPE_VECTOR, "MULTIPLY", TYPE_VECTOR),

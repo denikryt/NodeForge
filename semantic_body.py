@@ -32,6 +32,7 @@ from .consteval import (
 from .compile_time import CompileTimeSnapshot, CompileTimeState
 from .errors import CompileError
 from .nf_types import NFType
+from .numeric_semantics import normalize_float_constant, normalize_int_constant
 from .group_context import GroupContextAvailabilityCursor, GroupContextSlot
 from .parsing import _literal_string
 from .runtime_bindings import RuntimeBindingSymbol, validate_runtime_binding_target
@@ -980,23 +981,27 @@ def lower_basic_body(
         """Bind one compile-time/structural iteration item and return optional runtime publication IR."""
         validate_runtime_binding_target(name, reserved_name_labels)
         if materialize_literal and isinstance(item, (bool, int, float, str)):
-            # Historical flat tuple/list-target loops that mutate GeometryBuilder compiled each
-            # unpacked scalar through the runtime expression path before entering the body. Preserve
-            # those literal nodes even when a target is unused; the characterization topology is a
-            # public compatibility contract for this narrow builder-loop surface.
-            if isinstance(item, bool):
+            # Builder-loop literal materialization follows the canonical numeric literal
+            # contract while preserving the existing node-emission behavior of this narrow path.
+            if type(item) is bool:
                 typ = NFType.BOOL
-            elif isinstance(item, (int, float)):
+                literal = item
+            elif type(item) is int:
+                typ = NFType.INT
+                literal = normalize_int_constant(item)
+            elif type(item) is float:
                 typ = NFType.FLOAT
+                literal = normalize_float_constant(item)
             else:
                 typ = NFType.STRING
+                literal = item
             _clear_name_runtime_structural(active, name)
             active.array_bindings.pop(name, None)
             active_compile_time.discard(name)
             active.runtime_bindings[name] = RuntimeBindingSymbol(temp_binding_id, typ)
             clear_binding_object(active, temp_binding_id)
             result = IRValue(0, typ)
-            program = IRProgram((IRLiteral(result, 0, item),), result)
+            program = IRProgram((IRLiteral(result, 0, literal),), result)
             return IRBindLeaves(program, (IRLeafBinding(result, temp_binding_id, typ),))
         if isinstance(item, StructuralRuntimeLeaf):
             return _bind_loop_runtime_leaf(active, active_compile_time, name, item, temp_binding_id)

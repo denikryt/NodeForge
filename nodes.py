@@ -2,6 +2,7 @@
 
 from .constants import *
 from .errors import CompileError
+from .numeric_semantics import normalize_float_constant, normalize_int_constant
 from .values import Value
 
 
@@ -28,17 +29,19 @@ def _new_node(group, bl_idname, x=0, y=0):
 
 
 def _int_value(group, value, x=0, y=0):
-    """Create an integer constant node for sockets that require Int values."""
+    """Create an integer constant node for one validated NodeForge Int value."""
+    value = normalize_int_constant(value)
     node = _new_node(group, "FunctionNodeInputInt", x, y)
     node.label = str(value)
-    node.integer = int(value)
+    node.integer = value
     return Value(node.outputs[0], TYPE_INT)
 
 def _value(group, value, x=0, y=0):
-    """Function `_value` used by the NodeForge addon."""
+    """Create a Float constant node from one canonical NodeForge Float value."""
+    value = normalize_float_constant(value)
     node = _new_node(group, "ShaderNodeValue", x, y)
     node.label = str(value)
-    node.outputs[0].default_value = float(value)
+    node.outputs[0].default_value = value
     return Value(node.outputs[0], TYPE_FLOAT)
 
 
@@ -53,7 +56,7 @@ def _is_number_type(typ):
     return typ in {TYPE_FLOAT, TYPE_INT}
 
 def _math(group, operation, args, x=0, y=0):
-    """Function `_math` used by the NodeForge addon."""
+    """Create one Float Math node for already-typed numeric operands."""
     node = _new_node(group, "ShaderNodeMath", x, y)
     node.operation = operation
     for i, arg in enumerate(args):
@@ -61,6 +64,17 @@ def _math(group, operation, args, x=0, y=0):
             raise CompileError(f"Math operation {operation} expects numeric input")
         group.links.new(arg.socket, node.inputs[i])
     return Value(node.outputs[0], TYPE_FLOAT)
+
+
+def _integer_math(group, operation, args, x=0, y=0):
+    """Create one Integer Math node for already-typed NodeForge Int operands."""
+    node = _new_node(group, "FunctionNodeIntegerMath", x, y)
+    node.operation = operation
+    for i, arg in enumerate(args):
+        if arg.typ is not TYPE_INT:
+            raise CompileError(f"Integer Math operation {operation} expects Int input")
+        group.links.new(arg.socket, node.inputs[i])
+    return Value(node.outputs[0], TYPE_INT)
 
 def _vector_math(group, operation, args, out_type=TYPE_VECTOR, x=0, y=0):
     """Function `_vector_math` used by the NodeForge addon."""
@@ -96,8 +110,8 @@ def _combine_xyz_mixed(group, comps, x=0, y=0):
             if not _is_number_type(val.typ):
                 raise CompileError("vector(x, y, z) expects numeric arguments")
             group.links.new(val.socket, node.inputs[i])
-        elif isinstance(val, (int, float)) and not isinstance(val, bool):
-            node.inputs[i].default_value = float(val)
+        elif type(val) in {int, float}:
+            node.inputs[i].default_value = normalize_float_constant(val)
         else:
             raise CompileError("vector(x, y, z) expects numeric arguments")
     return Value(node.outputs[0], TYPE_VECTOR)
@@ -111,8 +125,10 @@ def _separate_xyz(group, val, component, x=0, y=0):
     return Value(node.outputs[{"x": 0, "y": 1, "z": 2}[component]], TYPE_FLOAT)
 
 def _compare(group, operation, left, right, x=0, y=0):
-    """Function `_compare` used by the NodeForge addon."""
-    if _is_number_type(left.typ) and _is_number_type(right.typ):
+    """Create one typed Compare node from already-resolved semantic operand types."""
+    if left.typ is TYPE_INT and right.typ is TYPE_INT:
+        data_type = "INT"
+    elif _is_number_type(left.typ) and _is_number_type(right.typ):
         data_type = "FLOAT"
     elif left.typ == right.typ and left.typ in {TYPE_BOOL, TYPE_VECTOR}:
         data_type = {TYPE_BOOL: "INT", TYPE_VECTOR: "VECTOR"}[left.typ]
@@ -121,6 +137,11 @@ def _compare(group, operation, left, right, x=0, y=0):
     node = _new_node(group, "FunctionNodeCompare", x, y)
     node.operation = operation
     node.data_type = data_type
+    if data_type == "FLOAT" and operation in {"EQUAL", "NOT_EQUAL"}:
+        for socket in node.inputs:
+            if getattr(socket, "name", None) == "Epsilon":
+                socket.default_value = 0.0
+                break
     group.links.new(left.socket, node.inputs[0])
     group.links.new(right.socket, node.inputs[1])
     return Value(node.outputs[0], TYPE_BOOL)
@@ -218,4 +239,4 @@ def _ensure_float(v):
     if v.typ != TYPE_FLOAT:
         raise CompileError("Expected Float")
 
-__all__ = ['_socket_type_for', '_new_node', '_value', '_string_value', '_int_value', '_is_number_type', '_math', '_vector_math', '_combine_xyz', '_combine_xyz_mixed', '_separate_xyz', '_compare', '_boolean_math', '_switch', '_mix', '_clamp', '_position', '_normal', '_index', '_id', '_map_range', '_ensure_float']
+__all__ = ['_socket_type_for', '_new_node', '_value', '_string_value', '_int_value', '_is_number_type', '_math', '_integer_math', '_vector_math', '_combine_xyz', '_combine_xyz_mixed', '_separate_xyz', '_compare', '_boolean_math', '_switch', '_mix', '_clamp', '_position', '_normal', '_index', '_id', '_map_range', '_ensure_float']

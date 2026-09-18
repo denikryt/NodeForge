@@ -38,6 +38,10 @@ def repeat_state_output_type(input_type: NFType) -> NFType:
     """Return the legacy logical post-Repeat state type for one physical input type."""
     if input_type not in _REPEAT_STATE_TYPES:
         raise CompileError(f"repeat_range state has unsupported type {input_type}")
+    # TODO(nodeforge-migration): Type-directed numeric semantics now keeps ordinary Int
+    # arithmetic as Int, but Repeat still publishes carried Int state through the historical
+    # Float output contract. Do not add coercion or retagging here; remove this marker when
+    # 30_repeat_exact_type_state.md replaces Repeat input/output typing with one exact NFType.
     return NFType.FLOAT if input_type is NFType.INT else input_type
 
 

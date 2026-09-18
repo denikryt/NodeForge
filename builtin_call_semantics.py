@@ -51,6 +51,7 @@ from .evaluation_modes import (
     resolve_argument_evaluation,
 )
 from .nf_types import NFType, NUMERIC_NF_TYPES
+from .numeric_semantics import normalize_float_constant, normalize_int_constant
 from .group_context import GroupContextSlot
 
 
@@ -176,12 +177,13 @@ def analyze_input_declaration_call(expr, consts):
         if default_expr is None:
             default = 0
         else:
-            default = int(
-                _as_float_const(
-                    _const(default_expr, consts, "input_int default= must be compile-time"),
-                    "input_int default",
-                )
-            )
+            raw = _const(default_expr, consts, "input_int default= must be compile-time")
+            if type(raw) is int:
+                default = normalize_int_constant(raw)
+            elif type(raw) is float:
+                default = normalize_int_constant(int(raw))
+            else:
+                raise CompileError("Expected numeric compile-time input_int default")
     elif name == "input_bool":
         if default_expr is None:
             default = False
@@ -195,7 +197,7 @@ def analyze_input_declaration_call(expr, consts):
         else:
             raw = _const(default_expr, consts, "input_vector default= must be compile-time")
             if _is_const_vector(raw):
-                default = tuple(float(item) for item in raw)
+                default = tuple(normalize_float_constant(item) for item in raw)
             elif isinstance(raw, (tuple, list)) and len(raw) == 3:
                 default = tuple(_as_float_const(item, "input_vector default component") for item in raw)
             else:

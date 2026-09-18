@@ -263,3 +263,9 @@ ion coverage.
 - Added frontend-only declarative evaluation modes for compile-time-only, runtime-only, and compile-time-or-runtime consumer requirements while keeping runtime folding, semantic typing, and IR representation separate.
 - Migrated input compile-time acquisition plus `instance_on_points()` and `transform()` mixed options to the shared representation selector, moving invalid static option rejection into semantic analysis before Blender realization while preserving existing diagnostics and runtime operand order.
 - Centralized the existing compile-time Number/Vector-like shape predicates for shared frontend/backend validation and retained `set_material()` as an explicit richer consumer-specific fallback boundary.
+
+## 0.56.0
+
+- Added type-directed numeric semantics: integer literals and integer-preserving arithmetic now remain signed-32 `Int`, mixed/Float arithmetic uses canonical Blender-compatible binary32 values, `//` and floored `%` have explicit Integer Math/Math lowering, and scalar comparisons choose typed Compare nodes.
+- Unified core numeric CTFE with the runtime language contract for characterized arithmetic, `len()` and left-to-right `sum()`, while keeping runtime numeric folding fail-closed and leaving named `nodeforge.math` callables package-owned.
+- Extended existing Vector scalar arithmetic to accept Int scalars without a cast IR, preserved reciprocal-plus-SCALE vector division semantics, and left the historical Repeat Int-to-Float publication boundary explicitly staged for the next migration.

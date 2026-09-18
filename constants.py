@@ -43,7 +43,15 @@ TYPE_TOKEN_NAMES = {
 
 _ALLOWED_CONSTS = {"pi": math.pi, "tau": math.tau, "e": math.e}
 
-_BIN_OPS = {ast.Add: "ADD", ast.Sub: "SUBTRACT", ast.Mult: "MULTIPLY", ast.Div: "DIVIDE", ast.Pow: "POWER", ast.Mod: "MODULO"}
+_BIN_OPS = {
+    ast.Add: "ADD",
+    ast.Sub: "SUBTRACT",
+    ast.Mult: "MULTIPLY",
+    ast.Div: "DIVIDE",
+    ast.FloorDiv: "FLOOR_DIVIDE",
+    ast.Pow: "POWER",
+    ast.Mod: "MODULO",
+}
 _COMPARE_OPS = {ast.Lt: "LESS_THAN", ast.LtE: "LESS_EQUAL", ast.Gt: "GREATER_THAN", ast.GtE: "GREATER_EQUAL", ast.Eq: "EQUAL", ast.NotEq: "NOT_EQUAL"}
 _BOOLEAN_OPS = {ast.And: "AND", ast.Or: "OR"}
 _VECTOR_MATH_FLOAT_OUTPUT = {"length": "LENGTH", "distance": "DISTANCE", "dot": "DOT_PRODUCT"}

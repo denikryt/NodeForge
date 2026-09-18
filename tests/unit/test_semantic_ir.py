@@ -240,8 +240,8 @@ def test_ir_value_is_program_local_shape_without_backend_state():
 
     first = _lower("1")
     second = _lower("2")
-    assert first.result == IRValue(0, TYPE_FLOAT)
-    assert second.result == IRValue(0, TYPE_FLOAT)
+    assert first.result == IRValue(0, TYPE_INT)
+    assert second.result == IRValue(0, TYPE_INT)
     assert first is not second
 
 
@@ -281,7 +281,7 @@ def test_arithmetic_is_explicit_ordered_value_program_with_relative_depths():
 
 @pytest.mark.parametrize(
     ("source", "value", "typ"),
-    [("1", 1, TYPE_FLOAT), ("1.5", 1.5, TYPE_FLOAT), ("True", True, TYPE_BOOL), ('"name"', "name", TYPE_STRING)],
+    [("1", 1, TYPE_INT), ("1.5", 1.5, TYPE_FLOAT), ("True", True, TYPE_BOOL), ('"name"', "name", TYPE_STRING)],
 )
 def test_literal_typing(source, value, typ):
     program = _lower(source)
@@ -344,7 +344,7 @@ def test_type_token_and_reserved_value_diagnostics_are_preserved():
     ("source", "bindings", "typ"),
     [
         ("a + b", {"a": TYPE_FLOAT, "b": TYPE_FLOAT}, TYPE_FLOAT),
-        ("a + b", {"a": TYPE_INT, "b": TYPE_INT}, TYPE_FLOAT),
+        ("a + b", {"a": TYPE_INT, "b": TYPE_INT}, TYPE_INT),
         ("a + b", {"a": TYPE_VECTOR, "b": TYPE_VECTOR}, TYPE_VECTOR),
         ("v * a", {"v": TYPE_VECTOR, "a": TYPE_FLOAT}, TYPE_VECTOR),
         ("a * v", {"v": TYPE_VECTOR, "a": TYPE_FLOAT}, TYPE_VECTOR),
@@ -466,9 +466,9 @@ def test_migration_and_permanent_diagnostic_precedence_is_preserved():
         match=r"legacy_call\(\) is temporarily unavailable while Python extension callables are being migrated",
     ):
         _lower("legacy_call() + (True + 1)", backend_helpers={"legacy_call"})
-    with pytest.raises(CompileError, match="Unsupported operation between BOOL and FLOAT"):
+    with pytest.raises(CompileError, match="Unsupported operation between BOOL and INT"):
         _lower("(True + 1) + legacy_call()", backend_helpers={"legacy_call"})
-    with pytest.raises(CompileError, match="Unsupported operation between BOOL and FLOAT"):
+    with pytest.raises(CompileError, match="Unsupported operation between BOOL and INT"):
         _lower("(True + 1) if 1 else 2")
     with pytest.raises(
         CompileError,
@@ -719,16 +719,21 @@ def test_backend_executes_program_order_and_applies_nonzero_base_depth(monkeypat
         calls.append(("value", value, x, y))
         return Value(object(), TYPE_FLOAT)
 
+    def fake_int_value(group, value, x=0, y=0):
+        calls.append(("int_value", value, x, y))
+        return Value(object(), TYPE_INT)
+
     def fake_math(group, operation, args, x=0, y=0):
         calls.append(("math", operation, x, y))
         return Value(object(), TYPE_FLOAT)
 
     monkeypatch.setattr(backend, "_value", fake_value)
+    monkeypatch.setattr(backend, "_int_value", fake_int_value)
     monkeypatch.setattr(backend, "_math", fake_math)
 
     result = backend.lower_expression(context, _lower("a * 2", bindings={"a": TYPE_FLOAT}), base_depth=3)
     assert result.typ == TYPE_FLOAT
-    assert calls == [("value", 2, 960, -360), ("math", "MULTIPLY", 720, -270)]
+    assert calls == [("int_value", 2, 960, -360), ("math", "MULTIPLY", 720, -270)]
 
 
 def test_backend_missing_operand_is_controlled_internal_error():
@@ -804,6 +809,10 @@ def test_backend_comparison_chain_executes_explicit_duplicate_operations(monkeyp
         calls.append(("value", value, x, y))
         return Value(object(), TYPE_FLOAT)
 
+    def fake_int_value(group, value, x=0, y=0):
+        calls.append(("int_value", value, x, y))
+        return Value(object(), TYPE_INT)
+
     def fake_math(group, operation, args, x=0, y=0):
         calls.append(("math", operation, x, y))
         return Value(object(), TYPE_FLOAT)
@@ -817,6 +826,7 @@ def test_backend_comparison_chain_executes_explicit_duplicate_operations(monkeyp
         return Value(object(), TYPE_BOOL)
 
     monkeypatch.setattr(backend, "_value", fake_value)
+    monkeypatch.setattr(backend, "_int_value", fake_int_value)
     monkeypatch.setattr(backend, "_math", fake_math)
     monkeypatch.setattr(backend, "_compare", fake_compare)
     monkeypatch.setattr(backend, "_boolean_math", fake_boolean_math)
@@ -838,10 +848,14 @@ def test_backend_result_type_drift_is_controlled_internal_error(monkeypatch):
     def fake_value(group, value, x=0, y=0):
         return Value(object(), TYPE_FLOAT)
 
+    def fake_int_value(group, value, x=0, y=0):
+        return Value(object(), TYPE_INT)
+
     def fake_math(group, operation, args, x=0, y=0):
         return Value(object(), TYPE_VECTOR)
 
     monkeypatch.setattr(backend, "_value", fake_value)
+    monkeypatch.setattr(backend, "_int_value", fake_int_value)
     monkeypatch.setattr(backend, "_math", fake_math)
 
     with pytest.raises(CompileError, match="expected type FLOAT, got VECTOR"):
@@ -972,7 +986,7 @@ def test_semantic_constant_normalization_preserves_vector_coercion_and_nested_ar
         "items": [1, [2, 3]],
     }))
     assert constants["flag"] == SemanticConstant("scalar", TYPE_BOOL, True)
-    assert constants["number"] == SemanticConstant("scalar", TYPE_FLOAT, 2)
+    assert constants["number"] == SemanticConstant("scalar", TYPE_INT, 2)
     assert constants["text"] == SemanticConstant("scalar", TYPE_STRING, "x")
     assert constants["vec"].kind == "vector" and constants["vec"].value == (1.0, 2.0, 3.0)
     assert constants["items"].kind == "array"

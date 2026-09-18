@@ -45,9 +45,30 @@ output("Geometry", geo)
 
 The dedicated function is the more convenient form when NodeForge provides one. `node(...)` keeps the rest of Geometry Nodes available while the built-in library continues to grow.
 
+### Numeric values
+
+NodeForge keeps integer and floating-point values distinct. An integer literal such as `1` is `Int`; a decimal literal such as `1.0` is `Float`; `True` and `False` are `Bool`, a separate semantic type from numeric `Int` and `Float`. `Int` uses the signed 32-bit domain. Statically known values outside that domain are rejected before they are materialized.
+
+Arithmetic is type-directed. Integer-preserving `+`, `-`, `*`, `//` and `%` operations on two `Int` values return `Int`. `/` and `**` return `Float`, and arithmetic with either operand already `Float` returns `Float`. `//` uses floor division and `%` is its floored-remainder partner, including for negative operands.
+
+```python
+i = index()
+left = i - 1          # Int
+cell = i // 4         # Int
+column = i % 4        # Int
+ratio = i / 4         # Float
+scaled = ratio + 0.5  # Float
+```
+
+Known NodeForge `Float` values use Blender-compatible binary32 representation. Compile-time values such as `0.1`, `pi`, `tau`, `e`, Float defaults and supported compile-time arithmetic therefore use the same canonical Float representation expected by Geometry Nodes. Compile-time evaluation and runtime graph removal remain separate: knowing a numeric value does not by itself remove its Geometry Nodes operation.
+
+Named mathematical callables such as `sin()`, `cos()` and `sqrt()` are supplied by the separate `nodeforge.math` package. Core compile-time numeric semantics cover language operators and structural helpers; package-call compile-time evaluation belongs to the package protocol when that capability is added.
+
 ### How the compiler works
 
 Internally, NodeForge parses the source, resolves its types and operations, builds a semantic intermediate representation, and lowers that representation into Blender nodes. The compiler owns the translation from source-level logic to the final `GeometryNodeTree`, keeping the language-facing part of the system separate from Blender graph construction.
+
+Numeric result typing and canonical Int/Float value semantics are owned by the Blender-independent `numeric_semantics` layer. Compile-time numeric evaluation consumes those same language rules, while runtime graph removal remains a separate fail-closed optimization decision. Blender lowering receives already-typed Semantic IR and selects the corresponding Integer Math, Math, Vector Math, or Compare realization without redefining source-level numeric types.
 
 ```text
 NodeForge source

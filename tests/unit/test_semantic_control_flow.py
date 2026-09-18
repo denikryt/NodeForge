@@ -341,7 +341,7 @@ def test_runtime_if_non_bool_condition_preserves_controlled_error():
         _lower('x = 0\nflag = input_float("Flag")\nif flag:\n    x = 1\nelse:\n    x = 2\noutput(x)')
 
 
-def test_repeat_local_int_float_branch_merge_is_explicitly_promoted():
+def test_repeat_local_int_branch_merge_uses_type_directed_numeric_semantics():
     result = _lower(
         'x = input_int("X", default=1)\nflag = input_bool("Flag")\n'
         'for i in repeat_range(2):\n'
@@ -352,8 +352,9 @@ def test_repeat_local_int_float_branch_merge_is_explicitly_promoted():
     repeat = result.body.statements[2]
     branch = repeat.body.statements[0]
     assert isinstance(branch, IRIf)
-    assert branch.merges[0].typ is NFType.FLOAT
-    assert branch.merges[0].false_coerce_to is NFType.FLOAT
+    assert branch.merges[0].typ is NFType.INT
+    assert branch.merges[0].false_coerce_to is None
+    assert branch.merges[0].true_coerce_to is None
 
 
 def test_contextual_store_inside_runtime_if_no_longer_forces_whole_body_fallback():

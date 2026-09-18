@@ -47,7 +47,11 @@ def _linked_numeric_inputs(group, node):
     for socket in node.inputs[:2]:
         link = next((item for item in group.links if item.to_node == node and item.to_socket == socket), None)
         check(link is not None, f"Math input {socket.name!r} is unexpectedly unlinked")
-        values.append(float(link.from_socket.default_value))
+        source = link.from_node
+        if source.bl_idname == "FunctionNodeInputInt":
+            values.append(float(source.integer))
+        else:
+            values.append(float(link.from_socket.default_value))
     return sorted(values)
 
 
@@ -329,7 +333,7 @@ output("Result", result)
 
 def test_semantic_error_keeps_outer_fresh_build_cleanup_boundary():
     before = {_pointer(group) for group in bpy.data.node_groups}
-    with pytest.raises(CompileError, match="Unsupported operation between BOOL and FLOAT"):
+    with pytest.raises(CompileError, match="Unsupported operation between BOOL and INT"):
         compiler.create_expression_group(
             "flag = input_bool('Flag')\nresult = flag + 1\noutput('Result', result)",
             "NFTest_semantic_ir_failure_cleanup",
@@ -564,7 +568,9 @@ def _check_operand_source(group, socket, value, binding_names):
 
 
 def _expected_compare_data_type(left_type, right_type):
-    """Return the Blender Compare mode required by the existing semantic operand types."""
+    """Return the Blender Compare mode required by the semantic operand types."""
+    if left_type == right_type == TYPE_INT:
+        return "INT"
     if left_type in {TYPE_FLOAT, TYPE_INT} and right_type in {TYPE_FLOAT, TYPE_INT}:
         return "FLOAT"
     if left_type == right_type == TYPE_BOOL:
@@ -597,6 +603,10 @@ def _check_literal_realization(group, operation, result_link):
             "Float literal value changed at the Blender boundary",
         )
         return
+    if operation.result.typ == TYPE_INT:
+        check(node.bl_idname == "FunctionNodeInputInt", "Int literal did not realize as FunctionNodeInputInt")
+        check(int(node.integer) == int(operation.value), "Int literal value changed at the Blender boundary")
+        return
     if operation.result.typ == TYPE_STRING:
         check(node.bl_idname == "FunctionNodeInputString", "String literal did not realize as FunctionNodeInputString")
         check(node.string == operation.value, "String literal value changed at the Blender boundary")
@@ -625,12 +635,17 @@ def _check_unary_realization(group, operation, result_link, binding_names):
         _check_operand_source(group, node.inputs[0], operation.operand, binding_names)
         return
     check(operation.op == "-", f"unexpected unary op {operation.op!r}")
-    if operation.operand.typ in {TYPE_FLOAT, TYPE_INT}:
-        check(node.bl_idname == "ShaderNodeMath", "numeric unary - did not realize as Math")
-        check(node.operation == "SUBTRACT", "numeric unary - operation enum changed")
+    if operation.operand.typ == TYPE_INT:
+        check(node.bl_idname == "FunctionNodeIntegerMath", "Int unary - did not realize as Integer Math")
+        check(node.operation == "NEGATE", "Int unary - operation enum changed")
+        _check_operand_source(group, node.inputs[0], operation.operand, binding_names)
+        return
+    if operation.operand.typ == TYPE_FLOAT:
+        check(node.bl_idname == "ShaderNodeMath", "Float unary - did not realize as Math")
+        check(node.operation == "SUBTRACT", "Float unary - operation enum changed")
         zero_link = _link_to_socket(group, node.inputs[0])
-        check(zero_link.from_node.bl_idname == "ShaderNodeValue", "numeric unary - lost its zero helper")
-        check(abs(float(zero_link.from_socket.default_value)) < 1e-8, "numeric unary - zero helper changed")
+        check(zero_link.from_node.bl_idname == "ShaderNodeValue", "Float unary - lost its zero helper")
+        check(abs(float(zero_link.from_socket.default_value)) < 1e-8, "Float unary - zero helper changed")
         _check_operand_source(group, node.inputs[1], operation.operand, binding_names)
         return
     check(operation.operand.typ == TYPE_VECTOR, "unexpected analyzer-accepted unary - type")
@@ -643,13 +658,37 @@ def _check_unary_realization(group, operation, result_link, binding_names):
 
 
 def _check_binary_realization(group, operation, result_link, binding_names):
-    """Validate exact backend operation and operand ordering for one binary IR operation."""
+    """Validate type-directed backend realization and ordered binary operands."""
     node = result_link.from_node
     left_type = operation.left.typ
     right_type = operation.right.typ
-    if left_type in {TYPE_FLOAT, TYPE_INT} and right_type in {TYPE_FLOAT, TYPE_INT}:
-        check(node.bl_idname == "ShaderNodeMath", "numeric binary op did not realize as Math")
-        check(node.operation == operation.op, "numeric Math operation enum differs from Semantic IR")
+    numeric_types = {TYPE_FLOAT, TYPE_INT}
+    if left_type in numeric_types and right_type in numeric_types:
+        if operation.result.typ == TYPE_INT:
+            check(node.bl_idname == "FunctionNodeIntegerMath", "Int binary op did not realize as Integer Math")
+            expected_operation = {
+                "ADD": "ADD",
+                "SUBTRACT": "SUBTRACT",
+                "MULTIPLY": "MULTIPLY",
+                "FLOOR_DIVIDE": "DIVIDE_FLOOR",
+                "MODULO": "FLOORED_MODULO",
+            }[operation.op]
+            check(node.operation == expected_operation, "Integer Math operation enum differs from Semantic IR")
+            _check_operand_source(group, node.inputs[0], operation.left, binding_names)
+            _check_operand_source(group, node.inputs[1], operation.right, binding_names)
+            return
+        check(operation.result.typ == TYPE_FLOAT, "scalar numeric operation produced an unexpected result type")
+        if operation.op == "FLOOR_DIVIDE":
+            check(node.bl_idname == "ShaderNodeMath" and node.operation == "FLOOR", "Float // final node is not Math FLOOR")
+            quotient_link = _link_to_socket(group, node.inputs[0])
+            quotient = quotient_link.from_node
+            check(quotient.bl_idname == "ShaderNodeMath" and quotient.operation == "DIVIDE", "Float // lost DIVIDE -> FLOOR topology")
+            _check_operand_source(group, quotient.inputs[0], operation.left, binding_names)
+            _check_operand_source(group, quotient.inputs[1], operation.right, binding_names)
+            return
+        check(node.bl_idname == "ShaderNodeMath", "Float/mixed binary op did not realize as Math")
+        expected_operation = "FLOORED_MODULO" if operation.op == "MODULO" else operation.op
+        check(node.operation == expected_operation, "Float/mixed Math operation enum differs from Semantic IR")
         _check_operand_source(group, node.inputs[0], operation.left, binding_names)
         _check_operand_source(group, node.inputs[1], operation.right, binding_names)
         return
@@ -670,16 +709,19 @@ def _check_binary_realization(group, operation, result_link, binding_names):
         _check_operand_source(group, node.inputs[0], vector_value, binding_names)
         _check_operand_source(group, node.inputs[3], scalar_value, binding_names)
         return
-    check(operation.op == "DIVIDE" and left_type == TYPE_VECTOR and right_type == TYPE_FLOAT, "unexpected Vector binary realization")
-    check(node.operation == "SCALE", "Vector / Float final node is not SCALE")
+    check(
+        operation.op == "DIVIDE" and left_type == TYPE_VECTOR and right_type in numeric_types,
+        "unexpected Vector binary realization",
+    )
+    check(node.operation == "SCALE", "Vector / scalar final node is not SCALE")
     _check_operand_source(group, node.inputs[0], operation.left, binding_names)
     reciprocal_link = _link_to_socket(group, node.inputs[3])
     reciprocal = reciprocal_link.from_node
-    check(reciprocal.bl_idname == "ShaderNodeMath", "Vector / Float reciprocal did not use Math")
-    check(reciprocal.operation == "DIVIDE", "Vector / Float reciprocal operation changed")
+    check(reciprocal.bl_idname == "ShaderNodeMath", "Vector / scalar reciprocal did not use Math")
+    check(reciprocal.operation == "DIVIDE", "Vector / scalar reciprocal operation changed")
     one_link = _link_to_socket(group, reciprocal.inputs[0])
-    check(one_link.from_node.bl_idname == "ShaderNodeValue", "Vector / Float reciprocal lost its 1.0 helper")
-    check(abs(float(one_link.from_socket.default_value) - 1.0) < 1e-8, "Vector / Float reciprocal helper changed")
+    check(one_link.from_node.bl_idname == "ShaderNodeValue", "Vector / scalar reciprocal lost its 1.0 helper")
+    check(abs(float(one_link.from_socket.default_value) - 1.0) < 1e-8, "Vector / scalar reciprocal helper changed")
     _check_operand_source(group, reciprocal.inputs[1], operation.right, binding_names)
 
 
@@ -1018,7 +1060,7 @@ output("Result", 1)
 ''',
         "NFTest_complete_ir_unused_cyclic_const",
     )
-    check(_nodes(group, "ShaderNodeValue"), "unrelated output did not compile with unused cyclic constant")
+    check(_nodes(group, "FunctionNodeInputInt"), "unrelated Int output did not compile with unused cyclic constant")
     bpy.data.node_groups.remove(group)
 
 def test_complete_expression_ir_vector_subscript_and_named_vector_topology():

@@ -10,7 +10,7 @@ from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECT
 from .errors import CompileError
 from .compiler_identities import BindingId
 from .group_context import GroupContextSlot
-from .nodes import _boolean_math, _combine_xyz_mixed, _compare, _int_value, _math, _separate_xyz, _string_value, _switch, _value, _vector_math
+from .nodes import _boolean_math, _combine_xyz_mixed, _compare, _int_value, _integer_math, _math, _separate_xyz, _string_value, _switch, _value, _vector_math
 from .geometry import (
     _capture_attribute_geometry,
     _cube_geometry,
@@ -150,7 +150,9 @@ def _lower_unary(context, operation, materialized, x, y):
     """Materialize one typed unary IR operation."""
     operand = _materialized_value(materialized, operation.operand)
     if operation.op == "-":
-        if operation.operand.typ in {TYPE_FLOAT, TYPE_INT}:
+        if operation.operand.typ is TYPE_INT:
+            result = _integer_math(context.group, "NEGATE", [operand], x, y)
+        elif operation.operand.typ is TYPE_FLOAT:
             zero = _value(context.group, 0.0, x, y - 40)
             result = _math(context.group, "SUBTRACT", [zero, operand], x, y)
         elif operation.operand.typ == TYPE_VECTOR:
@@ -171,14 +173,41 @@ def _lower_binary(context, operation, materialized, x, y):
     """Materialize one typed binary IR operation."""
     left = _materialized_value(materialized, operation.left)
     right = _materialized_value(materialized, operation.right)
-    if operation.left.typ in {TYPE_FLOAT, TYPE_INT} and operation.right.typ in {TYPE_FLOAT, TYPE_INT}:
-        result = _math(context.group, operation.op, [left, right], x, y)
+    numeric_types = {TYPE_FLOAT, TYPE_INT}
+    if operation.left.typ in numeric_types and operation.right.typ in numeric_types:
+        if operation.result.typ is TYPE_INT:
+            if operation.left.typ is not TYPE_INT or operation.right.typ is not TYPE_INT:
+                raise CompileError("Internal error: Int numeric result requires Int operands")
+            integer_operation = {
+                "ADD": "ADD",
+                "SUBTRACT": "SUBTRACT",
+                "MULTIPLY": "MULTIPLY",
+                "MODULO": "FLOORED_MODULO",
+                "FLOOR_DIVIDE": "DIVIDE_FLOOR",
+            }.get(operation.op)
+            if integer_operation is None:
+                raise CompileError(
+                    f"Internal error: unsupported Int Semantic IR binary operation {operation.op!r}"
+                )
+            result = _integer_math(context.group, integer_operation, [left, right], x, y)
+        elif operation.result.typ is TYPE_FLOAT:
+            if operation.op == "FLOOR_DIVIDE":
+                quotient = _math(context.group, "DIVIDE", [left, right], x, y)
+                result = _math(context.group, "FLOOR", [quotient], x, y)
+            elif operation.op == "MODULO":
+                result = _math(context.group, "FLOORED_MODULO", [left, right], x, y)
+            else:
+                result = _math(context.group, operation.op, [left, right], x, y)
+        else:
+            raise CompileError(
+                f"Internal error: scalar numeric IR has non-numeric result type {operation.result.typ}"
+            )
     elif operation.op in {"ADD", "SUBTRACT"} and operation.left.typ == TYPE_VECTOR and operation.right.typ == TYPE_VECTOR:
         result = _vector_math(context.group, operation.op, [left, right], TYPE_VECTOR, x, y)
     elif operation.op == "MULTIPLY":
-        if operation.left.typ == TYPE_VECTOR and operation.right.typ == TYPE_FLOAT:
+        if operation.left.typ == TYPE_VECTOR and operation.right.typ in numeric_types:
             result = _vector_math(context.group, "SCALE", [left, right], TYPE_VECTOR, x, y)
-        elif operation.left.typ == TYPE_FLOAT and operation.right.typ == TYPE_VECTOR:
+        elif operation.left.typ in numeric_types and operation.right.typ == TYPE_VECTOR:
             result = _vector_math(context.group, "SCALE", [right, left], TYPE_VECTOR, x, y)
         elif operation.left.typ == TYPE_VECTOR and operation.right.typ == TYPE_VECTOR:
             result = _vector_math(context.group, "MULTIPLY", [left, right], TYPE_VECTOR, x, y)
@@ -187,7 +216,7 @@ def _lower_binary(context, operation, materialized, x, y):
                 f"Internal error: unsupported Semantic IR binary lowering for "
                 f"{operation.left.typ} {operation.op} {operation.right.typ}"
             )
-    elif operation.op == "DIVIDE" and operation.left.typ == TYPE_VECTOR and operation.right.typ == TYPE_FLOAT:
+    elif operation.op == "DIVIDE" and operation.left.typ == TYPE_VECTOR and operation.right.typ in numeric_types:
         inv = _math(context.group, "DIVIDE", [_value(context.group, 1.0, x, y - 40), right], x, y)
         result = _vector_math(context.group, "SCALE", [left, inv], TYPE_VECTOR, x, y)
     else:

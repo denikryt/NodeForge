@@ -50,6 +50,13 @@ from .consteval import ConstEvalUnavailable, _const_eval, _is_const_vector
 from .compile_time import CompileTimeSnapshot, ConstVector
 from .errors import CompileError
 from .nf_types import NFType, NUMERIC_NF_TYPES
+from .numeric_semantics import (
+    INT_MIN,
+    normalize_float_constant,
+    normalize_int_constant,
+    resolve_numeric_binary,
+    resolve_numeric_unary_minus,
+)
 from .runtime_bindings import RuntimeBindingSymbol
 from .group_context import GroupContextSlot
 from .semantic_values import (
@@ -210,22 +217,36 @@ def _is_array_result(fact):
     return isinstance(fact.result_shape, ArrayResultShape)
 
 
+def _validate_known_int_domain(expr, environment):
+    """Reject hard Int-domain errors when one typed numeric expression is statically known.
+
+    This is semantic validation only. A successful compile-time evaluation does not
+    replace the runtime expression or authorize graph folding.
+    """
+    try:
+        _const_eval(expr, environment.const_eval_values)
+    except ConstEvalUnavailable:
+        return
+
+
 def _validate_binary(op_type, left_typ, right_typ):
-    """Return the current result type for one semantically valid binary operation."""
-    if op_type not in _BIN_OPS:
+    """Return the type-directed result for one semantically valid binary operation."""
+    operation = _BIN_OPS.get(op_type)
+    if operation is None:
         raise CompileError(f"Unsupported binary operator: {op_type.__name__}")
-    if _is_number_type(left_typ) and _is_number_type(right_typ):
-        return TYPE_FLOAT
+    numeric_result = resolve_numeric_binary(operation, left_typ, right_typ)
+    if numeric_result is not None:
+        return numeric_result
     if op_type in {ast.Add, ast.Sub} and left_typ == TYPE_VECTOR and right_typ == TYPE_VECTOR:
         return TYPE_VECTOR
     if op_type is ast.Mult:
-        if left_typ == TYPE_VECTOR and right_typ == TYPE_FLOAT:
+        if left_typ == TYPE_VECTOR and _is_number_type(right_typ):
             return TYPE_VECTOR
-        if left_typ == TYPE_FLOAT and right_typ == TYPE_VECTOR:
+        if _is_number_type(left_typ) and right_typ == TYPE_VECTOR:
             return TYPE_VECTOR
         if left_typ == TYPE_VECTOR and right_typ == TYPE_VECTOR:
             return TYPE_VECTOR
-    if op_type is ast.Div and left_typ == TYPE_VECTOR and right_typ == TYPE_FLOAT:
+    if op_type is ast.Div and left_typ == TYPE_VECTOR and _is_number_type(right_typ):
         return TYPE_VECTOR
     raise CompileError(f"Unsupported operation between {left_typ} and {right_typ}")
 
@@ -247,10 +268,12 @@ class _UnsupportedConstEvalValue:
 
 def _normalize_semantic_constant_inner(value, active):
     """Return one semantic constant plus whether its container graph contains a cycle."""
-    if isinstance(value, bool):
+    if type(value) is bool:
         return SemanticConstant("scalar", TYPE_BOOL, value), False
-    if isinstance(value, (int, float)):
-        return SemanticConstant("scalar", TYPE_FLOAT, value), False
+    if type(value) is int:
+        return SemanticConstant("scalar", TYPE_INT, normalize_int_constant(value)), False
+    if type(value) is float:
+        return SemanticConstant("scalar", TYPE_FLOAT, normalize_float_constant(value)), False
     if isinstance(value, str):
         return SemanticConstant("scalar", TYPE_STRING, value), False
     if _is_const_vector(value) or (
@@ -259,7 +282,11 @@ def _normalize_semantic_constant_inner(value, active):
         and all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in value)
     ):
         return (
-            SemanticConstant("vector", TYPE_VECTOR, tuple(float(item) for item in value)),
+            SemanticConstant(
+                "vector",
+                TYPE_VECTOR,
+                tuple(normalize_float_constant(item) for item in value),
+            ),
             False,
         )
     if isinstance(value, (list, tuple)):
@@ -292,7 +319,7 @@ def _normalize_semantic_constant(value):
 def _seed_const_eval_copy_memo(value, memo, visited):
     """Pre-seed deepcopy replacements while preserving supported container graph identity."""
     if _is_const_vector(value):
-        memo[id(value)] = tuple(float(item) for item in value)
+        memo[id(value)] = tuple(normalize_float_constant(item) for item in value)
         return
     if isinstance(value, (bool, int, float, str, type(None))):
         return
@@ -489,10 +516,14 @@ def analyze_expression(expr, environment):
 
     def analyze(node):
         if isinstance(node, ast.Constant):
-            if isinstance(node.value, bool):
+            if type(node.value) is bool:
                 return record(node, runtime_fact(TYPE_BOOL, literal_value=node.value))
-            if isinstance(node.value, (int, float)):
-                return record(node, runtime_fact(TYPE_FLOAT, literal_value=node.value))
+            if type(node.value) is int:
+                value = normalize_int_constant(node.value)
+                return record(node, runtime_fact(TYPE_INT, literal_value=value))
+            if type(node.value) is float:
+                value = normalize_float_constant(node.value)
+                return record(node, runtime_fact(TYPE_FLOAT, literal_value=value))
             if isinstance(node.value, str):
                 return record(node, runtime_fact(TYPE_STRING, literal_value=node.value))
             raise CompileError("Only numeric, boolean and string constants are supported")
@@ -560,7 +591,7 @@ def analyze_expression(expr, environment):
                 )
                 return record(node, ExpressionFact(_shape_for_constant(constant), resolved_name=resolved))
             if node.id in _ALLOWED_CONSTS:
-                value = _ALLOWED_CONSTS[node.id]
+                value = normalize_float_constant(_ALLOWED_CONSTS[node.id])
                 resolved = ResolvedName("allowed_constant", TYPE_FLOAT, name=node.id, value=value)
                 return record(node, runtime_fact(TYPE_FLOAT, resolved_name=resolved, literal_value=value))
             label = environment.reserved_name_labels.get(node.id)
@@ -779,9 +810,21 @@ def analyze_expression(expr, environment):
             right_typ = _require_runtime_type(right, "binary expression")
             op_type = type(node.op)
             typ = _validate_binary(op_type, left_typ, right_typ)
+            if typ is TYPE_INT:
+                _validate_known_int_domain(node, environment)
             return record(node, runtime_fact(typ, operation=_BIN_OPS[op_type]))
 
         if isinstance(node, ast.UnaryOp):
+            if (
+                isinstance(node.op, ast.USub)
+                and isinstance(node.operand, ast.Constant)
+                and type(node.operand.value) is int
+                and node.operand.value == -INT_MIN
+            ):
+                return record(
+                    node,
+                    runtime_fact(TYPE_INT, operation="SIGNED_INT_LITERAL", literal_value=INT_MIN),
+                )
             operand = analyze(node.operand)
             if operand is UNSUPPORTED:
                 return UNSUPPORTED
@@ -789,8 +832,11 @@ def analyze_expression(expr, environment):
                 return record(node, ExpressionFact(operand.result_shape, operation="+", array_id=operand.array_id))
             operand_typ = _require_runtime_type(operand, "unary expression")
             if isinstance(node.op, ast.USub):
-                if _is_number_type(operand_typ):
-                    return record(node, runtime_fact(TYPE_FLOAT, operation="-"))
+                numeric_type = resolve_numeric_unary_minus(operand_typ)
+                if numeric_type is not None:
+                    if numeric_type is TYPE_INT:
+                        _validate_known_int_domain(node, environment)
+                    return record(node, runtime_fact(numeric_type, operation="-"))
                 if operand_typ == TYPE_VECTOR:
                     return record(node, runtime_fact(TYPE_VECTOR, operation="-"))
                 raise CompileError(f"Unsupported unary operator: {type(node.op).__name__}")

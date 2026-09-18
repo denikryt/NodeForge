@@ -13,6 +13,7 @@ from NodeForge.consteval import (
 )
 from NodeForge.compile_time import CompileTimeState, ConstVector
 from NodeForge.errors import CompileError
+from NodeForge.numeric_semantics import normalize_float_constant
 
 pytestmark = pytest.mark.unit
 
@@ -57,13 +58,14 @@ def test_core_consteval_retains_structural_helpers_and_constants():
     assert _eval_expr("len([1, 2, 3])") == 3
     assert _eval_expr("sum([1, 2, 3])") == 6
     assert tuple(_eval_expr("vector(1, 2, 3)")) == (1.0, 2.0, 3.0)
-    assert _eval_expr("pi") == pi
-    assert _eval_expr("tau") == tau
-    assert _eval_expr("e") == e
+    assert _eval_expr("pi") == normalize_float_constant(pi)
+    assert _eval_expr("tau") == normalize_float_constant(tau)
+    assert _eval_expr("e") == normalize_float_constant(e)
 
 
 def test_core_consteval_keeps_operator_ownership_separate_from_named_math_calls():
-    assert _eval_expr("2 ** 3") == 8
+    with pytest.raises(ConstEvalUnavailable):
+        _eval_expr("2 ** 3")
     assert _eval_expr("5 % 2") == 1
 
     with pytest.raises(ConstEvalUnavailable):
