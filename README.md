@@ -6,7 +6,7 @@ NodeForge is a Blender add-on for describing Geometry Nodes logic in a Python-li
 
 ## Installation
 
-1. Download the `NodeForge-v<version>-blender.zip` file from the **Assets** section of the latest GitHub release.
+1. Download the latest `NodeForge-<version>-blender.zip` from the [**GitHub release**](https://github.com/denikryt/NodeForge/releases) section.
 2. In Blender, open **Edit → Preferences → Add-ons**.
 3. Open the Add-ons menu, choose **Install from Disk...**, and select the downloaded ZIP file.
 4. Enable **NodeForge** in the add-on list.
@@ -40,10 +40,12 @@ NodeForge scripts can call reusable functions and can be extended through instal
 
 ## Additional libraries
 
-- **NodeForge Math** adds math operations, reusable functions, and examples. Download the package ZIP from the [Assets section of the latest NodeForge release](https://github.com/denikryt/NodeForge/releases/latest), or browse its [source repository](https://github.com/denikryt/nodeforge.math).
+- **NodeForge Math** adds math operations, reusable functions, and examples. Download the package ZIP from the [NodeForge release section](https://github.com/denikryt/NodeForge/releases/latest), or browse its [source repository](https://github.com/denikryt/nodeforge.math).
 - **NodeForge L-System** adds tools for procedural L-system generation. [Download](https://www.patreon.com/nachitima/posts/nodeforge-l-v2-0-169730745)
 
 Install a library ZIP from the **Packages** section of the NodeForge tab in the Geometry Nodes Editor. Enable **Allow executable Python** when the package requires Python support.
+
+## Coverage
 
 The syntax follows Python as closely as the Geometry Nodes model allows. NodeForge adds a set of functions and language rules for concepts that are specific to Geometry Nodes, while ordinary expressions and control flow retain familiar Python syntax.
 
