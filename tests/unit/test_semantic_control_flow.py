@@ -184,13 +184,14 @@ def test_repeat_has_explicit_carried_state_and_int_count_literal():
     assert len(repeat.states) == 1
     state = repeat.states[0]
     assert state.source_name == "x"
+    assert state.typ is NFType.INT
     assert state.publish_to_parent is True
     assert "x" not in result.final_compile_time.values
 
 
 def test_repeat_body_can_read_non_carried_outer_binding():
     result = _lower(
-        'factor = input_float("Factor")\nx = 0\n'
+        'factor = input_float("Factor")\nx = 0.0\n'
         'for i in repeat_range(2):\n    x = x + factor\n'
         'output(x)'
     )
@@ -210,6 +211,7 @@ def test_nested_repeat_allows_sole_nonpublishing_enclosing_iteration_state():
     assert isinstance(inner, IRRepeat)
     assert len(inner.states) == 1
     assert inner.states[0].binding_id == outer.iteration_binding_id
+    assert inner.states[0].typ is NFType.INT
     assert inner.states[0].publish_to_parent is False
     # The statement after the inner Repeat still resolves the outer lexical Iteration BindingId.
     post_inner = outer.body.statements[1]
@@ -237,7 +239,7 @@ def test_repeat_runtime_if_uses_same_irif_and_repeat_merge_policy():
 
 
 
-def test_repeat_int_state_keeps_physical_input_type_separate_from_logical_output_type():
+def test_repeat_int_state_keeps_one_exact_type_through_exit():
     result = _lower(
         'x = input_int("X", default=1)\n'
         'for i in repeat_range(2):\n    x = x + 1\n'
@@ -245,8 +247,103 @@ def test_repeat_int_state_keeps_physical_input_type_separate_from_logical_output
     )
     repeat = result.body.statements[1]
     assert isinstance(repeat, IRRepeat)
-    assert repeat.states[0].input_type is NFType.INT
-    assert repeat.states[0].output_type is NFType.FLOAT
+    assert repeat.states[0].typ is NFType.INT
+    assert result.body.statements[2].value.result.typ is NFType.INT
+
+
+def test_repeat_float_state_keeps_one_exact_type_through_exit():
+    result = _lower(
+        'x = input_float("X", default=1.0)\n'
+        'for i in repeat_range(2):\n    x = x + 1.0\n'
+        'output(x)'
+    )
+    repeat = result.body.statements[1]
+    assert isinstance(repeat, IRRepeat)
+    assert repeat.states[0].typ is NFType.FLOAT
+    assert result.body.statements[2].value.result.typ is NFType.FLOAT
+
+
+def test_repeat_exact_state_rejects_int_to_float_assignment():
+    with pytest.raises(CompileError, match="repeat_range state 'x' changed type from INT to FLOAT"):
+        _lower(
+            'x = input_int("X", default=1)\n'
+            'for i in repeat_range(2):\n    x = x / 2\n'
+            'output(x)'
+        )
+
+
+def test_repeat_exact_state_rejects_float_to_int_assignment():
+    with pytest.raises(CompileError, match="repeat_range state 'x' changed type from FLOAT to INT"):
+        _lower(
+            'x = input_float("X", default=1.0)\n'
+            'for i in repeat_range(2):\n    x = 1\n'
+            'output(x)'
+        )
+
+
+def test_repeat_exact_state_rejects_temporary_type_change_even_if_later_restored():
+    with pytest.raises(CompileError, match="repeat_range state 'x' changed type from INT to FLOAT"):
+        _lower(
+            'x = input_int("X", default=1)\n'
+            'for i in repeat_range(2):\n'
+            '    x = x / 2\n'
+            '    x = 1\n'
+            'output(x)'
+        )
+
+
+def test_repeat_exact_state_rejects_augmented_type_change_before_later_restore():
+    with pytest.raises(CompileError, match="repeat_range state 'x' changed type from INT to FLOAT"):
+        _lower(
+            'x = input_int("X", default=1)\n'
+            'for i in repeat_range(2):\n'
+            '    x /= 2\n'
+            '    x = 1\n'
+            'output(x)'
+        )
+
+
+def test_repeat_exact_state_rejects_array_rebinding_before_runtime_state_disappears():
+    with pytest.raises(CompileError, match="repeat_range state 'x' changed type from INT to ARRAY"):
+        _lower(
+            'x = input_int("X", default=1)\n'
+            'for i in repeat_range(2):\n'
+            '    x = (1, 2)\n'
+            'output(x)'
+        )
+
+
+def test_repeat_exact_state_rejects_tuple_result_rebinding_before_runtime_state_disappears():
+    with pytest.raises(CompileError, match="repeat_range state 'x' changed type from INT to TUPLE"):
+        _lower(
+            'geo = input_geometry("Geometry")\n'
+            'x = input_int("X", default=1)\n'
+            'for i in repeat_range(2):\n'
+            '    x = capture_attribute(geo, 1.0)\n'
+            'output(x)'
+        )
+
+
+def test_repeat_exact_state_rejects_named_output_rebinding_before_runtime_state_disappears():
+    with pytest.raises(CompileError, match="repeat_range state 'x' changed type from INT to NAMED_OUTPUTS"):
+        _lower(
+            'x = input_int("X", default=1)\n'
+            'for i in repeat_range(2):\n'
+            '    x = node("ShaderNodeSeparateXYZ", outputs={"X": Float, "Y": Float})\n'
+            'output(x)'
+        )
+
+
+def test_repeat_exact_state_rejects_tuple_assignment_type_change_before_later_restore():
+    with pytest.raises(CompileError, match="repeat_range state 'x' changed type from INT to FLOAT"):
+        _lower(
+            'geo = input_geometry("Geometry")\n'
+            'x = input_int("X", default=1)\n'
+            'for i in repeat_range(2):\n'
+            '    geo, x = capture_attribute(geo, 1.0)\n'
+            '    x = 1\n'
+            'output(x)'
+        )
 
 
 def test_repeat_local_if_merge_order_follows_repeat_state_order():
@@ -353,8 +450,61 @@ def test_repeat_local_int_branch_merge_uses_type_directed_numeric_semantics():
     branch = repeat.body.statements[0]
     assert isinstance(branch, IRIf)
     assert branch.merges[0].typ is NFType.INT
-    assert branch.merges[0].false_coerce_to is None
-    assert branch.merges[0].true_coerce_to is None
+    assert not hasattr(branch.merges[0], "false_coerce_to")
+    assert not hasattr(branch.merges[0], "true_coerce_to")
+
+
+def test_repeat_local_float_branch_merge_keeps_exact_float_type():
+    result = _lower(
+        'x = input_float("X", default=1.0)\nflag = input_bool("Flag")\n'
+        'for i in repeat_range(2):\n'
+        '    if flag:\n        x = x + 1.0\n'
+        '    else:\n        x = x\n'
+        'output(x)'
+    )
+    repeat = result.body.statements[2]
+    branch = repeat.body.statements[0]
+    assert isinstance(branch, IRIf)
+    assert branch.merges[0].typ is NFType.FLOAT
+
+
+def test_repeat_local_if_rejects_int_to_float_assignment_before_merge():
+    with pytest.raises(CompileError, match="repeat_range state 'x' changed type from INT to FLOAT"):
+        _lower(
+            'x = input_int("X", default=1)\nflag = input_bool("Flag")\n'
+            'for i in repeat_range(2):\n'
+            '    if flag:\n        x = x + 1\n'
+            '    else:\n        x = x / 2\n'
+            'output(x)'
+        )
+
+
+def test_repeat_local_if_rejects_float_to_int_assignment_before_merge():
+    with pytest.raises(CompileError, match="repeat_range state 'x' changed type from FLOAT to INT"):
+        _lower(
+            'x = input_float("X", default=1.0)\nflag = input_bool("Flag")\n'
+            'for i in repeat_range(2):\n'
+            '    if flag:\n        x = x + 1.0\n'
+            '    else:\n        x = 1\n'
+            'output(x)'
+        )
+
+
+def test_post_repeat_int_remains_int_for_downstream_arithmetic():
+    from NodeForge.semantic_ir import IRAssign, IRBinary
+
+    result = _lower(
+        'x = input_int("X", default=1)\n'
+        'for i in repeat_range(2):\n    x = x + 1\n'
+        'y = x + 1\noutput(y)'
+    )
+    y_assign = next(
+        statement
+        for statement in result.body.statements
+        if isinstance(statement, IRAssign) and statement.source_name == "y"
+    )
+    binary = next(op for op in y_assign.value.operations if isinstance(op, IRBinary))
+    assert binary.result.typ is NFType.INT
 
 
 def test_contextual_store_inside_runtime_if_no_longer_forces_whole_body_fallback():

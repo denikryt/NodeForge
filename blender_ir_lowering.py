@@ -561,13 +561,6 @@ class BodyLoweringResult:
         object.__setattr__(self, "group_context_values", MappingProxyType(dict(self.group_context_values)))
 
 
-def _coerce_branch_value(value: Value, target_type):
-    """Apply the characterized Repeat Int/Float logical retag without creating a node."""
-    if target_type is None or value.typ is target_type:
-        return value
-    return Value(value.socket, target_type)
-
-
 def _lower_body_internal(
     context,
     body,
@@ -675,8 +668,6 @@ def _lower_body_internal(
                     false_value = false_result.runtime_bindings[merge.binding_id]
                 except KeyError as exc:
                     raise CompileError("Internal error: IRIf merge binding missing from branch backend state") from exc
-                true_value = _coerce_branch_value(true_value, merge.true_coerce_to)
-                false_value = _coerce_branch_value(false_value, merge.false_coerce_to)
                 if true_value.typ is not merge.typ or false_value.typ is not merge.typ:
                     raise CompileError("Internal error: IRIf backend merge type does not match semantic contract")
                 merged = _switch(
@@ -695,7 +686,7 @@ def _lower_body_internal(
                 _lower_program_result(context, statement.iterations, runtime_bindings, base_depth),
                 TYPE_INT,
             )
-            state_specs = tuple((state.input_type, state.source_name) for state in statement.states)
+            state_specs = tuple((state.typ, state.source_name) for state in statement.states)
             if repeat_origin is None:
                 repeat_x = 300 + layout_index * 160
                 repeat_y = -380 - layout_index * 70
@@ -715,13 +706,13 @@ def _lower_body_internal(
                     initial = runtime_bindings[state.binding_id]
                 except KeyError as exc:
                     raise CompileError(f"Internal error: missing Repeat entry state {state.source_name!r}") from exc
-                if initial.typ is not state.input_type:
+                if initial.typ is not state.typ:
                     raise CompileError("Internal error: Repeat backend entry type does not match semantic input type")
                 context.group.links.new(initial.socket, _socket_by_name(ri.inputs, state.source_name))
 
             body_bindings = dict(runtime_bindings)
             for state in statement.states:
-                body_bindings[state.binding_id] = Value(_socket_by_name(ri.outputs, state.source_name), state.input_type)
+                body_bindings[state.binding_id] = Value(_socket_by_name(ri.outputs, state.source_name), state.typ)
             body_bindings[statement.iteration_binding_id] = Value(ri.outputs[0], TYPE_INT)
             body_result = _lower_body_internal(
                 context,
@@ -737,10 +728,10 @@ def _lower_body_internal(
                     final_value = body_result.runtime_bindings[state.binding_id]
                 except KeyError as exc:
                     raise CompileError(f"Internal error: missing Repeat exit state {state.source_name!r}") from exc
-                if final_value.typ is not state.input_type and {final_value.typ, state.input_type} != {TYPE_INT, TYPE_FLOAT}:
+                if final_value.typ is not state.typ:
                     raise CompileError("Internal error: Repeat backend exit type violates semantic state contract")
                 context.group.links.new(final_value.socket, _socket_by_name(ro.inputs, state.source_name))
-                output_value = Value(_socket_by_name(ro.outputs, state.source_name), state.output_type)
+                output_value = Value(_socket_by_name(ro.outputs, state.source_name), state.typ)
                 if state.publish_to_parent:
                     runtime_bindings[state.binding_id] = output_value
                     auto_output = (state.source_name, output_value)

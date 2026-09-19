@@ -887,19 +887,20 @@ def test_runtime_if_remains_runtime_and_merges_int_state():
     assert binary.result.typ is TYPE_INT
 
 
-def test_repeat_stage30_boundary_and_exact_migration_marker_remain_visible():
-    import inspect
-    from NodeForge import semantic_control_flow
+def test_repeat_stage30_historical_type_split_and_marker_are_removed():
+    from pathlib import Path
+    import NodeForge
 
-    assert semantic_control_flow.repeat_state_output_type(TYPE_INT) is TYPE_FLOAT
-    source = inspect.getsource(semantic_control_flow.repeat_state_output_type)
-    marker = (
-        "TODO(nodeforge-migration): Type-directed numeric semantics now keeps ordinary Int\n"
-        "    # arithmetic as Int, but Repeat still publishes carried Int state through the historical\n"
-        "    # Float output contract. Do not add coercion or retagging here; remove this marker when\n"
-        "    # 30_repeat_exact_type_state.md replaces Repeat input/output typing with one exact NFType."
-    )
-    assert marker in source
+    root = Path(NodeForge.__file__).resolve().parent
+    control_flow_source = (root / "semantic_control_flow.py").read_text()
+    ir_source = (root / "semantic_ir.py").read_text()
+    backend_source = (root / "blender_ir_lowering.py").read_text()
+    combined = "\n".join((control_flow_source, ir_source, backend_source))
+    assert "repeat_state_output_type" not in combined
+    assert "Type-directed numeric semantics now keeps ordinary Int" not in combined
+    assert "false_coerce_to" not in combined
+    assert "true_coerce_to" not in combined
+    assert "_coerce_branch_value" not in combined
 
 
 def test_stage29_does_not_reintroduce_legacy_numeric_parity_or_stage26_numeric_todo():

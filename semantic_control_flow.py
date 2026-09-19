@@ -26,32 +26,16 @@ class BranchMergePolicy(str, Enum):
     REPEAT = "REPEAT"
 
 
-_REPEAT_STATE_TYPES = frozenset(
-    {NFType.GEOMETRY, NFType.VECTOR, NFType.FLOAT, NFType.INT, NFType.BOOL, NFType.BUNDLE}
-)
 _SWITCH_TYPES = frozenset(
     {NFType.FLOAT, NFType.INT, NFType.VECTOR, NFType.BOOL, NFType.GEOMETRY, NFType.STRING, NFType.BUNDLE}
 )
 
 
-def repeat_state_output_type(input_type: NFType) -> NFType:
-    """Return the legacy logical post-Repeat state type for one physical input type."""
-    if input_type not in _REPEAT_STATE_TYPES:
-        raise CompileError(f"repeat_range state has unsupported type {input_type}")
-    # TODO(nodeforge-migration): Type-directed numeric semantics now keeps ordinary Int
-    # arithmetic as Int, but Repeat still publishes carried Int state through the historical
-    # Float output contract. Do not add coercion or retagging here; remove this marker when
-    # 30_repeat_exact_type_state.md replaces Repeat input/output typing with one exact NFType.
-    return NFType.FLOAT if input_type is NFType.INT else input_type
-
-
-def require_repeat_state_assignment(name: str, input_type: NFType, assigned_type: NFType) -> None:
-    """Validate one Repeat state assignment against the existing Int/Float contract."""
-    if assigned_type is input_type:
+def require_repeat_state_assignment(name: str, expected_type: NFType, assigned_type: NFType) -> None:
+    """Require one Repeat carried state to preserve its exact semantic type."""
+    if assigned_type is expected_type:
         return
-    if {input_type, assigned_type} <= {NFType.INT, NFType.FLOAT}:
-        return
-    raise CompileError(f"repeat_range state {name!r} changed type from {input_type} to {assigned_type}")
+    raise CompileError(f"repeat_range state {name!r} changed type from {expected_type} to {assigned_type}")
 
 
 
@@ -265,21 +249,13 @@ def lower_runtime_if(
             continue
         true_type = true_symbol.typ if true_symbol is not None else merge_symbol.typ
         false_type = false_symbol.typ if false_symbol is not None else merge_symbol.typ
-        false_coerce = None
-        true_coerce = None
         if true_type is not false_type:
-            if policy is BranchMergePolicy.REPEAT and {true_type, false_type} <= {NFType.INT, NFType.FLOAT}:
-                typ = NFType.FLOAT
-                false_coerce = typ if false_type is NFType.INT else None
-                true_coerce = typ if true_type is NFType.INT else None
-            else:
-                prefix = "repeat_range if" if policy is BranchMergePolicy.REPEAT else "runtime if"
-                raise CompileError(f"{prefix} branch values for {name} have different types")
-        else:
-            typ = true_type
+            prefix = "repeat_range if" if policy is BranchMergePolicy.REPEAT else "runtime if"
+            raise CompileError(f"{prefix} branch values for {name} have different types")
+        typ = true_type
         if typ not in _SWITCH_TYPES:
             raise CompileError("runtime if branches must assign node values")
-        merges.append(IRBranchMerge(binding_id, name, typ, false_coerce, true_coerce))
+        merges.append(IRBranchMerge(binding_id, name, typ))
 
     if policy is BranchMergePolicy.TOP_LEVEL and not merges:
         raise CompileError("runtime if branches must assign at least one common variable")
@@ -305,6 +281,5 @@ __all__ = [
     "parse_repeat_range_for",
     "repeat_body_has_nonruntime_for",
     "repeat_mutation_names",
-    "repeat_state_output_type",
     "require_repeat_state_assignment",
 ]

@@ -595,27 +595,65 @@ def test_control_flow_ir_records_are_frozen_and_validate_local_structure_only():
     with pytest.raises(ValueError, match="source names"):
         IRIf(cond, body, body, (merge, IRBranchMerge(BindingId("scope", 2), "x", TYPE_FLOAT)))
     assert not hasattr(branch, "merge_policy")
+    assert [field.name for field in dataclasses.fields(merge)] == ["binding_id", "source_name", "typ"]
+    assert not hasattr(merge, "false_coerce_to")
+    assert not hasattr(merge, "true_coerce_to")
 
 
 def test_repeat_ir_accepts_sole_nonpublishing_state_and_rejects_local_collisions():
     """Repeat eligibility depends on physical carried state, not exit publication policy."""
     state_id = BindingId("scope", 1)
     iteration_id = BindingId("scope", 2)
-    state = IRRepeatState(state_id, "i", TYPE_INT, TYPE_FLOAT, 0, False)
+    state = IRRepeatState(state_id, "i", TYPE_INT, False)
     body = IRBody((IRDiscardExpression(_literal_program(TYPE_FLOAT, 1.0)),))
     repeat = IRRepeat(_literal_program(TYPE_INT, 2), iteration_id, "j", (state,), body)
     assert repeat.states == (state,)
+    assert [field.name for field in dataclasses.fields(state)] == [
+        "binding_id",
+        "source_name",
+        "typ",
+        "publish_to_parent",
+    ]
+    assert repeat.states[0].typ is TYPE_INT
     assert repeat.states[0].publish_to_parent is False
+    assert not hasattr(repeat.states[0], "input_type")
+    assert not hasattr(repeat.states[0], "output_type")
     with pytest.raises(TypeError, match="publish_to_parent"):
-        IRRepeatState(state_id, "i", TYPE_INT, TYPE_FLOAT, 0, 0)
-    with pytest.raises(TypeError, match="output type"):
-        IRRepeatState(state_id, "i", TYPE_FLOAT, TYPE_INT, 0, True)
+        IRRepeatState(state_id, "i", TYPE_INT, 0)
+    with pytest.raises(TypeError, match="unsupported Repeat state type"):
+        IRRepeatState(state_id, "i", TYPE_STRING, True)
     with pytest.raises(ValueError, match="BindingId"):
         IRRepeat(_literal_program(TYPE_INT, 2), state_id, "j", (state,), body)
     with pytest.raises(TypeError, match="at least one"):
         IRRepeat(_literal_program(TYPE_INT, 2), iteration_id, "j", (), body)
     with pytest.raises(TypeError, match="Int"):
         IRRepeat(_literal_program(TYPE_FLOAT, 2.0), iteration_id, "j", (state,), body)
+
+
+@pytest.mark.parametrize(
+    "typ",
+    [TYPE_GEOMETRY, TYPE_VECTOR, TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_BUNDLE],
+)
+def test_repeat_state_accepts_existing_supported_exact_types(typ):
+    state = IRRepeatState(BindingId("scope", 1), "state", typ, True)
+    assert state.typ is typ
+
+
+def test_repeat_states_preserve_tuple_order_as_the_single_ordering_authority():
+    """Repeat carried-state order is the immutable IRRepeat.states sequence order."""
+    first = IRRepeatState(BindingId("scope", 1), "first", TYPE_INT, True)
+    second = IRRepeatState(BindingId("scope", 2), "second", TYPE_FLOAT, True)
+    body = IRBody((IRDiscardExpression(_literal_program(TYPE_FLOAT, 1.0)),))
+
+    repeat = IRRepeat(
+        _literal_program(TYPE_INT, 2),
+        BindingId("scope", 3),
+        "i",
+        (second, first),
+        body,
+    )
+
+    assert repeat.states == (second, first)
 
 def _backend_context(backend, bindings=None, group=None):
     """Build an immutable explicit backend context for unit lowering tests."""

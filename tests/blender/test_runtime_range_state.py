@@ -38,6 +38,12 @@ output("Angle", angle)
     check(names == ["geo", "pos", "angle"], f"unexpected repeat item order: {names}")
     check(socket_types == ["GEOMETRY", "VECTOR", "FLOAT"], f"unexpected repeat item types: {socket_types}")
     check("next_pos" not in names and "piece" not in names, "loop temporaries became repeat state items")
+    outputs = {
+        item.name: item.socket_type
+        for item in group.interface.items_tree
+        if getattr(item, "item_type", "") == "SOCKET" and getattr(item, "in_out", "") == "OUTPUT"
+    }
+    check(outputs.get("Angle") == "NodeSocketFloat", f"Float Repeat output type changed: {outputs}")
 
 
 def test_repeat_range_geometry_branch_merge_uses_geometry_switch():
@@ -423,26 +429,33 @@ output("x", x)
     bpy.data.node_groups.remove(group)
 
 
-def test_repeat_int_state_keeps_int_physical_item_and_float_logical_exit():
-    """Legacy Int Repeat topology stays physical Int while post-Repeat semantics expose Float."""
+def test_repeat_int_state_keeps_exact_int_type_and_downstream_integer_arithmetic():
+    """Int Repeat state remains Int physically, semantically, and for downstream arithmetic."""
     group = compile_group(
         '''
 x = input_int("X", default=1)
 for i in repeat_range(2):
     x = x + 1
-output("x", x)
+y = x + 1
+output("y", y)
 ''',
-        "NFTest_repeat_int_physical_logical_split",
+        "NFTest_repeat_int_exact_state",
     )
     repeat_output = _repeat_output(group)
     items = list(repeat_output.repeat_items)
     check(len(items) == 1 and items[0].name == "x", f"unexpected Int Repeat state items: {[item.name for item in items]}")
-    check(items[0].socket_type == "INT", f"physical Int Repeat item changed type: {items[0].socket_type}")
+    check(items[0].socket_type == "INT", f"Int Repeat item changed type: {items[0].socket_type}")
     outputs = [
         item for item in group.interface.items_tree
         if getattr(item, "item_type", "") == "SOCKET" and getattr(item, "in_out", "") == "OUTPUT"
     ]
-    check(len(outputs) == 1 and outputs[0].socket_type == "NodeSocketFloat", "logical post-Repeat output stopped being Float")
+    check(len(outputs) == 1 and outputs[0].socket_type == "NodeSocketInt", "post-Repeat Int output did not remain Int")
+    integer_adds = [
+        node
+        for node in _nodes(group, "FunctionNodeIntegerMath")
+        if getattr(node, "operation", None) == "ADD"
+    ]
+    check(len(integer_adds) == 2, f"expected Int ADD inside and after Repeat, found {len(integer_adds)}")
     bpy.data.node_groups.remove(group)
 
 

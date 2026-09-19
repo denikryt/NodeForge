@@ -71,7 +71,6 @@ from .semantic_control_flow import (
     parse_repeat_range_for,
     repeat_body_has_nonruntime_for,
     repeat_mutation_names,
-    repeat_state_output_type,
     require_repeat_state_assignment,
     RuntimeMergeSymbol,
 )
@@ -87,6 +86,7 @@ from .semantic_values import (
     ObjectSemanticId,
     ObjectSemanticSnapshot,
     RuntimeResultShape,
+    SemanticResultShape,
     StructuralArrayId,
     StructuralArrayRef,
     StructuralArraySnapshot,
@@ -1155,6 +1155,39 @@ def lower_basic_body(
     def lower_statements(source_stmts, active: _BodySemanticState, active_compile_time: CompileTimeState, *, control_policy=None, repeat_merge_ids=None, repeat_merge_symbols=(), runtime_if_builder_baseline=None, root=False):
         statements = []
 
+        repeat_type_by_binding_id = (
+            {symbol.binding_id: symbol.typ for symbol in repeat_merge_symbols}
+            if control_policy is BranchMergePolicy.REPEAT
+            else {}
+        )
+
+        def validate_repeat_state_rebinding(
+            name: str,
+            assigned: NFType | SemanticResultShape,
+        ) -> None:
+            """Reject type or binding-category changes before mutating a Repeat carried state."""
+            current = active.runtime_bindings.get(name)
+            if current is None:
+                return
+            expected_type = repeat_type_by_binding_id.get(current.binding_id)
+            if expected_type is None:
+                return
+            if isinstance(assigned, NFType):
+                require_repeat_state_assignment(name, expected_type, assigned)
+                return
+            if isinstance(assigned, RuntimeResultShape):
+                require_repeat_state_assignment(name, expected_type, assigned.typ)
+                return
+            if isinstance(assigned, ArrayResultShape):
+                actual = "ARRAY"
+            elif isinstance(assigned, TupleResultShape):
+                actual = "TUPLE"
+            elif isinstance(assigned, NamedOutputsResultShape):
+                actual = "NAMED_OUTPUTS"
+            else:
+                raise CompileError("Internal error: unsupported semantic assignment result shape")
+            raise CompileError(f"repeat_range state {name!r} changed type from {expected_type} to {actual}")
+
         def emit(statement):
             """Append executable IR and make its backend auto-output result authoritative."""
             statements.append(statement)
@@ -1392,12 +1425,10 @@ def lower_basic_body(
                         builder_state_ids.add(builder_state.state_binding_id)
                         state_records.append(
                             IRRepeatState(
-                                builder_state.state_binding_id,
-                                name,
-                                NFType.GEOMETRY,
-                                NFType.GEOMETRY,
-                                len(state_records),
-                                True,
+                                binding_id=builder_state.state_binding_id,
+                                source_name=name,
+                                typ=NFType.GEOMETRY,
+                                publish_to_parent=True,
                             )
                         )
                         continue
@@ -1408,12 +1439,10 @@ def lower_basic_body(
                         raise CompileError(f"repeat_range state {name!r} has unsupported type {symbol.typ}")
                     state_records.append(
                         IRRepeatState(
-                            symbol.binding_id,
-                            name,
-                            symbol.typ,
-                            repeat_state_output_type(symbol.typ),
-                            len(state_records),
-                            symbol.binding_id not in active.lexical_iteration_ids,
+                            binding_id=symbol.binding_id,
+                            source_name=name,
+                            typ=symbol.typ,
+                            publish_to_parent=symbol.binding_id not in active.lexical_iteration_ids,
                         )
                     )
                 if not state_records:
@@ -1433,7 +1462,7 @@ def lower_basic_body(
                     if record.binding_id in builder_state_ids:
                         repeat_state.builder_states[record.source_name] = GeometryBuilderState(record.binding_id, (), True)
                     else:
-                        repeat_state.runtime_bindings[record.source_name] = RuntimeBindingSymbol(record.binding_id, record.input_type)
+                        repeat_state.runtime_bindings[record.source_name] = RuntimeBindingSymbol(record.binding_id, record.typ)
                 repeat_state.runtime_bindings[iteration_name] = RuntimeBindingSymbol(iteration_binding_id, NFType.INT)
                 repeat_state.lexical_iteration_ids.add(iteration_binding_id)
                 repeat_ir_body = lower_statements(
@@ -1443,7 +1472,7 @@ def lower_basic_body(
                     control_policy=BranchMergePolicy.REPEAT,
                     repeat_merge_ids=tuple(record.binding_id for record in state_records),
                     repeat_merge_symbols=tuple(
-                        RuntimeMergeSymbol(record.binding_id, record.source_name, record.input_type)
+                        RuntimeMergeSymbol(record.binding_id, record.source_name, record.typ)
                         for record in state_records
                     ),
                     root=False,
@@ -1459,7 +1488,7 @@ def lower_basic_body(
                     exit_symbol = repeat_state.runtime_bindings.get(record.source_name)
                     if exit_symbol is None:
                         raise CompileError(f"Internal error: missing Repeat state {record.source_name!r} after semantic body")
-                    require_repeat_state_assignment(record.source_name, record.input_type, exit_symbol.typ)
+                    require_repeat_state_assignment(record.source_name, record.typ, exit_symbol.typ)
                 repeat = IRRepeat(iterations.program, iteration_binding_id, iteration_name, tuple(state_records), repeat_ir_body)
                 emit(repeat)
                 active_compile_time.replace(repeat_compile_time)
@@ -1470,7 +1499,7 @@ def lower_basic_body(
                         active.builder_states[record.source_name] = GeometryBuilderState(record.binding_id, (), True)
                         active.changed_runtime_ids.add(record.binding_id)
                         continue
-                    active.runtime_bindings[record.source_name] = RuntimeBindingSymbol(record.binding_id, record.output_type)
+                    active.runtime_bindings[record.source_name] = RuntimeBindingSymbol(record.binding_id, record.typ)
                     active.changed_runtime_ids.add(record.binding_id)
                     clear_binding_object(active, record.binding_id)
                     active.interface_input_origins.pop(record.binding_id, None)
@@ -1498,6 +1527,7 @@ def lower_basic_body(
                     bindings = []
                     for name, source, shape in zip(names, analyzed.program.result.items, analyzed.result_shape.items):
                         active_compile_time.discard(name)
+                        validate_repeat_state_rebinding(name, shape)
                         symbol = bind_runtime(active, name, shape, changed=True)
                         bindings.append(IRLeafBinding(source, symbol.binding_id, shape.typ))
                     emit(IRBindLeaves(analyzed.program, tuple(bindings)))
@@ -1527,6 +1557,7 @@ def lower_basic_body(
                     except ValueError:
                         input_semantics = None
                     if input_semantics is not None:
+                        validate_repeat_state_rebinding(target, input_semantics.typ)
                         symbol = bind_input(active, target, input_semantics.typ)
                         declaration_id = identities.allocate_input_declaration_id(target)
                         active.interface_input_origins[symbol.binding_id] = declaration_id
@@ -1579,6 +1610,7 @@ def lower_basic_body(
                 analyzed = analyze_runtime_expression(stmt.value, active, active_compile_time, statements)
                 if analyzed is BODY_UNSUPPORTED:
                     return BODY_UNSUPPORTED
+                validate_repeat_state_rebinding(target, analyzed.result_shape)
                 if isinstance(analyzed.result_shape, ArrayResultShape):
                     array_id, planned_states, bind_statement, object_updates = _plan_array_result(
                         stmt.value,
@@ -1643,6 +1675,7 @@ def lower_basic_body(
                 if not isinstance(analyzed.result_shape, RuntimeResultShape) or not isinstance(analyzed.program.result, IRValue):
                     raise CompileError("Internal error: augmented assignment lowered to a structural result")
                 active_compile_time.discard(target)
+                validate_repeat_state_rebinding(target, analyzed.result_shape)
                 symbol = bind_runtime(active, target, analyzed.result_shape, changed=True)
                 active.explicitly_assigned_runtime_ids.add(symbol.binding_id)
                 emit(IRAssign(symbol.binding_id, target, analyzed.program))

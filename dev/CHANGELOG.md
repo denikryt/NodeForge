@@ -269,3 +269,7 @@ ion coverage.
 - Added type-directed numeric semantics: integer literals and integer-preserving arithmetic now remain signed-32 `Int`, mixed/Float arithmetic uses canonical Blender-compatible binary32 values, `//` and floored `%` have explicit Integer Math/Math lowering, and scalar comparisons choose typed Compare nodes.
 - Unified core numeric CTFE with the runtime language contract for characterized arithmetic, `len()` and left-to-right `sum()`, while keeping runtime numeric folding fail-closed and leaving named `nodeforge.math` callables package-owned.
 - Extended existing Vector scalar arithmetic to accept Int scalars without a cast IR, preserved reciprocal-plus-SCALE vector division semantics, and left the historical Repeat Int-to-Float publication boundary explicitly staged for the next migration.
+
+## 0.57.0
+
+- Made `repeat_range()` carried state exact-typed across entry, loop body, runtime branch merges, Repeat sockets, and post-Repeat publication. `Int` state now remains `Int` after Repeat, while type-changing assignments, runtime-to-structural rebinding, and branch merges fail with controlled compiler diagnostics instead of changing carried binding semantics or being logically retagged.

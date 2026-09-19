@@ -62,6 +62,8 @@ scaled = ratio + 0.5  # Float
 
 Known NodeForge `Float` values use Blender-compatible binary32 representation. Compile-time values such as `0.1`, `pi`, `tau`, `e`, Float defaults and supported compile-time arithmetic therefore use the same canonical Float representation expected by Geometry Nodes. Compile-time evaluation and runtime graph removal remain separate: knowing a numeric value does not by itself remove its Geometry Nodes operation.
 
+Variables carried by `repeat_range()` keep one semantic type for the full Repeat lifetime. Initialize a carried value with `1.0` when the loop state is intended to be `Float`; assigning a `Float` result to an `Int` carried state, or an `Int` result to a `Float` carried state, is a compile error. An `Int` carried state remains `Int` after the Repeat and continues to participate in integer-preserving arithmetic as `Int`.
+
 Named mathematical callables such as `sin()`, `cos()` and `sqrt()` are supplied by the separate `nodeforge.math` package. Core compile-time numeric semantics cover language operators and structural helpers; package-call compile-time evaluation belongs to the package protocol when that capability is added.
 
 ### How the compiler works

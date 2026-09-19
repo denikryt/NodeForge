@@ -152,7 +152,7 @@ def test_builder_only_repeat_uses_hidden_geometry_repeat_state():
     repeat = next(statement for statement in result.body.statements if isinstance(statement, IRRepeat))
     assert len(repeat.states) == 1
     assert repeat.states[0].source_name == "builder"
-    assert repeat.states[0].input_type is NFType.GEOMETRY
+    assert repeat.states[0].typ is NFType.GEOMETRY
 
 
 def test_repeat_runtime_if_merges_builder_hidden_geometry_state():

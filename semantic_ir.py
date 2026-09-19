@@ -588,8 +588,6 @@ class IRBranchMerge:
     binding_id: BindingId
     source_name: str
     typ: NFType
-    false_coerce_to: NFType | None = None
-    true_coerce_to: NFType | None = None
 
     def __post_init__(self) -> None:
         """Validate self-contained branch merge metadata."""
@@ -599,9 +597,6 @@ class IRBranchMerge:
             raise ValueError("source_name must be a non-empty string")
         if not isinstance(self.typ, NFType):
             raise TypeError("typ must be an NFType")
-        for value in (self.false_coerce_to, self.true_coerce_to):
-            if value is not None and not isinstance(value, NFType):
-                raise TypeError("branch coercion types must be NFType members or None")
 
 
 @dataclass(frozen=True)
@@ -639,13 +634,11 @@ _REPEAT_STATE_TYPES = frozenset({
 
 @dataclass(frozen=True)
 class IRRepeatState:
-    """Describe one physical Repeat item and its logical lexical-exit behavior."""
+    """Describe one Repeat carried binding with one exact semantic type."""
 
     binding_id: BindingId
     source_name: str
-    input_type: NFType
-    output_type: NFType
-    source_order: int
+    typ: NFType
     publish_to_parent: bool
 
     def __post_init__(self) -> None:
@@ -654,14 +647,8 @@ class IRRepeatState:
             raise TypeError("binding_id must be a BindingId")
         if not isinstance(self.source_name, str) or not self.source_name:
             raise ValueError("source_name must be a non-empty string")
-        if self.input_type not in _REPEAT_STATE_TYPES or self.output_type not in _REPEAT_STATE_TYPES:
+        if self.typ not in _REPEAT_STATE_TYPES:
             raise TypeError("IRRepeatState uses an unsupported Repeat state type")
-        if self.output_type is not self.input_type and not (
-            self.input_type is NFType.INT and self.output_type is NFType.FLOAT
-        ):
-            raise TypeError("IRRepeatState output type is incompatible with input type")
-        if not isinstance(self.source_order, int) or isinstance(self.source_order, bool) or self.source_order < 0:
-            raise ValueError("source_order must be a non-negative integer")
         if not isinstance(self.publish_to_parent, bool):
             raise TypeError("publish_to_parent must be bool")
 
@@ -691,15 +678,12 @@ class IRRepeat:
             raise TypeError("IRRepeat requires at least one IRRepeatState")
         ids = [item.binding_id for item in self.states]
         names = [item.source_name for item in self.states]
-        orders = [item.source_order for item in self.states]
         if self.iteration_binding_id in ids:
             raise ValueError("IRRepeat own iteration BindingId cannot also be carried state")
         if self.iteration_name in names:
             raise ValueError("IRRepeat own iteration name cannot also be a state name")
         if len(ids) != len(set(ids)) or len(names) != len(set(names)):
             raise ValueError("IRRepeat state IDs and names must be unique")
-        if orders != list(range(len(orders))):
-            raise ValueError("IRRepeat state source_order must be contiguous and ordered")
         if not isinstance(self.body, IRBody) or not self.body.statements:
             raise TypeError("IRRepeat body must be a non-empty IRBody")
 
