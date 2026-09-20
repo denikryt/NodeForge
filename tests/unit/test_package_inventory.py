@@ -28,21 +28,65 @@ def package_inventory(tmp_path):
 
 
 class _FakeGroupBackend:
-    """Exercise library adapters through the explicit group-backend contract."""
+    """Exercise library adapters through the prepared-only group-backend contract."""
 
     def __init__(self, callback):
         self._callback = callback
+        self._resolved_environment = None
+        self.requests = []
 
-    def create_or_update(
-        self, *, source, name, existing_group=None, build_options=None,
-        preserve_if_equivalent=False, finalize_before_commit=None
+    def _environment(self):
+        """Return one minimal immutable environment for source-only adapter fixtures."""
+        if self._resolved_environment is None:
+            from NodeForge.resolved_environment import ResolvedCatalog, ResolvedEnvironment
+            self._resolved_environment = ResolvedEnvironment(
+                {
+                    "functions": ResolvedCatalog("functions", {}),
+                    "examples": ResolvedCatalog("examples", {}),
+                    "local": ResolvedCatalog("local", {}),
+                },
+                {},
+            )
+        return self._resolved_environment
+
+    def new_source_callable_session(self):
+        """Return one root-attempt semantic source-call session."""
+        from NodeForge.source_callables import SourceCallableSession
+        return SourceCallableSession(resolved_environment=self._environment())
+
+    def prepare_source_compilation(
+        self, source, *, compilation_identity, source_callable_session=None, **kwargs
     ):
-        kwargs = dict(build_options or {})
-        if existing_group is not None:
-            kwargs["existing_group"] = existing_group
-        if preserve_if_equivalent:
+        """Prepare source semantics before the fake physical callback is invoked."""
+        from NodeForge.semantic_group import analyze_group_source
+        session = source_callable_session or self.new_source_callable_session()
+        return analyze_group_source(
+            source,
+            compilation_identity=compilation_identity,
+            resolved_environment=self._environment(),
+            backend_builtins=kwargs.get("backend_builtins"),
+            helper_namespace=kwargs.get("helper_namespace") or "NodeForge Group",
+            source_callable_session=session,
+        )
+
+    def create_or_update(self, request, *, finalize_before_commit=None):
+        self.requests.append(request)
+        kwargs = {}
+        if request.existing_group is not None:
+            kwargs["existing_group"] = request.existing_group
+        if request.function_group_cache is not None:
+            kwargs["function_group_cache"] = request.function_group_cache
+        if request.function_group_transaction is not None:
+            kwargs["function_group_transaction"] = request.function_group_transaction
+        if request.function_compilation_trace is not None:
+            kwargs["function_compilation_trace"] = request.function_compilation_trace
+        if request.function_compilation_inputs is not None:
+            kwargs["function_compilation_inputs"] = request.function_compilation_inputs
+        if request.function_instance_key is not None:
+            kwargs["function_instance_key"] = request.function_instance_key
+        if request.preserve_if_equivalent:
             kwargs["preserve_if_equivalent"] = True
-        group = self._callback(source, name, **kwargs)
+        group = self._callback(request.prepared_compilation.source, request.name, **kwargs)
         if not hasattr(group, "interface"):
             group.interface = types.SimpleNamespace(items_tree=[])
         if finalize_before_commit is not None:
@@ -50,16 +94,39 @@ class _FakeGroupBackend:
         return group
 
     def compile_group_callback(self, source, name="NodeForge Group", **kwargs):
-        """Provide the package-Python authoring callback over the same fake backend."""
+        """Provide the package-facing callback while keeping source out of physical publication."""
+        from NodeForge.blender_group_backend import BlenderGroupBuildRequest
+        from NodeForge.compiler_identities import GroupCompilationIdentity
         existing_group = kwargs.pop("existing_group", None)
         preserve = bool(kwargs.pop("preserve_if_equivalent", False))
-        return self.create_or_update(
-            source=source,
+        backend_builtins = kwargs.pop("backend_builtins", None)
+        source_callable_session = kwargs.pop("source_callable_session", None)
+        owner = f"FAKE/{name}"
+        prepared = self.prepare_source_compilation(
+            source,
+            compilation_identity=GroupCompilationIdentity(None, owner, owner, owner),
+            helper_namespace=name,
+            backend_builtins=backend_builtins,
+            source_callable_session=source_callable_session,
+        )
+        request = BlenderGroupBuildRequest(
+            prepared_compilation=prepared,
             name=name,
             existing_group=existing_group,
-            build_options=kwargs,
+            helper_namespace=name,
+            function_group_cache=kwargs.pop("function_group_cache", None),
+            function_group_transaction=(
+                kwargs.pop("function_group_transaction", None)
+                or kwargs.pop("local_helper_transaction", None)
+            ),
+            function_compilation_trace=kwargs.pop("function_compilation_trace", None),
+            function_compilation_inputs=kwargs.pop("function_compilation_inputs", None),
+            function_instance_key=kwargs.pop("function_instance_key", None),
+            source_callable_session=source_callable_session,
             preserve_if_equivalent=preserve,
         )
+        assert not kwargs
+        return self.create_or_update(request)
 
 def _write_manifest(
     root: Path,
@@ -399,7 +466,8 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
         compiled.append((group_name, existing_group, kwargs))
         return group
 
-    group_a = library.materialize_library_entry_group("examples", "demo", _FakeGroupBackend(compile_group))
+    backend_a = _FakeGroupBackend(compile_group)
+    group_a = library.materialize_library_entry_group("examples", "demo", backend_a)
     from NodeForge.compiler_identities import library_function_id
     from NodeForge.function_instances import (
         FUNCTION_DEFINITION_OWNER_PROP,
@@ -412,8 +480,8 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
     assert group_a["nodeforge_package_id"] == "vendor.a"
     assert group_a[FUNCTION_INSTANCE_KEY_PROP] == ""
     assert group_a[FUNCTION_DEFINITION_OWNER_PROP] == function_id_a.stable_key()
-    assert compiled[0][2]["function_group_owner_scope"] == expected_owner_a
-    assert compiled[0][2]["function_definition_identity"] == function_id_a.stable_key()
+    assert backend_a.requests[0].prepared_compilation.identity.owner_scope == expected_owner_a
+    assert backend_a.requests[0].prepared_compilation.identity.declaration_owner == function_id_a.stable_key()
     assert compiled[0][2]["function_instance_key"] == ""
     assert group_a.name in fake_bpy.data.node_groups
 
@@ -437,7 +505,7 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
 
 
 def test_library_materialization_contract_discriminator_is_explicit(package_inventory, tmp_path, monkeypatch):
-    """IR materialization selects call semantics while None selects direct shared definition."""
+    """Prepared source-call artifacts select reusable semantics while None selects direct catalog build."""
     class FakeGroup(dict):
         def __init__(self, name):
             super().__init__()
@@ -449,7 +517,10 @@ def test_library_materialization_contract_discriminator_is_explicit(package_inve
             return next((group for group in self if group.name == name), default)
 
     fake_groups = FakeNodeGroups()
-    fake_bpy = types.SimpleNamespace(data=types.SimpleNamespace(node_groups=fake_groups), app=types.SimpleNamespace(driver_namespace={}))
+    fake_bpy = types.SimpleNamespace(
+        data=types.SimpleNamespace(node_groups=fake_groups),
+        app=types.SimpleNamespace(driver_namespace={}),
+    )
     monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
     import NodeForge.library as library
     library = importlib.reload(library)
@@ -461,6 +532,7 @@ def test_library_materialization_contract_discriminator_is_explicit(package_inve
     packages.install_package_directory(source, allow_python=False)
 
     calls = []
+
     def compile_group(source_text, group_name, existing_group=None, **kwargs):
         group = existing_group or FakeGroup(f"{group_name}.{len(fake_groups)}")
         if group not in fake_groups:
@@ -468,41 +540,52 @@ def test_library_materialization_contract_discriminator_is_explicit(package_inve
         calls.append(kwargs)
         return group
 
-    from NodeForge.compiler_identities import CallSiteId, library_function_id
-    from NodeForge.function_instances import function_group_owner_scope, instance_key_for
+    from NodeForge.compiler_identities import CallSiteId, GroupCompilationIdentity, library_function_id
+    from NodeForge.function_instances import (
+        function_group_owner_scope,
+        function_materialization_owner_scope,
+        instance_key_for,
+    )
     from NodeForge.semantic_ir import IRFunctionMaterialization, IRFunctionMaterializationMode
+    from NodeForge.function_materializer import FunctionMaterializationContext, FunctionMaterializer
 
-    from NodeForge.function_materializer import FunctionMaterializationContext
-
+    backend = _FakeGroupBackend(compile_group)
     function_id = library_function_id("functions", "vendor.contract", "demo")
     direct_result = library.get_or_create_library_entry_group(
-        "functions", "demo", _FakeGroupBackend(compile_group), materialization=None
+        "functions", "demo", backend, materialization=None
     )
     direct = direct_result.group
     assert direct_result.instance_key == ""
     assert direct.get("nodeforge_function_instance_key") == ""
-    assert calls[-1]["function_group_owner_scope"] == function_group_owner_scope(
+    assert backend.requests[-1].prepared_compilation.identity.owner_scope == function_group_owner_scope(
         "LIBRARY", "functions", "vendor.contract", "demo", instance_key=None
     )
-    assert calls[-1]["function_group_cache"] is None
-    assert calls[-1]["function_group_transaction"] is None
-    assert calls[-1]["function_compilation_trace"] is None
+    assert "function_group_cache" not in calls[-1]
+    assert "function_group_transaction" not in calls[-1]
+    assert "function_compilation_trace" not in calls[-1]
 
     call_site = CallSiteId("root-owner", function_id, 0)
-    materialization = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.UNIQUE, call_site)
-    monkeypatch.setattr(
-        library,
-        "library_function_id",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("reusable adapter must not reconstruct FunctionId")),
+    materialization = IRFunctionMaterialization(
+        function_id, IRFunctionMaterializationMode.UNIQUE, call_site
+    )
+    record = library.find_library_entry_record("functions", "demo")
+    assert record is not None
+    owner_scope = function_materialization_owner_scope(materialization)
+    stable_id = function_id.stable_key()
+    session = backend.new_source_callable_session()
+    prepared_callable = session.prepare_library(
+        function_id=function_id,
+        identity=GroupCompilationIdentity(None, owner_scope, stable_id, stable_id),
+        record=record,
+        backend_builtins={},
     )
     cache = {}
-    context = FunctionMaterializationContext(cache, None, None)
-    unique_result = library.get_or_create_library_entry_group(
-        "functions",
-        "demo",
-        _FakeGroupBackend(compile_group),
+    context = FunctionMaterializationContext(cache, None, None, session)
+    unique_result = library.materialize_prepared_library_callable(
+        record,
+        FunctionMaterializer(group_backend=backend),
+        prepared_callable,
         materialization=materialization,
-        function_id=function_id,
         materialization_context=context,
     )
     unique = unique_result.group
@@ -510,20 +593,19 @@ def test_library_materialization_contract_discriminator_is_explicit(package_inve
     assert unique_result.instance_key == unique_key
     assert unique is not direct
     assert unique.get("nodeforge_function_instance_key") == unique_key
-    assert calls[-1]["function_group_owner_scope"] == function_group_owner_scope(
+    assert backend.requests[-1].prepared_compilation.identity.owner_scope == function_group_owner_scope(
         "LIBRARY", "functions", "vendor.contract", "demo", instance_key=unique_key
     )
     assert cache[("library", function_id, unique_key)] is unique
 
     other_id = library_function_id("functions", "vendor.other", "demo")
     wrong = IRFunctionMaterialization(other_id, IRFunctionMaterializationMode.SHARED)
-    with pytest.raises(CompileError, match="does not match"):
-        library.get_or_create_library_entry_group(
-            "functions",
-            "demo",
-            _FakeGroupBackend(compile_group),
+    with pytest.raises(CompileError, match="inconsistent materialization identity"):
+        library.materialize_prepared_library_callable(
+            record,
+            FunctionMaterializer(group_backend=backend),
+            prepared_callable,
             materialization=wrong,
-            function_id=function_id,
             materialization_context=context,
         )
 
@@ -1022,8 +1104,8 @@ def test_uninstall_removes_invalid_record_without_deleting_untrusted_target(pack
     assert marker.read_text(encoding="utf-8") == "keep"
 
 
-def test_local_catalog_adapter_does_not_use_generic_function_group_cache(monkeypatch, tmp_path):
-    """Active Local catalog materialization must not acquire reusable-cache semantics."""
+def test_local_catalog_adapter_uses_build_local_transaction_cache(monkeypatch, tmp_path):
+    """Local source materialization reuses the transaction-tracked build cache and fingerprint."""
     class FakeGroup(dict):
         def __init__(self, name):
             super().__init__()
@@ -1035,32 +1117,26 @@ def test_local_catalog_adapter_does_not_use_generic_function_group_cache(monkeyp
         def get(self, name, default=None):
             return next((group for group in self if group.name == name), default)
 
-    class ExplodingMapping(dict):
-        def __getitem__(self, key):
-            raise AssertionError("Local catalog must not read function_group_cache")
-        def get(self, key, default=None):
-            raise AssertionError("Local catalog must not read function_group_cache")
-        def __contains__(self, key):
-            raise AssertionError("Local catalog must not inspect function_group_cache")
-        def __setitem__(self, key, value):
-            raise AssertionError("Local catalog must not write function_group_cache")
-        def setdefault(self, key, default=None):
-            raise AssertionError("Local catalog must not write function_group_cache")
-
     class Frame:
         def __init__(self):
-            self.unproven = []
-            self.children = []
-        def mark_unproven(self, reason):
-            self.unproven.append(reason)
-        def record_dependency(self, materialization, fingerprint):
-            self.children.append((materialization, fingerprint))
+            self.identity_children = []
+
+        def record_dependency_identity(self, owner_scope, fingerprint):
+            self.identity_children.append((owner_scope, fingerprint))
 
     fake_groups = FakeNodeGroups()
-    fake_bpy = types.SimpleNamespace(data=types.SimpleNamespace(node_groups=fake_groups), app=types.SimpleNamespace(driver_namespace={}))
+    fake_bpy = types.SimpleNamespace(
+        data=types.SimpleNamespace(node_groups=fake_groups),
+        app=types.SimpleNamespace(driver_namespace={}),
+    )
     monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
     import NodeForge.library as library
     library = importlib.reload(library)
+
+    from NodeForge.function_instances import (
+        FUNCTION_COMPILATION_FINGERPRINT_PROP,
+        direct_library_owner_scope,
+    )
     from NodeForge.function_materializer import FunctionMaterializationContext
 
     source_path = tmp_path / "demo.nf"
@@ -1084,23 +1160,33 @@ def test_local_catalog_adapter_does_not_use_generic_function_group_cache(monkeyp
     def compile_group(source, group_name, **kwargs):
         callback_calls.append(kwargs)
         group = FakeGroup(group_name)
+        group[FUNCTION_COMPILATION_FINGERPRINT_PROP] = "local-fingerprint"
         fake_groups.append(group)
         return group
 
-    materialized = library.get_or_create_library_entry_group(
-        "local",
-        "demo",
-        _FakeGroupBackend(compile_group),
-        materialization_context=FunctionMaterializationContext(
-            ExplodingMapping(), transaction, trace
-        ),
-    )
-    group = materialized.group
+    backend = _FakeGroupBackend(compile_group)
+    cache = {}
+    session = backend.new_source_callable_session()
+    context = FunctionMaterializationContext(cache, transaction, trace, session)
 
-    assert materialized.instance_key == ""
-    assert group is fake_groups[-1]
+    first = library.get_or_create_library_entry_group(
+        "local", "demo", backend, materialization_context=context
+    )
+    second = library.get_or_create_library_entry_group(
+        "local", "demo", backend, materialization_context=context
+    )
+
+    assert first.group is second.group
+    assert first.instance_key == second.instance_key == ""
+    assert len(callback_calls) == 1
+    function_id = library.library_function_id("local", None, "demo")
+    assert cache[("local-catalog", function_id)] is first.group
     assert callback_calls[0]["function_group_transaction"] is transaction
     assert callback_calls[0]["function_compilation_trace"] is trace
-    assert "function_group_cache" not in callback_calls[0]
-    assert frame.unproven == ["local catalog dependency"]
-    assert frame.children == []
+    assert callback_calls[0]["function_compilation_inputs"]["kind"] == "library"
+    assert callback_calls[0]["function_compilation_inputs"]["namespace"] == "local"
+    owner = direct_library_owner_scope("local", function_id.package_id, "demo")
+    assert frame.identity_children == [
+        (owner, "local-fingerprint"),
+        (owner, "local-fingerprint"),
+    ]

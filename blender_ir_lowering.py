@@ -8,7 +8,7 @@ from typing import Mapping
 
 from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR
 from .errors import CompileError
-from .compiler_identities import BindingId
+from .compiler_identities import BindingId, InputDeclarationId, normalize_library_package_id
 from .group_context import GroupContextSlot
 from .nodes import _boolean_math, _combine_xyz_mixed, _compare, _int_value, _integer_math, _math, _separate_xyz, _string_value, _switch, _value, _vector_math
 from .geometry import (
@@ -61,9 +61,16 @@ from .semantic_ir import (
     IRRepeat,
     IRPanelDeclaration,
 )
-from .values import NodeResult, ObjectValue, TupleValue, Value
-from .interface import _create_group_input_socket, _create_interface_panel, interface_item_for_group_input_value
+from .values import NodeResult, ObjectValue, TupleValue, Value, make_value
+from .interface import _create_group_input_socket, _create_interface_panel, _set_socket_default
 from .runtime import _create_repeat_zone, _socket_by_name
+from .function_instances import (
+    FUNCTION_INSTANCE_KEY_PROP,
+    function_group_owner_scope,
+    function_materialization_owner_scope,
+)
+from .function_materializer import FunctionMaterializationContext, FunctionMaterializer
+from .source_callables import SourceCallablePreparationKey
 
 
 @dataclass(frozen=True)
@@ -78,14 +85,23 @@ class BlenderIRLoweringContext:
     group: object
     runtime_bindings: Mapping[BindingId, Value]
     group_context_values: Mapping[GroupContextSlot, Value] = None
+    interface_input_items: dict | None = None
+    source_callable_session: object | None = None
+    function_materializer: FunctionMaterializer | None = None
+    function_materialization_context: FunctionMaterializationContext | None = None
+    helper_namespace: str = "Group"
 
     def __post_init__(self):
-        """Freeze runtime bindings and detach mutable contextual backend state."""
+        """Freeze value bindings while retaining explicit mutable backend-owned maps."""
         object.__setattr__(self, "runtime_bindings", MappingProxyType(dict(self.runtime_bindings)))
         initial = {} if self.group_context_values is None else dict(self.group_context_values)
         if not all(isinstance(slot, GroupContextSlot) and isinstance(value, Value) for slot, value in initial.items()):
             raise TypeError("group_context_values must map GroupContextSlot to Value")
         object.__setattr__(self, "group_context_values", initial)
+        interface_items = {} if self.interface_input_items is None else self.interface_input_items
+        if not isinstance(interface_items, dict):
+            raise TypeError("interface_input_items must be a mutable dict")
+        object.__setattr__(self, "interface_input_items", interface_items)
 
 
 def _position(depth):
@@ -459,11 +475,103 @@ def _lower_builtin_call(context, operation, operands, x, y):
     raise CompileError(f"Internal error: no Blender lowering for builtin Call IR {name!r}")
 
 
+def _source_call_owner_scope(operation):
+    """Return the final physical owner already selected by source-call semantics."""
+    function_id = operation.target.function_id
+    if operation.materialization is not None:
+        if operation.materialization.callee != function_id:
+            raise CompileError("Internal error: source Call IR materialization target mismatch")
+        return function_materialization_owner_scope(operation.materialization)
+    if function_id is None or function_id.namespace != "local":
+        raise CompileError("Internal error: source Call IR without materialization must be Local catalog")
+    return function_group_owner_scope("LIBRARY", "local", "", function_id.name)
+
+
+def _lower_source_call(context, operation, operands, x, y):
+    """Materialize one prepared source callable and wire a GeometryNodeGroup by positions."""
+    from .library import (
+        _input_sockets as _group_node_inputs,
+        _output_sockets as _group_node_outputs,
+        apply_function_node_display_name,
+        materialize_prepared_library_callable,
+    )
+
+    session = context.source_callable_session
+    materializer = context.function_materializer
+    materialization_context = context.function_materialization_context
+    function_id = operation.target.function_id
+    if session is None or materializer is None or materialization_context is None or function_id is None:
+        raise CompileError("Internal error: source Call IR reached backend without source-call services")
+    owner_scope = _source_call_owner_scope(operation)
+    key = SourceCallablePreparationKey(function_id, owner_scope)
+    prepared_callable = session.get_prepared(key)
+    if prepared_callable.group.identity.owner_scope != owner_scope:
+        raise CompileError("Internal error: prepared source callable owner mismatch")
+    contract = prepared_callable.contract
+    if contract.function_id != function_id:
+        raise CompileError("Internal error: prepared source callable FunctionId mismatch")
+    if len(contract.outputs) != len(operation.results):
+        raise CompileError("Internal error: source-call result arity changed before Blender lowering")
+    for result, output in zip(operation.results, contract.outputs):
+        if result.typ is not output.typ:
+            raise CompileError("Internal error: source-call result type changed before Blender lowering")
+
+    if function_id.kind == "LOCAL_DEF":
+        if operation.materialization is None:
+            raise CompileError("Internal error: script-local function call requires materialization policy")
+        from .local_functions import build_prepared_local_materialization_spec
+
+        spec = build_prepared_local_materialization_spec(
+            prepared_callable,
+            operation.materialization,
+            helper_namespace=context.helper_namespace,
+        )
+        materialized_group = materializer.materialize_local(spec, materialization_context)
+    else:
+        record = session.resolved_environment.catalog(function_id.namespace).find(function_id.name)
+        if record is None or normalize_library_package_id(getattr(record, "package_id", "")) != function_id.package_id:
+            raise CompileError("Internal error: prepared library callable no longer matches resolved catalog")
+        materialized_group = materialize_prepared_library_callable(
+            record,
+            materializer,
+            prepared_callable,
+            materialization=operation.materialization,
+            materialization_context=materialization_context,
+        )
+
+    node = context.group.nodes.new("GeometryNodeGroup")
+    node.location = (x, y)
+    node.node_tree = materialized_group.group
+    apply_function_node_display_name(node, materialized_group.group)
+    physical_inputs = _group_node_inputs(node)
+    for static in operation.static_arguments:
+        if static.parameter_index >= len(physical_inputs):
+            raise CompileError("Internal error: source-call static input position is out of range")
+        _set_socket_default(physical_inputs[static.parameter_index], static.value)
+    for argument, value in zip(operation.arguments, operands):
+        position = argument.parameter_index
+        if position is None or position >= len(physical_inputs):
+            raise CompileError("Internal error: source-call runtime input position is out of range")
+        context.group.links.new(value.socket, physical_inputs[position])
+
+    physical_outputs = _group_node_outputs(node)
+    values = []
+    for result, output in zip(operation.results, contract.outputs):
+        if output.index >= len(physical_outputs):
+            raise CompileError("Internal error: source-call output position is out of range")
+        values.append(make_value(physical_outputs[output.index], result.typ))
+    if operation.materialization is not None and operation.materialization.mode.value == "UNIQUE":
+        node[FUNCTION_INSTANCE_KEY_PROP] = materialized_group.instance_key
+    return tuple(values)
+
+
 def _lower_call(context, operation, materialized, x, y):
     """Materialize one typed Call IR operation without source AST or Compiler state."""
     operands = [_materialized_value(materialized, argument.value) for argument in operation.arguments]
     if operation.target.kind is IRCallableKind.BUILTIN:
         result = _lower_builtin_call(context, operation, operands, x, y)
+    elif operation.target.kind is IRCallableKind.SOURCE_FUNCTION:
+        result = _lower_source_call(context, operation, operands, x, y)
     else:
         raise CompileError(f"Internal error: unsupported Call IR target kind {operation.target.kind}")
     _store_call_results(materialized, operation, result)
@@ -590,6 +698,7 @@ def _lower_body_internal(
                 declaration_id=statement.declaration_id,
             )
             runtime_bindings[statement.target_binding_id] = value
+            context.interface_input_items[statement.declaration_id] = _iface
             auto_output = (statement.target_name, value)
             continue
         if isinstance(statement, IRAssign):
@@ -630,11 +739,10 @@ def _lower_body_internal(
             if group_input is None:
                 raise CompileError("Internal error: panel declaration requires Group Input context")
             sockets = []
-            for binding_id in statement.member_binding_ids:
-                value = runtime_bindings.get(binding_id)
-                iface_item = interface_item_for_group_input_value(context.group, group_input, value)
+            for origin in statement.member_origins:
+                iface_item = context.interface_input_items.get(origin)
                 if iface_item is None:
-                    raise CompileError("Internal error: semantic panel member is not a physical Group Input")
+                    raise CompileError("Internal error: semantic panel origin has no physical Group Input item")
                 sockets.append(iface_item)
             _create_interface_panel(context.group, sockets, statement.name, collapsed=statement.collapsed)
             auto_output = None

@@ -4,7 +4,7 @@ from helpers import *
 
 
 def test_import_and_registry_checks():
-    for modname in ['compiler', 'expression_compiler', 'statement_compiler', 'local_functions', 'library_calls', 'systems.registry']:
+    for modname in ['compiler', 'expression_compiler', 'statement_compiler', 'local_functions', 'source_callables', 'semantic_group', 'callable_contracts', 'systems.registry']:
         __import__('NodeForge.' + modname)
     for module in (io, vector, geometry, fields, instancing):
         missing = sorted((name for name in module.NAMES if not registry.has_callable_builtin(name)))

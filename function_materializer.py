@@ -13,9 +13,12 @@ from types import MappingProxyType
 from typing import Callable, Mapping, MutableMapping
 
 from .errors import CompileError
+from .group_build_request import BlenderGroupBuildRequest
 from .compiler_identities import FunctionId
 from .semantic_ir import IRFunctionMaterialization
+from .semantic_group import SemanticGroupCompilation
 from .function_instances import (
+    direct_library_owner_scope,
     function_group_owner_scope,
     function_materialization_owner_scope,
     instance_key_for_materialization,
@@ -37,6 +40,7 @@ class FunctionMaterializationContext:
     function_group_cache: MutableMapping
     function_group_transaction: object | None
     function_compilation_trace: object | None
+    source_callable_session: object | None = None
 
 
 @dataclass(frozen=True)
@@ -55,18 +59,19 @@ class LocalFunctionMaterializationSpec:
     materialization: IRFunctionMaterialization
     logical_namespace: str
     group_name: str
-    source: str
+    prepared_compilation: SemanticGroupCompilation
     definition_owner: str
     own_inputs: Mapping[str, object]
-    compile_kwargs: Mapping[str, object]
+    helper_namespace: str | None
     find_existing: Callable[..., object | None]
     is_live_group: Callable[[object], bool]
     finalize_group: Callable[[object, str, str], None]
 
     def __post_init__(self):
-        """Freeze mutable request mappings at the materializer boundary."""
+        """Freeze mappings and require one prepared source authority."""
+        if not isinstance(self.prepared_compilation, SemanticGroupCompilation):
+            raise TypeError("prepared_compilation must be SemanticGroupCompilation")
         object.__setattr__(self, "own_inputs", _frozen_mapping(self.own_inputs))
-        object.__setattr__(self, "compile_kwargs", _frozen_mapping(self.compile_kwargs))
 
 
 @dataclass(frozen=True)
@@ -76,9 +81,9 @@ class LibraryFunctionMaterializationSpec:
     namespace: str
     name: str
     record: object
-    source: str
-    backend_builtins: Mapping[str, object]
+    prepared_compilation: SemanticGroupCompilation
     function_id: FunctionId
+    source_callable_session: object | None
     materialization: IRFunctionMaterialization | None
     group_name: str
     backend_signature: str
@@ -86,8 +91,9 @@ class LibraryFunctionMaterializationSpec:
     write_package_metadata: Callable[[object, object], None]
 
     def __post_init__(self):
-        """Freeze package-local backend helpers at the request boundary."""
-        object.__setattr__(self, "backend_builtins", _frozen_mapping(self.backend_builtins))
+        """Require one prepared source authority."""
+        if not isinstance(self.prepared_compilation, SemanticGroupCompilation):
+            raise TypeError("prepared_compilation must be SemanticGroupCompilation")
 
 
 @dataclass(frozen=True)
@@ -97,17 +103,18 @@ class LibraryFunctionUpdateSpec:
     namespace: str
     name: str
     record: object
-    source: str
-    backend_builtins: Mapping[str, object]
+    prepared_compilation: SemanticGroupCompilation
     function_id: FunctionId
+    source_callable_session: object | None
     group: object
     group_name: str
     backend_signature: str
     write_package_metadata: Callable[[object, object], None]
 
     def __post_init__(self):
-        """Freeze package-local backend helpers at the request boundary."""
-        object.__setattr__(self, "backend_builtins", _frozen_mapping(self.backend_builtins))
+        """Require one prepared source authority."""
+        if not isinstance(self.prepared_compilation, SemanticGroupCompilation):
+            raise TypeError("prepared_compilation must be SemanticGroupCompilation")
 
 
 class FunctionMaterializer:
@@ -131,6 +138,8 @@ class FunctionMaterializer:
         instance_key = instance_key_for_materialization(materialization)
         callee = materialization.callee
         owner_scope = function_materialization_owner_scope(materialization)
+        if spec.prepared_compilation.identity.owner_scope != owner_scope:
+            raise CompileError("Internal error: prepared local callable owner does not match materialization")
         cache_key = ("local-def", callee, instance_key or "SHARED")
         function_cache = context.function_group_cache
         function_group = function_cache.get(cache_key)
@@ -148,26 +157,21 @@ class FunctionMaterializer:
             instance_key=instance_key,
             transaction=context.function_group_transaction,
         )
-        compile_kwargs = dict(spec.compile_kwargs)
-        compile_kwargs.update({
-            "function_group_cache": function_cache,
-            "function_group_transaction": context.function_group_transaction,
-            "function_group_owner_scope": owner_scope,
-            "function_definition_owner": spec.definition_owner,
-            "function_compilation_trace": context.function_compilation_trace,
-            "function_compilation_inputs": dict(spec.own_inputs),
-            "function_definition_identity": callee.stable_key(),
-            "function_instance_key": instance_key,
-        })
-        if existing is not None:
-            compile_kwargs["preserve_if_equivalent"] = True
-        preserve_if_equivalent = bool(compile_kwargs.pop("preserve_if_equivalent", False))
-        function_group = self._group_backend.create_or_update(
-            source=spec.source,
+        request = BlenderGroupBuildRequest(
+            prepared_compilation=spec.prepared_compilation,
             name=spec.group_name,
             existing_group=existing,
-            build_options=compile_kwargs,
-            preserve_if_equivalent=preserve_if_equivalent,
+            helper_namespace=spec.helper_namespace,
+            function_group_cache=function_cache,
+            function_group_transaction=context.function_group_transaction,
+            function_compilation_trace=context.function_compilation_trace,
+            function_compilation_inputs=dict(spec.own_inputs),
+            function_instance_key=instance_key,
+            source_callable_session=context.source_callable_session,
+            preserve_if_equivalent=existing is not None,
+        )
+        function_group = self._group_backend.create_or_update(
+            request,
             finalize_before_commit=lambda group: spec.finalize_group(
                 group, stored_fingerprint(group), instance_key
             ),
@@ -208,13 +212,13 @@ class FunctionMaterializer:
         if materialization is not None:
             owner_scope = function_materialization_owner_scope(materialization)
         else:
-            owner_scope = function_group_owner_scope(
-                "LIBRARY",
+            owner_scope = direct_library_owner_scope(
                 namespace,
                 function_id.package_id,
                 function_id.name,
-                instance_key=instance_key or None,
             )
+        if spec.prepared_compilation.identity.owner_scope != owner_scope:
+            raise CompileError("Internal error: prepared library callable owner does not match materialization")
         cache_key = ("library", function_id, instance_key or "SHARED")
         if use_reusable_cache and cache_key in context.function_group_cache:
             group = context.function_group_cache[cache_key]
@@ -233,23 +237,10 @@ class FunctionMaterializer:
             "package_id": function_id.package_id,
             "package_version": getattr(spec.record, "package_version", "") or "",
             "name": spec.name,
-            "source": normalized_source(spec.source),
+            "source": normalized_source(spec.prepared_compilation.source),
             "backend_signature": spec.backend_signature,
         }
         existing = spec.find_existing(spec.record, instance_key=instance_key, transaction=transaction)
-        compile_kwargs = {
-            "backend_builtins": dict(spec.backend_builtins),
-            "function_group_cache": cache,
-            "function_group_transaction": transaction,
-            "function_group_owner_scope": owner_scope,
-            "function_definition_owner": definition_identity,
-            "function_compilation_trace": trace,
-            "function_compilation_inputs": own_inputs,
-            "function_definition_identity": definition_identity,
-            "function_instance_key": instance_key,
-        }
-        if existing is not None:
-            compile_kwargs["preserve_if_equivalent"] = True
         def finalize_before_commit(group):
             spec.write_package_metadata(group, spec.record)
             stamp_function_metadata(
@@ -258,15 +249,24 @@ class FunctionMaterializer:
                 definition_owner=spec.function_id.stable_key(),
                 fingerprint=stored_fingerprint(group),
             )
-            group["nodeforge_library_source"] = spec.source
+            group["nodeforge_library_source"] = spec.prepared_compilation.source
 
-        preserve_if_equivalent = bool(compile_kwargs.pop("preserve_if_equivalent", False))
-        group = self._group_backend.create_or_update(
-            source=spec.source,
+        request = BlenderGroupBuildRequest(
+            prepared_compilation=spec.prepared_compilation,
             name=spec.group_name,
             existing_group=existing,
-            build_options=compile_kwargs,
-            preserve_if_equivalent=preserve_if_equivalent,
+            function_group_cache=cache,
+            function_group_transaction=transaction,
+            function_compilation_trace=trace,
+            function_compilation_inputs=own_inputs,
+            function_instance_key=instance_key,
+            source_callable_session=(
+                context.source_callable_session if context is not None else spec.source_callable_session
+            ),
+            preserve_if_equivalent=existing is not None,
+        )
+        group = self._group_backend.create_or_update(
+            request,
             finalize_before_commit=finalize_before_commit,
         )
         if use_reusable_cache:
@@ -280,17 +280,31 @@ class FunctionMaterializer:
         spec: LibraryFunctionMaterializationSpec,
         context: FunctionMaterializationContext | None,
     ):
-        """Build a fresh Local catalog dependency without generic reusable caching."""
+        """Materialize one build-local Local catalog child with real freshness metadata."""
+        local_owner = direct_library_owner_scope("local", spec.function_id.package_id, spec.name)
+        if spec.prepared_compilation.identity.owner_scope != local_owner:
+            raise CompileError("Internal error: prepared Local catalog owner does not match physical policy")
         transaction = context.function_group_transaction if context is not None else None
         trace = context.function_compilation_trace if context is not None else None
-        local_owner = function_group_owner_scope("LIBRARY", "local", "", spec.name)
-        compile_kwargs = {
-            "backend_builtins": dict(spec.backend_builtins),
-            "function_group_transaction": transaction,
-            "function_group_owner_scope": local_owner,
-            "function_definition_owner": local_owner,
-            "function_definition_identity": spec.function_id.stable_key(),
-            "function_compilation_trace": trace,
+        cache = context.function_group_cache if context is not None else None
+        cache_key = ("local-catalog", spec.function_id)
+        if cache is not None:
+            cached = cache.get(cache_key)
+            if cached is not None:
+                fingerprint = stored_fingerprint(cached)
+                if not fingerprint:
+                    raise CompileError("Internal error: cached Local catalog group has no compilation fingerprint")
+                self._record_dependency_identity(trace, local_owner, fingerprint)
+                return cached
+
+        own_inputs = {
+            "kind": "library",
+            "namespace": "local",
+            "package_id": spec.function_id.package_id,
+            "package_version": getattr(spec.record, "package_version", "") or "",
+            "name": spec.name,
+            "source": normalized_source(spec.prepared_compilation.source),
+            "backend_signature": spec.backend_signature,
         }
         def finalize_before_commit(group):
             spec.write_package_metadata(group, spec.record)
@@ -300,63 +314,80 @@ class FunctionMaterializer:
                 definition_owner=spec.function_id.stable_key(),
                 fingerprint=stored_fingerprint(group),
             )
-            group["nodeforge_library_source"] = spec.source
+            group["nodeforge_library_source"] = spec.prepared_compilation.source
 
-        group = self._group_backend.create_or_update(
-            source=spec.source,
+        request = BlenderGroupBuildRequest(
+            prepared_compilation=spec.prepared_compilation,
             name=spec.group_name,
-            build_options=compile_kwargs,
+            function_group_transaction=transaction,
+            function_compilation_trace=trace,
+            function_compilation_inputs=own_inputs,
+            source_callable_session=(
+                context.source_callable_session if context is not None else spec.source_callable_session
+            ),
+        )
+        group = self._group_backend.create_or_update(
+            request,
             finalize_before_commit=finalize_before_commit,
         )
-        frame = getattr(trace, "current", None)
-        if frame is not None:
-            # IR_DEPENDENCY_LOCAL_CATALOG_MIGRATION: Local catalog calls do not yet carry
-            # reusable IRFunctionMaterialization identity because their current fresh-snapshot
-            # contract intentionally has no shared/unique instance identity. Preserve the existing
-            # freshness-unproven fallback here. Remove this branch when Local catalog calls have an
-            # explicit semantic dependency contract and their ownership/reuse semantics are defined
-            # and regression-tested in a dedicated plan.
-            frame.mark_unproven("local catalog dependency")
+        fingerprint = stored_fingerprint(group)
+        if not fingerprint:
+            raise CompileError("Internal error: Local catalog materialization produced no compilation fingerprint")
+        if cache is not None:
+            cache[cache_key] = group
+        self._record_dependency_identity(trace, local_owner, fingerprint)
         return group
 
     def update_library_group(self, spec: LibraryFunctionUpdateSpec):
-        """Update exactly one provenance-validated editable catalog root group."""
+        """Update one provenance-validated catalog root from prepared semantics."""
         stable_function_id = spec.function_id.stable_key()
-        owner_scope = function_group_owner_scope(
-            "LIBRARY",
+        expected_owner_scope = direct_library_owner_scope(
             spec.namespace,
             spec.function_id.package_id,
             spec.function_id.name,
         )
-        compile_kwargs = {
-            "backend_builtins": dict(spec.backend_builtins),
-            "function_group_owner_scope": owner_scope,
-            "function_definition_owner": stable_function_id,
-            "function_compilation_inputs": {
+        expected_definition_owner = (
+            expected_owner_scope if spec.namespace == "local" else stable_function_id
+        )
+        identity = spec.prepared_compilation.identity
+        if identity.owner_scope != expected_owner_scope:
+            raise CompileError("Internal error: prepared library update owner does not match selected root")
+        if identity.definition_owner != expected_definition_owner:
+            raise CompileError("Internal error: prepared library update definition owner does not match selected root")
+        if identity.declaration_owner != stable_function_id:
+            raise CompileError("Internal error: prepared library update declaration owner does not match selected root")
+        request = BlenderGroupBuildRequest(
+            prepared_compilation=spec.prepared_compilation,
+            name=spec.group_name,
+            existing_group=spec.group,
+            function_compilation_inputs={
                 "kind": "library-root",
                 "namespace": spec.namespace,
                 "package_id": spec.function_id.package_id,
                 "package_version": getattr(spec.record, "package_version", "") or "",
                 "name": spec.name,
-                "source": normalized_source(spec.source),
+                "source": normalized_source(spec.prepared_compilation.source),
                 "backend_signature": spec.backend_signature,
             },
-            "function_definition_identity": stable_function_id,
-            "preserve_if_equivalent": True,
-        }
+            source_callable_session=spec.source_callable_session,
+            preserve_if_equivalent=True,
+        )
+
         def finalize_before_commit(group):
             spec.write_package_metadata(group, spec.record)
-            group["nodeforge_library_source"] = spec.source
+            group["nodeforge_library_source"] = spec.prepared_compilation.source
 
-        preserve_if_equivalent = bool(compile_kwargs.pop("preserve_if_equivalent", False))
         return self._group_backend.create_or_update(
-            source=spec.source,
-            name=spec.group_name,
-            existing_group=spec.group,
-            build_options=compile_kwargs,
-            preserve_if_equivalent=preserve_if_equivalent,
+            request,
             finalize_before_commit=finalize_before_commit,
         )
+
+    @staticmethod
+    def _record_dependency_identity(trace, owner_scope: str, fingerprint: str | None) -> None:
+        """Record one realized dependency using canonical owner/fingerprint facts."""
+        frame = getattr(trace, "current", None)
+        if frame is not None:
+            frame.record_dependency_identity(owner_scope, fingerprint)
 
     @staticmethod
     def _record_dependency(trace, materialization: IRFunctionMaterialization, group) -> None:

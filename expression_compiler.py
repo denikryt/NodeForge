@@ -12,7 +12,6 @@ from .compile_time import reject_compile_time_object
 from .geometry_builder import GeometryBuilder
 from .systems import registry as systems_registry
 from . import local_functions
-from . import library_calls
 from .function_instances import extract_function_call_modifiers, unsupported_unique
 from .call_resolution import CallableEnvironment, CallableKind, UNRESOLVED, resolve_simple_callable
 from .builtin_call_semantics import (
@@ -351,21 +350,10 @@ def compile_expr(comp, expr, depth=0):
             if function_modifiers.unique_was_explicit:
                 raise unsupported_unique(name)
             return systems_registry.compile_resolved_call(comp, cleaned_expr, resolved.target, depth)
-        if resolved.kind is CallableKind.LOCAL_FUNCTION:
-            return local_functions.compile_local_function_call(comp, cleaned_expr, depth, modifiers=function_modifiers)
         if resolved.kind is CallableKind.BACKEND_HELPER:
             if function_modifiers.unique_was_explicit:
                 raise unsupported_unique(name)
             return local_functions.compile_backend_builtin_call(comp, cleaned_expr, depth)
-        if resolved.kind is CallableKind.LIBRARY:
-            return library_calls.compile_library_function_call(
-                comp,
-                cleaned_expr,
-                depth,
-                binding=resolved.target,
-                function_id=resolved.library_function_id,
-                modifiers=function_modifiers,
-            )
         raise CompileError(f"Internal error: unsupported resolved callable category {resolved.kind}")
 
     raise CompileError(f"Unsupported expression element: {type(expr).__name__}")

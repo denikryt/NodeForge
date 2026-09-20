@@ -87,18 +87,38 @@ output("Loose", loose)
     check(_panel_children(group, "First") == ["B", "A"], f"wrong First order: {_panel_children(group, 'First')}")
     check(_panel_children(group, "Second") == ["C"], "Second membership is wrong")
 
+    wrapper = bpy.data.node_groups.new("NFTest_panel_multiple_wrapper", "GeometryNodeTree")
+    group_node = wrapper.nodes.new("GeometryNodeGroup")
+    group_node.node_tree = group
+    physical_order = [socket.name for socket in group_node.inputs]
+    check(
+        physical_order == ["Loose", "B", "A", "C"],
+        f"panelized callable order mismatch: {physical_order}",
+    )
+
 
 def test_interface_panel_accepts_implicit_external_input():
     source = '''
 result = source_value * 2
+loose = input_float("Loose")
 panel([source_value], name="Inputs")
-output("Value", result)
+output("Value", result + loose)
 '''
     group = compile_group(source, "NFTest_panel_implicit")
     inputs = _interface_inputs(group)
     check("source_value" in inputs, "implicit external input was not created")
     check(_parent_name(inputs["source_value"]) == "Inputs", "implicit external input was not grouped")
+    check(_parent_name(inputs["Loose"]) == "", "explicit root input did not remain outside the panel")
     check("panel" not in inputs, "panel helper was incorrectly inferred as an implicit input")
+
+    wrapper = bpy.data.node_groups.new("NFTest_panel_implicit_wrapper", "GeometryNodeTree")
+    group_node = wrapper.nodes.new("GeometryNodeGroup")
+    group_node.node_tree = group
+    physical_order = [socket.name for socket in group_node.inputs]
+    check(
+        physical_order == ["Loose", "source_value"],
+        f"mixed root/panel callable order mismatch: {physical_order}",
+    )
 
 
 def test_interface_panel_rejects_invalid_members_and_arguments():

@@ -1,94 +1,53 @@
-"""Unit-level checks for Package inventory local-function capture analysis."""
+"""Unit checks for frontend-owned local-function capture analysis."""
 
 import ast
-import sys
-import types
+from pathlib import Path
 
 import pytest
+
+from NodeForge.compiler_identities import BindingId, local_function_id
+from NodeForge.constants import TYPE_FLOAT
+from NodeForge.runtime_bindings import RuntimeBindingSymbol
+from NodeForge.source_callables import analyze_local_captures
 
 pytestmark = pytest.mark.unit
 
 
-def _import_local_functions_with_stubbed_bpy(monkeypatch):
-    """Import local_functions in ordinary CPython without a Blender runtime."""
-    monkeypatch.setitem(sys.modules, "bpy", types.SimpleNamespace(data=types.SimpleNamespace(node_groups={})))
-    from NodeForge import local_functions
-
-    return local_functions
-
-
-class _CaptureComp:
-    """Minimal compiler-like object consumed by _analyze_captures."""
-
-    def __init__(self, labels, *, vars=None, consts=None, local_functions=None):
-        from NodeForge.compiler_identities import BindingId
-        from NodeForge.runtime_bindings import RuntimeBindingSymbol
-
-        self._values = dict(vars or {})
-        self._symbols = {
-            binding_name: RuntimeBindingSymbol(BindingId("capture-test", index), value.typ)
-            for index, (binding_name, value) in enumerate(self._values.items())
-        }
-        from NodeForge.compile_time import CompileTimeState
-
-        self.compile_time = CompileTimeState(consts or {})
-        self.local_functions = dict(local_functions or {})
-        self.reserved_name_labels = labels
-
-    def runtime_binding(self, name):
-        """Return frontend metadata for one test runtime capture."""
-        return self._symbols.get(name)
-
-    def runtime_value(self, name):
-        """Return the exact backend-like test object paired with a runtime symbol."""
-        return self._values.get(name)
-
-    def has_legacy_structural_binding(self, name):
-        """These capture fixtures contain no structural bindings."""
-        return False
-
-    def legacy_structural_binding(self, name):
-        """Return no structural fixture value."""
-        return None
+def _runtime_bindings(names):
+    """Build detached frontend runtime symbols for capture fixtures."""
+    return {
+        name: RuntimeBindingSymbol(BindingId("capture-test", index), TYPE_FLOAT)
+        for index, name in enumerate(names)
+    }
 
 
-def test_local_function_allowed_compile_time_constants_are_not_hidden_captures(monkeypatch):
-    local_functions = _import_local_functions_with_stubbed_bpy(monkeypatch)
+def _captures(fn, *, runtime=(), consts=None, functions=None, labels=None):
+    """Run the permanent frontend capture analyzer with detached semantic state."""
+    return analyze_local_captures(
+        fn,
+        local_functions=dict(functions or {}),
+        runtime_bindings=_runtime_bindings(runtime),
+        compile_time_values=dict(consts or {}),
+        reserved_name_labels=dict(labels or {}),
+    )
+
+
+def test_local_function_allowed_compile_time_constants_are_not_hidden_captures():
     fn = ast.parse("def f(x):\n    return x * pi + tau - e\n").body[0]
-
-    captures = local_functions._analyze_captures(
-        _CaptureComp({"pi": "compile-time constant", "tau": "compile-time constant", "e": "compile-time constant"}),
-        fn,
-    )
-
-    assert captures == ()
+    assert _captures(fn, labels={"pi": "compile-time constant", "tau": "compile-time constant", "e": "compile-time constant"}) == ()
 
 
-
-def test_same_name_runtime_capture_wins_over_compile_time(monkeypatch):
-    """Runtime capture keeps precedence when compile-time state has the same source name."""
-    local_functions = _import_local_functions_with_stubbed_bpy(monkeypatch)
-    from NodeForge.constants import TYPE_FLOAT
-
-    class _Value:
-        typ = TYPE_FLOAT
-
+def test_same_name_runtime_capture_wins_over_compile_time():
+    """Runtime binding metadata remains authoritative when CTFE has the same name."""
     fn = ast.parse("def f():\n    return a\n").body[0]
-    runtime_value = _Value()
-    captures = local_functions._analyze_captures(
-        _CaptureComp({}, vars={"a": runtime_value}, consts={"a": 7}),
-        fn,
-    )
+    captures = _captures(fn, runtime=("a",), consts={"a": 7})
+    assert len(captures) == 1
+    assert captures[0].name == "a"
+    assert captures[0].runtime is True
+    assert captures[0].typ is TYPE_FLOAT
 
-    assert captures == (("a", runtime_value, True, TYPE_FLOAT),)
 
-def test_local_function_nested_local_function_calls_forward_outer_captures(monkeypatch):
-    local_functions = _import_local_functions_with_stubbed_bpy(monkeypatch)
-    from NodeForge.constants import TYPE_FLOAT
-
-    class _Value:
-        typ = TYPE_FLOAT
-
+def test_local_function_nested_local_function_calls_forward_outer_captures():
     stmts = ast.parse(
         """
 a = input_float("A")
@@ -101,34 +60,29 @@ def f(x):
 """
     ).body
     functions = {stmt.name: stmt for stmt in stmts if isinstance(stmt, ast.FunctionDef)}
-
-    captures = local_functions._analyze_captures(
-        _CaptureComp({}, vars={"a": _Value()}, local_functions=functions),
-        functions["f"],
-    )
-
-    assert [capture[0] for capture in captures] == ["a"]
-    assert captures[0][2] is True
+    captures = _captures(functions["f"], runtime=("a",), functions=functions)
+    assert [capture.name for capture in captures] == ["a"]
+    assert captures[0].runtime is True
 
 
-def test_local_function_helper_namespace_fragment_preserves_distinct_parent_identities(monkeypatch):
-    local_functions = _import_local_functions_with_stubbed_bpy(monkeypatch)
-
-    assert local_functions._helper_namespace_fragment("A_B") == "A_B"
-    assert local_functions._helper_namespace_fragment("A.B") != local_functions._helper_namespace_fragment("A_B")
-    assert local_functions._logical_namespace("A.B") == "A.B"
+def test_local_function_definition_owner_identity_is_non_lossy():
+    """Distinct parent owner strings remain distinct in canonical local FunctionId identity."""
+    dotted = local_function_id("A.B", "helper", "x:FLOAT")
+    underscored = local_function_id("A_B", "helper", "x:FLOAT")
+    assert dotted != underscored
+    assert dotted.stable_key() != underscored.stable_key()
 
 
 def test_local_call_hands_physical_materialization_to_function_materializer():
-    """Keep local AST/capture work outside the physical helper lifecycle authority."""
-    from pathlib import Path
+    """Frontend source-call analysis and physical local-helper realization stay separate."""
+    root = Path(__file__).resolve().parents[2]
+    semantic_source = (root / "semantic_analysis.py").read_text(encoding="utf-8")
+    lowering_source = (root / "blender_ir_lowering.py").read_text(encoding="utf-8")
+    physical_source = (root / "local_functions.py").read_text(encoding="utf-8")
 
-    source = (Path(__file__).resolve().parents[2] / "local_functions.py").read_text(encoding="utf-8")
-    body = source.split("def compile_local_function_call", 1)[1]
-    assert "LocalFunctionMaterializationSpec(" in body
-    assert "FunctionMaterializationContext(" in body
-    assert ").materialize_local(spec, context)" in body
-    assert "comp.compile_group_callback(" not in body
-    after_resolution = body.split("materialization = comp.resolve_reusable_function_materialization", 1)[1]
-    assert "function_group_owner_scope(" not in after_resolution
-    assert "_find_local_helper(" not in after_resolution
+    assert "session.prepare_local(" in semantic_source
+    assert "IRFunctionMaterialization(" in semantic_source
+    assert "build_prepared_local_materialization_spec" in lowering_source
+    assert ".materialize_local(" in lowering_source
+    assert "def compile_local_function_call" not in physical_source
+    assert "resolve_reusable_function_materialization" not in physical_source

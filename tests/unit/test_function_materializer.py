@@ -5,10 +5,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from NodeForge.compiler_identities import CallSiteId, library_function_id, local_function_id
+from NodeForge.compiler_identities import (
+    CallSiteId,
+    GroupCompilationIdentity,
+    library_function_id,
+    local_function_id,
+)
 from NodeForge.errors import CompileError
 from NodeForge.function_instances import (
     FUNCTION_COMPILATION_FINGERPRINT_PROP,
+    direct_library_owner_scope,
     function_group_owner_scope,
     function_materialization_owner_scope,
     instance_key_for,
@@ -20,7 +26,9 @@ from NodeForge.function_materializer import (
     LibraryFunctionUpdateSpec,
     LocalFunctionMaterializationSpec,
 )
-from NodeForge.semantic_ir import IRFunctionMaterialization, IRFunctionMaterializationMode
+from NodeForge.callable_contracts import GroupInterfaceContract
+from NodeForge.semantic_group import SemanticGroupCompilation
+from NodeForge.semantic_ir import IRBody, IRFunctionMaterialization, IRFunctionMaterializationMode
 
 
 class FakeGroup(dict):
@@ -43,17 +51,26 @@ class FakeBackend:
         self.callback = callback
         self.calls = []
 
-    def create_or_update(
-        self, *, source, name, existing_group=None, build_options=None,
-        preserve_if_equivalent=False, finalize_before_commit=None
-    ):
-        kwargs = dict(build_options or {})
-        if existing_group is not None:
-            kwargs["existing_group"] = existing_group
-        if preserve_if_equivalent:
+    def create_or_update(self, request, *, finalize_before_commit=None):
+        kwargs = {}
+        for field_name in (
+            "existing_group",
+            "helper_namespace",
+            "function_group_cache",
+            "function_group_transaction",
+            "function_compilation_trace",
+            "function_compilation_inputs",
+            "function_instance_key",
+            "source_callable_session",
+        ):
+            value = getattr(request, field_name)
+            if value is not None:
+                kwargs[field_name] = value
+        if request.preserve_if_equivalent:
             kwargs["preserve_if_equivalent"] = True
-        self.calls.append((source, name, dict(kwargs)))
-        group = self.callback(source, name, **kwargs)
+        source = request.prepared_compilation.source
+        self.calls.append(request)
+        group = self.callback(source, request.name, **kwargs)
         if finalize_before_commit is not None:
             finalize_before_commit(group)
         return group
@@ -69,10 +86,14 @@ class Frame:
 
     def __init__(self):
         self.children = []
+        self.identity_children = []
         self.unproven = []
 
     def record_dependency(self, materialization, fingerprint):
         self.children.append((materialization, fingerprint))
+
+    def record_dependency_identity(self, owner_scope, fingerprint):
+        self.identity_children.append((owner_scope, fingerprint))
 
     def mark_unproven(self, reason):
         self.unproven.append(reason)
@@ -83,6 +104,18 @@ class Trace:
 
     def __init__(self, frame=None):
         self.current = frame
+
+
+def _prepared(source, *, owner_scope, definition_owner, declaration_owner):
+    """Build a minimal immutable semantic group artifact for materializer tests."""
+    return SemanticGroupCompilation(
+        source=source,
+        identity=GroupCompilationIdentity(None, owner_scope, definition_owner, declaration_owner),
+        normalized_lowered_source="normalized-body",
+        body=IRBody(()),
+        interface=GroupInterfaceContract((), ()),
+        geometry_mode=False,
+    )
 
 
 def local_request(*, materialization, existing=None, live=True, finalize=None):
@@ -99,11 +132,18 @@ def local_request(*, materialization, existing=None, live=True, finalize=None):
         group["finalized"] = (fingerprint, instance_key)
         group.name = "Helper"
 
+    owner_scope = function_materialization_owner_scope(materialization)
+    prepared = _prepared(
+        "output(value=1)\n",
+        owner_scope=owner_scope,
+        definition_owner=callee.definition_owner,
+        declaration_owner=callee.stable_key(),
+    )
     return LocalFunctionMaterializationSpec(
         materialization=materialization,
         logical_namespace="Root",
         group_name="Helper",
-        source="output(value=1)\n",
+        prepared_compilation=prepared,
         definition_owner=callee.definition_owner,
         own_inputs={
             "kind": "local-def",
@@ -112,13 +152,7 @@ def local_request(*, materialization, existing=None, live=True, finalize=None):
             "signature": callee.signature,
             "source": "output(value=1)\n",
         },
-        compile_kwargs={
-            "local_functions": {"nested": object()},
-            "backend_builtins": {"backend": object()},
-            "imported_library_functions": {"imported": object()},
-            "helper_namespace": "Root",
-            "local_helper_transaction": object(),
-        },
+        helper_namespace="Root",
         find_existing=find_existing,
         is_live_group=lambda group: live,
         finalize_group=finalize or default_finalize,
@@ -151,13 +185,24 @@ def library_request(*, namespace="functions", materialization=None, write_metada
     def default_write(group, record_arg):
         group["package"] = record_arg.package_id
 
+    if materialization is None:
+        owner_scope = direct_library_owner_scope(namespace, function_id.package_id, function_id.name)
+    else:
+        owner_scope = function_materialization_owner_scope(materialization)
+    definition_owner = owner_scope if namespace == "local" else function_id.stable_key()
+    prepared = _prepared(
+        "output(value=1)\n",
+        owner_scope=owner_scope,
+        definition_owner=definition_owner,
+        declaration_owner=function_id.stable_key(),
+    )
     return LibraryFunctionMaterializationSpec(
         namespace=namespace,
         name=record.name,
         record=record,
-        source="output(value=1)\n",
-        backend_builtins={"backend": object()},
+        prepared_compilation=prepared,
         function_id=function_id,
+        source_callable_session=None,
         materialization=materialization,
         group_name="Demo",
         backend_signature="backend-signature",
@@ -175,6 +220,7 @@ def test_materializer_constructor_and_context_are_minimal_and_borrowed():
         "function_group_cache",
         "function_group_transaction",
         "function_compilation_trace",
+        "source_callable_session",
     )
 
 
@@ -204,7 +250,6 @@ def test_shared_and_unique_local_identity_cache_and_owner_scope():
         assert result.instance_key == expected_key
         assert result.owner_scope == owner
         assert cache[("local-def", function_id, expected_key or "SHARED")] is result.group
-        assert calls[0]["function_group_owner_scope"] == owner
         assert calls[0]["function_instance_key"] == expected_key
         assert frame.children == [(materialization, "fingerprint")]
         assert frame.children[0][0] is materialization
@@ -424,49 +469,45 @@ def test_direct_catalog_uses_no_compilation_context_and_no_reusable_cache():
 
     result = make_materializer(compile_group).materialize_library(spec, context=None)
     assert result.instance_key == ""
-    assert calls[0]["function_group_cache"] is None
-    assert calls[0]["function_group_transaction"] is None
-    assert calls[0]["function_compilation_trace"] is None
+    assert "function_group_cache" not in calls[0]
+    assert "function_group_transaction" not in calls[0]
+    assert "function_compilation_trace" not in calls[0]
     assert calls[0].get("preserve_if_equivalent") is None
 
 
-def test_local_catalog_context_cache_is_not_a_capability():
-    """Never read or write generic reusable cache state for Local catalog entries."""
-    class ExplodingMapping(dict):
-        def __getitem__(self, key):
-            raise AssertionError("Local catalog must not read function_group_cache")
-
-        def get(self, key, default=None):
-            raise AssertionError("Local catalog must not read function_group_cache")
-
-        def __contains__(self, key):
-            raise AssertionError("Local catalog must not inspect function_group_cache")
-
-        def __setitem__(self, key, value):
-            raise AssertionError("Local catalog must not write function_group_cache")
-
-        def setdefault(self, key, default=None):
-            raise AssertionError("Local catalog must not write function_group_cache")
-
+def test_local_catalog_uses_build_local_transaction_tracked_cache_and_fingerprint():
+    """Local catalog children use one build-local cache and canonical fingerprint dependency rows."""
     spec = library_request(namespace="local", materialization=None)
     transaction = object()
     frame = Frame()
     trace = Trace(frame)
+    cache = {}
     calls = []
 
     def compile_group(source, group_name, **kwargs):
         calls.append(kwargs)
-        return FakeGroup(group_name)
+        return FakeGroup(group_name, fingerprint="local-fingerprint")
 
-    result = make_materializer(compile_group).materialize_library(
-        spec, FunctionMaterializationContext(ExplodingMapping(), transaction, trace)
-    )
-    assert result.group.name == "Demo"
+    materializer = make_materializer(compile_group)
+    context = FunctionMaterializationContext(cache, transaction, trace)
+    first = materializer.materialize_library(spec, context)
+    second = materializer.materialize_library(spec, context)
+
+    cache_key = ("local-catalog", spec.function_id)
+    owner = direct_library_owner_scope("local", spec.function_id.package_id, spec.name)
+    assert first.group is second.group
+    assert cache[cache_key] is first.group
+    assert len(calls) == 1
     assert calls[0]["function_group_transaction"] is transaction
     assert calls[0]["function_compilation_trace"] is trace
-    assert "function_group_cache" not in calls[0]
-    assert frame.unproven == ["local catalog dependency"]
-    assert frame.children == []
+    assert calls[0]["function_compilation_inputs"]["kind"] == "library"
+    assert calls[0]["function_compilation_inputs"]["source"]
+    assert frame.identity_children == [
+        (owner, "local-fingerprint"),
+        (owner, "local-fingerprint"),
+    ]
+    assert frame.unproven == []
+
 
 
 def test_selected_root_reload_targets_exact_group_and_metadata_failure_propagates():
@@ -483,13 +524,19 @@ def test_selected_root_reload_targets_exact_group_and_metadata_failure_propagate
     def metadata_fail(updated, record_arg):
         raise RuntimeError("reload metadata failed")
 
+    owner_scope = direct_library_owner_scope("functions", function_id.package_id, function_id.name)
     spec = LibraryFunctionUpdateSpec(
         namespace="functions",
         name="demo",
         record=record,
-        source="output(value=1)\n",
-        backend_builtins={"backend": object()},
+        prepared_compilation=_prepared(
+            "output(value=1)\n",
+            owner_scope=owner_scope,
+            definition_owner=function_id.stable_key(),
+            declaration_owner=function_id.stable_key(),
+        ),
         function_id=function_id,
+        source_callable_session=None,
         group=group,
         group_name=group.name,
         backend_signature="backend-signature",
@@ -540,7 +587,6 @@ def test_imported_unique_identity_uses_existing_call_site_key_and_owner_scope():
     assert result.instance_key == key
     assert result.owner_scope == owner
     assert cache[("library", function_id, key)] is result.group
-    assert calls[0]["function_group_owner_scope"] == owner
     assert calls[0]["function_instance_key"] == key
     assert frame.children == [(materialization, "fingerprint")]
     assert frame.children[0][0] is spec.materialization
@@ -560,7 +606,6 @@ def test_direct_library_materialization_retains_separate_owner_construction():
         "LIBRARY", "functions", "vendor.pkg", "demo"
     )
     assert result.owner_scope == expected
-    assert calls[0]["function_group_owner_scope"] == expected
 
 
 def test_imported_compile_failure_does_not_publish_cache_or_trace():
@@ -609,9 +654,11 @@ def test_materializer_source_has_no_compiler_backchannel_and_specs_are_ast_indep
     assert "__closure__" not in source
     assert "from .compiler import" not in source
     assert "import inspect" not in source
-    assert "IR_DEPENDENCY_LOCAL_CATALOG_MIGRATION" in source
+    assert "IR_DEPENDENCY_LOCAL_CATALOG_MIGRATION" not in source
     for spec_type in (LocalFunctionMaterializationSpec, LibraryFunctionMaterializationSpec, LibraryFunctionUpdateSpec):
         names = {field.name for field in fields(spec_type)}
+        assert "source" not in names
+        assert "prepared_compilation" in names
         assert "comp" not in names
         assert "compiler" not in names
         assert "expr" not in names

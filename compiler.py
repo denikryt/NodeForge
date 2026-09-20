@@ -1,18 +1,17 @@
 """Public compiler facade and high-level Geometry Nodes group assembly."""
 
 import ast
-import functools
+from contextlib import nullcontext
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
 import bpy
 
-from .constants import TYPE_FLOAT, TYPE_INT, TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
+from .constants import TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
 from .nf_types import NFType
 from .errors import CompileError
-from .compiler_identities import BindingId, CallSiteId, FunctionId
-from .semantic_ir import IRFunctionMaterialization, IRFunctionMaterializationMode
+from .compiler_identities import BindingId, GroupCompilationIdentity
 from .values import TupleValue, Value, make_value
 from .nodes import (
     _new_node,
@@ -51,7 +50,6 @@ from . import expression_compiler
 from .builtins import registry as builtin_registry
 from .function_instances import (
     FUNCTION_ROOT_OWNER_ID_PROP,
-    FunctionCallModifiers,
     FunctionCompilationTrace,
     function_group_owner_scope as make_function_group_owner_scope,
     interface_contract,
@@ -64,8 +62,14 @@ from .function_instances import (
 )
 
 from .statement_compiler import GroupBuildContext, compile_statements
+from .semantic_group import LibraryBinding, SemanticGroupCompilation, analyze_group_source
+from .source_callables import SourceCallableSession
+from .blender_ir_lowering import BlenderIRLoweringContext, lower_body
+from .function_materializer import FunctionMaterializationContext, FunctionMaterializer
+from .group_context import GroupContextSlot
+from .callable_contracts import canonicalize_group_input_default
 from .runtime_bindings import FrontendRuntimeBindings, RuntimeBindingSymbol
-from .blender_group_backend import BlenderGroupBackend, BlenderGroupBuildTransaction
+from .blender_group_backend import BlenderGroupBackend, BlenderGroupBuildRequest, BlenderGroupBuildTransaction
 from .resolved_environment import ResolvedEnvironment, resolve_environment
 
 # BLENDER_TRANSACTION_LEGACY_ALIAS_MIGRATION: Keep the historical transaction class
@@ -78,20 +82,6 @@ from .resolved_environment import ResolvedEnvironment, resolve_environment
 FunctionGroupBuildTransaction = BlenderGroupBuildTransaction
 LocalHelperBuildTransaction = BlenderGroupBuildTransaction
 
-
-
-@dataclass(frozen=True)
-class LibraryBinding:
-    """Resolved source-local binding to one catalog entry."""
-
-    namespace: str
-    canonical_name: str
-    record: LibraryEntryRecord
-
-    def __post_init__(self) -> None:
-        """Require the binding label to match its exact resolved catalog record."""
-        if self.record.namespace != self.namespace or self.record.name != self.canonical_name:
-            raise ValueError("Library binding does not match its resolved record")
 
 
 @dataclass(frozen=True)
@@ -134,12 +124,21 @@ class _ResolvedEnvironmentSlot:
 
 
 class _ResolvedEnvironmentBoundBackend(BlenderGroupBackend):
-    """Expose compiler-session identity without changing physical backend behavior."""
+    """Bind one immutable environment to semantic preparation and physical publication."""
 
-    def __init__(self, *, populate_candidate, resolved_environment_for_session):
-        """Bind one population callback and its environment provider."""
-        super().__init__(populate_candidate=populate_candidate)
+    def __init__(self, *, populate_candidate, prepare_compilation, resolved_environment_for_session):
+        """Bind population, preparation, and one compiler-session environment provider."""
+        super().__init__(populate_candidate=populate_candidate, prepare_compilation=prepare_compilation)
         self._resolved_environment_for_session = resolved_environment_for_session
+
+    def new_source_callable_session(self):
+        """Create one root-attempt source/preparation session over the bound environment."""
+        return SourceCallableSession(resolved_environment=self._resolved_environment_for_session())
+
+    def compile_group_callback(self, source: str, name: str = "NodeForge Group", **kwargs):
+        """Ensure public package builds share one source-call session across both phases."""
+        kwargs.setdefault("source_callable_session", self.new_source_callable_session())
+        return super().compile_group_callback(source, name=name, **kwargs)
 
 
 class Compiler:
@@ -222,7 +221,6 @@ class Compiler:
         self.input_declaration_owner = input_declaration_owner or self.function_definition_owner
         self.function_compilation_trace = function_compilation_trace or FunctionCompilationTrace()
         self.reserved_name_labels = dict(reserved_name_labels or {})
-        self._function_occurrence_counts = {}
         self._runtime_bindings = FrontendRuntimeBindings(self.function_group_owner_scope)
         # BASIC_BODY_IR_LEGACY_BACKEND_BINDING_BRIDGE: IRBody lowering owns values created by
         # inter-statement assignments, while body-entry input/state seeding and retained legacy helpers still
@@ -305,10 +303,10 @@ class Compiler:
         """Compile one AST expression into this group's node tree."""
         self.depth += 1
         try:
-            # TODO(nodeforge-migration): Compiler.compile() remains the legacy AST-expression entry point only
-            # for pending callable/extension migrations and direct characterization tests. Root-body compilation
-            # must never use it as a fallback after Semantic Body rejection. Remove this method and marker when no
-            # supported production caller depends on legacy AST-expression compilation.
+            # TODO(nodeforge-migration): Compiler.compile() remains the retained legacy AST-expression entry
+            # point only for pending Python extension migration and direct characterization tests. Source-backed
+            # local/imported calls must not use it. Remove this method and marker when declarative extension
+            # handling no longer depends on legacy AST-expression compilation and legacy compiler removal begins.
             return expression_compiler.compile_expr(self, expr, self.depth)
         finally:
             self.depth -= 1
@@ -531,37 +529,6 @@ class Compiler:
         view.update(state.legacy_structural)
         return MappingProxyType(view)
 
-    def resolve_reusable_function_materialization(
-        self,
-        function_id: FunctionId,
-        modifiers: FunctionCallModifiers,
-    ) -> IRFunctionMaterialization:
-        """Resolve shared/unique semantics for one canonical reusable callable."""
-        if not isinstance(function_id, FunctionId):
-            raise TypeError("function_id must be a FunctionId")
-        if not isinstance(modifiers, FunctionCallModifiers):
-            raise TypeError("modifiers must be FunctionCallModifiers")
-        if not modifiers.unique:
-            return IRFunctionMaterialization(
-                function_id,
-                IRFunctionMaterializationMode.SHARED,
-                None,
-            )
-        # REUSABLE_CALL_IR_MIGRATION: Unique materialization is now represented explicitly
-        # by IRFunctionMaterialization, but its CallSiteId ordinal is still allocated when
-        # the legacy AST call path reaches reusable-call preparation. Preserve the current
-        # unique-only per-owner/per-callee sequence here. Remove this allocator bridge when
-        # reusable calls are emitted by semantic lowering before backend/materialization.
-        counter_key = (self.function_group_owner_scope, function_id)
-        ordinal = self._function_occurrence_counts.get(counter_key, 0)
-        self._function_occurrence_counts[counter_key] = ordinal + 1
-        call_site = CallSiteId(self.function_group_owner_scope, function_id, ordinal)
-        return IRFunctionMaterialization(
-            function_id,
-            IRFunctionMaterializationMode.UNIQUE,
-            call_site,
-        )
-
     def _compile_const_value(self, value, x=0, y=0):
         """Turn a compile-time constant into a node Value or script-level array."""
         if _is_const_vector(value) or (
@@ -609,418 +576,220 @@ class Compiler:
             return self.compile(expr), True
 
 
-def _validate_import_bindings(
-    import_pairs,
-    body_stmts,
-    local_function_defs,
-    backend_names,
-    resolved_environment,
-    inherited_imports=None,
-):
-    """Validate and return source-local namespace-aware catalog bindings."""
-    imported: dict[str, LibraryBinding] = {}
-    local_bindings = _binding_names(body_stmts)
-    reserved_names = set(builtin_registry.BUILTIN_NAMES) | {"output", "store", "panel"} | set(_ALLOWED_CONSTS) | set(resolved_environment.system_names()) | set(backend_names) | set(TYPE_TOKEN_NAMES)
-
-    def validate_pair(namespace, canonical_name, exposed_name, *, inherited=False, inherited_record=None):
-        catalog = resolved_environment.catalog(namespace)
-        record = catalog.find(canonical_name)
-        if record is None:
-            raise CompileError(f"Unknown {namespace} import: {canonical_name}")
-        if inherited_record is not None and inherited_record is not record:
-            raise CompileError("Internal error: inherited library binding does not match resolved environment")
-        binding = LibraryBinding(namespace, canonical_name, record)
-        if exposed_name in imported:
-            if inherited and imported[exposed_name] == binding:
-                return
-            raise CompileError(f"Duplicate function import name: {exposed_name}")
-        if exposed_name in local_bindings or exposed_name in local_function_defs:
-            raise CompileError(f"Function import name conflicts with local binding: {exposed_name}")
-        if exposed_name in reserved_names:
-            raise CompileError(f"Function import name conflicts with reserved name: {exposed_name}")
-        imported[exposed_name] = binding
-
-    for import_request in import_pairs:
-        namespace = import_request.module
-        if import_request.is_star:
-            for library_name in sorted(resolved_environment.catalog(namespace).names(), key=str.lower):
-                validate_pair(namespace, library_name, library_name)
-            continue
-        validate_pair(namespace, import_request.canonical_name, import_request.exposed_name)
-    for inherited_exposed, inherited_binding in dict(inherited_imports or {}).items():
-        if isinstance(inherited_binding, LibraryBinding):
-            validate_pair(
-                inherited_binding.namespace,
-                inherited_binding.canonical_name,
-                inherited_exposed,
-                inherited=True,
-                inherited_record=inherited_binding.record,
-            )
-        else:
-            validate_pair("functions", inherited_binding, inherited_exposed, inherited=True)
-    return imported
 
 
-def _registered_name_labels(local_function_defs, backend_names, imported_library_functions, system_names):
-    """Return active DSL-owned names and human-readable reservation labels."""
-    labels = {}
-
-    def add(names, label):
-        for name in names:
-            labels.setdefault(name, label)
-
-    add(builtin_registry.BUILTIN_NAMES, "DSL builtin")
-    add({"output", "store", "panel"}, "reserved helper")
-    add(_ALLOWED_CONSTS, "compile-time constant")
-    add(system_names, "embedded-system constructor")
-    add(backend_names, "backend helper")
-    add(TYPE_TOKEN_NAMES, "type token")
-    add(imported_library_functions, "imported function")
-    add(local_function_defs, "local function")
-    return labels
-
-
-def _format_reserved_label(label):
-    """Format a reservation label for diagnostics."""
-    if label == "DSL builtin":
-        return "reserved by DSL builtin"
-    if label == "imported function":
-        return "already registered as imported function"
-    if label == "local function":
-        return "already registered as local function"
-    if label == "type token":
-        return "reserved by type token"
-    return f"reserved by {label}"
-
-
-def _allows_existing_top_level_shadow(label):
-    """Return True for legacy top-level names that remain value-rebindable."""
-    return label in {"DSL builtin", "compile-time constant"}
-
-
-def _check_registered_binding(name, labels, *, context="assign", allow_existing_shadow=False):
-    """Reject binding to a name that is already owned by non-shadowable DSL behavior."""
-    label = labels.get(name)
-    if label is None:
-        return
-    if allow_existing_shadow and _allows_existing_top_level_shadow(label):
-        return
-    if context == "parameter":
-        raise CompileError(f"Local function parameter {name} is {_format_reserved_label(label)}")
-    raise CompileError(f"Cannot assign to {name}: name is {_format_reserved_label(label)}")
-
-
-def _validate_registered_name_bindings(stmts, labels, *, top_level_function_names=None):
-    """Validate raw AST binding sites before compile-time preprocessing can erase them."""
-    top_level_function_names = set(top_level_function_names or ())
-
-    def check_target(target, *, allow_existing_shadow=False):
-        if isinstance(target, ast.Name):
-            _check_registered_binding(target.id, labels, allow_existing_shadow=allow_existing_shadow)
-            return
-        if isinstance(target, (ast.Tuple, ast.List)):
-            for item in target.elts:
-                check_target(item, allow_existing_shadow=allow_existing_shadow)
-
-    def visit(stmt, *, top_level=False, in_local_function=False):
-        allow_existing_shadow = not in_local_function
-        if isinstance(stmt, ast.Assign):
-            for target in stmt.targets:
-                check_target(target, allow_existing_shadow=allow_existing_shadow)
-            return
-        if isinstance(stmt, ast.AugAssign):
-            check_target(stmt.target, allow_existing_shadow=allow_existing_shadow)
-            return
-        if isinstance(stmt, ast.For):
-            check_target(stmt.target, allow_existing_shadow=allow_existing_shadow)
-            for sub in stmt.body:
-                visit(sub, in_local_function=in_local_function)
-            for sub in stmt.orelse:
-                visit(sub, in_local_function=in_local_function)
-            return
-        if isinstance(stmt, ast.If):
-            for sub in stmt.body:
-                visit(sub, in_local_function=in_local_function)
-            for sub in stmt.orelse:
-                visit(sub, in_local_function=in_local_function)
-            return
-        if isinstance(stmt, ast.FunctionDef):
-            if not (top_level and stmt.name in top_level_function_names and labels.get(stmt.name) == "local function"):
-                _check_registered_binding(stmt.name, labels)
-            for arg in list(stmt.args.posonlyargs) + list(stmt.args.args) + list(stmt.args.kwonlyargs):
-                if arg.arg == "__unique__":
-                    raise CompileError("Local function parameter __unique__ is reserved by the compiler")
-                _check_registered_binding(arg.arg, labels, context="parameter")
-            if stmt.args.vararg is not None:
-                _check_registered_binding(stmt.args.vararg.arg, labels, context="parameter")
-            if stmt.args.kwarg is not None:
-                _check_registered_binding(stmt.args.kwarg.arg, labels, context="parameter")
-            for sub in stmt.body:
-                visit(sub, in_local_function=True)
-
-    for stmt in stmts:
-        visit(stmt, top_level=True)
-
-
-def _validate_interface_directive_placement(stmts):
-    """Allow panel() only as a direct expression in the immediate group body."""
-
-    def is_panel_call(node):
-        return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "panel"
-
-    for stmt in stmts:
-        direct_call = stmt.value if isinstance(stmt, ast.Expr) and is_panel_call(stmt.value) else None
-        for node in ast.walk(stmt):
-            if is_panel_call(node) and node is not direct_call:
-                raise CompileError("panel() is a top-level interface declaration")
+def _assert_prepared_interface_parity(group, prepared: SemanticGroupCompilation) -> None:
+    """Assert realized public sockets match the frontend-owned final callable contract."""
+    physical_inputs = [
+        item for item in group.interface.items_tree
+        if getattr(item, "item_type", None) == "SOCKET" and getattr(item, "in_out", None) == "INPUT"
+    ]
+    physical_outputs = [
+        item for item in group.interface.items_tree
+        if getattr(item, "item_type", None) == "SOCKET" and getattr(item, "in_out", None) == "OUTPUT"
+    ]
+    if len(physical_inputs) != len(prepared.interface.inputs):
+        raise CompileError("Internal error: physical input count disagrees with semantic interface")
+    if len(physical_outputs) != len(prepared.interface.outputs):
+        raise CompileError("Internal error: physical output count disagrees with semantic interface")
+    for physical, contract in zip(physical_inputs, prepared.interface.inputs):
+        if getattr(physical, "name", "") != contract.display_name:
+            raise CompileError("Internal error: physical input order/name disagrees with semantic interface")
+        socket_type = getattr(physical, "socket_type", "") or getattr(physical, "bl_socket_idname", "")
+        if socket_type != _socket_type_for(contract.typ):
+            raise CompileError("Internal error: physical input type disagrees with semantic interface")
+        if contract.has_default:
+            if not hasattr(physical, "default_value"):
+                raise CompileError("Internal error: semantic input default has no physical default")
+            physical_default = canonicalize_group_input_default(contract.typ, physical.default_value)
+            if physical_default != contract.default:
+                raise CompileError("Internal error: physical input default disagrees with semantic interface")
+    for physical, contract in zip(physical_outputs, prepared.interface.outputs):
+        if getattr(physical, "name", "") != contract.display_name:
+            raise CompileError("Internal error: physical output order/name disagrees with semantic interface")
+        socket_type = getattr(physical, "socket_type", "") or getattr(physical, "bl_socket_idname", "")
+        if socket_type != _socket_type_for(contract.typ):
+            raise CompileError("Internal error: physical output type disagrees with semantic interface")
 
 
 def _populate_group(
     group,
-    source: str,
-    name: str = "NodeForge Group",
+    request: BlenderGroupBuildRequest,
     *,
-    resolved_environment_for_session,
-    local_functions=None,
-    backend_builtins=None,
     generated_resource_transaction=None,
-    imported_library_functions=None,
-    helper_namespace=None,
-    local_helper_transaction=None,
-    function_group_cache=None,
-    function_group_transaction=None,
-    function_group_owner_scope=None,
-    function_definition_owner=None,
-    function_compilation_trace=None,
-    function_compilation_inputs=None,
-    function_definition_identity=None,
-    function_instance_key=None,
-    root_owner_id=None,
     group_backend=None,
 ):
-    """Compile NodeForge source into an already-created fresh GeometryNodeTree."""
-    raw_stmts = _parse_source(source)
-    resolved_environment = resolved_environment_for_session()
-    raw_body_stmts, import_pairs = _extract_function_imports(raw_stmts)
-    system_names = resolved_environment.system_names()
-
-    local_function_defs = dict(local_functions or {})
-    for existing_local_name in local_function_defs:
-        if existing_local_name in system_names:
-            raise CompileError(
-                f"Local function {existing_local_name!r} collides with reserved system constructor name"
-            )
-    body_stmts = []
-    for stmt in raw_body_stmts:
-        if isinstance(stmt, ast.FunctionDef):
-            if stmt.name in system_names:
-                raise CompileError(
-                    f"Local function {stmt.name!r} collides with reserved system constructor name"
-                )
-            if stmt.name in local_function_defs:
-                raise CompileError(f"Duplicate local function: {stmt.name}")
-            local_function_defs[stmt.name] = stmt
-        else:
-            body_stmts.append(stmt)
-
-    backend_names = set(backend_builtins or {})
-    for helper_name in backend_names:
-        if helper_name in system_names:
-            raise CompileError(
-                f"Local backend helper {helper_name!r} collides with reserved system constructor name"
-            )
-    # Preserve the existing invariant that bundled catalog entries cannot use
-    # reserved embedded-system names even when the current source has no imports.
-    for namespace in ("functions", "examples"):
-        resolved_environment.catalog(namespace).names()
-    own_imported_library_functions = _validate_import_bindings(
-        import_pairs,
-        raw_body_stmts,
-        local_function_defs,
-        backend_names,
-        resolved_environment,
-        inherited_imports=imported_library_functions,
-    )
-    reserved_name_labels = _registered_name_labels(
-        local_function_defs,
-        backend_names,
-        own_imported_library_functions,
-        system_names,
-    )
-    _validate_registered_name_bindings(
-        raw_body_stmts,
-        reserved_name_labels,
-        top_level_function_names=local_function_defs,
-    )
-    _validate_interface_directive_placement(raw_body_stmts)
-
-    preprocessed = _preprocess_compile_time(body_stmts)
-    stmts = list(preprocessed.statements)
-    final_preprocess_compile_time = preprocessed.final_compile_time
-    callable_names = set(own_imported_library_functions) | set(local_function_defs) | backend_names | set(system_names)
-    input_names = sorted(
-        set(_collect_inputs(stmts, extra_builtin_names=callable_names, consts=final_preprocess_compile_time.values))
-        - set(final_preprocess_compile_time.values.keys())
-    )
-    input_types = _infer_input_types(stmts)
+    """Materialize one already-prepared group without parsing or semantic reanalysis."""
+    if not isinstance(request, BlenderGroupBuildRequest):
+        raise TypeError("request must be BlenderGroupBuildRequest")
+    prepared = request.prepared_compilation
+    identity = prepared.identity
     try:
-        group.color_tag = 'CONVERTER'
+        group.color_tag = "CONVERTER"
     except Exception:
         pass
-    if root_owner_id is not None:
-        group[FUNCTION_ROOT_OWNER_ID_PROP] = root_owner_id
-    _store_group_source(group, source)
+    if identity.root_owner_id is not None:
+        group[FUNCTION_ROOT_OWNER_ID_PROP] = identity.root_owner_id
+    _store_group_source(group, prepared.source)
     try:
         group[INPUT_DEFAULTS_PROP] = {}
     except Exception:
         pass
 
-    geometry_mode = _needs_geometry_io(stmts)
-    if geometry_mode:
-        group.interface.new_socket(name="Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
-    for input_name in input_names:
-        sock_type = "NodeSocketInt" if input_types.get(input_name) == TYPE_INT else "NodeSocketFloat"
-        sock = group.interface.new_socket(name=input_name, in_out="INPUT", socket_type=sock_type)
-        default_value = (1 if input_name == "iterations" else 0) if sock_type == "NodeSocketInt" else 0.0
-        _set_socket_default(sock, default_value)
-        _set_interface_socket_default(group, input_name, "INPUT", default_value)
-        _record_group_input_default(group, input_name, input_types.get(input_name, TYPE_FLOAT), default_value)
-
+    geometry_iface = None
+    if prepared.geometry_mode:
+        geometry_iface = group.interface.new_socket(
+            name="Geometry", in_out="INPUT", socket_type="NodeSocketGeometry"
+        )
     group_input = _new_node(group, "NodeGroupInput", -1100, 0)
     group_output = _new_node(group, "NodeGroupOutput", 1100, 0)
     group_output.is_active_output = True
-    comp = Compiler(
-        group,
-        group_input,
-        CompileTimeState(preprocessed.initial_compile_time.values),
-        local_functions=local_function_defs,
-        local_group_cache=function_group_cache if function_group_cache is not None else {},
-        backend_builtins=backend_builtins,
-        group_backend=group_backend,
-        generated_resource_transaction=generated_resource_transaction,
-        imported_library_functions=own_imported_library_functions,
-        helper_namespace=helper_namespace or name,
-        local_helper_transaction=local_helper_transaction,
-        function_group_cache=function_group_cache,
-        function_group_transaction=function_group_transaction or local_helper_transaction,
-        function_group_owner_scope=function_group_owner_scope,
-        function_definition_owner=function_definition_owner,
-        input_declaration_owner=function_definition_identity or function_definition_owner or function_group_owner_scope,
-        function_compilation_trace=function_compilation_trace,
-        reserved_name_labels=reserved_name_labels,
-        resolved_environment=resolved_environment,
-    )
 
-    initial_interface_input_origins = {}
-    implicit_iface_by_identifier = {
-        getattr(item, "identifier", None): item
-        for item in group.interface.items_tree
-        if getattr(item, "item_type", None) == "SOCKET" and getattr(item, "in_out", None) == "INPUT"
-    }
-    for socket in group_input.outputs:
-        if socket.name in input_names:
-            iface_item = implicit_iface_by_identifier.get(getattr(socket, "identifier", None))
-            if iface_item is None:
-                iface_item = next(
-                    (
-                        item for item in group.interface.items_tree
-                        if getattr(item, "item_type", None) == "SOCKET"
-                        and getattr(item, "in_out", None) == "INPUT"
-                        and getattr(item, "name", None) == socket.name
-                    ),
-                    None,
-                )
-            if iface_item is None:
-                raise CompileError(f'Internal error: implicit input socket "{socket.name}" has no interface item')
-            comp._register_interface_input(socket, iface_item)
-            comp.bind_runtime_value(socket.name, make_value(socket, input_types.get(socket.name, TYPE_FLOAT)))
-            symbol = comp.runtime_binding(socket.name)
-            if symbol is None:
-                raise CompileError(f'Internal error: implicit input "{socket.name}" has no runtime binding')
-            initial_interface_input_origins[symbol.binding_id] = symbol.binding_id
-
-    geometry_socket = None
-    if geometry_mode:
-        geometry_socket = next((s for s in group_input.outputs if s.name == "Geometry"), None)
-        if geometry_socket is None:
-            raise CompileError("Internal error: missing Geometry input")
-
-    ctx = GroupBuildContext(
-        group=group,
-        comp=comp,
-        geometry_mode=geometry_mode,
-        geometry_socket=geometry_socket,
-    )
-    frame = None
-    if function_compilation_inputs is not None and function_compilation_trace is not None:
-        own_inputs = dict(function_compilation_inputs)
-        own_inputs["lowered_source"] = normalized_statements(stmts)
-        trace_cm = function_compilation_trace.group(function_definition_identity or function_group_owner_scope or group.name, own_inputs)
-        frame = trace_cm.__enter__()
-    try:
-        compile_statements(
-            ctx,
-            stmts,
-            initial_interface_input_origins,
-            compile_time_effects_before=preprocessed.effects_before,
-            trailing_compile_time_effects=preprocessed.trailing_effects,
+    runtime_values = {}
+    interface_items = {}
+    for contract in prepared.interface.inputs:
+        binding_id = contract.interface_origin
+        if not isinstance(binding_id, BindingId):
+            continue
+        value, iface = _create_group_input_socket(
+            group,
+            group_input,
+            contract.display_name,
+            contract.typ,
+            contract.default if contract.has_default else None,
         )
-    finally:
-        if frame is not None:
-            trace_cm.__exit__(None, None, None)
+        runtime_values[binding_id] = value
+        interface_items[binding_id] = iface
 
-    if geometry_mode:
-        group.interface.new_socket(name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
-        group.links.new(ctx.geometry_socket, group_output.inputs["Geometry"])
+    geometry_value = None
+    if prepared.geometry_mode:
+        geometry_socket = next((socket for socket in group_input.outputs if socket.name == "Geometry"), None)
+        if geometry_socket is None:
+            raise CompileError("Internal error: prepared Geometry input did not materialize")
+        geometry_value = make_value(geometry_socket, TYPE_GEOMETRY)
 
-    if ctx.explicit_outputs:
-        outputs = ctx.explicit_outputs
-    elif ctx.auto_final_output is not None:
-        outputs = [ctx.auto_final_output]
-    else:
-        outputs = []
+    session = request.source_callable_session
+    materializer = FunctionMaterializer(group_backend=group_backend)
+    materialization_context = FunctionMaterializationContext(
+        function_group_cache=request.function_group_cache if request.function_group_cache is not None else {},
+        function_group_transaction=request.function_group_transaction,
+        function_compilation_trace=request.function_compilation_trace,
+        source_callable_session=session,
+    )
+    lowering_context = BlenderIRLoweringContext(
+        group=group,
+        runtime_bindings=runtime_values,
+        group_context_values=(
+            {GroupContextSlot.CURRENT_GEOMETRY: geometry_value}
+            if geometry_value is not None else {}
+        ),
+        interface_input_items=interface_items,
+        source_callable_session=session,
+        function_materializer=materializer,
+        function_materialization_context=materialization_context,
+        helper_namespace=request.helper_namespace or request.name,
+    )
 
-    used_interface_names = {"Geometry"} if geometry_mode else set()
-    for output_name, result in outputs:
-        if isinstance(result, list):
-            raise CompileError("Cannot output an array directly; use join(array) or index it")
-        reject_compile_time_object(result, "final output")
-        final_name = _unique_output_name(used_interface_names, output_name)
-        group.interface.new_socket(name=final_name, in_out="OUTPUT", socket_type=_socket_type_for(result.typ))
-        group.links.new(result.socket, group_output.inputs[final_name])
+    trace_context = nullcontext(None)
+    if request.function_compilation_inputs is not None and request.function_compilation_trace is not None:
+        own_inputs = dict(request.function_compilation_inputs)
+        own_inputs["lowered_source"] = prepared.normalized_lowered_source
+        trace_context = request.function_compilation_trace.group(identity.declaration_owner, own_inputs)
 
-    if not geometry_mode and not outputs:
-        raise CompileError("Script produced no output. Use out = ..., output(...), set_position(...), or store(...)")
+    with trace_context as frame:
+        body_result = lower_body(
+            lowering_context,
+            prepared.body,
+            runtime_values,
+            base_depth=1,
+            group_input=group_input,
+        )
 
-    if function_compilation_inputs is not None and function_compilation_trace is not None:
-        contract = interface_contract(group)
-        result = frame.finish(contract)
-        if not result.freshness_unproven:
-            stamp_function_metadata(
-                group,
-                instance_key=function_instance_key,
-                definition_owner=function_definition_owner,
-                fingerprint=result.fingerprint,
+        if prepared.geometry_mode:
+            current_geometry = body_result.group_context_values.get(GroupContextSlot.CURRENT_GEOMETRY)
+            if not isinstance(current_geometry, Value) or current_geometry.typ is not TYPE_GEOMETRY:
+                raise CompileError("Internal error: prepared geometry body lost current Geometry value")
+            group.interface.new_socket(name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+            group.links.new(current_geometry.socket, group_output.inputs["Geometry"])
+
+        body_outputs = (
+            body_result.explicit_outputs
+            if body_result.explicit_outputs
+            else ((body_result.auto_output,) if body_result.auto_output is not None else ())
+        )
+        expected_outputs = prepared.interface.outputs[1:] if prepared.geometry_mode else prepared.interface.outputs
+        if len(body_outputs) != len(expected_outputs):
+            raise CompileError("Internal error: physical body output count disagrees with semantic summary")
+        for (_source_name, value), contract in zip(body_outputs, expected_outputs):
+            if value.typ is not contract.typ:
+                raise CompileError("Internal error: physical output type disagrees with semantic output contract")
+            group.interface.new_socket(
+                name=contract.display_name,
+                in_out="OUTPUT",
+                socket_type=_socket_type_for(contract.typ),
             )
+            group.links.new(value.socket, group_output.inputs[contract.display_name])
+
+        _assert_prepared_interface_parity(group, prepared)
+        if frame is not None:
+            result = frame.finish(interface_contract(group))
+            if not result.freshness_unproven:
+                stamp_function_metadata(
+                    group,
+                    instance_key=request.function_instance_key,
+                    definition_owner=identity.definition_owner,
+                    fingerprint=result.fingerprint,
+                )
     return group
 
 
 def _new_group_backend(resolved_environment: ResolvedEnvironment | None = None):
-    """Return a physical backend bound to one compiler-session environment slot."""
+    """Return a prepared-only physical backend bound to one environment snapshot."""
     slot = _ResolvedEnvironmentSlot(resolved_environment)
-    populate = functools.partial(
-        _populate_group,
-        resolved_environment_for_session=slot.get,
-    )
+
+    def prepare(source, *, compilation_identity, source_callable_session=None, **kwargs):
+        session = source_callable_session or SourceCallableSession(resolved_environment=slot.get())
+        return analyze_group_source(
+            source,
+            compilation_identity=compilation_identity,
+            resolved_environment=slot.get(),
+            inherited_local_functions=kwargs.get("inherited_local_functions"),
+            inherited_imported_library_functions=kwargs.get("inherited_imported_library_functions"),
+            backend_builtins=kwargs.get("backend_builtins"),
+            helper_namespace=kwargs.get("helper_namespace") or "NodeForge Group",
+            source_callable_session=session,
+        )
+
     return _ResolvedEnvironmentBoundBackend(
-        populate_candidate=populate,
+        populate_candidate=_populate_group,
+        prepare_compilation=prepare,
         resolved_environment_for_session=slot.get,
     )
+
+
+def _prepare_root_build(backend, source: str, *, name: str, existing_group=None):
+    """Resolve final root identity and semantic compilation before Blender mutation."""
+    session = backend.new_source_callable_session()
+    identity = backend.resolve_root_compilation_identity(existing_group)
+    prepared = backend.prepare_source_compilation(
+        source,
+        compilation_identity=identity,
+        helper_namespace=name,
+        source_callable_session=session,
+    )
+    return prepared, session
 
 
 def create_expression_group(source: str, name: str = "NodeForge Group"):
-    """Create a new Geometry Nodes group from NodeForge source."""
-    return _new_group_backend().create_or_update(source=source, name=name)
+    """Create a new Geometry Nodes group from one prepared NodeForge compilation."""
+    backend = _new_group_backend()
+    prepared, session = _prepare_root_build(backend, source, name=name)
+    return backend.create_or_update(BlenderGroupBuildRequest(
+        prepared_compilation=prepared,
+        name=name,
+        source_callable_session=session,
+        helper_namespace=name,
+    ))
 
 
 def create_library_catalog_group(namespace: str, name: str):
@@ -1029,10 +798,7 @@ def create_library_catalog_group(namespace: str, name: str):
     record = environment.catalog(namespace).find(name)
     if record is None:
         raise CompileError(f"Unknown {namespace} library entry: {name}")
-    return materialize_library_entry_group_for_record(
-        record,
-        _new_group_backend(environment),
-    )
+    return materialize_library_entry_group_for_record(record, _new_group_backend(environment))
 
 
 def create_library_function_group(name: str):
@@ -1041,21 +807,28 @@ def create_library_function_group(name: str):
 
 
 def update_library_catalog_group(group, namespace: str, name: str):
-    """Reload a catalog-backed group in place from its current editable source."""
+    """Reload a catalog-backed group through prepared semantic compilation."""
     environment = resolve_environment()
     record = environment.catalog(namespace).find(name)
     if record is None:
         raise CompileError(f"Current source for {namespace} library entry {name!r} is unavailable")
     return update_materialized_library_entry_group_for_record(
-        record,
-        group,
-        _new_group_backend(environment),
+        record, group, _new_group_backend(environment)
     )
 
 
 def update_expression_group(group, source: str):
-    """Rebuild an existing Geometry Nodes group from NodeForge source."""
-    return _new_group_backend().create_or_update(source=source, name=getattr(group, "name", "NodeForge Group"), existing_group=group)
+    """Rebuild an existing Geometry Nodes group from one prepared compilation."""
+    name = getattr(group, "name", "NodeForge Group")
+    backend = _new_group_backend()
+    prepared, session = _prepare_root_build(backend, source, name=name, existing_group=group)
+    return backend.create_or_update(BlenderGroupBuildRequest(
+        prepared_compilation=prepared,
+        name=name,
+        existing_group=group,
+        source_callable_session=session,
+        helper_namespace=name,
+    ))
 
 
 __all__ = [

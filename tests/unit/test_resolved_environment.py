@@ -346,7 +346,7 @@ def _import_compiler_with_fake_bpy(monkeypatch):
 
 def test_import_validation_binds_exact_snapshot_records_and_preserves_sorting(monkeypatch):
     """Explicit, aliased, and star imports retain selected record object identity."""
-    compiler = _import_compiler_with_fake_bpy(monkeypatch)
+    from NodeForge import semantic_group
     from NodeForge.parsing import FunctionImport
 
     alpha = _Record("functions", "alpha")
@@ -360,7 +360,7 @@ def test_import_validation_binds_exact_snapshot_records_and_preserves_sorting(mo
         FunctionImport("functions", None, None, is_star=True),
     )
 
-    bindings = compiler._validate_import_bindings(imports, (), {}, set(), environment)
+    bindings = semantic_group._validate_import_bindings(imports, (), {}, set(), environment)
 
     assert tuple(bindings) == ("renamed", "alpha", "zeta")
     assert bindings["renamed"].record is zeta
@@ -370,20 +370,20 @@ def test_import_validation_binds_exact_snapshot_records_and_preserves_sorting(mo
 
 def test_inherited_import_requires_same_record_identity(monkeypatch):
     """Nested compilation may not silently rebind an inherited callable."""
-    compiler = _import_compiler_with_fake_bpy(monkeypatch)
+    from NodeForge import semantic_group
     selected = _Record("functions", "alpha")
     different = _Record("functions", "alpha")
     environment = ResolvedEnvironment(_catalogs(functions={"alpha": selected}), {})
-    inherited = {"alias": compiler.LibraryBinding("functions", "alpha", different)}
+    inherited = {"alias": semantic_group.LibraryBinding("functions", "alpha", different)}
 
     with pytest.raises(CompileError, match="inherited library binding does not match"):
-        compiler._validate_import_bindings((), (), {}, set(), environment, inherited)
+        semantic_group._validate_import_bindings((), (), {}, set(), environment, inherited)
 
 
 def test_reserved_name_labels_use_snapshot_system_names(monkeypatch):
     """Compiler reservation labels consume the supplied system-name view."""
-    compiler = _import_compiler_with_fake_bpy(monkeypatch)
-    labels = compiler._registered_name_labels({}, set(), {}, ("snapshot_marker",))
+    from NodeForge import semantic_group
+    labels = semantic_group._registered_name_labels({}, set(), {}, ("snapshot_marker",))
     assert labels["snapshot_marker"] == "embedded-system constructor"
 
 
@@ -422,152 +422,46 @@ def test_expression_dispatch_rejects_resolved_system_binding_before_legacy_handl
     assert observed == []
 
 
-def test_dynamic_callable_migration_errors_precede_legacy_dispatch_and_library_probing(monkeypatch):
-    """Pending callable categories fail at semantics before any retained legacy execution hook."""
-    compiler = _import_compiler_with_fake_bpy(monkeypatch)
-    from NodeForge import expression_compiler, library_calls, local_functions
-    from NodeForge.compile_time import CompileTimeState
-
-    record = types.SimpleNamespace(
-        namespace="functions",
-        name="imported_fn",
-        source_path=Path("/selected/imported_fn.nf"),
-        module_path=Path("/selected/imported_fn.py"),
-        package_id="vendor.selected",
-        package_version="2.0.0",
-    )
-    comp = types.SimpleNamespace(
-        resolved_environment=types.SimpleNamespace(system_constructors={}),
-        imported_library_functions={
-            "imported_fn": compiler.LibraryBinding("functions", "imported_fn", record),
-        },
-        local_functions={"local_fn": object()},
-        backend_builtins={"backend_helper": object()},
-        compile_time=CompileTimeState(),
-        reserved_name_labels={},
-        runtime_bindings_snapshot=lambda: MappingProxyType({}),
-        backend_runtime_values_snapshot=lambda: MappingProxyType({}),
-        legacy_structural_binding_names_snapshot=lambda: frozenset(),
-    )
-    observed = {"local": 0, "backend": 0, "library": 0, "native_probe": 0}
-
-    monkeypatch.setattr(
-        local_functions,
-        "compile_local_function_call",
-        lambda *_a, **_k: observed.__setitem__("local", observed["local"] + 1),
-    )
-    monkeypatch.setattr(
-        local_functions,
-        "compile_backend_builtin_call",
-        lambda *_a, **_k: observed.__setitem__("backend", observed["backend"] + 1),
-    )
-    monkeypatch.setattr(
-        library_calls,
-        "compile_library_function_call",
-        lambda *_a, **_k: observed.__setitem__("library", observed["library"] + 1),
-    )
-    monkeypatch.setattr(
-        library_calls,
-        "has_native_compile_call_for_record",
-        lambda *_a, **_k: observed.__setitem__("native_probe", observed["native_probe"] + 1),
-    )
-
-    expected = {
-        "local_fn": r"local_fn\(\) is temporarily unavailable while source-backed callable contracts are being migrated",
-        "imported_fn": r"imported_fn\(\) is temporarily unavailable while imported callable contracts are being migrated",
-        "backend_helper": r"backend_helper\(\) is temporarily unavailable while Python extension callables are being migrated",
-    }
-    for name, message in expected.items():
-        with pytest.raises(CompileError, match=message):
-            expression_compiler.compile_expr(comp, ast.parse(f"{name}()", mode="eval").body, 1)
-
-    assert observed == {"local": 0, "backend": 0, "library": 0, "native_probe": 0}
+def test_source_call_migration_removes_legacy_dispatch_modules_and_keeps_extension_boundary():
+    """Source-backed calls have no legacy dispatcher while Python extension categories stay gated."""
+    root = Path(__file__).resolve().parents[2]
+    assert not (root / "library_calls.py").exists()
+    local_source = (root / "local_functions.py").read_text(encoding="utf-8")
+    expression_source = (root / "expression_compiler.py").read_text(encoding="utf-8")
+    semantic_source = (root / "semantic_analysis.py").read_text(encoding="utf-8")
+    assert "def compile_local_function_call" not in local_source
+    assert "compile_library_function_call" not in expression_source
+    assert "compile_local_function_call" not in expression_source
+    assert "Python extension callables are being migrated" in semantic_source
 
 
-def test_library_call_uses_binding_record_without_live_discovery(monkeypatch):
-    """Imported native calls use the exact record carried by their source binding."""
-    compiler = _import_compiler_with_fake_bpy(monkeypatch)
-    from NodeForge import library_calls
+def test_source_callable_session_uses_exact_resolved_record_without_live_discovery(tmp_path):
+    """Pure imported source preparation consumes the exact record captured by the environment."""
+    from NodeForge.compiler_identities import GroupCompilationIdentity
+    from NodeForge.source_callables import SourceCallableSession
 
-    source = Path("/selected/source.nf")
-    module = Path("/selected/function.py")
+    source_path = tmp_path / "selected.nf"
+    source_path.write_text('x = input_float("X")\noutput("X", x)\n', encoding="utf-8")
     record = types.SimpleNamespace(
         namespace="functions",
         name="selected",
-        source_path=source,
-        module_path=module,
+        source_path=source_path,
+        module_path=None,
         package_id="vendor.selected",
         package_version="2.0.0",
     )
-    binding = compiler.LibraryBinding("functions", "selected", record)
-    observed = {}
-    monkeypatch.setattr(library_calls, "has_native_compile_call_for_record", lambda item: item is record)
-    monkeypatch.setattr(
-        library_calls,
-        "compile_module_library_entry_call_for_record",
-        lambda comp, expr, item, depth=0: observed.setdefault("call", (comp, expr, item, depth)),
+    environment = ResolvedEnvironment(_catalogs(functions={"selected": record}), {})
+    function_id = library_function_id("functions", record.package_id, record.name)
+    identity = GroupCompilationIdentity(None, "LIBRARY/test", function_id.stable_key(), function_id.stable_key())
+    prepared = SourceCallableSession(resolved_environment=environment).prepare_library(
+        function_id=function_id,
+        identity=identity,
+        record=record,
+        backend_builtins={},
     )
-    expr = ast.parse("selected()", mode="eval").body
-    comp = object()
+    assert prepared.contract.function_id == function_id
+    assert prepared.group.source == source_path.read_text(encoding="utf-8")
 
-    result = library_calls.compile_library_function_call(
-        comp,
-        expr,
-        5,
-        binding=binding,
-        function_id=library_function_id("functions", "vendor.selected", "selected"),
-    )
-
-    assert result == (comp, expr, record, 5)
-    assert observed["call"][2] is record
-
-
-@pytest.mark.parametrize(
-    "wrong_function_id",
-    [
-        local_function_id("owner", "selected", "sig"),
-        library_function_id("examples", "vendor.selected", "selected"),
-        library_function_id("functions", "vendor.other", "selected"),
-        library_function_id("functions", "vendor.selected", "other"),
-    ],
-    ids=["kind", "namespace", "package_id", "name"],
-)
-def test_native_library_call_rejects_mismatched_function_id_before_module_execution(monkeypatch, wrong_function_id):
-    """Canonical imported identity is validated before native module code can run."""
-    compiler = _import_compiler_with_fake_bpy(monkeypatch)
-    from NodeForge import library_calls
-
-    record = types.SimpleNamespace(
-        namespace="functions",
-        name="selected",
-        source_path=None,
-        module_path=Path("/selected/function.py"),
-        package_id="vendor.selected",
-        package_version="2.0.0",
-    )
-    binding = compiler.LibraryBinding("functions", "selected", record)
-    observed = {"native_probe": 0, "handler": 0}
-
-    def has_native(item):
-        observed["native_probe"] += 1
-        return True
-
-    def compile_native(comp, expr, item, depth=0):
-        observed["handler"] += 1
-        return "native"
-
-    monkeypatch.setattr(library_calls, "has_native_compile_call_for_record", has_native)
-    monkeypatch.setattr(library_calls, "compile_module_library_entry_call_for_record", compile_native)
-
-    with pytest.raises(CompileError, match="FunctionId does not match resolved binding"):
-        library_calls.compile_library_function_call(
-            object(),
-            ast.parse("selected()", mode="eval").body,
-            binding=binding,
-            function_id=wrong_function_id,
-        )
-
-    assert observed == {"native_probe": 0, "handler": 0}
 
 
 def test_direct_compiler_fallback_resolves_once_and_binds_its_backend(monkeypatch):
@@ -602,16 +496,30 @@ def test_compiler_rejects_unbound_and_mismatched_backends(monkeypatch):
         )
 
 
-def test_parse_failure_precedes_environment_resolution(monkeypatch):
-    """Invalid root syntax fails before the session slot reads package state."""
+def test_group_backend_public_callback_uses_semantic_preparation_before_publication(monkeypatch):
+    """Raw source remains only at the public callback facade, not the permanent backend request."""
     compiler = _import_compiler_with_fake_bpy(monkeypatch)
-    provider = lambda: pytest.fail("parse failure must not resolve the environment")
-    with pytest.raises(CompileError):
-        compiler._populate_group(
-            types.SimpleNamespace(),
-            "if:",
-            resolved_environment_for_session=provider,
-        )
+    from dataclasses import fields
+    from NodeForge.blender_group_backend import BlenderGroupBuildRequest
+
+    request_fields = {field.name for field in fields(BlenderGroupBuildRequest)}
+    assert request_fields == {
+        "prepared_compilation",
+        "name",
+        "existing_group",
+        "helper_namespace",
+        "function_group_cache",
+        "function_group_transaction",
+        "function_compilation_trace",
+        "function_compilation_inputs",
+        "function_instance_key",
+        "source_callable_session",
+        "preserve_if_equivalent",
+    }
+    source = Path(compiler.__file__).read_text(encoding="utf-8")
+    assert "def prepare(source, *, compilation_identity" in source
+    assert "analyze_group_source(" in source
+
 
 
 def test_compilation_modules_do_not_call_live_resolution_apis():
@@ -621,9 +529,10 @@ def test_compilation_modules_do_not_call_live_resolution_apis():
         for name in (
             "compiler.py",
             "expression_compiler.py",
-            "library_calls.py",
             "function_materializer.py",
             "local_functions.py",
+            "semantic_group.py",
+            "source_callables.py",
         )
     }
     forbidden = (

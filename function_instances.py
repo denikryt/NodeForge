@@ -122,6 +122,23 @@ def function_group_owner_scope(kind: str, *parts, instance_key: str | None = Non
     return _canonical_json(payload)
 
 
+def direct_library_owner_scope(namespace: str, package_id: str | None, name: str) -> str:
+    """Return the established owner scope for standalone catalog materialization.
+
+    Local catalog entries intentionally predate package-qualified reusable ownership
+    and therefore keep an empty package slot. Other editable catalogs use the
+    canonical package identifier carried by ``FunctionId``.
+    """
+
+    normalized_package_id = "" if namespace == "local" else str(package_id or CORE_PACKAGE_ID)
+    return function_group_owner_scope(
+        "LIBRARY",
+        str(namespace),
+        normalized_package_id,
+        str(name),
+    )
+
+
 def instance_key_for(call_site: CallSiteId) -> str:
     """Return the existing deterministic compact key for one canonical call site."""
 
@@ -255,20 +272,27 @@ class FunctionCompilationFrame:
     freshness_unproven: bool = False
     result: FunctionCompilationResult | None = None
 
+    def record_dependency_identity(self, owner_identity: str, fingerprint: str | None) -> None:
+        """Record one realized dependency by its canonical physical owner identity."""
+        if not isinstance(owner_identity, str) or not owner_identity:
+            raise ValueError("owner_identity must be a non-empty string")
+        if not fingerprint:
+            self.freshness_unproven = True
+            return
+        self.child_rows.append({"owner": owner_identity, "fingerprint": str(fingerprint)})
+
     def record_dependency(
         self,
         materialization: IRFunctionMaterialization,
         fingerprint: str | None,
     ) -> None:
-        """Record an actual reusable access using canonical compiler identity."""
-
+        """Record one reusable access through the generic identity helper."""
         if not isinstance(materialization, IRFunctionMaterialization):
             raise TypeError("materialization must be an IRFunctionMaterialization")
-        if not fingerprint:
-            self.freshness_unproven = True
-            return
-        owner_identity = function_materialization_owner_scope(materialization)
-        self.child_rows.append({"owner": owner_identity, "fingerprint": fingerprint})
+        self.record_dependency_identity(
+            function_materialization_owner_scope(materialization),
+            fingerprint,
+        )
 
     def mark_unproven(self, reason: str) -> None:
         """Mark this frame ineligible for untouched reuse."""
@@ -335,6 +359,7 @@ __all__ = [
     "normalized_source",
     "normalized_statements",
     "function_group_owner_scope",
+    "direct_library_owner_scope",
     "function_materialization_owner_scope",
     "instance_key_for",
     "instance_key_for_materialization",

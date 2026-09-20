@@ -19,7 +19,7 @@ from .builtin_call_semantics import (
     analyze_contextual_store_call,
     analyze_contextual_set_position_call,
 )
-from .compiler_identities import BindingId, InputDeclarationId, InterfaceInputOrigin
+from .compiler_identities import BindingId, CallSiteId, FunctionId, InputDeclarationId, InterfaceInputOrigin
 from .constants import TYPE_OBJECT
 from .consteval import (
     CompileTimeAppendExpression,
@@ -111,6 +111,60 @@ class _BodyUnsupported:
 BODY_UNSUPPORTED = _BodyUnsupported()
 
 
+
+
+@dataclass(frozen=True)
+class BodyOutputSummary:
+    """Describe final frontend-owned group output selection without backend Values."""
+
+    explicit_outputs: tuple[tuple[str, NFType], ...]
+    auto_output: tuple[str, NFType] | None
+
+    def __post_init__(self) -> None:
+        """Freeze output order and require canonical semantic types."""
+        object.__setattr__(self, "explicit_outputs", tuple(self.explicit_outputs))
+        for item in self.explicit_outputs:
+            if not isinstance(item, tuple) or len(item) != 2:
+                raise TypeError("explicit_outputs must contain (name, NFType) pairs")
+            name, typ = item
+            if not isinstance(name, str) or not name or not isinstance(typ, NFType):
+                raise TypeError("explicit output summary entries require name and NFType")
+        if self.auto_output is not None:
+            if not isinstance(self.auto_output, tuple) or len(self.auto_output) != 2:
+                raise TypeError("auto_output must be None or a (name, NFType) pair")
+            name, typ = self.auto_output
+            if not isinstance(name, str) or not name or not isinstance(typ, NFType):
+                raise TypeError("auto output summary requires name and NFType")
+
+
+def _summarize_body_outputs(body: IRBody, *, clear_auto_final_output: bool) -> BodyOutputSummary:
+    """Mirror existing backend output selection using semantic IR types only."""
+    explicit_outputs: list[tuple[str, NFType]] = []
+    auto_output: tuple[str, NFType] | None = None
+    for statement in body.statements:
+        if isinstance(statement, IRInputDeclaration):
+            auto_output = (statement.target_name, statement.typ)
+        elif isinstance(statement, IRAssign):
+            auto_output = (statement.source_name, statement.value.result.typ)
+        elif isinstance(statement, (IRBindLeaves, IRDiscardExpression, IRPanelDeclaration)):
+            auto_output = None
+        elif isinstance(statement, IROutput):
+            explicit_outputs.append((statement.name, statement.value.result.typ))
+            auto_output = None
+        elif isinstance(statement, IRFinalExpression):
+            auto_output = ("out", statement.value.result.typ)
+        elif isinstance(statement, IRIf):
+            for merge in statement.merges:
+                auto_output = (merge.source_name, merge.typ)
+        elif isinstance(statement, IRRepeat):
+            for state in statement.states:
+                if state.publish_to_parent:
+                    auto_output = (state.source_name, state.typ)
+    if clear_auto_final_output:
+        auto_output = None
+    return BodyOutputSummary(tuple(explicit_outputs), auto_output)
+
+
 @dataclass(frozen=True)
 class BasicBodyCompilation:
     """Return one accepted body plus detached final frontend semantic state."""
@@ -118,6 +172,7 @@ class BasicBodyCompilation:
     body: IRBody
     final_compile_time: CompileTimeSnapshot
     final_structural_arrays: StructuralArraySnapshot
+    output_summary: BodyOutputSummary
     clear_auto_final_output: bool = False
 
     def __post_init__(self) -> None:
@@ -126,6 +181,8 @@ class BasicBodyCompilation:
             raise TypeError("final_compile_time must be a CompileTimeSnapshot")
         if not isinstance(self.final_structural_arrays, StructuralArraySnapshot):
             raise TypeError("final_structural_arrays must be a StructuralArraySnapshot")
+        if not isinstance(self.output_summary, BodyOutputSummary):
+            raise TypeError("output_summary must be a BodyOutputSummary")
         if not isinstance(self.clear_auto_final_output, bool):
             raise TypeError("clear_auto_final_output must be a bool")
 
@@ -256,6 +313,7 @@ class _BodyIdentityAllocator:
     ordinary_reservations: dict[str, BindingId]
     structural_reservations: dict[tuple[str, tuple[str, int | str]], BindingId]
     input_declaration_ordinals: dict[str, int]
+    call_occurrence_ordinals: dict[FunctionId, int]
     next_object_id: int = 0
     next_array_id: int = 0
 
@@ -287,6 +345,14 @@ class _BodyIdentityAllocator:
         ordinal = self.input_declaration_ordinals.get(target_name, 0)
         self.input_declaration_ordinals[target_name] = ordinal + 1
         return InputDeclarationId(self.declaration_owner, target_name, ordinal)
+
+    def allocate_call_site_id(self, callee: FunctionId) -> CallSiteId:
+        """Allocate one monotonic owner-scoped source-call occurrence identity."""
+        if not isinstance(callee, FunctionId):
+            raise TypeError("callee must be a FunctionId")
+        ordinal = self.call_occurrence_ordinals.get(callee, 0)
+        self.call_occurrence_ordinals[callee] = ordinal + 1
+        return CallSiteId(self.owner_scope, callee, ordinal)
 
     def allocate_object_id(self) -> ObjectSemanticId:
         """Allocate one monotonic Object semantic identity."""
@@ -442,6 +508,9 @@ def lower_basic_body(
     initial_interface_input_origins: Mapping[BindingId, InterfaceInputOrigin] | None = None,
     compile_time_effects_before=(),
     trailing_compile_time_effects=(),
+    source_callable_session=None,
+    source_definition_owner: str | None = None,
+    helper_namespace: str = "Group",
 ):
     """Lower one whole eligible source body to compiler-owned structured Semantic IR."""
     validate_input_declaration_placement(stmts)
@@ -464,6 +533,7 @@ def lower_basic_body(
         ordinary_reservations={name: symbol.binding_id for name, symbol in initial_runtime_bindings.items()},
         structural_reservations={},
         input_declaration_ordinals={},
+        call_occurrence_ordinals={},
     )
     if not isinstance(initial_compile_time, CompileTimeSnapshot):
         raise TypeError("initial_compile_time must be a CompileTimeSnapshot")
@@ -1054,6 +1124,11 @@ def lower_basic_body(
             callable_environment=callable_environment,
             object_semantics=active.object_snapshot(),
             available_group_context_slots=group_context_cursor.snapshot(),
+            source_callable_session=source_callable_session,
+            source_definition_owner=source_definition_owner or declaration_owner or owner_scope,
+            source_owner_scope=owner_scope,
+            source_call_site_allocator=identities.allocate_call_site_id,
+            helper_namespace=helper_namespace,
         )
         analysis = analyze_expression(expr, environment)
         if analysis is None:
@@ -1806,7 +1881,6 @@ def lower_basic_body(
                             raise CompileError("panel() collapsed= must be a compile-time bool")
                     if panel_name in active.panel_names:
                         raise CompileError(f"panel() duplicate panel name: {panel_name}")
-                    member_binding_ids = []
                     member_origins = []
                     seen_origins = set()
                     for member in members_expr.elts:
@@ -1822,11 +1896,10 @@ def lower_basic_body(
                             raise CompileError(f'panel() item {name} already belongs to panel "{existing_panel}"')
                         seen_origins.add(origin)
                         member_origins.append(origin)
-                        member_binding_ids.append(symbol.binding_id)
                     active.panel_names.add(panel_name)
                     for origin in member_origins:
                         active.panel_member_origins[origin] = panel_name
-                    emit(IRPanelDeclaration(tuple(member_binding_ids), panel_name, collapsed))
+                    emit(IRPanelDeclaration(tuple(member_origins), panel_name, collapsed))
                     active.clear_auto_final_output = True
                     continue
                 if call is not None and call.func.id in {"store", "set_position"}:
@@ -1931,12 +2004,14 @@ def lower_basic_body(
     body = lower_statements(stmts, state, compile_time, root=True)
     if body is BODY_UNSUPPORTED:
         return BODY_UNSUPPORTED
+    output_summary = _summarize_body_outputs(body, clear_auto_final_output=state.clear_auto_final_output)
     return BasicBodyCompilation(
         body,
         compile_time.snapshot(),
         state.array_snapshot(),
+        output_summary,
         clear_auto_final_output=state.clear_auto_final_output,
     )
 
 
-__all__ = ["BODY_UNSUPPORTED", "BasicBodyCompilation", "lower_basic_body", "validate_input_declaration_placement"]
+__all__ = ["BODY_UNSUPPORTED", "BasicBodyCompilation", "BodyOutputSummary", "lower_basic_body", "validate_input_declaration_placement"]

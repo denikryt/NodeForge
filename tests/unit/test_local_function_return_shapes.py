@@ -12,12 +12,10 @@ from NodeForge.values import TupleValue, Value
 from NodeForge.nf_types import NFType
 
 
-def _local_functions(monkeypatch):
-    """Import local_functions with a minimal Blender module stand-in."""
-    monkeypatch.setitem(sys.modules, "bpy", types.SimpleNamespace(data=types.SimpleNamespace(node_groups={})))
-    sys.modules.pop("NodeForge.local_functions", None)
-    from NodeForge import local_functions
-    return local_functions
+def _source_callables():
+    """Return the Blender-independent source-call semantic helper module."""
+    from NodeForge import source_callables
+    return source_callables
 
 
 def _function(source):
@@ -26,14 +24,14 @@ def _function(source):
 
 
 def test_scalar_return_shape_preserves_value_name(monkeypatch):
-    module = _local_functions(monkeypatch)
+    module = _source_callables()
     shape = module.analyze_local_return_shape(_function("def f(x):\n    return x\n"))
     assert len(shape.elements) == 1
     assert shape.elements[0].socket_name == "Value"
 
 
 def test_tuple_return_names_and_order(monkeypatch):
-    module = _local_functions(monkeypatch)
+    module = _source_callables()
     fn = _function("def f(x):\n    doubled = x * 2\n    return doubled, x + 1, doubled\n")
     shape = module.analyze_local_return_shape(fn)
     assert [item.socket_name for item in shape.elements] == ["Doubled", "Value 2", "Doubled 2"]
@@ -47,13 +45,13 @@ def test_tuple_return_names_and_order(monkeypatch):
 
 @pytest.mark.parametrize("body", ["return ()", "return a, (b, c)", "return [a, b]"])
 def test_invalid_return_shapes_are_controlled(monkeypatch, body):
-    module = _local_functions(monkeypatch)
+    module = _source_callables()
     with pytest.raises(CompileError):
         module.analyze_local_return_shape(_function(f"def f():\n    {body}\n"))
 
 
 def test_annotations_accept_registry_and_reject_complex(monkeypatch):
-    module = _local_functions(monkeypatch)
+    module = _source_callables()
     for name, typ in TYPE_TOKEN_NAMES.items():
         annotation = ast.parse(name, mode="eval").body
         assert module.resolve_local_parameter_annotation(annotation) == typ
@@ -91,12 +89,15 @@ def test_compile_time_preprocessor_preserves_runtime_unpacking():
 
 def test_return_shape_metadata_serializes_historical_type_tokens(monkeypatch):
     """Local helper return metadata stays byte-for-byte compatible."""
-    module = _local_functions(monkeypatch)
+    module = _source_callables()
     shape = module.analyze_local_return_shape(_function("def f(x):\n    return x\n"))
-    assert module._serialize_return_shape(shape, (NFType.FLOAT,)) == '[{"key":"return:0","name":"Value","type":"FLOAT"}]'
+    monkeypatch.setitem(sys.modules, "bpy", types.SimpleNamespace(data=types.SimpleNamespace(node_groups={})))
+    sys.modules.pop("NodeForge.local_functions", None)
+    from NodeForge import local_functions
+    assert local_functions._serialize_return_shape(shape, (NFType.FLOAT,)) == '[{"key":"return:0","name":"Value","type":"FLOAT"}]'
 
 
 def test_local_signature_serialization_preserves_historical_identity(monkeypatch):
     """Canonical in-memory types retain the exact local helper signature bytes."""
-    module = _local_functions(monkeypatch)
-    assert module._serialize_local_signature(("a", "b"), {"a": NFType.FLOAT, "b": NFType.VECTOR}) == "a:FLOAT,b:VECTOR"
+    module = _source_callables()
+    assert module.serialize_local_signature(("a", "b"), {"a": NFType.FLOAT, "b": NFType.VECTOR}) == "a:FLOAT,b:VECTOR"

@@ -31,6 +31,7 @@ from .semantic_ir import (
     IRArray,
     IRCall,
     IRCallArgument,
+    IRStaticCallArgument,
     IRCallableKind,
     IRCallableTarget,
     IRBinary,
@@ -274,10 +275,24 @@ def lower_analyzed_expression(expr, analysis):
                     raise CompileError("Internal error: call runtime operand lowered to a structural result")
                 if operand.typ != operand_meta.typ:
                     raise CompileError("Internal error: analyzed call operand type changed during IR lowering")
-                arguments.append(IRCallArgument(operand_meta.parameter_name, operand))
+                arguments.append(
+                    IRCallArgument(
+                        operand_meta.parameter_name,
+                        operand,
+                        operand_meta.parameter_index,
+                    )
+                )
 
             if analyzed.target.kind is CallableKind.BUILTIN:
                 target = IRCallableTarget(IRCallableKind.BUILTIN, analyzed.target.source_name)
+            elif analyzed.target.kind in {CallableKind.LOCAL_FUNCTION, CallableKind.LIBRARY}:
+                if analyzed.source_function_id is None:
+                    raise CompileError("Internal error: source-backed call is missing FunctionId")
+                target = IRCallableTarget(
+                    IRCallableKind.SOURCE_FUNCTION,
+                    analyzed.target.source_name,
+                    analyzed.source_function_id,
+                )
             else:
                 raise CompileError("Internal error: dynamic callable reached Semantic Call IR lowering")
 
@@ -315,6 +330,10 @@ def lower_analyzed_expression(expr, analysis):
                     raw_mode = IRRawNodeOutputMode.NAMED_OUTPUTS
                 else:
                     raise CompileError("Internal error: raw node Call IR is missing output mode")
+            static_arguments = tuple(
+                IRStaticCallArgument(item.parameter_index, item.value)
+                for item in analyzed.static_operands
+            )
             builder.emit_operation(
                 IRCall(
                     results=results,
@@ -323,6 +342,8 @@ def lower_analyzed_expression(expr, analysis):
                     arguments=tuple(arguments),
                     options=options,
                     raw_output_mode=raw_mode,
+                    materialization=analyzed.materialization,
+                    static_arguments=static_arguments,
                 )
             )
             if isinstance(analyzed.result, ProjectedCallResult):

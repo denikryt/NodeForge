@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TypeAlias
 
-from .compiler_identities import BindingId, CallSiteId, FunctionId, InputDeclarationId
+from .compiler_identities import BindingId, CallSiteId, FunctionId, InputDeclarationId, InterfaceInputOrigin
 from .nf_types import NFType
 from .group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
 
@@ -31,21 +31,32 @@ class IRCallableKind(str, Enum):
     """Identify a compiler-owned call target that Semantic IR can realize."""
 
     BUILTIN = "BUILTIN"
+    SOURCE_FUNCTION = "SOURCE_FUNCTION"
 
 
 @dataclass(frozen=True)
 class IRCallableTarget:
-    """Store backend-independent identity for one migrated core callable."""
+    """Store backend-independent identity for one compiler-owned callable."""
 
     kind: IRCallableKind
     name: str
+    function_id: FunctionId | None = None
 
     def __post_init__(self) -> None:
-        """Validate target identity without admitting handler objects."""
+        """Validate category-specific target identity without backend objects."""
         if not isinstance(self.kind, IRCallableKind):
             raise TypeError("kind must be an IRCallableKind")
         if not isinstance(self.name, str) or not self.name:
             raise ValueError("callable target name must be a non-empty string")
+        if self.kind is IRCallableKind.BUILTIN:
+            if self.function_id is not None:
+                raise ValueError("builtin callable target cannot carry FunctionId")
+            return
+        if self.kind is IRCallableKind.SOURCE_FUNCTION:
+            if not isinstance(self.function_id, FunctionId):
+                raise ValueError("source-function callable target requires FunctionId")
+            return
+        raise ValueError("unsupported IR callable kind")
 
 
 class IRRawNodeOutputMode(str, Enum):
@@ -143,17 +154,43 @@ IRResult: TypeAlias = IRValue | IRArray | IRTuple | IRNamedOutputs
 
 @dataclass(frozen=True)
 class IRCallArgument:
-    """Reference one already-emitted runtime operand of a migrated call."""
+    """Reference one already-emitted runtime operand of a compiler-owned call."""
 
     parameter_name: str | None
     value: IRValue
+    parameter_index: int | None = None
 
     def __post_init__(self) -> None:
-        """Reject structural/backend operands in runtime call slots."""
+        """Reject structural/backend operands and invalid contract positions."""
         if self.parameter_name is not None and not isinstance(self.parameter_name, str):
             raise TypeError("parameter_name must be a string or None")
         if not isinstance(self.value, IRValue):
             raise TypeError("IRCallArgument.value must be an IRValue")
+        if self.parameter_index is not None and (
+            not isinstance(self.parameter_index, int)
+            or isinstance(self.parameter_index, bool)
+            or self.parameter_index < 0
+        ):
+            raise ValueError("IRCallArgument.parameter_index must be None or a non-negative integer")
+
+
+@dataclass(frozen=True)
+class IRStaticCallArgument:
+    """Store one detached source-call argument by callable input position."""
+
+    parameter_index: int
+    value: object
+
+    def __post_init__(self) -> None:
+        """Require one non-negative position and detached immutable value."""
+        if (
+            not isinstance(self.parameter_index, int)
+            or isinstance(self.parameter_index, bool)
+            or self.parameter_index < 0
+        ):
+            raise ValueError("IRStaticCallArgument.parameter_index must be a non-negative integer")
+        if not _is_ir_option_value(self.value):
+            raise TypeError("IRStaticCallArgument.value must be detached immutable IR data")
 
 
 @dataclass(frozen=True)
@@ -166,12 +203,15 @@ class IRCall:
     arguments: tuple[IRCallArgument, ...]
     options: tuple[tuple[str, object], ...] = ()
     raw_output_mode: IRRawNodeOutputMode | None = None
+    materialization: IRFunctionMaterialization | None = None
+    static_arguments: tuple[IRStaticCallArgument, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate call records before backend realization."""
         object.__setattr__(self, "results", tuple(self.results))
         object.__setattr__(self, "arguments", tuple(self.arguments))
         object.__setattr__(self, "options", tuple(self.options))
+        object.__setattr__(self, "static_arguments", tuple(self.static_arguments))
         if not isinstance(self.depth, int) or isinstance(self.depth, bool) or self.depth < 0:
             raise ValueError("IRCall.depth must be a non-negative integer")
         if not self.results or not all(isinstance(item, IRValue) for item in self.results):
@@ -182,6 +222,27 @@ class IRCall:
             raise TypeError("IRCall.target must be an IRCallableTarget")
         if not all(isinstance(item, IRCallArgument) for item in self.arguments):
             raise TypeError("IRCall arguments must be IRCallArgument records")
+        if not all(isinstance(item, IRStaticCallArgument) for item in self.static_arguments):
+            raise TypeError("IRCall static_arguments must be IRStaticCallArgument records")
+        if self.target.kind is IRCallableKind.BUILTIN:
+            if self.materialization is not None or self.static_arguments:
+                raise ValueError("builtin calls cannot carry source-function materialization/static arguments")
+            if any(item.parameter_index is not None for item in self.arguments):
+                raise ValueError("builtin runtime arguments cannot carry source-function positions")
+        elif self.target.kind is IRCallableKind.SOURCE_FUNCTION:
+            if self.target.function_id is None:
+                raise ValueError("source-function IRCall requires target FunctionId")
+            dynamic_positions = [item.parameter_index for item in self.arguments]
+            if any(position is None for position in dynamic_positions):
+                raise ValueError("source-function runtime arguments require parameter positions")
+            static_positions = [item.parameter_index for item in self.static_arguments]
+            all_positions = [int(position) for position in dynamic_positions] + static_positions
+            if len(all_positions) != len(set(all_positions)):
+                raise ValueError("source-function parameter positions must be unique across runtime/static arguments")
+            if self.materialization is not None and self.materialization.callee != self.target.function_id:
+                raise ValueError("source-function materialization must target IRCall FunctionId")
+        else:
+            raise ValueError("unsupported IRCall target kind")
         option_names = []
         for option in self.options:
             if not isinstance(option, tuple) or len(option) != 2:
@@ -562,19 +623,20 @@ class IRDiscardExpression:
 
 @dataclass(frozen=True)
 class IRPanelDeclaration:
-    """Declare one source-ordered native interface panel using runtime binding identities."""
+    """Declare one source-ordered native interface panel by canonical input origin."""
 
-    member_binding_ids: tuple[BindingId, ...]
+    member_origins: tuple[InterfaceInputOrigin, ...]
     name: str
     collapsed: bool
 
     def __post_init__(self) -> None:
-        """Validate detached panel declaration metadata."""
-        object.__setattr__(self, "member_binding_ids", tuple(self.member_binding_ids))
-        if not self.member_binding_ids or not all(isinstance(item, BindingId) for item in self.member_binding_ids):
-            raise TypeError("IRPanelDeclaration requires one or more BindingId members")
-        if len(self.member_binding_ids) != len(set(self.member_binding_ids)):
-            raise ValueError("IRPanelDeclaration member BindingIds must be unique")
+        """Validate detached panel membership using interface provenance identity."""
+        object.__setattr__(self, "member_origins", tuple(self.member_origins))
+        allowed = (BindingId, InputDeclarationId)
+        if not self.member_origins or not all(isinstance(item, allowed) for item in self.member_origins):
+            raise TypeError("IRPanelDeclaration requires one or more interface input origins")
+        if len(self.member_origins) != len(set(self.member_origins)):
+            raise ValueError("IRPanelDeclaration member origins must be unique")
         if not isinstance(self.name, str) or not self.name:
             raise ValueError("IRPanelDeclaration name must be a non-empty string")
         if not isinstance(self.collapsed, bool):
@@ -714,6 +776,7 @@ __all__ = [
     "IRTuple",
     "IRNamedOutputs",
     "IRCallArgument",
+    "IRStaticCallArgument",
     "IRCall",
     "IRFunctionMaterializationMode",
     "IRFunctionMaterialization",

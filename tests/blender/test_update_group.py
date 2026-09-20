@@ -396,10 +396,10 @@ def test_deferred_group_transaction_rollback_restores_first_external_snapshot():
     wrapper.links.new(group_node.outputs["X"], output.inputs["X"])
 
     transaction = blender_group_backend.BlenderGroupBuildTransaction()
-    compiler._new_group_backend().create_or_update(source=second, name=group.name, existing_group=group, build_options={"local_helper_transaction": transaction})
+    prepared_create_or_update(second, group.name, existing_group=group, build_options={"local_helper_transaction": transaction})
     check(_close(group_node.inputs["X"].default_value, 1.5), "first deferred update lost the original override")
     group_node.inputs["X"].default_value = 2.5
-    compiler._new_group_backend().create_or_update(source=third, name=group.name, existing_group=group, build_options={"local_helper_transaction": transaction})
+    prepared_create_or_update(third, group.name, existing_group=group, build_options={"local_helper_transaction": transaction})
     check(_close(group_node.inputs["X"].default_value, 2.5), "second deferred update lost the intermediate override")
 
     transaction.rollback()
@@ -420,14 +420,14 @@ def test_function_group_savepoint_restores_immediate_state_after_second_update()
     pointer = group.as_pointer()
     transaction = blender_group_backend.BlenderGroupBuildTransaction()
 
-    compiler._new_group_backend().create_or_update(source=second, name=group.name, existing_group=group, build_options={"function_group_transaction": transaction})
+    prepared_create_or_update(second, group.name, existing_group=group, build_options={"function_group_transaction": transaction})
     check(len(transaction._updated_by_identity) == 1, "first update did not create one physical identity record")
     check(len(transaction._mutation_journal) == 1, "first update did not create one mutation journal entry")
     savepoint = transaction.savepoint()
 
     original_name = group.name
     group.name = original_name + "_renamed"
-    compiler._new_group_backend().create_or_update(source=third, name=group.name, existing_group=group, build_options={"function_group_transaction": transaction})
+    prepared_create_or_update(third, group.name, existing_group=group, build_options={"function_group_transaction": transaction})
     check(group.as_pointer() == pointer, "second update changed physical group identity")
     check(len(transaction._updated_by_identity) == 1, "rename split one physical group into multiple transaction identities")
     check(len(transaction._mutation_journal) == 2, "second update was not journaled separately")

@@ -73,7 +73,7 @@ def _body_programs(body):
 
 def test_semantic_ir_route_materializes_representative_runtime_expressions(monkeypatch):
     calls = []
-    original = statement_compiler.lower_ir_body
+    original = compiler_module.lower_body
 
     def wrapped(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):
         for program in _body_programs(body):
@@ -82,7 +82,7 @@ def test_semantic_ir_route_materializes_representative_runtime_expressions(monke
             context, body, initial_runtime_bindings, base_depth, group_input=group_input
         )
 
-    monkeypatch.setattr(statement_compiler, "lower_ir_body", wrapped)
+    monkeypatch.setattr(compiler_module, "lower_body", wrapped)
     group = compile_group(
         '''
 a = input_float("A", default=2.0)
@@ -205,7 +205,7 @@ def test_supported_core_root_matrix_never_enters_legacy_statement_compiler(monke
 
 def test_structural_array_parent_uses_semantic_body_and_preserves_nested_expression_topology(monkeypatch):
     calls = []
-    original = statement_compiler.lower_ir_body
+    original = compiler_module.lower_body
 
     def wrapped(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):
         for program in _body_programs(body):
@@ -217,7 +217,7 @@ def test_structural_array_parent_uses_semantic_body_and_preserves_nested_express
     def forbidden_legacy_statement(*_args, **_kwargs):
         raise AssertionError("migrated structural array entered legacy compile_statement()")
 
-    monkeypatch.setattr(statement_compiler, "lower_ir_body", wrapped)
+    monkeypatch.setattr(compiler_module, "lower_body", wrapped)
     monkeypatch.setattr(statement_compiler, "compile_statement", forbidden_legacy_statement)
     group = compile_group(
         """
@@ -359,7 +359,7 @@ def test_semantic_backend_failure_does_not_retry_legacy_and_cleans_fresh_group(m
         legacy_calls.append("math")
         raise AssertionError("legacy AST binary lowering ran after semantic backend failure")
 
-    monkeypatch.setattr(statement_compiler, "lower_ir_body", fail_backend)
+    monkeypatch.setattr(compiler_module, "lower_body", fail_backend)
     monkeypatch.setattr(expression_compiler, "_math", legacy_math)
 
     try:
@@ -989,7 +989,7 @@ def test_complete_expression_ir_production_routing_covers_new_forms_and_excludes
     """Production expression/body routes must send owned forms through Semantic IR."""
     programs = []
     original_expression = expression_compiler.lower_ir_expression
-    original_body = statement_compiler.lower_ir_body
+    original_body = compiler_module.lower_body
 
     def wrapped_expression(context, program, base_depth=0):
         programs.append(program)
@@ -1002,7 +1002,7 @@ def test_complete_expression_ir_production_routing_covers_new_forms_and_excludes
         )
 
     monkeypatch.setattr(expression_compiler, "lower_ir_expression", wrapped_expression)
-    monkeypatch.setattr(statement_compiler, "lower_ir_body", wrapped_body)
+    monkeypatch.setattr(compiler_module, "lower_body", wrapped_body)
 
     def compile_and_remove(source, name):
         group = compile_group(source, name)
@@ -1142,7 +1142,7 @@ output("Location", info.location)
 def test_semantic_call_ir_materializes_core_calls_with_existing_layout(monkeypatch):
     """Stateless core calls enter body IR and retain the existing depth-derived placement."""
     calls = []
-    original = statement_compiler.lower_ir_body
+    original = compiler_module.lower_body
 
     def wrapped(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):
         for program in _body_programs(body):
@@ -1153,7 +1153,7 @@ def test_semantic_call_ir_materializes_core_calls_with_existing_layout(monkeypat
             context, body, initial_runtime_bindings, base_depth, group_input=group_input
         )
 
-    monkeypatch.setattr(statement_compiler, "lower_ir_body", wrapped)
+    monkeypatch.setattr(compiler_module, "lower_body", wrapped)
     group = compile_group(
         '''
 v = input_vector("V", default=(1, 2, 3))

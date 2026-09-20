@@ -10,6 +10,7 @@ from typing import Mapping
 from .compiler_identities import FunctionId, library_function_id
 from .group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
 from .nf_types import NFType
+from .semantic_ir import IRFunctionMaterialization
 
 
 class CallableKind(Enum):
@@ -71,13 +72,37 @@ class AnalyzedCallOperand:
 
     parameter_name: str | None
     typ: NFType
+    parameter_index: int | None = None
 
     def __post_init__(self) -> None:
-        """Require canonical runtime type identity."""
+        """Require canonical runtime type identity and optional source-call position."""
         if self.parameter_name is not None and not isinstance(self.parameter_name, str):
             raise TypeError("parameter_name must be a string or None")
         if not isinstance(self.typ, NFType):
             raise TypeError("typ must be an NFType")
+        if self.parameter_index is not None and (
+            not isinstance(self.parameter_index, int)
+            or isinstance(self.parameter_index, bool)
+            or self.parameter_index < 0
+        ):
+            raise ValueError("parameter_index must be None or a non-negative integer")
+
+
+@dataclass(frozen=True)
+class AnalyzedStaticCallOperand:
+    """Describe one detached source-call argument selected for static socket materialization."""
+
+    parameter_index: int
+    value: object
+
+    def __post_init__(self) -> None:
+        """Require one non-negative callable input position."""
+        if (
+            not isinstance(self.parameter_index, int)
+            or isinstance(self.parameter_index, bool)
+            or self.parameter_index < 0
+        ):
+            raise ValueError("parameter_index must be a non-negative integer")
 
 
 @dataclass(frozen=True)
@@ -185,6 +210,9 @@ class AnalyzedCall:
     runtime_operands: tuple[AnalyzedCallOperand, ...]
     options: tuple[tuple[str, object], ...]
     result: CallResultSpec
+    source_function_id: FunctionId | None = None
+    materialization: IRFunctionMaterialization | None = None
+    static_operands: tuple[AnalyzedStaticCallOperand, ...] = ()
 
     def __post_init__(self) -> None:
         """Freeze normalized fields and reject non-core call targets."""
@@ -192,8 +220,24 @@ class AnalyzedCall:
             raise TypeError("target must be a ResolvedCallable")
         object.__setattr__(self, "runtime_operands", tuple(self.runtime_operands))
         object.__setattr__(self, "options", tuple(self.options))
+        object.__setattr__(self, "static_operands", tuple(self.static_operands))
         if not all(isinstance(item, AnalyzedCallOperand) for item in self.runtime_operands):
             raise TypeError("runtime_operands must contain AnalyzedCallOperand records")
+        if not all(isinstance(item, AnalyzedStaticCallOperand) for item in self.static_operands):
+            raise TypeError("static_operands must contain AnalyzedStaticCallOperand records")
+        if self.target.kind in {CallableKind.LOCAL_FUNCTION, CallableKind.LIBRARY}:
+            if not isinstance(self.source_function_id, FunctionId):
+                raise TypeError("source-backed analyzed call requires FunctionId")
+            if self.materialization is not None and self.materialization.callee != self.source_function_id:
+                raise ValueError("source-call materialization must target source_function_id")
+            positions = [item.parameter_index for item in self.runtime_operands]
+            if any(position is None for position in positions):
+                raise ValueError("source-call runtime operands require parameter positions")
+            positions = [int(position) for position in positions] + [item.parameter_index for item in self.static_operands]
+            if len(positions) != len(set(positions)):
+                raise ValueError("source-call parameter positions must be unique")
+        elif self.source_function_id is not None or self.materialization is not None or self.static_operands:
+            raise ValueError("only source-backed analyzed calls may carry source-call metadata")
         if not isinstance(self.result, (RuntimeCallResult, TupleCallResult, NamedOutputsCallResult, ProjectedCallResult, ContextReadCallResult)):
             raise TypeError("result must be a call result specification")
 
@@ -239,6 +283,7 @@ def resolve_simple_callable(name: str, environment: CallableEnvironment):
 __all__ = [
     "AnalyzedCall",
     "AnalyzedCallOperand",
+    "AnalyzedStaticCallOperand",
     "CallResultSpec",
     "CallableEnvironment",
     "CallableKind",

@@ -6,7 +6,7 @@ import pytest
 
 from NodeForge.constants import TYPE_OBJECT, TYPE_TOKEN_NAMES
 from NodeForge.errors import CompileError
-from NodeForge.local_functions import input_call_for_type
+from NodeForge.source_callables import input_call_for_type
 from NodeForge.builtins import io, raw_nodes
 from NodeForge.values import ObjectValue, make_value
 

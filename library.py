@@ -15,11 +15,9 @@ from typing import Collection, Iterable, TYPE_CHECKING
 
 import bpy
 
-from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR, TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING, TYPE_BUNDLE
-from .nf_types import NFType
 from .errors import CompileError
 from .blender_group_authority import is_authority_ineligible_group
-from .compiler_identities import CORE_PACKAGE_ID, FunctionId, library_function_id, normalize_library_package_id
+from .compiler_identities import CORE_PACKAGE_ID, FunctionId, GroupCompilationIdentity, library_function_id, normalize_library_package_id
 from .semantic_ir import IRFunctionMaterialization
 from .function_materializer import (
     FunctionMaterializationContext,
@@ -28,14 +26,12 @@ from .function_materializer import (
     LibraryFunctionMaterializationSpec,
     LibraryFunctionUpdateSpec,
 )
-from .interface import _set_socket_default
-from .nodes import _new_node
-from .values import Value, TupleValue, make_value
 from .systems import registry as systems_registry
 from . import packages
 from .function_instances import (
     FUNCTION_DEFINITION_OWNER_PROP,
     FUNCTION_INSTANCE_KEY_PROP,
+    direct_library_owner_scope,
 )
 
 if TYPE_CHECKING:
@@ -947,31 +943,6 @@ def compile_module_library_entry_call_for_record(comp, expr, record: LibraryEntr
     return compile_call(comp, expr, depth)
 
 
-def _socket_type_to_value_type(socket) -> NFType:
-    """Map a supported Blender group socket to a NodeForge semantic type."""
-    bl_idname = getattr(socket, "bl_idname", "") or getattr(socket, "socket_type", "") or getattr(socket, "bl_socket_idname", "")
-    mappings = (
-        ("NodeSocketGeometry", TYPE_GEOMETRY),
-        ("NodeSocketMaterial", TYPE_MATERIAL),
-        ("NodeSocketObject", TYPE_OBJECT),
-        ("NodeSocketVector", TYPE_VECTOR),
-        ("NodeSocketBool", TYPE_BOOL),
-        ("NodeSocketInt", TYPE_INT),
-        ("NodeSocketString", TYPE_STRING),
-        ("NodeSocketBundle", TYPE_BUNDLE),
-        ("NodeSocketFloat", TYPE_FLOAT),
-    )
-    for prefix, typ in mappings:
-        if bl_idname.startswith(prefix):
-            return typ
-    raise CompileError(f"Unsupported Blender group socket type {bl_idname!r}")
-
-
-def _normalized_socket_name(name: str) -> str:
-    """Normalize socket and keyword names so scale_xy matches 'Scale XY'."""
-    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
-
-
 def _input_sockets(node):
     """Return real, non-hidden input sockets for a group node."""
     return [s for s in node.inputs if not getattr(s, "is_output", False) and getattr(s, "enabled", True) and not getattr(s, "hide", False)]
@@ -1061,26 +1032,32 @@ def update_materialized_library_entry_group(namespace: str, name: str, group, gr
 
 
 def update_materialized_library_entry_group_for_record(record: LibraryEntryRecord, group, group_backend):
-    """Update an existing root group from one exact resolved catalog record."""
+    """Update an existing root group through one prepared semantic compilation."""
     validate_reloadable_library_entry_record(group, record)
     source = load_library_entry_source_for_record(record)
-    backend_builtins = backend_builtins_for_record(record)
     function_id = library_function_id(record.namespace, record.package_id, record.name)
+    identity = _direct_library_compilation_identity(function_id)
+    session = group_backend.new_source_callable_session()
+    prepared = group_backend.prepare_source_compilation(
+        source,
+        compilation_identity=identity,
+        helper_namespace=record.name,
+        backend_builtins=backend_builtins_for_record(record),
+        source_callable_session=session,
+    )
     spec = LibraryFunctionUpdateSpec(
         namespace=record.namespace,
         name=record.name,
         record=record,
-        source=source,
-        backend_builtins=backend_builtins,
+        prepared_compilation=prepared,
         function_id=function_id,
+        source_callable_session=session,
         group=group,
         group_name=getattr(group, "name", _group_name_for_record(record)),
         backend_signature=_backend_signature_for_record(record),
         write_package_metadata=_write_package_metadata,
     )
-    return FunctionMaterializer(
-        group_backend=group_backend,
-    ).update_library_group(spec)
+    return FunctionMaterializer(group_backend=group_backend).update_library_group(spec)
 
 
 def _assert_owned_materialized_group(existing, record: LibraryEntryRecord, group_name: str) -> None:
@@ -1159,6 +1136,56 @@ def _validate_library_function_id(function_id: FunctionId, record: LibraryEntryR
         )
 
 
+def _direct_library_compilation_identity(function_id: FunctionId) -> GroupCompilationIdentity:
+    """Return the established direct-catalog owner before semantic preparation."""
+    owner_scope = direct_library_owner_scope(
+        function_id.namespace,
+        function_id.package_id,
+        function_id.name,
+    )
+    definition_owner = owner_scope if function_id.namespace == "local" else function_id.stable_key()
+    return GroupCompilationIdentity(
+        root_owner_id=None,
+        owner_scope=owner_scope,
+        definition_owner=definition_owner,
+        declaration_owner=function_id.stable_key(),
+    )
+
+
+def materialize_prepared_library_callable(
+    record: LibraryEntryRecord,
+    materializer: FunctionMaterializer,
+    prepared_callable,
+    *,
+    materialization: IRFunctionMaterialization | None,
+    materialization_context: FunctionMaterializationContext,
+) -> MaterializedFunctionGroup:
+    """Materialize one source-call callee from its captured prepared semantic artifact."""
+    _validate_resolved_record(record)
+    function_id = prepared_callable.contract.function_id
+    _validate_library_function_id(function_id, record)
+    if record.namespace == "local":
+        if materialization is not None:
+            raise CompileError("Internal error: Local catalog source call cannot carry reusable materialization")
+    else:
+        if materialization is None or materialization.callee != function_id:
+            raise CompileError("Internal error: reusable source call has inconsistent materialization identity")
+    spec = LibraryFunctionMaterializationSpec(
+        namespace=record.namespace,
+        name=record.name,
+        record=record,
+        prepared_compilation=prepared_callable.group,
+        function_id=function_id,
+        source_callable_session=materialization_context.source_callable_session,
+        materialization=materialization,
+        group_name=_group_name_for_record(record),
+        backend_signature=_backend_signature_for_record(record),
+        find_existing=_find_owned_library_entry_group,
+        write_package_metadata=_write_package_metadata,
+    )
+    return materializer.materialize_library(spec, context=materialization_context)
+
+
 def get_or_create_library_entry_group(
     namespace: str,
     name: str,
@@ -1188,77 +1215,56 @@ def get_or_create_library_entry_group_for_record(
     materialization: IRFunctionMaterialization | None = None,
     function_id: FunctionId | None = None,
     materialization_context: FunctionMaterializationContext | None = None,
+    prepared_callable=None,
 ) -> MaterializedFunctionGroup:
-    """Materialize an editable definition from one exact resolved catalog record."""
+    """Materialize an editable source definition from prepared semantics."""
     _validate_resolved_record(record)
     namespace = record.namespace
     name = record.name
     if record.source_path is None:
         raise CompileError(f"{namespace} library entry {name!r} has no editable .nf source")
-    source = load_library_entry_source_for_record(record)
-    backend_builtins = backend_builtins_for_record(record)
 
-    if namespace == "local":
-        if materialization is not None:
-            raise CompileError("Internal error: Local catalog materialization cannot use reusable-call IR yet")
-        if function_id is not None:
-            _validate_library_function_id(function_id, record)
-        else:
-            function_id = library_function_id(namespace, record.package_id, name)
-    elif materialization is not None:
-        if function_id is None:
-            raise CompileError("Internal error: reusable library materialization requires canonical FunctionId")
-        _validate_library_function_id(function_id, record)
-        if materialization.callee != function_id:
-            raise CompileError(
-                f"Internal error: reusable-call FunctionId does not match {namespace} library entry {name!r}"
-            )
+    if prepared_callable is not None:
         if materialization_context is None:
-            raise CompileError("Internal error: reusable library materialization requires compilation context")
-    else:
-        if function_id is not None:
-            raise CompileError("Internal error: direct catalog materialization cannot receive call-provided FunctionId")
-        function_id = library_function_id(namespace, record.package_id, name)
+            raise CompileError("Internal error: prepared source call requires materialization context")
+        return materialize_prepared_library_callable(
+            record,
+            group_backend,
+            prepared_callable,
+            materialization=materialization,
+            materialization_context=materialization_context,
+        )
 
+    if materialization is not None or function_id is not None:
+        raise CompileError("Internal error: source-call materialization must provide PreparedSourceCallable")
+    function_id = library_function_id(namespace, record.package_id, name)
+    source = load_library_entry_source_for_record(record)
+    identity = _direct_library_compilation_identity(function_id)
+    session = group_backend.new_source_callable_session()
+    prepared = group_backend.prepare_source_compilation(
+        source,
+        compilation_identity=identity,
+        helper_namespace=name,
+        backend_builtins=backend_builtins_for_record(record),
+        source_callable_session=session,
+    )
     spec = LibraryFunctionMaterializationSpec(
         namespace=namespace,
         name=name,
         record=record,
-        source=source,
-        backend_builtins=backend_builtins,
+        prepared_compilation=prepared,
         function_id=function_id,
-        materialization=materialization,
+        source_callable_session=session,
+        materialization=None,
         group_name=_group_name_for_record(record),
         backend_signature=_backend_signature_for_record(record),
         find_existing=_find_owned_library_entry_group,
         write_package_metadata=_write_package_metadata,
     )
-    return FunctionMaterializer(
-        group_backend=group_backend,
-    ).materialize_library(spec, context=materialization_context)
+    return FunctionMaterializer(group_backend=group_backend).materialize_library(
+        spec, context=materialization_context
+    )
 
-
-def make_library_call_node(group, function_group, compiled_args, const_args, x=0, y=0):
-    """Create a GeometryNodeGroup call using physical input positions, not display-name identity."""
-    node = _new_node(group, "GeometryNodeGroup", x, y)
-    node.node_tree = function_group
-    apply_function_node_display_name(node, function_group)
-
-    inputs = _input_sockets(node)
-    for input_index, value in const_args:
-        if input_index < 0 or input_index >= len(inputs):
-            raise CompileError(f"Function {function_group.name} has no input at position {input_index}")
-        _set_socket_default(inputs[input_index], value)
-    for input_index, value in compiled_args:
-        if input_index < 0 or input_index >= len(inputs):
-            raise CompileError(f"Function {function_group.name} has no input at position {input_index}")
-        group.links.new(value.socket, inputs[input_index])
-
-    outputs = _output_sockets(node)
-    if not outputs:
-        raise CompileError(f"Library function {function_group.name} has no outputs")
-    values = tuple(make_value(socket, _socket_type_to_value_type(socket)) for socket in outputs)
-    return values[0] if len(values) == 1 else TupleValue(values)
 
 def materialize_library_entry_group(namespace: str, name: str, group_backend):
     """Create/update a GeometryNodeTree for a catalog entry."""
@@ -1530,7 +1536,7 @@ __all__ = [
     "materialize_library_entry_group_for_record",
     "get_or_create_library_entry_group",
     "get_or_create_library_entry_group_for_record",
-    "make_library_call_node",
+    "materialize_prepared_library_callable",
     "display_name_for_function",
     "display_name_for_group",
     "apply_function_node_display_name",
@@ -1561,6 +1567,4 @@ __all__ = [
     "has_module_library_function",
     "backend_builtins_for_function",
     "compile_module_library_function_call",
-    "_normalized_socket_name",
-    "_socket_type_to_value_type",
 ]

@@ -36,9 +36,10 @@ def test_resolved_environment_defers_local_failure_without_repeating_discovery(m
     monkeypatch.setattr(library, "_read_local_source_registry", malformed_registry)
     environment = resolved_environment.resolve_environment()
     backend = compiler._new_group_backend(environment)
-    group = backend.create_or_update(
-        source='value = 2.0\noutput("Value", value)\n',
-        name="NFTest_deferred_local_failure",
+    group = prepared_create_or_update(
+        'value = 2.0\noutput("Value", value)\n',
+        "NFTest_deferred_local_failure",
+        backend=backend,
     )
 
     check(group is not None, "source without Local imports failed on deferred Local error")
@@ -57,17 +58,19 @@ def test_resolved_environment_defers_local_failure_without_repeating_discovery(m
     check(calls == [True], "deferred Local lookup repeated registry discovery")
 
 
-def test_root_and_nested_local_compilers_share_snapshot_without_live_rediscovery(monkeypatch):
-    """Root, parent, and leaf populations use one prebuilt environment by identity."""
+def test_root_and_nested_local_source_calls_share_snapshot_without_live_rediscovery(monkeypatch):
+    """Root, parent, and leaf semantic preparations share one frozen environment/session."""
+    from NodeForge import source_callables
+
     local = library.ensure_local_catalog_dir()
     leaf = local / "resolved_environment_leaf.nf"
     parent = local / "resolved_environment_parent.nf"
     seen_environments = []
-    original_init = compiler.Compiler.__init__
+    original_init = source_callables.SourceCallableSession.__init__
 
-    def recording_init(self, *args, **kwargs):
-        original_init(self, *args, **kwargs)
-        seen_environments.append(self.resolved_environment)
+    def recording_init(self, *, resolved_environment):
+        seen_environments.append(resolved_environment)
+        original_init(self, resolved_environment=resolved_environment)
 
     try:
         _write(leaf, 'x = input_float("X")\noutput("x", x * 2.0)\n')
@@ -79,7 +82,7 @@ def test_root_and_nested_local_compilers_share_snapshot_without_live_rediscovery
             'output("y", y)\n',
         )
         environment = resolved_environment.resolve_environment()
-        monkeypatch.setattr(compiler.Compiler, "__init__", recording_init)
+        monkeypatch.setattr(source_callables.SourceCallableSession, "__init__", recording_init)
         monkeypatch.setattr(
             packages,
             "active_package_records",
@@ -96,44 +99,31 @@ def test_root_and_nested_local_compilers_share_snapshot_without_live_rediscovery
             lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("nested catalog-name rediscovery")),
         )
 
-        compiler._new_group_backend(environment).create_or_update(
-            source=(
-                "from local import resolved_environment_parent\n"
-                "value = resolved_environment_parent(3.0)\n"
-                'output("Value", value)\n'
-            ),
-            name="NFTest_resolved_environment_nested_identity",
+        backend = compiler._new_group_backend(environment)
+        prepared_create_or_update(
+            "from local import resolved_environment_parent\n"
+            "value = resolved_environment_parent(3.0)\n"
+            'output("Value", value)\n',
+            "NFTest_resolved_environment_nested_identity",
+            backend=backend,
         )
 
-        check(len(seen_environments) >= 3, "expected root, parent, and leaf compiler populations")
-        check(
-            all(item is environment for item in seen_environments),
-            "nested compiler received a different ResolvedEnvironment object",
-        )
+        check(seen_environments == [environment], f"unexpected source-call sessions: {len(seen_environments)}")
     finally:
         leaf.unlink(missing_ok=True)
         parent.unlink(missing_ok=True)
 
-
-def test_direct_compiler_fallback_resolves_once_for_nested_local_dependency(monkeypatch):
-    """Standalone Compiler owns one environment across Local parent/leaf materialization."""
-    import ast
-
+def test_prepared_root_resolves_once_for_nested_local_dependency(monkeypatch):
+    """Prepared root and nested Local source calls share one resolved environment snapshot."""
     local = library.ensure_local_catalog_dir()
     leaf = local / "direct_environment_leaf.nf"
     parent = local / "direct_environment_parent.nf"
     real_resolve = compiler.resolve_environment
     resolve_calls = []
-    seen_environments = []
-    original_init = compiler.Compiler.__init__
 
     def counted_resolve():
         resolve_calls.append(True)
         return real_resolve()
-
-    def recording_init(self, *args, **kwargs):
-        original_init(self, *args, **kwargs)
-        seen_environments.append(self.resolved_environment)
 
     try:
         _write(leaf, 'x = input_float("X")\noutput("x", x + 1.0)\n')
@@ -145,26 +135,18 @@ def test_direct_compiler_fallback_resolves_once_for_nested_local_dependency(monk
             'output("y", y)\n',
         )
         monkeypatch.setattr(compiler, "resolve_environment", counted_resolve)
-        monkeypatch.setattr(compiler.Compiler, "__init__", recording_init)
-
-        root = bpy.data.node_groups.new("NFTest_direct_environment_fallback", "GeometryNodeTree")
-        direct = compiler.Compiler(root, None)
-        record = direct.resolved_environment.catalog("local").find("direct_environment_parent")
-        binding = compiler.LibraryBinding("local", "direct_environment_parent", record)
-        direct.imported_library_functions["direct_environment_parent"] = binding
-        result = direct.compile(ast.parse("direct_environment_parent(2.0)", mode="eval").body)
-
-        check(result is not None, "direct Compiler failed to materialize Local dependency")
-        check(resolve_calls == [True], f"direct Compiler resolved environment {len(resolve_calls)} times")
-        check(len(seen_environments) >= 3, "expected direct, parent, and leaf compiler instances")
-        check(
-            all(item is direct.resolved_environment for item in seen_environments),
-            "direct Compiler nested materialization changed environment identity",
+        group = compiler.create_expression_group(
+            "from local import direct_environment_parent\n"
+            "value = direct_environment_parent(2.0)\n"
+            'output("Value", value)\n',
+            "NFTest_prepared_environment_nested",
         )
+        check(group is not None, "prepared root failed to materialize nested Local dependency")
+        check(resolve_calls == [True], f"prepared root resolved environment {len(resolve_calls)} times")
+        bpy.data.node_groups.remove(group)
     finally:
         leaf.unlink(missing_ok=True)
         parent.unlink(missing_ok=True)
-
 
 def test_new_environment_observes_local_changes_without_mutating_old_snapshot():
     """A later root session sees new Local state while an older selection stays fixed."""

@@ -74,6 +74,25 @@ InterfaceInputOrigin: TypeAlias = BindingId | InputDeclarationId
 
 
 @dataclass(frozen=True)
+class GroupCompilationIdentity:
+    """Carry one final durable owner identity across semantic and backend phases."""
+
+    root_owner_id: str | None
+    owner_scope: str
+    definition_owner: str
+    declaration_owner: str
+
+    def __post_init__(self) -> None:
+        """Reject incomplete ownership data before semantic IDs are allocated."""
+        if self.root_owner_id is not None and (not isinstance(self.root_owner_id, str) or not self.root_owner_id):
+            raise ValueError("GroupCompilationIdentity.root_owner_id must be None or a non-empty string")
+        for field_name in ("owner_scope", "definition_owner", "declaration_owner"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"GroupCompilationIdentity.{field_name} must be a non-empty string")
+
+
+@dataclass(frozen=True)
 class FunctionId:
     """Identify one reusable local or imported function specialization."""
 
@@ -154,6 +173,7 @@ __all__ = [
     "CallSiteId",
     "CORE_PACKAGE_ID",
     "FunctionId",
+    "GroupCompilationIdentity",
     "InputDeclarationId",
     "InterfaceInputOrigin",
     "library_function_id",

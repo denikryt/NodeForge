@@ -3,6 +3,7 @@
 from helpers import *
 
 from NodeForge import statement_compiler
+from NodeForge import compiler as compiler_module
 
 
 def _interface_sockets(group, in_out):
@@ -29,13 +30,13 @@ def _node_signature(group):
 def test_basic_assignment_chain_uses_one_body_lowering_session(monkeypatch):
     """Eligible straight-line assignments are analyzed as one IRBody before Blender lowering."""
     calls = []
-    original = statement_compiler.lower_ir_body
+    original = compiler_module.lower_body
 
     def wrapped(context, body, initial_runtime_bindings, base_depth=1, **kwargs):
         calls.append((body, dict(initial_runtime_bindings), base_depth))
         return original(context, body, initial_runtime_bindings, base_depth, **kwargs)
 
-    monkeypatch.setattr(statement_compiler, "lower_ir_body", wrapped)
+    monkeypatch.setattr(compiler_module, "lower_body", wrapped)
     group = compile_group(
         '''
 x = a + b
@@ -191,8 +192,9 @@ output(z)
 ''',
         "NFTest_body_local_backend_values",
     )
-    check("a" in published_names, "implicit body-entry input was not seeded through Compiler")
-    check(not ({"x", "y", "z"} & set(published_names)), f"body locals leaked into Compiler: {published_names}")
+    check(not published_names, f"prepared body or entry bindings leaked through Compiler.bind_runtime_value: {published_names}")
+    inputs = _interface_sockets(group, "INPUT")
+    check([item.name for item in inputs] == ["a"], "prepared implicit body-entry input was not materialized")
     bpy.data.node_groups.remove(group)
 
 
@@ -235,13 +237,13 @@ def test_nested_input_calls_fail_before_interface_socket_creation():
 def test_fixed_tuple_storage_and_unpack_stay_in_one_irbody_and_one_producer(monkeypatch):
     """Stored/projected and unpacked capture_attribute tuples avoid whole-body legacy lowering."""
     calls = []
-    original = statement_compiler.lower_ir_body
+    original = compiler_module.lower_body
 
     def wrapped(context, body, initial_runtime_bindings, base_depth=1, **kwargs):
         calls.append(body)
         return original(context, body, initial_runtime_bindings, base_depth, **kwargs)
 
-    monkeypatch.setattr(statement_compiler, "lower_ir_body", wrapped)
+    monkeypatch.setattr(compiler_module, "lower_body", wrapped)
     group = compile_group(
         '''
 geo = input_geometry("Geometry")

@@ -697,7 +697,16 @@ def test_blender_lowering_context_is_minimal_immutable_and_compiler_independent(
     value = Value(object(), TYPE_FLOAT)
     source_bindings = {_test_binding_id("a"): value}
     context = backend.BlenderIRLoweringContext(object(), source_bindings)
-    assert tuple(field.name for field in fields(context)) == ("group", "runtime_bindings", "group_context_values")
+    assert tuple(field.name for field in fields(context)) == (
+        "group",
+        "runtime_bindings",
+        "group_context_values",
+        "interface_input_items",
+        "source_callable_session",
+        "function_materializer",
+        "function_materialization_context",
+        "helper_namespace",
+    )
     assert context.runtime_bindings[_test_binding_id("a")] is value
     source_bindings[_test_binding_id("a")] = Value(object(), TYPE_VECTOR)
     assert context.runtime_bindings[_test_binding_id("a")] is value
@@ -1232,10 +1241,8 @@ def test_raw_named_output_selection_preserves_attribute_and_string_subscript_dia
         _lower('node("ShaderNodeSeparateXYZ", outputs={"X": Float})[""]')
 
 
-def test_mixed_core_calls_stay_on_ir_path_and_pending_callable_categories_fail_directly():
-    """Semantic Call IR owns core calls while pending callable categories fail before legacy execution."""
-    from types import SimpleNamespace
-
+def test_mixed_core_calls_stay_on_ir_path_and_extension_categories_fail_directly():
+    """Semantic Call IR owns core calls while Python extension categories stay behind their explicit boundary."""
     core_cases = [
         ("length(v) + 1.0", {"v": TYPE_VECTOR}),
         ("cube(scale * 2.0)", {"scale": TYPE_FLOAT}),
@@ -1255,19 +1262,7 @@ def test_mixed_core_calls_stay_on_ir_path_and_pending_callable_categories_fail_d
         else:
             assert _operations(program, IRCall), source
 
-    record = SimpleNamespace(package_id="vendor.pkg", namespace="functions", name="imported_fn")
-    binding = SimpleNamespace(namespace="functions", canonical_name="imported_fn", record=record)
     cases = [
-        (
-            "local_fn(x) + 1.0",
-            {"bindings": {"x": TYPE_FLOAT}, "local_functions": {"local_fn": object()}},
-            r"local_fn\(\) is temporarily unavailable while source-backed callable contracts are being migrated",
-        ),
-        (
-            "imported_fn(x) + 1.0",
-            {"bindings": {"x": TYPE_FLOAT}, "imported_functions": {"imported_fn": binding}},
-            r"imported_fn\(\) is temporarily unavailable while imported callable contracts are being migrated",
-        ),
         (
             "system_constructor() + 1.0",
             {"systems": {"system_constructor": object()}},
@@ -1282,7 +1277,6 @@ def test_mixed_core_calls_stay_on_ir_path_and_pending_callable_categories_fail_d
     for source, kwargs, diagnostic in cases:
         with pytest.raises(CompileError, match=diagnostic):
             _lower(source, **kwargs)
-
 
 def test_grid_is_semantic_ir_capable_and_grid_uv_requires_available_context():
     """Grid writes explicit hidden UV context through the permanent semantic path."""

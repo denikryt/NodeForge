@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import uuid
 import warnings
-from dataclasses import dataclass
-from types import MappingProxyType
-from typing import Callable, Mapping
+from dataclasses import replace
+from typing import Callable
 
 import bpy
 
 from .errors import CompileError
+from .compiler_identities import GroupCompilationIdentity
+from .group_build_request import BlenderGroupBuildRequest
 from .storage import _reset_node_group
 from .update import (
     _capture_group_external_state,
@@ -44,112 +45,6 @@ from .function_instances import (
 
 _TEST_CUTOVER_FAIL_AFTER_RESET = False
 _TEST_BACKUP_COPY_FAIL_AFTER_RESET = False
-
-
-@dataclass(frozen=True)
-class BlenderGroupBuildRequest:
-    """Immutable compiler-to-backend request for one group publication."""
-
-    source: str
-    name: str
-    existing_group: object | None = None
-    local_functions: object | None = None
-    backend_builtins: Mapping[str, object] | None = None
-    imported_library_functions: Mapping[str, object] | None = None
-    helper_namespace: str | None = None
-    local_helper_transaction: object | None = None
-    function_group_cache: object | None = None
-    function_group_transaction: object | None = None
-    function_group_owner_scope: str | None = None
-    function_definition_owner: str | None = None
-    function_compilation_trace: object | None = None
-    function_compilation_inputs: Mapping[str, object] | None = None
-    function_definition_identity: str | None = None
-    function_instance_key: str | None = None
-    root_owner_id: str | None = None
-    preserve_if_equivalent: bool = False
-
-    def __post_init__(self):
-        """Freeze mapping-valued compiler state at the backend boundary."""
-        if self.backend_builtins is not None:
-            object.__setattr__(self, "backend_builtins", MappingProxyType(dict(self.backend_builtins)))
-        if self.imported_library_functions is not None:
-            object.__setattr__(
-                self,
-                "imported_library_functions",
-                MappingProxyType(dict(self.imported_library_functions)),
-            )
-        if self.function_compilation_inputs is not None:
-            object.__setattr__(
-                self,
-                "function_compilation_inputs",
-                MappingProxyType(dict(self.function_compilation_inputs)),
-            )
-
-    @classmethod
-    def from_options(
-        cls,
-        *,
-        source: str,
-        name: str,
-        existing_group=None,
-        build_options: Mapping[str, object] | None = None,
-        preserve_if_equivalent: bool = False,
-    ):
-        """Build a request from the exact supported compiler-state option set."""
-        options = dict(build_options or {})
-        allowed = {
-            "local_functions",
-            "backend_builtins",
-            "imported_library_functions",
-            "helper_namespace",
-            "local_helper_transaction",
-            "function_group_cache",
-            "function_group_transaction",
-            "function_group_owner_scope",
-            "function_definition_owner",
-            "function_compilation_trace",
-            "function_compilation_inputs",
-            "function_definition_identity",
-            "function_instance_key",
-            "root_owner_id",
-        }
-        unknown = sorted(set(options) - allowed)
-        if unknown:
-            raise TypeError(f"Unsupported Blender group build option(s): {', '.join(unknown)}")
-        return cls(
-            source=source,
-            name=name,
-            existing_group=existing_group,
-            preserve_if_equivalent=preserve_if_equivalent,
-            **options,
-        )
-
-    def population_options(self) -> dict[str, object]:
-        """Return only compiler-owned state forwarded to candidate population."""
-        result = {}
-        for field_name in (
-            "local_functions",
-            "backend_builtins",
-            "imported_library_functions",
-            "helper_namespace",
-            "local_helper_transaction",
-            "function_group_cache",
-            "function_group_transaction",
-            "function_group_owner_scope",
-            "function_definition_owner",
-            "function_compilation_trace",
-            "function_compilation_inputs",
-            "function_definition_identity",
-            "function_instance_key",
-            "root_owner_id",
-        ):
-            value = getattr(self, field_name)
-            if value is not None:
-                if isinstance(value, MappingProxyType):
-                    value = dict(value)
-                result[field_name] = value
-        return result
 
 
 def _copy_custom_properties(src, dst, *, strict=False):
@@ -596,20 +491,9 @@ def _transaction_owns_group(transaction, group) -> bool:
     return bool(transaction is not None and hasattr(transaction, "owns_group") and transaction.owns_group(group))
 
 
-def _root_owner_id_for_build(existing_group, transaction=None):
-    """Return the persistent or candidate root owner ID for a top-level build."""
-    if existing_group is not None:
-        try:
-            existing = existing_group.get(FUNCTION_ROOT_OWNER_ID_PROP)
-        except Exception:
-            existing = None
-        if existing:
-            root_id = validate_root_owner_id(existing)
-        else:
-            root_id = new_root_owner_id()
-    else:
-        root_id = new_root_owner_id()
-
+def _validate_root_owner_id_uniqueness(root_id, existing_group=None, transaction=None):
+    """Reject duplicate live root-owner identities without allocating a replacement."""
+    root_id = validate_root_owner_id(root_id)
     duplicates = []
     for group in bpy.data.node_groups:
         if existing_group is not None and group is existing_group:
@@ -627,6 +511,26 @@ def _root_owner_id_for_build(existing_group, transaction=None):
     if duplicates:
         raise CompileError(f"Multiple root node groups share NodeForge owner ID {root_id}")
     return root_id
+
+
+def _root_owner_id_for_build(existing_group, transaction=None):
+    """Return the persistent or candidate root owner ID using the established rules."""
+    if existing_group is not None:
+        try:
+            existing = existing_group.get(FUNCTION_ROOT_OWNER_ID_PROP)
+        except Exception:
+            existing = None
+        root_id = validate_root_owner_id(existing) if existing else new_root_owner_id()
+    else:
+        root_id = new_root_owner_id()
+    return _validate_root_owner_id_uniqueness(root_id, existing_group, transaction)
+
+
+def resolve_root_group_compilation_identity(existing_group=None, transaction=None):
+    """Resolve one final durable root identity before semantic group preparation."""
+    root_id = _root_owner_id_for_build(existing_group, transaction)
+    owner_scope = make_function_group_owner_scope("ROOT", root_id)
+    return GroupCompilationIdentity(root_id, owner_scope, owner_scope, owner_scope)
 
 
 
@@ -859,62 +763,111 @@ class BlenderGroupBuildTransaction:
 
 
 class BlenderGroupBackend:
-    """Own physical GeometryNodeTree create/update publication mechanics."""
+    """Own physical GeometryNodeTree publication for prepared semantic compilations."""
 
-    def __init__(self, *, populate_candidate: Callable[..., object]):
-        """Bind the compiler-owned supplied-group population function."""
+    def __init__(self, *, populate_candidate: Callable[..., object], prepare_compilation: Callable[..., object] | None = None):
+        """Bind physical population and optional public raw-source orchestration."""
         self._populate_candidate = populate_candidate
+        self._prepare_compilation = prepare_compilation
+
+    def resolve_root_compilation_identity(self, existing_group=None, transaction=None):
+        """Resolve the final root identity before semantic preparation."""
+        return resolve_root_group_compilation_identity(existing_group, transaction)
+
+    def prepare_source_compilation(self, source: str, *, compilation_identity, **kwargs):
+        """Invoke the compiler-owned pure preparation callback for one source snapshot."""
+        if self._prepare_compilation is None:
+            raise CompileError("Internal error: Blender group backend has no semantic preparation callback")
+        return self._prepare_compilation(source, compilation_identity=compilation_identity, **kwargs)
 
     def compile_group_callback(self, source: str, name: str = "NodeForge Group", **kwargs):
-        """Preserve the package/public callable build contract over this backend."""
+        """Preserve the public raw-source API as prepare-then-publish orchestration."""
         existing_group = kwargs.pop("existing_group", None)
         preserve_if_equivalent = bool(kwargs.pop("preserve_if_equivalent", False))
-        return self.create_or_update(
-            source=source,
+        local_functions = kwargs.pop("local_functions", None)
+        imported_library_functions = kwargs.pop("imported_library_functions", None)
+        backend_builtins = kwargs.pop("backend_builtins", None)
+        helper_namespace = kwargs.pop("helper_namespace", None) or name
+        source_callable_session = kwargs.pop("source_callable_session", None)
+        function_group_cache = kwargs.pop("function_group_cache", None)
+        function_tx = kwargs.pop("function_group_transaction", None)
+        local_tx = kwargs.pop("local_helper_transaction", None)
+        function_tx = function_tx or local_tx
+        function_compilation_trace = kwargs.pop("function_compilation_trace", None)
+        function_compilation_inputs = kwargs.pop("function_compilation_inputs", None)
+        function_instance_key = kwargs.pop("function_instance_key", None)
+        legacy_identity = {
+            "function_group_owner_scope": kwargs.pop("function_group_owner_scope", None),
+            "function_definition_owner": kwargs.pop("function_definition_owner", None),
+            "function_definition_identity": kwargs.pop("function_definition_identity", None),
+            "root_owner_id": kwargs.pop("root_owner_id", None),
+        }
+        if kwargs:
+            unknown = ", ".join(sorted(kwargs))
+            raise TypeError(f"Unsupported Blender group build option(s): {unknown}")
+        identity = self.resolve_root_compilation_identity(existing_group, function_tx)
+        prepared = self.prepare_source_compilation(
+            source,
+            compilation_identity=identity,
+            helper_namespace=helper_namespace,
+            inherited_local_functions=local_functions,
+            inherited_imported_library_functions=imported_library_functions,
+            backend_builtins=backend_builtins,
+            source_callable_session=source_callable_session,
+        )
+        for option_name, expected in (
+            ("function_group_owner_scope", identity.owner_scope),
+            ("function_definition_owner", identity.definition_owner),
+            ("function_definition_identity", identity.declaration_owner),
+            ("root_owner_id", identity.root_owner_id),
+        ):
+            supplied = legacy_identity[option_name]
+            if supplied is not None and supplied != expected:
+                raise CompileError(f"Internal error: prepared group identity disagrees with {option_name}")
+        request = BlenderGroupBuildRequest(
+            prepared_compilation=prepared,
             name=name,
             existing_group=existing_group,
-            build_options=kwargs,
+            helper_namespace=helper_namespace,
+            function_group_cache=function_group_cache,
+            function_group_transaction=function_tx,
+            function_compilation_trace=function_compilation_trace,
+            function_compilation_inputs=function_compilation_inputs,
+            function_instance_key=function_instance_key,
+            source_callable_session=source_callable_session,
             preserve_if_equivalent=preserve_if_equivalent,
         )
+        return self.create_or_update(request)
 
     def create_or_update(
         self,
+        request: BlenderGroupBuildRequest,
         *,
-        source: str,
-        name: str,
-        existing_group=None,
-        build_options: Mapping[str, object] | None = None,
-        preserve_if_equivalent: bool = False,
         finalize_before_commit: Callable[[object], None] | None = None,
     ):
-        """Build one group and publish it atomically within the active outer transaction."""
-        request = BlenderGroupBuildRequest.from_options(
-            source=source,
-            name=name,
-            existing_group=existing_group,
-            build_options=build_options,
-            preserve_if_equivalent=preserve_if_equivalent,
-        )
-        options = request.population_options()
-        local_tx = options.get("local_helper_transaction")
-        function_tx = options.get("function_group_transaction")
-        outermost = function_tx is None and local_tx is None
-        build_tx = function_tx or local_tx or BlenderGroupBuildTransaction()
-        active_cache = options.get("function_group_cache")
+        """Publish one already-prepared semantic compilation atomically."""
+        if not isinstance(request, BlenderGroupBuildRequest):
+            raise TypeError("request must be BlenderGroupBuildRequest")
+        identity = request.prepared_compilation.identity
+        outermost = request.function_group_transaction is None
+        build_tx = request.function_group_transaction or BlenderGroupBuildTransaction()
+        if identity.root_owner_id is not None:
+            _validate_root_owner_id_uniqueness(identity.root_owner_id, request.existing_group, build_tx)
+        active_cache = request.function_group_cache
         if active_cache is None:
             active_cache = {}
-            options["function_group_cache"] = active_cache
         build_tx.register_cache(active_cache)
-        options["function_group_transaction"] = build_tx
-        options["local_helper_transaction"] = build_tx
-        active_trace = options.get("function_compilation_trace") or FunctionCompilationTrace()
-        options["function_compilation_trace"] = active_trace
+        active_trace = request.function_compilation_trace or FunctionCompilationTrace()
+        request = replace(
+            request,
+            function_group_cache=active_cache,
+            function_group_transaction=build_tx,
+            function_compilation_trace=active_trace,
+        )
 
         if request.existing_group is None:
             return self._create_fresh(
-                request.source,
-                request.name,
-                options,
+                request,
                 build_tx,
                 outermost=outermost,
                 finalize_before_commit=finalize_before_commit,
@@ -922,46 +875,31 @@ class BlenderGroupBackend:
         if getattr(request.existing_group, "bl_idname", None) != "GeometryNodeTree":
             raise CompileError("Selected node group is not a GeometryNodeTree")
         return self._update_existing(
-            request.existing_group,
-            request.source,
-            request.name,
-            options,
+            request,
             build_tx,
             outermost=outermost,
             preserve_if_equivalent=request.preserve_if_equivalent,
             finalize_before_commit=finalize_before_commit,
         )
 
-    def _populate(self, group, source, name, options, resource_tx):
-        """Populate an already-owned candidate without transferring lifecycle ownership."""
+    def _populate(self, group, request, resource_tx):
+        """Populate an owned candidate from prepared semantics only."""
         return self._populate_candidate(
             group,
-            source=source,
-            name=name,
+            request=request,
             generated_resource_transaction=resource_tx,
             group_backend=self,
-            **options,
         )
 
-    def _create_fresh(self, source, name, options, build_tx, *, outermost, finalize_before_commit):
+    def _create_fresh(self, request, build_tx, *, outermost, finalize_before_commit):
         """Create, populate, and publish one fresh canonical group."""
-        owner_scope = options.get("function_group_owner_scope")
-        root_owner_id = options.get("root_owner_id")
-        if owner_scope is None:
-            root_owner_id = root_owner_id or _root_owner_id_for_build(None, build_tx)
-            owner_scope = make_function_group_owner_scope("ROOT", root_owner_id)
-            options["function_group_owner_scope"] = owner_scope
-            options["function_definition_owner"] = options.get("function_definition_owner") or owner_scope
-            options["function_definition_identity"] = options.get("function_definition_identity") or owner_scope
-            options["root_owner_id"] = root_owner_id
-
         tx = generated_resources.GeneratedResourceTransaction(owner_group_uuid=uuid.uuid4().hex)
         savepoint = build_tx.savepoint()
-        group = bpy.data.node_groups.new(name, "GeometryNodeTree")
+        group = bpy.data.node_groups.new(request.name, "GeometryNodeTree")
         mark_provisional(group)
         build_tx.register_created(group, tx)
         try:
-            self._populate(group, source, name, options, tx)
+            self._populate(group, request, tx)
             if tx.resources:
                 generated_resources.write_group_manifest(group, tx.manifest())
             if finalize_before_commit is not None:
@@ -1007,10 +945,7 @@ class BlenderGroupBackend:
 
     def _update_existing(
         self,
-        existing_group,
-        source,
-        name,
-        options,
+        request,
         build_tx,
         *,
         outermost,
@@ -1018,23 +953,17 @@ class BlenderGroupBackend:
         finalize_before_commit,
     ):
         """Build a private replacement, then cut over the authoritative datablock."""
+        existing_group = request.existing_group
+        name = request.name
         old_manifest = generated_resources.read_group_manifest(existing_group)
         owner_uuid = old_manifest["owner_group_uuid"] if old_manifest is not None else uuid.uuid4().hex
-        if options.get("function_group_owner_scope") is None:
-            root_owner_id = options.get("root_owner_id") or _root_owner_id_for_build(existing_group, build_tx)
-            owner_scope = make_function_group_owner_scope("ROOT", root_owner_id)
-            options["root_owner_id"] = root_owner_id
-            options["function_group_owner_scope"] = owner_scope
-            options["function_definition_owner"] = options.get("function_definition_owner") or owner_scope
-            options["function_definition_identity"] = options.get("function_definition_identity") or owner_scope
-
         tx = generated_resources.GeneratedResourceTransaction(owner_group_uuid=owner_uuid)
         savepoint = build_tx.savepoint()
         replacement = bpy.data.node_groups.new("NodeForge.replacement." + name, "GeometryNodeTree")
         mark_transaction_private(replacement)
         backup = None
         try:
-            self._populate(replacement, source, name, options, tx)
+            self._populate(replacement, request, tx)
             new_manifest = tx.manifest(empty=not bool(tx.resources)) if (old_manifest is not None or tx.resources) else None
             if new_manifest is not None:
                 generated_resources.write_group_manifest(replacement, new_manifest)
@@ -1146,4 +1075,5 @@ __all__ = [
     "_copy_group_contents",
     "_node_group_is_live",
     "_root_owner_id_for_build",
+    "resolve_root_group_compilation_identity",
 ]

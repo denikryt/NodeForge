@@ -273,3 +273,27 @@ ion coverage.
 ## 0.57.0
 
 - Made `repeat_range()` carried state exact-typed across entry, loop body, runtime branch merges, Repeat sockets, and post-Repeat publication. `Int` state now remains `Int` after Repeat, while type-changing assignments, runtime-to-structural rebinding, and branch merges fail with controlled compiler diagnostics instead of changing carried binding semantics or being logically retagged.
+
+## 0.58.0
+
+- Restored script-local and pure source-backed imported function calls on frontend-owned semantic callable contracts, with typed source Call IR and owner-specific prepared semantic groups materialized only after analysis.
+- Made source function interfaces, output types, panelized callable order, defaults, source snapshots, and durable compilation identity semantic facts; Blender interfaces are now downstream realizations checked for parity instead of signature probes.
+- Kept native/hybrid Python extension callables migration-disabled pending the declarative extension API, while preserving Local build-scoped reuse, reusable shared/unique ownership, catalog reload, and function freshness tracking through the prepared-only backend boundary.
+
+## 0.58.1
+
+- Made imported source-call keyword aliases Unicode-aware and optional, so arbitrary Blender input labels remain positionally callable while normalized Unicode labels support keyword addressing and only non-empty aliases participate in ambiguity checks.
+
+## 0.58.2
+
+- Simplified prepared group publication to carry one typed physical build request directly through materialization and Blender lowering, removing the legacy dict round-trip, duplicated identity options, and preparation-only backend state.
+- Removed unused source-call/group semantic record fields whose information was either derivable from canonical identities or had no production consumer, keeping one authority for interface origin, cache keys, and body compile-time state.
+
+## 0.58.3
+
+- Simplified prepared group materialization so `GroupInterfaceContract.inputs` is the single authority for implicit entry `BindingId` provenance and physical input creation, removing the duplicate `SemanticGroupCompilation.entry_binding_ids` state and reverse lookup.
+
+## 0.58.4
+
+- Simplified physical compilation tracing to use the standard context-manager lifecycle with `nullcontext()` when no trace frame is active, removing manual `__enter__()` / `__exit__()` exception plumbing while preserving trace cleanup and cycle behavior.
+- Removed the redundant `GroupInputContract.index`; final input position now comes exclusively from `GroupInterfaceContract.inputs` tuple order, while `GroupOutputContract.index` remains explicit for contextual-output offsets.

@@ -586,8 +586,8 @@ def test_rejected_semantic_body_does_not_mutate_inherited_compile_time_list():
     assert snapshot.values["items"] is shared
     assert shared == [1]
 
-def test_migrated_arrays_and_loops_are_accepted_while_pending_local_calls_fail_directly():
-    """Permanent body constructs stay accepted while pending local calls raise their migration diagnostic."""
+def test_migrated_arrays_and_loops_are_accepted_without_legacy_fallback():
+    """Permanent body constructs stay accepted without relying on the removed source-call migration failure."""
     array_result = _lower("items = [a]\nitems[0]", bindings=dict([_binding("a", 0)]))
     assert array_result is not BODY_UNSUPPORTED
     with pytest.raises(CompileError, match="Cannot unpack scalar result into 2 names"):
@@ -604,12 +604,6 @@ def test_migrated_arrays_and_loops_are_accepted_while_pending_local_calls_fail_d
     assert _lower("set_position(position())", geometry_mode=True) is not BODY_UNSUPPORTED
     with pytest.raises(CompileError, match=r"input_\*\(\) may only be used as the complete right-hand side of a simple assignment"):
         _lower("x = input_float('X') + 1")
-    local_callables = _callables(local_functions={"foo": object()})
-    with pytest.raises(
-        CompileError,
-        match=r"foo\(\) is temporarily unavailable while source-backed callable contracts are being migrated",
-    ):
-        _lower("x = foo()\nx", callables=local_callables)
 
 @pytest.mark.parametrize(
     "source",
@@ -657,21 +651,29 @@ def test_reserved_target_validation_is_shared_language_semantics():
         _lower("foo = 1", reserved={"foo": "imported function"})
 
 
-def test_body_entry_allocator_invariant_is_structurally_guaranteed_before_first_compile_statements():
-    """Initial BindingIds are only active group-input seeds before body compilation begins."""
-    from pathlib import Path
+def test_group_semantic_preparation_publishes_entry_binding_identity_through_interface():
+    """Implicit group inputs expose their final owner-scoped BindingId through the canonical interface."""
+    from NodeForge.compiler_identities import GroupCompilationIdentity
+    from NodeForge.resolved_environment import ResolvedCatalog, ResolvedEnvironment
+    from NodeForge.semantic_group import analyze_group_source
 
-    root = Path(__file__).resolve().parents[2]
-    source = (root / "compiler.py").read_text(encoding="utf-8")
-    populate = source[source.index("def _populate_group("):]
-    before_body = populate[:populate.index("compile_statements(\n            ctx,\n            stmts,")]
-    compiler_session = before_body[before_body.index("comp = Compiler("):]
-    assert "comp.bind_runtime_value(" in compiler_session
-    assert "comp.unbind_runtime_binding(" not in compiler_session
-    assert "comp.bind_legacy_structural(" not in compiler_session
-    assert "comp._restore_binding_state(" not in compiler_session
-    assert "compile_statement(" not in compiler_session
-
+    environment = ResolvedEnvironment(
+        {name: ResolvedCatalog(name, {}) for name in ("functions", "examples", "local")},
+        {},
+    )
+    identity = GroupCompilationIdentity(None, "ROOT/test-owner", "definition", "declaration")
+    compilation = analyze_group_source(
+        "output(x)\n",
+        compilation_identity=identity,
+        resolved_environment=environment,
+    )
+    entry_origins = [
+        item.interface_origin
+        for item in compilation.interface.inputs
+        if isinstance(item.interface_origin, BindingId)
+    ]
+    assert entry_origins == [BindingId("ROOT/test-owner", 0)]
+    assert entry_origins[0].owner_scope == compilation.identity.owner_scope
 
 def test_basic_body_frontend_has_no_backend_dependencies_or_compiler_mutation():
     """The body semantic phase remains pure and cannot publish backend Values."""
@@ -722,107 +724,39 @@ def test_body_lowerer_is_ast_free():
     assert "ast.AST" not in source
 
 
-def test_library_duplicate_display_labels_bind_positionally_and_reject_ambiguous_keywords(monkeypatch):
-    """Reusable calls retain physical slot identity when interface display labels repeat."""
-    import importlib
-    import sys
-    import types
-    from NodeForge.compiler_identities import library_function_id
+def test_library_duplicate_display_labels_bind_positionally_and_reject_ambiguous_keywords():
+    """Imported source-call binding uses final positions and rejects ambiguous display labels."""
+    from NodeForge.callable_contracts import SourceCallableParameter, bind_imported_source_arguments
 
-    monkeypatch.setitem(sys.modules, "bpy", types.SimpleNamespace())
-    library_calls = importlib.import_module("NodeForge.library_calls")
-
-    sockets = [
-        types.SimpleNamespace(name="Scale", bl_idname="NodeSocketFloat", enabled=True),
-        types.SimpleNamespace(name="Scale", bl_idname="NodeSocketFloat", enabled=True),
-        types.SimpleNamespace(name="Unique", bl_idname="NodeSocketFloat", enabled=True),
+    parameters = (
+        SourceCallableParameter(0, "a", "Scale", "scale", NFType.FLOAT, True),
+        SourceCallableParameter(1, "b", "Scale", "scale", NFType.FLOAT, True),
+        SourceCallableParameter(2, "unique", "Unique", "unique", NFType.FLOAT, True),
+    )
+    positional = bind_imported_source_arguments(parameters, (1.0, 7.0, 9.0), (), "dup")
+    assert [(parameter.input_index, value) for parameter, value in positional] == [
+        (0, 1.0), (1, 7.0), (2, 9.0)
     ]
-    function_group = object()
-
-    class Probe:
-        """Minimal group-node probe that exposes the cached function interface."""
-
-        def __init__(self):
-            self.location = None
-            self.inputs = []
-            self._node_tree = None
-
-        @property
-        def node_tree(self):
-            return self._node_tree
-
-        @node_tree.setter
-        def node_tree(self, value):
-            self._node_tree = value
-            self.inputs = sockets if value is function_group else []
-
-    class Nodes:
-        """Minimal node collection used only for interface probing."""
-
-        def new(self, _kind):
-            return Probe()
-
-        def remove(self, _node):
-            return None
-
-    record = types.SimpleNamespace(
-        namespace="local",
-        name="dup",
-        package_id="vendor.pkg",
-        source_path=None,
+    unique_keyword = bind_imported_source_arguments(
+        parameters, (1.0, 7.0), (("Unique", 9.0),), "dup"
     )
-    binding = types.SimpleNamespace(namespace="local", canonical_name="dup", record=record)
-    comp = types.SimpleNamespace(
-        group=types.SimpleNamespace(nodes=Nodes()),
-        local_group_cache={("catalog", "local", "dup"): function_group},
-        function_group_cache={},
-        function_group_transaction=None,
-        function_compilation_trace=None,
-        group_backend=None,
-        _const_or_compile_arg=lambda expr, _depth: (expr.value, False),
-    )
-    function_id = library_function_id("local", "vendor.pkg", "dup")
-    observed = []
-    monkeypatch.setattr(library_calls, "has_native_compile_call_for_record", lambda _record: False)
-    monkeypatch.setattr(
-        library_calls,
-        "make_library_call_node",
-        lambda _group, _function_group, compiled, constants, **_kwargs: observed.append((compiled, constants)) or "ok",
-    )
+    assert [(parameter.input_index, value) for parameter, value in unique_keyword] == [
+        (0, 1.0), (1, 7.0), (2, 9.0)
+    ]
+    with pytest.raises(CompileError, match="ambiguous because multiple inputs share that label"):
+        bind_imported_source_arguments(parameters, (), (("Scale", 1.0),), "dup")
+    with pytest.raises(CompileError, match="unknown keyword argument 'Nope'"):
+        bind_imported_source_arguments(parameters, (), (("Nope", 1.0),), "dup")
+    with pytest.raises(CompileError, match="multiple values for input 'Unique'"):
+        bind_imported_source_arguments(parameters, (1.0, 7.0, 9.0), (("Unique", 4.0),), "dup")
 
-    positional = ast.parse("dup(1.0, 7.0, 9.0)", mode="eval").body
-    assert library_calls.compile_library_function_call(comp, positional, binding=binding, function_id=function_id) == "ok"
-    assert observed[-1] == ([], [(0, 1.0), (1, 7.0), (2, 9.0)])
-
-    unique_keyword = ast.parse("dup(1.0, 7.0, Unique=9.0)", mode="eval").body
-    assert library_calls.compile_library_function_call(comp, unique_keyword, binding=binding, function_id=function_id) == "ok"
-    assert observed[-1] == ([], [(0, 1.0), (1, 7.0), (2, 9.0)])
-
-    ambiguous = ast.parse("dup(Scale=1.0)", mode="eval").body
-    with pytest.raises(CompileError, match="ambiguous because multiple inputs share that label; use positional arguments"):
-        library_calls.compile_library_function_call(comp, ambiguous, binding=binding, function_id=function_id)
-
-    unknown = ast.parse("dup(Nope=1.0)", mode="eval").body
-    with pytest.raises(CompileError, match="got unknown keyword argument 'Nope'"):
-        library_calls.compile_library_function_call(comp, unknown, binding=binding, function_id=function_id)
-
-    duplicate = ast.parse("dup(1.0, 7.0, 9.0, Unique=4.0)", mode="eval").body
-    with pytest.raises(CompileError, match="got multiple values for input 'Unique'"):
-        library_calls.compile_library_function_call(comp, duplicate, binding=binding, function_id=function_id)
-
-
-def test_generated_local_function_source_prologue_is_basic_body_eligible(monkeypatch):
+def test_generated_local_function_source_prologue_is_basic_body_eligible():
     """Generated helper input prologues enter IRBody rather than forcing legacy fallback."""
-    import sys
-    import types
-
-    monkeypatch.setitem(sys.modules, "bpy", types.SimpleNamespace(data=types.SimpleNamespace(node_groups={})))
-    sys.modules.pop("NodeForge.local_functions", None)
-    from NodeForge import local_functions
+    from NodeForge.source_callables import analyze_local_return_shape, local_function_source
 
     fn = ast.parse("def f(x):\n    doubled = x * 2\n    return doubled\n").body[0]
-    shape = local_functions.analyze_local_return_shape(fn)
-    source = local_functions.local_function_source(fn, {"x": NFType.FLOAT}, return_shape=shape)
+    shape = analyze_local_return_shape(fn)
+    source = local_function_source(fn, {"x": NFType.FLOAT}, return_shape=shape)
     result = _lower(source)
 
     assert result is not BODY_UNSUPPORTED
@@ -830,50 +764,19 @@ def test_generated_local_function_source_prologue_is_basic_body_eligible(monkeyp
     assert result.body.statements[0].target_name == "x"
     assert result.body.statements[0].display_name == "x"
 
+def test_imported_source_call_argument_slots_are_final_interface_positions():
+    """Semantic imported-call binding carries physical input positions without socket-name lookup."""
+    from NodeForge.callable_contracts import SourceCallableParameter, bind_imported_source_arguments
 
-def test_library_call_node_applies_duplicate_label_arguments_by_input_position(monkeypatch):
-    """Physical call-node realization never re-addresses duplicate inputs by display name."""
-    import importlib
-    import sys
-    import types
-    from NodeForge.values import NodeResult, TupleValue, Value
-
-    monkeypatch.setitem(sys.modules, "bpy", types.SimpleNamespace())
-    library = importlib.import_module("NodeForge.library")
-
-    class Socket:
-        """Minimal enabled group-node socket."""
-
-        def __init__(self, name, *, output=False):
-            self.name = name
-            self.bl_idname = "NodeSocketFloat"
-            self.enabled = True
-            self.hide = False
-            self.is_output = output
-            self.default_value = 0.0
-
-    inputs = [Socket("Scale"), Socket("Scale"), Socket("Unique")]
-    outputs = [Socket("Result", output=True)]
-    node = types.SimpleNamespace(inputs=inputs, outputs=outputs, node_tree=None)
-    links = []
-    group = types.SimpleNamespace(links=types.SimpleNamespace(new=lambda source, target: links.append((source, target))))
-    function_group = types.SimpleNamespace(name="Dup")
-    monkeypatch.setattr(library, "_new_node", lambda *_args, **_kwargs: node)
-    monkeypatch.setattr(library, "apply_function_node_display_name", lambda *_args: None)
-
-    dynamic_socket = object()
-    result = library.make_library_call_node(
-        group,
-        function_group,
-        compiled_args=[(1, Value(dynamic_socket, NFType.FLOAT))],
-        const_args=[(0, 1.0), (2, 9.0)],
+    parameters = (
+        SourceCallableParameter(0, "left", "Scale", "scale", NFType.FLOAT, True),
+        SourceCallableParameter(1, "right", "Scale", "scale", NFType.FLOAT, True),
+        SourceCallableParameter(2, "unique", "Unique", "unique", NFType.FLOAT, True),
     )
-
-    assert inputs[0].default_value == 1.0
-    assert inputs[2].default_value == 9.0
-    assert links == [(dynamic_socket, inputs[1])]
-    assert result.socket is outputs[0]
-
+    bound = bind_imported_source_arguments(parameters, ("left", "right"), (("Unique", "tail"),), "dup")
+    assert [(parameter.input_index, value) for parameter, value in bound] == [
+        (0, "left"), (1, "right"), (2, "tail")
+    ]
 
 def test_direct_input_removes_target_const_before_evaluating_display_metadata():
     """Input declaration normalization preserves legacy assignment const-state ordering."""
@@ -1447,7 +1350,7 @@ def test_panel_frontend_provenance_preserves_alias_and_rejects_nonphysical_resul
     alias = _lower('y = x\npanel([y], name="P")', bindings=bindings, input_origins=origins)
     panel = alias.body.statements[-1]
     assert isinstance(panel, IRPanelDeclaration)
-    assert panel.member_binding_ids == (BindingId("scope", 2),)
+    assert panel.member_origins == (x_id,)
 
     with pytest.raises(CompileError, match=r"panel\(\) duplicate input: y"):
         _lower('y = x\npanel([x, y], name="P")', bindings=bindings, input_origins=origins)
@@ -1497,7 +1400,7 @@ def test_panel_assignment_copies_current_source_origin_to_existing_target():
     result = _lower('x = y\npanel([x], name="P")', bindings=bindings, input_origins=origins)
     panel = result.body.statements[-1]
     assert isinstance(panel, IRPanelDeclaration)
-    assert panel.member_binding_ids == (x_id,)
+    assert panel.member_origins == (y_id,)
 
 
 def test_panel_repeat_publication_clears_input_origin_even_for_identity_assignment():

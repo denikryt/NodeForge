@@ -65,10 +65,34 @@ def _math_keyword_expr(name, params):
     args = ", ".join(f"{param}={values[param]}" for param in params)
     return f"{name}({args})"
 
+def prepared_create_or_update(source, name, *, existing_group=None, build_options=None, backend=None):
+    """Exercise the permanent prepared-only backend boundary from Blender regression tests."""
+    backend = backend or compiler._new_group_backend()
+    prepared, session = compiler._prepare_root_build(
+        backend, source, name=name, existing_group=existing_group
+    )
+    options = dict(build_options or {})
+    function_tx = options.pop("function_group_transaction", None) or options.pop("local_helper_transaction", None)
+    request = blender_group_backend.BlenderGroupBuildRequest(
+        prepared_compilation=prepared,
+        name=name,
+        existing_group=existing_group,
+        helper_namespace=options.pop("helper_namespace", name),
+        function_group_cache=options.pop("function_group_cache", None),
+        function_group_transaction=function_tx,
+        function_compilation_trace=options.pop("function_compilation_trace", None),
+        function_compilation_inputs=options.pop("function_compilation_inputs", None),
+        function_instance_key=options.pop("function_instance_key", None),
+        source_callable_session=options.pop("source_callable_session", session),
+    )
+    check(not options, f"unsupported prepared backend test options: {sorted(options)}")
+    return backend.create_or_update(request)
+
+
 def expect_compile_error(source, name, exc_type=CompileError, **kwargs):
     """Compile one source and require a controlled error type."""
     try:
-        compiler._new_group_backend().create_or_update(source=source, name=name, build_options=kwargs)
+        prepared_create_or_update(source, name, build_options=kwargs)
     except exc_type:
         return
     except AttributeError as exc:

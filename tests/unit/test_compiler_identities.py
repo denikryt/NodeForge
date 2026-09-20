@@ -13,8 +13,7 @@ from NodeForge.compiler_identities import (
     library_function_id,
     local_function_id,
 )
-from NodeForge.function_instances import FunctionCallModifiers, function_group_owner_scope, instance_key_for, instance_key_for_materialization
-from NodeForge.semantic_ir import IRFunctionMaterializationMode
+from NodeForge.function_instances import function_group_owner_scope, instance_key_for
 from NodeForge.nf_types import NFType
 
 pytestmark = pytest.mark.unit
@@ -152,41 +151,26 @@ def test_compiler_runtime_binding_slots_are_frontend_owned_and_backend_coherent(
         _cleanup_compiler_imports(before)
 
 
-def test_compiler_materialization_resolution_preserves_unique_only_occurrence_sequence(monkeypatch):
-    module, before = _load_compiler_without_blender(monkeypatch)
-    try:
-        compiler = object.__new__(module.Compiler)
-        compiler.function_group_owner_scope = _ROOT_OWNER
-        compiler._function_occurrence_counts = {}
-        first = local_function_id(_ROOT_OWNER, "first", "x:FLOAT")
-        second = local_function_id(_ROOT_OWNER, "second", "x:FLOAT")
-        shared = FunctionCallModifiers(unique=False)
-        unique = FunctionCallModifiers(unique=True, unique_was_explicit=True)
+def test_body_identity_allocator_owns_monotonic_source_call_occurrence_sequence():
+    """Unique source-call ordinals belong to the non-rewinding semantic body allocator."""
+    from NodeForge.semantic_body import _BodyIdentityAllocator
 
-        first_shared = compiler.resolve_reusable_function_materialization(first, shared)
-        assert first_shared.mode is IRFunctionMaterializationMode.SHARED
-        assert first_shared.call_site is None
-        assert instance_key_for_materialization(first_shared) == ""
-        assert compiler._function_occurrence_counts == {}
+    first = local_function_id(_ROOT_OWNER, "first", "x:FLOAT")
+    second = local_function_id(_ROOT_OWNER, "second", "x:FLOAT")
+    allocator = _BodyIdentityAllocator(
+        owner_scope=_ROOT_OWNER,
+        declaration_owner="declarations",
+        next_local_id=0,
+        ordinary_reservations={},
+        structural_reservations={},
+        input_declaration_ordinals={},
+        call_occurrence_ordinals={},
+    )
 
-        first_unique = compiler.resolve_reusable_function_materialization(first, unique)
-        assert first_unique.call_site == CallSiteId(_ROOT_OWNER, first, 0)
-        assert instance_key_for_materialization(first_unique) == instance_key_for(CallSiteId(_ROOT_OWNER, first, 0))
-
-        explicit_false = compiler.resolve_reusable_function_materialization(
-            first, FunctionCallModifiers(unique=False, unique_was_explicit=True)
-        )
-        assert explicit_false.mode is IRFunctionMaterializationMode.SHARED
-        assert compiler._function_occurrence_counts[(_ROOT_OWNER, first)] == 1
-
-        assert compiler.resolve_reusable_function_materialization(first, unique).call_site == CallSiteId(_ROOT_OWNER, first, 1)
-        assert compiler.resolve_reusable_function_materialization(second, unique).call_site == CallSiteId(_ROOT_OWNER, second, 0)
-
-        other_owner = function_group_owner_scope("ROOT", "other")
-        compiler.function_group_owner_scope = other_owner
-        assert compiler.resolve_reusable_function_materialization(first, unique).call_site == CallSiteId(other_owner, first, 0)
-    finally:
-        _cleanup_compiler_imports(before)
+    assert allocator.allocate_call_site_id(first) == CallSiteId(_ROOT_OWNER, first, 0)
+    assert allocator.allocate_call_site_id(first) == CallSiteId(_ROOT_OWNER, first, 1)
+    assert allocator.allocate_call_site_id(second) == CallSiteId(_ROOT_OWNER, second, 0)
+    assert allocator.call_occurrence_ordinals == {first: 2, second: 1}
 
 
 def test_interface_input_origin_is_exact_binding_or_input_declaration_union():
