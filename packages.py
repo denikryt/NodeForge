@@ -15,6 +15,7 @@ import shutil
 import stat
 import tempfile
 import uuid
+from types import SimpleNamespace
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -146,9 +147,11 @@ class SystemPackageRecord:
     package_version: str
     system_id: str
     root: Path
-    module_path: Path
+    module_path: Path | None
     origin: str
     permissions: dict[str, bool]
+    interface_path: Path | None = None
+    legacy_system_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -368,8 +371,10 @@ def _validate_root_contents(root: Path, contents: dict[str, str]) -> None:
             if not child.is_dir() or child.name.startswith(".") or child.name.startswith("__"):
                 continue
             _validate_public_name(child.name, "system id")
-            if not (child / "system.py").is_file():
-                raise PackageError(f"System {child.name!r} must contain system.py")
+            interface_path = child / "interface.py"
+            legacy_path = child / "system.py"
+            if not interface_path.is_file() and not legacy_path.is_file():
+                raise PackageError(f"System {child.name!r} must contain interface.py or system.py")
 
 
 def _validate_public_name(name: str, context: str) -> None:
@@ -392,25 +397,33 @@ def package_requires_python(root: Path, contents: dict[str, str]) -> bool:
 
 
 def validate_package_system_declarations(manifest: PackageManifest) -> None:
-    """Validate lightweight system entrypoint declarations for one package.
+    """Validate retained v1 package-local system declarations.
 
-    This imports only each conventional ``system.py`` declaration module. It
-    validates ``CONSTRUCTORS`` and the presence of callable ``load_handlers()``
-    without calling ``load_handlers()`` or importing runtime handler modules.
+    V2 declarations are normalized only by the install/replacement inventory
+    path and root environment bootstrap. Keeping this validator v1-only prevents
+    active-package/UI enumeration from becoming another v2 Python executor.
     """
+    from .systems import registry as systems_registry
+
+    names: dict[str, str] = {}
     try:
-        names = _system_constructor_names_for_manifest(manifest)
+        records = system_package_records_from_manifests((manifest,))
+        for record in records:
+            if record.interface_path is not None:
+                continue
+            module = systems_registry._load_system_entrypoint(record)
+            declared = systems_registry._read_constructors(module, record)
+            for name in declared:
+                if name in names:
+                    raise PackageError(f"Duplicate system constructor {name!r} inside {manifest.package_id}")
+                _validate_not_core_callable_name(name, manifest.package_id)
+                names[name] = record.system_id
     except PackageError:
         raise
     except CompileError as exc:
         raise PackageError(str(exc)) from exc
     except Exception as exc:
         raise PackageError(f"Could not validate system declarations for {manifest.package_id}: {exc}") from exc
-    if len(names) != len(set(names)):
-        raise PackageError(f"Duplicate system constructor inside {manifest.package_id}")
-    for name in names:
-        _validate_not_core_callable_name(name, manifest.package_id)
-
 
 def _validate_not_core_callable_name(name: str, package_id: str) -> None:
     """Reject package-backed constructors that shadow core DSL callables."""
@@ -446,7 +459,8 @@ def active_package_manifests(include_invalid: bool = False) -> list[PackageManif
     return out
 
 
-def _active_package_from_state(package_id: str, record: Any) -> ActivePackage:
+def _structural_active_package_from_state(package_id: str, record: Any) -> ActivePackage:
+    """Validate active package state without executing package declaration Python."""
     if not isinstance(record, dict):
         raise PackageError("Package state record must be an object")
     rel = _validate_state_installed_path(package_id, record.get("installed_path"))
@@ -461,8 +475,29 @@ def _active_package_from_state(package_id: str, record: Any) -> ActivePackage:
     python_required = package_requires_python(manifest.root, manifest.contents)
     if python_required and not bool(record.get("allow_python", False)):
         raise PackageError("Package requires Python but Python consent is not recorded")
-    validate_package_system_declarations(manifest)
     return ActivePackage(manifest, record, python_required)
+
+
+def active_package_manifest_snapshot() -> tuple[PackageManifest, ...]:
+    """Return one structurally active manifest snapshot without declaration execution."""
+    state = load_package_state()
+    manifests: list[PackageManifest] = []
+    for package_id, record in sorted(state.get("packages", {}).items()):
+        try:
+            active = _structural_active_package_from_state(package_id, record)
+        except PackageError:
+            continue
+        manifests.append(active.manifest)
+    return tuple(manifests)
+
+
+def _active_package_from_state(package_id: str, record: Any) -> ActivePackage:
+    """Return one active package while keeping v2 interface execution out of enumeration."""
+    active = _structural_active_package_from_state(package_id, record)
+    # Active-package/UI enumeration is intentionally structural for v2. Retained
+    # v1 declarations may still be checked without creating a third v2 executor.
+    validate_package_system_declarations(active.manifest)
+    return active
 
 
 def _package_diagnostic_from_state(package_id: str, record: Any, message: str) -> PackageDiagnostic:
@@ -553,8 +588,17 @@ def system_package_records_from_manifests(
         for child in sorted(systems_root.iterdir(), key=lambda p: p.name.lower()):
             if not child.is_dir() or child.name.startswith(".") or child.name.startswith("__"):
                 continue
-            module_path = child / "system.py"
-            if not module_path.is_file():
+            interface_path = child / "interface.py"
+            legacy_path = child / "system.py"
+            if interface_path.is_file():
+                interface = interface_path.resolve()
+                legacy = None
+                module_path = None
+            elif legacy_path.is_file():
+                interface = None
+                legacy = legacy_path.resolve()
+                module_path = legacy
+            else:
                 continue
             records.append(
                 SystemPackageRecord(
@@ -563,9 +607,11 @@ def system_package_records_from_manifests(
                     package_version=item.version,
                     system_id=child.name,
                     root=child.resolve(),
-                    module_path=module_path.resolve(),
+                    module_path=module_path,
                     origin=item.origin,
                     permissions=item.permissions,
+                    interface_path=interface,
+                    legacy_system_path=legacy,
                 )
             )
     return tuple(records)
@@ -577,27 +623,43 @@ def system_package_records() -> list[SystemPackageRecord]:
 
 
 def install_package_directory(source_dir: Path, *, allow_python: bool, replace: bool = False, origin: str = "user") -> PackageManifest:
-    """Install a package from an already-unpacked directory."""
+    """Install a package after validating the exact copied bytes that may be published."""
     source_dir = Path(source_dir).resolve()
     manifest = validate_package_root(source_dir, origin=origin)
     current_python_required = package_requires_python(manifest.root, manifest.contents)
     if current_python_required and not allow_python:
         raise PackageError("Package requires executable Python; explicit consent is required")
-    validate_package_system_declarations(manifest)
+
     state = load_package_state()
     if manifest.package_id in state.get("packages", {}) and not replace:
         raise PackageError(f"Package {manifest.package_id!r} is already installed")
-    _validate_no_package_name_collisions(manifest, ignore_package_id=manifest.package_id if replace else None)
+
     record: dict[str, Any] | None = None
     committed = False
+    old_record = None
     try:
-        record = _install_validated_directory(source_dir, manifest, allow_python=allow_python, origin=origin)
+        # Copy first. V2 declaration Python is normalized only from these exact
+        # candidate bytes, never once from source and again from the installed copy.
+        record = _install_validated_directory(
+            source_dir, manifest, allow_python=allow_python, origin=origin
+        )
+        installed_root = (packages_dir() / record["installed_path"]).resolve()
+        installed_manifest = validate_package_root(installed_root, origin=origin)
+        candidate_inventory = _normalize_package_callable_inventory(
+            installed_manifest,
+            normalize_native_libraries=True,
+        )
+
         new_state = load_package_state()
         packages_map = new_state.setdefault("packages", {})
         old_record = packages_map.get(manifest.package_id)
         if old_record is not None and not replace:
             raise PackageError(f"Package {manifest.package_id!r} is already installed")
-        _validate_no_package_name_collisions(manifest, ignore_package_id=manifest.package_id if replace else None)
+        _validate_no_package_name_collisions(
+            installed_manifest,
+            ignore_package_id=manifest.package_id if replace else None,
+            new_inventory=candidate_inventory,
+        )
         packages_map[manifest.package_id] = record
         save_package_state(new_state)
         committed = True
@@ -612,6 +674,7 @@ def install_package_directory(source_dir: Path, *, allow_python: bool, replace: 
 
 
 def _install_validated_directory(source_dir: Path, manifest: PackageManifest, *, allow_python: bool, origin: str) -> dict[str, Any]:
+    """Copy one structurally validated package without executing declaration Python."""
     token = f"install_{uuid.uuid4().hex[:12]}"
     target_parent = installed_dir() / manifest.package_id
     target_parent.mkdir(parents=True, exist_ok=True)
@@ -620,7 +683,10 @@ def _install_validated_directory(source_dir: Path, manifest: PackageManifest, *,
         raise PackageError("Install target collision")
     shutil.copytree(source_dir, target, symlinks=False, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"))
     installed_manifest = validate_package_root(target, origin=origin)
-    validate_package_system_declarations(installed_manifest)
+    if installed_manifest.package_id != manifest.package_id or installed_manifest.version != manifest.version:
+        raise PackageError("Copied package manifest identity changed during installation")
+    if package_requires_python(installed_manifest.root, installed_manifest.contents) and not allow_python:
+        raise PackageError("Package requires executable Python; explicit consent is required")
     rel = Path("installed") / manifest.package_id / token
     return {
         "installed_path": rel.as_posix(),
@@ -628,7 +694,6 @@ def _install_validated_directory(source_dir: Path, manifest: PackageManifest, *,
         "allow_python": bool(allow_python),
         "origin": origin,
     }
-
 
 def install_package_zip(zip_path: Path, *, allow_python: bool, replace: bool = False, origin: str = "user") -> PackageManifest:
     """Install a package from a hostile zip archive after safe extraction."""
@@ -756,59 +821,159 @@ def _zip_package_root_from_manifest_candidates(
     return PurePosixPath(top)
 
 
-def _validate_no_package_name_collisions(new_manifest: PackageManifest, *, ignore_package_id: str | None = None) -> None:
-    """Reject public names that would become ambiguous after installation."""
-    existing_by_namespace: dict[str, dict[str, tuple[str, Path]]] = {"functions": {}, "examples": {}}
-    for item in active_package_manifests():
-        if isinstance(item, PackageDiagnostic) or item.package_id == ignore_package_id:
-            continue
+@dataclass(frozen=True)
+class _PackageCallableInventory:
+    """Temporary install-validation inventory detached from owner Python objects."""
+
+    systems: dict[str, str]
+    libraries: dict[str, dict[str, Path]]
+
+
+def _normalize_package_callable_inventory(
+    manifest: PackageManifest,
+    *,
+    normalize_native_libraries: bool,
+) -> _PackageCallableInventory:
+    """Normalize one package's callable inventory exactly once for validation."""
+    from .systems import registry as systems_registry
+    from .extension_registry import (
+        ExtensionOwnerSession,
+        capture_owner_code_snapshot,
+        library_owner_key,
+        system_owner_key,
+    )
+
+    system_names: dict[str, str] = {}
+    try:
+        for record in system_package_records_from_manifests((manifest,)):
+            if record.interface_path is not None:
+                session = ExtensionOwnerSession(
+                    capture_owner_code_snapshot(system_owner_key(record), record.root)
+                )
+                families, _refs = session.normalize_interface()
+                declared = tuple(callable_id.name for callable_id in families)
+            else:
+                module = systems_registry._load_system_entrypoint(record)
+                declared = systems_registry._read_constructors(module, record)
+            for name in declared:
+                if name in system_names:
+                    raise PackageError(
+                        f"Duplicate system constructor {name!r} inside {manifest.package_id}"
+                    )
+                _validate_not_core_callable_name(name, manifest.package_id)
+                system_names[name] = record.system_id
+
+        libraries: dict[str, dict[str, Path]] = {"functions": {}, "examples": {}}
         for namespace in ("functions", "examples"):
-            root = item.root_for(namespace)
+            root = manifest.root_for(namespace)
             if root is None:
                 continue
-            for name, path in _public_entry_entries(root).items():
-                existing_by_namespace[namespace][name] = (item.package_id, path)
-    existing_constructor_names: dict[str, tuple[str, str]] = {}
-    try:
-        from .systems import registry as systems_registry
-
-        for record in system_package_records():
-            if record.package_id == ignore_package_id:
+            entries = _public_entry_entries(root)
+            libraries[namespace] = dict(entries)
+            if not normalize_native_libraries:
                 continue
-            module = systems_registry._load_system_entrypoint(record)
-            for name in systems_registry._read_constructors(module, record):
-                existing_constructor_names[name] = (record.package_id, record.system_id)
+            for name, path in entries.items():
+                if not path.is_dir():
+                    continue
+                interface_path = path / "interface.py"
+                if not interface_path.is_file():
+                    continue
+                if (path / "source.nf").is_file():
+                    raise PackageError(
+                        f"V2 hybrid library owner {namespace}/{name} is not supported by this backend-only platform"
+                    )
+                record = SimpleNamespace(
+                    namespace=namespace,
+                    name=name,
+                    package_id=manifest.package_id,
+                )
+                session = ExtensionOwnerSession(
+                    capture_owner_code_snapshot(library_owner_key(record), path.resolve())
+                )
+                families, _refs = session.normalize_interface()
+                names = tuple(callable_id.name for callable_id in families)
+                if names != (name,):
+                    raise PackageError(
+                        f"Native-only library {namespace}/{name} must declare exactly one EXTENSIONS key equal to {name!r}"
+                    )
+        return _PackageCallableInventory(system_names, libraries)
     except PackageError:
         raise
     except CompileError as exc:
         raise PackageError(str(exc)) from exc
+    except Exception as exc:
+        raise PackageError(f"Could not validate callable declarations for {manifest.package_id}: {exc}") from exc
 
-    new_function_names: dict[str, Path] = {}
-    for namespace in ("functions", "examples"):
-        root = new_manifest.root_for(namespace)
-        if root is None:
+
+def _existing_package_validation_inventories(
+    *,
+    ignore_package_id: str | None,
+) -> list[tuple[PackageManifest, _PackageCallableInventory]]:
+    """Return declaration-valid installed package inventories for collision checks."""
+    state = load_package_state()
+    inventories = []
+    for package_id, record in sorted(state.get("packages", {}).items()):
+        if package_id == ignore_package_id:
             continue
-        entries = _public_entry_entries(root)
-        if namespace == "functions":
-            new_function_names = entries
-        for name, path in entries.items():
+        try:
+            active = _structural_active_package_from_state(package_id, record)
+            inventory = _normalize_package_callable_inventory(
+                active.manifest,
+                normalize_native_libraries=False,
+            )
+        except PackageError:
+            # Preserve package-atomic activation: declaration-invalid packages do
+            # not contribute systems or package library roots to this environment.
+            continue
+        inventories.append((active.manifest, inventory))
+    return inventories
+
+
+def _validate_no_package_name_collisions(
+    new_manifest: PackageManifest,
+    *,
+    ignore_package_id: str | None = None,
+    new_inventory: _PackageCallableInventory | None = None,
+) -> None:
+    """Reject public names that would become ambiguous after installation."""
+    candidate = new_inventory or _normalize_package_callable_inventory(
+        new_manifest,
+        normalize_native_libraries=True,
+    )
+    existing_by_namespace: dict[str, dict[str, tuple[str, Path]]] = {
+        "functions": {},
+        "examples": {},
+    }
+    existing_system_names: dict[str, tuple[str, str]] = {}
+    for manifest, inventory in _existing_package_validation_inventories(
+        ignore_package_id=ignore_package_id
+    ):
+        for namespace in ("functions", "examples"):
+            for name, path in inventory.libraries[namespace].items():
+                existing_by_namespace[namespace][name] = (manifest.package_id, path)
+        for name, system_id in inventory.systems.items():
+            existing_system_names[name] = (manifest.package_id, system_id)
+
+    for namespace in ("functions", "examples"):
+        for name, path in candidate.libraries[namespace].items():
             owner = existing_by_namespace[namespace].get(name)
             if owner is not None:
                 raise PackageError(
                     f"Duplicate {namespace} library entry {name!r}: "
                     f"{owner[0]} at {owner[1]} and {new_manifest.package_id} at {path}"
                 )
+
+    new_function_names = candidate.libraries["functions"]
     for name, path in new_function_names.items():
-        owner = existing_constructor_names.get(name)
+        owner = existing_system_names.get(name)
         if owner is not None:
             raise PackageError(
                 f"Public name collision {name!r}: function from {new_manifest.package_id} at {path} "
                 f"and constructor from {owner[0]}/{owner[1]}"
             )
 
-    new_constructor_names = _system_constructor_entries_for_manifest(new_manifest)
-    for name, system_id in new_constructor_names.items():
-        owner = existing_constructor_names.get(name)
+    for name, system_id in candidate.systems.items():
+        owner = existing_system_names.get(name)
         if owner is not None:
             raise PackageError(
                 f"Duplicate system constructor {name!r}: {owner[0]}/{owner[1]} and {new_manifest.package_id}/{system_id}"
@@ -825,48 +990,6 @@ def _validate_no_package_name_collisions(new_manifest: PackageManifest, *, ignor
                 f"Public name collision {name!r}: function and constructor both declared by "
                 f"{new_manifest.package_id} ({function_path} and system {system_id})"
             )
-
-
-
-def _system_constructor_names_for_manifest(manifest: PackageManifest) -> set[str]:
-    """Read lightweight system declarations for a package root without handlers."""
-    return set(_system_constructor_entries_for_manifest(manifest))
-
-
-def _system_constructor_entries_for_manifest(manifest: PackageManifest) -> dict[str, str]:
-    """Read constructor declarations for a package root as name -> system id."""
-    systems_root = manifest.root_for("systems")
-    if systems_root is None:
-        return {}
-    from .systems import registry as systems_registry
-
-    names: dict[str, str] = {}
-    for child in sorted(systems_root.iterdir(), key=lambda p: p.name.lower()):
-        if not child.is_dir() or child.name.startswith(".") or child.name.startswith("__"):
-            continue
-        module_path = child / "system.py"
-        if not module_path.is_file():
-            continue
-        record = SystemPackageRecord(
-            package_id=manifest.package_id,
-            package_name=manifest.name,
-            package_version=manifest.version,
-            system_id=child.name,
-            root=child.resolve(),
-            module_path=module_path.resolve(),
-            origin=manifest.origin,
-            permissions=manifest.permissions,
-        )
-        module = systems_registry._load_system_entrypoint(record)
-        for name in systems_registry._read_constructors(module, record):
-            if name in names:
-                raise PackageError(f"Duplicate system constructor {name!r} inside {manifest.package_id}")
-            names[name] = child.name
-    return names
-
-
-def _public_entry_names(root: Path) -> set[str]:
-    return set(_public_entry_entries(root))
 
 
 def _public_entry_entries(root: Path) -> dict[str, Path]:

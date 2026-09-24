@@ -958,6 +958,7 @@ class BlenderGroupBackend:
         old_manifest = generated_resources.read_group_manifest(existing_group)
         owner_uuid = old_manifest["owner_group_uuid"] if old_manifest is not None else uuid.uuid4().hex
         tx = generated_resources.GeneratedResourceTransaction(owner_group_uuid=owner_uuid)
+        tx_registered = False
         savepoint = build_tx.savepoint()
         replacement = bpy.data.node_groups.new("NodeForge.replacement." + name, "GeometryNodeTree")
         mark_transaction_private(replacement)
@@ -1035,6 +1036,7 @@ class BlenderGroupBackend:
                 new_manifest,
                 original_name=original_name,
             )
+            tx_registered = True
             backup = None
             if finalize_before_commit is not None:
                 finalize_before_commit(existing_group)
@@ -1050,10 +1052,11 @@ class BlenderGroupBackend:
                     build_tx.rollback_to_savepoint(savepoint)
             except Exception as exc:
                 rollback_failures.append(exc)
-            try:
-                tx.rollback()
-            except Exception as exc:
-                rollback_failures.append(exc)
+            if not tx_registered:
+                try:
+                    tx.rollback()
+                except Exception as exc:
+                    rollback_failures.append(exc)
             if rollback_failures:
                 try:
                     update_exc.add_note(

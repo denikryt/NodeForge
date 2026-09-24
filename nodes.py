@@ -1,6 +1,7 @@
 """Low-level helpers for creating and wiring Blender nodes."""
 
 from .constants import *
+from .blender_socket_types import socket_type_for_nf_type
 from .errors import CompileError
 from .numeric_semantics import normalize_float_constant, normalize_int_constant
 from .values import Value
@@ -9,17 +10,7 @@ from .values import Value
 
 def _socket_type_for(typ):
     """Function `_socket_type_for` used by the NodeForge addon."""
-    return {
-        TYPE_FLOAT: "NodeSocketFloat",
-        TYPE_VECTOR: "NodeSocketVector",
-        TYPE_BOOL: "NodeSocketBool",
-        TYPE_GEOMETRY: "NodeSocketGeometry",
-        TYPE_INT: "NodeSocketInt",
-        TYPE_MATERIAL: "NodeSocketMaterial",
-        TYPE_OBJECT: "NodeSocketObject",
-        TYPE_STRING: "NodeSocketString",
-        TYPE_BUNDLE: "NodeSocketBundle",
-    }[typ]
+    return socket_type_for_nf_type(typ)
 
 def _new_node(group, bl_idname, x=0, y=0):
     """Function `_new_node` used by the NodeForge addon."""

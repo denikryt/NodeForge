@@ -297,3 +297,16 @@ ion coverage.
 
 - Simplified physical compilation tracing to use the standard context-manager lifecycle with `nullcontext()` when no trace frame is active, removing manual `__enter__()` / `__exit__()` exception plumbing while preserving trace cleanup and cycle behavior.
 - Removed the redundant `GroupInputContract.index`; final input position now comes exclusively from `GroupInterfaceContract.inputs` tuple order, while `GroupOutputContract.index` remains explicit for contextual-output offsets.
+
+## 0.59.0
+
+- Added declarative Python extension API v2 for backend-only systems and native libraries, including typed interface contracts, finite overloads, snapshot-backed lazy implementation disp
+tch, extension Call IR, physical backend context/value validation, transaction-owned generated resources, and the `nodeforge.math` system migration.
+- Simplified extension lifecycle ownership so retained package enumeration validates only v1 system declarations, while install/root v2 normalization uses the canonical library owner ide
+tity throughout bootstrap state.
+- Hardened snapshot-only extension dispatch so only modules executed by the captured-source loader persist in an owner session, and removed the unused registry-level duplicate implementa
+ion-reference map.
+- Centralized canonical extension invocation semantics so normalized callable specs derive their Python signature once and semantic/IR boundaries share one transport-position validator.
+- Fixed nested owner-local relative imports by mounting/restoring the synthetic extension root package, simplified snapshot namespace-package derivation to one post-capture pass, unified
+generated-resource ownership/publication through one transaction operation, and removed dead private package compatibility wrappers that could execute v2 interfaces outside the supported
+lifecycle.

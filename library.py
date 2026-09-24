@@ -69,6 +69,8 @@ class LibraryEntryRecord:
     path: Path
     source_path: Path | None = None
     module_path: Path | None = None
+    interface_path: Path | None = None
+    legacy_module_path: Path | None = None
     folder_path: str = ""
     package_id: str = ""
     package_name: str = ""
@@ -455,6 +457,14 @@ def _immediate_module_path(root: Path, name: str, native_module_file: str | None
     return None
 
 
+def _immediate_interface_path(root: Path, name: str) -> Path | None:
+    """Return the v2 interface marker for one immediate package library owner."""
+    path = root / name / "interface.py"
+    if path.exists() and path.is_file():
+        return path
+    return None
+
+
 def _relative_folder_for_path(root: Path, source_path: Path, name: str) -> str:
     """Return a local UI folder path for a discovered source record."""
     try:
@@ -482,6 +492,7 @@ def _candidate_records_from_inputs(
     *,
     package_roots: Iterable[packages.LibraryRoot],
     local_registry: Iterable[dict[str, str]] = (),
+    include_builtin_catalog: bool = True,
 ) -> list[LibraryEntryRecord]:
     """Return raw records from explicit package roots and one Local registry snapshot."""
     catalog = _catalog(namespace)
@@ -496,7 +507,7 @@ def _candidate_records_from_inputs(
         )
         local_files = _local_source_files_from_registry(registry)
     else:
-        if namespace == "examples":
+        if namespace == "examples" and include_builtin_catalog:
             roots.append((catalog_dir(namespace), "", "", ""))
         roots.extend(
             (root.path, root.package_id, root.package_name, root.package_version)
@@ -548,16 +559,45 @@ def _candidate_records_from_inputs(
                     )
             elif path.is_dir() and _is_public_function_name(path.name):
                 source_path = _immediate_source_path(root, path.name)
-                module_path = _immediate_module_path(root, path.name, catalog.native_module_file if catalog.allow_native else None)
-                if source_path is not None or module_path is not None:
+                interface_path = _immediate_interface_path(root, path.name) if catalog.allow_native else None
+                legacy_module_path = _immediate_module_path(
+                    root, path.name, catalog.native_module_file if catalog.allow_native else None
+                )
+                if interface_path is not None:
+                    if source_path is not None:
+                        # TODO(nodeforge-migration): Source-backed library owners with interface.py are reserved for the
+                        # later hybrid-extension migration. This backend-only platform supports pure source entries and
+                        # native-only v2 extension owners only; do not construct an owner-local helper view here. Remove
+                        # this marker when hybrid source/interface execution and its resource-mutation contract are implemented.
+                        kind = "v2_hybrid"
+                    else:
+                        kind = "extension"
                     records.append(
                         LibraryEntryRecord(
                             namespace=namespace,
                             name=path.name,
-                            kind=_record_kind_for_paths(source_path, module_path),
-                            path=source_path or module_path or path,
+                            kind=kind,
+                            path=source_path or interface_path,
                             source_path=source_path,
-                            module_path=module_path,
+                            module_path=None,
+                            interface_path=interface_path,
+                            legacy_module_path=legacy_module_path,
+                            package_id=package_id,
+                            package_name=package_name,
+                            package_version=package_version,
+                        )
+                    )
+                elif source_path is not None or legacy_module_path is not None:
+                    records.append(
+                        LibraryEntryRecord(
+                            namespace=namespace,
+                            name=path.name,
+                            kind=_record_kind_for_paths(source_path, legacy_module_path),
+                            path=source_path or legacy_module_path or path,
+                            source_path=source_path,
+                            module_path=legacy_module_path,
+                            interface_path=None,
+                            legacy_module_path=legacy_module_path,
                             package_id=package_id,
                             package_name=package_name,
                             package_version=package_version,

@@ -32,6 +32,7 @@ from .nodes import _id as _field_id, _index as _field_index, _normal as _field_n
 from .builtins.bundle import build_bundle, build_bundle_get, build_bundle_set
 from .builtins.object_info import resolve_object_property_explicit
 from .builtins.raw_nodes import build_materialized_raw_node
+from .blender_extension_backend import lower_extension_call
 from .semantic_ir import (
     IRBinary,
     IRCall,
@@ -90,6 +91,8 @@ class BlenderIRLoweringContext:
     function_materializer: FunctionMaterializer | None = None
     function_materialization_context: FunctionMaterializationContext | None = None
     helper_namespace: str = "Group"
+    extension_registry: object | None = None
+    generated_resource_transaction: object | None = None
 
     def __post_init__(self):
         """Freeze value bindings while retaining explicit mutable backend-owned maps."""
@@ -572,6 +575,8 @@ def _lower_call(context, operation, materialized, x, y):
         result = _lower_builtin_call(context, operation, operands, x, y)
     elif operation.target.kind is IRCallableKind.SOURCE_FUNCTION:
         result = _lower_source_call(context, operation, operands, x, y)
+    elif operation.target.kind is IRCallableKind.EXTENSION:
+        result = lower_extension_call(context, operation, operands, x, y)
     else:
         raise CompileError(f"Internal error: unsupported Call IR target kind {operation.target.kind}")
     _store_call_results(materialized, operation, result)

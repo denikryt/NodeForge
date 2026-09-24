@@ -303,10 +303,11 @@ class Compiler:
         """Compile one AST expression into this group's node tree."""
         self.depth += 1
         try:
-            # TODO(nodeforge-migration): Compiler.compile() remains the retained legacy AST-expression entry
-            # point only for pending Python extension migration and direct characterization tests. Source-backed
-            # local/imported calls must not use it. Remove this method and marker when declarative extension
-            # handling no longer depends on legacy AST-expression compilation and legacy compiler removal begins.
+            # TODO(nodeforge-migration): Compiler.compile() is retained only for direct legacy-expression
+            # characterization while the old expression compiler still exists. Supported source-backed and
+            # Python-extension production calls must use the permanent semantic/IR pipeline. Remove this method
+            # and marker when the retained legacy expression compiler and its characterization-only entry point
+            # are deleted.
             return expression_compiler.compile_expr(self, expr, self.depth)
         finally:
             self.depth -= 1
@@ -688,6 +689,12 @@ def _populate_group(
         function_materializer=materializer,
         function_materialization_context=materialization_context,
         helper_namespace=request.helper_namespace or request.name,
+        extension_registry=(
+            session.resolved_environment.extension_registry
+            if session is not None
+            else None
+        ),
+        generated_resource_transaction=generated_resource_transaction,
     )
 
     trace_context = nullcontext(None)
@@ -697,6 +704,12 @@ def _populate_group(
         trace_context = request.function_compilation_trace.group(identity.declaration_owner, own_inputs)
 
     with trace_context as frame:
+        if frame is not None:
+            for owner_key, fingerprint in prepared.extension_dependencies:
+                frame.record_dependency_identity(
+                    make_function_group_owner_scope("EXTENSION", *owner_key),
+                    fingerprint,
+                )
         body_result = lower_body(
             lowering_context,
             prepared.body,

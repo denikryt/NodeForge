@@ -4,23 +4,10 @@ INPUT_DEFAULTS_PROP = "gn_script_mvp_input_defaults"
 INPUT_DECLARATIONS_PROP = "gn_script_mvp_input_declarations"
 INPUT_DECLARATIONS_SCHEMA_VERSION = 1
 from .errors import CompileError
+from .blender_socket_types import socket_type_for_nf_type
 from .compiler_identities import InputDeclarationId
 from .nf_types import NFType, serialize_nf_type
 from .values import make_value
-
-
-_SOCKET_TYPE_BY_NF_TYPE = {
-    NFType.FLOAT: "NodeSocketFloat",
-    NFType.VECTOR: "NodeSocketVector",
-    NFType.BOOL: "NodeSocketBool",
-    NFType.GEOMETRY: "NodeSocketGeometry",
-    NFType.INT: "NodeSocketInt",
-    NFType.MATERIAL: "NodeSocketMaterial",
-    NFType.OBJECT: "NodeSocketObject",
-    NFType.STRING: "NodeSocketString",
-    NFType.BUNDLE: "NodeSocketBundle",
-    NFType.ROTATION: "NodeSocketRotation",
-}
 
 
 def _json_safe_default(value):
@@ -72,7 +59,7 @@ def _interface_socket_type_name(item, typ: NFType | None = None) -> str:
         if isinstance(value, str) and value:
             return value
     if typ is not None:
-        return _SOCKET_TYPE_BY_NF_TYPE[typ]
+        return socket_type_for_nf_type(typ)
     return ""
 
 
@@ -136,11 +123,11 @@ def _record_group_input_default(group, name, typ: NFType, default, *, interface_
             if getattr(item, "item_type", None) == "SOCKET"
             and getattr(item, "in_out", None) == "INPUT"
             and getattr(item, "name", None) == name
-            and _interface_socket_type_name(item, typ) == _SOCKET_TYPE_BY_NF_TYPE[typ]
+            and _interface_socket_type_name(item, typ) == socket_type_for_nf_type(typ)
         ]
         if not matching:
             # Unit tests use lightweight stand-ins without a Blender interface.
-            key = (name, _SOCKET_TYPE_BY_NF_TYPE[typ], 0)
+            key = (name, socket_type_for_nf_type(typ), 0)
         else:
             key = _interface_socket_key(group, matching[-1], typ)
     try:
@@ -336,7 +323,7 @@ def _legacy_socket_type(token: str) -> str:
         typ = NFType(str(token))
     except Exception:
         typ = NFType.FLOAT
-    return _SOCKET_TYPE_BY_NF_TYPE.get(typ, "NodeSocketFloat")
+    return socket_type_for_nf_type(typ)
 
 
 def _get_group_input_defaults(group):
@@ -433,7 +420,7 @@ def _create_group_input_socket(
         raise CompileError("Input display name must be a non-empty string")
     if not isinstance(typ, NFType):
         raise TypeError("typ must be an NFType")
-    socket_type = _SOCKET_TYPE_BY_NF_TYPE[typ]
+    socket_type = socket_type_for_nf_type(typ)
     iface = group.interface.new_socket(name=display_name, in_out="INPUT", socket_type=socket_type)
     if default is not None:
         _set_socket_default(iface, default)

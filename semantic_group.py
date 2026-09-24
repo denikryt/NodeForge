@@ -23,6 +23,8 @@ from .consteval import _infer_input_types, _preprocess_compile_time
 from .errors import CompileError
 from .function_instances import normalized_statements
 from .nf_types import NFType
+from .extension_contracts import ExtensionCallableId
+from .extension_registry import library_owner_key
 from .parsing import _binding_names, _collect_inputs, _extract_function_imports, _needs_geometry_io, _parse_source
 from .runtime_bindings import RuntimeBindingSymbol
 from .semantic_body import BODY_UNSUPPORTED, BasicBodyCompilation, lower_basic_body
@@ -36,11 +38,14 @@ class LibraryBinding:
     namespace: str
     canonical_name: str
     record: object
+    extension_callable_id: ExtensionCallableId | None = None
 
     def __post_init__(self) -> None:
         """Require the binding namespace/name to match its selected record."""
         if getattr(self.record, "namespace", None) != self.namespace or getattr(self.record, "name", None) != self.canonical_name:
             raise ValueError("Library binding does not match its resolved record")
+        if self.extension_callable_id is not None and not isinstance(self.extension_callable_id, ExtensionCallableId):
+            raise TypeError("LibraryBinding.extension_callable_id must be ExtensionCallableId or None")
 
 
 @dataclass(frozen=True)
@@ -53,6 +58,7 @@ class SemanticGroupCompilation:
     body: IRBody
     interface: GroupInterfaceContract
     geometry_mode: bool
+    extension_dependencies: tuple[tuple[tuple[str, ...], str], ...] = ()
 
     def __post_init__(self) -> None:
         """Freeze owner-independent metadata and reject backend objects by construction."""
@@ -68,6 +74,16 @@ class SemanticGroupCompilation:
             raise TypeError("SemanticGroupCompilation.interface must be GroupInterfaceContract")
         if not isinstance(self.geometry_mode, bool):
             raise TypeError("geometry_mode must be bool")
+        rows = tuple((tuple(owner), fingerprint) for owner, fingerprint in self.extension_dependencies)
+        if any(not owner or not all(isinstance(part, str) and part for part in owner) for owner, _ in rows):
+            raise ValueError("extension dependency owners must be canonical non-empty string tuples")
+        if any(not isinstance(fingerprint, str) or not fingerprint for _, fingerprint in rows):
+            raise ValueError("extension dependency fingerprints must be non-empty strings")
+        if len({owner for owner, _ in rows}) != len(rows):
+            raise ValueError("extension dependency owner keys must be unique")
+        if rows != tuple(sorted(rows, key=lambda row: row[0])):
+            raise ValueError("extension dependency rows must be sorted by owner key")
+        object.__setattr__(self, "extension_dependencies", rows)
 
 
 def _validate_import_bindings(
@@ -98,7 +114,12 @@ def _validate_import_bindings(
             raise CompileError(f"Unknown {namespace} import: {canonical_name}")
         if inherited_record is not None and inherited_record is not record:
             raise CompileError("Internal error: inherited library binding does not match resolved environment")
-        binding = LibraryBinding(namespace, canonical_name, record)
+        extension_callable_id = None
+        if getattr(record, "interface_path", None) is not None and getattr(record, "source_path", None) is None:
+            extension_callable_id = ExtensionCallableId(library_owner_key(record), canonical_name)
+            if not resolved_environment.extension_registry.contains(extension_callable_id):
+                raise CompileError("Internal error: selected native library extension is missing from registry")
+        binding = LibraryBinding(namespace, canonical_name, record, extension_callable_id)
         if exposed_name in imported:
             if inherited and imported[exposed_name] == binding:
                 return
@@ -409,7 +430,9 @@ def analyze_group_source(
         local_functions=local_function_defs,
         backend_helper_names=frozenset(backend_names),
         imported_functions=imported,
+        extension_system_callables=resolved_environment.extension_system_callables,
     )
+    extension_dependencies: dict[tuple[str, ...], str] = {}
     body_compilation = lower_basic_body(
         stmts,
         initial_runtime_bindings=initial_runtime_bindings,
@@ -426,6 +449,8 @@ def analyze_group_source(
         source_callable_session=source_callable_session,
         source_definition_owner=compilation_identity.definition_owner,
         helper_namespace=helper_namespace,
+        extension_registry=resolved_environment.extension_registry,
+        extension_dependency_sink=extension_dependencies,
     )
     if body_compilation is BODY_UNSUPPORTED:
         raise CompileError("Internal error: semantic group preparation reached an unplanned unsupported body")
@@ -443,6 +468,7 @@ def analyze_group_source(
         body=body_compilation.body,
         interface=interface,
         geometry_mode=geometry_mode,
+        extension_dependencies=tuple(sorted(extension_dependencies.items(), key=lambda row: row[0])),
     )
 
 

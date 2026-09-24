@@ -163,6 +163,8 @@ def _load_handlers(owner: ResolvedSystemConstructor) -> dict[str, Callable]:
 
 
 def _load_system_entrypoint(record: packages.SystemPackageRecord):
+    if record.module_path is None:
+        raise CompileError(f"System {record.package_id}/{record.system_id} is a v2 extension owner, not a v1 system.py owner")
     base_pkg = _synthetic_base_package(record)
     module_name = f"{base_pkg}.system"
     cached = _MODULE_CACHE.get(module_name)

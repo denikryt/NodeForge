@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from types import MappingProxyType
 from typing import Mapping
 
 from .compiler_identities import FunctionId, library_function_id
 from .group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
+from .extension_contracts import ExtensionCallableId, validate_extension_argument_positions
 from .nf_types import NFType
 from .semantic_ir import IRFunctionMaterialization
 
@@ -21,6 +22,7 @@ class CallableKind(Enum):
     LOCAL_FUNCTION = auto()
     BACKEND_HELPER = auto()
     LIBRARY = auto()
+    EXTENSION = auto()
     TOP_LEVEL_ONLY = auto()
     OBJECT_INFO = auto()
 
@@ -43,6 +45,11 @@ class ResolvedCallable:
         if self.kind is CallableKind.LIBRARY:
             if self.target is None or not isinstance(self.library_function_id, FunctionId):
                 raise ValueError("library call resolution requires binding and FunctionId")
+        elif self.kind is CallableKind.EXTENSION:
+            if not isinstance(self.target, ExtensionCallableId):
+                raise TypeError("extension call resolution requires ExtensionCallableId target")
+            if self.library_function_id is not None:
+                raise ValueError("extension call resolution cannot carry library_function_id")
         elif self.library_function_id is not None:
             raise ValueError("only library call resolution may carry library_function_id")
 
@@ -56,6 +63,7 @@ class CallableEnvironment:
     local_functions: Mapping[str, object]
     backend_helper_names: frozenset[str]
     imported_functions: Mapping[str, object]
+    extension_system_callables: Mapping[str, ExtensionCallableId] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Defensively freeze all name collections for one analysis invocation."""
@@ -64,6 +72,10 @@ class CallableEnvironment:
         object.__setattr__(self, "local_functions", MappingProxyType(dict(self.local_functions)))
         object.__setattr__(self, "backend_helper_names", frozenset(self.backend_helper_names))
         object.__setattr__(self, "imported_functions", MappingProxyType(dict(self.imported_functions)))
+        extension_systems = dict(self.extension_system_callables)
+        if not all(isinstance(value, ExtensionCallableId) for value in extension_systems.values()):
+            raise TypeError("extension_system_callables values must be ExtensionCallableId records")
+        object.__setattr__(self, "extension_system_callables", MappingProxyType(extension_systems))
 
 
 @dataclass(frozen=True)
@@ -73,6 +85,7 @@ class AnalyzedCallOperand:
     parameter_name: str | None
     typ: NFType
     parameter_index: int | None = None
+    variadic_index: int | None = None
 
     def __post_init__(self) -> None:
         """Require canonical runtime type identity and optional source-call position."""
@@ -86,6 +99,12 @@ class AnalyzedCallOperand:
             or self.parameter_index < 0
         ):
             raise ValueError("parameter_index must be None or a non-negative integer")
+        if self.variadic_index is not None and (
+            not isinstance(self.variadic_index, int)
+            or isinstance(self.variadic_index, bool)
+            or self.variadic_index < 0
+        ):
+            raise ValueError("variadic_index must be None or a non-negative integer")
 
 
 @dataclass(frozen=True)
@@ -94,6 +113,7 @@ class AnalyzedStaticCallOperand:
 
     parameter_index: int
     value: object
+    variadic_index: int | None = None
 
     def __post_init__(self) -> None:
         """Require one non-negative callable input position."""
@@ -103,6 +123,12 @@ class AnalyzedStaticCallOperand:
             or self.parameter_index < 0
         ):
             raise ValueError("parameter_index must be a non-negative integer")
+        if self.variadic_index is not None and (
+            not isinstance(self.variadic_index, int)
+            or isinstance(self.variadic_index, bool)
+            or self.variadic_index < 0
+        ):
+            raise ValueError("variadic_index must be None or a non-negative integer")
 
 
 @dataclass(frozen=True)
@@ -213,6 +239,7 @@ class AnalyzedCall:
     source_function_id: FunctionId | None = None
     materialization: IRFunctionMaterialization | None = None
     static_operands: tuple[AnalyzedStaticCallOperand, ...] = ()
+    extension_overload_index: int | None = None
 
     def __post_init__(self) -> None:
         """Freeze normalized fields and reject non-core call targets."""
@@ -233,11 +260,32 @@ class AnalyzedCall:
             positions = [item.parameter_index for item in self.runtime_operands]
             if any(position is None for position in positions):
                 raise ValueError("source-call runtime operands require parameter positions")
+            if any(item.variadic_index is not None for item in (*self.runtime_operands, *self.static_operands)):
+                raise ValueError("source-call operands cannot carry extension variadic positions")
             positions = [int(position) for position in positions] + [item.parameter_index for item in self.static_operands]
             if len(positions) != len(set(positions)):
                 raise ValueError("source-call parameter positions must be unique")
+            if self.extension_overload_index is not None:
+                raise ValueError("source-backed analyzed calls cannot carry extension overload index")
+        elif self.target.kind is CallableKind.EXTENSION:
+            if self.source_function_id is not None or self.materialization is not None:
+                raise ValueError("extension analyzed calls cannot carry source-call identity")
+            if self.extension_overload_index is not None and (
+                not isinstance(self.extension_overload_index, int)
+                or isinstance(self.extension_overload_index, bool)
+                or self.extension_overload_index < 0
+            ):
+                raise ValueError("extension_overload_index must be None or a non-negative integer")
+            validate_extension_argument_positions(
+                (item.parameter_index, item.variadic_index)
+                for item in (*self.runtime_operands, *self.static_operands)
+            )
         elif self.source_function_id is not None or self.materialization is not None or self.static_operands:
-            raise ValueError("only source-backed analyzed calls may carry source-call metadata")
+            raise ValueError("only source-backed or extension analyzed calls may carry static metadata")
+        elif self.extension_overload_index is not None:
+            raise ValueError("only extension analyzed calls may carry extension overload index")
+        elif any(item.variadic_index is not None for item in self.runtime_operands):
+            raise ValueError("only extension analyzed calls may carry variadic positions")
         if not isinstance(self.result, (RuntimeCallResult, TupleCallResult, NamedOutputsCallResult, ProjectedCallResult, ContextReadCallResult)):
             raise TypeError("result must be a call result specification")
 
@@ -258,7 +306,12 @@ def resolve_simple_callable(name: str, environment: CallableEnvironment):
     """Resolve *name* with the exact legacy callable precedence."""
     if name in environment.callable_builtins:
         return ResolvedCallable(CallableKind.BUILTIN, name, target=name)
+    extension_system = environment.extension_system_callables.get(name)
     system = environment.system_constructors.get(name)
+    if extension_system is not None and system is not None:
+        raise AssertionError("bootstrap admitted duplicate v1/v2 system owner")
+    if extension_system is not None:
+        return ResolvedCallable(CallableKind.EXTENSION, name, target=extension_system)
     if system is not None:
         return ResolvedCallable(CallableKind.SYSTEM, name, target=system)
     if name in environment.local_functions:
@@ -267,6 +320,9 @@ def resolve_simple_callable(name: str, environment: CallableEnvironment):
         return ResolvedCallable(CallableKind.BACKEND_HELPER, name, target=name)
     binding = environment.imported_functions.get(name)
     if binding is not None:
+        extension_callable_id = getattr(binding, "extension_callable_id", None)
+        if extension_callable_id is not None:
+            return ResolvedCallable(CallableKind.EXTENSION, name, target=extension_callable_id)
         record = binding.record
         function_id = library_function_id(binding.namespace, record.package_id, binding.canonical_name)
         return ResolvedCallable(

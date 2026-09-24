@@ -16,11 +16,13 @@ from ..constants import (
     TYPE_INT,
     TYPE_MATERIAL,
     TYPE_OBJECT,
+    TYPE_ROTATION,
     TYPE_STRING,
     TYPE_TOKEN_NAMES,
     TYPE_VECTOR,
 )
 from ..errors import CompileError
+from ..blender_socket_types import runtime_socket_nf_type
 from ..nodes import _new_node, _is_number_type
 from ..values import NodeResult, Value, make_value
 from ..statements import _kw_dict
@@ -39,7 +41,7 @@ INPUT_LITERAL = "literal_default"
 INPUT_SINGLE_LINK = "single_link"
 INPUT_MULTI_LINK = "multi_link"
 
-_SUPPORTED_TYPES = {TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR, TYPE_GEOMETRY, TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING, TYPE_BUNDLE}
+_SUPPORTED_TYPES = {TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR, TYPE_GEOMETRY, TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING, TYPE_BUNDLE, TYPE_ROTATION}
 
 
 def compile_call(comp, expr, depth=0):
@@ -308,33 +310,9 @@ def _validate_public_type(typ, context):
         raise CompileError(f"{context} must be a NodeForge type token")
 
 
-def _socket_runtime_type(socket):
-    """Return the NodeForge runtime type represented by a supported Blender socket."""
-    bl_idname = getattr(socket, "bl_idname", "") or ""
-    if bl_idname.startswith("NodeSocketFloat"):
-        return TYPE_FLOAT
-    if bl_idname.startswith("NodeSocketInt"):
-        return TYPE_INT
-    if bl_idname.startswith("NodeSocketBool"):
-        return TYPE_BOOL
-    if bl_idname.startswith("NodeSocketVector"):
-        return TYPE_VECTOR
-    if bl_idname.startswith("NodeSocketGeometry"):
-        return TYPE_GEOMETRY
-    if bl_idname.startswith("NodeSocketMaterial"):
-        return TYPE_MATERIAL
-    if bl_idname.startswith("NodeSocketObject"):
-        return TYPE_OBJECT
-    if bl_idname.startswith("NodeSocketString"):
-        return TYPE_STRING
-    if bl_idname.startswith("NodeSocketBundle"):
-        return TYPE_BUNDLE
-    return None
-
-
 def _validate_runtime_socket_type(socket, typ, *, direction, context, socket_name):
     """Reject raw-node runtime declarations/links for unsupported or mismatched sockets."""
-    socket_type = _socket_runtime_type(socket)
+    socket_type = runtime_socket_nf_type(socket)
     bl_idname = getattr(socket, "bl_idname", "<unknown>")
     if socket_type is None:
         raise CompileError(

@@ -45,6 +45,14 @@ output("Geometry", geo)
 
 The dedicated function is the more convenient form when NodeForge provides one. `node(...)` keeps the rest of Geometry Nodes available while the built-in library continues to grow.
 
+### Python extension packages
+
+Installable packages can add typed backend callables through extension API v2. A package declares its public callable signatures in `interface.py` and maps each public name to a lazy owner-local Python implementation. These calls use the same semantic analysis and typed Call IR as core language calls; package implementation code receives a small Blender-facing context rather than compiler internals.
+
+System extensions may expose several callables. Native library extensions expose one callable under their catalog name and become visible through the existing library import syntax. The backend-only API supports direct Geometry Nodes construction in the current candidate node tree and transaction-owned generated Mesh, Curve, and Object datablocks.
+
+Package authors can use [`dev/EXTENSION_API_V2.md`](dev/EXTENSION_API_V2.md) for the declaration syntax, evaluation modes, overload rules, implementation calling convention, backend context, and generated-resource contract.
+
 ### Numeric values
 
 NodeForge keeps integer and floating-point values distinct. An integer literal such as `1` is `Int`; a decimal literal such as `1.0` is `Float`; `True` and `False` are `Bool`, a separate semantic type from numeric `Int` and `Float`. `Int` uses the signed 32-bit domain. Statically known values outside that domain are rejected before they are materialized.

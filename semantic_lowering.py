@@ -280,6 +280,7 @@ def lower_analyzed_expression(expr, analysis):
                         operand_meta.parameter_name,
                         operand,
                         operand_meta.parameter_index,
+                        operand_meta.variadic_index,
                     )
                 )
 
@@ -292,6 +293,13 @@ def lower_analyzed_expression(expr, analysis):
                     IRCallableKind.SOURCE_FUNCTION,
                     analyzed.target.source_name,
                     analyzed.source_function_id,
+                )
+            elif analyzed.target.kind is CallableKind.EXTENSION:
+                target = IRCallableTarget(
+                    IRCallableKind.EXTENSION,
+                    analyzed.target.source_name,
+                    extension_callable_id=analyzed.target.target,
+                    extension_overload_index=analyzed.extension_overload_index,
                 )
             else:
                 raise CompileError("Internal error: dynamic callable reached Semantic Call IR lowering")
@@ -331,7 +339,7 @@ def lower_analyzed_expression(expr, analysis):
                 else:
                     raise CompileError("Internal error: raw node Call IR is missing output mode")
             static_arguments = tuple(
-                IRStaticCallArgument(item.parameter_index, item.value)
+                IRStaticCallArgument(item.parameter_index, item.value, item.variadic_index)
                 for item in analyzed.static_operands
             )
             builder.emit_operation(

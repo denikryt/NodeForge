@@ -118,15 +118,23 @@ class GeneratedResourceRef:
 
 @dataclass
 class GeneratedResourceTransaction:
-    """Track generated IDs created during one replacement compile."""
+    """Track exact generated Blender IDs created during one replacement compile."""
 
     owner_group_uuid: str
     generation_uuid: str = field(default_factory=lambda: uuid.uuid4().hex)
     resources: list[GeneratedResourceRef] = field(default_factory=list)
-    _ids: list[object] = field(default_factory=list)
+    _owned_ids: list[tuple[object, str]] = field(default_factory=list)
     committed: bool = False
 
     def add(self, id_obj, kind: str, role: str) -> GeneratedResourceRef:
+        """Own one exact new ID before publishing generated-resource metadata."""
+        if kind not in {"CURVE", "MESH", "OBJECT"}:
+            raise ValueError("generated resource kind must be CURVE, MESH, or OBJECT")
+        if id_obj is None:
+            raise ValueError("generated resource identity cannot be None")
+        if any(existing is id_obj for existing, _kind in self._owned_ids):
+            raise ValueError("generated resource identity is already owned by this transaction")
+        self._owned_ids.append((id_obj, kind))
         ref = GeneratedResourceRef(
             kind=kind,
             name=id_obj.name,
@@ -136,10 +144,10 @@ class GeneratedResourceTransaction:
         )
         _write_id_metadata(id_obj, ref)
         self.resources.append(ref)
-        self._ids.append(id_obj)
         return ref
 
     def manifest(self, *, empty: bool = False):
+        """Return the persisted manifest represented by this transaction."""
         return build_manifest(
             self.owner_group_uuid,
             [] if empty else [ref.to_dict() for ref in self.resources],
@@ -147,15 +155,38 @@ class GeneratedResourceTransaction:
         )
 
     def rollback(self):
+        """Best-effort remove every uncommitted exact ID in reverse creation order."""
         if self.committed:
             return
-        for id_obj in reversed(list(self._ids)):
-            delete_generated_id_object(id_obj, expected_owner_group_uuid=self.owner_group_uuid)
-        self._ids.clear()
+        failures = []
+        failed_owned_ids = []
+        for id_obj, kind in reversed(self._owned_ids):
+            try:
+                _remove_owned_id_exact(id_obj, kind)
+            except ReferenceError:
+                continue
+            except Exception as exc:
+                failures.append((kind, getattr(id_obj, "name", "<unknown>"), exc))
+                failed_owned_ids.append((id_obj, kind))
+        self._owned_ids = list(reversed(failed_owned_ids))
         self.resources.clear()
+        if failures:
+            summary = "; ".join(f"{kind} {name!r}: {exc}" for kind, name, exc in failures)
+            raise RuntimeError(
+                f"Generated-resource rollback failed for {len(failures)} ID(s): {summary}"
+            ) from failures[0][2]
 
     def mark_committed(self):
+        """Mark the transaction authoritative after the enclosing build reaches PONR."""
         self.committed = True
+
+
+def _remove_owned_id_exact(id_obj, kind: str) -> None:
+    """Remove one exact transaction-owned Blender ID without metadata lookup."""
+    collection = _id_collection(kind)
+    if collection is None:
+        raise ValueError(f"unsupported generated resource kind {kind!r}")
+    collection.remove(id_obj, do_unlink=True)
 
 
 def build_manifest(owner_group_uuid: str, resources: list[dict], *, generation_uuid: str | None = None):

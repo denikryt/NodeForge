@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import copy
+import inspect
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import AbstractSet, Mapping
@@ -72,9 +73,12 @@ from .group_context import GroupContextSlot
 from .callable_contracts import (
     bind_imported_source_arguments,
     bind_local_source_arguments,
+    canonicalize_group_input_default,
     source_argument_type_matches,
 )
 from .semantic_ir import IRFunctionMaterialization, IRFunctionMaterializationMode
+from .evaluation_modes import CompileTimeSelection, EvaluationMode, RuntimeRequired, resolve_argument_evaluation
+from .extension_contracts import ExtensionCallableSpec, ExtensionParameterSpec, TypeSpec
 from .source_callables import (
     analyze_local_captures,
     analyze_local_return_shape,
@@ -153,6 +157,7 @@ class SemanticEnvironment:
     source_owner_scope: str | None = None
     source_call_site_allocator: object | None = None
     helper_namespace: str = "Group"
+    extension_registry: object | None = None
 
 
 @dataclass(frozen=True)
@@ -413,6 +418,226 @@ def _call_result_types(result):
     raise CompileError("Internal error: unsupported analyzed call result contract")
 
 
+
+def _extension_static_type(value: object) -> NFType:
+    """Infer the direct runtime NFType represented by one detached CTFE value."""
+    if type(value) is bool:
+        return NFType.BOOL
+    if type(value) is int:
+        canonicalize_group_input_default(NFType.INT, value)
+        return NFType.INT
+    if type(value) is float:
+        canonicalize_group_input_default(NFType.FLOAT, value)
+        return NFType.FLOAT
+    if isinstance(value, str):
+        return NFType.STRING
+    if _is_const_vector(value) or isinstance(value, (tuple, list)):
+        canonicalize_group_input_default(NFType.VECTOR, value)
+        return NFType.VECTOR
+    raise CompileError(f"Extension compile-time argument has unsupported detached value {value!r}")
+
+
+def _extension_expected_type(type_spec: TypeSpec, actual: NFType) -> NFType:
+    """Select the exact declared type used to canonicalize one accepted argument."""
+    if actual in type_spec.nf_types:
+        return actual
+    compatible = [
+        expected
+        for expected in sorted(type_spec.nf_types, key=lambda item: item.value)
+        if source_argument_type_matches(expected, actual)
+    ]
+    if len(compatible) != 1:
+        raise CompileError(f"Extension argument type {actual} is not uniquely accepted by {sorted(t.value for t in type_spec.nf_types)}")
+    return compatible[0]
+
+
+def _extension_type_matches(type_spec: TypeSpec, actual: NFType, *, exact: bool) -> bool:
+    """Return exact-membership or existing source-compatibility acceptance for one argument."""
+    if exact:
+        return actual in type_spec.nf_types
+    return any(source_argument_type_matches(expected, actual) for expected in type_spec.nf_types)
+
+
+def _extension_result_spec(spec: ExtensionCallableSpec):
+    """Convert one exact extension result TypeSpec to the existing analyzed call shape."""
+    if spec.result.kind == "NF_SET":
+        return RuntimeCallResult(next(iter(spec.result.nf_types)))
+    return TupleCallResult(tuple(next(iter(item.nf_types)) for item in spec.result.items))
+
+
+def _extension_explicit_modes(spec: ExtensionCallableSpec, bound: inspect.BoundArguments) -> dict[int, EvaluationMode]:
+    """Map explicit source AST occurrence identity to the candidate-required evaluation mode."""
+    modes: dict[int, EvaluationMode] = {}
+    by_name = {parameter.name: parameter for parameter in spec.parameters}
+    for name, value in bound.arguments.items():
+        parameter = by_name[name]
+        if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
+            for item in value:
+                if isinstance(item, ast.AST):
+                    modes[id(item)] = parameter.evaluation_mode
+        elif isinstance(value, ast.AST):
+            modes[id(value)] = parameter.evaluation_mode
+    return modes
+
+
+def _analyze_extension_call(
+    node: ast.Call,
+    cleaned_call: ast.Call,
+    resolved: ResolvedCallable,
+    modifiers,
+    environment: SemanticEnvironment,
+    analyze,
+    facts,
+    call_result_shape,
+):
+    """Bind, acquire, select, and normalize one declarative extension call exactly once."""
+    name = resolved.source_name
+    if modifiers.unique_was_explicit:
+        raise unsupported_unique(name)
+    if any(isinstance(argument, ast.Starred) for argument in cleaned_call.args):
+        raise CompileError(f"{name}() does not support caller-side * argument expansion")
+    if any(keyword.arg is None for keyword in cleaned_call.keywords):
+        raise CompileError(f"{name}() does not support caller-side ** argument expansion")
+    seen_keywords: set[str] = set()
+    keyword_values: dict[str, ast.expr] = {}
+    for keyword in cleaned_call.keywords:
+        if keyword.arg in seen_keywords:
+            raise CompileError(f"{name}() got multiple values for keyword argument {keyword.arg!r}")
+        seen_keywords.add(keyword.arg)
+        keyword_values[keyword.arg] = keyword.value
+
+    registry = environment.extension_registry
+    if registry is None:
+        raise CompileError("Internal error: extension call has no immutable extension registry")
+    family = registry.callable_specs(resolved.target)
+    candidates: list[tuple[int, ExtensionCallableSpec, inspect.BoundArguments]] = []
+    for index, spec in enumerate(family):
+        signature = spec.python_signature()
+        try:
+            bound = signature.bind(*cleaned_call.args, **keyword_values)
+        except TypeError:
+            continue
+        bound.apply_defaults()
+        candidates.append((index, spec, bound))
+    if not candidates:
+        raise CompileError(f"{name}() arguments do not match any declared extension signature")
+
+    explicit_nodes = tuple(cleaned_call.args) + tuple(keyword.value for keyword in cleaned_call.keywords)
+    candidate_modes = [_extension_explicit_modes(spec, bound) for _idx, spec, bound in candidates]
+    required_modes: dict[int, EvaluationMode] = {}
+    for source_node in explicit_nodes:
+        modes = {mapping.get(id(source_node)) for mapping in candidate_modes}
+        if None in modes:
+            raise CompileError("Internal error: syntactically bound extension candidate lost source argument")
+        if len(modes) != 1:
+            raise CompileError(
+                f"{name}() overload candidates require conflicting EvaluationMode for one source argument"
+            )
+        required_modes[id(source_node)] = next(iter(modes))
+
+    # Each explicit source occurrence is acquired exactly once before type-based
+    # candidate selection. Defaults are already detached contract data.
+    acquired: dict[int, tuple[str, object, NFType]] = {}
+    for source_node in explicit_nodes:
+        mode = required_modes[id(source_node)]
+        try:
+            selection = resolve_argument_evaluation(source_node, environment.const_eval_values, mode)
+        except ConstEvalUnavailable as exc:
+            raise CompileError(f"{name}() argument must be available at compile time") from exc
+        if isinstance(selection, CompileTimeSelection):
+            actual_type = _extension_static_type(selection.value)
+            acquired[id(source_node)] = ("static", selection.value, actual_type)
+            continue
+        if not isinstance(selection, RuntimeRequired):
+            raise CompileError("Internal error: extension evaluation selector returned unsupported state")
+        fact = analyze(source_node)
+        if fact is UNSUPPORTED:
+            return UNSUPPORTED
+        actual_type = _require_runtime_type(fact, f"{name}() argument")
+        acquired[id(source_node)] = ("runtime", source_node, actual_type)
+
+    def candidate_matches(item, *, exact: bool) -> bool:
+        """Return whether one bound overload candidate accepts all acquired types."""
+        _index, spec, bound = item
+        parameters = {parameter.name: parameter for parameter in spec.parameters}
+        for parameter_name, value in bound.arguments.items():
+            parameter = parameters[parameter_name]
+            if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
+                occurrences = tuple(value)
+            else:
+                occurrences = (value,)
+            for occurrence in occurrences:
+                if isinstance(occurrence, ast.AST):
+                    actual_type = acquired[id(occurrence)][2]
+                else:
+                    if parameter.default_type is None:
+                        raise CompileError("Internal error: extension bound default lost canonical type")
+                    actual_type = parameter.default_type
+                if not _extension_type_matches(parameter.type_spec, actual_type, exact=exact):
+                    return False
+        return True
+
+    exact_candidates = [item for item in candidates if candidate_matches(item, exact=True)]
+    if len(exact_candidates) == 1:
+        selected = exact_candidates[0]
+    elif len(exact_candidates) > 1:
+        raise CompileError(f"{name}() call is ambiguous between multiple exact extension overloads")
+    else:
+        compatible = [item for item in candidates if candidate_matches(item, exact=False)]
+        if len(compatible) != 1:
+            if not compatible:
+                raise CompileError(f"{name}() argument types do not match any declared extension overload")
+            raise CompileError(f"{name}() call is ambiguous between multiple compatible extension overloads")
+        selected = compatible[0]
+
+    selected_index, selected_spec, selected_bound = selected
+    runtime_nodes: list[ast.expr] = []
+    runtime_operands: list[AnalyzedCallOperand] = []
+    static_operands: list[AnalyzedStaticCallOperand] = []
+    parameter_by_name = {parameter.name: parameter for parameter in selected_spec.parameters}
+    for parameter_index, parameter in enumerate(selected_spec.parameters):
+        value = selected_bound.arguments.get(parameter.name, ()) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else selected_bound.arguments.get(parameter.name)
+        occurrences = tuple(value) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else (value,)
+        for variadic_index, occurrence in enumerate(occurrences):
+            if occurrence is None and parameter.kind is not inspect.Parameter.VAR_POSITIONAL:
+                raise CompileError("Internal error: selected extension binding lost fixed parameter")
+            transport_variadic = variadic_index if parameter.kind is inspect.Parameter.VAR_POSITIONAL else None
+            if isinstance(occurrence, ast.AST):
+                representation, payload, actual_type = acquired[id(occurrence)]
+                if representation == "runtime":
+                    runtime_nodes.append(occurrence)
+                    runtime_operands.append(
+                        AnalyzedCallOperand(parameter.name, actual_type, parameter_index, transport_variadic)
+                    )
+                else:
+                    expected_type = _extension_expected_type(parameter.type_spec, actual_type)
+                    canonical = canonicalize_group_input_default(expected_type, payload)
+                    static_operands.append(
+                        AnalyzedStaticCallOperand(parameter_index, canonical, transport_variadic)
+                    )
+            else:
+                if parameter.default_type is None:
+                    raise CompileError("Internal error: selected extension default has no canonical type")
+                static_operands.append(
+                    AnalyzedStaticCallOperand(parameter_index, occurrence, transport_variadic)
+                )
+
+    overload_index = selected_index if len(family) > 1 else None
+    result_spec = _extension_result_spec(selected_spec)
+    analyzed_call = AnalyzedCall(
+        target=resolved,
+        runtime_operands=tuple(runtime_operands),
+        options=(),
+        result=result_spec,
+        static_operands=tuple(static_operands),
+        extension_overload_index=overload_index,
+    )
+    return ExpressionFact(
+        call_result_shape(result_spec),
+        analyzed_call=analyzed_call,
+        call_operand_nodes=tuple(runtime_nodes),
+    )
+
 def _unregistered_keyword_error(name):
     """Create the exact legacy diagnostic for keywords on an unresolved call."""
     return CompileError(
@@ -439,6 +664,7 @@ def build_semantic_environment(
     source_owner_scope=None,
     source_call_site_allocator=None,
     helper_namespace="Group",
+    extension_registry=None,
 ):
     """Build one immutable expression environment from detached compiler-owned snapshots."""
     structural_bindings = {} if structural_bindings is None else dict(structural_bindings)
@@ -488,6 +714,7 @@ def build_semantic_environment(
         source_owner_scope=source_owner_scope,
         source_call_site_allocator=source_call_site_allocator,
         helper_namespace=str(helper_namespace or "Group"),
+        extension_registry=extension_registry,
     )
 
 
@@ -1275,18 +1502,42 @@ def analyze_expression(expr, environment):
                         call_operand_nodes=tuple(runtime_nodes),
                     ),
                 )
+            if resolved.kind is CallableKind.EXTENSION:
+                extension_fact = _analyze_extension_call(
+                    node,
+                    cleaned_call,
+                    resolved,
+                    modifiers,
+                    environment,
+                    analyze,
+                    facts,
+                    call_result_shape,
+                )
+                if extension_fact is UNSUPPORTED:
+                    return UNSUPPORTED
+                return record(node, extension_fact)
             if resolved.kind is CallableKind.LIBRARY:
                 session = environment.source_callable_session
                 if session is None or not callable(environment.source_call_site_allocator):
                     raise CompileError("Internal error: imported source call has no semantic source-call session")
                 binding = resolved.target
                 library_record = binding.record
+                if (
+                    getattr(library_record, "interface_path", None) is not None
+                    and getattr(library_record, "source_path", None) is not None
+                ):
+                    # TODO(nodeforge-migration): Source-backed library owners with interface.py are reserved for the
+                    # later hybrid-extension migration. This backend-only platform supports pure source entries and
+                    # native-only v2 extension owners only; do not construct an owner-local helper view here. Remove
+                    # this marker when hybrid source/interface execution and its resource-mutation contract are implemented.
+                    raise CompileError(
+                        f"{name}() is temporarily unavailable while v2 hybrid source/interface callables are being migrated"
+                    )
                 if getattr(library_record, "source_path", None) is None or getattr(library_record, "module_path", None) is not None:
-                    # TODO(nodeforge-migration): Library entries that require a Python module remain intentionally
-                    # unavailable while pure source-backed .nf calls use semantic callable contracts only. Do not
-                    # import or execute function.py/backend.py to recover the v1 call path here. The declarative
-                    # extension API restores native and hybrid library entries; remove this marker when those records
-                    # have typed non-legacy extension contracts and no supported LIBRARY call depends on module execution.
+                    # TODO(nodeforge-migration): Legacy native/hybrid Python library owners remain migration-blocked;
+                    # pure source callables and validated native-only v2 extension owners use permanent typed contracts.
+                    # Do not execute legacy native modules through compile_call() here. Remove this rejection only after
+                    # hybrid v2 execution is implemented and the remaining legacy native/hybrid routes are deleted.
                     raise CompileError(
                         f"{name}() is temporarily unavailable while Python extension callables are being migrated"
                     )
@@ -1373,10 +1624,10 @@ def analyze_expression(expr, environment):
             if resolved.kind in {CallableKind.SYSTEM, CallableKind.BACKEND_HELPER}:
                 if modifiers.unique_was_explicit:
                     raise unsupported_unique(name)
-                # TODO(nodeforge-migration): V1 SYSTEM/BACKEND_HELPER execution is intentionally disabled instead
-                # of preserving an AST/Compiler fallback lane. These callables currently execute Python handlers
-                # that may inspect source AST and mutate compiler/Blender state. The declarative extension API restores
-                # supported extension calls; remove this marker once those calls no longer require the v1 execution path.
+                # TODO(nodeforge-migration): V1 SYSTEM/BACKEND_HELPER owners remain intentionally unsupported
+                # while validated v2 owners use typed extension contracts, symbolic implementation refs and ordinary Extension Call IR. Do not
+                # restore the AST/Compiler handler path. Remove this v1-only rejection when the remaining legacy
+                # extension owner routes are deleted after the v2 reference-package cutover.
                 raise CompileError(
                     f"{name}() is temporarily unavailable while Python extension callables are being migrated"
                 )

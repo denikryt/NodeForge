@@ -30,7 +30,7 @@ FUNCTION_COMPILATION_FINGERPRINT_PROP = "nodeforge_function_compilation_fingerpr
 FUNCTION_ROOT_OWNER_ID_PROP = "nodeforge_function_root_owner_id"
 
 FINGERPRINT_SCHEMA = 1
-FUNCTION_COMPILER_VERSION = "0.50.0"
+FUNCTION_COMPILER_VERSION: str | None = None
 SHARED_INSTANCE_KEY = "SHARED"
 
 
@@ -308,12 +308,13 @@ class FunctionCompilationFrame:
             return self.result
         payload = {
             "schema": FINGERPRINT_SCHEMA,
-            "compiler": FUNCTION_COMPILER_VERSION,
             "owner": self.owner_identity,
             "own_inputs": self.own_inputs,
             "children": sorted(self.child_rows, key=lambda row: _canonical_json(row)),
             "interface": contract,
         }
+        if FUNCTION_COMPILER_VERSION is not None:
+            payload["compiler"] = FUNCTION_COMPILER_VERSION
         self.result = FunctionCompilationResult(_digest_payload(payload), False)
         return self.result
 

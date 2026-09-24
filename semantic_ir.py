@@ -9,6 +9,7 @@ from typing import TypeAlias
 from .compiler_identities import BindingId, CallSiteId, FunctionId, InputDeclarationId, InterfaceInputOrigin
 from .nf_types import NFType
 from .group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
+from .extension_contracts import ExtensionCallableId, validate_extension_argument_positions
 
 
 def _is_ir_option_value(value) -> bool:
@@ -32,6 +33,7 @@ class IRCallableKind(str, Enum):
 
     BUILTIN = "BUILTIN"
     SOURCE_FUNCTION = "SOURCE_FUNCTION"
+    EXTENSION = "EXTENSION"
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,8 @@ class IRCallableTarget:
     kind: IRCallableKind
     name: str
     function_id: FunctionId | None = None
+    extension_callable_id: ExtensionCallableId | None = None
+    extension_overload_index: int | None = None
 
     def __post_init__(self) -> None:
         """Validate category-specific target identity without backend objects."""
@@ -49,12 +53,26 @@ class IRCallableTarget:
         if not isinstance(self.name, str) or not self.name:
             raise ValueError("callable target name must be a non-empty string")
         if self.kind is IRCallableKind.BUILTIN:
-            if self.function_id is not None:
-                raise ValueError("builtin callable target cannot carry FunctionId")
+            if self.function_id is not None or self.extension_callable_id is not None or self.extension_overload_index is not None:
+                raise ValueError("builtin callable target cannot carry source/extension identity")
             return
         if self.kind is IRCallableKind.SOURCE_FUNCTION:
             if not isinstance(self.function_id, FunctionId):
                 raise ValueError("source-function callable target requires FunctionId")
+            if self.extension_callable_id is not None or self.extension_overload_index is not None:
+                raise ValueError("source-function callable target cannot carry extension identity")
+            return
+        if self.kind is IRCallableKind.EXTENSION:
+            if self.function_id is not None:
+                raise ValueError("extension callable target cannot carry FunctionId")
+            if not isinstance(self.extension_callable_id, ExtensionCallableId):
+                raise TypeError("extension callable target requires ExtensionCallableId")
+            if self.extension_overload_index is not None and (
+                not isinstance(self.extension_overload_index, int)
+                or isinstance(self.extension_overload_index, bool)
+                or self.extension_overload_index < 0
+            ):
+                raise ValueError("extension overload index must be None or a non-negative integer")
             return
         raise ValueError("unsupported IR callable kind")
 
@@ -159,6 +177,7 @@ class IRCallArgument:
     parameter_name: str | None
     value: IRValue
     parameter_index: int | None = None
+    variadic_index: int | None = None
 
     def __post_init__(self) -> None:
         """Reject structural/backend operands and invalid contract positions."""
@@ -172,6 +191,12 @@ class IRCallArgument:
             or self.parameter_index < 0
         ):
             raise ValueError("IRCallArgument.parameter_index must be None or a non-negative integer")
+        if self.variadic_index is not None and (
+            not isinstance(self.variadic_index, int)
+            or isinstance(self.variadic_index, bool)
+            or self.variadic_index < 0
+        ):
+            raise ValueError("IRCallArgument.variadic_index must be None or a non-negative integer")
 
 
 @dataclass(frozen=True)
@@ -180,6 +205,7 @@ class IRStaticCallArgument:
 
     parameter_index: int
     value: object
+    variadic_index: int | None = None
 
     def __post_init__(self) -> None:
         """Require one non-negative position and detached immutable value."""
@@ -189,6 +215,12 @@ class IRStaticCallArgument:
             or self.parameter_index < 0
         ):
             raise ValueError("IRStaticCallArgument.parameter_index must be a non-negative integer")
+        if self.variadic_index is not None and (
+            not isinstance(self.variadic_index, int)
+            or isinstance(self.variadic_index, bool)
+            or self.variadic_index < 0
+        ):
+            raise ValueError("IRStaticCallArgument.variadic_index must be None or a non-negative integer")
         if not _is_ir_option_value(self.value):
             raise TypeError("IRStaticCallArgument.value must be detached immutable IR data")
 
@@ -227,20 +259,29 @@ class IRCall:
         if self.target.kind is IRCallableKind.BUILTIN:
             if self.materialization is not None or self.static_arguments:
                 raise ValueError("builtin calls cannot carry source-function materialization/static arguments")
-            if any(item.parameter_index is not None for item in self.arguments):
-                raise ValueError("builtin runtime arguments cannot carry source-function positions")
+            if any(item.parameter_index is not None or item.variadic_index is not None for item in self.arguments):
+                raise ValueError("builtin runtime arguments cannot carry source/extension positions")
         elif self.target.kind is IRCallableKind.SOURCE_FUNCTION:
             if self.target.function_id is None:
                 raise ValueError("source-function IRCall requires target FunctionId")
             dynamic_positions = [item.parameter_index for item in self.arguments]
             if any(position is None for position in dynamic_positions):
                 raise ValueError("source-function runtime arguments require parameter positions")
+            if any(item.variadic_index is not None for item in (*self.arguments, *self.static_arguments)):
+                raise ValueError("source-function arguments cannot carry extension variadic positions")
             static_positions = [item.parameter_index for item in self.static_arguments]
             all_positions = [int(position) for position in dynamic_positions] + static_positions
             if len(all_positions) != len(set(all_positions)):
                 raise ValueError("source-function parameter positions must be unique across runtime/static arguments")
             if self.materialization is not None and self.materialization.callee != self.target.function_id:
                 raise ValueError("source-function materialization must target IRCall FunctionId")
+        elif self.target.kind is IRCallableKind.EXTENSION:
+            if self.materialization is not None:
+                raise ValueError("extension IRCall cannot carry source-function materialization")
+            validate_extension_argument_positions(
+                (item.parameter_index, item.variadic_index)
+                for item in (*self.arguments, *self.static_arguments)
+            )
         else:
             raise ValueError("unsupported IRCall target kind")
         option_names = []

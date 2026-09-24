@@ -511,6 +511,8 @@ def lower_basic_body(
     source_callable_session=None,
     source_definition_owner: str | None = None,
     helper_namespace: str = "Group",
+    extension_registry=None,
+    extension_dependency_sink=None,
 ):
     """Lower one whole eligible source body to compiler-owned structured Semantic IR."""
     validate_input_declaration_placement(stmts)
@@ -538,6 +540,10 @@ def lower_basic_body(
     if not isinstance(initial_compile_time, CompileTimeSnapshot):
         raise TypeError("initial_compile_time must be a CompileTimeSnapshot")
     compile_time = CompileTimeState(initial_compile_time.values)
+    if extension_dependency_sink is None:
+        extension_dependency_sink = {}
+    if not isinstance(extension_dependency_sink, dict):
+        raise TypeError("extension_dependency_sink must be a dict")
     compile_time_effects_before = tuple(tuple(items) for items in compile_time_effects_before)
     trailing_compile_time_effects = tuple(trailing_compile_time_effects)
     if compile_time_effects_before and len(compile_time_effects_before) != len(stmts):
@@ -1129,6 +1135,7 @@ def lower_basic_body(
             source_owner_scope=owner_scope,
             source_call_site_allocator=identities.allocate_call_site_id,
             helper_namespace=helper_namespace,
+            extension_registry=extension_registry,
         )
         analysis = analyze_expression(expr, environment)
         if analysis is None:
@@ -1138,6 +1145,18 @@ def lower_basic_body(
             return BODY_UNSUPPORTED
         if analysis.object_semantics is None:
             raise CompileError("Internal error: body expression analysis lost Object semantic registry")
+        if extension_registry is not None:
+            from .call_resolution import CallableKind
+            for fact in analysis.facts.values():
+                analyzed_call = getattr(fact, "analyzed_call", None)
+                if analyzed_call is None or analyzed_call.target.kind is not CallableKind.EXTENSION:
+                    continue
+                owner_key = analyzed_call.target.target.owner
+                fingerprint = extension_registry.owner_fingerprint(owner_key)
+                previous = extension_dependency_sink.get(owner_key)
+                if previous is not None and previous != fingerprint:
+                    raise CompileError("Internal error: one extension owner produced conflicting fingerprints")
+                extension_dependency_sink[owner_key] = fingerprint
         program = lower_analyzed_expression(expr, analysis)
         group_context_cursor.replace(analysis.available_group_context_slots)
         return _AnalyzedBodyExpression(
