@@ -61,7 +61,7 @@ def foo(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY] = 1.0) -> Float: ..
 
 
 def test_imported_keyed_declaration_is_rejected(tmp_path):
-    """A keyed declaration must be defined in the current fresh interface globals."""
+    """Declaration-only interface modules cannot source public declarations from owner-local modules."""
     (tmp_path / "decls.py").write_text(
         "from typing import Annotated\nfrom NodeForge import EvaluationMode, Float\ndef foo(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...\n",
         encoding="utf-8",
@@ -74,7 +74,7 @@ EXTENSION_API = 2
 EXTENSIONS = {"foo": ".operations:build"}
 """,
     )
-    with pytest.raises(CompileError, match="current interface"):
+    with pytest.raises(CompileError, match=r"declaration-only.*owner-local module '\.decls'"):
         session.normalize_interface()
 
 

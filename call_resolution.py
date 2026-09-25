@@ -9,7 +9,7 @@ from typing import Mapping
 
 from .compiler_identities import FunctionId, library_function_id
 from .group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
-from .extension_contracts import ExtensionCallableId, validate_extension_argument_positions
+from .extension_contracts import ExtensionCallableId, TypeSpec, validate_extension_argument_positions
 from .nf_types import NFType
 from .semantic_ir import IRFunctionMaterialization
 
@@ -240,6 +240,8 @@ class AnalyzedCall:
     materialization: IRFunctionMaterialization | None = None
     static_operands: tuple[AnalyzedStaticCallOperand, ...] = ()
     extension_overload_index: int | None = None
+    extension_state_type: TypeSpec | None = None
+    extension_state: object | None = None
 
     def __post_init__(self) -> None:
         """Freeze normalized fields and reject non-core call targets."""
@@ -276,12 +278,26 @@ class AnalyzedCall:
                 or self.extension_overload_index < 0
             ):
                 raise ValueError("extension_overload_index must be None or a non-negative integer")
-            validate_extension_argument_positions(
-                (item.parameter_index, item.variadic_index)
-                for item in (*self.runtime_operands, *self.static_operands)
-            )
+            if self.extension_state_type is None:
+                if self.extension_state is not None:
+                    raise ValueError("extension_state requires extension_state_type")
+                validate_extension_argument_positions(
+                    (item.parameter_index, item.variadic_index)
+                    for item in (*self.runtime_operands, *self.static_operands)
+                )
+            else:
+                if not isinstance(self.extension_state_type, TypeSpec):
+                    raise TypeError("extension_state_type must be TypeSpec")
+                if self.extension_overload_index is not None:
+                    raise ValueError("semantic-state extension calls cannot be overloaded")
+                if self.static_operands:
+                    raise ValueError("semantic-state extension calls cannot carry public static operands")
+                if any(item.parameter_index is not None or item.variadic_index is not None for item in self.runtime_operands):
+                    raise ValueError("semantic-state dependency operands cannot carry public parameter positions")
         elif self.source_function_id is not None or self.materialization is not None or self.static_operands:
             raise ValueError("only source-backed or extension analyzed calls may carry static metadata")
+        elif self.extension_state_type is not None or self.extension_state is not None:
+            raise ValueError("only extension analyzed calls may carry extension semantic state")
         elif self.extension_overload_index is not None:
             raise ValueError("only extension analyzed calls may carry extension overload index")
         elif any(item.variadic_index is not None for item in self.runtime_operands):

@@ -40,9 +40,9 @@ def _manifest(root: Path, package_id: str, *, systems: bool = False, functions: 
                 "name": package_id,
                 "version": "1.0.0",
                 "author": "Tests",
-                "description": "Stage 32 installer fixture",
+                "description": "declarative extension installer fixture",
                 "nodeforge_min_version": "0.59.0",
-                "nodeforge_max_version": "0.59.0",
+                "nodeforge_max_version": "0.60.0",
                 "contents": contents,
                 "permissions": {"python": True},
             }

@@ -44,14 +44,13 @@ def test_implementation_module_is_lazy_and_executes_captured_bytes(tmp_path):
     callable_id = next(iter(session.normalize_interface()[0]))
 
     (tmp_path / "operations.py").write_text("raise RuntimeError('live disk must not be used')\n", encoding="utf-8")
-    implementation = registry.resolve_implementation(callable_id)
-    assert callable(implementation)
+    assert registry.invoke_implementation(callable_id, None, None) is None
     assert getattr(builtins, marker) == 1
     delattr(builtins, marker)
 
 
 def test_interface_eager_import_of_physical_implementation_is_rejected(tmp_path):
-    """Implementation modules imported by interface.py remain forbidden and deterministic."""
+    """Declaration-only interface.py rejects physical owner-local modules at the loader boundary."""
     (tmp_path / "interface.py").write_text(
         """
 from typing import Annotated
@@ -73,7 +72,7 @@ def foo(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...
         capture_owner_code_snapshot(("system", "vendor.demo", "eager"), tmp_path)
     )
 
-    with pytest.raises(CompileError, match=r"implementation module '\.operations'.*interface normalization"):
+    with pytest.raises(CompileError, match=r"declaration-only.*owner-local module '\.operations'"):
         session.normalize_interface()
 
 
@@ -84,10 +83,9 @@ def test_lazy_implementation_load_does_not_poison_cached_interface_normalization
     families, refs = session.normalize_interface()
     callable_id = next(iter(families))
 
-    implementation = session.resolve_implementation(callable_id)
+    session.invoke_implementation(callable_id, None, None)
     cached_families, cached_refs = session.normalize_interface()
 
-    assert callable(implementation)
     assert cached_families is families
     assert cached_refs is refs
 
@@ -131,8 +129,7 @@ def test_new_owner_session_masks_stale_synthetic_modules(tmp_path):
     previous = sys.modules.get(stale_name)
     sys.modules[stale_name] = stale_module
     try:
-        implementation = registry.resolve_implementation(callable_id)
-        assert implementation(None, None) == "fresh"
+        assert registry.invoke_implementation(callable_id, None, None) == "fresh"
         assert sys.modules.get(stale_name) is stale_module
     finally:
         if previous is None:
@@ -170,32 +167,31 @@ def foo(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...
     registry = ExtensionRegistry((session,))
     callable_id = next(iter(session.normalize_interface()[0]))
 
-    implementation = registry.resolve_implementation(callable_id)
+    assert registry.invoke_implementation(callable_id, None, None) == "captured"
 
-    assert implementation(None, None) == "captured"
     assert not getattr(session.modules["operations"], "injected_fake", False)
 
 def test_nested_owner_local_imports_use_snapshot_package_hierarchy(tmp_path):
-    """Nested namespace and captured-package imports resolve through the owner snapshot."""
+    """Nested implementation helpers resolve through the mounted IMPLEMENTATION snapshot generation."""
     (tmp_path / "helpers").mkdir()
     (tmp_path / "helpers" / "deep.py").write_text("CONST = 2\n", encoding="utf-8")
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "__init__.py").write_text("FLAG = 3\n", encoding="utf-8")
     (tmp_path / "impl").mkdir()
     (tmp_path / "impl" / "ops.py").write_text(
-        "def build_foo(context, value): return value\n",
+        "def build_foo(context, value):\n"
+        "    from ..helpers.deep import CONST\n"
+        "    from ..pkg import FLAG\n"
+        "    return value, CONST + FLAG\n",
         encoding="utf-8",
     )
     (tmp_path / "interface.py").write_text(
         """
 from typing import Annotated
 from NodeForge import EvaluationMode, Float
-from .helpers.deep import CONST
-from .pkg import FLAG
 
 EXTENSION_API = 2
 EXTENSIONS = {"foo": ".impl.ops:build_foo"}
-OWNER_SENTINEL = CONST + FLAG
 
 def foo(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...
 """,
@@ -210,10 +206,7 @@ def foo(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...
         session = ExtensionOwnerSession(snapshot)
         families, _refs = session.normalize_interface()
         callable_id = next(iter(families))
-        implementation = session.resolve_implementation(callable_id)
-
-        assert session.modules["interface"].OWNER_SENTINEL == 5
-        assert callable(implementation)
+        assert session.invoke_implementation(callable_id, None, 7) == (7, 5)
         assert sys.modules["_nodeforge_ext"] is sentinel_root
     finally:
         if previous_root is None:

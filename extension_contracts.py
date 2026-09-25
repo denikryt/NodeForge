@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
+from enum import Enum
 from typing import Literal
 
 from .evaluation_modes import EvaluationMode
@@ -27,6 +28,22 @@ class ExtensionCallableId:
 
 
 @dataclass(frozen=True)
+class ExtensionTypeId:
+    """Identify one owner-scoped package semantic record independent of Python class identity."""
+
+    owner: tuple[str, ...]
+    name: str
+
+    def __post_init__(self) -> None:
+        """Validate the canonical owner tuple and record identifier."""
+        object.__setattr__(self, "owner", tuple(self.owner))
+        if not self.owner or not all(isinstance(part, str) and part for part in self.owner):
+            raise ValueError("extension type owner must contain non-empty string parts")
+        if not isinstance(self.name, str) or not self.name or not self.name.isidentifier():
+            raise ValueError("extension type name must be a Python identifier")
+
+
+@dataclass(frozen=True)
 class ExtensionImplementationRef:
     """Store one symbolic owner-relative physical implementation target."""
 
@@ -44,32 +61,133 @@ class ExtensionImplementationRef:
             raise ValueError("extension implementation attribute must be one Python identifier")
 
 
-TypeSpecKind = Literal["NF_SET", "TUPLE_FIXED"]
+class PythonScalarKind(str, Enum):
+    """Canonical detached Python scalar kinds allowed inside package semantic state."""
+
+    BOOL = "BOOL"
+    INT = "INT"
+    FLOAT = "FLOAT"
+    STRING = "STRING"
+
+
+TypeSpecKind = Literal[
+    "NF_SET",
+    "PY_SCALAR",
+    "RECORD",
+    "LIST",
+    "TUPLE_FIXED",
+    "TUPLE_VAR",
+    "DICT_STR",
+    "OPTIONAL",
+]
 
 
 @dataclass(frozen=True)
 class TypeSpec:
-    """Describe the deliberately small executable extension type grammar."""
+    """Describe one canonical recursive extension type independent from Python typing objects."""
 
     kind: TypeSpecKind
     nf_types: frozenset[NFType] = frozenset()
     items: tuple["TypeSpec", ...] = ()
+    python_scalar_kind: PythonScalarKind | None = None
+    record_type: ExtensionTypeId | None = None
+    item: "TypeSpec | None" = None
 
     def __post_init__(self) -> None:
-        """Freeze members and reject structurally malformed type specifications."""
+        """Freeze recursive members and reject malformed canonical specifications."""
         object.__setattr__(self, "nf_types", frozenset(self.nf_types))
         object.__setattr__(self, "items", tuple(self.items))
-        if self.kind not in {"NF_SET", "TUPLE_FIXED"}:
+        allowed = {
+            "NF_SET", "PY_SCALAR", "RECORD", "LIST",
+            "TUPLE_FIXED", "TUPLE_VAR", "DICT_STR", "OPTIONAL",
+        }
+        if self.kind not in allowed:
             raise ValueError("unsupported extension TypeSpec kind")
-        if not all(isinstance(item, NFType) for item in self.nf_types):
+        if not all(isinstance(value, NFType) for value in self.nf_types):
             raise TypeError("TypeSpec.nf_types must contain NFType members")
-        if not all(isinstance(item, TypeSpec) for item in self.items):
+        if not all(isinstance(value, TypeSpec) for value in self.items):
             raise TypeError("TypeSpec.items must contain TypeSpec records")
+        if self.python_scalar_kind is not None and not isinstance(self.python_scalar_kind, PythonScalarKind):
+            raise TypeError("TypeSpec.python_scalar_kind must be PythonScalarKind or None")
+        if self.record_type is not None and not isinstance(self.record_type, ExtensionTypeId):
+            raise TypeError("TypeSpec.record_type must be ExtensionTypeId or None")
+        if self.item is not None and not isinstance(self.item, TypeSpec):
+            raise TypeError("TypeSpec.item must be TypeSpec or None")
+
+        populated = {
+            "nf": bool(self.nf_types),
+            "items": bool(self.items),
+            "scalar": self.python_scalar_kind is not None,
+            "record": self.record_type is not None,
+            "item": self.item is not None,
+        }
         if self.kind == "NF_SET":
-            if not self.nf_types or self.items:
-                raise ValueError("NF_SET requires one or more NFTypes and no items")
-        elif self.nf_types or not self.items:
-            raise ValueError("TUPLE_FIXED requires items and no direct NFTypes")
+            if not populated["nf"] or any(populated[key] for key in ("items", "scalar", "record", "item")):
+                raise ValueError("NF_SET requires one or more NFTypes and no other payload")
+        elif self.kind == "PY_SCALAR":
+            if not populated["scalar"] or any(populated[key] for key in ("nf", "items", "record", "item")):
+                raise ValueError("PY_SCALAR requires exactly one PythonScalarKind")
+        elif self.kind == "RECORD":
+            if not populated["record"] or any(populated[key] for key in ("nf", "items", "scalar", "item")):
+                raise ValueError("RECORD requires exactly one ExtensionTypeId")
+        elif self.kind == "TUPLE_FIXED":
+            if not populated["items"] or any(populated[key] for key in ("nf", "scalar", "record", "item")):
+                raise ValueError("TUPLE_FIXED requires one or more items")
+        else:
+            if not populated["item"] or any(populated[key] for key in ("nf", "items", "scalar", "record")):
+                raise ValueError(f"{self.kind} requires exactly one item TypeSpec")
+
+
+@dataclass(frozen=True)
+class ExtensionTypeSpec:
+    """Store one normalized same-owner nominal package record schema."""
+
+    id: ExtensionTypeId
+    fields: tuple[tuple[str, TypeSpec], ...]
+    bases: tuple[ExtensionTypeId, ...]
+    is_public: bool
+
+    def __post_init__(self) -> None:
+        """Freeze ordered fields/bases and validate detached schema members."""
+        object.__setattr__(self, "fields", tuple(self.fields))
+        object.__setattr__(self, "bases", tuple(self.bases))
+        if not isinstance(self.id, ExtensionTypeId):
+            raise TypeError("ExtensionTypeSpec.id must be ExtensionTypeId")
+        names: list[str] = []
+        for field in self.fields:
+            if not isinstance(field, tuple) or len(field) != 2:
+                raise TypeError("ExtensionTypeSpec.fields must contain (name, TypeSpec) pairs")
+            name, spec = field
+            if not isinstance(name, str) or not name.isidentifier():
+                raise ValueError("ExtensionTypeSpec field names must be Python identifiers")
+            if not isinstance(spec, TypeSpec):
+                raise TypeError("ExtensionTypeSpec field types must be TypeSpec records")
+            names.append(name)
+        if len(names) != len(set(names)):
+            raise ValueError("ExtensionTypeSpec field names must be unique")
+        if not all(isinstance(base, ExtensionTypeId) for base in self.bases):
+            raise TypeError("ExtensionTypeSpec.bases must contain ExtensionTypeId records")
+        if any(base.owner != self.id.owner for base in self.bases):
+            raise ValueError("ExtensionTypeSpec bases must belong to the same owner")
+        if not isinstance(self.is_public, bool):
+            raise TypeError("ExtensionTypeSpec.is_public must be bool")
+
+
+def is_frontend_semantic_type_spec(spec: TypeSpec) -> bool:
+    """Return whether *spec* denotes a frontend semantic record/list public value."""
+    if spec.kind == "RECORD":
+        return True
+    return spec.kind == "LIST" and is_frontend_semantic_type_spec(spec.item)
+
+
+def is_executable_result_type_spec(spec: TypeSpec) -> bool:
+    """Return whether *spec* is an executable public result shape from the backend-only declarative extension contract."""
+    if spec.kind == "NF_SET":
+        return len(spec.nf_types) == 1
+    if spec.kind == "TUPLE_FIXED":
+        return bool(spec.items) and all(item.kind == "NF_SET" and len(item.nf_types) == 1 for item in spec.items)
+    return False
+
 
 
 @dataclass(frozen=True)
@@ -79,12 +197,12 @@ class ExtensionParameterSpec:
     name: str
     kind: object
     type_spec: TypeSpec
-    evaluation_mode: EvaluationMode
+    evaluation_mode: EvaluationMode | None
     default: object = inspect.Parameter.empty
     default_type: NFType | None = None
 
     def __post_init__(self) -> None:
-        """Validate the direct-NF parameter contract and optional detached default."""
+        """Validate the public parameter contract and optional detached default."""
         if not isinstance(self.name, str) or not self.name:
             raise ValueError("extension parameter name must be non-empty")
         if self.kind not in {
@@ -95,15 +213,24 @@ class ExtensionParameterSpec:
             inspect.Parameter.VAR_KEYWORD,
         }:
             raise TypeError("extension parameter kind must be inspect.Parameter.kind")
-        if not isinstance(self.type_spec, TypeSpec) or self.type_spec.kind != "NF_SET":
-            raise TypeError("extension parameters require direct NF_SET TypeSpec")
-        if not isinstance(self.evaluation_mode, EvaluationMode):
-            raise TypeError("extension parameter evaluation_mode must be EvaluationMode")
+        if not isinstance(self.type_spec, TypeSpec):
+            raise TypeError("extension parameter type_spec must be TypeSpec")
+        if self.type_spec.kind == "NF_SET":
+            if not isinstance(self.evaluation_mode, EvaluationMode):
+                raise TypeError("direct NF_SET extension parameter requires EvaluationMode")
+        elif is_frontend_semantic_type_spec(self.type_spec):
+            if self.evaluation_mode is not None:
+                raise ValueError("semantic RECORD/LIST extension parameter cannot carry EvaluationMode")
+        else:
+            raise TypeError("public extension parameters support only NF_SET or semantic RECORD/LIST")
         if self.default is inspect.Parameter.empty:
             if self.default_type is not None:
                 raise ValueError("extension parameter without default cannot carry default_type")
-        elif not isinstance(self.default_type, NFType):
-            raise TypeError("extension parameter default requires canonical NFType")
+        else:
+            if self.type_spec.kind != "NF_SET":
+                raise ValueError("semantic RECORD/LIST extension parameters cannot declare defaults")
+            if not isinstance(self.default_type, NFType):
+                raise TypeError("extension parameter default requires canonical NFType")
 
 
 @dataclass(frozen=True)
@@ -115,7 +242,7 @@ class ExtensionCallableSpec:
     result: TypeSpec
 
     def __post_init__(self) -> None:
-        """Freeze ordered parameters and validate exact executable result shape."""
+        """Freeze ordered parameters and validate supported public result shape."""
         object.__setattr__(self, "parameters", tuple(self.parameters))
         if not isinstance(self.id, ExtensionCallableId):
             raise TypeError("ExtensionCallableSpec.id must be ExtensionCallableId")
@@ -123,21 +250,19 @@ class ExtensionCallableSpec:
             raise TypeError("ExtensionCallableSpec.parameters must contain ExtensionParameterSpec records")
         if not isinstance(self.result, TypeSpec):
             raise TypeError("ExtensionCallableSpec.result must be TypeSpec")
-        if self.result.kind == "NF_SET":
-            if len(self.result.nf_types) != 1:
-                raise ValueError("extension result NF_SET must contain exactly one NFType")
-        else:
-            if any(item.kind != "NF_SET" or len(item.nf_types) != 1 for item in self.result.items):
-                raise ValueError("extension fixed tuple result leaves must be singleton NF_SET")
+        if self.result.kind == "NF_SET" and len(self.result.nf_types) != 1:
+            raise ValueError("extension result NF_SET must contain exactly one NFType")
+        if self.result.kind == "TUPLE_FIXED" and any(
+            item.kind != "NF_SET" or len(item.nf_types) != 1 for item in self.result.items
+        ):
+            raise ValueError("extension fixed tuple result leaves must each contain exactly one NFType")
+        if not (is_executable_result_type_spec(self.result) or is_frontend_semantic_type_spec(self.result)):
+            raise ValueError("extension public result must be executable NF value/tuple or semantic RECORD/LIST")
 
     def python_signature(self) -> inspect.Signature:
         """Derive the canonical Python invocation signature for this callable alternative."""
         return inspect.Signature(
-            inspect.Parameter(
-                parameter.name,
-                parameter.kind,
-                default=parameter.default,
-            )
+            inspect.Parameter(parameter.name, parameter.kind, default=parameter.default)
             for parameter in self.parameters
         )
 
@@ -167,7 +292,12 @@ __all__ = [
     "ExtensionCallableSpec",
     "ExtensionImplementationRef",
     "ExtensionParameterSpec",
+    "ExtensionTypeId",
+    "ExtensionTypeSpec",
+    "PythonScalarKind",
     "TypeSpec",
     "TypeSpecKind",
+    "is_executable_result_type_spec",
+    "is_frontend_semantic_type_spec",
     "validate_extension_argument_positions",
 ]

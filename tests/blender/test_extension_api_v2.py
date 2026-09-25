@@ -34,7 +34,7 @@ def _write_extension_package(
                 "author": "Tests",
                 "description": "Physical extension fixture",
                 "nodeforge_min_version": "0.59.0",
-                "nodeforge_max_version": "0.59.0",
+                "nodeforge_max_version": "0.60.0",
                 "contents": {"systems": "systems"},
                 "permissions": {"python": True},
             }
@@ -96,7 +96,7 @@ def _write_rotation_extension_package(root: Path) -> None:
                 "author": "Tests",
                 "description": "Rotation physical-type fixture",
                 "nodeforge_min_version": "0.59.0",
-                "nodeforge_max_version": "0.59.0",
+                "nodeforge_max_version": "0.60.0",
                 "contents": {"systems": "systems"},
                 "permissions": {"python": True},
             }
@@ -135,7 +135,7 @@ def identity_rotation(context, value):
 
 
 def _write_nested_import_extension_package(root: Path) -> None:
-    """Create one v2 owner whose declaration and implementation use nested owner-local modules."""
+    """Create one v2 owner whose implementation uses nested owner-local modules lazily."""
     owner = root / "systems" / "nested"
     (owner / "helpers").mkdir(parents=True)
     (owner / "pkg").mkdir()
@@ -150,7 +150,7 @@ def _write_nested_import_extension_package(root: Path) -> None:
                 "author": "Tests",
                 "description": "Nested owner-local import fixture",
                 "nodeforge_min_version": "0.59.0",
-                "nodeforge_max_version": "0.59.0",
+                "nodeforge_max_version": "0.60.0",
                 "contents": {"systems": "systems"},
                 "permissions": {"python": True},
             }
@@ -163,8 +163,6 @@ def _write_nested_import_extension_package(root: Path) -> None:
         """
 from typing import Annotated
 from NodeForge import EvaluationMode, Float
-from .helpers.deep import CONST
-from .pkg import FLAG
 
 EXTENSION_API = 2
 EXTENSIONS = {"nested_scale": ".impl.ops:build_scale"}
@@ -172,7 +170,7 @@ EXTENSIONS = {"nested_scale": ".impl.ops:build_scale"}
 def nested_scale(
     value: Annotated[Float, EvaluationMode.RUNTIME_ONLY],
     *,
-    factor: Annotated[Float, EvaluationMode.COMPILE_TIME_ONLY] = CONST + FLAG,
+    factor: Annotated[Float, EvaluationMode.COMPILE_TIME_ONLY] = 5.0,
 ) -> Float: ...
 """,
         encoding="utf-8",
@@ -180,13 +178,134 @@ def nested_scale(
     (owner / "impl" / "ops.py").write_text(
         """
 def build_scale(context, value, *, factor=5.0):
+    from ..helpers.deep import CONST
+    from ..pkg import FLAG
     from NodeForge.extension_api import NFType
+    if factor != CONST + FLAG:
+        raise AssertionError("captured implementation helpers produced an unexpected factor")
     node = context.group.nodes.new("ShaderNodeMath")
     node.operation = "MULTIPLY"
     node.location = context.location
     context.group.links.new(value.socket, node.inputs[0])
     node.inputs[1].default_value = float(factor)
     return context.value(node.outputs[0], NFType.FLOAT)
+""",
+        encoding="utf-8",
+    )
+
+
+def _write_semantic_extension_package(root: Path) -> None:
+    """Create one owner covering semantic-only and semantic-then-backend execution."""
+    owner = root / "systems" / "semantic"
+    owner.mkdir(parents=True)
+    (root / "nodeforge_package.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "id": "vendor.extension.semantic",
+                "name": "Extension Semantic",
+                "version": "1.0.0",
+                "author": "Tests",
+                "description": "Package semantic-state Blender fixture",
+                "nodeforge_min_version": "0.60.0",
+                "nodeforge_max_version": "0.60.0",
+                "contents": {"systems": "systems"},
+                "permissions": {"python": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (owner / "interface.py").write_text(
+        """
+from dataclasses import dataclass
+from typing import Annotated
+from NodeForge import EvaluationMode, Float
+
+EXTENSION_API = 2
+
+@dataclass(frozen=True)
+class Part:
+    value: Float
+
+@dataclass(frozen=True)
+class DerivedPart(Part):
+    label: str
+
+@dataclass(frozen=True)
+class _Inner:
+    enabled: bool
+
+@dataclass(frozen=True)
+class _State:
+    parts: list[Part]
+    inner: _Inner
+
+EXTENSIONS = {
+    "make_part": None,
+    "consume_part": ".backend:consume_part",
+    "bad_consume_part": ".backend:bad_consume_part",
+}
+
+def make_part(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Part: ...
+def consume_part(part: Part) -> Float: ...
+def bad_consume_part(part: Part) -> Float: ...
+""",
+        encoding="utf-8",
+    )
+    (owner / "semantic.py").write_text(
+        """
+from .interface import DerivedPart, Part, _Inner, _State
+
+def make_part(value) -> Part:
+    return DerivedPart(value, "derived")
+
+def consume_part(part) -> _State:
+    return _State([part], _Inner(True))
+
+def bad_consume_part(part) -> _State:
+    return _State([part], _Inner(True))
+""",
+        encoding="utf-8",
+    )
+    (owner / "backend.py").write_text(
+        """
+import builtins
+from .interface import DerivedPart, _Inner, _State
+from NodeForge.extension_api import ExtensionBackendValue, NFType
+
+def make_part(context, semantic_state):
+    builtins._nodeforge_semantic_backend_calls.append("make_part")
+    raise AssertionError("semantic-only make_part must never invoke backend code")
+
+def _runtime_leaf(semantic_state):
+    if type(semantic_state) is not _State:
+        raise AssertionError("semantic state did not reconstruct as the exact session _State class")
+    if type(semantic_state.inner) is not _Inner or semantic_state.inner.enabled is not True:
+        raise AssertionError("nested private semantic state was reconstructed incorrectly")
+    if len(semantic_state.parts) != 1 or type(semantic_state.parts[0]) is not DerivedPart:
+        raise AssertionError("concrete semantic subtype identity was not preserved")
+    if semantic_state.parts[0].label != "derived":
+        raise AssertionError("detached package scalar state was not preserved")
+    value = semantic_state.parts[0].value
+    if not isinstance(value, ExtensionBackendValue) or value.typ is not NFType.INT:
+        raise AssertionError("runtime semantic leaf did not reconstruct as the actual typed backend value")
+    return value
+
+def consume_part(context, semantic_state):
+    builtins._nodeforge_semantic_backend_calls.append("consume_part")
+    value = _runtime_leaf(semantic_state)
+    node = context.group.nodes.new("ShaderNodeMath")
+    node.operation = "ADD"
+    node.location = context.location
+    context.group.links.new(value.socket, node.inputs[0])
+    node.inputs[1].default_value = 0.0
+    return context.value(node.outputs[0], NFType.FLOAT)
+
+def bad_consume_part(context, semantic_state):
+    builtins._nodeforge_semantic_backend_calls.append("bad_consume_part")
+    value = _runtime_leaf(semantic_state)
+    context.new_generated_mesh(role="semantic-state-rollback", name_hint="SemanticStateRollback")
+    return ExtensionBackendValue(value.socket, NFType.FLOAT)
 """,
         encoding="utf-8",
     )
@@ -296,6 +415,57 @@ def test_invalid_extension_result_rolls_back_generated_resources():
 
         assert {mesh.as_pointer() for mesh in bpy.data.meshes} == before_meshes
         assert {group.as_pointer() for group in bpy.data.node_groups} == before_groups
+
+
+def test_semantic_state_reconstructs_exact_records_and_runtime_leaf():
+    """Semantic-only composition feeds exact package records and typed backend leaves to one physical call."""
+    builtins._nodeforge_semantic_backend_calls = []
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "package"
+            _write_semantic_extension_package(source)
+            packages.install_package_directory(source, allow_python=True)
+            group = compile_group(
+                'value = input_int("Value", default=3)\n'
+                'result = consume_part(make_part(value))\n'
+                'output("Result", result)\n',
+                "NFTest_extension_v2_semantic_state",
+            )
+
+            math_nodes = [
+                node for node in group.nodes
+                if node.bl_idname == "ShaderNodeMath" and node.operation == "ADD"
+            ]
+            assert len(math_nodes) == 1
+            assert builtins._nodeforge_semantic_backend_calls == ["consume_part"]
+    finally:
+        delattr(builtins, "_nodeforge_semantic_backend_calls")
+
+
+def test_semantic_backend_result_failure_rolls_back_generated_resources():
+    """Semantic-then-backend result validation failure rolls back resources from that extension call."""
+    builtins._nodeforge_semantic_backend_calls = []
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "package"
+            _write_semantic_extension_package(source)
+            packages.install_package_directory(source, allow_python=True)
+            before_meshes = {mesh.as_pointer() for mesh in bpy.data.meshes}
+            before_groups = {group.as_pointer() for group in bpy.data.node_groups}
+
+            with pytest.raises(CompileError, match="output sockets"):
+                compile_group(
+                    'value = input_int("Value", default=3)\n'
+                    'result = bad_consume_part(make_part(value))\n'
+                    'output("Result", result)\n',
+                    "NFTest_extension_v2_semantic_rollback",
+                )
+
+            assert builtins._nodeforge_semantic_backend_calls == ["bad_consume_part"]
+            assert {mesh.as_pointer() for mesh in bpy.data.meshes} == before_meshes
+            assert {group.as_pointer() for group in bpy.data.node_groups} == before_groups
+    finally:
+        delattr(builtins, "_nodeforge_semantic_backend_calls")
 
 
 def test_nodeforge_math_v2_reference_package():

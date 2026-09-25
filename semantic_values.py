@@ -9,6 +9,7 @@ from typing import Mapping, TypeAlias
 
 from .compiler_identities import BindingId
 from .errors import CompileError
+from .extension_contracts import ExtensionTypeId
 from .nf_types import NFType
 
 
@@ -95,6 +96,19 @@ class ArrayResultShape:
 
 
 @dataclass(frozen=True)
+class ExtensionResultShape:
+    """Describe one concrete owner-scoped package semantic record result leaf."""
+
+    type_id: ExtensionTypeId
+
+    def __post_init__(self) -> None:
+        """Require canonical package semantic type identity."""
+        if not isinstance(self.type_id, ExtensionTypeId):
+            raise TypeError("ExtensionResultShape.type_id must be ExtensionTypeId")
+
+
+
+@dataclass(frozen=True)
 class TupleResultShape:
     """Describe one fixed tuple returned by a compiler-owned runtime call."""
 
@@ -138,7 +152,7 @@ class NamedOutputsResultShape:
         raise CompileError(f"Unknown raw node output {name!r}; declared outputs are: {known}")
 
 
-SemanticResultShape: TypeAlias = RuntimeResultShape | ArrayResultShape | TupleResultShape | NamedOutputsResultShape
+SemanticResultShape: TypeAlias = RuntimeResultShape | ArrayResultShape | TupleResultShape | NamedOutputsResultShape | ExtensionResultShape
 
 
 class StructuralBindingKind(str, Enum):
@@ -387,6 +401,7 @@ class ObjectSemanticSnapshot:
 
 __all__ = [
     "ArrayResultShape",
+    "ExtensionResultShape",
     "NamedOutputsResultShape",
     "ObjectInfoState",
     "ObjectSemanticId",

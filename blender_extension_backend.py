@@ -9,6 +9,8 @@ from .blender_socket_types import validate_runtime_value_socket
 from .errors import CompileError
 from .extension_api import ExtensionBackendContext, ExtensionBackendValue
 from .extension_contracts import ExtensionCallableSpec, TypeSpec
+from .extension_values import unpack_value
+from .semantic_ir import IRCallOperandRef
 from .nf_types import NFType
 from .values import Value, make_value
 
@@ -115,16 +117,35 @@ def lower_extension_call(context, operation, operands, x, y):
         raise CompileError("Internal error: EXTENSION Call IR reached backend without generated-resource transaction")
 
     spec = _selected_spec(registry, operation)
-    bound = _bound_arguments(spec, operation, operands, context.group)
     callable_id = operation.target.extension_callable_id
-    implementation = registry.resolve_implementation(callable_id)
     backend_context = ExtensionBackendContext(
         group=context.group,
         location=(x, y),
         generated_resource_transaction=transaction,
     )
     try:
-        result = implementation(backend_context, *bound.args, **bound.kwargs)
+        if operation.extension_state_type is None:
+            bound = _bound_arguments(spec, operation, operands, context.group)
+            result = registry.invoke_implementation(
+                callable_id, backend_context, *bound.args, **bound.kwargs
+            )
+        else:
+            def resolve_runtime_leaf(stored):
+                """Resolve one IR operand reference into the public backend runtime wrapper."""
+                if not isinstance(stored, IRCallOperandRef):
+                    return None
+                if stored.operand_index >= len(operands):
+                    raise CompileError("Internal error: extension semantic state operand reference is out of range")
+                value = operands[stored.operand_index]
+                return value.typ, _physical_argument_value(value, context.group)
+
+            semantic_state = unpack_value(
+                operation.extension_state_type,
+                operation.extension_state,
+                registry=registry,
+                runtime_leaf_resolver=resolve_runtime_leaf,
+            )
+            result = registry.invoke_implementation(callable_id, backend_context, semantic_state)
     except CompileError:
         raise
     except Exception as exc:

@@ -310,3 +310,9 @@ ion-reference map.
 - Fixed nested owner-local relative imports by mounting/restoring the synthetic extension root package, simplified snapshot namespace-package derivation to one post-capture pass, unified
 generated-resource ownership/publication through one transaction operation, and removed dead private package compatibility wrappers that could execute v2 interfaces outside the supported
 lifecycle.
+## 0.60.0
+
+- Added package-defined semantic values to extension API v2: owner-scoped frozen record schemas, `RuntimeRef`, expression-local semantic composition, semantic-only and semantic-then-backend execution, phase-isolated `semantic.py`/implementation lifecycles, detached semantic state in ordinary Call IR, and typed backend reconstruction while deliberately deferring body persistence to persistent semantic-value integration.
+- Made `interface.py` the declaration-only canonical cross-phase module, rejected every owner-local child-module import while it executes, kept ordinary helpers phase-local to semantic/implementation generations, and required semantic and physical package function bodies to execute inside their active owner-session mounts so lazy relative imports cannot escape the captured snapshot boundary.
+- Hardened semantic record identity and state publication by rejecting ambiguous owner-local dataclass aliases, validating detached semantic state against exact dependency NFTypes before canonical `AnalyzedCall` creation, and allowing package-side dataclass construction hooks while compiler reconstruction remains field-only and side-effect-free.
+- Extended the paired `nodeforge.math` package compatibility metadata for NodeForge 0.60.0 without changing its backend-only math implementation semantics.

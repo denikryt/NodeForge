@@ -47,11 +47,11 @@ The dedicated function is the more convenient form when NodeForge provides one. 
 
 ### Python extension packages
 
-Installable packages can add typed backend callables through extension API v2. A package declares its public callable signatures in `interface.py` and maps each public name to a lazy owner-local Python implementation. These calls use the same semantic analysis and typed Call IR as core language calls; package implementation code receives a small Blender-facing context rather than compiler internals.
+Installable packages can add typed callables through extension API v2. A package declares its public callable signatures and frozen semantic record types in declaration-only `interface.py`; because that module has canonical cross-phase identity, it does not import other owner-local package modules. Backend-only callables map directly to lazy owner-local physical implementations; semantic-capable callables may additionally use `semantic.py` to construct package-defined frontend values or normalize private state before backend realization. All forms use the permanent semantic analysis and typed Call IR pipeline rather than compiler internals.
 
-System extensions may expose several callables. Native library extensions expose one callable under their catalog name and become visible through the existing library import syntax. The backend-only API supports direct Geometry Nodes construction in the current candidate node tree and transaction-owned generated Mesh, Curve, and Object datablocks.
+System extensions may expose several callables. Native library extensions expose one callable under their catalog name and become visible through the existing library import syntax. Physical implementations receive a small Blender-facing context and use the existing transaction-owned generated Mesh, Curve, and Object boundary. Package-defined semantic records are expression-local and can be composed directly between extension calls; source-variable persistence is added by the persistent semantic-value integration work.
 
-Package authors can use [`dev/EXTENSION_API_V2.md`](dev/EXTENSION_API_V2.md) for the declaration syntax, evaluation modes, overload rules, implementation calling convention, backend context, and generated-resource contract.
+Package authors can use [`dev/EXTENSION_API_V2.md`](dev/EXTENSION_API_V2.md) for declaration syntax, evaluation modes, semantic records, `RuntimeRef`, semantic/backend execution forms, owner-session lifecycle, backend context, and generated-resource contracts.
 
 ### Numeric values
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import copy
 import inspect
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import AbstractSet, Mapping
 
@@ -78,7 +78,26 @@ from .callable_contracts import (
 )
 from .semantic_ir import IRFunctionMaterialization, IRFunctionMaterializationMode
 from .evaluation_modes import CompileTimeSelection, EvaluationMode, RuntimeRequired, resolve_argument_evaluation
-from .extension_contracts import ExtensionCallableSpec, ExtensionParameterSpec, TypeSpec
+from .extension_contracts import (
+    ExtensionCallableSpec,
+    ExtensionParameterSpec,
+    TypeSpec,
+    is_frontend_semantic_type_spec,
+)
+from .extension_semantics import (
+    ExtensionDependencySource,
+    ExtensionExecutionForm,
+    ExtensionSemanticPayload,
+    SemanticInvocation,
+    classify_extension_execution,
+    semantic_type_compatible,
+)
+from .extension_values import (
+    ExtensionValue,
+    select_declared_nf_type,
+    static_nf_type,
+    type_spec_accepts_nf,
+)
 from .source_callables import (
     analyze_local_captures,
     analyze_local_return_shape,
@@ -88,6 +107,7 @@ from .source_callables import (
 )
 from .semantic_values import (
     ArrayResultShape,
+    ExtensionResultShape,
     NamedOutputsResultShape,
     ObjectInfoState,
     ObjectSemanticId,
@@ -198,6 +218,7 @@ class ExpressionFact:
     call_operand_nodes: tuple[ast.expr, ...] = ()
     object_info_state: ObjectInfoState | None = None
     array_id: StructuralArrayId | None = None
+    semantic_payload: ExtensionSemanticPayload | None = None
 
 
 @dataclass(frozen=True)
@@ -214,6 +235,8 @@ class ExpressionAnalysis:
     source_call_site_allocator: object | None = None
     helper_namespace: str = "Group"
     structural_arrays: StructuralArraySnapshot = field(default_factory=lambda: StructuralArraySnapshot({}, {}))
+    used_extension_owners: frozenset[tuple[str, ...]] = frozenset()
+    extension_registry: object | None = None
 
 
 @dataclass(frozen=True)
@@ -419,44 +442,6 @@ def _call_result_types(result):
 
 
 
-def _extension_static_type(value: object) -> NFType:
-    """Infer the direct runtime NFType represented by one detached CTFE value."""
-    if type(value) is bool:
-        return NFType.BOOL
-    if type(value) is int:
-        canonicalize_group_input_default(NFType.INT, value)
-        return NFType.INT
-    if type(value) is float:
-        canonicalize_group_input_default(NFType.FLOAT, value)
-        return NFType.FLOAT
-    if isinstance(value, str):
-        return NFType.STRING
-    if _is_const_vector(value) or isinstance(value, (tuple, list)):
-        canonicalize_group_input_default(NFType.VECTOR, value)
-        return NFType.VECTOR
-    raise CompileError(f"Extension compile-time argument has unsupported detached value {value!r}")
-
-
-def _extension_expected_type(type_spec: TypeSpec, actual: NFType) -> NFType:
-    """Select the exact declared type used to canonicalize one accepted argument."""
-    if actual in type_spec.nf_types:
-        return actual
-    compatible = [
-        expected
-        for expected in sorted(type_spec.nf_types, key=lambda item: item.value)
-        if source_argument_type_matches(expected, actual)
-    ]
-    if len(compatible) != 1:
-        raise CompileError(f"Extension argument type {actual} is not uniquely accepted by {sorted(t.value for t in type_spec.nf_types)}")
-    return compatible[0]
-
-
-def _extension_type_matches(type_spec: TypeSpec, actual: NFType, *, exact: bool) -> bool:
-    """Return exact-membership or existing source-compatibility acceptance for one argument."""
-    if exact:
-        return actual in type_spec.nf_types
-    return any(source_argument_type_matches(expected, actual) for expected in type_spec.nf_types)
-
 
 def _extension_result_spec(spec: ExtensionCallableSpec):
     """Convert one exact extension result TypeSpec to the existing analyzed call shape."""
@@ -480,7 +465,7 @@ def _extension_explicit_modes(spec: ExtensionCallableSpec, bound: inspect.BoundA
     return modes
 
 
-def _analyze_extension_call(
+def _analyze_extension_backend_call(
     node: ast.Call,
     cleaned_call: ast.Call,
     resolved: ResolvedCallable,
@@ -490,7 +475,7 @@ def _analyze_extension_call(
     facts,
     call_result_shape,
 ):
-    """Bind, acquire, select, and normalize one declarative extension call exactly once."""
+    """Preserve the reviewed backend-only extension acquisition/overload path."""
     name = resolved.source_name
     if modifiers.unique_was_explicit:
         raise unsupported_unique(name)
@@ -545,7 +530,7 @@ def _analyze_extension_call(
         except ConstEvalUnavailable as exc:
             raise CompileError(f"{name}() argument must be available at compile time") from exc
         if isinstance(selection, CompileTimeSelection):
-            actual_type = _extension_static_type(selection.value)
+            actual_type = static_nf_type(selection.value)
             acquired[id(source_node)] = ("static", selection.value, actual_type)
             continue
         if not isinstance(selection, RuntimeRequired):
@@ -573,7 +558,7 @@ def _analyze_extension_call(
                     if parameter.default_type is None:
                         raise CompileError("Internal error: extension bound default lost canonical type")
                     actual_type = parameter.default_type
-                if not _extension_type_matches(parameter.type_spec, actual_type, exact=exact):
+                if not type_spec_accepts_nf(parameter.type_spec, actual_type, exact=exact):
                     return False
         return True
 
@@ -610,7 +595,7 @@ def _analyze_extension_call(
                         AnalyzedCallOperand(parameter.name, actual_type, parameter_index, transport_variadic)
                     )
                 else:
-                    expected_type = _extension_expected_type(parameter.type_spec, actual_type)
+                    expected_type = select_declared_nf_type(parameter.type_spec, actual_type)
                     canonical = canonicalize_group_input_default(expected_type, payload)
                     static_operands.append(
                         AnalyzedStaticCallOperand(parameter_index, canonical, transport_variadic)
@@ -636,6 +621,284 @@ def _analyze_extension_call(
         call_result_shape(result_spec),
         analyzed_call=analyzed_call,
         call_operand_nodes=tuple(runtime_nodes),
+    )
+
+
+
+def _semantic_result_shape(type_spec: TypeSpec, stored: object) -> SemanticResultShape:
+    """Describe the concrete expression-local shape of one packed semantic result."""
+    if type_spec.kind == "RECORD":
+        if not isinstance(stored, ExtensionValue):
+            raise CompileError("Internal error: semantic RECORD result did not pack to ExtensionValue")
+        return ExtensionResultShape(stored.type_id)
+    if type_spec.kind == "LIST":
+        if not isinstance(stored, tuple):
+            raise CompileError("Internal error: semantic LIST result did not pack to immutable tuple storage")
+        return ArrayResultShape(tuple(_semantic_result_shape(type_spec.item, item) for item in stored))
+    raise CompileError("Internal error: non-semantic result requested semantic result shape")
+
+
+def _contextual_semantic_list_payload(
+    expression: ast.expr,
+    expected: TypeSpec,
+    *,
+    analyze,
+    facts,
+    invocation: SemanticInvocation,
+    registry,
+    call_name: str,
+) -> ExtensionSemanticPayload:
+    """Acquire one semantic LIST, preserving its declared TypeSpec even for empty literals."""
+    fact = analyze(expression)
+    if fact is UNSUPPORTED:
+        raise _BuiltinOperandUnsupported
+    if fact.semantic_payload is not None:
+        payload = fact.semantic_payload
+        if not semantic_type_compatible(payload.type_spec, expected, registry):
+            raise CompileError(f"{call_name}() semantic list argument has incompatible declared record type")
+        return invocation.import_payload(payload)
+    if not isinstance(expression, ast.List):
+        raise CompileError(f"{call_name}() expects a frontend semantic list value")
+    if expected.kind != "LIST":
+        raise CompileError("Internal error: semantic list acquisition received non-LIST TypeSpec")
+
+    packed_items: list[object] = []
+    for child in expression.elts:
+        if expected.item.kind == "LIST":
+            child_payload = _contextual_semantic_list_payload(
+                child,
+                expected.item,
+                analyze=analyze,
+                facts=facts,
+                invocation=invocation,
+                registry=registry,
+                call_name=call_name,
+            )
+        elif expected.item.kind == "RECORD":
+            child_fact = analyze(child)
+            if child_fact is UNSUPPORTED:
+                raise _BuiltinOperandUnsupported
+            child_payload = child_fact.semantic_payload
+            if child_payload is None or child_payload.type_spec.kind != "RECORD":
+                raise CompileError(f"{call_name}() semantic list elements must be package-defined semantic records")
+            if not semantic_type_compatible(child_payload.type_spec, expected.item, registry):
+                raise CompileError(f"{call_name}() semantic list element has incompatible record type")
+            child_payload = invocation.import_payload(child_payload)
+        else:
+            raise CompileError("Internal error: public semantic LIST must recursively contain RECORD leaves")
+        packed_items.append(child_payload.value)
+
+    payload = ExtensionSemanticPayload(expected, tuple(packed_items), invocation.dependencies)
+    facts[expression] = replace(fact, semantic_payload=payload)
+    return payload
+
+
+def _analyze_extension_semantic_call(
+    node: ast.Call,
+    cleaned_call: ast.Call,
+    resolved: ResolvedCallable,
+    modifiers,
+    environment: SemanticEnvironment,
+    analyze,
+    facts,
+    call_result_shape,
+    spec: ExtensionCallableSpec,
+    semantic_return: TypeSpec,
+    execution_form: ExtensionExecutionForm,
+):
+    """Analyze one non-overloaded semantic-capable extension call without body persistence."""
+    name = resolved.source_name
+    if modifiers.unique_was_explicit:
+        raise unsupported_unique(name)
+    if any(isinstance(argument, ast.Starred) for argument in cleaned_call.args):
+        raise CompileError(f"{name}() does not support caller-side * argument expansion")
+    if any(keyword.arg is None for keyword in cleaned_call.keywords):
+        raise CompileError(f"{name}() does not support caller-side ** argument expansion")
+
+    keyword_values: dict[str, ast.expr] = {}
+    for keyword in cleaned_call.keywords:
+        if keyword.arg in keyword_values:
+            raise CompileError(f"{name}() got multiple values for keyword argument {keyword.arg!r}")
+        keyword_values[keyword.arg] = keyword.value
+    signature = spec.python_signature()
+    try:
+        bound = signature.bind(*cleaned_call.args, **keyword_values)
+    except TypeError as exc:
+        raise CompileError(f"{name}() arguments do not match its declared extension signature") from exc
+    bound.apply_defaults()
+
+    registry = environment.extension_registry
+    if registry is None:
+        raise CompileError("Internal error: semantic extension call has no immutable extension registry")
+    invocation = SemanticInvocation(registry)
+
+    try:
+        for parameter in spec.parameters:
+            bound_value = (
+                bound.arguments.get(parameter.name, ())
+                if parameter.kind is inspect.Parameter.VAR_POSITIONAL
+                else bound.arguments.get(parameter.name)
+            )
+            occurrences = tuple(bound_value) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else (bound_value,)
+            acquired_items: list[object] = []
+            for occurrence in occurrences:
+                if occurrence is None and parameter.kind is not inspect.Parameter.VAR_POSITIONAL:
+                    raise CompileError("Internal error: semantic extension binding lost fixed parameter")
+                if not isinstance(occurrence, ast.AST):
+                    if parameter.type_spec.kind != "NF_SET" or parameter.default_type is None:
+                        raise CompileError("Internal error: semantic extension default lost canonical NF contract")
+                    acquired_items.append(occurrence)
+                    continue
+
+                type_spec = parameter.type_spec
+                if type_spec.kind == "NF_SET":
+                    try:
+                        selection = resolve_argument_evaluation(
+                            occurrence,
+                            environment.const_eval_values,
+                            parameter.evaluation_mode,
+                        )
+                    except ConstEvalUnavailable as exc:
+                        raise CompileError(f"{name}() argument must be available at compile time") from exc
+                    if isinstance(selection, CompileTimeSelection):
+                        actual_type = static_nf_type(selection.value)
+                        if not type_spec_accepts_nf(type_spec, actual_type):
+                            raise CompileError(f"{name}() argument type {actual_type} is not accepted by its extension contract")
+                        expected_type = select_declared_nf_type(type_spec, actual_type)
+                        acquired_items.append(canonicalize_group_input_default(expected_type, selection.value))
+                    elif isinstance(selection, RuntimeRequired):
+                        fact = analyze(occurrence)
+                        if fact is UNSUPPORTED:
+                            raise _BuiltinOperandUnsupported
+                        actual_type = _require_runtime_type(fact, f"{name}() argument")
+                        if not type_spec_accepts_nf(type_spec, actual_type):
+                            raise CompileError(f"{name}() argument type {actual_type} is not accepted by its extension contract")
+                        source = ExtensionDependencySource(occurrence, actual_type)
+                        acquired_items.append(invocation.runtime_ref_for_source(source))
+                    else:
+                        raise CompileError("Internal error: unsupported extension evaluation selection")
+                elif type_spec.kind == "RECORD":
+                    fact = analyze(occurrence)
+                    if fact is UNSUPPORTED:
+                        raise _BuiltinOperandUnsupported
+                    payload = fact.semantic_payload
+                    if payload is None or not isinstance(fact.result_shape, ExtensionResultShape):
+                        raise CompileError(f"{name}() expects a package-defined semantic record")
+                    if not registry.is_nominal_subtype(fact.result_shape.type_id, type_spec.record_type):
+                        raise CompileError(f"{name}() semantic record argument has incompatible nominal type")
+                    acquired_items.append(invocation.reconstruct_payload(payload))
+                elif type_spec.kind == "LIST":
+                    payload = _contextual_semantic_list_payload(
+                        occurrence,
+                        type_spec,
+                        analyze=analyze,
+                        facts=facts,
+                        invocation=invocation,
+                        registry=registry,
+                        call_name=name,
+                    )
+                    acquired_items.append(invocation.reconstruct_payload(payload))
+                else:
+                    raise CompileError("Internal error: unsupported public semantic extension parameter TypeSpec")
+
+            if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
+                bound.arguments[parameter.name] = tuple(acquired_items)
+            else:
+                bound.arguments[parameter.name] = acquired_items[0]
+    except _BuiltinOperandUnsupported:
+        return UNSUPPORTED
+
+    semantic_value = registry.invoke_semantic(spec.id, *bound.args, **bound.kwargs)
+    packed = invocation.pack_result(semantic_return, semantic_value)
+    dependencies = invocation.dependencies
+
+    if execution_form is ExtensionExecutionForm.SEMANTIC_ONLY:
+        payload = ExtensionSemanticPayload(spec.result, packed, dependencies)
+        return ExpressionFact(
+            _semantic_result_shape(spec.result, packed),
+            semantic_payload=payload,
+        )
+
+    if execution_form is not ExtensionExecutionForm.SEMANTIC_THEN_BACKEND:
+        raise CompileError("Internal error: semantic extension call has unexpected execution form")
+    result_spec = _extension_result_spec(spec)
+    runtime_operands = tuple(AnalyzedCallOperand(None, source.typ) for source in dependencies)
+    analyzed_call = AnalyzedCall(
+        target=resolved,
+        runtime_operands=runtime_operands,
+        options=(),
+        result=result_spec,
+        extension_state_type=semantic_return,
+        extension_state=packed,
+    )
+    return ExpressionFact(
+        call_result_shape(result_spec),
+        analyzed_call=analyzed_call,
+        call_operand_nodes=tuple(source.expression for source in dependencies),
+    )
+
+
+def _analyze_extension_call(
+    node: ast.Call,
+    cleaned_call: ast.Call,
+    resolved: ResolvedCallable,
+    modifiers,
+    environment: SemanticEnvironment,
+    analyze,
+    facts,
+    call_result_shape,
+):
+    """Dispatch backend-only or semantic-capable extension calls by normalized contract."""
+    registry = environment.extension_registry
+    if registry is None:
+        raise CompileError("Internal error: extension call has no immutable extension registry")
+    family = registry.callable_specs(resolved.target)
+    semantic_return = registry.semantic_return_type(resolved.target)
+    if len(family) > 1:
+        if semantic_return is not None:
+            raise CompileError(f"Overloaded extension callable {resolved.source_name}() cannot define semantic.py implementation")
+        return _analyze_extension_backend_call(
+            node,
+            cleaned_call,
+            resolved,
+            modifiers,
+            environment,
+            analyze,
+            facts,
+            call_result_shape,
+        )
+
+    spec = family[0]
+    execution_form = classify_extension_execution(
+        spec,
+        semantic_return,
+        has_implementation=registry.has_implementation(spec.id),
+    )
+    if execution_form is ExtensionExecutionForm.BACKEND_ONLY:
+        return _analyze_extension_backend_call(
+            node,
+            cleaned_call,
+            resolved,
+            modifiers,
+            environment,
+            analyze,
+            facts,
+            call_result_shape,
+        )
+    if semantic_return is None:
+        raise CompileError("Internal error: semantic execution form has no semantic return contract")
+    return _analyze_extension_semantic_call(
+        node,
+        cleaned_call,
+        resolved,
+        modifiers,
+        environment,
+        analyze,
+        facts,
+        call_result_shape,
+        spec,
+        semantic_return,
+        execution_form,
     )
 
 def _unregistered_keyword_error(name):
@@ -724,6 +987,7 @@ def analyze_expression(expr, environment):
     if not isinstance(environment, SemanticEnvironment):
         raise TypeError("environment must be a SemanticEnvironment")
     available_group_context_slots = set(environment.available_group_context_slots)
+    used_extension_owners: set[tuple[str, ...]] = set()
     if not all(isinstance(slot, GroupContextSlot) for slot in available_group_context_slots):
         raise TypeError("available_group_context_slots must contain GroupContextSlot values")
     if environment.object_semantics is None:
@@ -1515,6 +1779,7 @@ def analyze_expression(expr, environment):
                 )
                 if extension_fact is UNSUPPORTED:
                     return UNSUPPORTED
+                used_extension_owners.add(tuple(resolved.target.owner))
                 return record(node, extension_fact)
             if resolved.kind is CallableKind.LIBRARY:
                 session = environment.source_callable_session
@@ -1653,6 +1918,8 @@ def analyze_expression(expr, environment):
         source_call_site_allocator=environment.source_call_site_allocator,
         helper_namespace=environment.helper_namespace,
         structural_arrays=environment.structural_arrays,
+        used_extension_owners=frozenset(used_extension_owners),
+        extension_registry=environment.extension_registry,
     )
 
 

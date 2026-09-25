@@ -31,6 +31,7 @@ from .semantic_ir import (
     IRArray,
     IRCall,
     IRCallArgument,
+    IRCallOperandRef,
     IRStaticCallArgument,
     IRCallableKind,
     IRCallableTarget,
@@ -51,7 +52,25 @@ from .semantic_ir import (
     IRValue,
     IRVectorComponent,
     IRVectorLiteral,
+    validate_extension_ir_state,
 )
+from .extension_values import ExtensionDependencySlot, ExtensionValue
+
+
+def _detach_extension_state(value, runtime_operands):
+    """Replace frontend dependency slots with tagged IR operand references after actual-type verification."""
+    if isinstance(value, ExtensionDependencySlot):
+        if value.dependency_index >= len(runtime_operands):
+            raise CompileError("Internal error: extension dependency slot is out of range")
+        operand_meta = runtime_operands[value.dependency_index]
+        if value.typ is not operand_meta.typ:
+            raise CompileError("Internal error: extension dependency slot actual type changed before IR detachment")
+        return IRCallOperandRef(value.dependency_index)
+    if isinstance(value, ExtensionValue):
+        return ExtensionValue(value.type_id, _detach_extension_state(value.storage, runtime_operands))
+    if isinstance(value, tuple):
+        return tuple(_detach_extension_state(item, runtime_operands) for item in value)
+    return value
 
 
 class _IRBuilder:
@@ -342,6 +361,18 @@ def lower_analyzed_expression(expr, analysis):
                 IRStaticCallArgument(item.parameter_index, item.value, item.variadic_index)
                 for item in analyzed.static_operands
             )
+            extension_state_type = analyzed.extension_state_type
+            extension_state = analyzed.extension_state
+            if extension_state_type is not None:
+                extension_state = _detach_extension_state(extension_state, analyzed.runtime_operands)
+                if analysis.extension_registry is None:
+                    raise CompileError("Internal error: semantic-state extension lowering lost ExtensionRegistry")
+                validate_extension_ir_state(
+                    extension_state_type,
+                    extension_state,
+                    tuple(arguments),
+                    analysis.extension_registry,
+                )
             builder.emit_operation(
                 IRCall(
                     results=results,
@@ -352,6 +383,8 @@ def lower_analyzed_expression(expr, analysis):
                     raw_output_mode=raw_mode,
                     materialization=analyzed.materialization,
                     static_arguments=static_arguments,
+                    extension_state_type=extension_state_type,
+                    extension_state=extension_state,
                 )
             )
             if isinstance(analyzed.result, ProjectedCallResult):

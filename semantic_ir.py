@@ -9,7 +9,7 @@ from typing import TypeAlias
 from .compiler_identities import BindingId, CallSiteId, FunctionId, InputDeclarationId, InterfaceInputOrigin
 from .nf_types import NFType
 from .group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
-from .extension_contracts import ExtensionCallableId, validate_extension_argument_positions
+from .extension_contracts import ExtensionCallableId, PythonScalarKind, TypeSpec, validate_extension_argument_positions
 
 
 def _is_ir_option_value(value) -> bool:
@@ -171,6 +171,111 @@ IRResult: TypeAlias = IRValue | IRArray | IRTuple | IRNamedOutputs
 
 
 @dataclass(frozen=True)
+class IRCallOperandRef:
+    """Reference one ordinary EXTENSION IRCall runtime operand from detached semantic state."""
+
+    operand_index: int
+
+    def __post_init__(self) -> None:
+        """Require one non-negative physical operand index."""
+        if not isinstance(self.operand_index, int) or isinstance(self.operand_index, bool) or self.operand_index < 0:
+            raise ValueError("IRCallOperandRef.operand_index must be a non-negative integer")
+
+
+def _detached_nf_type(value):
+    """Infer the canonical NFType of one detached static semantic-state leaf."""
+    from .compile_time import ConstVector
+    if type(value) is bool:
+        return NFType.BOOL
+    if type(value) is int:
+        return NFType.INT
+    if type(value) is float:
+        return NFType.FLOAT
+    if type(value) is str:
+        return NFType.STRING
+    if isinstance(value, ConstVector):
+        return NFType.VECTOR
+    return None
+
+
+def validate_extension_ir_state(type_spec: TypeSpec, state, arguments, registry) -> None:
+    """Validate detached extension semantic state against TypeSpec and referenced IRValue types."""
+    from .callable_contracts import source_argument_type_matches
+    from .extension_values import ExtensionValue
+
+    def validate(spec, value):
+        if spec.kind == "OPTIONAL":
+            if value is None:
+                return
+            validate(spec.item, value)
+            return
+        if spec.kind == "PY_SCALAR":
+            expected = {
+                PythonScalarKind.BOOL: bool,
+                PythonScalarKind.INT: int,
+                PythonScalarKind.FLOAT: float,
+                PythonScalarKind.STRING: str,
+            }[spec.python_scalar_kind]
+            if type(value) is not expected:
+                raise TypeError("extension IR PY_SCALAR state has incompatible detached value")
+            return
+        if spec.kind == "NF_SET":
+            if isinstance(value, IRCallOperandRef):
+                if value.operand_index >= len(arguments):
+                    raise ValueError("IRCallOperandRef references an out-of-range extension operand")
+                actual = arguments[value.operand_index].value.typ
+                if not any(source_argument_type_matches(expected, actual) for expected in spec.nf_types):
+                    raise TypeError("IRCallOperandRef references a runtime operand incompatible with its TypeSpec")
+                return
+            actual = _detached_nf_type(value)
+            if actual is None or not any(source_argument_type_matches(expected, actual) for expected in spec.nf_types):
+                raise TypeError("extension IR static NF state is incompatible with its TypeSpec")
+            return
+        if spec.kind == "RECORD":
+            if not isinstance(value, ExtensionValue):
+                raise TypeError("extension IR RECORD state must be ExtensionValue")
+            concrete = registry.type_spec(value.type_id)
+            if not registry.is_nominal_subtype(concrete.id, spec.record_type):
+                raise TypeError("extension IR RECORD state violates nominal TypeSpec")
+            if not isinstance(value.storage, tuple) or len(value.storage) != len(concrete.fields):
+                raise TypeError("extension IR RECORD state has invalid field storage")
+            for (_name, field_spec), field_value in zip(concrete.fields, value.storage):
+                validate(field_spec, field_value)
+            return
+        if spec.kind == "LIST":
+            if not isinstance(value, tuple):
+                raise TypeError("extension IR LIST state must use immutable tuple storage")
+            for item in value:
+                validate(spec.item, item)
+            return
+        if spec.kind == "TUPLE_FIXED":
+            if not isinstance(value, tuple) or len(value) != len(spec.items):
+                raise TypeError("extension IR fixed tuple state has invalid shape")
+            for item_spec, item in zip(spec.items, value):
+                validate(item_spec, item)
+            return
+        if spec.kind == "TUPLE_VAR":
+            if not isinstance(value, tuple):
+                raise TypeError("extension IR variadic tuple state must use tuple storage")
+            for item in value:
+                validate(spec.item, item)
+            return
+        if spec.kind == "DICT_STR":
+            if not isinstance(value, tuple):
+                raise TypeError("extension IR dict state must use immutable tuple storage")
+            for pair in value:
+                if not isinstance(pair, tuple) or len(pair) != 2 or type(pair[0]) is not str:
+                    raise TypeError("extension IR dict state entry is malformed")
+                validate(spec.item, pair[1])
+            return
+        raise TypeError(f"unsupported extension IR TypeSpec kind {spec.kind!r}")
+
+    if not isinstance(type_spec, TypeSpec):
+        raise TypeError("extension_state_type must be TypeSpec")
+    validate(type_spec, state)
+
+
+@dataclass(frozen=True)
 class IRCallArgument:
     """Reference one already-emitted runtime operand of a compiler-owned call."""
 
@@ -237,6 +342,8 @@ class IRCall:
     raw_output_mode: IRRawNodeOutputMode | None = None
     materialization: IRFunctionMaterialization | None = None
     static_arguments: tuple[IRStaticCallArgument, ...] = ()
+    extension_state_type: TypeSpec | None = None
+    extension_state: object | None = None
 
     def __post_init__(self) -> None:
         """Validate call records before backend realization."""
@@ -278,12 +385,26 @@ class IRCall:
         elif self.target.kind is IRCallableKind.EXTENSION:
             if self.materialization is not None:
                 raise ValueError("extension IRCall cannot carry source-function materialization")
-            validate_extension_argument_positions(
-                (item.parameter_index, item.variadic_index)
-                for item in (*self.arguments, *self.static_arguments)
-            )
+            if self.extension_state_type is None:
+                if self.extension_state is not None:
+                    raise ValueError("extension_state requires extension_state_type")
+                validate_extension_argument_positions(
+                    (item.parameter_index, item.variadic_index)
+                    for item in (*self.arguments, *self.static_arguments)
+                )
+            else:
+                if not isinstance(self.extension_state_type, TypeSpec):
+                    raise TypeError("extension_state_type must be TypeSpec")
+                if self.target.extension_overload_index is not None:
+                    raise ValueError("semantic-state extension IRCall cannot be overloaded")
+                if self.static_arguments:
+                    raise ValueError("semantic-state extension IRCall cannot carry public static arguments")
+                if any(item.parameter_index is not None or item.variadic_index is not None for item in self.arguments):
+                    raise ValueError("semantic-state extension dependency operands cannot carry public positions")
         else:
             raise ValueError("unsupported IRCall target kind")
+        if self.target.kind is not IRCallableKind.EXTENSION and (self.extension_state_type is not None or self.extension_state is not None):
+            raise ValueError("only EXTENSION IRCall may carry extension semantic state")
         option_names = []
         for option in self.options:
             if not isinstance(option, tuple) or len(option) != 2:
@@ -817,6 +938,7 @@ __all__ = [
     "IRTuple",
     "IRNamedOutputs",
     "IRCallArgument",
+    "IRCallOperandRef",
     "IRStaticCallArgument",
     "IRCall",
     "IRFunctionMaterializationMode",
@@ -836,6 +958,7 @@ __all__ = [
     "IRCompare",
     "IRConditional",
     "IRVectorLiteral",
+    "validate_extension_ir_state",
     "IRObjectProperty",
     "IRVectorComponent",
     "IRAssign",

@@ -1146,17 +1146,23 @@ def lower_basic_body(
         if analysis.object_semantics is None:
             raise CompileError("Internal error: body expression analysis lost Object semantic registry")
         if extension_registry is not None:
-            from .call_resolution import CallableKind
-            for fact in analysis.facts.values():
-                analyzed_call = getattr(fact, "analyzed_call", None)
-                if analyzed_call is None or analyzed_call.target.kind is not CallableKind.EXTENSION:
-                    continue
-                owner_key = analyzed_call.target.target.owner
+            for owner_key in analysis.used_extension_owners:
                 fingerprint = extension_registry.owner_fingerprint(owner_key)
                 previous = extension_dependency_sink.get(owner_key)
                 if previous is not None and previous != fingerprint:
                     raise CompileError("Internal error: one extension owner produced conflicting fingerprints")
                 extension_dependency_sink[owner_key] = fingerprint
+        root_fact = analysis.facts[expr]
+        if root_fact.semantic_payload is not None:
+            # TODO(nodeforge-migration): Package-defined semantic values are currently expression-local.
+            # A semantic result must be consumed by another extension call inside this analyzed expression;
+            # do not lower, bind, output, or route it through legacy structural state. Persistent semantic-value integration will add
+            # body-owned extension bindings and persistent runtime-dependency carriers. Remove this guard
+            # after assignment/read/control-flow persistence for extension semantic values is implemented.
+            raise CompileError(
+                "Package-defined semantic values are expression-local until persistent semantic-value integration is implemented; "
+                "consume them inside another extension call"
+            )
         program = lower_analyzed_expression(expr, analysis)
         group_context_cursor.replace(analysis.available_group_context_slots)
         return _AnalyzedBodyExpression(
