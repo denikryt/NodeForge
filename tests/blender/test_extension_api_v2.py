@@ -34,7 +34,7 @@ def _write_extension_package(
                 "author": "Tests",
                 "description": "Physical extension fixture",
                 "nodeforge_min_version": "0.59.0",
-                "nodeforge_max_version": "0.60.0",
+                "nodeforge_max_version": "0.61.3",
                 "contents": {"systems": "systems"},
                 "permissions": {"python": True},
             }
@@ -96,7 +96,7 @@ def _write_rotation_extension_package(root: Path) -> None:
                 "author": "Tests",
                 "description": "Rotation physical-type fixture",
                 "nodeforge_min_version": "0.59.0",
-                "nodeforge_max_version": "0.60.0",
+                "nodeforge_max_version": "0.61.3",
                 "contents": {"systems": "systems"},
                 "permissions": {"python": True},
             }
@@ -150,7 +150,7 @@ def _write_nested_import_extension_package(root: Path) -> None:
                 "author": "Tests",
                 "description": "Nested owner-local import fixture",
                 "nodeforge_min_version": "0.59.0",
-                "nodeforge_max_version": "0.60.0",
+                "nodeforge_max_version": "0.61.3",
                 "contents": {"systems": "systems"},
                 "permissions": {"python": True},
             }
@@ -208,7 +208,7 @@ def _write_semantic_extension_package(root: Path) -> None:
                 "author": "Tests",
                 "description": "Package semantic-state Blender fixture",
                 "nodeforge_min_version": "0.60.0",
-                "nodeforge_max_version": "0.60.0",
+                "nodeforge_max_version": "0.61.3",
                 "contents": {"systems": "systems"},
                 "permissions": {"python": True},
             }
@@ -242,11 +242,15 @@ class _State:
 
 EXTENSIONS = {
     "make_part": None,
+    "ignore_part_input": None,
+    "runtime_resource": ".backend:runtime_resource",
     "consume_part": ".backend:consume_part",
     "bad_consume_part": ".backend:bad_consume_part",
 }
 
 def make_part(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Part: ...
+def ignore_part_input(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Part: ...
+def runtime_resource(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...
 def consume_part(part: Part) -> Float: ...
 def bad_consume_part(part: Part) -> Float: ...
 """,
@@ -258,6 +262,9 @@ from .interface import DerivedPart, Part, _Inner, _State
 
 def make_part(value) -> Part:
     return DerivedPart(value, "derived")
+
+def ignore_part_input(value) -> Part:
+    return DerivedPart(1.0, "derived")
 
 def consume_part(part) -> _State:
     return _State([part], _Inner(True))
@@ -290,6 +297,16 @@ def _runtime_leaf(semantic_state):
     if not isinstance(value, ExtensionBackendValue) or value.typ is not NFType.INT:
         raise AssertionError("runtime semantic leaf did not reconstruct as the actual typed backend value")
     return value
+
+def runtime_resource(context, value):
+    builtins._nodeforge_semantic_backend_calls.append("runtime_resource")
+    context.new_generated_mesh(role="discarded-runtime-resource", name_hint="DiscardedRuntimeResource")
+    node = context.group.nodes.new("ShaderNodeMath")
+    node.operation = "ADD"
+    node.location = context.location
+    context.group.links.new(value.socket, node.inputs[0])
+    node.inputs[1].default_value = 0.0
+    return context.value(node.outputs[0], NFType.FLOAT)
 
 def consume_part(context, semantic_state):
     builtins._nodeforge_semantic_backend_calls.append("consume_part")
@@ -452,8 +469,9 @@ def test_semantic_backend_result_failure_rolls_back_generated_resources():
             packages.install_package_directory(source, allow_python=True)
             before_meshes = {mesh.as_pointer() for mesh in bpy.data.meshes}
             before_groups = {group.as_pointer() for group in bpy.data.node_groups}
+            before_objects = {obj.as_pointer() for obj in bpy.data.objects}
 
-            with pytest.raises(CompileError, match="output sockets"):
+            with pytest.raises(CompileError) as exc_info:
                 compile_group(
                     'value = input_int("Value", default=3)\n'
                     'result = bad_consume_part(make_part(value))\n'
@@ -461,12 +479,91 @@ def test_semantic_backend_result_failure_rolls_back_generated_resources():
                     "NFTest_extension_v2_semantic_rollback",
                 )
 
+            message = str(exc_info.value)
+            assert "physical" in message.lower() and "INT" in message and "FLOAT" in message
             assert builtins._nodeforge_semantic_backend_calls == ["bad_consume_part"]
             assert {mesh.as_pointer() for mesh in bpy.data.meshes} == before_meshes
             assert {group.as_pointer() for group in bpy.data.node_groups} == before_groups
+            assert {obj.as_pointer() for obj in bpy.data.objects} == before_objects
     finally:
         delattr(builtins, "_nodeforge_semantic_backend_calls")
 
+
+
+def test_persistent_semantic_assignment_reconstructs_runtime_leaf_later():
+    """A body-persisted semantic record reconstructs its hidden runtime snapshot for later backend use."""
+    builtins._nodeforge_semantic_backend_calls = []
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "package"
+            _write_semantic_extension_package(source)
+            packages.install_package_directory(source, allow_python=True)
+            group = compile_group(
+                'value = input_int("Value", default=3)\n'
+                'part = make_part(value)\n'
+                'result = consume_part(part)\n'
+                'output("Result", result)\n',
+                "NFTest_extension_v2_persistent_semantic_state",
+            )
+            math_nodes = [
+                node for node in group.nodes
+                if node.bl_idname == "ShaderNodeMath" and node.operation == "ADD"
+            ]
+            assert len(math_nodes) == 1
+            assert builtins._nodeforge_semantic_backend_calls == ["consume_part"]
+    finally:
+        delattr(builtins, "_nodeforge_semantic_backend_calls")
+
+
+def test_discarded_runtime_extension_argument_creates_no_backend_or_resource():
+    """Semantic callback discard removes nested runtime demand before Blender dispatch/resources."""
+    builtins._nodeforge_semantic_backend_calls = []
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "package"
+            _write_semantic_extension_package(source)
+            packages.install_package_directory(source, allow_python=True)
+            before_meshes = {mesh.as_pointer() for mesh in bpy.data.meshes}
+            group = compile_group(
+                'value = input_int("Value", default=3)\n'
+                'part = ignore_part_input(runtime_resource(value))\n'
+                'output("Value", value)\n',
+                "NFTest_extension_v2_discarded_runtime_demand",
+            )
+            assert group is not None
+            assert builtins._nodeforge_semantic_backend_calls == []
+            assert {mesh.as_pointer() for mesh in bpy.data.meshes} == before_meshes
+    finally:
+        delattr(builtins, "_nodeforge_semantic_backend_calls")
+
+
+def test_persistent_semantic_backend_failure_still_rolls_back_resources():
+    """Stage-32 transaction ownership remains authoritative after Stage-34 body persistence."""
+    builtins._nodeforge_semantic_backend_calls = []
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "package"
+            _write_semantic_extension_package(source)
+            packages.install_package_directory(source, allow_python=True)
+            before_meshes = {mesh.as_pointer() for mesh in bpy.data.meshes}
+            before_groups = {group.as_pointer() for group in bpy.data.node_groups}
+            before_objects = {obj.as_pointer() for obj in bpy.data.objects}
+            with pytest.raises(CompileError) as exc_info:
+                compile_group(
+                    'value = input_int("Value", default=3)\n'
+                    'part = make_part(value)\n'
+                    'result = bad_consume_part(part)\n'
+                    'output("Result", result)\n',
+                    "NFTest_extension_v2_persistent_semantic_rollback",
+                )
+            message = str(exc_info.value)
+            assert "physical" in message.lower() and "INT" in message and "FLOAT" in message
+            assert builtins._nodeforge_semantic_backend_calls == ["bad_consume_part"]
+            assert {mesh.as_pointer() for mesh in bpy.data.meshes} == before_meshes
+            assert {group.as_pointer() for group in bpy.data.node_groups} == before_groups
+            assert {obj.as_pointer() for obj in bpy.data.objects} == before_objects
+    finally:
+        delattr(builtins, "_nodeforge_semantic_backend_calls")
 
 def test_nodeforge_math_v2_reference_package():
     """The migrated Math owner compiles through v2 without legacy Compiler handlers."""

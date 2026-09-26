@@ -42,7 +42,7 @@ def _manifest(root: Path, package_id: str, *, systems: bool = False, functions: 
                 "author": "Tests",
                 "description": "declarative extension installer fixture",
                 "nodeforge_min_version": "0.59.0",
-                "nodeforge_max_version": "0.60.0",
+                "nodeforge_max_version": "0.61.3",
                 "contents": contents,
                 "permissions": {"python": True},
             }

@@ -89,6 +89,7 @@ from .extension_semantics import (
     ExtensionExecutionForm,
     ExtensionSemanticPayload,
     SemanticInvocation,
+    compact_extension_semantic_payload,
     classify_extension_execution,
     semantic_type_compatible,
 )
@@ -170,6 +171,7 @@ class SemanticEnvironment:
     structural_bindings: Mapping[str, StructuralBindingSymbol] = field(default_factory=lambda: MappingProxyType({}))
     structural_arrays: StructuralArraySnapshot = field(default_factory=lambda: StructuralArraySnapshot({}, {}))
     builder_bindings: Mapping[str, BindingId] = field(default_factory=lambda: MappingProxyType({}))
+    extension_bindings: Mapping[str, ExtensionSemanticPayload] = field(default_factory=lambda: MappingProxyType({}))
     object_semantics: ObjectSemanticSnapshot | None = None
     available_group_context_slots: frozenset[GroupContextSlot] = frozenset()
     source_callable_session: object | None = None
@@ -215,7 +217,7 @@ class ExpressionFact:
     resolved_name: ResolvedName | None = None
     literal_value: object | None = None
     analyzed_call: AnalyzedCall | None = None
-    call_operand_nodes: tuple[ast.expr, ...] = ()
+    call_operand_nodes: tuple[ast.expr | BindingId, ...] = ()
     object_info_state: ObjectInfoState | None = None
     array_id: StructuralArrayId | None = None
     semantic_payload: ExtensionSemanticPayload | None = None
@@ -656,7 +658,7 @@ def _contextual_semantic_list_payload(
         payload = fact.semantic_payload
         if not semantic_type_compatible(payload.type_spec, expected, registry):
             raise CompileError(f"{call_name}() semantic list argument has incompatible declared record type")
-        return invocation.import_payload(payload)
+        return payload
     if not isinstance(expression, ast.List):
         raise CompileError(f"{call_name}() expects a frontend semantic list value")
     if expected.kind != "LIST":
@@ -683,12 +685,11 @@ def _contextual_semantic_list_payload(
                 raise CompileError(f"{call_name}() semantic list elements must be package-defined semantic records")
             if not semantic_type_compatible(child_payload.type_spec, expected.item, registry):
                 raise CompileError(f"{call_name}() semantic list element has incompatible record type")
-            child_payload = invocation.import_payload(child_payload)
         else:
             raise CompileError("Internal error: public semantic LIST must recursively contain RECORD leaves")
-        packed_items.append(child_payload.value)
+        packed_items.append(invocation.import_payload_value(child_payload))
 
-    payload = ExtensionSemanticPayload(expected, tuple(packed_items), invocation.dependencies)
+    payload = compact_extension_semantic_payload(expected, tuple(packed_items), invocation.dependencies)
     facts[expression] = replace(fact, semantic_payload=payload)
     return payload
 
@@ -710,10 +711,32 @@ def _analyze_extension_semantic_call(
     name = resolved.source_name
     if modifiers.unique_was_explicit:
         raise unsupported_unique(name)
-    if any(isinstance(argument, ast.Starred) for argument in cleaned_call.args):
-        raise CompileError(f"{name}() does not support caller-side * argument expansion")
     if any(keyword.arg is None for keyword in cleaned_call.keywords):
         raise CompileError(f"{name}() does not support caller-side ** argument expansion")
+
+    normalized_args: list[ast.expr | ExtensionSemanticPayload] = []
+    try:
+        for argument in cleaned_call.args:
+            if not isinstance(argument, ast.Starred):
+                normalized_args.append(argument)
+                continue
+            starred_fact = analyze(argument.value)
+            if starred_fact is UNSUPPORTED:
+                raise _BuiltinOperandUnsupported
+            payload = starred_fact.semantic_payload
+            if payload is None or payload.type_spec.kind != "LIST":
+                raise CompileError(f"{name}() caller-side * requires a package semantic LIST value")
+            if not isinstance(payload.value, tuple):
+                raise CompileError("Internal error: semantic LIST payload storage is malformed")
+            for item in payload.value:
+                child = compact_extension_semantic_payload(
+                    payload.type_spec.item,
+                    item,
+                    payload.dependencies,
+                )
+                normalized_args.append(child)
+    except _BuiltinOperandUnsupported:
+        return UNSUPPORTED
 
     keyword_values: dict[str, ast.expr] = {}
     for keyword in cleaned_call.keywords:
@@ -722,7 +745,7 @@ def _analyze_extension_semantic_call(
         keyword_values[keyword.arg] = keyword.value
     signature = spec.python_signature()
     try:
-        bound = signature.bind(*cleaned_call.args, **keyword_values)
+        bound = signature.bind(*normalized_args, **keyword_values)
     except TypeError as exc:
         raise CompileError(f"{name}() arguments do not match its declared extension signature") from exc
     bound.apply_defaults()
@@ -741,16 +764,24 @@ def _analyze_extension_semantic_call(
             )
             occurrences = tuple(bound_value) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else (bound_value,)
             acquired_items: list[object] = []
+            type_spec = parameter.type_spec
             for occurrence in occurrences:
                 if occurrence is None and parameter.kind is not inspect.Parameter.VAR_POSITIONAL:
                     raise CompileError("Internal error: semantic extension binding lost fixed parameter")
+                if isinstance(occurrence, ExtensionSemanticPayload):
+                    payload = occurrence
+                    if type_spec.kind not in {"RECORD", "LIST"}:
+                        raise CompileError(f"{name}() caller-side * semantic item is incompatible with parameter contract")
+                    if not semantic_type_compatible(payload.type_spec, type_spec, registry):
+                        raise CompileError(f"{name}() caller-side * semantic item has incompatible declared type")
+                    acquired_items.append(invocation.reconstruct_payload(payload))
+                    continue
                 if not isinstance(occurrence, ast.AST):
                     if parameter.type_spec.kind != "NF_SET" or parameter.default_type is None:
                         raise CompileError("Internal error: semantic extension default lost canonical NF contract")
                     acquired_items.append(occurrence)
                     continue
 
-                type_spec = parameter.type_spec
                 if type_spec.kind == "NF_SET":
                     try:
                         selection = resolve_argument_evaluation(
@@ -810,13 +841,14 @@ def _analyze_extension_semantic_call(
 
     semantic_value = registry.invoke_semantic(spec.id, *bound.args, **bound.kwargs)
     packed = invocation.pack_result(semantic_return, semantic_value)
-    dependencies = invocation.dependencies
+    semantic_payload = compact_extension_semantic_payload(semantic_return, packed, invocation.dependencies)
+    packed = semantic_payload.value
+    dependencies = semantic_payload.dependencies
 
     if execution_form is ExtensionExecutionForm.SEMANTIC_ONLY:
-        payload = ExtensionSemanticPayload(spec.result, packed, dependencies)
         return ExpressionFact(
             _semantic_result_shape(spec.result, packed),
-            semantic_payload=payload,
+            semantic_payload=semantic_payload,
         )
 
     if execution_form is not ExtensionExecutionForm.SEMANTIC_THEN_BACKEND:
@@ -834,7 +866,7 @@ def _analyze_extension_semantic_call(
     return ExpressionFact(
         call_result_shape(result_spec),
         analyzed_call=analyzed_call,
-        call_operand_nodes=tuple(source.expression for source in dependencies),
+        call_operand_nodes=tuple(source.source for source in dependencies),
     )
 
 
@@ -920,6 +952,7 @@ def build_semantic_environment(
     structural_bindings=None,
     structural_arrays=None,
     builder_bindings=None,
+    extension_bindings=None,
     object_semantics=None,
     available_group_context_slots=frozenset(),
     source_callable_session=None,
@@ -938,7 +971,18 @@ def build_semantic_environment(
     builder_bindings = {} if builder_bindings is None else dict(builder_bindings)
     if not all(isinstance(value, BindingId) for value in builder_bindings.values()):
         raise TypeError("builder_bindings values must be BindingId records")
-    ownership_sets = (set(runtime_bindings), set(structural_bindings), set(structural_arrays.bindings), set(builder_bindings))
+    extension_bindings = {} if extension_bindings is None else dict(extension_bindings)
+    if not all(isinstance(value, ExtensionSemanticPayload) for value in extension_bindings.values()):
+        raise TypeError("extension_bindings values must be ExtensionSemanticPayload records")
+    if any(
+        any(not dependency.is_persistent for dependency in payload.dependencies)
+        for payload in extension_bindings.values()
+    ):
+        raise ValueError("extension_bindings payload dependencies must be BindingId-backed")
+    ownership_sets = (
+        set(runtime_bindings), set(structural_bindings), set(structural_arrays.bindings),
+        set(builder_bindings), set(extension_bindings),
+    )
     if any(ownership_sets[i] & ownership_sets[j] for i in range(len(ownership_sets)) for j in range(i + 1, len(ownership_sets))):
         raise CompileError("Internal error: source name is active in multiple semantic binding domains")
     if object_semantics is not None and not isinstance(object_semantics, ObjectSemanticSnapshot):
@@ -970,6 +1014,7 @@ def build_semantic_environment(
         structural_bindings=MappingProxyType(structural_bindings),
         structural_arrays=structural_arrays,
         builder_bindings=MappingProxyType(builder_bindings),
+        extension_bindings=MappingProxyType(extension_bindings),
         object_semantics=object_semantics,
         available_group_context_slots=frozenset(available_group_context_slots),
         source_callable_session=source_callable_session,
@@ -1107,6 +1152,15 @@ def analyze_expression(expr, environment):
                 return record(node, ExpressionFact(shape, resolved_name=resolved, array_id=array_id))
             if node.id in environment.builder_bindings:
                 raise CompileError("geometry_builder cannot escape script scope")
+            if node.id in environment.extension_bindings:
+                payload = environment.extension_bindings[node.id]
+                return record(
+                    node,
+                    ExpressionFact(
+                        _semantic_result_shape(payload.type_spec, payload.value),
+                        semantic_payload=payload,
+                    ),
+                )
             # COMPLETE_EXPRESSION_IR_LEGACY_BINDING_FALLBACK: Non-Value bindings retained only by
             # the legacy expression implementation have no frontend-owned semantic result shape. Report an
             # internal UNSUPPORTED result for direct legacy characterization; production root bodies must not
@@ -1641,6 +1695,10 @@ def analyze_expression(expr, environment):
                         child_fact = analyze(child)
                         if child_fact is UNSUPPORTED:
                             raise _BuiltinOperandUnsupported
+                        if child_fact.semantic_payload is not None:
+                            raise CompileError(
+                                f"{name}() source function arguments cannot be package semantic values"
+                            )
                         if isinstance(child_fact.result_shape, ArrayResultShape):
                             raise CompileError(
                                 "Local function constant arguments must be numbers, booleans, strings or vectors"
@@ -1665,6 +1723,7 @@ def analyze_expression(expr, environment):
                     structural_binding_names=frozenset(environment.structural_bindings),
                     structural_array_names=frozenset(environment.structural_arrays.bindings),
                     builder_binding_names=frozenset(environment.builder_bindings),
+                    extension_binding_names=frozenset(environment.extension_bindings),
                 )
                 for capture in captures:
                     bound_types[capture.name] = capture.typ
@@ -1847,6 +1906,10 @@ def analyze_expression(expr, environment):
                     child_fact = analyze(child)
                     if child_fact is UNSUPPORTED:
                         return UNSUPPORTED
+                    if child_fact.semantic_payload is not None:
+                        raise CompileError(
+                            f"{name}() source function arguments cannot be package semantic values"
+                        )
                     actual_type = _require_runtime_type(child_fact, "function-library argument")
                     if not source_argument_type_matches(parameter.typ, actual_type):
                         raise CompileError(

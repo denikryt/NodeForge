@@ -31,6 +31,7 @@ from .consteval import (
 )
 from .compile_time import CompileTimeSnapshot, CompileTimeState
 from .errors import CompileError
+from .extension_semantics import ExtensionDependencySource, ExtensionSemanticPayload
 from .nf_types import NFType
 from .numeric_semantics import normalize_float_constant, normalize_int_constant
 from .group_context import GroupContextAvailabilityCursor, GroupContextSlot
@@ -64,7 +65,7 @@ from .semantic_ir import (
     IRValue,
     IRBinding,
 )
-from .semantic_lowering import lower_analyzed_expression
+from .semantic_lowering import lower_analyzed_dependency_sources, lower_analyzed_expression
 from .semantic_control_flow import (
     BranchMergePolicy,
     lower_runtime_if,
@@ -81,6 +82,7 @@ from .semantic_geometry_builder import (
 )
 from .semantic_values import (
     ArrayResultShape,
+    ExtensionResultShape,
     NamedOutputsResultShape,
     ObjectInfoState,
     ObjectSemanticId,
@@ -189,12 +191,20 @@ class BasicBodyCompilation:
 
 @dataclass(frozen=True)
 class _AnalyzedBodyExpression:
-    """Pair one emitted expression program with semantic shape/state needed by body ownership."""
+    """Carry one analyzed body expression as either executable IR or frontend semantic state."""
 
-    program: IRProgram
+    program: IRProgram | None
     result_shape: object
     object_semantics: ObjectSemanticSnapshot
     analysis: object | None = None
+    semantic_payload: ExtensionSemanticPayload | None = None
+
+    def __post_init__(self) -> None:
+        """Require exactly one root representation: executable IR or package semantic payload."""
+        has_program = self.program is not None
+        has_payload = self.semantic_payload is not None
+        if has_program == has_payload:
+            raise ValueError("body expression requires exactly one of program or semantic_payload")
 
 
 def _kw_dict(call: ast.Call) -> dict[str, ast.expr]:
@@ -367,7 +377,7 @@ class _BodyIdentityAllocator:
         return array_id
 
 
-@dataclass
+@dataclass(kw_only=True)
 class _BodySemanticState:
     """Store forkable active frontend state for one structured body point."""
 
@@ -376,6 +386,7 @@ class _BodySemanticState:
     array_bindings: dict[str, StructuralArrayId]
     array_states: dict[StructuralArrayId, StructuralArrayState]
     builder_states: dict[str, GeometryBuilderState]
+    extension_bindings: dict[str, ExtensionSemanticPayload]
     object_ids_by_binding: dict[BindingId, ObjectSemanticId]
     object_states: dict[ObjectSemanticId, ObjectInfoState]
     interface_input_origins: dict[BindingId, InterfaceInputOrigin]
@@ -390,23 +401,24 @@ class _BodySemanticState:
     def fork(self) -> "_BodySemanticState":
         """Copy active state while retaining the shared non-rewinding allocator."""
         return _BodySemanticState(
-            dict(self.runtime_bindings),
-            dict(self.structural_bindings),
-            dict(self.array_bindings),
-            dict(self.array_states),
-            dict(self.builder_states),
-            dict(self.object_ids_by_binding),
-            dict(self.object_states),
-            dict(self.interface_input_origins),
+            runtime_bindings=dict(self.runtime_bindings),
+            structural_bindings=dict(self.structural_bindings),
+            array_bindings=dict(self.array_bindings),
+            array_states=dict(self.array_states),
+            builder_states=dict(self.builder_states),
+            extension_bindings=dict(self.extension_bindings),
+            object_ids_by_binding=dict(self.object_ids_by_binding),
+            object_states=dict(self.object_states),
+            interface_input_origins=dict(self.interface_input_origins),
             # panel declarations are root-only; branch states share the attempt-owned
             # membership/name registries instead of forking semantic panel ownership.
-            self.panel_member_origins,
-            self.panel_names,
-            self.identities,
-            set(),
-            set(),
-            set(self.lexical_iteration_ids),
-            self.clear_auto_final_output,
+            panel_member_origins=self.panel_member_origins,
+            panel_names=self.panel_names,
+            identities=self.identities,
+            changed_runtime_ids=set(),
+            explicitly_assigned_runtime_ids=set(),
+            lexical_iteration_ids=set(self.lexical_iteration_ids),
+            clear_auto_final_output=self.clear_auto_final_output,
         )
 
     def adopt(self, other: "_BodySemanticState") -> None:
@@ -416,6 +428,7 @@ class _BodySemanticState:
         self.array_bindings = dict(other.array_bindings)
         self.array_states = dict(other.array_states)
         self.builder_states = dict(other.builder_states)
+        self.extension_bindings = dict(other.extension_bindings)
         self.object_ids_by_binding = dict(other.object_ids_by_binding)
         self.object_states = dict(other.object_states)
         self.interface_input_origins = dict(other.interface_input_origins)
@@ -551,8 +564,22 @@ def lower_basic_body(
     if not compile_time_effects_before:
         compile_time_effects_before = tuple(() for _ in stmts)
     state = _BodySemanticState(
-        dict(initial_runtime_bindings), {}, {}, {}, {}, {}, {},
-        dict(initial_interface_input_origins), {}, set(), identities, set(), set(), set(), False
+        runtime_bindings=dict(initial_runtime_bindings),
+        structural_bindings={},
+        array_bindings={},
+        array_states={},
+        builder_states={},
+        extension_bindings={},
+        object_ids_by_binding={},
+        object_states={},
+        interface_input_origins=dict(initial_interface_input_origins),
+        panel_member_origins={},
+        panel_names=set(),
+        identities=identities,
+        changed_runtime_ids=set(),
+        explicitly_assigned_runtime_ids=set(),
+        lexical_iteration_ids=set(),
+        clear_auto_final_output=False,
     )
     group_context_cursor = GroupContextAvailabilityCursor(
         {GroupContextSlot.CURRENT_GEOMETRY} if geometry_mode else set()
@@ -565,18 +592,31 @@ def lower_basic_body(
 
     output_names: set[str] = set()
 
-    def replay_compile_time_effect(effect, active_compile_time: CompileTimeState) -> None:
-        """Replay one erased preprocessing action against the current source-order CT state."""
+    def bind_compile_time_name(
+        active: _BodySemanticState,
+        active_compile_time: CompileTimeState,
+        name: str,
+        value,
+    ) -> None:
+        """Publish one source-level compile-time rebind and invalidate stale extension ownership."""
+        active.extension_bindings.pop(name, None)
+        active_compile_time.bind(name, value)
+
+    def replay_compile_time_effect(
+        effect, active: _BodySemanticState, active_compile_time: CompileTimeState
+    ) -> None:
+        """Replay one erased preprocessing action against source-ordered CT and body ownership state."""
         if isinstance(effect, CompileTimeBindExpression):
             try:
                 value = _const_eval(effect.expression, active_compile_time.values)
             except ConstEvalUnavailable as exc:
                 raise CompileError("Internal error: erased compile-time assignment became unavailable during replay") from exc
-            active_compile_time.bind(effect.name, value)
+            bind_compile_time_name(active, active_compile_time, effect.name, value)
             return
         if isinstance(effect, CompileTimeForEffect):
             had_old_target = active_compile_time.contains(effect.target)
             old_target = active_compile_time.get(effect.target)
+            old_extension = active.extension_bindings.pop(effect.target, None)
             try:
                 try:
                     iterable = _const_eval(effect.iterable_expression, active_compile_time.values)
@@ -593,7 +633,7 @@ def lower_basic_body(
                             "Internal error: erased compile-time loop replay produced fewer iterations than preprocessing"
                         ) from exc
                     active_compile_time.bind(effect.target, item)
-                    replay_compile_time_effects(effects, active_compile_time)
+                    replay_compile_time_effects(effects, active, active_compile_time)
                 try:
                     next(iterator)
                 except StopIteration:
@@ -607,6 +647,8 @@ def lower_basic_body(
                     active_compile_time.bind(effect.target, old_target)
                 else:
                     active_compile_time.discard(effect.target)
+                if old_extension is not None:
+                    active.extension_bindings[effect.target] = old_extension
             return
         if isinstance(effect, CompileTimeAppendExpression):
             target = active_compile_time.get(effect.name)
@@ -620,10 +662,12 @@ def lower_basic_body(
             return
         raise TypeError(f"unsupported compile-time preprocessing effect: {type(effect).__name__}")
 
-    def replay_compile_time_effects(effects, active_compile_time: CompileTimeState) -> None:
-        """Replay one ordered erased-effect batch without replacing the active CT state."""
+    def replay_compile_time_effects(
+        effects, active: _BodySemanticState, active_compile_time: CompileTimeState
+    ) -> None:
+        """Replay one ordered erased-effect batch without replacing the active CT/body state."""
         for effect in effects:
-            replay_compile_time_effect(effect, active_compile_time)
+            replay_compile_time_effect(effect, active, active_compile_time)
 
     def clear_binding_object(active: _BodySemanticState, binding_id: BindingId) -> None:
         active.object_ids_by_binding.pop(binding_id, None)
@@ -639,6 +683,7 @@ def lower_basic_body(
             for leaf in structural.leaves:
                 clear_binding_object(active, leaf.binding_id)
         active.array_bindings.pop(name, None)
+        active.extension_bindings.pop(name, None)
 
     def _commit_builder_construction(active: _BodySemanticState, active_compile_time: CompileTimeState, name: str) -> None:
         """Publish one fully validated fresh frontend-only builder state atomically."""
@@ -739,6 +784,7 @@ def lower_basic_body(
         current = active.runtime_bindings.get(name)
         binding_id = current.binding_id if current is not None else identities.reserve_ordinary(name)
         active.array_bindings.pop(name, None)
+        active.extension_bindings.pop(name, None)
         old_structural = active.structural_bindings.pop(name, None)
         if old_structural is not None:
             for leaf in old_structural.leaves:
@@ -762,6 +808,7 @@ def lower_basic_body(
 
     def bind_structural(active: _BodySemanticState, name: str, shape) -> StructuralBindingSymbol:
         active.array_bindings.pop(name, None)
+        active.extension_bindings.pop(name, None)
         runtime = active.runtime_bindings.pop(name, None)
         if runtime is not None:
             clear_binding_object(active, runtime.binding_id)
@@ -795,7 +842,8 @@ def lower_basic_body(
         return symbol
 
     def _clear_name_runtime_structural(active: _BodySemanticState, name: str) -> None:
-        """Deactivate runtime/fixed-structural ownership before publishing an array alias."""
+        """Deactivate runtime/fixed-structural/extension ownership before another category publishes."""
+        active.extension_bindings.pop(name, None)
         runtime = active.runtime_bindings.pop(name, None)
         if runtime is not None:
             clear_binding_object(active, runtime.binding_id)
@@ -987,6 +1035,7 @@ def lower_basic_body(
             runtime,
             structural,
             active.array_bindings.get(name),
+            active.extension_bindings.get(name),
             active_compile_time.contains(name),
             active_compile_time.get(name),
             object_bindings,
@@ -995,13 +1044,14 @@ def lower_basic_body(
 
     def _restore_lexical_name(active: _BodySemanticState, active_compile_time: CompileTimeState, name: str, snapshot) -> None:
         """Restore one loop-target name without disturbing non-target loop mutations."""
-        runtime, structural, array_id, had_const, const_value, object_bindings, runtime_origin = snapshot
+        runtime, structural, array_id, extension_binding, had_const, const_value, object_bindings, runtime_origin = snapshot
         current_runtime = active.runtime_bindings.get(name)
         if current_runtime is not None:
             active.interface_input_origins.pop(current_runtime.binding_id, None)
         active.runtime_bindings.pop(name, None)
         active.structural_bindings.pop(name, None)
         active.array_bindings.pop(name, None)
+        active.extension_bindings.pop(name, None)
         if runtime is not None:
             active.runtime_bindings[name] = runtime
             if runtime_origin is not None:
@@ -1012,6 +1062,8 @@ def lower_basic_body(
             active.structural_bindings[name] = structural
         elif array_id is not None:
             active.array_bindings[name] = array_id
+        elif extension_binding is not None:
+            active.extension_bindings[name] = extension_binding
         active.object_ids_by_binding.update(object_bindings)
         if had_const:
             active_compile_time.bind(name, const_value)
@@ -1084,6 +1136,7 @@ def lower_basic_body(
         if isinstance(item, StructuralBindingSymbol):
             active.runtime_bindings.pop(name, None)
             active.array_bindings.pop(name, None)
+            active.extension_bindings.pop(name, None)
             active.structural_bindings[name] = item
             active_compile_time.discard(name)
             return None
@@ -1094,6 +1147,7 @@ def lower_basic_body(
         active.runtime_bindings.pop(name, None)
         active.structural_bindings.pop(name, None)
         active.array_bindings.pop(name, None)
+        active.extension_bindings.pop(name, None)
         active_compile_time.bind(name, item)
         return None
 
@@ -1124,6 +1178,7 @@ def lower_basic_body(
             structural_bindings=active.structural_bindings,
             structural_arrays=active.array_snapshot(),
             builder_bindings={name: state_record.state_binding_id for name, state_record in active.builder_states.items()},
+            extension_bindings=active.extension_bindings,
             legacy_binding_names=legacy_binding_names,
             compile_time=active_compile_time.snapshot(),
             reserved_name_labels=reserved_name_labels,
@@ -1153,29 +1208,76 @@ def lower_basic_body(
                     raise CompileError("Internal error: one extension owner produced conflicting fingerprints")
                 extension_dependency_sink[owner_key] = fingerprint
         root_fact = analysis.facts[expr]
+        group_context_cursor.replace(analysis.available_group_context_slots)
         if root_fact.semantic_payload is not None:
-            # TODO(nodeforge-migration): Package-defined semantic values are currently expression-local.
-            # A semantic result must be consumed by another extension call inside this analyzed expression;
-            # do not lower, bind, output, or route it through legacy structural state. Persistent semantic-value integration will add
-            # body-owned extension bindings and persistent runtime-dependency carriers. Remove this guard
-            # after assignment/read/control-flow persistence for extension semantic values is implemented.
-            raise CompileError(
-                "Package-defined semantic values are expression-local until persistent semantic-value integration is implemented; "
-                "consume them inside another extension call"
+            return _AnalyzedBodyExpression(
+                None,
+                root_fact.result_shape,
+                analysis.object_semantics,
+                analysis,
+                root_fact.semantic_payload,
             )
         program = lower_analyzed_expression(expr, analysis)
-        group_context_cursor.replace(analysis.available_group_context_slots)
         return _AnalyzedBodyExpression(
             program,
-            analysis.facts[expr].result_shape,
+            root_fact.result_shape,
             analysis.object_semantics,
             analysis,
         )
+
+    def persist_extension_payload(
+        analyzed: _AnalyzedBodyExpression,
+        active: _BodySemanticState,
+) -> tuple[ExtensionSemanticPayload, IRBindLeaves | None]:
+        """Snapshot live transient semantic dependencies into fresh hidden body bindings."""
+        payload = analyzed.semantic_payload
+        if payload is None or analyzed.analysis is None:
+            raise CompileError("Internal error: extension persistence requires analyzed semantic payload")
+        transient = [
+            dependency
+            for dependency in payload.dependencies
+            if not dependency.is_persistent
+        ]
+        carrier = None
+        carrier_values: tuple[IRValue, ...] = ()
+        if transient:
+            carrier, carrier_values = lower_analyzed_dependency_sources(
+                analyzed.analysis,
+                tuple((dependency.source, dependency.typ) for dependency in transient),
+            )
+            if len(carrier_values) != len(transient):
+                raise CompileError("Internal error: extension dependency carrier result count changed")
+
+        transient_values = iter(carrier_values)
+        normalized: list[ExtensionDependencySource] = []
+        leaf_bindings: list[IRLeafBinding] = []
+        for dependency in payload.dependencies:
+            if dependency.is_persistent:
+                normalized.append(dependency)
+                continue
+            source_value = next(transient_values)
+            binding_id = identities.allocate_binding_id()
+            normalized.append(ExtensionDependencySource(binding_id, dependency.typ))
+            leaf_bindings.append(IRLeafBinding(source_value, binding_id, dependency.typ))
+
+        persistent_payload = ExtensionSemanticPayload(
+            payload.type_spec,
+            payload.value,
+            tuple(normalized),
+        )
+        statement = None
+        if leaf_bindings:
+            if carrier is None:
+                raise CompileError("Internal error: extension persistence lost its dependency carrier")
+            statement = IRBindLeaves(carrier, tuple(leaf_bindings))
+        return persistent_payload, statement
 
     def accept_expression(expr, active: _BodySemanticState, active_compile_time: CompileTimeState, statement_sink: list):
         analyzed = analyze_runtime_expression(expr, active, active_compile_time, statement_sink)
         if analyzed is BODY_UNSUPPORTED:
             return BODY_UNSUPPORTED
+        if analyzed.semantic_payload is not None:
+            raise CompileError("Package-defined semantic value cannot be used where a runtime value is required")
         active.adopt_object_snapshot(analyzed.object_semantics)
         return analyzed
 
@@ -1288,6 +1390,64 @@ def lower_basic_body(
                 raise CompileError("Internal error: unsupported semantic assignment result shape")
             raise CompileError(f"repeat_range state {name!r} changed type from {expected_type} to {actual}")
 
+        def validate_repeat_extension_rebinding(
+            name: str, analyzed: _AnalyzedBodyExpression
+        ) -> None:
+            """Reject runtime-carried Repeat state changing into extension semantic ownership."""
+            if analyzed.semantic_payload is None:
+                return
+            current = active.runtime_bindings.get(name)
+            if current is None or current.binding_id not in repeat_type_by_binding_id:
+                return
+            raise CompileError(
+                f"repeat_range state {name!r} cannot change from runtime state to package semantic value"
+            )
+
+        def merge_runtime_if_extension_bindings(result) -> dict[str, ExtensionSemanticPayload]:
+            """Join package semantic body state after the ordinary runtime-if merge is already valid."""
+            base = active.extension_bindings
+            true_state = result.true_state
+            false_state = result.false_state
+
+            def has_other_owner(state: _BodySemanticState, name: str) -> bool:
+                """Return whether one branch owns *name* through a non-extension body category."""
+                return any((
+                    name in state.runtime_bindings,
+                    name in state.structural_bindings,
+                    name in state.array_bindings,
+                    name in state.builder_states,
+                ))
+
+            merged = dict(base)
+            names = set(base) | set(true_state.extension_bindings) | set(false_state.extension_bindings)
+            for name in names:
+                incoming = base.get(name)
+                true_value = true_state.extension_bindings.get(name)
+                false_value = false_state.extension_bindings.get(name)
+                if true_value is not None and false_value is not None:
+                    if true_value != false_value:
+                        raise CompileError(
+                            f"runtime if branches produce different package semantic values for {name!r}"
+                        )
+                    merged[name] = true_value
+                    continue
+                if true_value is None and false_value is None:
+                    if incoming is not None:
+                        raise CompileError(
+                            f"runtime if branches disagree on package semantic ownership for {name!r}"
+                        )
+                    merged.pop(name, None)
+                    continue
+                present = true_value if true_value is not None else false_value
+                missing_state = false_state if true_value is not None else true_state
+                if incoming is not None or has_other_owner(missing_state, name):
+                    raise CompileError(
+                        f"runtime if branches disagree on package semantic ownership for {name!r}"
+                    )
+                # One-sided branch-local semantic values do not escape the runtime join.
+                merged.pop(name, None)
+            return merged
+
         def emit(statement):
             """Append executable IR and make its backend auto-output result authoritative."""
             statements.append(statement)
@@ -1302,7 +1462,7 @@ def lower_basic_body(
 
         for index, stmt in enumerate(source_stmts):
             if root:
-                replay_compile_time_effects(compile_time_effects_before[index], active_compile_time)
+                replay_compile_time_effects(compile_time_effects_before[index], active, active_compile_time)
             is_final = root and index == len(source_stmts) - 1
 
             if isinstance(stmt, ast.If):
@@ -1372,8 +1532,10 @@ def lower_basic_body(
                         if true_is_local and false_is_local:
                             raise CompileError("geometry_builder cannot escape script scope")
 
+                merged_extension_bindings = merge_runtime_if_extension_bindings(result)
                 emit(result.statement)
                 active_compile_time.replace(result.merged_compile_time)
+                active.extension_bindings = merged_extension_bindings
                 # Runtime merge publication is independent of compile-time state.
                 for merge in result.statement.merges:
                     builder_state = active.builder_states.get(merge.source_name)
@@ -1382,6 +1544,8 @@ def lower_basic_body(
                         continue
                     active.runtime_bindings[merge.source_name] = RuntimeBindingSymbol(merge.binding_id, merge.typ)
                     active.structural_bindings.pop(merge.source_name, None)
+                    active.array_bindings.pop(merge.source_name, None)
+                    active.extension_bindings.pop(merge.source_name, None)
                     active.changed_runtime_ids.add(merge.binding_id)
                     active.explicitly_assigned_runtime_ids.add(merge.binding_id)
                     clear_binding_object(active, merge.binding_id)
@@ -1514,6 +1678,11 @@ def lower_basic_body(
                 for builder_name in _builder_read_names(repeat_region, active):
                     ensure_builder_current(active, builder_name, statements)
                 candidate_names = repeat_mutation_names(repeat_body)
+                for name in candidate_names:
+                    if name in active.extension_bindings:
+                        raise CompileError(
+                            f"repeat_range cannot carry or rebind package semantic value {name!r}"
+                        )
                 state_records = []
                 entry_symbols = dict(active.runtime_bindings)
                 builder_state_ids = set()
@@ -1705,11 +1874,21 @@ def lower_basic_body(
                     else:
                         has_compile_time_value = True
                         if _is_compile_time_owned_assignment_rhs(stmt.value):
-                            active_compile_time.bind(target, compile_time_value)
+                            bind_compile_time_name(active, active_compile_time, target, compile_time_value)
                             continue
                 analyzed = analyze_runtime_expression(stmt.value, active, active_compile_time, statements)
                 if analyzed is BODY_UNSUPPORTED:
                     return BODY_UNSUPPORTED
+                validate_repeat_extension_rebinding(target, analyzed)
+                if analyzed.semantic_payload is not None:
+                    active.adopt_object_snapshot(analyzed.object_semantics)
+                    persistent_payload, persistence_statement = persist_extension_payload(analyzed, active)
+                    _clear_nonbuilder_name_ownership(active, target)
+                    active_compile_time.discard(target)
+                    active.extension_bindings[target] = persistent_payload
+                    if persistence_statement is not None:
+                        emit(persistence_statement)
+                    continue
                 validate_repeat_state_rebinding(target, analyzed.result_shape)
                 if isinstance(analyzed.result_shape, ArrayResultShape):
                     array_id, planned_states, bind_statement, object_updates = _plan_array_result(
@@ -2023,7 +2202,7 @@ def lower_basic_body(
 
             raise CompileError("Unsupported statement")
         if root:
-            replay_compile_time_effects(trailing_compile_time_effects, active_compile_time)
+            replay_compile_time_effects(trailing_compile_time_effects, active, active_compile_time)
         return IRBody(tuple(statements))
 
     body = lower_statements(stmts, state, compile_time, root=True)

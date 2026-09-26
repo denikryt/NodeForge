@@ -86,3 +86,17 @@ def test_local_call_hands_physical_materialization_to_function_materializer():
     assert ".materialize_local(" in lowering_source
     assert "def compile_local_function_call" not in physical_source
     assert "resolve_reusable_function_materialization" not in physical_source
+
+
+def test_local_function_rejects_package_semantic_capture_at_capture_boundary():
+    """Source-call capture formation rejects package semantic body state before preparation."""
+    fn = ast.parse("def f():\n    return part\n").body[0]
+    with pytest.raises(Exception, match="package semantic values are not supported"):
+        analyze_local_captures(
+            fn,
+            local_functions={},
+            runtime_bindings={},
+            compile_time_values={},
+            reserved_name_labels={},
+            extension_binding_names=frozenset({"part"}),
+        )

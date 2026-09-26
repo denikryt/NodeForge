@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 
+from .compiler_identities import BindingId
 from .constants import TYPE_BOOL, TYPE_OBJECT
 from .nf_types import NFType
 from .call_resolution import (
@@ -102,8 +103,8 @@ class _IRBuilder:
         return IRProgram(tuple(self._operations), result)
 
 
-def lower_analyzed_expression(expr, analysis):
-    """Emit one ordered :class:`IRProgram` from resolved and type-checked facts."""
+def lower_analyzed_expression(expr, analysis, *, dependency_sources=None):
+    """Emit one ordered IRProgram from analyzed facts or selected runtime dependency roots."""
     if not isinstance(analysis, ExpressionAnalysis) or analysis.root is not expr:
         raise CompileError("Internal error: invalid Semantic IR expression analysis")
 
@@ -167,6 +168,20 @@ def lower_analyzed_expression(expr, analysis):
             else:
                 raise CompileError("Internal error: unsupported structural array item")
         return IRArray(tuple(items))
+
+    def emit_runtime_source(source, typ: NFType, depth):
+        """Emit one AST occurrence or already-persistent BindingId without semantic re-analysis."""
+        if isinstance(source, BindingId):
+            result = builder.new_value(typ)
+            return builder.emit(IRBinding(result, depth, source))
+        if not isinstance(source, ast.expr):
+            raise TypeError("runtime source must be ast.expr or BindingId")
+        value = emit(source, depth)
+        if not isinstance(value, IRValue):
+            raise CompileError("Internal error: extension runtime dependency lowered to a structural result")
+        if value.typ is not typ:
+            raise CompileError("Internal error: extension runtime dependency type changed during IR lowering")
+        return value
 
     def emit(node, depth):
         node_fact = fact(node)
@@ -289,9 +304,7 @@ def lower_analyzed_expression(expr, analysis):
                 raise CompileError("Internal error: analyzed call operand metadata is inconsistent")
             arguments = []
             for operand_meta, operand_node in zip(analyzed.runtime_operands, node_fact.call_operand_nodes):
-                operand = emit(operand_node, depth + 1)
-                if not isinstance(operand, IRValue):
-                    raise CompileError("Internal error: call runtime operand lowered to a structural result")
+                operand = emit_runtime_source(operand_node, operand_meta.typ, depth + 1)
                 if operand.typ != operand_meta.typ:
                     raise CompileError("Internal error: analyzed call operand type changed during IR lowering")
                 arguments.append(
@@ -461,8 +474,30 @@ def lower_analyzed_expression(expr, analysis):
 
         raise CompileError(f"Internal error: analyzed AST node {type(node).__name__} has no IR emitter")
 
+    if dependency_sources is not None:
+        dependency_sources = tuple(dependency_sources)
+        if not dependency_sources:
+            raise ValueError("dependency_sources must contain at least one runtime source")
+        values = tuple(emit_runtime_source(source, typ, 0) for source, typ in dependency_sources)
+        result = values[0] if len(values) == 1 else IRTuple(values)
+        return builder.finish(result)
     result = emit(expr, 0)
     return builder.finish(result)
 
 
-__all__ = ["lower_analyzed_expression"]
+def lower_analyzed_dependency_sources(analysis, sources):
+    """Lower dependency roots and return their carrier plus ordered exact result leaves."""
+    if not isinstance(analysis, ExpressionAnalysis):
+        raise TypeError("analysis must be an ExpressionAnalysis")
+    carrier = lower_analyzed_expression(analysis.root, analysis, dependency_sources=tuple(sources))
+    result = carrier.result
+    if isinstance(result, IRValue):
+        leaves = (result,)
+    elif isinstance(result, IRTuple):
+        leaves = tuple(result.items)
+    else:
+        raise CompileError("Internal error: extension dependency carrier has invalid result shape")
+    return carrier, leaves
+
+
+__all__ = ["lower_analyzed_expression", "lower_analyzed_dependency_sources"]

@@ -316,3 +316,25 @@ lifecycle.
 - Made `interface.py` the declaration-only canonical cross-phase module, rejected every owner-local child-module import while it executes, kept ordinary helpers phase-local to semantic/implementation generations, and required semantic and physical package function bodies to execute inside their active owner-session mounts so lazy relative imports cannot escape the captured snapshot boundary.
 - Hardened semantic record identity and state publication by rejecting ambiguous owner-local dataclass aliases, validating detached semantic state against exact dependency NFTypes before canonical `AnalyzedCall` creation, and allowing package-side dataclass construction hooks while compiler reconstruction remains field-only and side-effect-free.
 - Extended the paired `nodeforge.math` package compatibility metadata for NodeForge 0.60.0 without changing its backend-only math implementation semantics.
+
+## 0.61.0
+
+- Added persistent package-defined semantic values to Extension API v2: semantic records and semantic lists can survive source assignment with hidden runtime-dependency snapshots, canonical dependency compaction, body/control-flow ownership, and later semantic/backend reconstruction without exposing compiler bindings to packages.
+- Made retained packed semantic dependencies the runtime-demand authority, so semantic callbacks that discard a `RuntimeRef` do not lower the discarded runtime expression or create backend/generated-resource side effects solely for it.
+- Added generic caller-side `*` expansion for semantic lists with element-local dependency compaction, while keeping semantic lists distinct from mutable structural arrays and keeping package semantic values outside source-callable public/capture contracts and Repeat carried state.
+
+## 0.61.1
+
+- Fixed runtime-if extension-state joining so an incoming persistent package semantic binding cannot be silently replaced by another body ownership category on both branch exits.
+- Relaxed two Blender extension rollback regressions from an obsolete exact error wording while retaining physical type-mismatch, backend-invocation, and generated-resource rollback assertions.
+
+## 0.61.2
+
+- Simplified persistent extension semantic plumbing without changing behavior: semantic LIST star expansion now passes canonical payloads directly through signature binding, nested payload reconstruction reuses one dependency-import path, and semantic-only calls reuse their already-canonical callback payload.
+- Made extension dependency lowering return its exact ordered carrier leaves to body persistence, removing body-layer decoding of single-value versus tuple carrier representation.
+- Made `_BodySemanticState` keyword-only and converted its construction sites to named fields, reducing positional state-coupling risk while preserving runtime/body semantics.
+
+## 0.61.3
+
+- Simplified persistent extension semantic body state by storing canonical `ExtensionSemanticPayload` values directly in `extension_bindings`; the BindingId-only persistence invariant is now enforced at the semantic-environment/body ownership boundary instead of through a one-field lifecycle wrapper.
+- Simplified `ExtensionDependencySource` identity to standard frozen-dataclass field semantics, relying on `ast.AST` object identity and `BindingId` value identity with focused regressions covering both cases.

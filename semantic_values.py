@@ -39,6 +39,8 @@ class StructuralArrayId:
             raise ValueError("StructuralArrayId.local_id must be a non-negative integer")
 
 
+
+
 @dataclass(frozen=True)
 class StructuralRuntimeLeaf:
     """Store one persistent runtime leaf referenced by a structural array."""

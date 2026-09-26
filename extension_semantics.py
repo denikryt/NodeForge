@@ -6,6 +6,7 @@ import ast
 from dataclasses import dataclass
 from enum import Enum
 
+from .compiler_identities import BindingId
 from .errors import CompileError
 from .extension_contracts import (
     ExtensionCallableSpec,
@@ -77,46 +78,96 @@ def classify_extension_execution(
 
 @dataclass(frozen=True)
 class ExtensionDependencySource:
-    """Identify one already-analyzed runtime source occurrence within one expression analysis."""
+    """Identify one transient AST occurrence or persistent body binding used by semantic state."""
 
-    expression: ast.expr
+    source: ast.expr | BindingId
     typ: NFType
 
     def __post_init__(self) -> None:
-        """Require an expression occurrence and its actual canonical runtime type."""
-        if not isinstance(self.expression, ast.expr):
-            raise TypeError("ExtensionDependencySource.expression must be ast.expr")
+        """Require one compiler-owned dependency identity and its actual runtime type."""
+        if not isinstance(self.source, (ast.expr, BindingId)):
+            raise TypeError("ExtensionDependencySource.source must be ast.expr or BindingId")
         if not isinstance(self.typ, NFType):
             raise TypeError("ExtensionDependencySource.typ must be NFType")
 
-    def __hash__(self) -> int:
-        """Hash by exact source occurrence identity and actual type."""
-        return hash((id(self.expression), self.typ))
+    @property
+    def is_persistent(self) -> bool:
+        """Return whether this dependency already names a persistent body binding."""
+        return isinstance(self.source, BindingId)
 
-    def __eq__(self, other: object) -> bool:
-        """Deduplicate only the exact same analyzed source occurrence."""
-        return (
-            isinstance(other, ExtensionDependencySource)
-            and self.expression is other.expression
-            and self.typ is other.typ
-        )
+
+
+def _dependency_slot_indices(value: object):
+    """Yield dependency slot indices in deterministic detached-storage traversal order."""
+    if isinstance(value, ExtensionDependencySlot):
+        yield value.dependency_index, value.typ
+        return
+    from .extension_values import ExtensionValue
+    if isinstance(value, ExtensionValue):
+        yield from _dependency_slot_indices(value.storage)
+        return
+    if isinstance(value, tuple):
+        for item in value:
+            yield from _dependency_slot_indices(item)
 
 
 @dataclass(frozen=True)
 class ExtensionSemanticPayload:
-    """Carry one expression-local package semantic value and its runtime dependency sources."""
+    """Carry canonical detached package semantic state and exactly its live runtime dependencies."""
 
     type_spec: TypeSpec
     value: object
     dependencies: tuple[ExtensionDependencySource, ...]
 
     def __post_init__(self) -> None:
-        """Freeze dependencies and require a frontend-semantic canonical type contract."""
-        object.__setattr__(self, "dependencies", tuple(self.dependencies))
+        """Require dependency-compact canonical storage ordered by first semantic use."""
+        dependencies = tuple(self.dependencies)
+        object.__setattr__(self, "dependencies", dependencies)
         if not isinstance(self.type_spec, TypeSpec) or not is_frontend_semantic_type_spec(self.type_spec):
             raise TypeError("ExtensionSemanticPayload requires RECORD or recursively semantic LIST TypeSpec")
-        if not all(isinstance(item, ExtensionDependencySource) for item in self.dependencies):
+        if not all(isinstance(item, ExtensionDependencySource) for item in dependencies):
             raise TypeError("ExtensionSemanticPayload.dependencies must contain ExtensionDependencySource records")
+        first_seen: list[int] = []
+        seen: set[int] = set()
+        for index, slot_type in _dependency_slot_indices(self.value):
+            if index < 0 or index >= len(dependencies):
+                raise CompileError("Extension semantic dependency slot is out of range")
+            if dependencies[index].typ is not slot_type:
+                raise CompileError("Extension semantic dependency slot actual type does not match its source")
+            if index not in seen:
+                seen.add(index)
+                first_seen.append(index)
+        expected = list(range(len(dependencies)))
+        if first_seen != expected or len(set(dependencies)) != len(dependencies):
+            raise CompileError("Extension semantic payload dependencies are not canonical and dependency-compact")
+
+
+def compact_extension_semantic_payload(
+    type_spec: TypeSpec,
+    value: object,
+    dependencies: tuple[ExtensionDependencySource, ...] | list[ExtensionDependencySource],
+) -> ExtensionSemanticPayload:
+    """Canonicalize live dependencies by first occurrence in detached semantic storage."""
+    dependencies = tuple(dependencies)
+    mapping: dict[int, int] = {}
+    compact: list[ExtensionDependencySource] = []
+    canonical_by_source: dict[ExtensionDependencySource, int] = {}
+    for old_index, slot_type in _dependency_slot_indices(value):
+        if old_index < 0 or old_index >= len(dependencies):
+            raise CompileError("Extension semantic dependency slot is out of range")
+        source = dependencies[old_index]
+        if source.typ is not slot_type:
+            raise CompileError("Extension semantic dependency slot actual type does not match its source")
+        if old_index in mapping:
+            continue
+        canonical_index = canonical_by_source.get(source)
+        if canonical_index is None:
+            canonical_index = len(compact)
+            canonical_by_source[source] = canonical_index
+            compact.append(source)
+        mapping[old_index] = canonical_index
+    remapped = remap_dependency_slots(value, mapping) if mapping else value
+    return ExtensionSemanticPayload(type_spec, remapped, tuple(compact))
 
 
 class SemanticInvocation:
@@ -158,37 +209,27 @@ class SemanticInvocation:
             raise CompileError("Extension semantic dependency actual type changed during reconstruction")
         return ref
 
-    def import_payload(self, payload: ExtensionSemanticPayload) -> ExtensionSemanticPayload:
-        """Remap a nested payload once into this invocation's ordered dependency table."""
-        mapping: dict[int, int] = {}
-        for old_index, source in enumerate(payload.dependencies):
-            mapping[old_index] = self._add_source(source)
-        return ExtensionSemanticPayload(
-            payload.type_spec,
-            remap_dependency_slots(payload.value, mapping),
-            self.dependencies,
-        )
-
-    def reconstruct_payload(self, payload: ExtensionSemanticPayload) -> object:
-        """Rebuild package data while importing nested dependencies without rewriting storage."""
+    def import_payload_value(self, payload: ExtensionSemanticPayload) -> object:
+        """Return invocation-local remapped storage without constructing a noncanonical payload."""
         mapping = {
             old_index: self._add_source(source)
             for old_index, source in enumerate(payload.dependencies)
         }
+        return remap_dependency_slots(payload.value, mapping) if mapping else payload.value
+
+    def reconstruct_payload(self, payload: ExtensionSemanticPayload) -> object:
+        """Rebuild package data from invocation-local remapped detached storage."""
+        imported_value = self.import_payload_value(payload)
 
         def resolve_runtime_leaf(stored: object):
-            """Resolve one frontend dependency slot through the invocation-local index map."""
+            """Resolve one invocation-local dependency slot to its active RuntimeRef."""
             if not isinstance(stored, ExtensionDependencySlot):
                 return None
-            try:
-                index = mapping[stored.dependency_index]
-            except KeyError as exc:
-                raise CompileError("Extension semantic dependency slot references an unknown payload dependency") from exc
-            return stored.typ, self.runtime_ref(index, stored.typ)
+            return stored.typ, self.runtime_ref(stored.dependency_index, stored.typ)
 
         return unpack_value(
             payload.type_spec,
-            payload.value,
+            imported_value,
             registry=self.registry,
             runtime_leaf_resolver=resolve_runtime_leaf,
         )
@@ -204,7 +245,7 @@ class SemanticInvocation:
 
     @property
     def dependencies(self) -> tuple[ExtensionDependencySource, ...]:
-        """Return the deterministic runtime dependency order accumulated by this invocation."""
+        """Return invocation acquisition state; canonical payload reachability owns runtime demand."""
         return tuple(self._sources)
 
 
@@ -226,5 +267,6 @@ __all__ = [
     "ExtensionDependencySource",
     "ExtensionSemanticPayload",
     "SemanticInvocation",
+    "compact_extension_semantic_payload",
     "semantic_type_compatible",
 ]

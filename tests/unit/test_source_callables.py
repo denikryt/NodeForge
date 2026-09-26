@@ -490,6 +490,7 @@ def test_source_callable_records_do_not_duplicate_derivable_or_unused_state():
         "body",
         "interface",
         "geometry_mode",
+        "extension_dependencies",
     }
     assert "origin_kind" not in {field.name for field in fields(GroupInputContract)}
     assert "index" not in {field.name for field in fields(GroupInputContract)}

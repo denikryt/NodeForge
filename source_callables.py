@@ -323,6 +323,7 @@ def analyze_local_captures(
     structural_binding_names=frozenset(),
     structural_array_names=frozenset(),
     builder_binding_names=frozenset(),
+    extension_binding_names=frozenset(),
     _stack=(),
 ) -> tuple[LocalCapture, ...]:
     """Resolve direct/transitive captures entirely from frontend-owned semantic state."""
@@ -352,6 +353,10 @@ def analyze_local_captures(
                 raise CompileError(f"Internal error: local function capture {name!r} has no frontend type")
             append(LocalCapture(name, typ, True))
             continue
+        if name in extension_binding_names:
+            raise CompileError(
+                f"Local function {fn.name}() cannot capture {name}: package semantic values are not supported"
+            )
         if name in structural_array_names:
             raise CompileError(f"Local function {fn.name}() cannot capture {name}: arrays are not supported")
         if name in structural_binding_names or name in builder_binding_names:
@@ -381,6 +386,7 @@ def analyze_local_captures(
             structural_binding_names=structural_binding_names,
             structural_array_names=structural_array_names,
             builder_binding_names=builder_binding_names,
+            extension_binding_names=extension_binding_names,
             _stack=_stack + (fn.name,),
         ):
             if capture.name in local_names and capture.name not in seen:

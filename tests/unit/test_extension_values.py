@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 from pathlib import Path
+import ast
 
 import pytest
 
+from NodeForge.compiler_identities import BindingId
 from NodeForge.errors import CompileError
 from NodeForge.extension_contracts import PythonScalarKind, TypeSpec
 from NodeForge.extension_registry import ExtensionOwnerSession, ExtensionRegistry, capture_owner_code_snapshot
 from NodeForge.extension_semantic_api import RuntimeRef
+from NodeForge.extension_semantics import (
+    ExtensionDependencySource,
+    ExtensionSemanticPayload,
+    compact_extension_semantic_payload,
+)
 from NodeForge.extension_values import (
     ExtensionDependencySlot,
     ExtensionValue,
@@ -188,6 +195,74 @@ def test_pack_detaches_mutable_containers_and_preserves_dict_order(tmp_path):
     assert reconstructed.values == [1.0, 2.0]
     assert list(reconstructed.by_name) == ["b", "a"]
     assert reconstructed.maybe is None
+
+
+def test_stage34_compaction_preserves_complete_detached_record_grammar(tmp_path):
+    """Persistence normalization is grammar-agnostic across the complete Stage-33 detached storage model."""
+    _session, registry, specs, classes = _fixture(tmp_path)
+    part_token = object()
+    list_token = object()
+    vector_token = object()
+    refs = {
+        part_token: (0, NFType.INT),
+        list_token: (1, NFType.FLOAT),
+        vector_token: (2, NFType.VECTOR),
+    }
+    part_ref = RuntimeRef(part_token, NFType.INT)
+    record = classes["Container"](
+        classes["Part"](part_ref),
+        [RuntimeRef(list_token, NFType.FLOAT)],
+        (7, 2.5),
+        (RuntimeRef(vector_token, NFType.VECTOR),),
+        {"left": classes["Part"](part_ref)},
+        classes["Part"](part_ref),
+    )
+    spec = type_spec_for(specs["Container"])
+    packed = pack_value(spec, record, registry=registry, active_runtime_refs=refs)
+    sources = (
+        ExtensionDependencySource(ast.Name(id="i", ctx=ast.Load()), NFType.INT),
+        ExtensionDependencySource(ast.Name(id="f", ctx=ast.Load()), NFType.FLOAT),
+        ExtensionDependencySource(ast.Name(id="v", ctx=ast.Load()), NFType.VECTOR),
+    )
+    payload = compact_extension_semantic_payload(spec, packed, sources)
+    assert payload.value == packed
+    assert payload.dependencies == sources
+
+    persistent = ExtensionSemanticPayload(
+        spec,
+        payload.value,
+        tuple(
+            ExtensionDependencySource(BindingId("scope", index), source.typ)
+            for index, source in enumerate(payload.dependencies)
+        ),
+    )
+    reconstructed = unpack_value(
+        spec,
+        persistent.value,
+        registry=registry,
+        runtime_leaf_resolver=lambda stored: (stored.typ, (stored.dependency_index, stored.typ))
+        if isinstance(stored, ExtensionDependencySlot)
+        else None,
+    )
+    assert reconstructed.part.value == (0, NFType.INT)
+    assert reconstructed.values == [(1, NFType.FLOAT)]
+    assert reconstructed.fixed == (7, 2.5)
+    assert reconstructed.vectors == ((2, NFType.VECTOR),)
+    assert reconstructed.by_name["left"].value == (0, NFType.INT)
+    assert reconstructed.maybe.value == (0, NFType.INT)
+
+
+def test_stage34_payload_compaction_rejects_out_of_range_or_mismatched_nested_slot(tmp_path):
+    """Malformed runtime slots fail at canonical payload construction instead of later persistence/lowering."""
+    _session, _registry, specs, _classes = _fixture(tmp_path)
+    spec = type_spec_for(specs["Part"])
+    source = ExtensionDependencySource(ast.Name(id="x", ctx=ast.Load()), NFType.FLOAT)
+    out_of_range = ExtensionValue(spec.record_type, (ExtensionDependencySlot(1, NFType.FLOAT),))
+    with pytest.raises(CompileError, match="out of range"):
+        compact_extension_semantic_payload(spec, out_of_range, (source,))
+    mismatched = ExtensionValue(spec.record_type, (ExtensionDependencySlot(0, NFType.INT),))
+    with pytest.raises(CompileError, match="actual type does not match"):
+        compact_extension_semantic_payload(spec, mismatched, (source,))
 
 
 def test_stale_or_fabricated_runtime_ref_is_rejected(tmp_path):
