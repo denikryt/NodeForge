@@ -84,7 +84,7 @@ pytestmark = pytest.mark.unit
 
 def _empty_callable_environment():
     """Return an empty immutable callable namespace for non-call semantic tests."""
-    return CallableEnvironment(frozenset(), {}, {}, frozenset(), {})
+    return CallableEnvironment(frozenset(), {}, {}, {})
 
 
 _TEST_BINDING_LOCAL_IDS = {}
@@ -136,7 +136,9 @@ def _environment(*, bindings=None, consts=None, labels=None, legacy_names=(), ba
         MappingProxyType(dict(labels or {})),
         callable_environment=CallableEnvironment(
             frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES) if builtins is None else frozenset(builtins),
-            systems or {}, local_functions or {}, frozenset(backend_helpers), imported_functions or {},
+            local_functions or {},
+            imported_functions or {},
+            systems or {},
         ),
         structural_arrays=structural_arrays or StructuralArraySnapshot({}, {}),
         object_semantics=object_semantics,
@@ -460,31 +462,22 @@ def test_vector_component_and_object_property_semantics_are_owned():
         _lower("obj.x", bindings={"obj": TYPE_OBJECT})
 
 
-def test_migration_and_permanent_diagnostic_precedence_is_preserved():
-    with pytest.raises(
-        CompileError,
-        match=r"legacy_call\(\) is temporarily unavailable while Python extension callables are being migrated",
-    ):
-        _lower("legacy_call() + (True + 1)", backend_helpers={"legacy_call"})
+def test_unknown_call_and_permanent_diagnostic_precedence_is_preserved():
+    with pytest.raises(CompileError, match=r"Unsupported function: legacy_call"):
+        _lower("legacy_call() + (True + 1)")
     with pytest.raises(CompileError, match="Unsupported operation between BOOL and INT"):
-        _lower("(True + 1) + legacy_call()", backend_helpers={"legacy_call"})
+        _lower("(True + 1) + legacy_call()")
     with pytest.raises(CompileError, match="Unsupported operation between BOOL and INT"):
         _lower("(True + 1) if 1 else 2")
-    with pytest.raises(
-        CompileError,
-        match=r"legacy_call\(\) is temporarily unavailable while Python extension callables are being migrated",
-    ):
-        _lower("1 < legacy_call() < (True + 1)", backend_helpers={"legacy_call"})
+    with pytest.raises(CompileError, match=r"Unsupported function: legacy_call"):
+        _lower("1 < legacy_call() < (True + 1)")
 
 
-def test_unknown_calls_and_extension_migration_calls_have_distinct_diagnostics():
+def test_unknown_calls_are_direct_semantic_errors():
     with pytest.raises(CompileError, match="Unsupported function: foo"):
         _lower("foo()")
-    with pytest.raises(
-        CompileError,
-        match=r"legacy_call\(\) is temporarily unavailable while Python extension callables are being migrated",
-    ):
-        _lower("legacy_call(a)", bindings={"a": TYPE_FLOAT}, backend_helpers={"legacy_call"})
+    with pytest.raises(CompileError, match=r"Unsupported function: legacy_call"):
+        _lower("legacy_call(a)", bindings={"a": TYPE_FLOAT})
 
 
 def test_object_info_is_frontend_state_effect_without_backend_call_ir():
@@ -1264,21 +1257,13 @@ def test_mixed_core_calls_stay_on_ir_path_and_extension_categories_fail_directly
         else:
             assert _operations(program, IRCall), source
 
-    cases = [
-        (
-            "system_constructor() + 1.0",
-            {"systems": {"system_constructor": object()}},
-            r"system_constructor\(\) is temporarily unavailable while Python extension callables are being migrated",
-        ),
-        (
-            "backend_helper(x) + 1.0",
-            {"bindings": {"x": TYPE_FLOAT}, "backend_helpers": {"backend_helper"}},
-            r"backend_helper\(\) is temporarily unavailable while Python extension callables are being migrated",
-        ),
-    ]
-    for source, kwargs, diagnostic in cases:
-        with pytest.raises(CompileError, match=diagnostic):
-            _lower(source, **kwargs)
+    # Removed v1 SYSTEM/BACKEND_HELPER names are not callable categories in the
+    # permanent semantic environment. Recognizable v1 owners are rejected at
+    # package discovery before semantic analysis; unregistered names are ordinary errors.
+    with pytest.raises(CompileError, match=r"Unsupported function: system_constructor"):
+        _lower("system_constructor() + 1.0")
+    with pytest.raises(CompileError, match=r"Unsupported function: backend_helper"):
+        _lower("backend_helper(x) + 1.0", bindings={"x": TYPE_FLOAT})
 
 def test_grid_is_semantic_ir_capable_and_grid_uv_requires_available_context():
     """Grid writes explicit hidden UV context through the permanent semantic path."""

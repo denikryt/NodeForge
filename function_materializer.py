@@ -86,7 +86,6 @@ class LibraryFunctionMaterializationSpec:
     source_callable_session: object | None
     materialization: IRFunctionMaterialization | None
     group_name: str
-    backend_signature: str
     find_existing: Callable[..., object | None]
     write_package_metadata: Callable[[object, object], None]
 
@@ -108,7 +107,6 @@ class LibraryFunctionUpdateSpec:
     source_callable_session: object | None
     group: object
     group_name: str
-    backend_signature: str
     write_package_metadata: Callable[[object, object], None]
 
     def __post_init__(self):
@@ -238,7 +236,6 @@ class FunctionMaterializer:
             "package_version": getattr(spec.record, "package_version", "") or "",
             "name": spec.name,
             "source": normalized_source(spec.prepared_compilation.source),
-            "backend_signature": spec.backend_signature,
         }
         existing = spec.find_existing(spec.record, instance_key=instance_key, transaction=transaction)
         def finalize_before_commit(group):
@@ -304,7 +301,6 @@ class FunctionMaterializer:
             "package_version": getattr(spec.record, "package_version", "") or "",
             "name": spec.name,
             "source": normalized_source(spec.prepared_compilation.source),
-            "backend_signature": spec.backend_signature,
         }
         def finalize_before_commit(group):
             spec.write_package_metadata(group, spec.record)
@@ -367,7 +363,6 @@ class FunctionMaterializer:
                 "package_version": getattr(spec.record, "package_version", "") or "",
                 "name": spec.name,
                 "source": normalized_source(spec.prepared_compilation.source),
-                "backend_signature": spec.backend_signature,
             },
             source_callable_session=spec.source_callable_session,
             preserve_if_equivalent=True,

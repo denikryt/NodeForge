@@ -67,7 +67,7 @@ def _env(*, bindings=None, consts=None):
         constants,
         const_eval_values,
         MappingProxyType({}),
-        callable_environment=CallableEnvironment(frozenset(), {}, {}, frozenset(), {}),
+        callable_environment=CallableEnvironment(frozenset(), {}, {}, {}),
     )
 
 
@@ -402,7 +402,6 @@ output(x)
             frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
             {},
             {},
-            frozenset(),
             {},
         ),
         owner_scope="scope",
@@ -741,7 +740,6 @@ def _body_callables():
         frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
         {},
         {},
-        frozenset(),
         {},
     )
 

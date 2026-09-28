@@ -90,7 +90,6 @@ def _validate_import_bindings(
     import_pairs,
     body_stmts,
     local_function_defs,
-    backend_names,
     resolved_environment,
     inherited_imports=None,
 ):
@@ -102,7 +101,6 @@ def _validate_import_bindings(
         | {"output", "store", "panel"}
         | set(_ALLOWED_CONSTS)
         | set(resolved_environment.system_names())
-        | set(backend_names)
         | set(TYPE_TOKEN_NAMES)
     )
 
@@ -151,7 +149,7 @@ def _validate_import_bindings(
     return imported
 
 
-def _registered_name_labels(local_function_defs, backend_names, imported_library_functions, system_names):
+def _registered_name_labels(local_function_defs, imported_library_functions, system_names):
     """Return active DSL-owned names and their established reservation labels."""
     labels = {}
 
@@ -163,8 +161,7 @@ def _registered_name_labels(local_function_defs, backend_names, imported_library
     add(builtin_registry.BUILTIN_NAMES, "DSL builtin")
     add({"output", "store", "panel"}, "reserved helper")
     add(_ALLOWED_CONSTS, "compile-time constant")
-    add(system_names, "embedded-system constructor")
-    add(backend_names, "backend helper")
+    add(system_names, "extension system callable")
     add(TYPE_TOKEN_NAMES, "type token")
     add(imported_library_functions, "imported function")
     add(local_function_defs, "local function")
@@ -355,7 +352,6 @@ def analyze_group_source(
     resolved_environment,
     inherited_local_functions=None,
     inherited_imported_library_functions=None,
-    backend_builtins=None,
     helper_namespace: str = "NodeForge Group",
     source_callable_session=None,
 ) -> SemanticGroupCompilation:
@@ -381,21 +377,16 @@ def analyze_group_source(
         else:
             body_stmts.append(stmt)
 
-    backend_names = set(backend_builtins or {})
-    for helper_name in backend_names:
-        if helper_name in system_names:
-            raise CompileError(f"Local backend helper {helper_name!r} collides with reserved system constructor name")
     for namespace in ("functions", "examples"):
         resolved_environment.catalog(namespace).names()
     imported = _validate_import_bindings(
         import_pairs,
         raw_body_stmts,
         local_function_defs,
-        backend_names,
         resolved_environment,
         inherited_imports=inherited_imported_library_functions,
     )
-    reserved_name_labels = _registered_name_labels(local_function_defs, backend_names, imported, system_names)
+    reserved_name_labels = _registered_name_labels(local_function_defs, imported, system_names)
     _validate_registered_name_bindings(
         raw_body_stmts,
         reserved_name_labels,
@@ -405,7 +396,7 @@ def analyze_group_source(
 
     preprocessed = _preprocess_compile_time(body_stmts)
     stmts = list(preprocessed.statements)
-    callable_names = set(imported) | set(local_function_defs) | backend_names | set(system_names)
+    callable_names = set(imported) | set(local_function_defs) | set(system_names)
     input_names = sorted(
         set(_collect_inputs(stmts, extra_builtin_names=callable_names, consts=preprocessed.final_compile_time.values))
         - set(preprocessed.final_compile_time.values.keys())
@@ -426,9 +417,7 @@ def analyze_group_source(
 
     callable_environment = CallableEnvironment(
         callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
-        system_constructors=resolved_environment.system_constructors,
         local_functions=local_function_defs,
-        backend_helper_names=frozenset(backend_names),
         imported_functions=imported,
         extension_system_callables=resolved_environment.extension_system_callables,
     )

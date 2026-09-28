@@ -10,8 +10,6 @@ from .consteval import _const_eval
 from .builtins import registry as builtin_registry
 from .compile_time import reject_compile_time_object
 from .geometry_builder import GeometryBuilder
-from .systems import registry as systems_registry
-from . import local_functions
 from .function_instances import extract_function_call_modifiers, unsupported_unique
 from .call_resolution import CallableEnvironment, CallableKind, UNRESOLVED, resolve_simple_callable
 from .builtin_call_semantics import (
@@ -49,10 +47,9 @@ def compile_expr(comp, expr, depth=0):
     legacy_binding_names = comp.legacy_structural_binding_names_snapshot()
     callable_environment = CallableEnvironment(
         callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
-        system_constructors=comp.resolved_environment.system_constructors,
         local_functions=comp.local_functions,
-        backend_helper_names=frozenset(comp.backend_builtins),
         imported_functions=comp.imported_library_functions,
+        extension_system_callables=comp.resolved_environment.extension_system_callables,
     )
     environment = build_semantic_environment(
         runtime_bindings=runtime_bindings,
@@ -346,14 +343,6 @@ def compile_expr(comp, expr, depth=0):
             if function_modifiers.unique_was_explicit:
                 raise unsupported_unique(name)
             return builtin_registry.compile_call(comp, cleaned_expr, depth)
-        if resolved.kind is CallableKind.SYSTEM:
-            if function_modifiers.unique_was_explicit:
-                raise unsupported_unique(name)
-            return systems_registry.compile_resolved_call(comp, cleaned_expr, resolved.target, depth)
-        if resolved.kind is CallableKind.BACKEND_HELPER:
-            if function_modifiers.unique_was_explicit:
-                raise unsupported_unique(name)
-            return local_functions.compile_backend_builtin_call(comp, cleaned_expr, depth)
         raise CompileError(f"Internal error: unsupported resolved callable category {resolved.kind}")
 
     raise CompileError(f"Unsupported expression element: {type(expr).__name__}")

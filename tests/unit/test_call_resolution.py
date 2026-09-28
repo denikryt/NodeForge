@@ -17,6 +17,7 @@ from NodeForge.call_resolution import (
 )
 from NodeForge.compiler_identities import library_function_id
 from NodeForge.function_instances import extract_function_call_modifiers
+from NodeForge.extension_contracts import ExtensionCallableId
 
 
 pytestmark = pytest.mark.unit
@@ -27,27 +28,32 @@ def _call(source):
     return ast.parse(source, mode="eval").body
 
 
+def _extension_id(name: str) -> ExtensionCallableId:
+    """Return one detached system-extension identity for resolver tests."""
+    return ExtensionCallableId(("system", "vendor.pkg", "demo"), name)
+
+
 def _environment(**overrides):
-    """Return an immutable resolver namespace with every category represented."""
+    """Return an immutable resolver namespace with every permanent category represented."""
     record = SimpleNamespace(package_id="vendor.pkg")
     binding = SimpleNamespace(namespace="functions", canonical_name="lib_fn", record=record)
     values = {
         "callable_builtins": {"same", "builtin"},
-        "system_constructors": {"same": object(), "system": object()},
         "local_functions": {"same": object(), "local": object()},
-        "backend_helper_names": {"same", "helper"},
         "imported_functions": {"same": binding, "lib": binding},
+        "extension_system_callables": {"same": _extension_id("same"), "extension": _extension_id("extension")},
     }
     values.update(overrides)
     return CallableEnvironment(**values)
 
 
-def test_resolution_precedence_matches_legacy_dispatch_exactly():
+def test_resolution_precedence_uses_permanent_callable_categories():
     env = _environment()
     assert resolve_simple_callable("same", env).kind is CallableKind.BUILTIN
-    assert resolve_simple_callable("system", env).kind is CallableKind.SYSTEM
+    extension = resolve_simple_callable("extension", env)
+    assert extension.kind is CallableKind.EXTENSION
+    assert extension.target == _extension_id("extension")
     assert resolve_simple_callable("local", env).kind is CallableKind.LOCAL_FUNCTION
-    assert resolve_simple_callable("helper", env).kind is CallableKind.BACKEND_HELPER
     library = resolve_simple_callable("lib", env)
     assert library.kind is CallableKind.LIBRARY
     assert library.library_function_id == library_function_id("functions", "vendor.pkg", "lib_fn")
@@ -58,14 +64,14 @@ def test_resolution_precedence_matches_legacy_dispatch_exactly():
 
 def test_environment_defensively_freezes_all_namespace_collections():
     builtins = {"builtin"}
-    systems = {"system": object()}
-    env = CallableEnvironment(builtins, systems, {}, {"helper"}, {})
+    extensions = {"extension": _extension_id("extension")}
+    env = CallableEnvironment(builtins, {}, {}, extensions)
     builtins.add("later")
-    systems["later"] = object()
+    extensions["later"] = _extension_id("later")
     assert "later" not in env.callable_builtins
-    assert "later" not in env.system_constructors
+    assert "later" not in env.extension_system_callables
     with pytest.raises(TypeError):
-        env.system_constructors["x"] = object()
+        env.extension_system_callables["x"] = _extension_id("x")
 
 
 def test_modifier_extraction_uses_detached_constants_and_preserves_explicit_false():
@@ -89,7 +95,7 @@ def _analyze_unresolved(source, *, consts=None):
         constants,
         detached,
         MappingProxyType({}),
-        CallableEnvironment(frozenset(), {}, {}, frozenset(), {}),
+        CallableEnvironment(frozenset(), {}, {}, {}),
     )
     return analyze_expression(_call(source), environment)
 
@@ -127,37 +133,29 @@ def test_top_level_only_and_non_simple_call_diagnostics_are_preserved():
 @pytest.mark.parametrize(
     ("first_kind", "second_kind", "expected"),
     [
-        ("builtin", "system", CallableKind.BUILTIN),
+        ("builtin", "extension", CallableKind.BUILTIN),
         ("builtin", "local", CallableKind.BUILTIN),
-        ("builtin", "helper", CallableKind.BUILTIN),
         ("builtin", "library", CallableKind.BUILTIN),
-        ("system", "local", CallableKind.SYSTEM),
-        ("system", "helper", CallableKind.SYSTEM),
-        ("system", "library", CallableKind.SYSTEM),
-        ("local", "helper", CallableKind.LOCAL_FUNCTION),
+        ("extension", "local", CallableKind.EXTENSION),
+        ("extension", "library", CallableKind.EXTENSION),
         ("local", "library", CallableKind.LOCAL_FUNCTION),
-        ("helper", "library", CallableKind.BACKEND_HELPER),
     ],
 )
-def test_every_pairwise_callable_collision_uses_legacy_precedence(first_kind, second_kind, expected):
-    """Every constructible pairwise namespace collision selects the earlier legacy category."""
+def test_every_pairwise_callable_collision_uses_permanent_precedence(first_kind, second_kind, expected):
+    """Every permanent pairwise namespace collision selects the earlier category."""
     record = SimpleNamespace(package_id="pkg", namespace="functions", name="same")
     binding = SimpleNamespace(namespace="functions", canonical_name="same", record=record)
-    system = object()
-    local = object()
     namespaces = {
         "builtin": {"callable_builtins": {"same"}},
-        "system": {"system_constructors": {"same": system}},
-        "local": {"local_functions": {"same": local}},
-        "helper": {"backend_helper_names": {"same"}},
+        "extension": {"extension_system_callables": {"same": _extension_id("same")}},
+        "local": {"local_functions": {"same": object()}},
         "library": {"imported_functions": {"same": binding}},
     }
     values = {
         "callable_builtins": set(),
-        "system_constructors": {},
         "local_functions": {},
-        "backend_helper_names": set(),
         "imported_functions": {},
+        "extension_system_callables": {},
     }
     for category in (first_kind, second_kind):
         for field, payload in namespaces[category].items():
@@ -168,26 +166,23 @@ def test_every_pairwise_callable_collision_uses_legacy_precedence(first_kind, se
     assert resolve_simple_callable("same", CallableEnvironment(**values)).kind is expected
 
 
-def test_resolution_preserves_exact_snapshot_objects_without_backend_helper_payloads():
-    """System/library targets keep snapshot identity while helpers stay name-only records."""
-    system = object()
+def test_resolution_preserves_extension_and_library_snapshot_identity():
+    """Extension/library targets retain only canonical snapshot identities."""
+    extension_id = _extension_id("extension")
     record = SimpleNamespace(package_id="vendor.pkg", namespace="functions", name="entry")
     binding = SimpleNamespace(namespace="functions", canonical_name="entry", record=record)
     env = CallableEnvironment(
         frozenset(),
-        {"sys": system},
         {},
-        {"helper"},
         {"alias": binding},
+        {"extension": extension_id},
     )
-    resolved_system = resolve_simple_callable("sys", env)
+    resolved_extension = resolve_simple_callable("extension", env)
     resolved_library = resolve_simple_callable("alias", env)
-    resolved_helper = resolve_simple_callable("helper", env)
-    assert resolved_system.target is system
+    assert resolved_extension.kind is CallableKind.EXTENSION
+    assert resolved_extension.target is extension_id
     assert resolved_library.target is binding
     assert resolved_library.library_function_id == library_function_id("functions", "vendor.pkg", "entry")
-    assert resolved_helper.target == "helper"
-    assert not callable(resolved_helper.target)
 
 
 def test_resolver_module_has_no_live_catalog_package_or_system_discovery_imports():
@@ -227,7 +222,7 @@ def test_object_info_method_syntax_is_classified_by_semantic_analysis():
         constants,
         detached,
         MappingProxyType({}),
-        CallableEnvironment(frozenset(), {}, {}, frozenset(), {}),
+        CallableEnvironment(frozenset(), {}, {}, {}),
         object_semantics=ObjectSemanticSnapshot(
             {binding_id: object_id},
             {object_id: ObjectInfoState()},

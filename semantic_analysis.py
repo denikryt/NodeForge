@@ -640,6 +640,39 @@ def _semantic_result_shape(type_spec: TypeSpec, stored: object) -> SemanticResul
     raise CompileError("Internal error: non-semantic result requested semantic result shape")
 
 
+def _common_semantic_list_item_type_spec(
+    type_specs: tuple[TypeSpec, ...],
+    registry,
+) -> TypeSpec:
+    """Infer the common nominal RECORD TypeSpec for one non-empty semantic list literal."""
+    if not type_specs:
+        raise ValueError("semantic list type inference requires at least one TypeSpec")
+    if any(type_spec.kind != "RECORD" for type_spec in type_specs):
+        raise CompileError("Package semantic list literal elements must be package-defined semantic records")
+    record_type = registry.most_specific_common_nominal_base(
+        type_spec.record_type for type_spec in type_specs
+    )
+    return TypeSpec("RECORD", record_type=record_type)
+
+
+def _infer_semantic_list_literal_payload(
+    payloads: tuple[ExtensionSemanticPayload, ...],
+    registry,
+) -> ExtensionSemanticPayload:
+    """Combine semantic list-literal elements through existing payload import and compaction rules."""
+    item_type = _common_semantic_list_item_type_spec(
+        tuple(payload.type_spec for payload in payloads),
+        registry,
+    )
+    invocation = SemanticInvocation(registry)
+    items = tuple(invocation.import_payload_value(payload) for payload in payloads)
+    return compact_extension_semantic_payload(
+        TypeSpec("LIST", item=item_type),
+        items,
+        invocation.dependencies,
+    )
+
+
 def _contextual_semantic_list_payload(
     expression: ast.expr,
     expected: TypeSpec,
@@ -651,18 +684,26 @@ def _contextual_semantic_list_payload(
     call_name: str,
 ) -> ExtensionSemanticPayload:
     """Acquire one semantic LIST, preserving its declared TypeSpec even for empty literals."""
-    fact = analyze(expression)
-    if fact is UNSUPPORTED:
-        raise _BuiltinOperandUnsupported
-    if fact.semantic_payload is not None:
+    if expected.kind != "LIST":
+        raise CompileError("Internal error: semantic list acquisition received non-LIST TypeSpec")
+
+    if not isinstance(expression, ast.List):
+        fact = analyze(expression)
+        if fact is UNSUPPORTED:
+            raise _BuiltinOperandUnsupported
         payload = fact.semantic_payload
+        if payload is None:
+            raise CompileError(f"{call_name}() expects a frontend semantic list value")
         if not semantic_type_compatible(payload.type_spec, expected, registry):
             raise CompileError(f"{call_name}() semantic list argument has incompatible declared record type")
         return payload
-    if not isinstance(expression, ast.List):
-        raise CompileError(f"{call_name}() expects a frontend semantic list value")
-    if expected.kind != "LIST":
-        raise CompileError("Internal error: semantic list acquisition received non-LIST TypeSpec")
+
+    existing = facts.get(expression)
+    if existing is not None and existing.semantic_payload is not None:
+        payload = existing.semantic_payload
+        if not semantic_type_compatible(payload.type_spec, expected, registry):
+            raise CompileError(f"{call_name}() semantic list argument has incompatible declared record type")
+        return payload
 
     packed_items: list[object] = []
     for child in expression.elts:
@@ -690,7 +731,10 @@ def _contextual_semantic_list_payload(
         packed_items.append(invocation.import_payload_value(child_payload))
 
     payload = compact_extension_semantic_payload(expected, tuple(packed_items), invocation.dependencies)
-    facts[expression] = replace(fact, semantic_payload=payload)
+    facts[expression] = ExpressionFact(
+        _semantic_result_shape(payload.type_spec, payload.value),
+        semantic_payload=payload,
+    )
     return payload
 
 
@@ -1187,7 +1231,37 @@ def analyze_expression(expr, environment):
                 raise CompileError(f"Name {node.id} is registered as {label} and cannot be used as a value")
             raise CompileError(f"Unknown name: {node.id}")
 
-        if isinstance(node, (ast.List, ast.Tuple)):
+        if isinstance(node, ast.List):
+            items = []
+            semantic_payloads: list[ExtensionSemanticPayload | None] = []
+            for child in node.elts:
+                item = analyze(child)
+                if item is UNSUPPORTED:
+                    return UNSUPPORTED
+                items.append(item.result_shape)
+                semantic_payloads.append(item.semantic_payload)
+            semantic_count = sum(payload is not None for payload in semantic_payloads)
+            if semantic_count:
+                if semantic_count != len(semantic_payloads):
+                    raise CompileError(
+                        "A list literal cannot mix package semantic values with ordinary values"
+                    )
+                if environment.extension_registry is None:
+                    raise CompileError("Internal error: semantic list literal has no immutable extension registry")
+                payload = _infer_semantic_list_literal_payload(
+                    tuple(payload for payload in semantic_payloads if payload is not None),
+                    environment.extension_registry,
+                )
+                return record(
+                    node,
+                    ExpressionFact(
+                        _semantic_result_shape(payload.type_spec, payload.value),
+                        semantic_payload=payload,
+                    ),
+                )
+            return record(node, ExpressionFact(ArrayResultShape(tuple(items))))
+
+        if isinstance(node, ast.Tuple):
             items = []
             for child in node.elts:
                 item = analyze(child)
@@ -1764,7 +1838,6 @@ def analyze_expression(expr, environment):
                     hidden_capture_names=tuple(capture.name for capture in captures),
                     local_functions=environment.callable_environment.local_functions,
                     imported_library_functions=environment.callable_environment.imported_functions,
-                    backend_builtins={key: None for key in environment.callable_environment.backend_helper_names},
                     helper_namespace=environment.helper_namespace,
                     return_shape=return_shape,
                 )
@@ -1858,12 +1931,9 @@ def analyze_expression(expr, environment):
                         f"{name}() is temporarily unavailable while v2 hybrid source/interface callables are being migrated"
                     )
                 if getattr(library_record, "source_path", None) is None or getattr(library_record, "module_path", None) is not None:
-                    # TODO(nodeforge-migration): Legacy native/hybrid Python library owners remain migration-blocked;
-                    # pure source callables and validated native-only v2 extension owners use permanent typed contracts.
-                    # Do not execute legacy native modules through compile_call() here. Remove this rejection only after
-                    # hybrid v2 execution is implemented and the remaining legacy native/hybrid routes are deleted.
                     raise CompileError(
-                        f"{name}() is temporarily unavailable while Python extension callables are being migrated"
+                        f"{name}() uses unsupported Extension API v1 native execution; "
+                        "migrate the owner to interface.py (EXTENSION_API = 2)"
                     )
                 function_id = resolved.library_function_id
                 if binding.namespace == "local":
@@ -1892,7 +1962,6 @@ def analyze_expression(expr, environment):
                     function_id=function_id,
                     identity=identity,
                     record=library_record,
-                    backend_builtins={},
                 )
                 public_parameters = tuple(parameter for parameter in prepared.contract.parameters if parameter.public)
                 bound_pairs = bind_imported_source_arguments(
@@ -1948,16 +2017,6 @@ def analyze_expression(expr, environment):
                         analyzed_call=analyzed_call,
                         call_operand_nodes=tuple(runtime_nodes),
                     ),
-                )
-            if resolved.kind in {CallableKind.SYSTEM, CallableKind.BACKEND_HELPER}:
-                if modifiers.unique_was_explicit:
-                    raise unsupported_unique(name)
-                # TODO(nodeforge-migration): V1 SYSTEM/BACKEND_HELPER owners remain intentionally unsupported
-                # while validated v2 owners use typed extension contracts, symbolic implementation refs and ordinary Extension Call IR. Do not
-                # restore the AST/Compiler handler path. Remove this v1-only rejection when the remaining legacy
-                # extension owner routes are deleted after the v2 reference-package cutover.
-                raise CompileError(
-                    f"{name}() is temporarily unavailable while Python extension callables are being migrated"
                 )
             raise CompileError(f"Internal error: unsupported resolved callable category {resolved.kind}")
 

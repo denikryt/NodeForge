@@ -35,7 +35,7 @@ pytestmark = pytest.mark.unit
 
 def _empty_callable_environment():
     """Return an empty immutable callable namespace for non-call semantic tests."""
-    return CallableEnvironment(frozenset(), {}, {}, frozenset(), {})
+    return CallableEnvironment(frozenset(), {}, {}, {})
 
 
 _TYPES = (
@@ -154,7 +154,7 @@ def _environment(bindings, *, object_registry=True):
         semantic_constants,
         const_eval_values,
         MappingProxyType({}),
-        callable_environment=CallableEnvironment(frozenset(IR_CAPABLE_BUILTIN_NAMES), {}, {}, frozenset(), {}),
+        callable_environment=CallableEnvironment(frozenset(IR_CAPABLE_BUILTIN_NAMES), {}, {}, {}),
         object_semantics=object_semantics,
     )
 
@@ -291,9 +291,8 @@ def test_successful_semantic_analysis_commits_to_ir_backend_without_legacy_retry
             compile_time=CompileTimeState(),
             reserved_name_labels={},
             group=object(),
-            resolved_environment=SimpleNamespace(system_constructors={}),
+            resolved_environment=SimpleNamespace(extension_system_callables={}),
             local_functions={},
-            backend_builtins={},
             imported_library_functions={},
             runtime_bindings_snapshot=lambda: MappingProxyType({}),
             backend_runtime_values_snapshot=lambda: MappingProxyType({}),
@@ -341,7 +340,7 @@ def test_vector_literal_uses_real_combine_xyz_helper_contract():
     constants, const_eval_values = build_semantic_constant_snapshot(CompileTimeSnapshot({"vec": (1, 2, 3)}))
     environment = SemanticEnvironment(
         MappingProxyType({}), frozenset(), constants, const_eval_values, MappingProxyType({}),
-        callable_environment=CallableEnvironment(frozenset(IR_CAPABLE_BUILTIN_NAMES), {}, {}, frozenset(), {}),
+        callable_environment=CallableEnvironment(frozenset(IR_CAPABLE_BUILTIN_NAMES), {}, {}, {}),
     )
     program = lower_analyzed_expression(expr, analyze_expression(expr, environment))
     group = _FakeGroup()
@@ -454,9 +453,8 @@ def test_scoped_grid_compat_routes_entire_nested_expression_through_legacy_dispa
             compile_time=CompileTimeState(),
             reserved_name_labels={},
             group=object(),
-            resolved_environment=SimpleNamespace(system_constructors={}),
+            resolved_environment=SimpleNamespace(extension_system_callables={}),
             local_functions={},
-            backend_builtins={},
             imported_library_functions={},
             runtime_bindings_snapshot=lambda: MappingProxyType({}),
             backend_runtime_values_snapshot=lambda: MappingProxyType({}),
@@ -502,9 +500,8 @@ def test_scoped_grid_compat_keeps_non_grid_expressions_semantic_first(monkeypatc
             compile_time=CompileTimeState(),
             reserved_name_labels={},
             group=object(),
-            resolved_environment=SimpleNamespace(system_constructors={}),
+            resolved_environment=SimpleNamespace(extension_system_callables={}),
             local_functions={},
-            backend_builtins={},
             imported_library_functions={},
             runtime_bindings_snapshot=lambda: MappingProxyType({}),
             backend_runtime_values_snapshot=lambda: MappingProxyType({}),
@@ -524,7 +521,7 @@ def test_compiler_grid_compatibility_routing_state_is_instance_local(monkeypatch
     """Separate Compiler sessions do not share contextual grid routing or legacy grid state."""
     monkeypatch.setitem(sys.modules, "bpy", ModuleType("bpy"))
     compiler_module = importlib.import_module("NodeForge.compiler")
-    environment = SimpleNamespace(system_constructors={})
+    environment = SimpleNamespace(extension_system_callables={})
     monkeypatch.setattr(compiler_module, "_new_group_backend", lambda _environment: object())
 
     first = compiler_module.Compiler(SimpleNamespace(name="First"), object(), resolved_environment=environment)
@@ -562,9 +559,8 @@ def test_scoped_grid_compat_separate_expressions_share_legacy_grid_context(monke
             compile_time=CompileTimeState(),
             reserved_name_labels={},
             group=object(),
-            resolved_environment=SimpleNamespace(system_constructors={}),
+            resolved_environment=SimpleNamespace(extension_system_callables={}),
             local_functions={},
-            backend_builtins={},
             imported_library_functions={},
             runtime_bindings_snapshot=lambda: MappingProxyType({}),
             backend_runtime_values_snapshot=lambda: MappingProxyType({}),

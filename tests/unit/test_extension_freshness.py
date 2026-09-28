@@ -44,7 +44,6 @@ def foo(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...
             "examples": ResolvedCatalog("examples", {}),
             "local": ResolvedCatalog("local", {}),
         },
-        {},
         extension_registry=registry,
         extension_system_callables={"foo": callable_id},
     )

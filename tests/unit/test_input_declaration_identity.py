@@ -189,9 +189,7 @@ def _control_flow_declaration_keys(source):
     """Return deterministic declaration stable keys from one pure root-body analysis."""
     callables = CallableEnvironment(
         callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
-        system_constructors={},
         local_functions={},
-        backend_helper_names=frozenset(),
         imported_functions={},
     )
     result = lower_basic_body(

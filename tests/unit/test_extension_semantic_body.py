@@ -72,7 +72,6 @@ def consume(part) -> _State: return _State(part)
             "examples": ResolvedCatalog("examples", {}),
             "local": ResolvedCatalog("local", {}),
         },
-        {},
         extension_registry=registry,
         extension_system_callables=by_name,
     )
@@ -186,7 +185,6 @@ def test_imported_source_argument_rejects_package_semantic_value(tmp_path):
             "examples": base.catalog("examples"),
             "local": base.catalog("local"),
         },
-        {},
         extension_registry=base.extension_registry,
         extension_system_callables=base.extension_system_callables,
     )
@@ -241,7 +239,6 @@ output(y)
             "examples": base.catalog("examples"),
             "local": base.catalog("local"),
         },
-        {},
         extension_registry=base.extension_registry,
         extension_system_callables=base.extension_system_callables,
     )

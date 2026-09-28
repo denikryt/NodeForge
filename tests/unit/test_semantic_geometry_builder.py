@@ -19,9 +19,7 @@ from NodeForge.semantic_ir import IRBindLeaves, IRCall, IRIf, IROutput, IRRepeat
 def _callables():
     return CallableEnvironment(
         callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
-        system_constructors={},
         local_functions={},
-        backend_helper_names=frozenset(),
         imported_functions={},
     )
 

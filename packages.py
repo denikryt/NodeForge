@@ -373,8 +373,14 @@ def _validate_root_contents(root: Path, contents: dict[str, str]) -> None:
             _validate_public_name(child.name, "system id")
             interface_path = child / "interface.py"
             legacy_path = child / "system.py"
-            if not interface_path.is_file() and not legacy_path.is_file():
-                raise PackageError(f"System {child.name!r} must contain interface.py or system.py")
+            if interface_path.is_file():
+                continue
+            if legacy_path.is_file():
+                raise PackageError(
+                    f"System {child.name!r} uses unsupported Extension API v1 system.py; "
+                    "migrate the owner to interface.py (EXTENSION_API = 2)"
+                )
+            raise PackageError(f"System {child.name!r} must contain interface.py")
 
 
 def _validate_public_name(name: str, context: str) -> None:
@@ -397,33 +403,18 @@ def package_requires_python(root: Path, contents: dict[str, str]) -> bool:
 
 
 def validate_package_system_declarations(manifest: PackageManifest) -> None:
-    """Validate retained v1 package-local system declarations.
+    """Validate that every structurally accepted system uses Extension API v2.
 
-    V2 declarations are normalized only by the install/replacement inventory
-    path and root environment bootstrap. Keeping this validator v1-only prevents
-    active-package/UI enumeration from becoming another v2 Python executor.
+    Package root validation rejects legacy ``system.py``-only owners before this
+    function runs. Keeping this public validator structural guarantees that active
+    package/UI enumeration never imports package implementation modules.
     """
-    from .systems import registry as systems_registry
-
-    names: dict[str, str] = {}
-    try:
-        records = system_package_records_from_manifests((manifest,))
-        for record in records:
-            if record.interface_path is not None:
-                continue
-            module = systems_registry._load_system_entrypoint(record)
-            declared = systems_registry._read_constructors(module, record)
-            for name in declared:
-                if name in names:
-                    raise PackageError(f"Duplicate system constructor {name!r} inside {manifest.package_id}")
-                _validate_not_core_callable_name(name, manifest.package_id)
-                names[name] = record.system_id
-    except PackageError:
-        raise
-    except CompileError as exc:
-        raise PackageError(str(exc)) from exc
-    except Exception as exc:
-        raise PackageError(f"Could not validate system declarations for {manifest.package_id}: {exc}") from exc
+    records = system_package_records_from_manifests((manifest,))
+    for record in records:
+        if record.interface_path is None:
+            raise PackageError(
+                f"System {record.system_id!r} uses unsupported Extension API v1 system.py"
+            )
 
 def _validate_not_core_callable_name(name: str, package_id: str) -> None:
     """Reject package-backed constructors that shadow core DSL callables."""
@@ -589,17 +580,16 @@ def system_package_records_from_manifests(
             if not child.is_dir() or child.name.startswith(".") or child.name.startswith("__"):
                 continue
             interface_path = child / "interface.py"
-            legacy_path = child / "system.py"
-            if interface_path.is_file():
-                interface = interface_path.resolve()
-                legacy = None
-                module_path = None
-            elif legacy_path.is_file():
-                interface = None
-                legacy = legacy_path.resolve()
-                module_path = legacy
-            else:
-                continue
+            if not interface_path.is_file():
+                # ``validate_package_root`` rejects legacy system.py-only layouts.
+                # Keep derivation fail-closed if a caller somehow supplies an
+                # unvalidated manifest-like object.
+                raise PackageError(
+                    f"System {child.name!r} must use interface.py (EXTENSION_API = 2)"
+                )
+            interface = interface_path.resolve()
+            legacy = None
+            module_path = None
             records.append(
                 SystemPackageRecord(
                     package_id=item.package_id,
@@ -835,7 +825,6 @@ def _normalize_package_callable_inventory(
     normalize_native_libraries: bool,
 ) -> _PackageCallableInventory:
     """Normalize one package's callable inventory exactly once for validation."""
-    from .systems import registry as systems_registry
     from .extension_registry import (
         ExtensionOwnerSession,
         capture_owner_code_snapshot,
@@ -846,15 +835,15 @@ def _normalize_package_callable_inventory(
     system_names: dict[str, str] = {}
     try:
         for record in system_package_records_from_manifests((manifest,)):
-            if record.interface_path is not None:
-                session = ExtensionOwnerSession(
-                    capture_owner_code_snapshot(system_owner_key(record), record.root)
+            if record.interface_path is None:
+                raise PackageError(
+                    f"System {record.system_id!r} uses unsupported Extension API v1 system.py"
                 )
-                families, _refs = session.normalize_interface()
-                declared = tuple(callable_id.name for callable_id in families)
-            else:
-                module = systems_registry._load_system_entrypoint(record)
-                declared = systems_registry._read_constructors(module, record)
+            session = ExtensionOwnerSession(
+                capture_owner_code_snapshot(system_owner_key(record), record.root)
+            )
+            families, _refs = session.normalize_interface()
+            declared = tuple(callable_id.name for callable_id in families)
             for name in declared:
                 if name in system_names:
                     raise PackageError(

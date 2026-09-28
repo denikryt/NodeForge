@@ -53,7 +53,6 @@ def _environment(*, functions=None, examples=None, local=None):
             "examples": ResolvedCatalog("examples", examples or {}),
             "local": ResolvedCatalog("local", local or {}),
         },
-        {},
     )
 
 
@@ -200,10 +199,10 @@ def test_source_session_caches_snapshot_by_function_and_preparation_by_owner(tmp
     function_id = library_function_id("functions", record.package_id, record.name)
     session = SourceCallableSession(resolved_environment=_environment())
 
-    first = session.prepare_library(function_id=function_id, identity=_identity("LIBRARY/one"), record=record, backend_builtins={})
-    same = session.prepare_library(function_id=function_id, identity=_identity("LIBRARY/one"), record=record, backend_builtins={})
+    first = session.prepare_library(function_id=function_id, identity=_identity("LIBRARY/one"), record=record)
+    same = session.prepare_library(function_id=function_id, identity=_identity("LIBRARY/one"), record=record)
     source_path.write_text('x = input_float("Changed", default=9.0)\noutput(x)\n', encoding="utf-8")
-    second_owner = session.prepare_library(function_id=function_id, identity=_identity("LIBRARY/two"), record=record, backend_builtins={})
+    second_owner = session.prepare_library(function_id=function_id, identity=_identity("LIBRARY/two"), record=record)
 
     assert first is same
     assert first is not second_owner
@@ -233,7 +232,6 @@ def test_source_session_cycle_detection_is_function_id_based(tmp_path):
             function_id=function_id,
             identity=_identity("LIBRARY/root-owner", function_id.stable_key()),
             record=record,
-            backend_builtins={},
         )
     assert session.prepared == {}
 
@@ -251,7 +249,6 @@ def test_imported_semantic_contract_uses_panel_projected_public_order(tmp_path):
         function_id=function_id,
         identity=_identity("LIBRARY/panelled", function_id.stable_key()),
         record=record,
-        backend_builtins={},
     )
 
     assert [parameter.display_name for parameter in prepared.contract.parameters] == ["Loose", "B", "A", "C"]
@@ -275,7 +272,6 @@ def test_imported_semantic_contract_derives_optional_unicode_keyword_aliases(tmp
         function_id=function_id,
         identity=_identity("LIBRARY/labels", function_id.stable_key()),
         record=record,
-        backend_builtins={},
     )
 
     assert [(parameter.display_name, parameter.keyword_key) for parameter in prepared.contract.parameters] == [
@@ -377,7 +373,6 @@ def test_local_catalog_cache_miss_supplies_real_fingerprint_inputs_and_hit_reuse
         source_callable_session=None,
         materialization=None,
         group_name="Local Demo",
-        backend_signature="sig",
         find_existing=lambda *args, **kwargs: None,
         write_package_metadata=lambda group, record: None,
     )
@@ -441,7 +436,6 @@ def test_selected_library_update_forwards_prepared_semantics_only():
         source_callable_session=None,
         group=group,
         group_name="Demo",
-        backend_signature="sig",
         write_package_metadata=lambda target, rec: None,
     )
     backend = Backend()

@@ -8,7 +8,6 @@ from typing import Mapping, Never, TYPE_CHECKING
 
 from .errors import CompileError
 from . import packages
-from .systems import registry as systems_registry
 
 if TYPE_CHECKING:
     from .library import LibraryEntryRecord
@@ -113,7 +112,6 @@ class ResolvedEnvironment:
     """Immutable external callable selection shared by one root compilation."""
 
     catalogs: Mapping[str, ResolvedCatalog]
-    system_constructors: Mapping[str, systems_registry.ResolvedSystemConstructor]
     extension_registry: object | None = None
     extension_system_callables: Mapping[str, object] = field(default_factory=dict)
 
@@ -128,17 +126,10 @@ class ResolvedEnvironment:
         for namespace, catalog in catalogs.items():
             if catalog.namespace != namespace:
                 raise ValueError("Resolved environment catalog key does not match catalog namespace")
-        systems = dict(self.system_constructors)
-        for name, binding in systems.items():
-            if binding.name != name:
-                raise ValueError("Resolved system mapping key does not match constructor name")
         extension_systems = dict(self.extension_system_callables)
         for name, callable_id in extension_systems.items():
             if not isinstance(callable_id, ExtensionCallableId) or callable_id.name != name:
                 raise ValueError("Resolved v2 system mapping key does not match extension callable identity")
-        overlap = set(systems) & set(extension_systems)
-        if overlap:
-            raise ValueError(f"Resolved environment contains duplicate v1/v2 system names: {sorted(overlap)!r}")
         registry = self.extension_registry
         if registry is None:
             registry = ExtensionRegistry.empty()
@@ -148,7 +139,6 @@ class ResolvedEnvironment:
             if not registry.contains(callable_id):
                 raise ValueError("Resolved v2 system callable is missing from extension registry")
         object.__setattr__(self, "catalogs", MappingProxyType(catalogs))
-        object.__setattr__(self, "system_constructors", MappingProxyType(systems))
         object.__setattr__(self, "extension_registry", registry)
         object.__setattr__(self, "extension_system_callables", MappingProxyType(extension_systems))
 
@@ -160,12 +150,8 @@ class ResolvedEnvironment:
             raise CompileError(f"Unknown library catalog: {namespace}") from exc
 
     def system_names(self) -> tuple[str, ...]:
-        """Return retained-v1 and v2 system callable names in deterministic order."""
-        return tuple(sorted(set(self.system_constructors) | set(self.extension_system_callables)))
-
-    def system(self, name: str) -> systems_registry.ResolvedSystemConstructor | None:
-        """Return the retained-v1 resolved owner for a constructor name."""
-        return self.system_constructors.get(name)
+        """Return active Extension API v2 system callable names in deterministic order."""
+        return tuple(sorted(self.extension_system_callables))
 
 
 def _resolved_failure_from_exception(exc: Exception) -> ResolvedCatalogFailure:
@@ -194,7 +180,7 @@ def _core_validate_system_name(name: str, package_id: str) -> None:
 
 
 def resolve_environment() -> ResolvedEnvironment:
-    """Resolve one coherent v1/v2 external callable environment snapshot."""
+    """Resolve one coherent permanent external callable environment snapshot."""
     from . import library
     from .extension_registry import (
         ExtensionOwnerSession,
@@ -284,7 +270,6 @@ def resolve_environment() -> ResolvedEnvironment:
         records_by_package.setdefault(record.package_id, []).append(record)
 
     admitted_packages: set[str] = set()
-    admitted_v1_records: list[object] = []
     admitted_v2_sessions: list[ExtensionOwnerSession] = []
     v2_system_map: dict[str, object] = {}
     for package_id in sorted(manifests_by_id):
@@ -295,14 +280,13 @@ def resolve_environment() -> ResolvedEnvironment:
                 raise snapshot_failure
             local_names: dict[str, str] = {}
             package_v1 = [record for record in package_records if record.interface_path is None]
-            package_v2 = [record for record in package_records if record.interface_path is not None]
             if package_v1:
-                legacy = systems_registry.resolve_constructors(package_v1)
-                for name, binding in legacy.items():
-                    _core_validate_system_name(name, package_id)
-                    if name in local_names:
-                        raise CompileError(f"Duplicate system constructor {name!r} inside {package_id}")
-                    local_names[name] = binding.record.system_id
+                # Valid manifests reject system.py-only owners structurally. Keep
+                # bootstrap fail-closed without importing legacy handler modules.
+                raise CompileError(
+                    f"Package {package_id!r} contains unsupported Extension API v1 system owner"
+                )
+            package_v2 = list(package_records)
             normalized_sessions: list[ExtensionOwnerSession] = []
             normalized_ids: list[object] = []
             for record in package_v2:
@@ -321,21 +305,13 @@ def resolve_environment() -> ResolvedEnvironment:
             # package-owned library candidates/failures are discarded below.
             continue
         admitted_packages.add(package_id)
-        admitted_v1_records.extend(package_v1)
         admitted_v2_sessions.extend(normalized_sessions)
         for callable_id in normalized_ids:
             if callable_id.name in v2_system_map:
                 raise CompileError(f"Duplicate system constructor {callable_id.name!r} across active packages")
             v2_system_map[callable_id.name] = callable_id
 
-    legacy_systems = dict(systems_registry.resolve_constructors(admitted_v1_records))
-    for name in legacy_systems:
-        if name in v2_system_map:
-            owner = legacy_systems[name].record
-            raise CompileError(
-                f"Duplicate system constructor {name!r}: {owner.package_id}/{owner.system_id} and v2 owner"
-            )
-    complete_system_names = frozenset(set(legacy_systems) | set(v2_system_map))
+    complete_system_names = frozenset(v2_system_map)
 
     catalogs: dict[str, ResolvedCatalog] = {}
     selected_library_sessions: list[ExtensionOwnerSession] = []
@@ -393,7 +369,6 @@ def resolve_environment() -> ResolvedEnvironment:
     registry = ExtensionRegistry((*admitted_v2_sessions, *selected_library_sessions))
     return ResolvedEnvironment(
         catalogs=catalogs,
-        system_constructors=legacy_systems,
         extension_registry=registry,
         extension_system_callables=v2_system_map,
     )

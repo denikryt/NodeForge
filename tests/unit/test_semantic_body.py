@@ -25,9 +25,7 @@ from NodeForge.semantic_ir import (
 def _callables(**overrides):
     data = dict(
         callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
-        system_constructors={},
         local_functions={},
-        backend_helper_names=frozenset(),
         imported_functions={},
     )
     data.update(overrides)
@@ -239,12 +237,12 @@ def test_same_label_different_input_types_are_independent():
     assert second.typ is NFType.VECTOR
 
 
-def test_late_extension_migration_error_does_not_mutate_input_semantic_state():
+def test_late_unknown_call_error_does_not_mutate_input_semantic_state():
     bindings = dict([_binding("a", 0)])
     constants = {"k": 3}
     with pytest.raises(
         CompileError,
-        match=r"backend_helper\(\) is temporarily unavailable while Python extension callables are being migrated",
+        match=r"Unsupported function: backend_helper",
     ):
         lower_basic_body(
             _stmts('x = a + 1\ny = backend_helper(x)\nx'),
@@ -252,7 +250,7 @@ def test_late_extension_migration_error_does_not_mutate_input_semantic_state():
             initial_compile_time=CompileTimeSnapshot(MappingProxyType(constants)),
             legacy_binding_names=frozenset(),
             reserved_name_labels={},
-            callable_environment=_callables(backend_helper_names=frozenset({"backend_helper"})),
+            callable_environment=_callables(),
             owner_scope="scope",
         )
     assert constants == {"k": 3}
@@ -268,9 +266,8 @@ def test_compile_statements_internal_tripwire_preserves_committed_compile_time_s
     committed = CompileTimeState({"c": 2})
     comp = SimpleNamespace(
         compile_time=committed,
-        resolved_environment=SimpleNamespace(system_constructors={}),
+        resolved_environment=SimpleNamespace(extension_system_callables={}),
         local_functions={},
-        backend_builtins={},
         imported_library_functions={},
         function_group_owner_scope="scope",
         input_declaration_owner="scope",
@@ -311,9 +308,8 @@ def test_compile_statements_routes_supported_core_only_through_semantic_body(mon
     class FakeComp:
         def __init__(self):
             self.compile_time = CompileTimeState({})
-            self.resolved_environment = SimpleNamespace(system_constructors={})
+            self.resolved_environment = SimpleNamespace(extension_system_callables={})
             self.local_functions = {}
-            self.backend_builtins = {}
             self.imported_library_functions = {}
             self.function_group_owner_scope = "scope"
             self.input_declaration_owner = "scope"
@@ -443,11 +439,11 @@ def test_compile_statements_routes_supported_core_only_through_semantic_body(mon
 
     semantic_lowerings.clear()
     deferred_comp = FakeComp()
-    deferred_comp.resolved_environment = SimpleNamespace(system_constructors={"system_constructor": object()})
+    deferred_comp.resolved_environment = SimpleNamespace(extension_system_callables={})
     deferred = GroupBuildContext(group=object(), comp=deferred_comp, geometry_mode=False)
     with pytest.raises(
         CompileError,
-        match=r"system_constructor\(\) is temporarily unavailable while Python extension callables are being migrated",
+        match=r"Unsupported function: system_constructor",
     ):
         compile_statements(deferred, _stmts("system_constructor()"))
     assert semantic_lowerings == []
@@ -484,9 +480,8 @@ def test_runtime_dependent_flat_unpack_loop_is_a_direct_semantic_error(monkeypat
     class FakeComp:
         def __init__(self):
             self.compile_time = CompileTimeState({})
-            self.resolved_environment = SimpleNamespace(system_constructors={})
+            self.resolved_environment = SimpleNamespace(extension_system_callables={})
             self.local_functions = {}
-            self.backend_builtins = {}
             self.imported_library_functions = {}
             self.function_group_owner_scope = "scope"
             self.input_declaration_owner = "scope"
@@ -527,14 +522,14 @@ def test_runtime_dependent_flat_unpack_loop_is_a_direct_semantic_error(monkeypat
         )
 
 
-def test_extension_migration_error_does_not_publish_speculative_compile_time_changes():
-    """A direct migration diagnostic cannot publish speculative compile-time bindings."""
+def test_unknown_call_error_does_not_publish_speculative_compile_time_changes():
+    """A direct semantic error cannot publish speculative compile-time bindings."""
     from NodeForge.compile_time import CompileTimeState
 
     committed = CompileTimeState({"c": 2})
     with pytest.raises(
         CompileError,
-        match=r"backend_helper\(\) is temporarily unavailable while Python extension callables are being migrated",
+        match=r"Unsupported function: backend_helper",
     ):
         lower_basic_body(
             _stmts("c = 3\nx = 1\ny = backend_helper()\nx"),
@@ -542,7 +537,7 @@ def test_extension_migration_error_does_not_publish_speculative_compile_time_cha
             initial_compile_time=committed.snapshot(),
             legacy_binding_names=frozenset(),
             reserved_name_labels={},
-            callable_environment=_callables(backend_helper_names=frozenset({"backend_helper"})),
+            callable_environment=_callables(),
             owner_scope="scope",
         )
     assert committed.get("c") == 2
@@ -659,7 +654,6 @@ def test_group_semantic_preparation_publishes_entry_binding_identity_through_int
 
     environment = ResolvedEnvironment(
         {name: ResolvedCatalog(name, {}) for name in ("functions", "examples", "local")},
-        {},
     )
     identity = GroupCompilationIdentity(None, "ROOT/test-owner", "definition", "declaration")
     compilation = analyze_group_source(
@@ -1450,12 +1444,12 @@ def test_literal_true_still_analyzes_false_branch_semantic_error():
         )
 
 
-def test_literal_false_does_not_bypass_existing_extension_migration_diagnostic():
-    """Both literal-condition branches expose the existing extension migration boundary."""
-    callables = _callables(backend_helper_names=frozenset({"backend_helper"}))
+def test_literal_false_does_not_bypass_unknown_call_diagnostic():
+    """Both literal-condition branches expose ordinary semantic errors."""
+    callables = _callables()
     with pytest.raises(
         CompileError,
-        match=r"backend_helper\(\) is temporarily unavailable while Python extension callables are being migrated",
+        match=r"Unsupported function: backend_helper",
     ):
         _lower(
             'if False:\n'
@@ -1466,7 +1460,7 @@ def test_literal_false_does_not_bypass_existing_extension_migration_diagnostic()
         )
 
 
-def test_extension_migration_error_keeps_contextual_core_atomic_and_never_calls_legacy(monkeypatch):
+def test_unknown_call_error_keeps_contextual_core_atomic_and_never_calls_legacy(monkeypatch):
     from types import SimpleNamespace
     from NodeForge.compile_time import CompileTimeState
     from NodeForge.statement_compiler import GroupBuildContext, compile_statements
@@ -1475,9 +1469,8 @@ def test_extension_migration_error_keeps_contextual_core_atomic_and_never_calls_
     class FakeComp:
         def __init__(self):
             self.compile_time = CompileTimeState({"seed": 1})
-            self.resolved_environment = SimpleNamespace(system_constructors={"dynamic_system": object()})
+            self.resolved_environment = SimpleNamespace(extension_system_callables={})
             self.local_functions = {}
-            self.backend_builtins = {}
             self.imported_library_functions = {}
             self.function_group_owner_scope = "scope"
             self.input_declaration_owner = "scope"
@@ -1509,7 +1502,7 @@ def test_extension_migration_error_keeps_contextual_core_atomic_and_never_calls_
     )
     with pytest.raises(
         CompileError,
-        match=r"dynamic_system\(\) is temporarily unavailable while Python extension callables are being migrated",
+        match=r"Unsupported function: dynamic_system",
     ):
         compile_statements(ctx, _stmts(source))
     assert dict(comp.compile_time.values) == {"seed": 1}
@@ -1517,8 +1510,8 @@ def test_extension_migration_error_keeps_contextual_core_atomic_and_never_calls_
     assert not hasattr(comp, "_interface_input_binding_ids")
 
 @pytest.mark.parametrize("initial_state", [False, True])
-def test_extension_migration_error_preserves_legacy_grid_routing_state(monkeypatch, initial_state):
-    """A direct migration diagnostic leaves retained legacy routing state unchanged."""
+def test_unknown_call_error_preserves_legacy_grid_routing_state(monkeypatch, initial_state):
+    """A direct semantic diagnostic leaves retained legacy routing state unchanged."""
     from types import SimpleNamespace
     from NodeForge.compile_time import CompileTimeState
     from NodeForge.statement_compiler import GroupBuildContext, compile_statements
@@ -1527,9 +1520,8 @@ def test_extension_migration_error_preserves_legacy_grid_routing_state(monkeypat
     class FakeComp:
         def __init__(self):
             self.compile_time = CompileTimeState({})
-            self.resolved_environment = SimpleNamespace(system_constructors={"dynamic_system": object()})
+            self.resolved_environment = SimpleNamespace(extension_system_callables={})
             self.local_functions = {}
-            self.backend_builtins = {}
             self.imported_library_functions = {}
             self.function_group_owner_scope = "scope"
             self.input_declaration_owner = "scope"
@@ -1554,7 +1546,7 @@ def test_extension_migration_error_preserves_legacy_grid_routing_state(monkeypat
     comp = FakeComp()
     with pytest.raises(
         CompileError,
-        match=r"dynamic_system\(\) is temporarily unavailable while Python extension callables are being migrated",
+        match=r"Unsupported function: dynamic_system",
     ):
         compile_statements(
             GroupBuildContext(group=object(), comp=comp, geometry_mode=False),

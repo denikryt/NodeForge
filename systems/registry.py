@@ -1,226 +1,89 @@
-"""Dynamic registry for package-backed embedded system constructor calls."""
+"""Structural public-name view for installed Extension API v2 system owners."""
 
 from __future__ import annotations
-
-import hashlib
-import importlib.util
-import sys
-import types
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable, Iterable, Mapping
 
 from ..errors import CompileError
 from .. import packages
 
-_RESERVED_CACHE: dict[str, "ResolvedSystemConstructor"] | None = None
-_MODULE_CACHE: dict[str, object] = {}
-
-
-@dataclass(frozen=True)
-class ResolvedSystemConstructor:
-    """Resolved owner for one public system constructor name."""
-
-    name: str
-    record: packages.SystemPackageRecord
-    constructors: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        """Defensively freeze the selected owner's declared constructor sequence."""
-        object.__setattr__(self, "constructors", tuple(self.constructors))
+_RESERVED_CACHE: dict[str, packages.SystemPackageRecord] | None = None
 
 
 def invalidate_cache() -> None:
-    """Clear dynamic constructor and synthetic module caches."""
+    """Clear the live convenience cache of v2 system callable names."""
     global _RESERVED_CACHE
     _RESERVED_CACHE = None
-    # Synthetic package names contain install-path hashes; old modules are harmless but
-    # should not be reused by this registry after package state changes.
-    _MODULE_CACHE.clear()
-
-
-def constructor_names() -> tuple[str, ...]:
-    """Return the active package-backed constructor names."""
-    return tuple(sorted(_constructor_map()))
-
-
-def has_system_constructor(name: str) -> bool:
-    """Return True when *name* is reserved for a package-backed constructor."""
-    return name in _constructor_map()
-
-
-def constructor_owner(name: str) -> packages.SystemPackageRecord | None:
-    """Return the package system record that owns *name*, if active."""
-    item = _constructor_map().get(name)
-    return item.record if item is not None else None
-
-
-def get_handler(name: str) -> Callable:
-    """Return the lazily loaded handler for an active package-backed constructor."""
-    item = _constructor_map().get(name)
-    if item is None:
-        raise CompileError(f"Unsupported system constructor: {name}")
-    return get_resolved_handler(item)
-
-
-def get_resolved_handler(binding: ResolvedSystemConstructor) -> Callable:
-    """Return the handler selected by one compilation-session system binding."""
-    handlers = _load_handlers(binding)
-    try:
-        return handlers[binding.name]
-    except KeyError as exc:
-        raise CompileError(
-            f"System {binding.record.system_id!r} did not provide handler for {binding.name!r}"
-        ) from exc
-
-
-def compile_call(comp, expr, depth=0):
-    """Compile one registered package-backed constructor call."""
-    name = expr.func.id
-    handler = get_handler(name)
-    return handler(comp, expr, depth)
-
-
-def compile_resolved_call(comp, expr, binding: ResolvedSystemConstructor, depth=0):
-    """Compile a call through the exact system owner selected for this session."""
-    if expr.func.id != binding.name:
-        raise CompileError("Internal error: resolved system binding does not match call name")
-    return get_resolved_handler(binding)(comp, expr, depth)
 
 
 def clear_cache() -> None:
-    """Clear dynamic constructor and synthetic module caches."""
+    """Compatibility alias for invalidating structural system-name state."""
     invalidate_cache()
 
 
-def validate_no_reserved_collision(name: str, owner: str) -> None:
-    """Reject user-owned callables that collide with active system names."""
-    if name in constructor_names():
-        raise CompileError(f"{owner} {name!r} collides with reserved system constructor name")
-
-
-def _constructor_map() -> dict[str, ResolvedSystemConstructor]:
+def _constructor_map() -> dict[str, packages.SystemPackageRecord]:
+    """Return live v2 callable names without loading any v1 system handler module."""
     global _RESERVED_CACHE
     if _RESERVED_CACHE is not None:
         return _RESERVED_CACHE
-    out = dict(resolve_constructors(packages.system_package_records()))
+
+    from ..extension_registry import (
+        ExtensionOwnerSession,
+        capture_owner_code_snapshot,
+        system_owner_key,
+    )
+
+    out: dict[str, packages.SystemPackageRecord] = {}
+    owners: dict[str, str] = {}
+    for record in packages.system_package_records():
+        if record.interface_path is None:
+            raise CompileError(
+                f"System {record.package_id}/{record.system_id} uses unsupported Extension API v1 system.py"
+            )
+        session = ExtensionOwnerSession(capture_owner_code_snapshot(system_owner_key(record), record.root))
+        families, _refs = session.normalize_interface()
+        for callable_id in families:
+            name = callable_id.name
+            if name in out:
+                raise CompileError(
+                    f"Duplicate system constructor {name!r}: {owners[name]} and "
+                    f"{record.package_id}/{record.system_id}"
+                )
+            out[name] = record
+            owners[name] = f"{record.package_id}/{record.system_id}"
     _RESERVED_CACHE = out
     return out
 
 
-def resolve_constructors(
-    records: Iterable[packages.SystemPackageRecord],
-) -> Mapping[str, ResolvedSystemConstructor]:
-    """Resolve constructor ownership from explicit package system records."""
-    out: dict[str, ResolvedSystemConstructor] = {}
-    owners: dict[str, str] = {}
-    for record in records:
-        module = _load_system_entrypoint(record)
-        constructors = _read_constructors(module, record)
-        for name in constructors:
-            if name in out:
-                raise CompileError(
-                    f"Duplicate system constructor {name!r}: {owners[name]} and {record.package_id}/{record.system_id}"
-                )
-            out[name] = ResolvedSystemConstructor(name, record, constructors)
-            owners[name] = f"{record.package_id}/{record.system_id}"
-    return out
+def constructor_names() -> tuple[str, ...]:
+    """Return active Extension API v2 system callable names."""
+    return tuple(sorted(_constructor_map()))
 
 
-def _read_constructors(module, record: packages.SystemPackageRecord) -> tuple[str, ...]:
-    raw = getattr(module, "CONSTRUCTORS", None)
-    if not isinstance(raw, (list, tuple)) or not raw:
-        raise CompileError(f"System {record.package_id}/{record.system_id} must declare CONSTRUCTORS")
-    names: list[str] = []
-    seen: set[str] = set()
-    for item in raw:
-        if not isinstance(item, str) or not item or not item.isidentifier() or item.startswith("_"):
-            raise CompileError(f"System {record.package_id}/{record.system_id} has invalid constructor name {item!r}")
-        if item in seen:
-            raise CompileError(f"System {record.package_id}/{record.system_id} declares duplicate constructor {item!r}")
-        seen.add(item)
-        names.append(item)
-    if not callable(getattr(module, "load_handlers", None)):
-        raise CompileError(f"System {record.package_id}/{record.system_id} must define load_handlers()")
-    return tuple(names)
+def has_system_constructor(name: str) -> bool:
+    """Return whether an active v2 system owner declares *name*."""
+    return name in _constructor_map()
 
 
-def _load_handlers(owner: ResolvedSystemConstructor) -> dict[str, Callable]:
-    module = _load_system_entrypoint(owner.record)
-    handlers = module.load_handlers()
-    if not isinstance(handlers, dict):
-        raise CompileError(f"System {owner.record.package_id}/{owner.record.system_id} load_handlers() must return a dict")
-    expected = set(owner.constructors)
-    actual = set(handlers)
-    if actual != expected:
-        raise CompileError(
-            f"System {owner.record.package_id}/{owner.record.system_id} handlers do not match CONSTRUCTORS"
-        )
-    for name, handler in handlers.items():
-        if not callable(handler):
-            raise CompileError(f"System handler {name!r} from {owner.record.package_id}/{owner.record.system_id} is not callable")
-    return handlers
+def constructor_owner(name: str) -> packages.SystemPackageRecord | None:
+    """Return the v2 system record that owns *name*, if active."""
+    return _constructor_map().get(name)
 
 
-def _load_system_entrypoint(record: packages.SystemPackageRecord):
-    if record.module_path is None:
-        raise CompileError(f"System {record.package_id}/{record.system_id} is a v2 extension owner, not a v1 system.py owner")
-    base_pkg = _synthetic_base_package(record)
-    module_name = f"{base_pkg}.system"
-    cached = _MODULE_CACHE.get(module_name)
-    if cached is not None:
-        return cached
-    _ensure_synthetic_package(base_pkg, record.root)
-    spec = importlib.util.spec_from_file_location(module_name, record.module_path)
-    if spec is None or spec.loader is None:
-        raise CompileError(f"Could not load system entrypoint: {record.module_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    _MODULE_CACHE[module_name] = module
-    return module
-
-
-def _synthetic_base_package(record: packages.SystemPackageRecord) -> str:
-    package = __package__.split(".systems")[0] if __package__ else "NodeForge"
-    safe_package_id = "".join(ch if ch.isalnum() else "_" for ch in record.package_id)
-    safe_system_id = "".join(ch if ch.isalnum() else "_" for ch in record.system_id)
-    digest = hashlib.sha256(str(record.root).encode("utf-8")).hexdigest()[:12]
-    return f"{package}._package_modules.{safe_package_id}.systems.{safe_system_id}_{digest}"
-
-
-def _ensure_synthetic_package(base_pkg: str, system_root: Path) -> None:
-    parts = base_pkg.split(".")
-    for index in range(1, len(parts) + 1):
-        name = ".".join(parts[:index])
-        if name in sys.modules:
-            module = sys.modules[name]
-        else:
-            module = types.ModuleType(name)
-            module.__package__ = name
-            module.__path__ = []
-            sys.modules[name] = module
-        if index == len(parts):
-            module.__path__ = [str(system_root)]
-            module.__package__ = name
+def validate_no_reserved_collision(name: str, owner: str) -> None:
+    """Reject user-owned callables that collide with active v2 system names."""
+    if name in constructor_names():
+        raise CompileError(f"{owner} {name!r} collides with reserved system constructor name")
 
 
 def NAMES() -> tuple[str, ...]:
-    """Compatibility callable returning the active constructor set."""
+    """Return the active constructor set for legacy discovery callers."""
     return constructor_names()
 
 
 __all__ = [
-    "ResolvedSystemConstructor",
     "constructor_names",
     "constructor_owner",
-    "get_handler",
-    "get_resolved_handler",
     "clear_cache",
     "has_system_constructor",
-    "compile_call",
-    "compile_resolved_call",
-    "resolve_constructors",
     "validate_no_reserved_collision",
     "invalidate_cache",
     "NAMES",

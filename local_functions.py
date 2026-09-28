@@ -1,4 +1,4 @@
-"""Physical helpers for prepared local functions and retained v1 backend helpers."""
+"""Physical helpers for prepared local source functions."""
 
 import ast
 import json
@@ -172,15 +172,7 @@ def build_prepared_local_materialization_spec(
         finalize_group=finalize_local_group,
     )
 
-def compile_backend_builtin_call(comp, expr, depth=0):
-    """Compile a package-local Python helper exposed only while compiling source.nf."""
-    name = expr.func.id
-    helper = comp.backend_builtins.get(name)
-    if not callable(helper):
-        raise CompileError(f"Local backend helper {name} is not callable")
-    return helper(comp, expr, depth)
 
 __all__ = [
     "build_prepared_local_materialization_spec",
-    "compile_backend_builtin_call",
 ]

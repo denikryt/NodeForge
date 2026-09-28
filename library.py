@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import errno
 import json
-import importlib.util
 import os
 import re
-import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -862,125 +860,14 @@ def _module_path_for_entry(namespace: str, name: str) -> Path | None:
     return record.module_path
 
 
-def _load_entry_module_for_record(record: LibraryEntryRecord):
-    """Load the trusted native module selected by an exact catalog record."""
-    _validate_resolved_record(record)
-    catalog = _catalog(record.namespace)
-    path = record.module_path
-    if path is None or not catalog.allow_native or catalog.native_module_file is None:
-        raise CompileError(f"Unknown native {record.namespace} library entry: {record.name}")
-    package = __package__ or "NodeForge"
-    module_stem = Path(catalog.native_module_file).stem
-    if record.package_id:
-        safe_package_id = "".join(ch if ch.isalnum() else "_" for ch in record.package_id)
-        digest = str(abs(hash(str(path.parent.resolve()))))
-        base_pkg = f"{package}._package_modules.{safe_package_id}.{record.namespace}.{record.name}_{digest}"
-        _ensure_synthetic_package(base_pkg, path.parent)
-        module_name = f"{base_pkg}.{module_stem}"
-    else:
-        module_name = f"{package}.{catalog.dirname}.{record.name}.{module_stem}"
-    existing = sys.modules.get(module_name)
-    if existing is not None and getattr(existing, "__file__", None) == str(path):
-        return existing
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    if spec is None or spec.loader is None:
-        raise CompileError(f"Could not load {record.namespace} backend module: {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def _load_entry_module(namespace: str, name: str):
-    """Load a live-resolved trusted native helper module for a catalog entry."""
-    record = find_library_entry_record(namespace, name)
-    if record is None:
-        raise CompileError(f"Unknown native {namespace} library entry: {name}")
-    return _load_entry_module_for_record(record)
-
-
-def _ensure_synthetic_package(base_pkg: str, root: Path) -> None:
-    """Create a private package namespace whose __path__ supports relative imports."""
-    import types
-
-    parts = base_pkg.split(".")
-    for index in range(1, len(parts) + 1):
-        name = ".".join(parts[:index])
-        module = sys.modules.get(name)
-        if module is None:
-            module = types.ModuleType(name)
-            module.__package__ = name
-            module.__path__ = []
-            sys.modules[name] = module
-        if index == len(parts):
-            module.__path__ = [str(root)]
-            module.__package__ = name
-
 def has_module_library_entry(namespace: str, name: str) -> bool:
-    """Return True if a trusted native module exists for a catalog entry."""
-    return _module_path_for_entry(namespace, name) is not None
+    """Return whether discovery found a legacy native Python library owner.
 
-
-def has_native_compile_call(namespace: str, name: str | None = None) -> bool:
-    """Return True when a trusted module owns whole-call compilation.
-
-    The one-argument form is kept as a compatibility alias for functions.
+    This is structural characterization only. Stage 35 never imports or executes
+    the native module; supported Python extensions use ``interface.py`` through
+    Extension API v2.
     """
-    if name is None:
-        namespace, name = "functions", namespace
-    record = find_library_entry_record(namespace, name)
-    return False if record is None else has_native_compile_call_for_record(record)
-
-
-def has_native_compile_call_for_record(record: LibraryEntryRecord) -> bool:
-    """Return whether the exact selected record owns whole-call compilation."""
-    _validate_resolved_record(record)
-    if record.module_path is None:
-        return False
-    module = _load_entry_module_for_record(record)
-    return callable(getattr(module, "compile_call", None))
-
-
-def backend_builtins_for_entry(namespace: str, name: str) -> dict[str, object]:
-    """Return package-local backend helpers exposed while compiling source.nf."""
-    record = find_library_entry_record(namespace, name)
-    if record is None:
-        return {}
-    return backend_builtins_for_record(record)
-
-
-def backend_builtins_for_record(record: LibraryEntryRecord) -> dict[str, object]:
-    """Return backend helpers from the exact selected catalog record."""
-    _validate_resolved_record(record)
-    if record.module_path is None:
-        return {}
-    module = _load_entry_module_for_record(record)
-    builtins = getattr(module, "BACKEND_BUILTINS", None)
-    if builtins is None:
-        return {}
-    if not isinstance(builtins, dict):
-        raise CompileError(f"{record.namespace} module {record.name} BACKEND_BUILTINS must be a dict")
-    return dict(builtins)
-
-
-def compile_module_library_entry_call(comp, expr, depth=0, namespace="functions", entry_name=None):
-    """Compile a call handled by a trusted native helper module."""
-    name = entry_name or expr.func.id
-    record = find_library_entry_record(namespace, name)
-    if record is None:
-        raise CompileError(f"Unknown native {namespace} library entry: {name}")
-    return compile_module_library_entry_call_for_record(comp, expr, record, depth)
-
-
-def compile_module_library_entry_call_for_record(comp, expr, record: LibraryEntryRecord, depth=0):
-    """Compile a call through the native module of an exact selected record."""
-    module = _load_entry_module_for_record(record)
-    compile_call = getattr(module, "compile_call", None)
-    if compile_call is None:
-        raise CompileError(
-            f"{record.namespace} module {record.name} must define compile_call(comp, expr, depth=0)"
-        )
-    return compile_call(comp, expr, depth)
+    return _module_path_for_entry(namespace, name) is not None
 
 
 def _input_sockets(node):
@@ -999,13 +886,6 @@ def _record_kind(namespace: str, name: str) -> str:
     if record is None:
         return "script"
     return record.kind
-
-
-def _backend_signature_for_record(record: LibraryEntryRecord | None) -> str:
-    """Return the trusted backend signature for source recompilation checks."""
-    if record is None or record.module_path is None:
-        return ""
-    return str(record.module_path.stat().st_mtime_ns)
 
 
 def _group_catalog_provenance(group) -> tuple[str, str]:
@@ -1082,7 +962,6 @@ def update_materialized_library_entry_group_for_record(record: LibraryEntryRecor
         source,
         compilation_identity=identity,
         helper_namespace=record.name,
-        backend_builtins=backend_builtins_for_record(record),
         source_callable_session=session,
     )
     spec = LibraryFunctionUpdateSpec(
@@ -1094,7 +973,6 @@ def update_materialized_library_entry_group_for_record(record: LibraryEntryRecor
         source_callable_session=session,
         group=group,
         group_name=getattr(group, "name", _group_name_for_record(record)),
-        backend_signature=_backend_signature_for_record(record),
         write_package_metadata=_write_package_metadata,
     )
     return FunctionMaterializer(group_backend=group_backend).update_library_group(spec)
@@ -1121,7 +999,6 @@ def _write_package_metadata(group, record: LibraryEntryRecord) -> None:
     group["nodeforge_library_namespace"] = record.namespace
     group["nodeforge_library_name"] = record.name
     group["nodeforge_function_kind"] = record.kind
-    group["nodeforge_backend_signature"] = _backend_signature_for_record(record)
     group["nodeforge_package_id"] = record.package_id or CORE_PACKAGE_ID
     if record.package_id:
         group["nodeforge_package_name"] = record.package_name
@@ -1219,7 +1096,6 @@ def materialize_prepared_library_callable(
         source_callable_session=materialization_context.source_callable_session,
         materialization=materialization,
         group_name=_group_name_for_record(record),
-        backend_signature=_backend_signature_for_record(record),
         find_existing=_find_owned_library_entry_group,
         write_package_metadata=_write_package_metadata,
     )
@@ -1285,7 +1161,6 @@ def get_or_create_library_entry_group_for_record(
         source,
         compilation_identity=identity,
         helper_namespace=name,
-        backend_builtins=backend_builtins_for_record(record),
         source_callable_session=session,
     )
     spec = LibraryFunctionMaterializationSpec(
@@ -1297,7 +1172,6 @@ def get_or_create_library_entry_group_for_record(
         source_callable_session=session,
         materialization=None,
         group_name=_group_name_for_record(record),
-        backend_signature=_backend_signature_for_record(record),
         find_existing=_find_owned_library_entry_group,
         write_package_metadata=_write_package_metadata,
     )
@@ -1320,15 +1194,10 @@ def materialize_library_entry_group_for_record(record: LibraryEntryRecord, group
     namespace = record.namespace
     name = record.name
     if record.module_path is not None:
-        module = _load_entry_module_for_record(record)
-        materialize = getattr(module, "materialize_group", None)
-        if materialize is not None:
-            group = materialize(group_backend.compile_group_callback)
-            try:
-                _write_package_metadata(group, record)
-            except Exception:
-                pass
-            return apply_function_group_display_name(group, name) if namespace == "functions" else group
+        raise CompileError(
+            f"{namespace} library entry {name!r} uses unsupported Extension API v1 native execution; "
+            "migrate the owner to interface.py (EXTENSION_API = 2)"
+        )
     if record.source_path is not None:
         materialized = get_or_create_library_entry_group_for_record(record, group_backend)
         group = materialized.group
@@ -1516,16 +1385,6 @@ def has_module_library_function(name: str) -> bool:
     return has_module_library_entry("functions", name)
 
 
-def backend_builtins_for_function(name: str) -> dict[str, object]:
-    """Return package-local backend helpers for a functions entry."""
-    return backend_builtins_for_entry("functions", name)
-
-
-def compile_module_library_function_call(comp, expr, depth=0, function_name=None):
-    """Compile a functions-catalog native call."""
-    return compile_module_library_entry_call(comp, expr, depth, namespace="functions", entry_name=function_name)
-
-
 def library_function_names() -> set[str]:
     """Return all callable function names from the functions folder."""
     return library_entry_names("functions")
@@ -1581,12 +1440,6 @@ __all__ = [
     "display_name_for_group",
     "apply_function_node_display_name",
     "has_module_library_entry",
-    "has_native_compile_call",
-    "has_native_compile_call_for_record",
-    "backend_builtins_for_entry",
-    "backend_builtins_for_record",
-    "compile_module_library_entry_call",
-    "compile_module_library_entry_call_for_record",
     "ensure_local_catalog_dir",
     "local_source_roots",
     "link_local_source_folder",
@@ -1605,6 +1458,4 @@ __all__ = [
     "load_library_source",
     "get_or_create_library_group",
     "has_module_library_function",
-    "backend_builtins_for_function",
-    "compile_module_library_function_call",
 ]

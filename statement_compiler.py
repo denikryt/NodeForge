@@ -572,10 +572,9 @@ def compile_statements(
     runtime_bindings = comp.runtime_bindings_snapshot()
     callable_environment = CallableEnvironment(
         callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
-        system_constructors=comp.resolved_environment.system_constructors,
         local_functions=comp.local_functions,
-        backend_helper_names=frozenset(comp.backend_builtins),
         imported_functions=comp.imported_library_functions,
+        extension_system_callables=comp.resolved_environment.extension_system_callables,
     )
     root_compile_time = comp.compile_time.snapshot()
     body_compilation = lower_basic_body(

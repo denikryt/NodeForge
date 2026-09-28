@@ -43,7 +43,7 @@ pytestmark = pytest.mark.unit
 
 def _empty_callable_environment():
     """Return an empty immutable callable namespace for non-call semantic tests."""
-    return CallableEnvironment(frozenset(), {}, {}, frozenset(), {})
+    return CallableEnvironment(frozenset(), {}, {}, {})
 
 
 
@@ -79,10 +79,9 @@ def _env(*, bindings=None, legacy=(), consts=None, labels=None, backend_helpers=
         MappingProxyType(dict(labels or {})),
         callable_environment=CallableEnvironment(
             frozenset(builtins),
-            systems or {},
             local_functions or {},
-            frozenset(backend_helpers),
             imported_functions or {},
+            systems or {},
         ),
         structural_arrays=structural_arrays or StructuralArraySnapshot({}, {}),
         object_semantics=object_semantics,
@@ -282,12 +281,9 @@ def test_type_token_diagnostic_is_preserved():
         _analyze("Float")
 
 
-def test_extension_migration_error_short_circuits_before_unknown_right():
-    with pytest.raises(
-        CompileError,
-        match=r"legacy_call\(\) is temporarily unavailable while Python extension callables are being migrated",
-    ):
-        _analyze("legacy_call() + unknown_name", backend_helpers={"legacy_call"})
+def test_unknown_call_short_circuits_before_unknown_right():
+    with pytest.raises(CompileError, match=r"Unsupported function: legacy_call"):
+        _analyze("legacy_call() + unknown_name")
     with pytest.raises(CompileError, match="Unknown name: unknown_name"):
         _analyze("a + unknown_name", bindings={"a": TYPE_FLOAT})
 
@@ -374,12 +370,9 @@ def test_legacy_expression_environment_allows_unused_object_but_falls_back_when_
     assert arithmetic is not None
     assert _analyze("obj.geometry", bindings={"obj": TYPE_OBJECT}, object_registry=False) is None
 
-def test_extension_calls_are_explicit_migration_errors_while_legacy_bindings_remain_internal():
-    with pytest.raises(
-        CompileError,
-        match=r"f\(\) is temporarily unavailable while Python extension callables are being migrated",
-    ):
-        _analyze("f()", bindings={"a": TYPE_FLOAT}, backend_helpers={"f"})
+def test_unknown_calls_are_direct_errors_while_legacy_bindings_remain_internal():
+    with pytest.raises(CompileError, match=r"Unsupported function: f"):
+        _analyze("f()", bindings={"a": TYPE_FLOAT})
     assert _analyze("legacy[0]", legacy={"legacy"}) is None
     array = _analyze("[a]", bindings={"a": TYPE_FLOAT})
     assert isinstance(array.facts[array.root].result_shape, ArrayResultShape)

@@ -786,7 +786,6 @@ class BlenderGroupBackend:
         preserve_if_equivalent = bool(kwargs.pop("preserve_if_equivalent", False))
         local_functions = kwargs.pop("local_functions", None)
         imported_library_functions = kwargs.pop("imported_library_functions", None)
-        backend_builtins = kwargs.pop("backend_builtins", None)
         helper_namespace = kwargs.pop("helper_namespace", None) or name
         source_callable_session = kwargs.pop("source_callable_session", None)
         function_group_cache = kwargs.pop("function_group_cache", None)
@@ -812,7 +811,6 @@ class BlenderGroupBackend:
             helper_namespace=helper_namespace,
             inherited_local_functions=local_functions,
             inherited_imported_library_functions=imported_library_functions,
-            backend_builtins=backend_builtins,
             source_callable_session=source_callable_session,
         )
         for option_name, expected in (

@@ -32,9 +32,7 @@ pytestmark = pytest.mark.unit
 def _callables(by_name):
     return CallableEnvironment(
         callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
-        system_constructors={},
         local_functions={},
-        backend_helper_names=frozenset(),
         imported_functions={},
         extension_system_callables=by_name,
     )
@@ -362,6 +360,27 @@ def test_repeat_rejects_runtime_carried_state_becoming_extension_semantic(tmp_pa
         )
 
 
+
+def test_literal_semantic_list_persists_and_star_expands_with_existing_hidden_dependencies(tmp_path):
+    """A literal list of sibling semantic records persists through generic Stage-34 state and star expansion."""
+    result = _lower(
+        tmp_path,
+        "a = make_alpha(x)\nb = make_beta(2.0)\nparts = [a, b]\nconsume_star(*parts)\n",
+        bindings=dict([_binding("x", 0, NFType.INT)]),
+    )
+    snapshots = [statement for statement in result.body.statements if isinstance(statement, IRBindLeaves)]
+    assert len(snapshots) == 1
+    hidden = snapshots[0].bindings[0].destination
+    consumer = result.body.statements[-1]
+    assert isinstance(consumer, IRFinalExpression)
+    call = next(op for op in consumer.value.operations if isinstance(op, IRCall))
+    assert [op.binding_id for op in consumer.value.operations if op.__class__.__name__ == "IRBinding"] == [hidden]
+    assert len(call.arguments) == 1
+    parts = call.extension_state.storage[0]
+    assert [item.type_id.name for item in parts] == ["AlphaPart", "BetaPart"]
+    assert parts[0].storage[0].operand_index == 0
+    assert parts[1].storage[0] == 2.0
+
 def test_persistent_semantic_list_star_uses_hidden_snapshots_in_element_order(tmp_path):
     """Stored semantic LIST expands into compact child payloads backed by its hidden snapshots."""
     result = _lower(
@@ -565,9 +584,7 @@ def test_semantic_environment_rejects_duplicate_extension_and_runtime_ownership(
     )
     callables = CallableEnvironment(
         callable_builtins=frozenset(),
-        system_constructors={},
         local_functions={},
-        backend_helper_names=frozenset(),
         imported_functions={},
         extension_system_callables={},
     )

@@ -23,7 +23,6 @@ from NodeForge.resolved_environment import (
     resolve_environment,
 )
 from NodeForge.systems import registry as systems_registry
-from NodeForge.systems.registry import ResolvedSystemConstructor
 
 
 @dataclass(frozen=True)
@@ -48,48 +47,38 @@ def _catalogs(functions=None, examples=None, local=None):
 def test_catalog_and_environment_defensively_freeze_nested_mappings():
     record = _Record("functions", "demo", "vendor.demo", "1.0.0")
     entries = {"demo": record}
-    systems = {"marker": types.SimpleNamespace(name="marker")}
     catalogs = _catalogs(functions=entries)
-    environment = ResolvedEnvironment(catalogs, systems)
+    environment = ResolvedEnvironment(catalogs)
 
     entries.clear()
     catalogs.clear()
-    systems.clear()
 
     assert environment.catalog("functions").find("demo") is record
     assert environment.catalog("functions").names() == frozenset({"demo"})
     assert environment.catalog("functions").records() == (record,)
-    assert environment.system_names() == ("marker",)
+    assert environment.system_names() == ()
     with pytest.raises(TypeError):
         environment.catalogs["extra"] = ResolvedCatalog("local", {})
     with pytest.raises(TypeError):
         environment.catalog("functions").entries["extra"] = record
-    with pytest.raises(TypeError):
-        environment.system_constructors["extra"] = types.SimpleNamespace(name="extra")
 
 
 def test_environment_rejects_incomplete_and_mismatched_maps():
     with pytest.raises(ValueError, match="requires functions, examples, and local"):
-        ResolvedEnvironment({}, {})
+        ResolvedEnvironment({})
     with pytest.raises(ValueError, match="catalog key"):
         ResolvedEnvironment(
             {
                 "functions": ResolvedCatalog("examples", {}),
                 "examples": ResolvedCatalog("functions", {}),
                 "local": ResolvedCatalog("local", {}),
-            },
-            {},
+            }
         )
-    with pytest.raises(ValueError, match="constructor name"):
-        ResolvedEnvironment(_catalogs(), {"wrong": types.SimpleNamespace(name="actual")})
-
-
-def test_resolved_system_constructor_defensively_freezes_declared_names():
-    """A caller-owned declaration list cannot mutate an existing system binding."""
-    constructors = ["marker"]
-    binding = ResolvedSystemConstructor("marker", types.SimpleNamespace(), constructors)
-    constructors.append("later")
-    assert binding.constructors == ("marker",)
+    with pytest.raises(ValueError, match="v2 system mapping"):
+        ResolvedEnvironment(
+            _catalogs(),
+            extension_system_callables={"wrong": types.SimpleNamespace(name="actual")},
+        )
 
 
 def test_catalog_rejects_bad_record_placement_and_partial_failure():
@@ -219,7 +208,6 @@ def test_resolve_environment_reads_active_inventory_once_and_uses_explicit_deriv
     monkeypatch.setattr(packages, "active_package_records", active_records)
     monkeypatch.setattr(packages, "library_roots_from_manifests", roots)
     monkeypatch.setattr(packages, "system_package_records_from_manifests", system_records)
-    monkeypatch.setattr(systems_registry, "resolve_constructors", lambda records: {})
     monkeypatch.setitem(sys.modules, "NodeForge.library", fake_library)
     monkeypatch.setattr(NodeForge, "library", fake_library, raising=False)
 
@@ -256,7 +244,6 @@ def test_existing_environment_is_stable_and_later_resolution_observes_new_state(
 
     monkeypatch.setattr(packages, "active_package_records", active_records)
     monkeypatch.setattr(packages, "system_package_records_from_manifests", lambda manifests: ())
-    monkeypatch.setattr(systems_registry, "resolve_constructors", lambda records: {})
     monkeypatch.setattr(packages, "library_roots_from_manifests", lambda namespace, manifests: ())
 
     fake_library = types.ModuleType("NodeForge.library")
@@ -353,14 +340,13 @@ def test_import_validation_binds_exact_snapshot_records_and_preserves_sorting(mo
     zeta = _Record("functions", "zeta")
     environment = ResolvedEnvironment(
         _catalogs(functions={"zeta": zeta, "alpha": alpha}),
-        {},
     )
     imports = (
         FunctionImport("functions", "zeta", "renamed"),
         FunctionImport("functions", None, None, is_star=True),
     )
 
-    bindings = semantic_group._validate_import_bindings(imports, (), {}, set(), environment)
+    bindings = semantic_group._validate_import_bindings(imports, (), {}, environment)
 
     assert tuple(bindings) == ("renamed", "alpha", "zeta")
     assert bindings["renamed"].record is zeta
@@ -373,66 +359,49 @@ def test_inherited_import_requires_same_record_identity(monkeypatch):
     from NodeForge import semantic_group
     selected = _Record("functions", "alpha")
     different = _Record("functions", "alpha")
-    environment = ResolvedEnvironment(_catalogs(functions={"alpha": selected}), {})
+    environment = ResolvedEnvironment(_catalogs(functions={"alpha": selected}))
     inherited = {"alias": semantic_group.LibraryBinding("functions", "alpha", different)}
 
     with pytest.raises(CompileError, match="inherited library binding does not match"):
-        semantic_group._validate_import_bindings((), (), {}, set(), environment, inherited)
+        semantic_group._validate_import_bindings((), (), {}, environment, inherited)
 
 
 def test_reserved_name_labels_use_snapshot_system_names(monkeypatch):
-    """Compiler reservation labels consume the supplied system-name view."""
+    """Compiler reservation labels consume the supplied v2 system-name view."""
     from NodeForge import semantic_group
-    labels = semantic_group._registered_name_labels({}, set(), {}, ("snapshot_marker",))
-    assert labels["snapshot_marker"] == "embedded-system constructor"
+    labels = semantic_group._registered_name_labels({}, {}, ("snapshot_marker",))
+    assert labels["snapshot_marker"] == "extension system callable"
 
 
-def test_expression_dispatch_rejects_resolved_system_binding_before_legacy_handler(monkeypatch):
-    """Resolved SYSTEM calls stop at the semantic migration boundary and never invoke the legacy handler."""
-    compiler = _import_compiler_with_fake_bpy(monkeypatch)
-    from NodeForge import expression_compiler
-
-    binding = types.SimpleNamespace(name="snapshot_marker")
-    environment = types.SimpleNamespace(system_constructors={"snapshot_marker": binding})
-    comp = types.SimpleNamespace(
-        resolved_environment=environment,
-        imported_library_functions={},
-        local_functions={},
-        backend_builtins={},
-        compile_time=__import__("NodeForge.compile_time", fromlist=["CompileTimeState"]).CompileTimeState(),
-        reserved_name_labels={},
-        runtime_bindings_snapshot=lambda: MappingProxyType({}),
-        backend_runtime_values_snapshot=lambda: MappingProxyType({}),
-        legacy_structural_binding_names_snapshot=lambda: frozenset(),
-    )
-    observed = []
-
-    monkeypatch.setattr(
-        systems_registry,
+def test_v1_system_execution_api_is_absent_after_cutover():
+    """Recognized legacy system owners cannot reach executable handler APIs."""
+    for name in (
+        "ResolvedSystemConstructor",
+        "get_handler",
+        "get_resolved_handler",
+        "compile_call",
         "compile_resolved_call",
-        lambda *_args, **_kwargs: observed.append(True),
-    )
-    expr = ast.parse("snapshot_marker()", mode="eval").body
-
-    with pytest.raises(
-        CompileError,
-        match=r"snapshot_marker\(\) is temporarily unavailable while Python extension callables are being migrated",
+        "resolve_constructors",
+        "_load_handlers",
     ):
-        expression_compiler.compile_expr(comp, expr, 7)
-    assert observed == []
+        assert not hasattr(systems_registry, name)
 
 
-def test_source_call_migration_removes_legacy_dispatch_modules_and_keeps_extension_boundary():
-    """Source-backed calls have no legacy dispatcher while Python extension categories stay gated."""
+def test_source_call_migration_removes_v1_extension_execution_and_keeps_v2_boundary():
+    """Permanent source/extension calls have no v1 executable dispatcher after cutover."""
     root = Path(__file__).resolve().parents[2]
     assert not (root / "library_calls.py").exists()
     local_source = (root / "local_functions.py").read_text(encoding="utf-8")
     expression_source = (root / "expression_compiler.py").read_text(encoding="utf-8")
     semantic_source = (root / "semantic_analysis.py").read_text(encoding="utf-8")
+    library_source = (root / "library.py").read_text(encoding="utf-8")
     assert "def compile_local_function_call" not in local_source
     assert "compile_library_function_call" not in expression_source
     assert "compile_local_function_call" not in expression_source
-    assert "Python extension callables are being migrated" in semantic_source
+    assert "CallableKind.SYSTEM" not in semantic_source
+    assert "CallableKind.BACKEND_HELPER" not in semantic_source
+    assert "compile_module_library_entry_call" not in library_source
+    assert "backend_builtins_for_entry" not in library_source
 
 
 def test_source_callable_session_uses_exact_resolved_record_without_live_discovery(tmp_path):
@@ -450,14 +419,13 @@ def test_source_callable_session_uses_exact_resolved_record_without_live_discove
         package_id="vendor.selected",
         package_version="2.0.0",
     )
-    environment = ResolvedEnvironment(_catalogs(functions={"selected": record}), {})
+    environment = ResolvedEnvironment(_catalogs(functions={"selected": record}))
     function_id = library_function_id("functions", record.package_id, record.name)
     identity = GroupCompilationIdentity(None, "LIBRARY/test", function_id.stable_key(), function_id.stable_key())
     prepared = SourceCallableSession(resolved_environment=environment).prepare_library(
         function_id=function_id,
         identity=identity,
         record=record,
-        backend_builtins={},
     )
     assert prepared.contract.function_id == function_id
     assert prepared.group.source == source_path.read_text(encoding="utf-8")
@@ -467,7 +435,7 @@ def test_source_callable_session_uses_exact_resolved_record_without_live_discove
 def test_direct_compiler_fallback_resolves_once_and_binds_its_backend(monkeypatch):
     """Standalone Compiler construction creates one snapshot-backed nested callback."""
     compiler = _import_compiler_with_fake_bpy(monkeypatch)
-    environment = ResolvedEnvironment(_catalogs(), {})
+    environment = ResolvedEnvironment(_catalogs())
     calls = []
     monkeypatch.setattr(compiler, "resolve_environment", lambda: calls.append(True) or environment)
 
@@ -481,8 +449,8 @@ def test_direct_compiler_fallback_resolves_once_and_binds_its_backend(monkeypatc
 def test_compiler_rejects_unbound_and_mismatched_backends(monkeypatch):
     """Caller backends cannot bypass exact compilation-session identity checks."""
     compiler = _import_compiler_with_fake_bpy(monkeypatch)
-    first = ResolvedEnvironment(_catalogs(), {})
-    second = ResolvedEnvironment(_catalogs(), {})
+    first = ResolvedEnvironment(_catalogs())
+    second = ResolvedEnvironment(_catalogs())
     group = types.SimpleNamespace(name="Direct")
 
     with pytest.raises(CompileError, match="not bound to a resolved environment"):

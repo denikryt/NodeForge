@@ -338,3 +338,11 @@ lifecycle.
 
 - Simplified persistent extension semantic body state by storing canonical `ExtensionSemanticPayload` values directly in `extension_bindings`; the BindingId-only persistence invariant is now enforced at the semantic-environment/body ownership boundary instead of through a one-field lifecycle wrapper.
 - Simplified `ExtensionDependencySource` identity to standard frozen-dataclass field semantics, relying on `ast.AST` object identity and `BindingId` value identity with focused regressions covering both cases.
+
+## 0.62.0
+
+- Completed the Python Extension API v2 cutover: package-defined semantic values persist through the permanent compiler, `nodeforge.lsystem` can migrate entirely through interface/semantic/backend v2 contracts, and legacy SYSTEM/BACKEND_HELPER/native `compile_call` execution routes are no longer part of supported production compilation.
+
+## 0.62.1
+
+- Fixed source list literals composed entirely of package semantic records: sibling record types now infer one unique most-specific same-owner nominal base, preserve existing semantic runtime dependencies, and fail with controlled diagnostics for mixed, unrelated, or ambiguous element types instead of reaching runtime lowering.

@@ -205,7 +205,6 @@ def library_request(*, namespace="functions", materialization=None, write_metada
         source_callable_session=None,
         materialization=materialization,
         group_name="Demo",
-        backend_signature="backend-signature",
         find_existing=find_existing,
         write_package_metadata=write_metadata or default_write,
     )
@@ -539,7 +538,6 @@ def test_selected_root_reload_targets_exact_group_and_metadata_failure_propagate
         source_callable_session=None,
         group=group,
         group_name=group.name,
-        backend_signature="backend-signature",
         write_package_metadata=metadata_fail,
     )
     with pytest.raises(RuntimeError, match="reload metadata failed"):

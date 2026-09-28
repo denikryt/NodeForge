@@ -151,7 +151,6 @@ class Compiler:
         consts=None,
         local_functions=None,
         local_group_cache=None,
-        backend_builtins=None,
         group_backend=None,
         generated_resource_transaction=None,
         imported_library_functions=None,
@@ -177,7 +176,6 @@ class Compiler:
         self.local_functions = local_functions or {}
         self.local_group_cache = local_group_cache if local_group_cache is not None else {}
         self.function_group_cache = function_group_cache if function_group_cache is not None else self.local_group_cache
-        self.backend_builtins = dict(backend_builtins or {})
         # RESOLVED_ENVIRONMENT_MIGRATION: Compiler is still exported and legacy tests or
         # integrations may construct it directly without the root compiler entry points.
         # A standalone Compiler creates one snapshot and an environment-bound backend, or
@@ -768,7 +766,6 @@ def _new_group_backend(resolved_environment: ResolvedEnvironment | None = None):
             resolved_environment=slot.get(),
             inherited_local_functions=kwargs.get("inherited_local_functions"),
             inherited_imported_library_functions=kwargs.get("inherited_imported_library_functions"),
-            backend_builtins=kwargs.get("backend_builtins"),
             helper_namespace=kwargs.get("helper_namespace") or "NodeForge Group",
             source_callable_session=session,
         )

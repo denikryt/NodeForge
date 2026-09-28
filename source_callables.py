@@ -426,7 +426,6 @@ class SourceCallableSession:
         source_supplier,
         local_functions,
         imported_library_functions,
-        backend_builtins,
         helper_namespace: str,
         local_public_names: tuple[str, ...] | None = None,
         local_hidden_names: tuple[str, ...] = (),
@@ -451,7 +450,6 @@ class SourceCallableSession:
                 resolved_environment=self.resolved_environment,
                 inherited_local_functions=local_functions,
                 inherited_imported_library_functions=imported_library_functions,
-                backend_builtins=backend_builtins,
                 helper_namespace=helper_namespace,
                 source_callable_session=self,
             )
@@ -520,7 +518,6 @@ class SourceCallableSession:
         hidden_capture_names: tuple[str, ...],
         local_functions,
         imported_library_functions,
-        backend_builtins,
         helper_namespace: str,
         return_shape: LocalReturnShape,
     ) -> PreparedSourceCallable:
@@ -531,7 +528,6 @@ class SourceCallableSession:
             source_supplier=lambda: generated_source,
             local_functions=local_functions,
             imported_library_functions=imported_library_functions,
-            backend_builtins=backend_builtins,
             helper_namespace=helper_namespace,
             local_public_names=tuple(explicit_parameter_names),
             local_hidden_names=tuple(hidden_capture_names),
@@ -544,7 +540,6 @@ class SourceCallableSession:
         function_id: FunctionId,
         identity: GroupCompilationIdentity,
         record,
-        backend_builtins,
     ) -> PreparedSourceCallable:
         """Prepare one pure source-only catalog entry without importing Python modules."""
         source_path = getattr(record, "source_path", None)
@@ -556,7 +551,6 @@ class SourceCallableSession:
             source_supplier=lambda: source_path.read_text(encoding="utf-8"),
             local_functions={},
             imported_library_functions={},
-            backend_builtins=backend_builtins,
             helper_namespace=getattr(record, "name", function_id.name),
         )
 

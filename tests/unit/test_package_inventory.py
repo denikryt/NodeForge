@@ -44,8 +44,7 @@ class _FakeGroupBackend:
                     "functions": ResolvedCatalog("functions", {}),
                     "examples": ResolvedCatalog("examples", {}),
                     "local": ResolvedCatalog("local", {}),
-                },
-                {},
+                }
             )
         return self._resolved_environment
 
@@ -64,7 +63,6 @@ class _FakeGroupBackend:
             source,
             compilation_identity=compilation_identity,
             resolved_environment=self._environment(),
-            backend_builtins=kwargs.get("backend_builtins"),
             helper_namespace=kwargs.get("helper_namespace") or "NodeForge Group",
             source_callable_session=session,
         )
@@ -99,14 +97,12 @@ class _FakeGroupBackend:
         from NodeForge.compiler_identities import GroupCompilationIdentity
         existing_group = kwargs.pop("existing_group", None)
         preserve = bool(kwargs.pop("preserve_if_equivalent", False))
-        backend_builtins = kwargs.pop("backend_builtins", None)
         source_callable_session = kwargs.pop("source_callable_session", None)
         owner = f"FAKE/{name}"
         prepared = self.prepare_source_compilation(
             source,
             compilation_identity=GroupCompilationIdentity(None, owner, owner, owner),
             helper_namespace=name,
-            backend_builtins=backend_builtins,
             source_callable_session=source_callable_session,
         )
         request = BlenderGroupBuildRequest(
@@ -160,6 +156,24 @@ def _write_manifest(
     )
 
 
+
+
+def _write_v2_system(system_root: Path, public_name: str) -> None:
+    """Write one minimal backend-only Extension API v2 system owner fixture."""
+    system_root.mkdir(parents=True, exist_ok=True)
+    (system_root / "interface.py").write_text(
+        "from NodeForge import Float, EvaluationMode\n"
+        "from typing import Annotated\n"
+        "EXTENSION_API = 2\n"
+        f"EXTENSIONS = {{{public_name!r}: '.backend:{public_name}'}}\n"
+        f"def {public_name}(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...\n",
+        encoding="utf-8",
+    )
+    (system_root / "backend.py").write_text(
+        f"def {public_name}(context, value):\n    return value\n",
+        encoding="utf-8",
+    )
+
 def test_explicitly_installed_packages_use_unified_inventory(package_inventory, tmp_path):
     source = tmp_path / "vendor.inventory"
     (source / "functions").mkdir(parents=True)
@@ -189,12 +203,7 @@ def test_manifest_derived_roots_match_live_wrappers_without_loading_state(
     (source / "systems" / "marker").mkdir(parents=True)
     (source / "functions" / "alpha.nf").write_text("output(value=1)\n", encoding="utf-8")
     (source / "examples" / "beta.nf").write_text("output(value=2)\n", encoding="utf-8")
-    (source / "systems" / "marker" / "system.py").write_text(
-        "CONSTRUCTORS = ['derived_marker']\n"
-        "def load_handlers():\n"
-        "    return {'derived_marker': lambda comp, expr, depth=0: None}\n",
-        encoding="utf-8",
-    )
+    _write_v2_system(source / "systems" / "marker", "derived_marker")
     _write_manifest(
         source,
         package_id="vendor.derived",
@@ -219,45 +228,26 @@ def test_manifest_derived_roots_match_live_wrappers_without_loading_state(
     assert packages.system_package_records_from_manifests(manifests) == expected_systems
 
 
-def test_system_resolution_and_handler_dispatch_use_explicit_record(package_inventory, tmp_path, monkeypatch):
-    """A resolved system binding must select and load its recorded owner directly."""
+def test_system_resolution_uses_v2_interface_without_v1_handler_dispatch(package_inventory, tmp_path):
+    """System discovery exposes the captured v2 owner and no executable v1 handler API."""
     source = tmp_path / "resolved_system"
-    (source / "systems" / "marker").mkdir(parents=True)
+    system_root = source / "systems" / "marker"
     _write_manifest(
         source,
         package_id="vendor.resolved",
         contents={"systems": "systems"},
         python=True,
     )
-    (source / "systems" / "marker" / "system.py").write_text(
-        "CONSTRUCTORS = ['resolved_marker']\n"
-        "def load_handlers():\n"
-        "    return {'resolved_marker': lambda comp, expr, depth=0: ('selected', depth)}\n",
-        encoding="utf-8",
-    )
+    _write_v2_system(system_root, "resolved_marker")
     packages.install_package_directory(source, allow_python=True)
 
     records = tuple(packages.system_package_records())
-    selected = systems_registry.resolve_constructors(records)["resolved_marker"]
-    systems_registry.invalidate_cache()
-    monkeypatch.setattr(packages, "system_package_records", lambda: [])
-    assert systems_registry.constructor_names() == ()
-    monkeypatch.setattr(
-        systems_registry,
-        "_constructor_map",
-        lambda: pytest.fail("record-bound handler dispatch must not use the live registry"),
-    )
-    handler = systems_registry.get_resolved_handler(selected)
-
-    assert selected.name == "resolved_marker"
-    assert selected.record is records[0]
-    assert handler(None, None, 4) == ("selected", 4)
-
-
-
-
-
-
+    assert len(records) == 1
+    assert records[0].interface_path.name == "interface.py"
+    assert systems_registry.constructor_names() == ("resolved_marker",)
+    assert systems_registry.constructor_owner("resolved_marker") == records[0]
+    assert not hasattr(systems_registry, "get_resolved_handler")
+    assert not hasattr(systems_registry, "compile_resolved_call")
 def test_uninstall_validates_state_pointer_before_deleting_files(package_inventory, tmp_path):
     source_a = tmp_path / "source_a"
     (source_a / "functions").mkdir(parents=True)
@@ -577,7 +567,6 @@ def test_library_materialization_contract_discriminator_is_explicit(package_inve
         function_id=function_id,
         identity=GroupCompilationIdentity(None, owner_scope, stable_id, stable_id),
         record=record,
-        backend_builtins={},
     )
     cache = {}
     context = FunctionMaterializationContext(cache, None, None, session)
@@ -799,34 +788,26 @@ def test_zip_install_rejects_internal_duplicate_example_public_names(package_inv
 
     assert "vendor.dupeexamples" not in packages.load_package_state()["packages"]
 
-def test_system_entrypoint_declares_names_and_loads_handlers_lazily(package_inventory, tmp_path):
+def test_install_rejects_v1_system_owner_without_executing_module(package_inventory, tmp_path):
     source = tmp_path / "sys_pkg"
-    (source / "systems" / "test").mkdir(parents=True)
+    system_root = source / "systems" / "test"
+    system_root.mkdir(parents=True)
     _write_manifest(source, contents={"systems": "systems"}, python=True)
-    (source / "systems" / "test" / "system.py").write_text(
+    sentinel = tmp_path / "v1_executed"
+    (system_root / "system.py").write_text(
+        f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('executed')\n"
         "CONSTRUCTORS = ['test_marker']\n"
-        "def load_handlers():\n"
-        "    from .runtime import HANDLERS\n"
-        "    return HANDLERS\n",
+        "def load_handlers(): return {}\n",
         encoding="utf-8",
     )
-    (source / "systems" / "test" / "runtime.py").write_text(
-        "LOADED = True\nHANDLERS = {'test_marker': lambda comp, expr, depth=0: ('ok', depth)}\n",
-        encoding="utf-8",
-    )
-    packages.install_package_directory(source, allow_python=True)
 
-    import sys
+    with pytest.raises(packages.PackageError, match="unsupported Extension API v1 system.py"):
+        packages.install_package_directory(source, allow_python=True)
 
-    before = set(sys.modules)
-    assert "test_marker" in systems_registry.constructor_names()
-    assert not any(name.endswith(".runtime") for name in set(sys.modules) - before)
-    owner = systems_registry._constructor_map()["test_marker"]
-    assert systems_registry._load_handlers(owner)["test_marker"](None, None, 3) == ("ok", 3)
-    assert any(name.endswith(".runtime") for name in set(sys.modules) - before)
+    assert not sentinel.exists()
+    assert "test_marker" not in systems_registry.constructor_names()
 
-
-def test_install_rejects_system_missing_load_handlers_before_state_commit(package_inventory, tmp_path):
+def test_install_rejects_v1_system_before_state_commit(package_inventory, tmp_path):
     source = tmp_path / "bad_sys_pkg"
     (source / "systems" / "bad").mkdir(parents=True)
     _write_manifest(source, package_id="vendor.bad", contents={"systems": "systems"}, python=True)
@@ -835,7 +816,7 @@ def test_install_rejects_system_missing_load_handlers_before_state_commit(packag
         encoding="utf-8",
     )
 
-    with pytest.raises(packages.PackageError, match="load_handlers"):
+    with pytest.raises(packages.PackageError, match="unsupported Extension API v1 system.py"):
         packages.install_package_directory(source, allow_python=True)
 
     assert "vendor.bad" not in packages.load_package_state()["packages"]
@@ -846,12 +827,7 @@ def test_install_rejects_system_constructor_colliding_with_core_builtin(package_
     source = tmp_path / "core_collision"
     (source / "systems" / "test").mkdir(parents=True)
     _write_manifest(source, package_id="vendor.corecollision", contents={"systems": "systems"}, python=True)
-    (source / "systems" / "test" / "system.py").write_text(
-        "CONSTRUCTORS = ['cube']\n"
-        "def load_handlers():\n"
-        "    return {'cube': lambda comp, expr, depth=0: None}\n",
-        encoding="utf-8",
-    )
+    _write_v2_system(source / "systems" / "test", "cube")
 
     with pytest.raises(packages.PackageError, match="core callable"):
         packages.install_package_directory(source, allow_python=True)
@@ -864,12 +840,7 @@ def test_replace_rejects_core_builtin_constructor_collision_and_keeps_old_pointe
     original = tmp_path / "original"
     (original / "systems" / "test").mkdir(parents=True)
     _write_manifest(original, package_id="vendor.replace", contents={"systems": "systems"}, python=True)
-    (original / "systems" / "test" / "system.py").write_text(
-        "CONSTRUCTORS = ['replace_marker']\n"
-        "def load_handlers():\n"
-        "    return {'replace_marker': lambda comp, expr, depth=0: None}\n",
-        encoding="utf-8",
-    )
+    _write_v2_system(original / "systems" / "test", "replace_marker")
     packages.install_package_directory(original, allow_python=True)
     old_pointer = packages.load_package_state()["packages"]["vendor.replace"]["installed_path"]
     assert systems_registry.has_system_constructor("replace_marker")
@@ -877,12 +848,7 @@ def test_replace_rejects_core_builtin_constructor_collision_and_keeps_old_pointe
     replacement = tmp_path / "replacement"
     (replacement / "systems" / "test").mkdir(parents=True)
     _write_manifest(replacement, package_id="vendor.replace", contents={"systems": "systems"}, python=True, version="2.0.0")
-    (replacement / "systems" / "test" / "system.py").write_text(
-        "CONSTRUCTORS = ['cube']\n"
-        "def load_handlers():\n"
-        "    return {'cube': lambda comp, expr, depth=0: None}\n",
-        encoding="utf-8",
-    )
+    _write_v2_system(replacement / "systems" / "test", "cube")
 
     with pytest.raises(packages.PackageError, match="core callable"):
         packages.install_package_directory(replacement, allow_python=True, replace=True)
@@ -899,12 +865,7 @@ def test_install_rejects_function_name_colliding_with_active_constructor(package
     owner = tmp_path / "active_constructor"
     (owner / "systems" / "test").mkdir(parents=True)
     _write_manifest(owner, package_id="vendor.constructorowner", contents={"systems": "systems"}, python=True)
-    (owner / "systems" / "test" / "system.py").write_text(
-        "CONSTRUCTORS = ['active_marker']\n"
-        "def load_handlers():\n"
-        "    return {'active_marker': lambda comp, expr, depth=0: None}\n",
-        encoding="utf-8",
-    )
+    _write_v2_system(owner / "systems" / "test", "active_marker")
     packages.install_package_directory(owner, allow_python=True)
 
     source = tmp_path / "function_constructor_collision"
@@ -928,12 +889,7 @@ def test_install_rejects_constructor_name_colliding_with_active_function(package
     source = tmp_path / "constructor_function_collision"
     (source / "systems" / "test").mkdir(parents=True)
     _write_manifest(source, package_id="vendor.constructorfunc", contents={"systems": "systems"}, python=True)
-    (source / "systems" / "test" / "system.py").write_text(
-        "CONSTRUCTORS = ['active_function']\n"
-        "def load_handlers():\n"
-        "    return {'active_function': lambda comp, expr, depth=0: None}\n",
-        encoding="utf-8",
-    )
+    _write_v2_system(source / "systems" / "test", "active_function")
 
     with pytest.raises(packages.PackageError, match="Public name collision.*active_function"):
         packages.install_package_directory(source, allow_python=True)
@@ -952,12 +908,7 @@ def test_install_rejects_same_package_function_and_constructor_name(package_inve
         contents={"functions": "functions", "systems": "systems"},
         python=True,
     )
-    (source / "systems" / "test" / "system.py").write_text(
-        "CONSTRUCTORS = ['marker']\n"
-        "def load_handlers():\n"
-        "    return {'marker': lambda comp, expr, depth=0: None}\n",
-        encoding="utf-8",
-    )
+    _write_v2_system(source / "systems" / "test", "marker")
 
     with pytest.raises(packages.PackageError, match="function and constructor"):
         packages.install_package_directory(source, allow_python=True)
@@ -976,12 +927,7 @@ def test_replace_rejects_cross_kind_collision_and_keeps_old_pointer(package_inve
     owner = tmp_path / "active_cross_constructor"
     (owner / "systems" / "test").mkdir(parents=True)
     _write_manifest(owner, package_id="vendor.crossowner", contents={"systems": "systems"}, python=True)
-    (owner / "systems" / "test" / "system.py").write_text(
-        "CONSTRUCTORS = ['cross_marker']\n"
-        "def load_handlers():\n"
-        "    return {'cross_marker': lambda comp, expr, depth=0: None}\n",
-        encoding="utf-8",
-    )
+    _write_v2_system(owner / "systems" / "test", "cross_marker")
     packages.install_package_directory(owner, allow_python=True)
 
     replacement = tmp_path / "replacement_cross_kind"
@@ -1029,7 +975,7 @@ def test_malformed_active_system_record_is_invalid_diagnostic_not_global_registr
     assert "bad_call" not in systems_registry.constructor_names()
     diagnostics = packages.active_package_manifests(include_invalid=True)
     assert any(
-        getattr(item, "package_id", None) == "vendor.bad" and "load_handlers" in getattr(item, "message", "")
+        getattr(item, "package_id", None) == "vendor.bad" and "unsupported Extension API v1 system.py" in getattr(item, "message", "")
         for item in diagnostics
     )
 
@@ -1150,7 +1096,6 @@ def test_local_catalog_adapter_uses_build_local_transaction_cache(monkeypatch, t
     )
     monkeypatch.setattr(library, "find_library_entry_record", lambda namespace, name: record)
     monkeypatch.setattr(library, "load_library_entry_source", lambda namespace, name: "output(value=1)\n")
-    monkeypatch.setattr(library, "backend_builtins_for_entry", lambda namespace, name: {})
 
     transaction = object()
     frame = Frame()

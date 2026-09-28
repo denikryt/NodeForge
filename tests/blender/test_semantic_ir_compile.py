@@ -31,7 +31,7 @@ from NodeForge.values import Value, make_value
 
 def _empty_callable_environment():
     """Return an empty immutable callable namespace for non-call semantic tests."""
-    return CallableEnvironment(frozenset(), {}, {}, frozenset(), {})
+    return CallableEnvironment(frozenset(), {}, {}, {})
 
 def _nodes(group, bl_idname, operation=None):
     """Return nodes matching one Blender node type and optional operation enum."""

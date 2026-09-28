@@ -501,6 +501,53 @@ class ExtensionOwnerSession:
                 pending.extend(spec.bases)
         return False
 
+    def most_specific_common_nominal_base(self, type_ids: Iterable[ExtensionTypeId]) -> ExtensionTypeId:
+        """Return the unique most-specific common record base for non-empty same-owner types."""
+        self.normalize_interface()
+        type_ids = tuple(type_ids)
+        if not type_ids:
+            raise ValueError("common nominal base requires at least one extension type")
+        if not all(isinstance(type_id, ExtensionTypeId) for type_id in type_ids):
+            raise TypeError("common nominal base requires ExtensionTypeId records")
+        if any(type_id.owner != self.snapshot.owner_key for type_id in type_ids):
+            raise CompileError("Package semantic list elements must belong to one extension owner")
+
+        def ancestors(type_id: ExtensionTypeId) -> frozenset[ExtensionTypeId]:
+            pending = [type_id]
+            found: set[ExtensionTypeId] = set()
+            while pending:
+                current = pending.pop()
+                if current in found:
+                    continue
+                found.add(current)
+                spec = self._type_specs.get(current)
+                if spec is None:
+                    raise CompileError(f"Unknown extension semantic type: {current}")
+                pending.extend(spec.bases)
+            return frozenset(found)
+
+        common = set(ancestors(type_ids[0]))
+        for type_id in type_ids[1:]:
+            common.intersection_update(ancestors(type_id))
+        if not common:
+            raise CompileError("Package semantic list elements have no common nominal record base")
+
+        most_specific = [
+            candidate
+            for candidate in common
+            if not any(
+                other != candidate and self.is_nominal_subtype(other, candidate)
+                for other in common
+            )
+        ]
+        if len(most_specific) != 1:
+            names = ", ".join(sorted(candidate.name for candidate in most_specific))
+            raise CompileError(
+                "Package semantic list elements have ambiguous common nominal record bases"
+                + (f": {names}" if names else "")
+            )
+        return most_specific[0]
+
     def implementation_ref(self, callable_id: ExtensionCallableId) -> ExtensionImplementationRef | None:
         """Return the optional normalized physical implementation reference."""
         families, refs = self.normalize_interface()
@@ -686,6 +733,18 @@ class ExtensionRegistry:
         if concrete.owner != expected.owner:
             return False
         return self._session_for_owner(concrete.owner).is_nominal_subtype(concrete, expected)
+
+    def most_specific_common_nominal_base(self, type_ids: Iterable[ExtensionTypeId]) -> ExtensionTypeId:
+        """Return the unique most-specific common nominal base across one extension owner."""
+        type_ids = tuple(type_ids)
+        if not type_ids:
+            raise ValueError("common nominal base requires at least one extension type")
+        if not all(isinstance(type_id, ExtensionTypeId) for type_id in type_ids):
+            raise TypeError("common nominal base requires ExtensionTypeId records")
+        owner = type_ids[0].owner
+        if any(type_id.owner != owner for type_id in type_ids[1:]):
+            raise CompileError("Package semantic list elements must belong to one extension owner")
+        return self._session_for_owner(owner).most_specific_common_nominal_base(type_ids)
 
     def contains(self, callable_id: ExtensionCallableId) -> bool:
         """Return whether one canonical callable identity belongs to this registry."""

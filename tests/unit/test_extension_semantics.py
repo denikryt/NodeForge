@@ -51,9 +51,7 @@ def _environment(registry, callable_id, branch_type):
     }
     callables = CallableEnvironment(
         callable_builtins=frozenset(),
-        system_constructors={},
         local_functions={},
-        backend_helper_names=frozenset(),
         imported_functions={},
         extension_system_callables={"select": callable_id},
     )
@@ -111,9 +109,7 @@ def test_v2_hybrid_library_is_migration_blocked_before_source_preparation(tmp_pa
     binding = LibraryBinding("functions", "hybrid", record)
     callables = CallableEnvironment(
         callable_builtins=frozenset(),
-        system_constructors={},
         local_functions={},
-        backend_helper_names=frozenset(),
         imported_functions={"hybrid": binding},
     )
     environment = SemanticEnvironment(

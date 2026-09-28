@@ -44,8 +44,32 @@ class Part:
     value: Float | Int | Object
 
 @dataclass(frozen=True)
+class AlphaPart(Part):
+    pass
+
+@dataclass(frozen=True)
+class BetaPart(Part):
+    pass
+
+@dataclass(frozen=True)
 class Other:
     value: Float
+
+@dataclass(frozen=True)
+class AmbiguousBaseA:
+    pass
+
+@dataclass(frozen=True)
+class AmbiguousBaseB:
+    pass
+
+@dataclass(frozen=True)
+class AmbiguousPartA(AmbiguousBaseA, AmbiguousBaseB):
+    pass
+
+@dataclass(frozen=True)
+class AmbiguousPartB(AmbiguousBaseA, AmbiguousBaseB):
+    pass
 
 @dataclass(frozen=True)
 class Pair:
@@ -69,6 +93,11 @@ EXTENSIONS = {
     "make": None,
     "make_static": None,
     "make_object": None,
+    "make_alpha": None,
+    "make_beta": None,
+    "make_other": None,
+    "make_ambiguous_a": None,
+    "make_ambiguous_b": None,
     "ignore": None,
     "runtime_value": ".backend:runtime_value",
     "make_empty_parts": None,
@@ -88,6 +117,11 @@ EXTENSIONS = {
 def make(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Part: ...
 def make_static(value: Annotated[Float, EvaluationMode.COMPILE_TIME_ONLY]) -> Part: ...
 def make_object(value: Annotated[Object, EvaluationMode.RUNTIME_ONLY]) -> Part: ...
+def make_alpha(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> AlphaPart: ...
+def make_beta(value: Annotated[Float, EvaluationMode.COMPILE_TIME_ONLY]) -> BetaPart: ...
+def make_other(value: Annotated[Float, EvaluationMode.COMPILE_TIME_ONLY]) -> Other: ...
+def make_ambiguous_a() -> AmbiguousPartA: ...
+def make_ambiguous_b() -> AmbiguousPartB: ...
 def ignore(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Part: ...
 def runtime_value(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...
 def make_empty_parts() -> list[Part]: ...
@@ -105,7 +139,10 @@ def consume_star(*parts: Part) -> Float: ...
 '''
 
 SEMANTIC = '''
-from .interface import Part, Other, Pair, _BuildSpec, _PartsSpec, _PairSpec
+from .interface import (
+    Part, AlphaPart, BetaPart, Other, AmbiguousPartA, AmbiguousPartB,
+    Pair, _BuildSpec, _PartsSpec, _PairSpec,
+)
 
 def make(value) -> Part:
     return Part(value)
@@ -115,6 +152,21 @@ def make_static(value) -> Part:
 
 def make_object(value) -> Part:
     return Part(value)
+
+def make_alpha(value) -> AlphaPart:
+    return AlphaPart(value)
+
+def make_beta(value) -> BetaPart:
+    return BetaPart(value)
+
+def make_other(value) -> Other:
+    return Other(value)
+
+def make_ambiguous_a() -> AmbiguousPartA:
+    return AmbiguousPartA()
+
+def make_ambiguous_b() -> AmbiguousPartB:
+    return AmbiguousPartB()
 
 def ignore(value) -> Part:
     return Part(1.0)
@@ -178,12 +230,12 @@ def consume_star(context, semantic_state):
 '''
 
 
-def _registry(tmp_path: Path):
+def _registry(tmp_path: Path, *, owner_key=("system", "vendor.semantic", "records")):
     tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "interface.py").write_text(INTERFACE, encoding="utf-8")
     (tmp_path / "semantic.py").write_text(SEMANTIC, encoding="utf-8")
     (tmp_path / "backend.py").write_text(BACKEND, encoding="utf-8")
-    session = ExtensionOwnerSession(capture_owner_code_snapshot(("system", "vendor.semantic", "records"), tmp_path))
+    session = ExtensionOwnerSession(capture_owner_code_snapshot(owner_key, tmp_path))
     registry = ExtensionRegistry((session,))
     specs, _refs = session.normalize_interface()
     by_name = {callable_id.name: callable_id for callable_id in specs}
@@ -194,9 +246,7 @@ def _environment(registry, by_name):
     runtime = {"x": RuntimeBindingSymbol(BindingId("scope", 0), NFType.INT)}
     callables = CallableEnvironment(
         callable_builtins=frozenset(),
-        system_constructors={},
         local_functions={},
-        backend_helper_names=frozenset(),
         imported_functions={},
         extension_system_callables=by_name,
     )
@@ -210,6 +260,97 @@ def _environment(registry, by_name):
         extension_registry=registry,
     )
 
+
+
+def test_semantic_record_list_literal_infers_common_nominal_base_and_preserves_order_and_dependencies(tmp_path):
+    """Sibling semantic records form one generic LIST[common-base] payload in source order."""
+    _session, registry, by_name = _registry(tmp_path)
+    root = ast.parse("[make_alpha(x), make_beta(2.0)]", mode="eval").body
+    analysis = analyze_expression(root, _environment(registry, by_name))
+    fact = analysis.facts[root]
+
+    payload = fact.semantic_payload
+    assert isinstance(payload, ExtensionSemanticPayload)
+    assert payload.type_spec.kind == "LIST"
+    assert payload.type_spec.item.kind == "RECORD"
+    assert payload.type_spec.item.record_type.name == "Part"
+    assert [item.type_id.name for item in payload.value] == ["AlphaPart", "BetaPart"]
+    assert len(payload.dependencies) == 1
+    assert payload.dependencies[0].typ is NFType.INT
+    assert payload.dependencies[0].source is root.elts[0].args[0]
+    assert isinstance(payload.value[0].storage[0], ExtensionDependencySlot)
+    assert payload.value[0].storage[0].dependency_index == 0
+
+
+def test_semantic_record_list_literal_static_elements_have_no_runtime_dependencies(tmp_path):
+    """A fully static semantic record list does not invent a runtime dependency carrier."""
+    _session, registry, by_name = _registry(tmp_path)
+    root = ast.parse("[make_static(1.0), make_static(2.0)]", mode="eval").body
+    analysis = analyze_expression(root, _environment(registry, by_name))
+    payload = analysis.facts[root].semantic_payload
+    assert payload is not None
+    assert payload.dependencies == ()
+    assert [item.type_id.name for item in payload.value] == ["Part", "Part"]
+
+
+def test_semantic_record_list_literal_rejects_mixed_semantic_and_ordinary_runtime_values(tmp_path):
+    """A semantic list literal fails closed instead of falling back to structural/runtime lowering."""
+    _session, registry, by_name = _registry(tmp_path)
+    root = ast.parse("[make_alpha(x), x]", mode="eval").body
+    with pytest.raises(CompileError, match="cannot mix package semantic values with ordinary values"):
+        analyze_expression(root, _environment(registry, by_name))
+
+
+def test_semantic_record_list_literal_rejects_unrelated_nominal_types(tmp_path):
+    """Semantic records without one common nominal base produce a controlled compiler diagnostic."""
+    _session, registry, by_name = _registry(tmp_path)
+    root = ast.parse("[make_alpha(x), make_other(2.0)]", mode="eval").body
+    with pytest.raises(CompileError, match="no common nominal record base"):
+        analyze_expression(root, _environment(registry, by_name))
+
+
+def test_semantic_record_list_literal_rejects_ambiguous_common_nominal_bases(tmp_path):
+    """Multiple incomparable common nominal bases are rejected deterministically."""
+    _session, registry, by_name = _registry(tmp_path)
+    root = ast.parse("[make_ambiguous_a(), make_ambiguous_b()]", mode="eval").body
+    with pytest.raises(CompileError, match="ambiguous common nominal record bases"):
+        analyze_expression(root, _environment(registry, by_name))
+
+
+def test_ordinary_list_literal_remains_structural_array_without_semantic_payload(tmp_path):
+    """Lists with no package semantic elements keep the existing structural-array analysis path."""
+    _session, registry, by_name = _registry(tmp_path)
+    root = ast.parse("[x, 1]", mode="eval").body
+    analysis = analyze_expression(root, _environment(registry, by_name))
+    fact = analysis.facts[root]
+    assert fact.semantic_payload is None
+    assert isinstance(fact.result_shape, ArrayResultShape)
+    assert len(fact.result_shape.items) == 2
+
+
+def test_common_nominal_base_rejects_cross_owner_record_types(tmp_path):
+    """Semantic list inference cannot merge nominal records from different extension owners."""
+    session_a, _registry_a, _ = _registry(
+        tmp_path / "owner_a",
+        owner_key=("system", "vendor.semantic.a", "records"),
+    )
+    session_b, _registry_b, _ = _registry(
+        tmp_path / "owner_b",
+        owner_key=("system", "vendor.semantic.b", "records"),
+    )
+    registry = ExtensionRegistry((session_a, session_b))
+    alpha = next(type_id for type_id in session_a.type_specs() if type_id.name == "AlphaPart")
+    beta = next(type_id for type_id in session_b.type_specs() if type_id.name == "BetaPart")
+    with pytest.raises(CompileError, match="one extension owner"):
+        registry.most_specific_common_nominal_base((alpha, beta))
+
+
+def test_contextual_nested_semantic_list_keeps_empty_literal_typing(tmp_path):
+    """Consumer-declared nested LIST typing still gives an empty inner literal its semantic type."""
+    _session, registry, by_name = _registry(tmp_path)
+    root = ast.parse("consume_nested([[make(x)], []])", mode="eval").body
+    analysis = analyze_expression(root, _environment(registry, by_name))
+    assert analysis.facts[root].analyzed_call is not None
 
 def test_semantic_only_record_and_semantic_then_backend_reuse_runtime_dependency(tmp_path):
     """A nested semantic child stays frontend-only while its dependency becomes an ordinary parent IR operand."""

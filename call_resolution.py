@@ -18,9 +18,7 @@ class CallableKind(Enum):
     """Identify the compiler-owned category selected for one source call."""
 
     BUILTIN = auto()
-    SYSTEM = auto()
     LOCAL_FUNCTION = auto()
-    BACKEND_HELPER = auto()
     LIBRARY = auto()
     EXTENSION = auto()
     TOP_LEVEL_ONLY = auto()
@@ -59,18 +57,14 @@ class CallableEnvironment:
     """Immutable namespace snapshot used to resolve simple expression calls."""
 
     callable_builtins: frozenset[str]
-    system_constructors: Mapping[str, object]
     local_functions: Mapping[str, object]
-    backend_helper_names: frozenset[str]
     imported_functions: Mapping[str, object]
     extension_system_callables: Mapping[str, ExtensionCallableId] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Defensively freeze all name collections for one analysis invocation."""
         object.__setattr__(self, "callable_builtins", frozenset(self.callable_builtins))
-        object.__setattr__(self, "system_constructors", MappingProxyType(dict(self.system_constructors)))
         object.__setattr__(self, "local_functions", MappingProxyType(dict(self.local_functions)))
-        object.__setattr__(self, "backend_helper_names", frozenset(self.backend_helper_names))
         object.__setattr__(self, "imported_functions", MappingProxyType(dict(self.imported_functions)))
         extension_systems = dict(self.extension_system_callables)
         if not all(isinstance(value, ExtensionCallableId) for value in extension_systems.values()):
@@ -323,17 +317,10 @@ def resolve_simple_callable(name: str, environment: CallableEnvironment):
     if name in environment.callable_builtins:
         return ResolvedCallable(CallableKind.BUILTIN, name, target=name)
     extension_system = environment.extension_system_callables.get(name)
-    system = environment.system_constructors.get(name)
-    if extension_system is not None and system is not None:
-        raise AssertionError("bootstrap admitted duplicate v1/v2 system owner")
     if extension_system is not None:
         return ResolvedCallable(CallableKind.EXTENSION, name, target=extension_system)
-    if system is not None:
-        return ResolvedCallable(CallableKind.SYSTEM, name, target=system)
     if name in environment.local_functions:
         return ResolvedCallable(CallableKind.LOCAL_FUNCTION, name, target=name)
-    if name in environment.backend_helper_names:
-        return ResolvedCallable(CallableKind.BACKEND_HELPER, name, target=name)
     binding = environment.imported_functions.get(name)
     if binding is not None:
         extension_callable_id = getattr(binding, "extension_callable_id", None)
