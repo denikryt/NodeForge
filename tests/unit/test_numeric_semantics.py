@@ -63,7 +63,6 @@ def _env(*, bindings=None, consts=None):
     )
     return SemanticEnvironment(
         MappingProxyType(runtime_bindings),
-        frozenset(),
         constants,
         const_eval_values,
         MappingProxyType({}),
@@ -396,7 +395,6 @@ output(x)
         list(preprocessed.statements),
         initial_runtime_bindings={},
         initial_compile_time=preprocessed.initial_compile_time,
-        legacy_binding_names=frozenset(),
         reserved_name_labels={},
         callable_environment=CallableEnvironment(
             frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
@@ -755,7 +753,6 @@ def _lower_preprocessed_body(source):
         list(preprocessed.statements),
         initial_runtime_bindings={},
         initial_compile_time=preprocessed.initial_compile_time,
-        legacy_binding_names=frozenset(),
         reserved_name_labels={},
         callable_environment=_body_callables(),
         owner_scope="stage29-body",

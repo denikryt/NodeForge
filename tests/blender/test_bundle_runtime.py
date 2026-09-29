@@ -368,14 +368,8 @@ def test_bundle_errors_are_controlled():
         expect_compile_error(source, f"NFTest_bundle_error_{index}")
 
 
-def test_straight_line_bundle_body_uses_call_ir_not_legacy_ast_handler(monkeypatch):
-    """Structural/Object/Bundle semantics migration structural changes keep stateless Bundle calls on the migrated IRBody route."""
-    from NodeForge.builtins import bundle as bundle_builtin
-
-    def forbidden_legacy_call(*_args, **_kwargs):
-        raise AssertionError("legacy Bundle compile_call unexpectedly used for IRBody")
-
-    monkeypatch.setattr(bundle_builtin, "compile_call", forbidden_legacy_call)
+def test_straight_line_bundle_body_uses_permanent_call_ir():
+    """Straight-line Bundle calls compile through the permanent typed Call IR route."""
     group = compile_group(
         '''
 path = input_string("Path", default="value")

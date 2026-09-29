@@ -8,7 +8,6 @@ import pytest
 
 from NodeForge.constants import TYPE_FLOAT, TYPE_TOKEN_NAMES
 from NodeForge.errors import CompileError
-from NodeForge.values import TupleValue, Value
 from NodeForge.nf_types import NFType
 
 
@@ -57,14 +56,6 @@ def test_annotations_accept_registry_and_reject_complex(monkeypatch):
         assert module.resolve_local_parameter_annotation(annotation) == typ
     with pytest.raises(CompileError):
         module.resolve_local_parameter_annotation(ast.parse("list[Float]", mode="eval").body)
-
-
-def test_tuple_value_indexing_and_bounds():
-    values = TupleValue((Value(object(), TYPE_FLOAT), Value(object(), TYPE_FLOAT)))
-    assert values.get_item(0) is values.values[0]
-    assert values.get_item(-1) is values.values[1]
-    with pytest.raises(CompileError, match="out of range"):
-        values.get_item(2)
 
 
 def test_parser_accepts_flat_unpacking_for_statement_lowering():

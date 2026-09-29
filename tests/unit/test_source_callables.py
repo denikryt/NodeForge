@@ -601,10 +601,12 @@ def test_legacy_source_call_entrypoints_are_absent():
     """Permanent source calls have no fallback adapter or legacy dispatch entrypoint."""
     root = Path(__file__).resolve().parents[2]
     local_source = (root / "local_functions.py").read_text(encoding="utf-8")
-    expression_source = (root / "expression_compiler.py").read_text(encoding="utf-8")
+    semantic_source = (root / "semantic_analysis.py").read_text(encoding="utf-8")
+    lowering_source = (root / "semantic_lowering.py").read_text(encoding="utf-8")
 
     assert "def compile_local_function_call" not in local_source
     assert not (root / "library_calls.py").exists()
-    assert "compile_library_function_call" not in expression_source
-    assert "LOCAL_FUNCTION" not in expression_source
-    assert "LIBRARY" not in expression_source
+    assert not (root / "expression_compiler.py").exists()
+    assert 'CallableKind.LOCAL_FUNCTION' in semantic_source
+    assert 'CallableKind.LIBRARY' in semantic_source
+    assert 'IRCallableKind.SOURCE_FUNCTION' in lowering_source

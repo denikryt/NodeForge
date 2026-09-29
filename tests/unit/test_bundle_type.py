@@ -4,7 +4,8 @@ import ast
 
 import pytest
 
-from NodeForge.builtins import bundle, io, raw_nodes
+from NodeForge.builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
+from NodeForge.builtins import bundle, raw_nodes
 from NodeForge.constants import TYPE_BUNDLE, TYPE_TOKEN_NAMES, TYPE_VECTOR
 from NodeForge.nf_types import NFType
 from NodeForge.errors import CompileError
@@ -15,12 +16,20 @@ from NodeForge.callable_contracts import source_argument_type_matches
 pytestmark = pytest.mark.unit
 
 
-def test_bundle_type_token_and_input_registration():
+def test_bundle_type_token_and_permanent_builtin_registration():
     assert TYPE_TOKEN_NAMES["Bundle"] == TYPE_BUNDLE
     assert _socket_type_for(TYPE_BUNDLE) == "NodeSocketBundle"
-    assert "input_bundle" in io.NAMES
+    assert "input_bundle" in INPUT_DECLARATION_BUILTIN_NAMES
     assert TYPE_BUNDLE in raw_nodes._SUPPORTED_TYPES
-    assert {"bundle", "bundle_get", "bundle_set"} <= bundle.NAMES
+    assert {"bundle", "bundle_get", "bundle_set"} <= IR_CAPABLE_BUILTIN_NAMES
+
+
+def test_bundle_is_not_registered_through_deleted_executable_builtin_modules():
+    from NodeForge.builtins import registry
+
+    assert not hasattr(registry, "compile_call")
+    assert not hasattr(registry, "_HANDLERS")
+    assert registry.has_callable_builtin("bundle")
 
 
 def test_local_function_bundle_parameter_is_runtime_only():
@@ -32,15 +41,14 @@ def test_local_function_bundle_parameter_is_runtime_only():
         value_type_for_const({"x": 1})
 
 
-def test_bundle_type_token_parser_accepts_bundle():
-    expr = ast.parse("Bundle", mode="eval").body
-    assert bundle._parse_type_token(expr, "typ=") == TYPE_BUNDLE
+def test_bundle_backend_socket_mapping_is_explicit_and_rejects_unknown_type():
     assert bundle._bundle_socket_type(TYPE_BUNDLE, "item") == "BUNDLE"
     assert bundle._bundle_socket_type(TYPE_VECTOR, "item") == "VECTOR"
+    with pytest.raises(CompileError, match="unsupported Bundle item type"):
+        bundle._bundle_socket_type(object(), "item")
 
 
 def test_source_callable_bundle_type_matching_is_semantic():
-    """Bundle source-call compatibility is an NFType decision, not a Blender socket probe."""
     assert source_argument_type_matches(TYPE_BUNDLE, TYPE_BUNDLE)
     assert not source_argument_type_matches(TYPE_BUNDLE, TYPE_VECTOR)
 

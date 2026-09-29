@@ -177,27 +177,20 @@ output("x", x)
     )
 
 
-def test_repeat_state_assignment_allows_explicit_item_named_like_removed_default_geometry():
-    import ast
 
-    from NodeForge.compiler import Compiler
-    from NodeForge.nodes import _int_value, _value
-    from NodeForge.runtime import _repeat_state_assignments
 
-    # The public DSL reserves Geometry as a type token. This lower-level probe
-    # isolates the Repeat Zone invariant: a removable default item named
-    # "Geometry" must not be treated as a permanent system socket collision.
+def test_repeat_zone_allows_state_named_like_removed_default_geometry():
+    """The backend validates Repeat names after removing Blender's default state item."""
+    from NodeForge.blender_ir_lowering import _create_repeat_zone
+    from NodeForge.nf_types import NFType
+
     group = bpy.data.node_groups.new("NFTest_repeat_range_lower_geometry_name", "GeometryNodeTree")
     try:
-        group_input = group.nodes.new("NodeGroupInput")
-        comp = Compiler(group, group_input, consts={})
-        comp.bind_runtime_value("Geometry", _value(group, 0, 0, 0))
-        iterations = _int_value(group, 3, 0, -80)
-        body = ast.parse("Geometry = 1").body
-
-        _repeat_state_assignments(group, comp, iterations, body, index_name="i")
-
-        repeat_output = _repeat_output(group)
+        _repeat_input, repeat_output = _create_repeat_zone(
+            group,
+            ((NFType.FLOAT, "Geometry"),),
+            "i",
+        )
         names = [item.name for item in repeat_output.repeat_items]
         check(names == ["Geometry"], f"unexpected repeat item names: {names}")
     finally:
@@ -407,26 +400,21 @@ output("x", x)
     )
 
 
-def test_ordinary_repeat_range_uses_ir_backend_not_legacy_engine(monkeypatch):
-    """An eligible ordinary Repeat must not call the AST/Compiler legacy Repeat engine."""
-    from NodeForge import statement_compiler
-
-    def forbidden(*_args, **_kwargs):
-        raise AssertionError("eligible ordinary Repeat reached legacy _repeat_state_assignments")
-
-    monkeypatch.setattr(statement_compiler, "_repeat_state_assignments", forbidden)
+def test_ordinary_repeat_range_uses_permanent_ir_backend():
+    """An ordinary Repeat materializes exactly one permanent Repeat Zone."""
     group = compile_group(
-        '''
+        """
 x = 0
 for i in repeat_range(2):
     x = x + 1
 output("x", x)
-''',
+""",
         "NFTest_repeat_ir_route",
     )
     check(len(_nodes(group, "GeometryNodeRepeatInput")) == 1, "IR Repeat did not create one Repeat Input")
     check(len(_nodes(group, "GeometryNodeRepeatOutput")) == 1, "IR Repeat did not create one Repeat Output")
     bpy.data.node_groups.remove(group)
+
 
 
 def test_repeat_int_state_keeps_exact_int_type_and_downstream_integer_arithmetic():

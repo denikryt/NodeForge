@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import ast
 import json
 from collections import Counter
 
-from ..compile_time import reject_compile_time_object
-from ..consteval import _const_eval, _is_const_vector
 from ..constants import (
     TYPE_BOOL,
     TYPE_BUNDLE,
@@ -18,16 +15,13 @@ from ..constants import (
     TYPE_OBJECT,
     TYPE_ROTATION,
     TYPE_STRING,
-    TYPE_TOKEN_NAMES,
     TYPE_VECTOR,
 )
 from ..errors import CompileError
 from ..blender_socket_types import runtime_socket_nf_type
 from ..nodes import _new_node, _is_number_type
-from ..values import NodeResult, Value, make_value
-from ..statements import _kw_dict
+from ..values import Value, make_value
 
-NAMES = {"node"}
 
 RAW_NODE_PROP = "nodeforge_raw_node"
 RAW_BL_IDNAME_PROP = "nodeforge_raw_bl_idname"
@@ -42,183 +36,6 @@ INPUT_SINGLE_LINK = "single_link"
 INPUT_MULTI_LINK = "multi_link"
 
 _SUPPORTED_TYPES = {TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR, TYPE_GEOMETRY, TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING, TYPE_BUNDLE, TYPE_ROTATION}
-
-
-def compile_call(comp, expr, depth=0):
-    """Compile a public node(...) call."""
-    x = depth * 240
-    y = -depth * 90
-    spec = _parse_node_call(comp, expr)
-    return build_raw_node(comp, x=x, y=y, context="node()", **spec)
-
-
-def _parse_node_call(comp, expr):
-    if len(expr.args) != 1:
-        raise CompileError("node(...) expects exactly one positional bl_idname argument")
-    if any(kw.arg is None for kw in expr.keywords):
-        raise CompileError("node(...) does not support **kwargs")
-    kws = _kw_dict(expr)
-    allowed = {"props", "inputs", "output", "typ", "outputs"}
-    extra = set(kws) - allowed
-    if extra:
-        raise CompileError("node(...) got unsupported keyword argument(s): " + ", ".join(sorted(extra)))
-
-    output = _optional_literal_string(comp, kws.get("output"), "output=")
-    typ = _optional_type_token(kws.get("typ"), "typ=")
-    outputs = _parse_outputs(comp, kws.get("outputs"))
-    has_single = output is not None or typ is not None
-    has_multi = outputs is not None
-    if has_single and has_multi:
-        raise CompileError("node(...) accepts either output=/typ= or outputs=, not both")
-    if has_single and (output is None or typ is None):
-        raise CompileError("node(...) single-output mode requires both output= and typ=")
-    if not has_single and not has_multi:
-        raise CompileError("node(...) requires output=/typ= or outputs=")
-
-    return {
-        "bl_idname": _literal_string_node_arg(comp, expr.args[0], "bl_idname"),
-        "props": _parse_literal_dict(comp, kws.get("props"), "props=") if "props" in kws else {},
-        "inputs": _parse_inputs(comp, kws.get("inputs")) if "inputs" in kws else {},
-        "output": output,
-        "typ": typ,
-        "outputs": outputs,
-    }
-
-
-def _literal_string_node_arg(comp, expr, context):
-    """Return a node(...) string argument resolved from compile-time constants."""
-    try:
-        value = _const_eval(expr, comp.compile_time.values)
-    except CompileError as exc:
-        raise CompileError(f"node(...) {context} must be a non-empty compile-time string") from exc
-    if isinstance(value, str) and value:
-        return value
-    raise CompileError(f"node(...) {context} must be a non-empty compile-time string")
-
-
-def _optional_literal_string(comp, expr, context):
-    if expr is None:
-        return None
-    return _literal_string_node_arg(comp, expr, context)
-
-
-def _optional_type_token(expr, context):
-    if expr is None:
-        return None
-    if not isinstance(expr, ast.Name) or expr.id not in TYPE_TOKEN_NAMES:
-        raise CompileError(f"node(...) {context} must be one of: {', '.join(sorted(TYPE_TOKEN_NAMES))}")
-    return TYPE_TOKEN_NAMES[expr.id]
-
-
-def _parse_outputs(comp, expr):
-    if expr is None:
-        return None
-    if not isinstance(expr, ast.Dict):
-        raise CompileError("node(...) outputs= must be written as a literal dict")
-    if not expr.keys:
-        raise CompileError("node(...) outputs= cannot be empty")
-    out = {}
-    for key_expr, value_expr in zip(expr.keys, expr.values):
-        key = _literal_string_node_arg(comp, key_expr, "outputs key")
-        if key in out:
-            raise CompileError(f"node(...) outputs= has duplicate socket {key!r}")
-        out[key] = _optional_type_token(value_expr, f"outputs[{key!r}]")
-    return out
-
-
-def _parse_literal_dict(comp, expr, context):
-    if expr is None:
-        return {}
-    if not isinstance(expr, ast.Dict):
-        raise CompileError(f"node(...) {context} must be written as a literal dict")
-    out = {}
-    for key_expr, value_expr in zip(expr.keys, expr.values):
-        key = _literal_string_node_arg(comp, key_expr, f"{context} key")
-        if key in out:
-            raise CompileError(f"node(...) {context} has duplicate key {key!r}")
-        try:
-            value = _const_eval(value_expr, comp.compile_time.values)
-        except CompileError as exc:
-            raise CompileError(f"node(...) {context} values must be compile-time literals") from exc
-        out[key] = _normalize_json_value(value, f"node(...) {context}{key!r}")
-    return out
-
-
-def _parse_inputs(comp, expr):
-    if expr is None:
-        return {}
-    if not isinstance(expr, ast.Dict):
-        raise CompileError("node(...) inputs= must be written as a literal dict")
-    out = {}
-    for key_expr, value_expr in zip(expr.keys, expr.values):
-        key = _literal_string_node_arg(comp, key_expr, "inputs key")
-        if key in out:
-            raise CompileError(f"node(...) inputs= has duplicate socket {key!r}")
-        if isinstance(value_expr, ast.List):
-            if not value_expr.elts:
-                raise CompileError(f"node(...) input {key!r} list cannot be empty")
-            out[key] = list(value_expr.elts)
-        else:
-            out[key] = value_expr
-    return out
-
-
-def build_raw_node(
-    comp,
-    *,
-    bl_idname,
-    props=None,
-    inputs=None,
-    output=None,
-    typ=None,
-    outputs=None,
-    x=0,
-    y=0,
-    context="raw node",
-):
-    """Build a raw Blender node and return a Value or NodeResult."""
-    props = dict(props or {})
-    inputs = dict(inputs or {})
-    if not isinstance(bl_idname, str) or not bl_idname:
-        raise CompileError(f"{context}: bl_idname must be a non-empty string")
-    _validate_public_type(typ, f"{context}: typ") if typ is not None else None
-    if outputs is not None:
-        if not outputs:
-            raise CompileError(f"{context}: outputs cannot be empty")
-        for out_typ in outputs.values():
-            _validate_public_type(out_typ, f"{context}: output type")
-    elif output is None or typ is None:
-        raise CompileError(f"{context}: raw node requires single-output or multi-output declaration")
-
-    try:
-        node = _new_node(comp.group, bl_idname, x, y)
-    except Exception as exc:
-        raise CompileError(f"{context}: could not create Blender node {bl_idname!r}: {exc}") from exc
-
-    for prop_name, prop_value in props.items():
-        _set_node_property(node, prop_name, prop_value, context)
-
-    input_contracts = []
-    for socket_name, value_spec in inputs.items():
-        socket = resolve_socket(node.inputs, socket_name, direction="input", context=context)
-        if isinstance(value_spec, list):
-            input_contracts.append(_wire_multi_input(comp, node, socket_name, socket, value_spec, context))
-        else:
-            input_contracts.append(_wire_or_default_input(comp, node, socket_name, socket, value_spec, context))
-
-    if outputs is not None:
-        values = {}
-        for socket_name, out_typ in outputs.items():
-            socket = resolve_socket(node.outputs, socket_name, direction="output", context=context)
-            _validate_runtime_socket_type(socket, out_typ, direction="output", context=context, socket_name=socket_name)
-            values[socket_name] = make_value(socket, out_typ)
-        _write_raw_metadata(node, bl_idname, props, input_contracts, tuple(outputs.keys()), RAW_MULTI_MODE)
-        return NodeResult(values)
-
-    out_socket = resolve_socket(node.outputs, output, direction="output", context=context)
-    _validate_runtime_socket_type(out_socket, typ, direction="output", context=context, socket_name=output)
-    _write_raw_metadata(node, bl_idname, props, input_contracts, (output,), RAW_SINGLE_MODE)
-    return make_value(out_socket, typ)
 
 
 
@@ -280,13 +97,13 @@ def build_materialized_raw_node(
             input_contracts.append({"name": socket_name, "mode": INPUT_LITERAL, "default": normalized})
 
     if outputs is not None:
-        values = {}
+        values = []
         for socket_name, out_typ in outputs.items():
             socket = resolve_socket(node.outputs, socket_name, direction="output", context=context)
             _validate_runtime_socket_type(socket, out_typ, direction="output", context=context, socket_name=socket_name)
-            values[socket_name] = make_value(socket, out_typ)
+            values.append(make_value(socket, out_typ))
         _write_raw_metadata(node, bl_idname, props, input_contracts, tuple(outputs.keys()), RAW_MULTI_MODE)
-        return NodeResult(values)
+        return tuple(values)
 
     out_socket = resolve_socket(node.outputs, output, direction="output", context=context)
     _validate_runtime_socket_type(out_socket, typ, direction="output", context=context, socket_name=output)
@@ -384,44 +201,6 @@ def resolve_socket(sockets, socket_name, *, direction, context):
     return matches[0]
 
 
-def _wire_or_default_input(comp, node, socket_name, socket, value_spec, context):
-    if isinstance(value_spec, Value):
-        value = value_spec
-        reject_compile_time_object(value, f"{context} input {socket_name!r}")
-        _link_value(comp, value, socket, context, socket_name)
-        return {"name": socket_name, "mode": INPUT_SINGLE_LINK, "links": 1}
-    literal_known = not isinstance(value_spec, ast.AST)
-    literal = value_spec
-    if isinstance(value_spec, ast.AST):
-        try:
-            literal = _const_eval(value_spec, comp.compile_time.values)
-            literal_known = True
-        except CompileError:
-            literal_known = False
-    if literal_known:
-        normalized = _assign_literal_default(socket, literal, context, socket_name)
-        return {"name": socket_name, "mode": INPUT_LITERAL, "default": normalized}
-    value = comp.compile(value_spec)
-    reject_compile_time_object(value, f"{context} input {socket_name!r}")
-    if isinstance(value, list):
-        raise CompileError(f"{context}: input {socket_name!r} cannot be a script array; use a literal list only for multi-input fanout")
-    _link_value(comp, value, socket, context, socket_name)
-    return {"name": socket_name, "mode": INPUT_SINGLE_LINK, "links": 1}
-
-
-def _wire_multi_input(comp, node, socket_name, socket, items, context):
-    _require_multi_input(socket, context, socket_name)
-    values = []
-    for item in items:
-        value = item if isinstance(item, Value) else comp.compile(item)
-        reject_compile_time_object(value, f"{context} multi-input {socket_name!r}")
-        if isinstance(value, list):
-            raise CompileError(f"{context}: multi-input {socket_name!r} items cannot be arrays")
-        values.append(value)
-    for value in values:
-        _link_value(comp, value, socket, context, socket_name)
-    return {"name": socket_name, "mode": INPUT_MULTI_LINK, "links": len(values)}
-
 
 def _require_multi_input(socket, context, socket_name):
     if hasattr(socket, "is_multi_input"):
@@ -434,16 +213,6 @@ def _require_multi_input(socket, context, socket_name):
         except Exception as exc:
             raise CompileError(f"{context}: could not verify multi-input socket {socket_name!r}") from exc
     raise CompileError(f"{context}: Blender did not expose multi-input metadata for socket {socket_name!r}")
-
-
-def _link_value(comp, value, socket, context, socket_name):
-    if not isinstance(value, Value):
-        raise CompileError(f"{context}: input {socket_name!r} expects a runtime node value")
-    _validate_runtime_socket_type(socket, value.typ, direction="input", context=context, socket_name=socket_name)
-    try:
-        comp.group.links.new(value.socket, socket)
-    except Exception as exc:
-        raise CompileError(f"{context}: failed to link input {socket_name!r}: {exc}") from exc
 
 
 def _assign_literal_default(socket, literal, context, socket_name):
@@ -466,8 +235,6 @@ def _assign_literal_default(socket, literal, context, socket_name):
 
 
 def _normalize_input_literal(literal, context, socket_name):
-    if _is_const_vector(literal):
-        return tuple(float(v) for v in literal)
     if isinstance(literal, tuple):
         if len(literal) == 3 and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in literal):
             return tuple(float(v) for v in literal)
@@ -486,8 +253,6 @@ def _normalize_socket_default(value, context):
 
 
 def _normalize_json_value(value, context="value"):
-    if _is_const_vector(value):
-        return [float(v) for v in value]
     if isinstance(value, bool):
         return bool(value)
     if isinstance(value, int) and not isinstance(value, bool):
@@ -690,10 +455,10 @@ def validate_raw_node_after_cutover(node, group):
 
 
 __all__ = [
-    "NAMES",
-    "build_raw_node",
-    "compile_call",
+    "build_materialized_raw_node",
+    "resolve_socket",
     "is_raw_node",
+    "raw_node_spec",
     "copy_raw_node_properties",
     "resolve_cutover_socket",
     "validate_raw_node_after_cutover",

@@ -1,15 +1,23 @@
 from helpers import *
 
 
-
-
 def test_import_and_registry_checks():
-    for modname in ['compiler', 'expression_compiler', 'statement_compiler', 'local_functions', 'source_callables', 'semantic_group', 'callable_contracts', 'systems.registry']:
+    """Permanent compiler modules import and the declarative builtin registry is populated."""
+    for modname in [
+        'compiler',
+        'semantic_analysis',
+        'semantic_body',
+        'semantic_group',
+        'source_callables',
+        'callable_contracts',
+        'blender_ir_lowering',
+        'systems.registry',
+    ]:
         __import__('NodeForge.' + modname)
-    for module in (io, vector, geometry, fields, instancing):
-        missing = sorted((name for name in module.NAMES if not registry.has_callable_builtin(name)))
-        check(not missing, f'registry missing {module.__name__}: {missing}')
+    check(registry.CALLABLE_BUILTIN_NAMES, 'callable builtin registry is empty')
+    check(registry.BUILTIN_NAMES >= registry.CALLABLE_BUILTIN_NAMES, 'builtin registry lost callable names')
     print('IMPORT_AND_REGISTRY_OK')
+
 
 
 def test_helpers_star_import_exports_private_migration_helpers():

@@ -346,3 +346,10 @@ lifecycle.
 ## 0.62.1
 
 - Fixed source list literals composed entirely of package semantic records: sibling record types now infer one unique most-specific same-owner nominal base, preserve existing semantic runtime dependencies, and fail with controlled diagnostics for mixed, unrelated, or ambiguous element types instead of reaching runtime lowering.
+
+## 0.62.2
+
+- Removed the physically retained legacy AST/`Compiler` execution implementation after the Extension API v2 cutover. Supported core, source-backed, and v2 extension compilation now uses the permanent semantic analysis -> typed Semantic IR -> Blender lowering pipeline exclusively.
+- Moved the remaining Repeat-zone and Store Named Attribute physical helpers to their permanent backend owners, reduced builtin registration to declarative namespace inventory, and removed obsolete legacy structural/backend compatibility containers and retry sentinels.
+- Removed the unsupported `nodeforge.math` Mandelbrot v1 hybrid artifact and coordinated Math/L-System package compatibility with the legacy-free core. Persisted Blender-data compatibility and fail-closed v1 package-layout recognition remain intact.
+- Fixed final Stage-36 backend-ownership regressions in relocated Repeat/raw-node helpers and updated Blender 5.2 regression infrastructure to exercise typed modifier inputs and Extension v2 wrapped backend failures directly.

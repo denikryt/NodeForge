@@ -5,8 +5,73 @@ from .errors import CompileError
 from .values import Value
 from .nodes import _new_node, _value, _combine_xyz, _combine_xyz_mixed, _is_number_type
 from .consteval import _as_float_const, _is_const_number, _is_const_vector_like
-from .statements import _attribute_domain
 
+
+
+_ALLOWED_STORE_TYPES = {
+    "FLOAT": "FLOAT",
+    "INT": "INT",
+    "INTEGER": "INT",
+    "VECTOR": "FLOAT_VECTOR",
+    "FLOAT_VECTOR": "FLOAT_VECTOR",
+    "COLOR": "FLOAT_COLOR",
+    "RGBA": "FLOAT_COLOR",
+    "FLOAT_COLOR": "FLOAT_COLOR",
+    "BOOL": "BOOLEAN",
+    "BOOLEAN": "BOOLEAN",
+}
+_ALLOWED_DOMAINS = {"POINT", "EDGE", "FACE", "CORNER", "CURVE", "INSTANCE"}
+
+
+def _attribute_data_type(typ):
+    """Map one supported NodeForge field type to Store Named Attribute data type."""
+    return {
+        TYPE_FLOAT: "FLOAT",
+        TYPE_INT: "INT",
+        TYPE_VECTOR: "FLOAT_VECTOR",
+        TYPE_BOOL: "BOOLEAN",
+    }.get(typ)
+
+
+def _attribute_domain(domain, context):
+    """Return a validated Geometry Nodes attribute domain token."""
+    normalized = (domain or "POINT").upper()
+    if normalized not in _ALLOWED_DOMAINS:
+        raise CompileError(
+            f"Unsupported {context} domain. Use POINT, EDGE, FACE, CORNER, CURVE or INSTANCE"
+        )
+    return normalized
+
+
+def _store_named_attribute(
+    group, geometry_socket, attr_name, value, selection=None, domain="POINT",
+    data_type_override=None, x=0, y=0,
+):
+    """Build the physical Store Named Attribute primitive from typed backend values."""
+    if data_type_override:
+        data_type = _ALLOWED_STORE_TYPES.get(data_type_override.upper())
+        if data_type is None:
+            raise CompileError("Unsupported store() type. Use FLOAT, INT, VECTOR, COLOR or BOOLEAN")
+    else:
+        data_type = _attribute_data_type(value.typ)
+    if data_type is None:
+        raise CompileError("store(name, value) supports Float, Int, Vector and Bool values")
+    domain = _attribute_domain(domain, "store()")
+    node = _new_node(group, "GeometryNodeStoreNamedAttribute", x, y)
+    node.data_type = data_type
+    node.domain = domain
+    node.inputs["Selection"].default_value = True
+    if isinstance(attr_name, Value):
+        if attr_name.typ != TYPE_STRING:
+            raise CompileError("store() attribute name must be String")
+        group.links.new(attr_name.socket, node.inputs["Name"])
+    else:
+        node.inputs["Name"].default_value = attr_name
+    group.links.new(geometry_socket, node.inputs["Geometry"])
+    if selection is not None:
+        group.links.new(selection.socket, node.inputs["Selection"])
+    group.links.new(value.socket, node.inputs["Value"])
+    return node.outputs["Geometry"]
 
 
 
@@ -64,7 +129,6 @@ def _grid_geometry(group, width, height, x=0, y=0):
 
 def _store_named_attribute_geometry(group, geo, attr_name, value, selection=None, domain="POINT", data_type_override=None, x=0, y=0):
     """Expression-form Store Named Attribute returning Geometry."""
-    from .statements import _store_named_attribute
     if geo.typ != TYPE_GEOMETRY:
         raise CompileError("store_named_attribute() first argument must be Geometry")
     socket = _store_named_attribute(group, geo.socket, attr_name, value, selection, domain, data_type_override, x, y)

@@ -1,31 +1,31 @@
-"""Central dispatch table for NodeForge DSL built-ins."""
+"""Declarative namespace inventory for NodeForge DSL builtins."""
 
-from . import vector, fields, geometry, geometry_builder, instancing, io, raw_nodes, node_wrappers, bundle, runtime
+from ..builtin_call_semantics import (
+    INPUT_DECLARATION_BUILTIN_NAMES,
+    IR_CAPABLE_BUILTIN_NAMES,
+)
 
-_MODULES = (vector, fields, geometry, geometry_builder, instancing, io, raw_nodes, node_wrappers, bundle)
-_RUNTIME_NAMES = set(runtime.NAMES)
-
-_HANDLERS = {}
-for _module in _MODULES:
-    for _name in _module.NAMES:
-        _HANDLERS[_name] = _module.compile_call
-
-BUILTIN_NAMES = set(_HANDLERS) | _RUNTIME_NAMES
-CALLABLE_BUILTIN_NAMES = set(_HANDLERS)
-RUNTIME_BUILTIN_NAMES = _RUNTIME_NAMES
+CALLABLE_BUILTIN_NAMES = frozenset(
+    IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES
+)
+RUNTIME_BUILTIN_NAMES = frozenset({"range", "repeat_range"})
+BUILTIN_NAMES = frozenset(CALLABLE_BUILTIN_NAMES | RUNTIME_BUILTIN_NAMES)
 
 
 def has_builtin(name: str) -> bool:
+    """Return whether *name* is reserved by the core DSL builtin namespace."""
     return name in BUILTIN_NAMES
 
 
 def has_callable_builtin(name: str) -> bool:
+    """Return whether *name* is a callable core DSL builtin."""
     return name in CALLABLE_BUILTIN_NAMES
 
 
-def compile_call(comp, expr, depth=0):
-    name = expr.func.id
-    handler = _HANDLERS.get(name)
-    if handler is None:
-        raise KeyError(name)
-    return handler(comp, expr, depth)
+__all__ = [
+    "BUILTIN_NAMES",
+    "CALLABLE_BUILTIN_NAMES",
+    "RUNTIME_BUILTIN_NAMES",
+    "has_builtin",
+    "has_callable_builtin",
+]

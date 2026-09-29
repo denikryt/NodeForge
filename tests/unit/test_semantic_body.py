@@ -14,7 +14,7 @@ from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
 from NodeForge.runtime_bindings import RuntimeBindingSymbol
 from NodeForge.semantic_values import StructuralArrayRef, StructuralRuntimeLeaf
-from NodeForge.semantic_body import BODY_UNSUPPORTED, lower_basic_body
+from NodeForge.semantic_body import lower_basic_body
 from NodeForge.semantic_ir import (
     IRAssign, IRArray, IRBindLeaves, IRBody, IRFinalExpression, IRIf,
     IRContextRead, IRContextWrite, IRDiscardExpression, IRInputDeclaration, IROutput, IRPanelDeclaration,
@@ -37,14 +37,13 @@ def _stmts(source):
 
 
 def _lower(
-    source, *, bindings=None, constants=None, legacy=(), reserved=None, callables=None,
+    source, *, bindings=None, constants=None, reserved=None, callables=None,
     geometry_mode=False, input_origins=None,
 ):
     return lower_basic_body(
         _stmts(source),
         initial_runtime_bindings=bindings or {},
         initial_compile_time=CompileTimeSnapshot(constants or {}),
-        legacy_binding_names=frozenset(legacy),
         reserved_name_labels=reserved or {},
         callable_environment=callables or _callables(),
         owner_scope="scope",
@@ -62,7 +61,6 @@ def _preprocessed_lower(source, *, bindings=None, callables=None):
         list(preprocessed.statements),
         initial_runtime_bindings=bindings or {},
         initial_compile_time=preprocessed.initial_compile_time,
-        legacy_binding_names=frozenset(),
         reserved_name_labels={},
         callable_environment=callables or _callables(),
         owner_scope="scope",
@@ -248,279 +246,12 @@ def test_late_unknown_call_error_does_not_mutate_input_semantic_state():
             _stmts('x = a + 1\ny = backend_helper(x)\nx'),
             initial_runtime_bindings=MappingProxyType(bindings),
             initial_compile_time=CompileTimeSnapshot(MappingProxyType(constants)),
-            legacy_binding_names=frozenset(),
-            reserved_name_labels={},
+                reserved_name_labels={},
             callable_environment=_callables(),
             owner_scope="scope",
         )
     assert constants == {"k": 3}
     assert bindings == dict([_binding("a", 0)])
-
-def test_compile_statements_internal_tripwire_preserves_committed_compile_time_state(monkeypatch):
-    """An unexpected semantic sentinel fails closed without publishing speculative state or legacy execution."""
-    from types import SimpleNamespace
-    from NodeForge.compile_time import CompileTimeState
-    from NodeForge.statement_compiler import GroupBuildContext, compile_statements
-    import NodeForge.statement_compiler as statement_compiler
-
-    committed = CompileTimeState({"c": 2})
-    comp = SimpleNamespace(
-        compile_time=committed,
-        resolved_environment=SimpleNamespace(extension_system_callables={}),
-        local_functions={},
-        imported_library_functions={},
-        function_group_owner_scope="scope",
-        input_declaration_owner="scope",
-        reserved_name_labels={},
-        runtime_bindings_snapshot=lambda: MappingProxyType({}),
-        legacy_structural_binding_names_snapshot=lambda: frozenset(),
-    )
-    def reject_after_speculation(_stmts, *, initial_compile_time, **_kwargs):
-        speculative = CompileTimeState(initial_compile_time.values)
-        speculative.bind("c", 3)
-        speculative.bind("x", 1)
-        return BODY_UNSUPPORTED
-
-    monkeypatch.setattr(statement_compiler, "lower_basic_body", reject_after_speculation)
-    monkeypatch.setattr(
-        statement_compiler,
-        "compile_statement",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("legacy statement compiler was called")),
-    )
-    with pytest.raises(
-        CompileError,
-        match="Internal error: Semantic Body reached an unplanned legacy fallback after whole-body fallback is disabled",
-    ):
-        compile_statements(GroupBuildContext(group=object(), comp=comp, geometry_mode=False), _stmts("pass"))
-
-    assert dict(committed.values) == {"c": 2}
-
-
-
-
-def test_compile_statements_routes_supported_core_only_through_semantic_body(monkeypatch):
-    """Supported core bodies lower through Semantic IR while pending extensions fail before legacy routing."""
-    from types import SimpleNamespace
-    from NodeForge.compile_time import CompileTimeState
-    from NodeForge.statement_compiler import GroupBuildContext, compile_statements
-    import NodeForge.statement_compiler as statement_compiler
-
-    class FakeComp:
-        def __init__(self):
-            self.compile_time = CompileTimeState({})
-            self.resolved_environment = SimpleNamespace(extension_system_callables={})
-            self.local_functions = {}
-            self.imported_library_functions = {}
-            self.function_group_owner_scope = "scope"
-            self.input_declaration_owner = "scope"
-            self.reserved_name_labels = {}
-            self.group_input = None
-
-        def runtime_bindings_snapshot(self):
-            return MappingProxyType({})
-
-        def backend_runtime_values_snapshot(self):
-            return {}
-
-        def legacy_structural_binding_names_snapshot(self):
-            return frozenset()
-
-    semantic_lowerings = []
-    legacy_statements = []
-
-    def record_lowering(_context, body, _bindings, **_kwargs):
-        semantic_lowerings.append(body)
-        return SimpleNamespace(
-            explicit_outputs=[],
-            auto_output=None,
-            group_context_values=MappingProxyType(dict(_context.group_context_values)),
-        )
-
-    def record_legacy(_ctx, stmt, *_args, **_kwargs):
-        legacy_statements.append(stmt)
-
-    monkeypatch.setattr(statement_compiler, "lower_ir_body", record_lowering)
-    monkeypatch.setattr(statement_compiler, "compile_statement", record_legacy)
-
-    migrated = GroupBuildContext(group=object(), comp=FakeComp(), geometry_mode=False)
-    compile_statements(migrated, _stmts("x = 1.0 + 2.0\noutput(x)"))
-    assert len(semantic_lowerings) == 1
-    assert legacy_statements == []
-
-    semantic_lowerings.clear()
-    migrated_control_flow = GroupBuildContext(group=object(), comp=FakeComp(), geometry_mode=False)
-    compile_statements(
-        migrated_control_flow,
-        _stmts(
-            'condition = input_bool("Condition")\n'
-            'if condition:\n'
-            '    x = 1.0\n'
-            'else:\n'
-            '    x = 2.0\n'
-            'output(x)'
-        ),
-    )
-    assert len(semantic_lowerings) == 1
-    assert legacy_statements == []
-
-    semantic_lowerings.clear()
-    migrated_object = GroupBuildContext(group=object(), comp=FakeComp(), geometry_mode=False)
-    compile_statements(
-        migrated_object,
-        _stmts(
-            'obj = input_object("Object")\n'
-            'obj.info(as_instance=False)\n'
-            'output("Location", obj.location)'
-        ),
-    )
-    assert len(semantic_lowerings) == 1
-    assert legacy_statements == []
-
-    semantic_lowerings.clear()
-    migrated_bundle = GroupBuildContext(group=object(), comp=FakeComp(), geometry_mode=False)
-    compile_statements(migrated_bundle, _stmts('b = bundle(value=1.0)\noutput("Bundle", b)'))
-    assert len(semantic_lowerings) == 1
-    assert legacy_statements == []
-
-    semantic_lowerings.clear()
-    migrated = GroupBuildContext(group=object(), comp=FakeComp(), geometry_mode=False)
-    compile_statements(
-        migrated,
-        _stmts("items = [position()]\nitems.append(position())\nfor item in items:\n    x = item\nx"),
-    )
-    assert len(semantic_lowerings) == 1
-    assert legacy_statements == []
-
-    semantic_lowerings.clear()
-    migrated_builder = GroupBuildContext(group=object(), comp=FakeComp(), geometry_mode=False)
-    compile_statements(
-        migrated_builder,
-        _stmts('builder = geometry_builder()\nbuilder.add(cube(1.0))\noutput("Geometry", builder.geometry)'),
-    )
-    assert len(semantic_lowerings) == 1
-    assert legacy_statements == []
-
-    semantic_lowerings.clear()
-    migrated_builder = GroupBuildContext(group=object(), comp=FakeComp(), geometry_mode=False)
-    compile_statements(
-        migrated_builder,
-        _stmts(
-            "builder = geometry_builder()\n"
-            "builder.add(cube(1.0))\n"
-            "for i in repeat_range(2):\n"
-            "    builder.add(cube(0.5))\n"
-            "output(\"Geometry\", builder.geometry)"
-        ),
-    )
-    assert len(semantic_lowerings) == 1
-    assert legacy_statements == []
-
-    semantic_lowerings.clear()
-    contextual_geometry = GroupBuildContext(
-        group=object(), comp=FakeComp(), geometry_mode=True, geometry_socket=object()
-    )
-    original_geometry_socket = contextual_geometry.geometry_socket
-    compile_statements(contextual_geometry, _stmts("store('a', 1.0)\nset_position(position())"))
-    assert len(semantic_lowerings) == 1
-    assert legacy_statements == []
-    assert contextual_geometry.geometry_socket is original_geometry_socket
-
-    semantic_lowerings.clear()
-    contextual_grid = GroupBuildContext(group=object(), comp=FakeComp(), geometry_mode=False)
-    compile_statements(contextual_grid, _stmts("geo = grid(2, 2)\nuv = grid_uv()\noutput(uv)"))
-    assert len(semantic_lowerings) == 1
-    assert legacy_statements == []
-
-    semantic_lowerings.clear()
-    contextual_panel = GroupBuildContext(group=object(), comp=FakeComp(), geometry_mode=False)
-    compile_statements(contextual_panel, _stmts('x = input_float("X")\npanel([x], name="P")\noutput(x)'))
-    assert len(semantic_lowerings) == 1
-    assert legacy_statements == []
-
-    semantic_lowerings.clear()
-    deferred_comp = FakeComp()
-    deferred_comp.resolved_environment = SimpleNamespace(extension_system_callables={})
-    deferred = GroupBuildContext(group=object(), comp=deferred_comp, geometry_mode=False)
-    with pytest.raises(
-        CompileError,
-        match=r"Unsupported function: system_constructor",
-    ):
-        compile_statements(deferred, _stmts("system_constructor()"))
-    assert semantic_lowerings == []
-    assert legacy_statements == []
-
-
-def test_compile_time_flat_unpack_append_loop_is_rejected_before_legacy_routing(monkeypatch):
-    """The removed preprocessing escape cannot route flat tuple/list targets into the old compiler."""
-    from NodeForge.consteval import _preprocess_compile_time
-    import NodeForge.statement_compiler as statement_compiler
-
-    monkeypatch.setattr(
-        statement_compiler,
-        "compile_statement",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("legacy statement compiler was called")),
-    )
-    with pytest.raises(CompileError, match="Only simple compile-time for targets are supported"):
-        _preprocess_compile_time(_stmts(
-            "items = []\n"
-            "for x, y in [[1.0, 2.0]]:\n"
-            "    items.append(x + y)\n"
-            "output(items[0])"
-        ))
-
-
-def test_runtime_dependent_flat_unpack_loop_is_a_direct_semantic_error(monkeypatch):
-    """A surviving generic non-name ordinary-for target fails directly without statement fallback."""
-    from types import SimpleNamespace
-    from NodeForge.compile_time import CompileTimeState
-    from NodeForge.consteval import _preprocess_compile_time
-    from NodeForge.statement_compiler import GroupBuildContext, compile_statements
-    import NodeForge.statement_compiler as statement_compiler
-
-    class FakeComp:
-        def __init__(self):
-            self.compile_time = CompileTimeState({})
-            self.resolved_environment = SimpleNamespace(extension_system_callables={})
-            self.local_functions = {}
-            self.imported_library_functions = {}
-            self.function_group_owner_scope = "scope"
-            self.input_declaration_owner = "scope"
-            self.reserved_name_labels = {}
-            self.group_input = None
-
-        def runtime_bindings_snapshot(self):
-            return MappingProxyType({})
-
-        def backend_runtime_values_snapshot(self):
-            return {}
-
-        def legacy_structural_binding_names_snapshot(self):
-            return frozenset()
-
-    monkeypatch.setattr(
-        statement_compiler,
-        "compile_statement",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("legacy statement compiler was called")),
-    )
-    preprocessed = _preprocess_compile_time(_stmts(
-        'a = input_float("A", default=1.0)\n'
-        'pairs = [[a, a]]\n'
-        'for x, y in pairs:\n'
-        '    result = x + y\n'
-        'output("Result", result)'
-    ))
-    retained = list(preprocessed.statements)
-    assert any(isinstance(stmt, ast.For) for stmt in retained)
-
-    comp = FakeComp()
-    with pytest.raises(CompileError, match="Only simple compile-time for targets are supported"):
-        compile_statements(
-            GroupBuildContext(group=object(), comp=comp, geometry_mode=False),
-            retained,
-            compile_time_effects_before=preprocessed.effects_before,
-            trailing_compile_time_effects=preprocessed.trailing_effects,
-        )
-
 
 def test_unknown_call_error_does_not_publish_speculative_compile_time_changes():
     """A direct semantic error cannot publish speculative compile-time bindings."""
@@ -535,8 +266,7 @@ def test_unknown_call_error_does_not_publish_speculative_compile_time_changes():
             _stmts("c = 3\nx = 1\ny = backend_helper()\nx"),
             initial_runtime_bindings={},
             initial_compile_time=committed.snapshot(),
-            legacy_binding_names=frozenset(),
-            reserved_name_labels={},
+                reserved_name_labels={},
             callable_environment=_callables(),
             owner_scope="scope",
         )
@@ -553,8 +283,7 @@ def test_semantic_body_exception_does_not_mutate_committed_compile_time_owner():
             _stmts("c = 3\nx = missing + 1"),
             initial_runtime_bindings={},
             initial_compile_time=committed.snapshot(),
-            legacy_binding_names=frozenset(),
-            reserved_name_labels={},
+                reserved_name_labels={},
             callable_environment=_callables(),
             owner_scope="scope",
         )
@@ -573,8 +302,7 @@ def test_rejected_semantic_body_does_not_mutate_inherited_compile_time_list():
             _stmts("x = 2\nitems.append(x)"),
             initial_runtime_bindings={},
             initial_compile_time=snapshot,
-            legacy_binding_names=frozenset(),
-            reserved_name_labels={},
+                reserved_name_labels={},
             callable_environment=_callables(),
             owner_scope="scope",
         )
@@ -584,19 +312,19 @@ def test_rejected_semantic_body_does_not_mutate_inherited_compile_time_list():
 def test_migrated_arrays_and_loops_are_accepted_without_legacy_fallback():
     """Permanent body constructs stay accepted without relying on the removed source-call migration failure."""
     array_result = _lower("items = [a]\nitems[0]", bindings=dict([_binding("a", 0)]))
-    assert array_result is not BODY_UNSUPPORTED
+    assert array_result.body.statements
     with pytest.raises(CompileError, match="Cannot unpack scalar result into 2 names"):
         _lower("a, b = pair", bindings=dict([_binding("pair", 0)]))
-    assert _lower('builder = geometry_builder()\noutput("Geometry", builder.geometry)') is not BODY_UNSUPPORTED
+    _lower('builder = geometry_builder()\noutput("Geometry", builder.geometry)')
     with pytest.raises(CompileError, match="geometry_builder cannot escape script scope"):
         _lower("builder = geometry_builder()\nbuilder")
-    assert _lower("x = grid(2, 2)\nx") is not BODY_UNSUPPORTED
-    assert _lower("if True:\n    x = 1\nelse:\n    x = 2") is not BODY_UNSUPPORTED
-    assert _lower("for i in [1]:\n    x = i") is not BODY_UNSUPPORTED
+    _lower("x = grid(2, 2)\nx")
+    _lower("if True:\n    x = 1\nelse:\n    x = 2")
+    _lower("for i in [1]:\n    x = i")
     with pytest.raises(CompileError, match=r"panel\(\) expects exactly one positional list or tuple of group inputs"):
         _lower("panel('P', a)", bindings=dict([_binding("a", 0)]))
-    assert _lower("store('x', a)", bindings=dict([_binding("a", 0)]), geometry_mode=True) is not BODY_UNSUPPORTED
-    assert _lower("set_position(position())", geometry_mode=True) is not BODY_UNSUPPORTED
+    _lower("store('x', a)", bindings=dict([_binding("a", 0)]), geometry_mode=True)
+    _lower("set_position(position())", geometry_mode=True)
     with pytest.raises(CompileError, match=r"input_\*\(\) may only be used as the complete right-hand side of a simple assignment"):
         _lower("x = input_float('X') + 1")
 
@@ -697,17 +425,6 @@ def test_basic_body_frontend_has_no_backend_dependencies_or_compiler_mutation():
         assert forbidden not in code_only
 
 
-def test_compile_statements_route_never_uses_legacy_binding_publication_or_statement_compilation():
-    """The production root route consumes Semantic Body output without legacy publication APIs."""
-    from pathlib import Path
-
-    root = Path(__file__).resolve().parents[2]
-    source = (root / "statement_compiler.py").read_text(encoding="utf-8")
-    function = source[source.index("def compile_statements("):]
-    assert "comp.bind_runtime_value(" not in function
-    assert "comp.bind_legacy_structural(" not in function
-    assert "compile_statement(" not in function
-
 def test_body_lowerer_is_ast_free():
     """Blender body lowering consumes only IR and compiler identities, never source AST."""
     from pathlib import Path
@@ -753,7 +470,7 @@ def test_generated_local_function_source_prologue_is_basic_body_eligible():
     source = local_function_source(fn, {"x": NFType.FLOAT}, return_shape=shape)
     result = _lower(source)
 
-    assert result is not BODY_UNSUPPORTED
+    assert result.body is not None
     assert isinstance(result.body.statements[0], IRInputDeclaration)
     assert result.body.statements[0].target_name == "x"
     assert result.body.statements[0].display_name == "x"
@@ -1020,7 +737,7 @@ def test_structural_array_alias_append_reassignment_and_nested_identity_are_fron
     assert arrays.bindings["b"] == arrays.states[arrays.bindings["c"]].items[0].array_id
     assert len(arrays.states[arrays.bindings["b"]].items) == 2
     assert len(arrays.states[arrays.bindings["a"]].items) == 1
-    assert result is not BODY_UNSUPPORTED
+    assert result.body is not None
 
 
 def test_nested_projection_alias_keeps_array_identity_for_later_append():
@@ -1076,7 +793,7 @@ def test_ordinary_for_unrolls_source_compile_time_iterables_without_irrepeat():
     )
     for source in cases:
         result = _lower(source, bindings=dict([_binding("x", 0)]))
-        assert result is not BODY_UNSUPPORTED
+        assert result.body is not None
         assert not any(isinstance(statement, IRRepeat) for statement in result.body.statements)
 
 
@@ -1090,7 +807,7 @@ def test_ordinary_for_unrolls_named_structural_array_and_restores_runtime_target
         "output(x)",
         bindings=bindings,
     )
-    assert result is not BODY_UNSUPPORTED
+    assert result.body is not None
     assert result.body.statements[-1].value.result.typ is NFType.FLOAT
     assert not any(isinstance(statement, IRRepeat) for statement in result.body.statements)
 
@@ -1134,8 +851,7 @@ def test_flat_loop_target_with_direct_append_is_rejected_before_body_fallback():
             _stmts(source),
             initial_runtime_bindings={},
             initial_compile_time=CompileTimeSnapshot({}),
-            legacy_binding_names=frozenset(),
-            reserved_name_labels={},
+                reserved_name_labels={},
             callable_environment=_callables(),
             owner_scope="scope",
         )
@@ -1216,14 +932,14 @@ def test_array_items_preserve_bundle_object_and_fixed_structural_shapes():
         "output('Captured', items[0][1])",
         bindings=dict([_binding("geo", 0, NFType.GEOMETRY), _binding("value", 1, NFType.FLOAT)]),
     )
-    assert fixed is not BODY_UNSUPPORTED
+    assert fixed.body is not None
 
     named = _lower(
         'parts = node("ShaderNodeSeparateXYZ", outputs={"X": Float, "Y": Float})\n'
         'items = [parts]\n'
         'output("Y", items[0].Y)'
     )
-    assert named is not BODY_UNSUPPORTED
+    assert named.body is not None
 
 
 def test_loop_target_restoration_preserves_object_provenance():
@@ -1243,7 +959,7 @@ def test_semantic_structural_append_preserves_legacy_ignored_keyword_compatibili
         "items = [x]\nitems.append(y, ignored=missing)\noutput(items[1])",
         bindings=dict([_binding("x", 0), _binding("y", 1)]),
     )
-    assert result is not BODY_UNSUPPORTED
+    assert result.body is not None
     state = result.final_structural_arrays.states[result.final_structural_arrays.bindings["items"]]
     assert len(state.items) == 2
 
@@ -1310,7 +1026,7 @@ def test_grid_context_is_available_in_traversal_order_across_runtime_if():
         'else:\n    geo = grid(2, 2)\n    result = 2\n'
         'uv = grid_uv()\noutput(uv)'
     )
-    assert false_to_after is not BODY_UNSUPPORTED
+    assert false_to_after.body is not None
 
 
 def test_grid_in_runtime_if_condition_makes_uv_available_in_true_branch():
@@ -1460,196 +1176,6 @@ def test_literal_false_does_not_bypass_unknown_call_diagnostic():
         )
 
 
-def test_unknown_call_error_keeps_contextual_core_atomic_and_never_calls_legacy(monkeypatch):
-    from types import SimpleNamespace
-    from NodeForge.compile_time import CompileTimeState
-    from NodeForge.statement_compiler import GroupBuildContext, compile_statements
-    import NodeForge.statement_compiler as statement_compiler
-
-    class FakeComp:
-        def __init__(self):
-            self.compile_time = CompileTimeState({"seed": 1})
-            self.resolved_environment = SimpleNamespace(extension_system_callables={})
-            self.local_functions = {}
-            self.imported_library_functions = {}
-            self.function_group_owner_scope = "scope"
-            self.input_declaration_owner = "scope"
-            self.reserved_name_labels = {}
-            self.group_input = None
-
-        def runtime_bindings_snapshot(self):
-            return MappingProxyType({})
-
-        def backend_runtime_values_snapshot(self):
-            return {}
-
-        def legacy_structural_binding_names_snapshot(self):
-            return frozenset()
-
-    monkeypatch.setattr(
-        statement_compiler,
-        "compile_statement",
-        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("legacy statement compiler was called")),
-    )
-    comp = FakeComp()
-    ctx = GroupBuildContext(group=object(), comp=comp, geometry_mode=True, geometry_socket=object())
-    source = (
-        'x = input_float("X")\n'
-        'panel([x], name="P")\n'
-        'geo = grid(2, 2)\nuv = grid_uv()\n'
-        'store("a", x)\nset_position(position())\n'
-        'result = dynamic_system()\nresult'
-    )
-    with pytest.raises(
-        CompileError,
-        match=r"Unsupported function: dynamic_system",
-    ):
-        compile_statements(ctx, _stmts(source))
-    assert dict(comp.compile_time.values) == {"seed": 1}
-    assert not hasattr(comp, "grid_context")
-    assert not hasattr(comp, "_interface_input_binding_ids")
-
-@pytest.mark.parametrize("initial_state", [False, True])
-def test_unknown_call_error_preserves_legacy_grid_routing_state(monkeypatch, initial_state):
-    """A direct semantic diagnostic leaves retained legacy routing state unchanged."""
-    from types import SimpleNamespace
-    from NodeForge.compile_time import CompileTimeState
-    from NodeForge.statement_compiler import GroupBuildContext, compile_statements
-    import NodeForge.statement_compiler as statement_compiler
-
-    class FakeComp:
-        def __init__(self):
-            self.compile_time = CompileTimeState({})
-            self.resolved_environment = SimpleNamespace(extension_system_callables={})
-            self.local_functions = {}
-            self.imported_library_functions = {}
-            self.function_group_owner_scope = "scope"
-            self.input_declaration_owner = "scope"
-            self.reserved_name_labels = {}
-            self.group_input = None
-            self._legacy_contextual_grid_expression_routing_active = initial_state
-
-        def runtime_bindings_snapshot(self):
-            return MappingProxyType({})
-
-        def backend_runtime_values_snapshot(self):
-            return {}
-
-        def legacy_structural_binding_names_snapshot(self):
-            return frozenset()
-
-    monkeypatch.setattr(
-        statement_compiler,
-        "compile_statement",
-        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("legacy statement compiler was called")),
-    )
-    comp = FakeComp()
-    with pytest.raises(
-        CompileError,
-        match=r"Unsupported function: dynamic_system",
-    ):
-        compile_statements(
-            GroupBuildContext(group=object(), comp=comp, geometry_mode=False),
-            _stmts("result = dynamic_system()\nresult"),
-        )
-    assert comp._legacy_contextual_grid_expression_routing_active is initial_state
-
-
-def test_contextual_statement_diagnostics_match_legacy_statement_contract():
-    """Migrated contextual statements preserve the legacy path's exact public diagnostics."""
-    from NodeForge.compile_time import CompileTimeState
-    from NodeForge.statement_compiler import GroupBuildContext, compile_statement
-    from NodeForge.values import NodeResult, TupleValue, Value
-
-    class LegacyComp:
-        def __init__(self, compiled):
-            self.compiled = compiled
-            self.compile_time = CompileTimeState({})
-            self.group = object()
-
-        def compile(self, expr):
-            return self.compiled[ast.unparse(expr)]
-
-    cases = (
-        (
-            'store("a", [1.0])',
-            {},
-            {'[1.0]': [Value(object(), NFType.FLOAT)]},
-            "store() value cannot be an array",
-        ),
-        (
-            'store(f, f)',
-            dict([_binding("f", 0, NFType.FLOAT)]),
-            {'f': Value(object(), NFType.FLOAT)},
-            "store() attribute name must be a compile-time string or runtime String, got FLOAT",
-        ),
-        (
-            'set_position(f)',
-            dict([_binding("f", 0, NFType.FLOAT)]),
-            {'f': Value(object(), NFType.FLOAT)},
-            "set_position() expects a Vector argument",
-        ),
-        (
-            'set_position(v, selection=f)',
-            dict([_binding("v", 0, NFType.VECTOR), _binding("f", 1, NFType.FLOAT)]),
-            {'v': Value(object(), NFType.VECTOR), 'f': Value(object(), NFType.FLOAT)},
-            "selection= must be a Bool expression",
-        ),
-        (
-            'store("a", capture_attribute(empty_geometry(), 1.0))',
-            {},
-            {
-                'capture_attribute(empty_geometry(), 1.0)': TupleValue(
-                    (Value(object(), NFType.GEOMETRY), Value(object(), NFType.FLOAT))
-                )
-            },
-            "store() value received a tuple of 2 values; unpack it or select an element by a compile-time index",
-        ),
-        (
-            'set_position(capture_attribute(empty_geometry(), 1.0))',
-            {},
-            {
-                'capture_attribute(empty_geometry(), 1.0)': TupleValue(
-                    (Value(object(), NFType.GEOMETRY), Value(object(), NFType.FLOAT))
-                )
-            },
-            "set_position() position received a tuple of 2 values; unpack it or select an element by a compile-time index",
-        ),
-        (
-            'store("a", node("ShaderNodeSeparateXYZ", outputs={"X": Float}))',
-            {},
-            {
-                "node('ShaderNodeSeparateXYZ', outputs={'X': Float})": NodeResult(
-                    {"X": Value(object(), NFType.FLOAT)}
-                )
-            },
-            "NodeResult is compile-time only and cannot be used in store() value",
-        ),
-        (
-            'set_position(node("ShaderNodeSeparateXYZ", outputs={"X": Float}))',
-            {},
-            {
-                "node('ShaderNodeSeparateXYZ', outputs={'X': Float})": NodeResult(
-                    {"X": Value(object(), NFType.FLOAT)}
-                )
-            },
-            "NodeResult is compile-time only and cannot be used in set_position() position",
-        ),
-    )
-    for source, bindings, legacy_values, expected in cases:
-        with pytest.raises(CompileError) as migrated_exc:
-            _lower(source, bindings=bindings, geometry_mode=True)
-        legacy_ctx = GroupBuildContext(
-            group=object(),
-            comp=LegacyComp(legacy_values),
-            geometry_mode=True,
-            geometry_socket=object(),
-        )
-        with pytest.raises(CompileError) as legacy_exc:
-            compile_statement(legacy_ctx, _stmts(source)[0], 0)
-        assert str(migrated_exc.value) == str(legacy_exc.value) == expected
-
-
 def test_grid_type_diagnostics_preserve_width_height_legacy_wording():
     """Grid rejects invalid arguments with the same per-socket diagnostics as the backend contract."""
     with pytest.raises(CompileError) as exc_info:
@@ -1719,7 +1245,6 @@ def test_late_compile_time_owned_assignment_uses_runtime_if_joined_fact_without_
         retained,
         initial_runtime_bindings={},
         initial_compile_time=preprocessed.initial_compile_time,
-        legacy_binding_names=frozenset(),
         reserved_name_labels={},
         callable_environment=_callables(),
         owner_scope="scope",
@@ -1727,7 +1252,7 @@ def test_late_compile_time_owned_assignment_uses_runtime_if_joined_fact_without_
         trailing_compile_time_effects=preprocessed.trailing_effects,
     )
 
-    assert result is not BODY_UNSUPPORTED
+    assert result.body is not None
     assert result.final_compile_time.values["n"] == 2
     assert result.final_compile_time.values["xs"] == [0, 1]
     assert not any(
@@ -1776,7 +1301,6 @@ def test_late_compile_time_owned_root_family_consumes_after_runtime_if_join(
         retained,
         initial_runtime_bindings={},
         initial_compile_time=preprocessed.initial_compile_time,
-        legacy_binding_names=frozenset(),
         reserved_name_labels={},
         callable_environment=_callables(),
         owner_scope="scope",
@@ -1818,8 +1342,7 @@ def test_ordered_preprocessing_handoff_does_not_publish_future_only_name_earlier
             list(preprocessed.statements),
             initial_runtime_bindings={},
             initial_compile_time=preprocessed.initial_compile_time,
-            legacy_binding_names=frozenset(),
-            reserved_name_labels={},
+                reserved_name_labels={},
             callable_environment=_callables(),
             owner_scope="scope",
             compile_time_effects_before=preprocessed.effects_before,
@@ -2026,8 +1549,7 @@ def test_compile_time_for_effect_replay_rejects_fewer_iterations_than_preprocess
             [],
             initial_runtime_bindings={},
             initial_compile_time=CompileTimeSnapshot({}),
-            legacy_binding_names=frozenset(),
-            reserved_name_labels={},
+                reserved_name_labels={},
             callable_environment=_callables(),
             owner_scope="scope",
             trailing_compile_time_effects=(effect,),
@@ -2048,8 +1570,7 @@ def test_compile_time_for_effect_replay_rejects_more_iterations_than_preprocessi
             [],
             initial_runtime_bindings={},
             initial_compile_time=CompileTimeSnapshot({}),
-            legacy_binding_names=frozenset(),
-            reserved_name_labels={},
+                reserved_name_labels={},
             callable_environment=_callables(),
             owner_scope="scope",
             trailing_compile_time_effects=(effect,),

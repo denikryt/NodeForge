@@ -256,8 +256,8 @@ output("Geometry", join(location_point, rotation_point, scale_point))
     _cleanup_objects(target_obj, target_mesh, vector_target, vector_mesh, source_obj, source_mesh)
 
 
-def test_object_info_legacy_whole_body_fallback_preserves_configuration():
-    """A later unsupported statement leaves legacy ObjectValue as the only persistent Object-state owner."""
+def test_object_info_configuration_persists_across_structural_body_state():
+    """Object.info configuration remains frontend-owned across later structural statements."""
     group = compile_group(
         '''
 obj = input_object("Source")
@@ -265,16 +265,16 @@ obj.info(as_instance=False)
 items = [1.0]
 output("Geometry", obj.geometry)
 ''',
-        "NFTest_object_info_legacy_fallback_config",
+        "NFTest_object_info_permanent_config",
     )
     nodes = _object_info_nodes(group)
     check(len(nodes) == 1, f"expected one Object Info node, got {len(nodes)}")
-    check(nodes[0].inputs["As Instance"].default_value is False, "legacy fallback lost Object.info(as_instance=False)")
+    check(nodes[0].inputs["As Instance"].default_value is False, "permanent Object state lost Object.info(as_instance=False)")
     bpy.data.node_groups.remove(group)
 
 
-def test_object_info_legacy_whole_body_fallback_preserves_resolution_lock_and_alias():
-    """Legacy fallback keeps Object resolution lock shared through aliases across compile_expr calls."""
+def test_object_info_resolution_lock_is_shared_through_aliases():
+    """Frontend Object identity keeps the resolution lock shared through aliases."""
     for suffix, source in (
         (
             "direct",
@@ -299,8 +299,8 @@ output("Geometry", geometry)
         ),
     ):
         try:
-            compiler.create_expression_group(source, f"NFTest_object_info_legacy_fallback_lock_{suffix}")
+            compiler.create_expression_group(source, f"NFTest_object_info_permanent_lock_{suffix}")
         except CompileError as exc:
             check(str(exc) == "Object.info() cannot be changed after Object Info has been resolved", f"unexpected Object lock diagnostic: {exc}")
         else:
-            raise AssertionError("legacy Object Info resolution lock was lost after whole-body fallback")
+            raise AssertionError("Object Info resolution lock was lost across frontend aliasing")

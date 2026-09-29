@@ -101,19 +101,6 @@ from .semantic_values import (
 )
 
 
-@dataclass(frozen=True)
-class _BodyUnsupported:
-    """Sentinel for an unexpected semantic-body gap that must fail closed at the root."""
-
-
-# TODO(nodeforge-migration): BODY_UNSUPPORTED no longer authorizes legacy compilation. Keep this
-# sentinel only as a fail-closed internal tripwire while remaining propagation plumbing and physically
-# retained legacy code are removed. Every known user-source case must raise a permanent or explicitly
-# marked migration diagnostic first. Remove this sentinel together with the retained legacy compiler.
-BODY_UNSUPPORTED = _BodyUnsupported()
-
-
-
 
 @dataclass(frozen=True)
 class BodyOutputSummary:
@@ -512,7 +499,6 @@ def lower_basic_body(
     *,
     initial_runtime_bindings: Mapping[str, RuntimeBindingSymbol],
     initial_compile_time: CompileTimeSnapshot,
-    legacy_binding_names,
     reserved_name_labels: Mapping[str, str],
     callable_environment,
     owner_scope: str,
@@ -1179,7 +1165,6 @@ def lower_basic_body(
             structural_arrays=active.array_snapshot(),
             builder_bindings={name: state_record.state_binding_id for name, state_record in active.builder_states.items()},
             extension_bindings=active.extension_bindings,
-            legacy_binding_names=legacy_binding_names,
             compile_time=active_compile_time.snapshot(),
             reserved_name_labels=reserved_name_labels,
             callable_environment=callable_environment,
@@ -1193,11 +1178,6 @@ def lower_basic_body(
             extension_registry=extension_registry,
         )
         analysis = analyze_expression(expr, environment)
-        if analysis is None:
-            # Expression-only legacy state can still report an unsupported sentinel while the old
-            # compiler remains physically present. Supported root source must never rely on this path;
-            # propagate it only to the root fail-closed tripwire.
-            return BODY_UNSUPPORTED
         if analysis.object_semantics is None:
             raise CompileError("Internal error: body expression analysis lost Object semantic registry")
         if extension_registry is not None:
@@ -1274,8 +1254,6 @@ def lower_basic_body(
 
     def accept_expression(expr, active: _BodySemanticState, active_compile_time: CompileTimeState, statement_sink: list):
         analyzed = analyze_runtime_expression(expr, active, active_compile_time, statement_sink)
-        if analyzed is BODY_UNSUPPORTED:
-            return BODY_UNSUPPORTED
         if analyzed.semantic_payload is not None:
             raise CompileError("Package-defined semantic value cannot be used where a runtime value is required")
         active.adopt_object_snapshot(analyzed.object_semantics)
@@ -1290,8 +1268,6 @@ def lower_basic_body(
                 runtime_sources.append(None)
                 return NFType.GEOMETRY
             analyzed = analyze_runtime_expression(child, active, active_compile_time, statement_sink)
-            if analyzed is BODY_UNSUPPORTED:
-                raise _ContextualOperandUnsupported
             if not isinstance(analyzed.result_shape, RuntimeResultShape) or not isinstance(analyzed.program.result, IRValue):
                 if isinstance(analyzed.result_shape, TupleResultShape):
                     raise CompileError(
@@ -1299,7 +1275,7 @@ def lower_basic_body(
                         "unpack it or select an element by a compile-time index"
                     )
                 if isinstance(analyzed.result_shape, NamedOutputsResultShape):
-                    raise CompileError(f"NodeResult is compile-time only and cannot be used in {context}")
+                    raise CompileError(f"Named multi-output results are structural and cannot be used in {context}")
                 if context == "store() value" and isinstance(analyzed.result_shape, ArrayResultShape):
                     raise CompileError("store() value cannot be an array")
                 raise CompileError(f"{context} requires a runtime value")
@@ -1307,13 +1283,10 @@ def lower_basic_body(
             runtime_sources.append(analyzed.program)
             return analyzed.result_shape.typ
 
-        try:
-            if builtin_name == "store_named_attribute":
-                semantics = analyze_contextual_store_call(call, active_compile_time.values, add_runtime)
-            else:
-                semantics = analyze_contextual_set_position_call(call, active_compile_time.values, add_runtime)
-        except _ContextualOperandUnsupported:
-            return BODY_UNSUPPORTED
+        if builtin_name == "store_named_attribute":
+            semantics = analyze_contextual_store_call(call, active_compile_time.values, add_runtime)
+        else:
+            semantics = analyze_contextual_set_position_call(call, active_compile_time.values, add_runtime)
         operations = []
         arguments = []
         next_id = 0
@@ -1346,13 +1319,6 @@ def lower_basic_body(
         )
         operations.append(IRContextWrite(0, GroupContextSlot.CURRENT_GEOMETRY, result))
         return IRProgram(tuple(operations), result)
-
-    class _ContextualOperandUnsupported(Exception):
-        """Abort contextual statement ownership when an operand hits an internal semantic gap."""
-
-    def nested_control_flow_unsupported():
-        """Propagate an unexpected nested semantic gap to the root fail-closed tripwire."""
-        return BODY_UNSUPPORTED
 
     def lower_statements(source_stmts, active: _BodySemanticState, active_compile_time: CompileTimeState, *, control_policy=None, repeat_merge_ids=None, repeat_merge_symbols=(), runtime_if_builder_baseline=None, root=False):
         statements = []
@@ -1505,7 +1471,6 @@ def lower_basic_body(
                         runtime_if_builder_baseline=branch_builder_baseline,
                         root=False,
                     ),
-                    unsupported_sentinel=BODY_UNSUPPORTED,
                     merge_binding_ids=repeat_merge_ids,
                     merge_symbols=repeat_merge_symbols,
                     identity_assignment_merge_eligible=lambda true_state, false_state: (
@@ -1513,8 +1478,6 @@ def lower_basic_body(
                         or branch_has_fresh_builder_identity(false_state)
                     ),
                 )
-                if result is BODY_UNSUPPORTED:
-                    return nested_control_flow_unsupported()
 
                 # A builder identity created/replaced independently in both runtime branches was
                 # historically a common changed compile-time object and therefore failed at the
@@ -1558,8 +1521,6 @@ def lower_basic_body(
                     builder_target_names = _builder_loop_target_names(stmt.target, stmt.body)
                     iterable_items = _iterable_items(stmt.iter, active, active_compile_time)
                     target_names = builder_target_names or _ordinary_for_target_names(stmt.target)
-                    if any(name in legacy_binding_names for name in target_names):
-                        return BODY_UNSUPPORTED
                     for name in target_names:
                         validate_runtime_binding_target(name, reserved_name_labels)
                         if name in active.builder_states:
@@ -1622,8 +1583,6 @@ def lower_basic_body(
                                 runtime_if_builder_baseline=runtime_if_builder_baseline,
                                 root=False,
                             )
-                            if lowered is BODY_UNSUPPORTED:
-                                return BODY_UNSUPPORTED
                             statements.extend(lowered.statements)
                     finally:
                         for name in target_names:
@@ -1648,8 +1607,6 @@ def lower_basic_body(
                                 identities.ordinary_reservations[name] = previous
                     continue
                 iterations_expr, repeat_body, iteration_name = parsed
-                if iteration_name in legacy_binding_names:
-                    return BODY_UNSUPPORTED
                 validate_runtime_binding_target(iteration_name, reserved_name_labels)
                 repeat_compile_time = active_compile_time.fork()
                 try:
@@ -1665,8 +1622,6 @@ def lower_basic_body(
                     )
                 else:
                     iterations = accept_expression(iterations_expr, active, active_compile_time, statements)
-                    if iterations is BODY_UNSUPPORTED:
-                        return BODY_UNSUPPORTED
                     if not isinstance(iterations.result_shape, RuntimeResultShape) or iterations.result_shape.typ is not NFType.INT:
                         raise CompileError("repeat_range(n) expects an Int value")
 
@@ -1715,8 +1670,6 @@ def lower_basic_body(
                         )
                     )
                 if not state_records:
-                    if any(name in legacy_binding_names for name in candidate_names):
-                        return BODY_UNSUPPORTED
                     raise CompileError("repeat_range loop must update at least one existing variable or geometry_builder")
                 state_names = [record.source_name for record in state_records]
                 if iteration_name in state_names:
@@ -1746,8 +1699,6 @@ def lower_basic_body(
                     ),
                     root=False,
                 )
-                if repeat_ir_body is BODY_UNSUPPORTED:
-                    return nested_control_flow_unsupported()
                 for record in state_records:
                     if record.binding_id in builder_state_ids:
                         exit_builder = repeat_state.builder_states.get(record.source_name)
@@ -1780,15 +1731,11 @@ def lower_basic_body(
                 target_node = stmt.targets[0]
                 if isinstance(target_node, (ast.Tuple, ast.List)):
                     names = _tuple_target_names(target_node)
-                    if any(name in legacy_binding_names for name in names):
-                        return BODY_UNSUPPORTED
                     for name in names:
                         validate_runtime_binding_target(name, reserved_name_labels)
                         if name in active.builder_states:
                             raise CompileError("Cannot assign over geometry_builder binding")
                     analyzed = accept_expression(stmt.value, active, active_compile_time, statements)
-                    if analyzed is BODY_UNSUPPORTED:
-                        return BODY_UNSUPPORTED
                     if not isinstance(analyzed.result_shape, TupleResultShape) or not isinstance(analyzed.program.result, IRTuple):
                         raise CompileError(f"Cannot unpack scalar result into {len(names)} names")
                     if len(analyzed.result_shape.items) != len(names):
@@ -1805,8 +1752,6 @@ def lower_basic_body(
                     raise CompileError("Only simple assignments like name = value are supported")
                 target = target_node.id
                 validate_runtime_binding_target(target, reserved_name_labels)
-                if target in legacy_binding_names:
-                    return BODY_UNSUPPORTED
                 if control_policy is not None and target in active.array_bindings:
                     raise CompileError("Structural array rebinding inside runtime control flow is not supported")
 
@@ -1856,7 +1801,7 @@ def lower_basic_body(
                 has_compile_time_value = False
                 if control_policy is BranchMergePolicy.REPEAT:
                     # Legacy Repeat assignments are runtime-state operations: compile_runtime_stmt()
-                    # always invalidates the assigned name in Compiler.compile_time instead of publishing a
+                    # always invalidates the assigned name in compile-time state instead of publishing a
                     # newly const-evaluated value. Preserve that contextual contract so a carried
                     # state cannot become a stale compile-time constant after Repeat construction.
                     pass
@@ -1877,8 +1822,6 @@ def lower_basic_body(
                             bind_compile_time_name(active, active_compile_time, target, compile_time_value)
                             continue
                 analyzed = analyze_runtime_expression(stmt.value, active, active_compile_time, statements)
-                if analyzed is BODY_UNSUPPORTED:
-                    return BODY_UNSUPPORTED
                 validate_repeat_extension_rebinding(target, analyzed)
                 if analyzed.semantic_payload is not None:
                     active.adopt_object_snapshot(analyzed.object_semantics)
@@ -1938,8 +1881,6 @@ def lower_basic_body(
                     raise CompileError("Only simple augmented assignments like name += value are supported")
                 target = stmt.target.id
                 validate_runtime_binding_target(target, reserved_name_labels)
-                if target in legacy_binding_names:
-                    return BODY_UNSUPPORTED
                 current = active.runtime_bindings.get(target)
                 if current is None and (target in active.structural_bindings or target in active.array_bindings):
                     bin_expr = ast.BinOp(left=ast.Name(id=target, ctx=ast.Load()), op=stmt.op, right=stmt.value)
@@ -1949,8 +1890,6 @@ def lower_basic_body(
                     raise CompileError(f"Unknown name for augmented assignment: {target}")
                 bin_expr = ast.BinOp(left=ast.Name(id=target, ctx=ast.Load()), op=stmt.op, right=stmt.value)
                 analyzed = accept_expression(bin_expr, active, active_compile_time, statements)
-                if analyzed is BODY_UNSUPPORTED:
-                    return BODY_UNSUPPORTED
                 if not isinstance(analyzed.result_shape, RuntimeResultShape) or not isinstance(analyzed.program.result, IRValue):
                     raise CompileError("Internal error: augmented assignment lowered to a structural result")
                 active_compile_time.discard(target)
@@ -1983,8 +1922,6 @@ def lower_basic_body(
                     else:
                         raise CompileError('output(value), output("Name", value), or output(name="Name", value=value) expected')
                     analyzed = accept_expression(value_expr, active, active_compile_time, statements)
-                    if analyzed is BODY_UNSUPPORTED:
-                        return BODY_UNSUPPORTED
                     if isinstance(analyzed.result_shape, ArrayResultShape):
                         raise CompileError("output() cannot output an array directly; use join(array) or index it")
                     if not isinstance(analyzed.result_shape, RuntimeResultShape) or not isinstance(analyzed.program.result, IRValue):
@@ -1994,7 +1931,7 @@ def lower_basic_body(
                                 "unpack it or select an element by a compile-time index"
                             )
                         if isinstance(analyzed.result_shape, NamedOutputsResultShape):
-                            raise CompileError("NodeResult is compile-time only and cannot be used in output() value")
+                            raise CompileError("Named multi-output results are structural and cannot be used in output() value")
                         raise CompileError("output() value requires a runtime value")
                     emit(IROutput(out_name, analyzed.program))
                     continue
@@ -2021,16 +1958,12 @@ def lower_basic_body(
                         raise CompileError("builder.extend(...) expects one positional array argument")
                     if method == "add":
                         analyzed = analyze_runtime_expression(method_call.args[0], active, active_compile_time, statements)
-                        if analyzed is BODY_UNSUPPORTED:
-                            return BODY_UNSUPPORTED
                         binding_id = _persist_builder_geometry_argument(
                             active, analyzed, statements, diagnostic="builder.add(...) expects Geometry"
                         )
                         _append_builder_binding(active, builder_name, binding_id, statements)
                     else:
                         analyzed = analyze_runtime_expression(method_call.args[0], active, active_compile_time, statements)
-                        if analyzed is BODY_UNSUPPORTED:
-                            return BODY_UNSUPPORTED
                         if not isinstance(analyzed.result_shape, ArrayResultShape) or not isinstance(analyzed.program.result, IRArray):
                             raise CompileError("builder.extend(...) expects an array of Geometry values")
                         if len(analyzed.result_shape.items) != len(analyzed.program.result.items):
@@ -2113,8 +2046,6 @@ def lower_basic_body(
                     program = build_contextual_call_program(
                         call, active, active_compile_time, statements, builtin_name=builtin_name
                     )
-                    if program is BODY_UNSUPPORTED:
-                        return BODY_UNSUPPORTED
                     emit(IRDiscardExpression(program))
                     active.clear_auto_final_output = True
                     continue
@@ -2137,8 +2068,6 @@ def lower_basic_body(
                         raise CompileError("Structural array append inside runtime control flow is not supported")
 
                     analyzed = analyze_runtime_expression(append_call.args[0], active, active_compile_time, statements)
-                    if analyzed is BODY_UNSUPPORTED:
-                        return BODY_UNSUPPORTED
                     planned_states = {}
                     object_updates = {}
                     item, bindings = _plan_persisted_item(
@@ -2173,8 +2102,6 @@ def lower_basic_body(
                     if stmt.value.func.attr != "info":
                         raise CompileError("Object values support only the .info() method")
                     analyzed = accept_expression(stmt.value, active, active_compile_time, statements)
-                    if analyzed is BODY_UNSUPPORTED:
-                        return BODY_UNSUPPORTED
                     if not isinstance(analyzed.result_shape, RuntimeResultShape) or analyzed.result_shape.typ is not TYPE_OBJECT:
                         raise CompileError(".info() can only be used on Object values")
                     emit(IRDiscardExpression(analyzed.program))
@@ -2184,8 +2111,6 @@ def lower_basic_body(
                         "Only assignments, array append, for/if blocks, store(), set_position() and output() may appear before the final expression"
                     )
                 analyzed = accept_expression(stmt.value, active, active_compile_time, statements)
-                if analyzed is BODY_UNSUPPORTED:
-                    return BODY_UNSUPPORTED
                 if isinstance(analyzed.result_shape, ArrayResultShape):
                     raise CompileError("A final expression cannot be an array; use join(array) or index it")
                 if not isinstance(analyzed.result_shape, RuntimeResultShape) or not isinstance(analyzed.program.result, IRValue):
@@ -2195,7 +2120,7 @@ def lower_basic_body(
                             "unpack it or select an element by a compile-time index"
                         )
                     if isinstance(analyzed.result_shape, NamedOutputsResultShape):
-                        raise CompileError("NodeResult is compile-time only and cannot be used in final expression")
+                        raise CompileError("Named multi-output results are structural and cannot be used in final expression")
                     raise CompileError("final expression requires a runtime value")
                 emit(IRFinalExpression(analyzed.program))
                 continue
@@ -2206,8 +2131,6 @@ def lower_basic_body(
         return IRBody(tuple(statements))
 
     body = lower_statements(stmts, state, compile_time, root=True)
-    if body is BODY_UNSUPPORTED:
-        return BODY_UNSUPPORTED
     output_summary = _summarize_body_outputs(body, clear_auto_final_output=state.clear_auto_final_output)
     return BasicBodyCompilation(
         body,
@@ -2218,4 +2141,4 @@ def lower_basic_body(
     )
 
 
-__all__ = ["BODY_UNSUPPORTED", "BasicBodyCompilation", "BodyOutputSummary", "lower_basic_body", "validate_input_declaration_placement"]
+__all__ = ["BasicBodyCompilation", "BodyOutputSummary", "lower_basic_body", "validate_input_declaration_placement"]

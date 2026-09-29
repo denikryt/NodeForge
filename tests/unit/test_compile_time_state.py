@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import ast
-import importlib
-import sys
 from pathlib import Path
-from types import MappingProxyType, ModuleType
 
 import pytest
 
@@ -56,49 +53,6 @@ def test_adopted_backing_mapping_keeps_identity_across_replace():
     state.replace(CompileTimeSnapshot({"b": 2}))
     assert backing == {"b": 2}
     assert state.values["b"] == 2
-
-
-def _compiler_class(monkeypatch):
-    """Import Compiler with a minimal bpy stub for compatibility-surface tests."""
-    monkeypatch.setitem(sys.modules, "bpy", ModuleType("bpy"))
-    return importlib.import_module("NodeForge.compiler").Compiler
-
-
-def test_direct_compiler_constructor_adopts_consts_mapping(monkeypatch):
-    """Direct Compiler callers retain the exact historical consts mapping identity."""
-    from types import SimpleNamespace
-
-    Compiler = _compiler_class(monkeypatch)
-    module = importlib.import_module("NodeForge.compiler")
-    environment = SimpleNamespace()
-    monkeypatch.setattr(module, "_new_group_backend", lambda _environment: object())
-    backing = {"seed": 4}
-    compiler = Compiler(
-        SimpleNamespace(name="Direct"),
-        object(),
-        consts=backing,
-        resolved_environment=environment,
-    )
-
-    assert compiler.consts is backing
-    assert compiler.compile_time.get("seed") == 4
-
-
-def test_compiler_consts_facade_mutates_exact_compile_time_owner(monkeypatch):
-    """The temporary .consts facade exposes one owner rather than a second state store."""
-    Compiler = _compiler_class(monkeypatch)
-    compiler = object.__new__(Compiler)
-    backing = {"a": 1}
-    compiler.compile_time = CompileTimeState(backing, adopt_mapping=True)
-
-    assert compiler.consts is backing
-    compiler.consts["b"] = 2
-    assert compiler.compile_time.get("b") == 2
-
-    owner = compiler.compile_time
-    compiler.consts = {"c": 3}
-    assert compiler.compile_time is owner
-    assert backing == {"c": 3}
 
 
 def test_compile_time_state_module_has_no_backend_dependencies():
@@ -151,13 +105,11 @@ def test_compile_time_state_source_contracts_have_one_owner():
     assert direct_accesses == []
 
     semantic_body_source = (root / "semantic_body.py").read_text(encoding="utf-8")
-    statement_source = (root / "statement_compiler.py").read_text(encoding="utf-8")
-    expression_source = (root / "expression_compiler.py").read_text(encoding="utf-8")
     control_source = (root / "semantic_control_flow.py").read_text(encoding="utf-8")
     assert "constants: dict[str, object]" not in semantic_body_source
-    assert "consts: dict" not in statement_source
-    assert "COMPLETE_EXPRESSION_IR_CONSTANT_MIGRATION" not in expression_source
     assert "CONTROL_FLOW_IR_LEGACY_CONSTANT_THREADING_COMPAT" not in control_source
+    assert not (root / "statement_compiler.py").exists()
+    assert not (root / "expression_compiler.py").exists()
 
 
 def test_replace_accepts_state_and_snapshot_without_swapping_mapping():

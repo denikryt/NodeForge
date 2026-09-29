@@ -76,14 +76,8 @@ output("x", x)
 
 
 
-def test_compile_time_range_is_late_consumed_after_runtime_if_join(monkeypatch):
+def test_compile_time_range_is_late_consumed_after_runtime_if_join():
     """Equal runtime-if exits restore CT knowledge for a later compile-time-owned range."""
-    from NodeForge import statement_compiler
-
-    def forbidden_legacy_statement(*_args, **_kwargs):
-        raise AssertionError("late compile-time range unexpectedly entered legacy statement lowering")
-
-    monkeypatch.setattr(statement_compiler, "compile_statement", forbidden_legacy_statement)
     source = """
 n = 2
 flag = input_bool("Flag")

@@ -357,21 +357,8 @@ output("Geometry", builder.geometry)
     check(len(_nodes(group, "GeometryNodeSwitch")) == 1, "ordinary merged Value should retain one runtime-if switch")
 
 
-def test_geometry_builder_branch_local_identity_assignment_uses_semantic_runtime_if(monkeypatch):
+def test_geometry_builder_branch_local_identity_assignment_uses_semantic_runtime_if():
     """Exact coordinator case stays Semantic Body-owned and emits one ordinary runtime-if Switch."""
-    from NodeForge import geometry_builder as geometry_builder_module
-    from NodeForge import statement_compiler
-
-    def forbidden(*_args, **_kwargs):
-        raise AssertionError("branch-local GeometryBuilder compatibility case reached legacy execution")
-
-    monkeypatch.setattr(statement_compiler, "compile_statement", forbidden)
-    monkeypatch.setattr(statement_compiler, "_compile_builder_method", forbidden)
-    monkeypatch.setattr(geometry_builder_module.GeometryBuilder, "materialize", forbidden)
-    monkeypatch.setattr(geometry_builder_module.GeometryBuilder, "add_value", forbidden)
-    monkeypatch.setattr(geometry_builder_module.GeometryBuilder, "extend_values", forbidden)
-    monkeypatch.setattr(geometry_builder_module.GeometryBuilder, "geometry_value", forbidden)
-
     group = compile_group(
         'value = input_float("Value", default=0.0)\n'
         'flag = input_bool("Flag", default=True)\n'

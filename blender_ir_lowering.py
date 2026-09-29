@@ -7,10 +7,11 @@ from types import MappingProxyType
 from typing import Mapping
 
 from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR
+from .nf_types import NFType
 from .errors import CompileError
 from .compiler_identities import BindingId, InputDeclarationId, normalize_library_package_id
 from .group_context import GroupContextSlot
-from .nodes import _boolean_math, _combine_xyz_mixed, _compare, _int_value, _integer_math, _math, _separate_xyz, _string_value, _switch, _value, _vector_math
+from .nodes import _boolean_math, _combine_xyz_mixed, _compare, _int_value, _integer_math, _math, _new_node, _separate_xyz, _string_value, _switch, _value, _vector_math
 from .geometry import (
     _capture_attribute_geometry,
     _cube_geometry,
@@ -62,9 +63,8 @@ from .semantic_ir import (
     IRRepeat,
     IRPanelDeclaration,
 )
-from .values import NodeResult, ObjectValue, TupleValue, Value, make_value
+from .values import ObjectValue, Value, make_value
 from .interface import _create_group_input_socket, _create_interface_panel, _set_socket_default
-from .runtime import _create_repeat_zone, _socket_by_name
 from .function_instances import (
     FUNCTION_INSTANCE_KEY_PROP,
     function_group_owner_scope,
@@ -72,6 +72,61 @@ from .function_instances import (
 )
 from .function_materializer import FunctionMaterializationContext, FunctionMaterializer
 from .source_callables import SourceCallablePreparationKey
+
+
+def _repeat_item_type_for_nf_type(typ: NFType) -> str:
+    """Map one supported semantic type to the exact Blender Repeat item token."""
+    mapping = {
+        NFType.GEOMETRY: "GEOMETRY",
+        NFType.VECTOR: "VECTOR",
+        NFType.BOOL: "BOOLEAN",
+        NFType.INT: "INT",
+        NFType.BUNDLE: "BUNDLE",
+        NFType.FLOAT: "FLOAT",
+    }
+    try:
+        return mapping[typ]
+    except KeyError as exc:
+        raise CompileError(f"repeat_range state has unsupported type {typ}") from exc
+
+
+def _socket_by_name(sockets, name):
+    """Return the Repeat Zone socket with the given display name."""
+    for socket in sockets:
+        if socket.name == name:
+            return socket
+    raise CompileError(f"Internal error: missing Repeat Zone socket {name!r}")
+
+
+def _create_repeat_zone(group, state_specs, index_name, x=0, y=0):
+    """Create one physical Repeat Zone from already-typed semantic state specs."""
+    ri = _new_node(group, "GeometryNodeRepeatInput", x, y)
+    ro = _new_node(group, "GeometryNodeRepeatOutput", x + 1120, y)
+    if not ri.pair_with_output(ro):
+        raise CompileError("Could not pair Repeat Zone nodes")
+    ro.repeat_items.clear()
+
+    # Semantic analysis validates compiler-owned names. Blender system socket names
+    # remain a physical backend fact and are checked only after the zone exists.
+    system_socket_names = {"Iterations", "Iteration"}
+    for sockets in (ri.inputs, ri.outputs, ro.inputs, ro.outputs):
+        for socket in sockets:
+            system_socket_names.add(socket.name)
+    if index_name in system_socket_names:
+        raise CompileError(
+            f"repeat_range loop index name {index_name!r} conflicts with Repeat Zone socket name"
+        )
+    names = [name for _typ, name in state_specs]
+    if len(names) != len(set(names)):
+        raise CompileError("repeat_range state names must be unique")
+    for name in names:
+        if name in system_socket_names:
+            raise CompileError(
+                f"repeat_range state name {name!r} conflicts with Repeat Zone socket name"
+            )
+    for typ, name in state_specs:
+        ro.repeat_items.new(_repeat_item_type_for_nf_type(typ), name)
+    return ri, ro
 
 
 @dataclass(frozen=True)
@@ -320,13 +375,9 @@ def _slot_value(slot, operands):
 
 
 def _store_call_results(materialized, operation, backend_result):
-    """Store one scalar or structural backend call result into declared IR results."""
-    if isinstance(backend_result, TupleValue):
-        values = tuple(backend_result.values)
-    elif isinstance(backend_result, NodeResult):
-        values = tuple(backend_result.get_output(name) for name in backend_result.output_names)
-    elif isinstance(backend_result, tuple):
-        values = tuple(backend_result)
+    """Store one scalar or ordered tuple backend call result into declared IR results."""
+    if isinstance(backend_result, tuple):
+        values = backend_result
     else:
         values = (backend_result,)
     if len(values) != len(operation.results):
@@ -872,13 +923,13 @@ def lower_body(context, body, initial_runtime_bindings, base_depth=1, *, group_i
 
 
 def _materialize_program_result(materialized, result):
-    """Reconstruct one legacy backend expression result from Semantic IR structure."""
+    """Reconstruct one IR expression result using ordinary Python structure."""
     if isinstance(result, IRArray):
         return [_materialize_program_result(materialized, item) for item in result.items]
     if isinstance(result, IRTuple):
-        return TupleValue(tuple(_materialized_value(materialized, item) for item in result.items))
+        return tuple(_materialized_value(materialized, item) for item in result.items)
     if isinstance(result, IRNamedOutputs):
-        return NodeResult({name: _materialized_value(materialized, item) for name, item in result.items})
+        return {name: _materialized_value(materialized, item) for name, item in result.items}
     return _materialized_value(materialized, result)
 
 def lower_expression(context, program, base_depth=0):
@@ -887,12 +938,6 @@ def lower_expression(context, program, base_depth=0):
     for operation in program.operations:
         _execute_operation(context, operation, materialized, base_depth)
 
-    # STRUCTURAL_SEMANTICS_LEGACY_EXPRESSION_RESULT_BRIDGE: Migrated IRBody consumes tuple/named-output
-    # structure through compiler-owned leaf BindingIds and never requires TupleValue/NodeResult, but
-    # legacy whole-body statement lowering still calls expression lowering and expects list/TupleValue/
-    # NodeResult return containers. Reconstruct them only at this legacy expression return boundary.
-    # Remove this bridge when compile_statement() is no longer a production body path and no caller
-    # above Blender lowering consumes backend structural containers.
     return _materialize_program_result(materialized, program.result)
 
 

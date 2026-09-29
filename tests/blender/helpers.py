@@ -19,7 +19,7 @@ import NodeForge
 from NodeForge import compiler, library, blender_group_backend
 from NodeForge.errors import CompileError
 from NodeForge import generated_resources
-from NodeForge.builtins import fields, geometry, instancing, io, vector, registry
+from NodeForge.builtins import registry
 from NodeForge.systems import registry as systems_registry
 from NodeForge.values import Value
 
@@ -249,9 +249,18 @@ def _modifier_input_prop(modifier, group, socket_name):
     return prop
 
 def _set_modifier_input(modifier, group, socket_name, value):
+    """Set one Blender 5.2 modifier input while preserving its declared scalar type."""
     prop = _modifier_input_prop(modifier, group, socket_name)
     try:
-        prop.value = float(value)
+        current = prop.value
+        if isinstance(current, bool):
+            prop.value = bool(value)
+        elif isinstance(current, int):
+            prop.value = int(value)
+        elif isinstance(current, float):
+            prop.value = float(value)
+        else:
+            prop.value = value
     except Exception as exc:
         raise AssertionError(f"could not set modifier input {socket_name!r}") from exc
 

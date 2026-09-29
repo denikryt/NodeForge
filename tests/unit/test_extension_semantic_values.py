@@ -252,7 +252,6 @@ def _environment(registry, by_name):
     )
     return SemanticEnvironment(
         MappingProxyType(runtime),
-        frozenset(runtime),
         MappingProxyType({}),
         MappingProxyType({}),
         MappingProxyType({}),
@@ -585,7 +584,6 @@ def test_caller_side_semantic_list_star_expands_before_signature_binding(tmp_pat
     env = _environment(registry, by_name)
     env = SemanticEnvironment(
         MappingProxyType(runtime),
-        frozenset(runtime),
         env.constants,
         env.const_eval_values,
         env.reserved_name_labels,
@@ -614,7 +612,6 @@ def test_semantic_list_star_children_are_dependency_compact_independently(tmp_pa
     base = _environment(registry, by_name)
     env = SemanticEnvironment(
         MappingProxyType(runtime),
-        frozenset(runtime),
         base.constants,
         base.const_eval_values,
         base.reserved_name_labels,
@@ -651,7 +648,6 @@ def test_caller_side_semantic_list_star_preserves_mixed_source_order(tmp_path):
     base = _environment(registry, by_name)
     env = SemanticEnvironment(
         MappingProxyType(runtime),
-        frozenset(runtime),
         base.constants,
         base.const_eval_values,
         base.reserved_name_labels,

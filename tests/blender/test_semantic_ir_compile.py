@@ -5,10 +5,8 @@ from helpers import *
 import ast
 from types import MappingProxyType, SimpleNamespace
 
-from NodeForge import expression_compiler, statement_compiler, semantic_body, runtime as runtime_module
+from NodeForge import semantic_body
 from NodeForge import compiler as compiler_module
-from NodeForge.builtins import geometry as legacy_geometry_builtins
-from NodeForge import geometry_builder as geometry_builder_module
 from NodeForge.blender_ir_lowering import BlenderIRLoweringContext, lower_expression as lower_ir_program
 from NodeForge.constants import (
     TYPE_BOOL, TYPE_BUNDLE, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_MATERIAL,
@@ -115,12 +113,8 @@ output("Comparison", cmp)
 
 
 
-def test_supported_core_root_matrix_never_enters_legacy_statement_compiler(monkeypatch):
-    """Representative supported core bodies stay on the Semantic Body root route."""
-    def forbidden(*_args, **_kwargs):
-        raise AssertionError("supported core body entered legacy compile_statement()")
-
-    monkeypatch.setattr(statement_compiler, "compile_statement", forbidden)
+def test_supported_core_root_matrix_compiles_through_permanent_pipeline():
+    """Representative supported core bodies compile through the permanent Semantic Body route."""
     cases = [
         (
             "expression",
@@ -214,11 +208,7 @@ def test_structural_array_parent_uses_semantic_body_and_preserves_nested_express
             context, body, initial_runtime_bindings, base_depth, group_input=group_input
         )
 
-    def forbidden_legacy_statement(*_args, **_kwargs):
-        raise AssertionError("migrated structural array entered legacy compile_statement()")
-
     monkeypatch.setattr(compiler_module, "lower_body", wrapped)
-    monkeypatch.setattr(statement_compiler, "compile_statement", forbidden_legacy_statement)
     group = compile_group(
         """
 a = input_float("A", default=2.0)
@@ -343,11 +333,10 @@ def test_semantic_error_keeps_outer_fresh_build_cleanup_boundary():
 
 
 
-def test_semantic_backend_failure_does_not_retry_legacy_and_cleans_fresh_group(monkeypatch):
-    """Keep body-backend failure committed to IR while removing the partial fresh group."""
+def test_semantic_backend_failure_propagates_and_cleans_fresh_group(monkeypatch):
+    """A permanent backend failure propagates while the partial fresh group is removed."""
     before = {_pointer(group) for group in bpy.data.node_groups}
     backend_error = CompileError("controlled Semantic IR backend failure")
-    legacy_calls = []
     backend_calls = []
 
     def fail_backend(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):
@@ -355,12 +344,7 @@ def test_semantic_backend_failure_does_not_retry_legacy_and_cleans_fresh_group(m
         context.group.nodes.new("ShaderNodeValue")
         raise backend_error
 
-    def legacy_math(*args, **kwargs):
-        legacy_calls.append("math")
-        raise AssertionError("legacy AST binary lowering ran after semantic backend failure")
-
     monkeypatch.setattr(compiler_module, "lower_body", fail_backend)
-    monkeypatch.setattr(expression_compiler, "_math", legacy_math)
 
     try:
         compiler.create_expression_group(
@@ -374,7 +358,6 @@ def test_semantic_backend_failure_does_not_retry_legacy_and_cleans_fresh_group(m
 
     after = {_pointer(group) for group in bpy.data.node_groups}
     check(backend_calls, "supported expression did not commit to Semantic IR backend")
-    check(legacy_calls == [], "semantic backend failure retried the legacy AST dispatcher")
     check(after == before, "semantic backend failure leaked a partially materialized fresh group")
 
 _CONTRACT_TYPES = (
@@ -406,11 +389,10 @@ def _contract_environment(bindings):
     }
     semantic_constants, const_eval_values = build_semantic_constant_snapshot(CompileTimeSnapshot({}))
     return SemanticEnvironment(
-        MappingProxyType(runtime_bindings),
-        frozenset(),
-        semantic_constants,
-        const_eval_values,
-        MappingProxyType({}),
+        runtime_bindings=MappingProxyType(runtime_bindings),
+        constants=semantic_constants,
+        const_eval_values=const_eval_values,
+        reserved_name_labels=MappingProxyType({}),
         callable_environment=_empty_callable_environment(),
     )
 
@@ -827,13 +809,8 @@ def test_semantic_backend_dispatch_signatures_realize_on_blender_rna():
 
 
 
-def test_structural_arrays_flat_unpack_append_loop_fails_before_legacy_routing(monkeypatch):
-    """Flat ordinary-for unpacking is rejected directly and cannot enter the legacy statement compiler."""
-    monkeypatch.setattr(
-        statement_compiler,
-        "compile_statement",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("legacy statement compiler was called")),
-    )
+def test_structural_arrays_flat_unpack_append_loop_is_rejected_before_blender_effects():
+    """Flat ordinary-for unpacking is rejected directly without leaking Blender state."""
     before = set(bpy.data.node_groups)
     try:
         compile_group(
@@ -849,13 +826,8 @@ def test_structural_arrays_flat_unpack_append_loop_fails_before_legacy_routing(m
         raise AssertionError("flat ordinary-for unpacking unexpectedly compiled")
     check(set(bpy.data.node_groups) == before, "failed flat-unpack compilation leaked a generated node group")
 
-def test_structural_arrays_runtime_dependent_flat_unpack_fails_before_legacy_routing(monkeypatch):
-    """Runtime-valued flat ordinary-for unpacking is rejected directly without legacy execution."""
-    monkeypatch.setattr(
-        statement_compiler,
-        "compile_statement",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("legacy statement compiler was called")),
-    )
+def test_structural_arrays_runtime_dependent_flat_unpack_is_rejected_before_blender_effects():
+    """Runtime-valued flat ordinary-for unpacking is rejected directly without partial effects."""
     before = set(bpy.data.node_groups)
     try:
         compile_group(
@@ -872,18 +844,8 @@ def test_structural_arrays_runtime_dependent_flat_unpack_fails_before_legacy_rou
         raise AssertionError("runtime-valued flat ordinary-for unpacking unexpectedly compiled")
     check(set(bpy.data.node_groups) == before, "failed runtime flat-unpack compilation leaked a generated node group")
 
-def test_frontend_geometry_builder_core_route_forbids_legacy_builder_execution(monkeypatch):
-    """Accepted core builder bodies lower through Semantic Body even with legacy builder hooks forbidden."""
-    def forbidden(*_args, **_kwargs):
-        raise AssertionError("accepted core GeometryBuilder body reached legacy builder execution")
-
-    monkeypatch.setattr(statement_compiler, "_compile_builder_method", forbidden)
-    monkeypatch.setattr(geometry_builder_module.GeometryBuilder, "materialize", forbidden)
-    monkeypatch.setattr(geometry_builder_module.GeometryBuilder, "add_value", forbidden)
-    monkeypatch.setattr(geometry_builder_module.GeometryBuilder, "extend_values", forbidden)
-    monkeypatch.setattr(geometry_builder_module.GeometryBuilder, "geometry_value", forbidden)
-    monkeypatch.setattr(runtime_module, "BuilderStateDescriptor", forbidden)
-
+def test_frontend_geometry_builder_core_route_preserves_permanent_topology():
+    """Accepted core builder bodies lower through the permanent Semantic Body route."""
     group = compile_group(
         'builder = geometry_builder()\n'
         'items = [cube(1.0), cube(2.0)]\n'
@@ -899,12 +861,8 @@ def test_frontend_geometry_builder_core_route_forbids_legacy_builder_execution(m
     bpy.data.node_groups.remove(group)
 
 
-def test_geometry_builder_and_grid_share_semantic_body_route(monkeypatch):
-    """Grid no longer forces an otherwise migrated GeometryBuilder body through legacy statements."""
-    def forbidden(*_args, **_kwargs):
-        raise AssertionError("builder + grid core body entered compile_statement()")
-
-    monkeypatch.setattr(statement_compiler, "compile_statement", forbidden)
+def test_geometry_builder_and_grid_share_semantic_body_route():
+    """Grid and GeometryBuilder share the permanent Semantic Body route."""
     group = compile_group(
         'builder = geometry_builder()\n'
         'builder.add(cube(1.0))\n'
@@ -945,7 +903,6 @@ output("Geometry", result)
 
     for environment in builder_envs:
         check("builder" not in environment.runtime_bindings, "GeometryBuilder leaked into ordinary runtime binding names")
-        check("builder" not in environment.legacy_binding_names, "accepted frontend GeometryBuilder leaked into legacy bindings")
         check(isinstance(environment.builder_bindings["builder"], BindingId), "builder semantic environment lacks BindingId identity")
         check(
             all(isinstance(symbol, RuntimeBindingSymbol) for symbol in environment.runtime_bindings.values()),
@@ -957,43 +914,11 @@ output("Geometry", result)
         )
 
 
-def test_semantic_environment_exports_constant_metadata_without_legacy_containers():
-    from NodeForge.compiler import Compiler
 
-    group = bpy.data.node_groups.new("NFTest_semantic_constant_snapshot", "GeometryNodeTree")
-    comp = Compiler(group, None, consts={"pi": [1.0, 2.0, 3.0], "scalar": 2.5})
-    captured = {}
-    original = expression_compiler.analyze_expression
-
-    def wrapped(expr, environment):
-        captured["environment"] = environment
-        return original(expr, environment)
-
-    expression_compiler.analyze_expression = wrapped
-    try:
-        result = expression_compiler.compile_expr(comp, ast.parse("pi", mode="eval").body)
-        check(getattr(result, "typ", None) == TYPE_VECTOR, "non-scalar const did not remain on legacy constant path")
-    finally:
-        expression_compiler.analyze_expression = original
-        bpy.data.node_groups.remove(group)
-
-    environment = captured["environment"]
-    check(environment.constants["pi"].kind == "vector", "non-scalar const was not normalized semantically")
-    check(environment.constants["pi"].typ == TYPE_VECTOR, "vector const semantic type changed")
-    check(environment.constants["scalar"].kind == "scalar", "scalar const semantic kind changed")
-    check(environment.constants["scalar"].value == 2.5, "scalar const metadata changed")
-
-
-
-def test_complete_expression_ir_production_routing_covers_new_forms_and_excludes_call_parent(monkeypatch):
-    """Production expression/body routes must send owned forms through Semantic IR."""
+def test_permanent_expression_routing_keeps_structures_frontend_owned_and_runtime_forms_in_ir(monkeypatch):
+    """Body-owned structure stays frontend-side while runtime expression forms reach typed IR."""
     programs = []
-    original_expression = expression_compiler.lower_ir_expression
     original_body = compiler_module.lower_body
-
-    def wrapped_expression(context, program, base_depth=0):
-        programs.append(program)
-        return original_expression(context, program, base_depth)
 
     def wrapped_body(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):
         programs.extend(_body_programs(body))
@@ -1001,22 +926,18 @@ def test_complete_expression_ir_production_routing_covers_new_forms_and_excludes
             context, body, initial_runtime_bindings, base_depth, group_input=group_input
         )
 
-    monkeypatch.setattr(expression_compiler, "lower_ir_expression", wrapped_expression)
     monkeypatch.setattr(compiler_module, "lower_body", wrapped_body)
 
     def compile_and_remove(source, name):
         group = compile_group(source, name)
         bpy.data.node_groups.remove(group)
 
-    from NodeForge.compiler import Compiler
-
-    array_group = bpy.data.node_groups.new("NFTest_complete_ir_route_array", "GeometryNodeTree")
-    try:
-        comp = Compiler(array_group, None)
-        expression_compiler.compile_expr(comp, ast.parse("[1, 2]", mode="eval").body)
-    finally:
-        bpy.data.node_groups.remove(array_group)
-    check(any(isinstance(program.result, IRArray) for program in programs), "source array did not reach IR backend as IRArray")
+    compile_and_remove('items = [1, 2]\noutput("Result", items[0])', "NFTest_complete_ir_route_array")
+    check(
+        not any(isinstance(program.result, IRArray) for program in programs),
+        "body-owned structural array leaked through the Blender expression-result boundary",
+    )
+    check(programs, "indexed structural array produced no permanent runtime expression program")
 
     programs.clear()
     compile_and_remove('v = vector(1, 2, 3)\noutput("Result", v)', "NFTest_complete_ir_route_vector_literal")
@@ -1180,7 +1101,7 @@ output("Geometry", geo)
 
 
 def test_semantic_call_ir_raw_named_outputs_preserve_one_entry_structure_and_selection():
-    """outputs= remains NodeResult-shaped for one output and supports both selectors on the IR path."""
+    """outputs= remains structurally named for one output and supports both selectors on the IR path."""
     group = compile_group(
         '''
 a = node("ShaderNodeSeparateXYZ", inputs={"Vector": (1, 2, 3)}, outputs={"X": Float}).X
@@ -1282,17 +1203,8 @@ output("Captured", captured)
     bpy.data.node_groups.remove(group)
 
 
-def test_contextual_group_semantic_route_preserves_store_set_position_and_grid_topology(monkeypatch):
-    """Accepted contextual core syntax avoids legacy statements while preserving physical node topology."""
-    def forbidden(*_args, **_kwargs):
-        raise AssertionError("accepted contextual core body entered compile_statement()")
-
-    monkeypatch.setattr(statement_compiler, "compile_statement", forbidden)
-    monkeypatch.setattr(statement_compiler, "_compile_panel_statement", forbidden)
-    monkeypatch.setattr(statement_compiler, "_set_position_node", forbidden)
-    monkeypatch.setattr(legacy_geometry_builtins, "compile_call", forbidden)
-    monkeypatch.setattr(compiler_module.Compiler, "interface_input_for_value", forbidden)
-    monkeypatch.setattr(compiler_module.Compiler, "interface_input_identity_for_value", forbidden)
+def test_contextual_group_semantic_route_preserves_store_set_position_and_grid_topology():
+    """Contextual core syntax preserves physical topology on the permanent route."""
     group = compile_group(
         'scale = input_float("Scale")\n'
         'geo = grid(scale, 3)\n'

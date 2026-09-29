@@ -102,12 +102,11 @@ def _expr(source):
     return ast.parse(source, mode="eval").body
 
 
-def _environment(*, bindings=None, consts=None, labels=None, legacy_names=(), backend_helpers=(), builtins=None, systems=None, local_functions=None, imported_functions=None, object_registry=True, structural_arrays=None):
+def _environment(*, bindings=None, consts=None, labels=None, backend_helpers=(), builtins=None, systems=None, local_functions=None, imported_functions=None, object_registry=True, structural_arrays=None):
     """Build one immutable semantic environment for pure IR tests.
 
     Object-focused frontend tests opt into the same persistent registry that
-    ``lower_basic_body()`` owns.  Tests for legacy expression fallback disable
-    it explicitly.
+    ``lower_basic_body()`` owns.
     """
     from types import MappingProxyType
 
@@ -130,7 +129,6 @@ def _environment(*, bindings=None, consts=None, labels=None, legacy_names=(), ba
         object_semantics = ObjectSemanticSnapshot(object_ids, states, next_id)
     return SemanticEnvironment(
         MappingProxyType(runtime_bindings),
-        frozenset(legacy_names),
         semantic_constants,
         const_eval_values,
         MappingProxyType(dict(labels or {})),
@@ -145,14 +143,14 @@ def _environment(*, bindings=None, consts=None, labels=None, legacy_names=(), ba
     )
 
 
-def _lower(source, *, bindings=None, consts=None, labels=None, legacy_names=(), backend_helpers=(), builtins=None, systems=None, local_functions=None, imported_functions=None, object_registry=True):
+def _lower(source, *, bindings=None, consts=None, labels=None, backend_helpers=(), builtins=None, systems=None, local_functions=None, imported_functions=None, object_registry=True):
     """Analyze and lower one source expression through the pure frontend phases."""
     expr = _expr(source)
     analysis = analyze_expression(
         expr,
-        _environment(bindings=bindings, consts=consts, labels=labels, legacy_names=legacy_names, backend_helpers=backend_helpers, builtins=builtins, systems=systems, local_functions=local_functions, imported_functions=imported_functions, object_registry=object_registry),
+        _environment(bindings=bindings, consts=consts, labels=labels, backend_helpers=backend_helpers, builtins=builtins, systems=systems, local_functions=local_functions, imported_functions=imported_functions, object_registry=object_registry),
     )
-    return None if analysis is None else lower_analyzed_expression(expr, analysis)
+    return lower_analyzed_expression(expr, analysis)
 
 
 def _operations(program, operation_type):
@@ -515,10 +513,10 @@ def test_capture_attribute_call_result_is_structural_tuple_until_selected():
     selected = _lower("capture_attribute(geo, value)[1]", bindings={"geo": TYPE_GEOMETRY, "value": TYPE_VECTOR})
     assert selected.result.typ == TYPE_VECTOR
 
-@pytest.mark.parametrize("name", ["builder", "raw_result", "tuple_result", "items"])
-def test_legacy_binding_boundaries_remain_unsupported(name):
-    source = f"{name}[0]" if name != "builder" else "builder.geometry"
-    assert _lower(source, legacy_names={name}) is None
+@pytest.mark.parametrize("source", ["builder.geometry", "raw_result[0]", "tuple_result[0]", "items[0]"])
+def test_unknown_structural_names_are_direct_semantic_errors(source):
+    with pytest.raises(CompileError, match="Unknown name"):
+        _lower(source)
 
 
 def test_ir_operations_store_no_ast_or_backend_objects():
@@ -1302,7 +1300,6 @@ def test_stored_structural_array_lowers_recursively_to_irbinding_leaves():
             "stored_x": RuntimeBindingSymbol(x_id, TYPE_FLOAT),
             "stored_y": RuntimeBindingSymbol(y_id, TYPE_VECTOR),
         }),
-        frozenset(),
         MappingProxyType({}),
         MappingProxyType({}),
         MappingProxyType({}),

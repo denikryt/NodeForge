@@ -194,12 +194,16 @@ def test_semantic_modules_are_blender_independent_and_no_aggregate_nftypes_exist
     assert not hasattr(NFType, "NAMED_OUTPUTS")
 
 
-def test_ir_structural_records_do_not_embed_backend_containers_or_mutable_fields():
-    from NodeForge.values import NodeResult, TupleValue
+def test_ir_structural_records_do_not_embed_legacy_backend_containers_or_mutable_fields():
+    import NodeForge.values as values
 
-    assert all(field.name not in {"tuple_value", "node_result"} for field in __import__("dataclasses").fields(IRBindLeaves))
-    assert NodeResult is not IRNamedOutputs
-    assert TupleValue is not IRTuple
+    assert all(
+        field.name not in {"tuple_value", "node_result"}
+        for field in __import__("dataclasses").fields(IRBindLeaves)
+    )
+    assert not hasattr(values, "NodeResult")
+    assert not hasattr(values, "TupleValue")
+    assert IRNamedOutputs is not IRTuple
 
 
 def test_structural_array_records_validate_identity_immutability_and_detached_snapshot():

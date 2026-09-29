@@ -91,7 +91,6 @@ def _analyze_unresolved(source, *, consts=None):
     constants, detached = build_semantic_constant_snapshot(CompileTimeSnapshot(consts or {}))
     environment = SemanticEnvironment(
         MappingProxyType({}),
-        frozenset(),
         constants,
         detached,
         MappingProxyType({}),
@@ -218,7 +217,6 @@ def test_object_info_method_syntax_is_classified_by_semantic_analysis():
     object_id = ObjectSemanticId(0)
     env = SemanticEnvironment(
         MappingProxyType({"obj": RuntimeBindingSymbol(binding_id, TYPE_OBJECT)}),
-        frozenset(),
         constants,
         detached,
         MappingProxyType({}),

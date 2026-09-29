@@ -156,7 +156,6 @@ def lower_runtime_if(
     policy: BranchMergePolicy,
     analyze_condition: Callable,
     lower_branch: Callable,
-    unsupported_sentinel,
     merge_binding_ids=None,
     merge_symbols=(),
     identity_assignment_merge_eligible: Callable[[object, object], bool] | None = None,
@@ -171,8 +170,6 @@ def lower_runtime_if(
         raise CompileError("runtime if currently requires an else branch")
 
     analyzed_condition = analyze_condition(stmt.test, base_state, compile_time)
-    if analyzed_condition is unsupported_sentinel:
-        return unsupported_sentinel
     if analyzed_condition.program.result.typ is not NFType.BOOL:
         message = "repeat_range if condition must be Bool" if policy is BranchMergePolicy.REPEAT else "select(cond, true, false): cond must be Bool"
         raise CompileError(message)
@@ -181,8 +178,6 @@ def lower_runtime_if(
     true_state = base_state.fork()
     true_compile_time = compile_time.fork()
     true_body = lower_branch(stmt.body, true_state, true_compile_time, policy)
-    if true_body is unsupported_sentinel:
-        return unsupported_sentinel
 
     false_state = base_state.fork()
     false_compile_time = compile_time.fork()
@@ -191,8 +186,6 @@ def lower_runtime_if(
         if stmt.orelse
         else lower_branch((), false_state, false_compile_time, policy)
     )
-    if false_body is unsupported_sentinel:
-        return unsupported_sentinel
 
     if policy is BranchMergePolicy.TOP_LEVEL:
         changed_ids = true_state.changed_runtime_ids & false_state.changed_runtime_ids

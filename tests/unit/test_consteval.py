@@ -13,6 +13,7 @@ from NodeForge.consteval import (
 )
 from NodeForge.compile_time import CompileTimeState, ConstVector
 from NodeForge.errors import CompileError
+from NodeForge.nf_types import NFType
 from NodeForge.numeric_semantics import normalize_float_constant
 
 pytestmark = pytest.mark.unit
@@ -97,16 +98,30 @@ def test_compile_time_f_string_rejects_non_string_or_formatted_interpolation(sou
 
 
 def test_literal_string_and_input_discovery_use_compile_time_fstrings():
+    from NodeForge.builtin_call_semantics import analyze_builtin_call
     from NodeForge.parsing import _collect_inputs, _literal_string, _parse_source
-    from NodeForge.statements import _kw_dict, _optional_string_kw
 
     expr = ast.parse('f"{prefix} Name"', mode="eval").body
     assert _literal_string(expr, "name", {"prefix": "Socket"}) == "Socket Name"
 
-    call = ast.parse('store("c", x, domain=f"{domain_name}", type=f"{kind}")', mode="exec").body[0].value
-    kws = _kw_dict(call)
-    assert _optional_string_kw(kws, "domain", "POINT", {"domain_name": "FACE", "kind": "COLOR"}) == "FACE"
-    assert _optional_string_kw(kws, "type", None, {"domain_name": "FACE", "kind": "COLOR"}) == "COLOR"
+    call = ast.parse(
+        'store_named_attribute(geo, "c", x, domain=f"{domain_name}", type=f"{kind}")',
+        mode="eval",
+    ).body
+    runtime_types = {"geo": NFType.GEOMETRY, "x": NFType.FLOAT}
+
+    def add_runtime(node, _parameter_name, _context):
+        assert isinstance(node, ast.Name)
+        return runtime_types[node.id]
+
+    semantics = analyze_builtin_call(
+        "store_named_attribute",
+        call,
+        {"domain_name": "FACE", "kind": "FLOAT"},
+        add_runtime,
+    )
+    assert dict(semantics.options)["domain"] == "FACE"
+    assert dict(semantics.options)["data_type"] == "FLOAT"
 
     stmts = _parse_source('prefix = "Result"\nvalue = input_float(f"{prefix} Value")\noutput(f"{prefix} Output", value)')
     from NodeForge.consteval import _preprocess_compile_time

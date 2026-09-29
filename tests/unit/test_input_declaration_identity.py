@@ -196,7 +196,6 @@ def _control_flow_declaration_keys(source):
         ast.parse(source, mode="exec").body,
         initial_runtime_bindings={},
         initial_compile_time=CompileTimeSnapshot({}),
-        legacy_binding_names=frozenset(),
         reserved_name_labels={},
         callable_environment=callables,
         owner_scope="owner",

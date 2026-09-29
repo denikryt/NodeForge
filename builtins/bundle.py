@@ -1,27 +1,14 @@
-"""Runtime Blender Bundle construction and item access for the NodeForge DSL."""
+"""Blender backend helpers for NodeForge Bundle construction and item access."""
 
 from __future__ import annotations
 
-import ast
-
-from ..compile_time import reject_compile_time_object
 from ..constants import (
-    TYPE_BOOL,
-    TYPE_BUNDLE,
-    TYPE_FLOAT,
-    TYPE_GEOMETRY,
-    TYPE_INT,
-    TYPE_MATERIAL,
-    TYPE_OBJECT,
-    TYPE_STRING,
-    TYPE_TOKEN_NAMES,
-    TYPE_VECTOR,
+    TYPE_BOOL, TYPE_BUNDLE, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_MATERIAL,
+    TYPE_OBJECT, TYPE_STRING, TYPE_VECTOR,
 )
 from ..errors import CompileError
 from ..nodes import _new_node
-from ..values import Value, make_value, reject_tuple_value
-
-NAMES = {"bundle", "bundle_get", "bundle_set"}
+from ..values import make_value
 
 _BUNDLE_SOCKET_TYPES = {
     TYPE_FLOAT: "FLOAT",
@@ -34,24 +21,6 @@ _BUNDLE_SOCKET_TYPES = {
     TYPE_STRING: "STRING",
     TYPE_BUNDLE: "BUNDLE",
 }
-
-
-# STRUCTURAL_SEMANTICS_LEGACY_BUNDLE_CALL_COMPAT: Stateless Bundle calls are compiler-owned Call IR
-# in migrated expressions/bodies and lower through build_bundle/build_bundle_get/build_bundle_set.
-# Keep this AST/Compiler handler only because remaining whole-body legacy statements still route
-# expressions through builtin compile_call dispatch. Do not call it from Semantic IR lowering.
-# Remove it when the legacy expression/statement call dispatcher is no longer a production path.
-def compile_call(comp, expr, depth=0):
-    """Compile one public Bundle built-in call."""
-    name = expr.func.id
-    if name == "bundle":
-        return _compile_bundle(comp, expr, depth)
-    if name == "bundle_get":
-        return _compile_bundle_get(comp, expr, depth)
-    if name == "bundle_set":
-        return _compile_bundle_set(comp, expr, depth)
-    raise CompileError(f"Unsupported Bundle builtin: {name}")
-
 
 def build_bundle(group, items, *, x=0, y=0):
     """Build a Combine Bundle node from already-materialized runtime item Values."""
@@ -113,86 +82,6 @@ def build_bundle_set(group, bundle_value, path_value, item_value, *, x=0, y=0):
     return make_value(node.outputs["Bundle"], TYPE_BUNDLE)
 
 
-def _compile_bundle(comp, expr, depth):
-    """Lower ``bundle(**named_items)`` to Blender's Combine Bundle node."""
-    if expr.args:
-        raise CompileError("bundle(...) accepts named keyword items only")
-    if any(keyword.arg is None for keyword in expr.keywords):
-        raise CompileError("bundle(...) does not support **kwargs")
-
-    values = []
-    seen_names = set()
-    for keyword in expr.keywords:
-        item_name = keyword.arg
-        if item_name in seen_names:
-            raise CompileError(f"bundle() has duplicate item name {item_name!r}")
-        seen_names.add(item_name)
-        value = comp.compile(keyword.value)
-        value = _require_runtime_value(value, f"bundle() item {item_name!r}")
-        values.append((item_name, value))
-
-    return build_bundle(comp.group, values, x=depth * 240, y=-depth * 90)
-
-
-def _compile_bundle_get(comp, expr, depth):
-    """Lower ``bundle_get(bundle, path, typ=Type)`` to Get Bundle Item."""
-    if len(expr.args) != 2:
-        raise CompileError("bundle_get(bundle, path, typ=...) expects exactly two positional arguments")
-    if any(keyword.arg is None for keyword in expr.keywords):
-        raise CompileError("bundle_get(...) does not support **kwargs")
-    keywords = {keyword.arg: keyword.value for keyword in expr.keywords}
-    if set(keywords) != {"typ"}:
-        raise CompileError("bundle_get(...) requires exactly one keyword argument: typ=")
-
-    bundle_value = _require_runtime_value(comp.compile(expr.args[0]), "bundle_get() bundle")
-    if bundle_value.typ != TYPE_BUNDLE:
-        raise CompileError(f"bundle_get() first argument expects Bundle, got {bundle_value.typ}")
-    path_value = _compile_path(comp, expr.args[1], "bundle_get() path")
-    output_type = _parse_type_token(keywords["typ"], "bundle_get() typ=")
-    return build_bundle_get(comp.group, bundle_value, path_value, output_type, x=depth * 240, y=-depth * 90)
-
-
-def _compile_bundle_set(comp, expr, depth):
-    """Lower ``bundle_set(bundle, path, value)`` to Store Bundle Item."""
-    if len(expr.args) != 3:
-        raise CompileError("bundle_set(bundle, path, value) expects exactly three positional arguments")
-    if expr.keywords:
-        raise CompileError("bundle_set(...) does not accept keyword arguments")
-
-    bundle_value = _require_runtime_value(comp.compile(expr.args[0]), "bundle_set() bundle")
-    if bundle_value.typ != TYPE_BUNDLE:
-        raise CompileError(f"bundle_set() first argument expects Bundle, got {bundle_value.typ}")
-    path_value = _compile_path(comp, expr.args[1], "bundle_set() path")
-    item_value = _require_runtime_value(comp.compile(expr.args[2]), "bundle_set() value")
-    return build_bundle_set(comp.group, bundle_value, path_value, item_value, x=depth * 240, y=-depth * 90)
-
-
-def _compile_path(comp, expr, context):
-    """Compile a Bundle path expression and require a runtime String value."""
-    value = _require_runtime_value(comp.compile(expr), context)
-    if value.typ != TYPE_STRING:
-        raise CompileError(f"{context} expects String, got {value.typ}")
-    return value
-
-
-def _require_runtime_value(value, context):
-    """Return one ordinary runtime Value or raise a controlled Bundle diagnostic."""
-    reject_compile_time_object(value, context)
-    reject_tuple_value(value, context)
-    if isinstance(value, list):
-        raise CompileError(f"{context} cannot be a script array")
-    if not isinstance(value, Value):
-        raise CompileError(f"{context} expects a runtime node value")
-    return value
-
-
-def _parse_type_token(expr, context):
-    """Resolve one NodeForge type token used by Bundle item access."""
-    if not isinstance(expr, ast.Name) or expr.id not in TYPE_TOKEN_NAMES:
-        raise CompileError(f"{context} must be one of: {', '.join(sorted(TYPE_TOKEN_NAMES))}")
-    return TYPE_TOKEN_NAMES[expr.id]
-
-
 def _bundle_socket_type(typ, context):
     """Map a supported NodeForge runtime type to Blender's Bundle item enum."""
     socket_type = _BUNDLE_SOCKET_TYPES.get(typ)
@@ -200,14 +89,10 @@ def _bundle_socket_type(typ, context):
         raise CompileError(f"{context} has unsupported Bundle item type {typ}")
     return socket_type
 
-
 __all__ = [
-    "NAMES",
-    "compile_call",
     "build_bundle",
     "build_bundle_get",
     "build_bundle_set",
     "_BUNDLE_SOCKET_TYPES",
     "_bundle_socket_type",
-    "_parse_type_token",
 ]

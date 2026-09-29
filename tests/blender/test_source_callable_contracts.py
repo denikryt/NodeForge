@@ -191,15 +191,8 @@ def test_public_materialize_group_callback_prepares_before_backend_publication()
         _remove_group(root)
 
 
-def test_source_backed_production_routes_do_not_reenter_legacy_compilers(monkeypatch):
-    """Supported local and imported source calls compile with legacy entry points forbidden."""
-    from NodeForge import statement_compiler
-
-    def forbidden(*_args, **_kwargs):
-        raise AssertionError("source-backed production routing re-entered a legacy compiler")
-
-    monkeypatch.setattr(compiler.Compiler, "compile", forbidden)
-    monkeypatch.setattr(statement_compiler, "compile_statement", forbidden)
+def test_source_backed_production_routes_compile_without_legacy_compiler():
+    """Supported local and imported source calls compile on the permanent source-call route."""
 
     local_dir = library.ensure_local_catalog_dir()
     source_path = local_dir / "source_callable_route_tripwire.nf"

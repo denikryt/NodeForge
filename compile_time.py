@@ -1,10 +1,8 @@
-"""Compile-time state, compiler-only object protocol, and rejection helpers."""
+"""Compiler-owned compile-time knowledge snapshots and control-flow merge helpers."""
 
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
-
-from .errors import CompileError
 
 
 class ConstVector(tuple):
@@ -118,55 +116,9 @@ def merge_runtime_if_compile_time(
     return CompileTimeSnapshot(merged)
 
 
-@dataclass(frozen=True)
-class CompileTimeObject:
-    """Base class for compiler-only non-runtime objects.
-
-    This protocol is distinct from :class:`CompileTimeState`: subclasses such as
-    GeometryBuilder can carry compiler/backend state and therefore must remain outside
-    the const-evaluable source-binding environment. Runtime node-value consumers must
-    reject them before socket or type handling.
-    """
-
-    @property
-    def typ(self):
-        """Reject accidental use as a typed runtime node value."""
-        raise CompileError(f"{type(self).__name__} is compile-time only and cannot be used as a runtime node value")
-
-    @property
-    def socket(self):
-        """Reject accidental use as a runtime node socket."""
-        raise CompileError(f"{type(self).__name__} is compile-time only and cannot be used as a runtime node socket")
-
-
-def is_compile_time_object(value) -> bool:
-    """Return True when *value* is a compiler-only non-runtime object."""
-    return isinstance(value, CompileTimeObject)
-
-
-def reject_compile_time_object(value, context: str):
-    """Raise a controlled error if *value* is compiler-only.
-
-    Lists are checked recursively because arrays are script-level containers that
-    can otherwise carry compiler-only objects into runtime consumers.
-    """
-    if isinstance(value, CompileTimeObject):
-        usage_error = getattr(value, "usage_error", None)
-        if callable(usage_error):
-            raise CompileError(usage_error(context))
-        raise CompileError(f"{type(value).__name__} is compile-time only and cannot be used in {context}")
-    if isinstance(value, list):
-        for item in value:
-            reject_compile_time_object(item, context)
-    return value
-
-
 __all__ = [
     "ConstVector",
-    "CompileTimeObject",
     "CompileTimeSnapshot",
     "CompileTimeState",
-    "is_compile_time_object",
     "merge_runtime_if_compile_time",
-    "reject_compile_time_object",
 ]

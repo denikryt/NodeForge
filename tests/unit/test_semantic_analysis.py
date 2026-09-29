@@ -52,7 +52,7 @@ def _expr(source):
     return ast.parse(source, mode="eval").body
 
 
-def _env(*, bindings=None, legacy=(), consts=None, labels=None, backend_helpers=(), builtins=(), systems=None, local_functions=None, imported_functions=None, object_registry=True, structural_arrays=None, **_ignored):
+def _env(*, bindings=None, consts=None, labels=None, backend_helpers=(), builtins=(), systems=None, local_functions=None, imported_functions=None, object_registry=True, structural_arrays=None, **_ignored):
     """Construct the immutable semantic snapshot used by analyzer tests."""
     runtime_bindings = {
         name: RuntimeBindingSymbol(BindingId("test-owner", index), typ)
@@ -73,7 +73,6 @@ def _env(*, bindings=None, legacy=(), consts=None, labels=None, backend_helpers=
         object_semantics = ObjectSemanticSnapshot(object_ids, states, next_id)
     return SemanticEnvironment(
         MappingProxyType(runtime_bindings),
-        frozenset(legacy),
         constants,
         const_eval_values,
         MappingProxyType(dict(labels or {})),
@@ -141,8 +140,8 @@ def test_join_empty_named_structural_array_preserves_zero_operand_call():
     assert root_fact.call_operand_nodes == ()
 
 
-def test_environment_mapping_and_set_contract_is_structurally_immutable():
-    env = _env(bindings={"a": TYPE_FLOAT}, legacy={"legacy"}, consts={"k": 1, "v": object()}, labels={"f": "DSL builtin"})
+def test_environment_mapping_contract_is_structurally_immutable():
+    env = _env(bindings={"a": TYPE_FLOAT}, consts={"k": 1, "v": object()}, labels={"f": "DSL builtin"})
     with pytest.raises(TypeError):
         env.runtime_bindings["b"] = RuntimeBindingSymbol(BindingId("test-owner", 1), TYPE_FLOAT)
     with pytest.raises(TypeError):
@@ -150,7 +149,7 @@ def test_environment_mapping_and_set_contract_is_structurally_immutable():
     with pytest.raises(TypeError):
         env.reserved_name_labels["x"] = "DSL builtin"
     with pytest.raises(dataclasses.FrozenInstanceError):
-        env.legacy_binding_names = frozenset()
+        env.helper_namespace = "Other"
 
 
 
@@ -165,7 +164,6 @@ def test_reached_name_resolution_precedence_is_exact():
     analysis = _analyze(
         "x",
         bindings={"x": TYPE_VECTOR},
-        legacy={"x"},
         consts={"x": 1},
         labels={"x": "DSL builtin"},
     )
@@ -173,7 +171,8 @@ def test_reached_name_resolution_precedence_is_exact():
     assert analysis.facts[analysis.root].resolved_name.kind == "runtime_binding"
     assert analysis.facts[analysis.root].resolved_name.binding_id == BindingId("test-owner", 0)
 
-    assert _analyze("x", legacy={"x"}, consts={"x": 1}) is None
+    constant = _analyze("x", consts={"x": 1})
+    assert _typ(constant.facts[constant.root]) == TYPE_INT
     pi = _analyze("pi")
     assert _typ(pi.facts[pi.root]) == TYPE_FLOAT
 
@@ -207,7 +206,6 @@ def test_constant_snapshot_is_cycle_safe_and_never_retains_unsupported_object_id
 
     environment = SemanticEnvironment(
         MappingProxyType({}),
-        frozenset(),
         constants,
         const_eval_values,
         MappingProxyType({}),
@@ -364,16 +362,18 @@ def test_vector_component_and_object_attribute_boundaries():
 
 
 
-def test_legacy_expression_environment_allows_unused_object_but_falls_back_when_reached():
-    """Marker 11 is reached by use, not merely by Object presence in the environment."""
+def test_object_expression_requires_body_owned_semantic_state_only_when_reached():
+    """Object use without its persistent registry is a controlled internal error, not a retry signal."""
     arithmetic = _analyze("1.0 + 2.0", bindings={"obj": TYPE_OBJECT}, object_registry=False)
-    assert arithmetic is not None
-    assert _analyze("obj.geometry", bindings={"obj": TYPE_OBJECT}, object_registry=False) is None
+    assert arithmetic.facts[arithmetic.root].result_shape == RuntimeResultShape(TYPE_FLOAT)
+    with pytest.raises(CompileError, match="requires body-owned Object semantic state"):
+        _analyze("obj.geometry", bindings={"obj": TYPE_OBJECT}, object_registry=False)
 
-def test_unknown_calls_are_direct_errors_while_legacy_bindings_remain_internal():
+def test_unknown_calls_and_unknown_names_are_direct_errors():
     with pytest.raises(CompileError, match=r"Unsupported function: f"):
         _analyze("f()", bindings={"a": TYPE_FLOAT})
-    assert _analyze("legacy[0]", legacy={"legacy"}) is None
+    with pytest.raises(CompileError, match="Unknown name: legacy"):
+        _analyze("legacy[0]")
     array = _analyze("[a]", bindings={"a": TYPE_FLOAT})
     assert isinstance(array.facts[array.root].result_shape, ArrayResultShape)
     with pytest.raises(CompileError, match="indexing is supported"):
@@ -412,7 +412,6 @@ def test_snapshot_backed_structural_array_analysis_preserves_index_and_nested_id
             "first": RuntimeBindingSymbol(first_binding, TYPE_FLOAT),
             "second": RuntimeBindingSymbol(second_binding, TYPE_VECTOR),
         }),
-        frozenset(),
         MappingProxyType({}),
         MappingProxyType({}),
         MappingProxyType({}),
@@ -454,7 +453,6 @@ def test_structural_array_provenance_survives_identity_expression_result_not_onl
     )
     env = SemanticEnvironment(
         MappingProxyType({"x": RuntimeBindingSymbol(binding, TYPE_FLOAT)}),
-        frozenset(),
         MappingProxyType({}),
         MappingProxyType({}),
         MappingProxyType({}),

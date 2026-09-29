@@ -57,7 +57,6 @@ def _environment(registry, callable_id, branch_type):
     )
     return SemanticEnvironment(
         MappingProxyType(runtime),
-        frozenset(runtime),
         MappingProxyType({}),
         MappingProxyType({}),
         MappingProxyType({}),
@@ -114,7 +113,6 @@ def test_v2_hybrid_library_is_migration_blocked_before_source_preparation(tmp_pa
     )
     environment = SemanticEnvironment(
         MappingProxyType({}),
-        frozenset(),
         MappingProxyType({}),
         MappingProxyType({}),
         MappingProxyType({}),

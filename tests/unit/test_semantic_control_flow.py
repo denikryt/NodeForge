@@ -12,7 +12,7 @@ from NodeForge.compiler_identities import BindingId, InputDeclarationId
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
 from NodeForge.runtime_bindings import RuntimeBindingSymbol
-from NodeForge.semantic_body import BODY_UNSUPPORTED, lower_basic_body
+from NodeForge.semantic_body import lower_basic_body
 from NodeForge.semantic_ir import IRBranchMerge, IRIf, IRInputDeclaration, IRRepeat
 
 
@@ -24,12 +24,11 @@ def _callables():
     )
 
 
-def _lower(source, *, bindings=None, constants=None, legacy=(), geometry_mode=False):
+def _lower(source, *, bindings=None, constants=None, geometry_mode=False):
     return lower_basic_body(
         ast.parse(source, mode="exec").body,
         initial_runtime_bindings=bindings or {},
         initial_compile_time=CompileTimeSnapshot(constants or {}),
-        legacy_binding_names=frozenset(legacy),
         reserved_name_labels={},
         callable_environment=_callables(),
         owner_scope="scope",
@@ -404,9 +403,8 @@ def test_builder_repeat_is_owned_by_semantic_ir():
         'builder = geometry_builder()\n'
         'for i in repeat_range(2):\n    builder.add(cube(1))\n'
         'builder.geometry',
-        legacy=(),
     )
-    assert result is not BODY_UNSUPPORTED
+    assert result.body is not None
     repeat = next(statement for statement in result.body.statements if isinstance(statement, IRRepeat))
     assert [state.source_name for state in repeat.states] == ["builder"]
 
@@ -511,7 +509,7 @@ def test_contextual_store_inside_runtime_if_no_longer_forces_whole_body_fallback
         'if flag:\n    store("a", x)\n    x = x + 1\nelse:\n    x = x + 2',
         geometry_mode=True,
     )
-    assert result is not BODY_UNSUPPORTED
+    assert result.body is not None
     branch = next(stmt for stmt in result.body.statements if isinstance(stmt, IRIf))
     assert branch.merges and branch.merges[0].source_name == "x"
 

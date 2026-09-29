@@ -391,13 +391,12 @@ def test_source_call_migration_removes_v1_extension_execution_and_keeps_v2_bound
     """Permanent source/extension calls have no v1 executable dispatcher after cutover."""
     root = Path(__file__).resolve().parents[2]
     assert not (root / "library_calls.py").exists()
+    assert not (root / "expression_compiler.py").exists()
+    assert not (root / "statement_compiler.py").exists()
     local_source = (root / "local_functions.py").read_text(encoding="utf-8")
-    expression_source = (root / "expression_compiler.py").read_text(encoding="utf-8")
     semantic_source = (root / "semantic_analysis.py").read_text(encoding="utf-8")
     library_source = (root / "library.py").read_text(encoding="utf-8")
     assert "def compile_local_function_call" not in local_source
-    assert "compile_library_function_call" not in expression_source
-    assert "compile_local_function_call" not in expression_source
     assert "CallableKind.SYSTEM" not in semantic_source
     assert "CallableKind.BACKEND_HELPER" not in semantic_source
     assert "compile_module_library_entry_call" not in library_source
@@ -432,38 +431,6 @@ def test_source_callable_session_uses_exact_resolved_record_without_live_discove
 
 
 
-def test_direct_compiler_fallback_resolves_once_and_binds_its_backend(monkeypatch):
-    """Standalone Compiler construction creates one snapshot-backed nested callback."""
-    compiler = _import_compiler_with_fake_bpy(monkeypatch)
-    environment = ResolvedEnvironment(_catalogs())
-    calls = []
-    monkeypatch.setattr(compiler, "resolve_environment", lambda: calls.append(True) or environment)
-
-    comp = compiler.Compiler(types.SimpleNamespace(name="Direct"), None)
-
-    assert calls == [True]
-    assert comp.resolved_environment is environment
-    assert comp.group_backend._resolved_environment_for_session() is environment
-
-
-def test_compiler_rejects_unbound_and_mismatched_backends(monkeypatch):
-    """Caller backends cannot bypass exact compilation-session identity checks."""
-    compiler = _import_compiler_with_fake_bpy(monkeypatch)
-    first = ResolvedEnvironment(_catalogs())
-    second = ResolvedEnvironment(_catalogs())
-    group = types.SimpleNamespace(name="Direct")
-
-    with pytest.raises(CompileError, match="not bound to a resolved environment"):
-        compiler.Compiler(group, None, group_backend=object(), resolved_environment=first)
-    with pytest.raises(CompileError, match="uses a different resolved environment"):
-        compiler.Compiler(
-            group,
-            None,
-            group_backend=compiler._new_group_backend(second),
-            resolved_environment=first,
-        )
-
-
 def test_group_backend_public_callback_uses_semantic_preparation_before_publication(monkeypatch):
     """Raw source remains only at the public callback facade, not the permanent backend request."""
     compiler = _import_compiler_with_fake_bpy(monkeypatch)
@@ -496,7 +463,8 @@ def test_compilation_modules_do_not_call_live_resolution_apis():
         name: (root / name).read_text(encoding="utf-8")
         for name in (
             "compiler.py",
-            "expression_compiler.py",
+            "semantic_analysis.py",
+            "blender_ir_lowering.py",
             "function_materializer.py",
             "local_functions.py",
             "semantic_group.py",
@@ -521,18 +489,3 @@ def test_compilation_modules_do_not_call_live_resolution_apis():
     assert "resolved_environment" not in materializer_source
     assert "ResolvedEnvironment" not in backend_source
     assert "ResolvedEnvironment" not in materializer_source
-
-
-def test_direct_compiler_compatibility_marker_matches_plan_exactly():
-    """The only new temporary branch remains searchable with its removal contract."""
-    source = (Path(__file__).resolve().parents[2] / "compiler.py").read_text(encoding="utf-8")
-    marker = """        # RESOLVED_ENVIRONMENT_MIGRATION: Compiler is still exported and legacy tests or
-        # integrations may construct it directly without the root compiler entry points.
-        # A standalone Compiler creates one snapshot and an environment-bound backend, or
-        # adopts the exact snapshot exposed by a supplied environment-bound backend. Reject
-        # arbitrary backends because their nested populate callback could resolve again.
-        # Production root entry points always pass one shared ResolvedEnvironment. Remove
-        # this fallback when Compiler is internal/session-owned and every caller must pass
-        # both an explicit environment and its matching session-bound backend."""
-    assert source.count("RESOLVED_ENVIRONMENT_MIGRATION") == 1
-    assert marker in source

@@ -27,7 +27,7 @@ from .extension_contracts import ExtensionCallableId
 from .extension_registry import library_owner_key
 from .parsing import _binding_names, _collect_inputs, _extract_function_imports, _needs_geometry_io, _parse_source
 from .runtime_bindings import RuntimeBindingSymbol
-from .semantic_body import BODY_UNSUPPORTED, BasicBodyCompilation, lower_basic_body
+from .semantic_body import BasicBodyCompilation, lower_basic_body
 from .semantic_ir import IRBody, IRIf, IRInputDeclaration, IRPanelDeclaration, IRRepeat
 
 
@@ -426,7 +426,6 @@ def analyze_group_source(
         stmts,
         initial_runtime_bindings=initial_runtime_bindings,
         initial_compile_time=preprocessed.initial_compile_time,
-        legacy_binding_names=frozenset(),
         reserved_name_labels=reserved_name_labels,
         callable_environment=callable_environment,
         owner_scope=compilation_identity.owner_scope,
@@ -441,8 +440,6 @@ def analyze_group_source(
         extension_registry=resolved_environment.extension_registry,
         extension_dependency_sink=extension_dependencies,
     )
-    if body_compilation is BODY_UNSUPPORTED:
-        raise CompileError("Internal error: semantic group preparation reached an unplanned unsupported body")
     interface = _build_interface_contract(
         geometry_mode=geometry_mode,
         implicit_inputs=tuple(implicit_inputs),

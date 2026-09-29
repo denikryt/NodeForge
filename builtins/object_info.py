@@ -64,19 +64,4 @@ def resolve_object_property_explicit(
     return obj._object_info_outputs[name]
 
 
-def resolve_object_property(group, obj, name, *, x=0, y=0):
-    """Materialize one legacy Object property using ObjectValue-owned semantic state."""
-    result = resolve_object_property_explicit(
-        group,
-        obj,
-        name,
-        transform_space=obj._info_transform_space,
-        as_instance=obj._info_as_instance,
-        x=x,
-        y=y,
-    )
-    obj._info_resolved = True
-    return result
-
-
-__all__ = ["resolve_object_property", "resolve_object_property_explicit"]
+__all__ = ["resolve_object_property_explicit"]

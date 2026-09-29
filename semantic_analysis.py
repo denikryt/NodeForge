@@ -7,7 +7,7 @@ import copy
 import inspect
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
-from typing import AbstractSet, Mapping
+from typing import Mapping
 
 from .compiler_identities import (
     BindingId,
@@ -163,7 +163,6 @@ class SemanticEnvironment:
     """Immutable semantic metadata snapshot used by one expression analysis."""
 
     runtime_bindings: Mapping[str, RuntimeBindingSymbol]
-    legacy_binding_names: AbstractSet[str]
     constants: Mapping[str, SemanticConstant]
     const_eval_values: Mapping[str, object]
     reserved_name_labels: Mapping[str, str]
@@ -241,18 +240,6 @@ class ExpressionAnalysis:
     extension_registry: object | None = None
 
 
-@dataclass(frozen=True)
-class _Unsupported:
-    """Internal result indicating that this migration boundary does not own a path."""
-
-
-UNSUPPORTED = _Unsupported()
-
-
-class _BuiltinOperandUnsupported(Exception):
-    """Abort one builtin analysis when a child still exposes an internal unsupported sentinel."""
-
-
 
 def _is_number_type(typ):
     """Return whether *typ* follows the existing scalar Math-node contract."""
@@ -271,7 +258,7 @@ def _require_runtime_type(fact, context):
             f"{context} received a tuple of {len(shape.items)} values; unpack it or select an element by a compile-time index"
         )
     if isinstance(shape, NamedOutputsResultShape):
-        raise CompileError(f"NodeResult is compile-time only and cannot be used in {context}")
+        raise CompileError(f"Named multi-output results are structural and cannot be used in {context}")
     raise CompileError(f"{context} requires a runtime value")
 
 
@@ -538,8 +525,6 @@ def _analyze_extension_backend_call(
         if not isinstance(selection, RuntimeRequired):
             raise CompileError("Internal error: extension evaluation selector returned unsupported state")
         fact = analyze(source_node)
-        if fact is UNSUPPORTED:
-            return UNSUPPORTED
         actual_type = _require_runtime_type(fact, f"{name}() argument")
         acquired[id(source_node)] = ("runtime", source_node, actual_type)
 
@@ -689,8 +674,6 @@ def _contextual_semantic_list_payload(
 
     if not isinstance(expression, ast.List):
         fact = analyze(expression)
-        if fact is UNSUPPORTED:
-            raise _BuiltinOperandUnsupported
         payload = fact.semantic_payload
         if payload is None:
             raise CompileError(f"{call_name}() expects a frontend semantic list value")
@@ -719,8 +702,6 @@ def _contextual_semantic_list_payload(
             )
         elif expected.item.kind == "RECORD":
             child_fact = analyze(child)
-            if child_fact is UNSUPPORTED:
-                raise _BuiltinOperandUnsupported
             child_payload = child_fact.semantic_payload
             if child_payload is None or child_payload.type_spec.kind != "RECORD":
                 raise CompileError(f"{call_name}() semantic list elements must be package-defined semantic records")
@@ -759,28 +740,23 @@ def _analyze_extension_semantic_call(
         raise CompileError(f"{name}() does not support caller-side ** argument expansion")
 
     normalized_args: list[ast.expr | ExtensionSemanticPayload] = []
-    try:
-        for argument in cleaned_call.args:
-            if not isinstance(argument, ast.Starred):
-                normalized_args.append(argument)
-                continue
-            starred_fact = analyze(argument.value)
-            if starred_fact is UNSUPPORTED:
-                raise _BuiltinOperandUnsupported
-            payload = starred_fact.semantic_payload
-            if payload is None or payload.type_spec.kind != "LIST":
-                raise CompileError(f"{name}() caller-side * requires a package semantic LIST value")
-            if not isinstance(payload.value, tuple):
-                raise CompileError("Internal error: semantic LIST payload storage is malformed")
-            for item in payload.value:
-                child = compact_extension_semantic_payload(
-                    payload.type_spec.item,
-                    item,
-                    payload.dependencies,
-                )
-                normalized_args.append(child)
-    except _BuiltinOperandUnsupported:
-        return UNSUPPORTED
+    for argument in cleaned_call.args:
+        if not isinstance(argument, ast.Starred):
+            normalized_args.append(argument)
+            continue
+        starred_fact = analyze(argument.value)
+        payload = starred_fact.semantic_payload
+        if payload is None or payload.type_spec.kind != "LIST":
+            raise CompileError(f"{name}() caller-side * requires a package semantic LIST value")
+        if not isinstance(payload.value, tuple):
+            raise CompileError("Internal error: semantic LIST payload storage is malformed")
+        for item in payload.value:
+            child = compact_extension_semantic_payload(
+                payload.type_spec.item,
+                item,
+                payload.dependencies,
+            )
+            normalized_args.append(child)
 
     keyword_values: dict[str, ast.expr] = {}
     for keyword in cleaned_call.keywords:
@@ -799,89 +775,82 @@ def _analyze_extension_semantic_call(
         raise CompileError("Internal error: semantic extension call has no immutable extension registry")
     invocation = SemanticInvocation(registry)
 
-    try:
-        for parameter in spec.parameters:
-            bound_value = (
-                bound.arguments.get(parameter.name, ())
-                if parameter.kind is inspect.Parameter.VAR_POSITIONAL
-                else bound.arguments.get(parameter.name)
-            )
-            occurrences = tuple(bound_value) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else (bound_value,)
-            acquired_items: list[object] = []
-            type_spec = parameter.type_spec
-            for occurrence in occurrences:
-                if occurrence is None and parameter.kind is not inspect.Parameter.VAR_POSITIONAL:
-                    raise CompileError("Internal error: semantic extension binding lost fixed parameter")
-                if isinstance(occurrence, ExtensionSemanticPayload):
-                    payload = occurrence
-                    if type_spec.kind not in {"RECORD", "LIST"}:
-                        raise CompileError(f"{name}() caller-side * semantic item is incompatible with parameter contract")
-                    if not semantic_type_compatible(payload.type_spec, type_spec, registry):
-                        raise CompileError(f"{name}() caller-side * semantic item has incompatible declared type")
-                    acquired_items.append(invocation.reconstruct_payload(payload))
-                    continue
-                if not isinstance(occurrence, ast.AST):
-                    if parameter.type_spec.kind != "NF_SET" or parameter.default_type is None:
-                        raise CompileError("Internal error: semantic extension default lost canonical NF contract")
-                    acquired_items.append(occurrence)
-                    continue
+    for parameter in spec.parameters:
+        bound_value = (
+            bound.arguments.get(parameter.name, ())
+            if parameter.kind is inspect.Parameter.VAR_POSITIONAL
+            else bound.arguments.get(parameter.name)
+        )
+        occurrences = tuple(bound_value) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else (bound_value,)
+        acquired_items: list[object] = []
+        type_spec = parameter.type_spec
+        for occurrence in occurrences:
+            if occurrence is None and parameter.kind is not inspect.Parameter.VAR_POSITIONAL:
+                raise CompileError("Internal error: semantic extension binding lost fixed parameter")
+            if isinstance(occurrence, ExtensionSemanticPayload):
+                payload = occurrence
+                if type_spec.kind not in {"RECORD", "LIST"}:
+                    raise CompileError(f"{name}() caller-side * semantic item is incompatible with parameter contract")
+                if not semantic_type_compatible(payload.type_spec, type_spec, registry):
+                    raise CompileError(f"{name}() caller-side * semantic item has incompatible declared type")
+                acquired_items.append(invocation.reconstruct_payload(payload))
+                continue
+            if not isinstance(occurrence, ast.AST):
+                if parameter.type_spec.kind != "NF_SET" or parameter.default_type is None:
+                    raise CompileError("Internal error: semantic extension default lost canonical NF contract")
+                acquired_items.append(occurrence)
+                continue
 
-                if type_spec.kind == "NF_SET":
-                    try:
-                        selection = resolve_argument_evaluation(
-                            occurrence,
-                            environment.const_eval_values,
-                            parameter.evaluation_mode,
-                        )
-                    except ConstEvalUnavailable as exc:
-                        raise CompileError(f"{name}() argument must be available at compile time") from exc
-                    if isinstance(selection, CompileTimeSelection):
-                        actual_type = static_nf_type(selection.value)
-                        if not type_spec_accepts_nf(type_spec, actual_type):
-                            raise CompileError(f"{name}() argument type {actual_type} is not accepted by its extension contract")
-                        expected_type = select_declared_nf_type(type_spec, actual_type)
-                        acquired_items.append(canonicalize_group_input_default(expected_type, selection.value))
-                    elif isinstance(selection, RuntimeRequired):
-                        fact = analyze(occurrence)
-                        if fact is UNSUPPORTED:
-                            raise _BuiltinOperandUnsupported
-                        actual_type = _require_runtime_type(fact, f"{name}() argument")
-                        if not type_spec_accepts_nf(type_spec, actual_type):
-                            raise CompileError(f"{name}() argument type {actual_type} is not accepted by its extension contract")
-                        source = ExtensionDependencySource(occurrence, actual_type)
-                        acquired_items.append(invocation.runtime_ref_for_source(source))
-                    else:
-                        raise CompileError("Internal error: unsupported extension evaluation selection")
-                elif type_spec.kind == "RECORD":
-                    fact = analyze(occurrence)
-                    if fact is UNSUPPORTED:
-                        raise _BuiltinOperandUnsupported
-                    payload = fact.semantic_payload
-                    if payload is None or not isinstance(fact.result_shape, ExtensionResultShape):
-                        raise CompileError(f"{name}() expects a package-defined semantic record")
-                    if not registry.is_nominal_subtype(fact.result_shape.type_id, type_spec.record_type):
-                        raise CompileError(f"{name}() semantic record argument has incompatible nominal type")
-                    acquired_items.append(invocation.reconstruct_payload(payload))
-                elif type_spec.kind == "LIST":
-                    payload = _contextual_semantic_list_payload(
+            if type_spec.kind == "NF_SET":
+                try:
+                    selection = resolve_argument_evaluation(
                         occurrence,
-                        type_spec,
-                        analyze=analyze,
-                        facts=facts,
-                        invocation=invocation,
-                        registry=registry,
-                        call_name=name,
+                        environment.const_eval_values,
+                        parameter.evaluation_mode,
                     )
-                    acquired_items.append(invocation.reconstruct_payload(payload))
+                except ConstEvalUnavailable as exc:
+                    raise CompileError(f"{name}() argument must be available at compile time") from exc
+                if isinstance(selection, CompileTimeSelection):
+                    actual_type = static_nf_type(selection.value)
+                    if not type_spec_accepts_nf(type_spec, actual_type):
+                        raise CompileError(f"{name}() argument type {actual_type} is not accepted by its extension contract")
+                    expected_type = select_declared_nf_type(type_spec, actual_type)
+                    acquired_items.append(canonicalize_group_input_default(expected_type, selection.value))
+                elif isinstance(selection, RuntimeRequired):
+                    fact = analyze(occurrence)
+                    actual_type = _require_runtime_type(fact, f"{name}() argument")
+                    if not type_spec_accepts_nf(type_spec, actual_type):
+                        raise CompileError(f"{name}() argument type {actual_type} is not accepted by its extension contract")
+                    source = ExtensionDependencySource(occurrence, actual_type)
+                    acquired_items.append(invocation.runtime_ref_for_source(source))
                 else:
-                    raise CompileError("Internal error: unsupported public semantic extension parameter TypeSpec")
-
-            if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
-                bound.arguments[parameter.name] = tuple(acquired_items)
+                    raise CompileError("Internal error: unsupported extension evaluation selection")
+            elif type_spec.kind == "RECORD":
+                fact = analyze(occurrence)
+                payload = fact.semantic_payload
+                if payload is None or not isinstance(fact.result_shape, ExtensionResultShape):
+                    raise CompileError(f"{name}() expects a package-defined semantic record")
+                if not registry.is_nominal_subtype(fact.result_shape.type_id, type_spec.record_type):
+                    raise CompileError(f"{name}() semantic record argument has incompatible nominal type")
+                acquired_items.append(invocation.reconstruct_payload(payload))
+            elif type_spec.kind == "LIST":
+                payload = _contextual_semantic_list_payload(
+                    occurrence,
+                    type_spec,
+                    analyze=analyze,
+                    facts=facts,
+                    invocation=invocation,
+                    registry=registry,
+                    call_name=name,
+                )
+                acquired_items.append(invocation.reconstruct_payload(payload))
             else:
-                bound.arguments[parameter.name] = acquired_items[0]
-    except _BuiltinOperandUnsupported:
-        return UNSUPPORTED
+                raise CompileError("Internal error: unsupported public semantic extension parameter TypeSpec")
+
+        if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
+            bound.arguments[parameter.name] = tuple(acquired_items)
+        else:
+            bound.arguments[parameter.name] = acquired_items[0]
 
     semantic_value = registry.invoke_semantic(spec.id, *bound.args, **bound.kwargs)
     packed = invocation.pack_result(semantic_return, semantic_value)
@@ -989,7 +958,6 @@ def _unregistered_keyword_error(name):
 def build_semantic_environment(
     *,
     runtime_bindings,
-    legacy_binding_names,
     compile_time,
     reserved_name_labels,
     callable_environment,
@@ -1050,7 +1018,6 @@ def build_semantic_environment(
     semantic_constants, const_eval_values = build_semantic_constant_snapshot(compile_time)
     return SemanticEnvironment(
         runtime_bindings=MappingProxyType(runtime_bindings),
-        legacy_binding_names=frozenset(legacy_binding_names),
         constants=semantic_constants,
         const_eval_values=const_eval_values,
         reserved_name_labels=MappingProxyType(dict(reserved_name_labels)),
@@ -1088,16 +1055,12 @@ def analyze_expression(expr, environment):
         object_states = dict(environment.object_semantics.states)
         next_object_id = environment.object_semantics.next_object_id
 
-    def has_body_object_semantics():
-        """Return whether this expression runs with persistent body-owned Object semantics."""
-        # STRUCTURAL_SEMANTICS_LEGACY_OBJECT_EXPRESSION_FALLBACK: Object semantics are stateful across
-        # expressions. Only lower_basic_body() supplies the persistent frontend Object registry required
-        # to own Object identity, Object.info() configuration, aliases, and post-resolution locking. Direct
-        # legacy expression characterization can still call semantic analysis without that registry, so Object
-        # bindings/results, Object.info(), Object properties, and Object-preserving projections remain an
-        # internal UNSUPPORTED result in that expression-only mode. Production root bodies always supply the
-        # body-owned registry. Remove this sentinel bridge with the retained legacy expression compiler.
-        return object_ids_by_binding is not None and object_states is not None
+    def require_body_object_semantics():
+        """Reject Object analysis that lacks the persistent body-owned semantic registry."""
+        if object_ids_by_binding is None or object_states is None:
+            raise CompileError(
+                "Internal error: Object expression analysis requires body-owned Object semantic state"
+            )
 
     def allocate_object_id():
         nonlocal next_object_id
@@ -1119,8 +1082,8 @@ def analyze_expression(expr, environment):
 
     def call_result_shape(result):
         types = _call_result_types(result)
-        if any(typ is NFType.OBJECT for typ in types) and object_ids_by_binding is None:
-            return UNSUPPORTED
+        if any(typ is NFType.OBJECT for typ in types):
+            require_body_object_semantics()
         shapes = tuple(
             RuntimeResultShape(typ, allocate_object_id() if typ is NFType.OBJECT else None)
             for typ in types
@@ -1157,8 +1120,7 @@ def analyze_expression(expr, environment):
             if node.id in environment.runtime_bindings:
                 symbol = environment.runtime_bindings[node.id]
                 if symbol.typ is NFType.OBJECT:
-                    if not has_body_object_semantics():
-                        return UNSUPPORTED
+                    require_body_object_semantics()
                     object_id = object_ids_by_binding.get(symbol.binding_id)
                     if not isinstance(object_id, ObjectSemanticId):
                         raise CompileError("Internal error: Object runtime binding has no ObjectSemanticId")
@@ -1173,8 +1135,8 @@ def analyze_expression(expr, environment):
                 return record(node, runtime_fact(symbol.typ, object_id=object_id, resolved_name=resolved))
             if node.id in environment.structural_bindings:
                 structural = environment.structural_bindings[node.id]
-                if object_ids_by_binding is None and any(leaf.typ is NFType.OBJECT for leaf in structural.leaves):
-                    return UNSUPPORTED
+                if any(leaf.typ is NFType.OBJECT for leaf in structural.leaves):
+                    require_body_object_semantics()
                 shape = structural.result_shape({} if object_ids_by_binding is None else object_ids_by_binding)
                 resolved = ResolvedName(
                     "structural_binding",
@@ -1205,12 +1167,6 @@ def analyze_expression(expr, environment):
                         semantic_payload=payload,
                     ),
                 )
-            # COMPLETE_EXPRESSION_IR_LEGACY_BINDING_FALLBACK: Non-Value bindings retained only by
-            # the legacy expression implementation have no frontend-owned semantic result shape. Report an
-            # internal UNSUPPORTED result for direct legacy characterization; production root bodies must not
-            # depend on these bindings. Remove this bridge when the retained legacy compiler is deleted.
-            if node.id in environment.legacy_binding_names:
-                return UNSUPPORTED
             if node.id in environment.constants:
                 constant = environment.constants[node.id]
                 if constant.kind == "unsupported":
@@ -1236,8 +1192,6 @@ def analyze_expression(expr, environment):
             semantic_payloads: list[ExtensionSemanticPayload | None] = []
             for child in node.elts:
                 item = analyze(child)
-                if item is UNSUPPORTED:
-                    return UNSUPPORTED
                 items.append(item.result_shape)
                 semantic_payloads.append(item.semantic_payload)
             semantic_count = sum(payload is not None for payload in semantic_payloads)
@@ -1265,8 +1219,6 @@ def analyze_expression(expr, environment):
             items = []
             for child in node.elts:
                 item = analyze(child)
-                if item is UNSUPPORTED:
-                    return UNSUPPORTED
                 items.append(item.result_shape)
             return record(node, ExpressionFact(ArrayResultShape(tuple(items))))
 
@@ -1283,8 +1235,6 @@ def analyze_expression(expr, environment):
                 )
                 return record(node, runtime_fact(TYPE_GEOMETRY, resolved_name=resolved))
             base = analyze(node.value)
-            if base is UNSUPPORTED:
-                return UNSUPPORTED
             if isinstance(base.result_shape, NamedOutputsResultShape):
                 shape = base.result_shape.get(node.attr)
                 resolved_name = None
@@ -1308,8 +1258,7 @@ def analyze_expression(expr, environment):
                 )
             base_typ = _require_runtime_type(base, "attribute access")
             if base_typ == TYPE_OBJECT:
-                if not has_body_object_semantics():
-                    return UNSUPPORTED
+                require_body_object_semantics()
                 if node.attr not in OBJECT_PROPERTY_TYPES:
                     raise CompileError("Object values support only .geometry, .location, .rotation and .scale")
                 object_id = base.result_shape.object_id
@@ -1340,8 +1289,6 @@ def analyze_expression(expr, environment):
 
         if isinstance(node, ast.Subscript):
             base = analyze(node.value)
-            if base is UNSUPPORTED:
-                return UNSUPPORTED
             if isinstance(base.result_shape, NamedOutputsResultShape):
                 try:
                     key = _const_eval(node.slice, environment.const_eval_values)
@@ -1463,11 +1410,7 @@ def analyze_expression(expr, environment):
 
         if isinstance(node, ast.BinOp):
             left = analyze(node.left)
-            if left is UNSUPPORTED:
-                return UNSUPPORTED
             right = analyze(node.right)
-            if right is UNSUPPORTED:
-                return UNSUPPORTED
             left_typ = _require_runtime_type(left, "binary expression")
             right_typ = _require_runtime_type(right, "binary expression")
             op_type = type(node.op)
@@ -1488,8 +1431,6 @@ def analyze_expression(expr, environment):
                     runtime_fact(TYPE_INT, operation="SIGNED_INT_LITERAL", literal_value=INT_MIN),
                 )
             operand = analyze(node.operand)
-            if operand is UNSUPPORTED:
-                return UNSUPPORTED
             if isinstance(node.op, ast.UAdd):
                 return record(node, ExpressionFact(operand.result_shape, operation="+", array_id=operand.array_id))
             operand_typ = _require_runtime_type(operand, "unary expression")
@@ -1510,10 +1451,8 @@ def analyze_expression(expr, environment):
 
         if isinstance(node, ast.BoolOp):
             if not node.values:
-                return UNSUPPORTED
+                raise CompileError("Internal error: boolean expression has no operands")
             first = analyze(node.values[0])
-            if first is UNSUPPORTED:
-                return UNSUPPORTED
             if len(node.values) < 2:
                 return record(node, ExpressionFact(first.result_shape))
             op = _BOOLEAN_OPS.get(type(node.op))
@@ -1522,8 +1461,6 @@ def analyze_expression(expr, environment):
             current_typ = _require_runtime_type(first, "boolean expression")
             for child in node.values[1:]:
                 nxt = analyze(child)
-                if nxt is UNSUPPORTED:
-                    return UNSUPPORTED
                 next_typ = _require_runtime_type(nxt, "boolean expression")
                 if current_typ != TYPE_BOOL or next_typ != TYPE_BOOL:
                     raise CompileError("Boolean operations expect Bool values")
@@ -1537,11 +1474,7 @@ def analyze_expression(expr, environment):
             left_expr = node.left
             for op_node, right_expr in zip(node.ops, node.comparators):
                 left = analyze(left_expr)
-                if left is UNSUPPORTED:
-                    return UNSUPPORTED
                 right = analyze(right_expr)
-                if right is UNSUPPORTED:
-                    return UNSUPPORTED
                 op = _COMPARE_OPS.get(type(op_node))
                 if not op:
                     raise CompileError("Unsupported comparison operator")
@@ -1555,14 +1488,8 @@ def analyze_expression(expr, environment):
 
         if isinstance(node, ast.IfExp):
             condition = analyze(node.test)
-            if condition is UNSUPPORTED:
-                return UNSUPPORTED
             true_value = analyze(node.body)
-            if true_value is UNSUPPORTED:
-                return UNSUPPORTED
             false_value = analyze(node.orelse)
-            if false_value is UNSUPPORTED:
-                return UNSUPPORTED
             condition_typ = _require_runtime_type(condition, "if-expression condition")
             if _is_array_result(true_value) or _is_array_result(false_value):
                 raise CompileError("if-expression cannot return arrays")
@@ -1580,11 +1507,8 @@ def analyze_expression(expr, environment):
             if isinstance(node.func, ast.Attribute):
                 if node.func.attr != "info":
                     raise CompileError("Object values support only the .info() method")
-                if not has_body_object_semantics():
-                    return UNSUPPORTED
+                require_body_object_semantics()
                 receiver = analyze(node.func.value)
-                if receiver is UNSUPPORTED:
-                    return UNSUPPORTED
                 if _require_runtime_type(receiver, ".info() receiver") != TYPE_OBJECT:
                     raise CompileError(".info() can only be used on Object values")
                 object_id = receiver.result_shape.object_id
@@ -1672,8 +1596,6 @@ def analyze_expression(expr, environment):
                 ):
                     source_array = cleaned_call.args[0]
                     source_fact = analyze(source_array)
-                    if source_fact is UNSUPPORTED:
-                        return UNSUPPORTED
                     if isinstance(source_fact.result_shape, ArrayResultShape):
                         if source_fact.result_shape.items:
                             expanded = []
@@ -1705,18 +1627,13 @@ def analyze_expression(expr, environment):
 
                 def add_runtime(child, parameter_name, context):
                     child_fact = analyze(child)
-                    if child_fact is UNSUPPORTED:
-                        raise _BuiltinOperandUnsupported
                     typ = _require_runtime_type(child_fact, context)
                     runtime_nodes.append(child)
                     return typ
 
-                try:
-                    builtin = analyze_builtin_call(
-                        name, cleaned_call, environment.const_eval_values, add_runtime
-                    )
-                except _BuiltinOperandUnsupported:
-                    return UNSUPPORTED
+                builtin = analyze_builtin_call(
+                    name, cleaned_call, environment.const_eval_values, add_runtime
+                )
                 if isinstance(builtin.result, ContextReadCallResult):
                     if builtin.result.slot not in available_group_context_slots:
                         if builtin.result.slot is GroupContextSlot.GRID_UV:
@@ -1729,8 +1646,6 @@ def analyze_expression(expr, environment):
                     result=builtin.result,
                 )
                 result_shape = call_result_shape(builtin.result)
-                if result_shape is UNSUPPORTED:
-                    return UNSUPPORTED
                 if isinstance(builtin.result, ProjectedCallResult):
                     for slot, _result_index in builtin.result.context_writes:
                         available_group_context_slots.add(slot)
@@ -1764,29 +1679,24 @@ def analyze_expression(expr, environment):
                     tuple((keyword.arg, keyword.value) for keyword in cleaned_call.keywords),
                     name,
                 )
-                try:
-                    for param_name, child in bound_arguments:
-                        child_fact = analyze(child)
-                        if child_fact is UNSUPPORTED:
-                            raise _BuiltinOperandUnsupported
-                        if child_fact.semantic_payload is not None:
-                            raise CompileError(
-                                f"{name}() source function arguments cannot be package semantic values"
-                            )
-                        if isinstance(child_fact.result_shape, ArrayResultShape):
-                            raise CompileError(
-                                "Local function constant arguments must be numbers, booleans, strings or vectors"
-                            )
-                        actual_type = _require_runtime_type(child_fact, "script-local function argument")
-                        expected = declared[param_name]
-                        if expected is not None and not source_argument_type_matches(expected, actual_type):
-                            raise CompileError(
-                                f"{name}() parameter {param_name!r} expects {expected}, got {actual_type}"
-                            )
-                        bound_nodes[param_name] = child
-                        bound_types[param_name] = expected or actual_type
-                except _BuiltinOperandUnsupported:
-                    return UNSUPPORTED
+                for param_name, child in bound_arguments:
+                    child_fact = analyze(child)
+                    if child_fact.semantic_payload is not None:
+                        raise CompileError(
+                            f"{name}() source function arguments cannot be package semantic values"
+                        )
+                    if isinstance(child_fact.result_shape, ArrayResultShape):
+                        raise CompileError(
+                            "Local function constant arguments must be numbers, booleans, strings or vectors"
+                        )
+                    actual_type = _require_runtime_type(child_fact, "script-local function argument")
+                    expected = declared[param_name]
+                    if expected is not None and not source_argument_type_matches(expected, actual_type):
+                        raise CompileError(
+                            f"{name}() parameter {param_name!r} expects {expected}, got {actual_type}"
+                        )
+                    bound_nodes[param_name] = child
+                    bound_types[param_name] = expected or actual_type
 
                 captures = analyze_local_captures(
                     fn,
@@ -1866,8 +1776,6 @@ def analyze_expression(expr, environment):
                     if capture.runtime:
                         child = ast.copy_location(ast.Name(id=capture.name, ctx=ast.Load()), node)
                         capture_fact = analyze(child)
-                        if capture_fact is UNSUPPORTED:
-                            return UNSUPPORTED
                         actual_type = _require_runtime_type(capture_fact, "script-local function capture")
                         runtime_nodes.append(child)
                         runtime_operands.append(
@@ -1909,8 +1817,6 @@ def analyze_expression(expr, environment):
                     facts,
                     call_result_shape,
                 )
-                if extension_fact is UNSUPPORTED:
-                    return UNSUPPORTED
                 used_extension_owners.add(tuple(resolved.target.owner))
                 return record(node, extension_fact)
             if resolved.kind is CallableKind.LIBRARY:
@@ -1973,8 +1879,6 @@ def analyze_expression(expr, environment):
                 bound: list[tuple[object, ast.expr, NFType]] = []
                 for parameter, child in bound_pairs:
                     child_fact = analyze(child)
-                    if child_fact is UNSUPPORTED:
-                        return UNSUPPORTED
                     if child_fact.semantic_payload is not None:
                         raise CompileError(
                             f"{name}() source function arguments cannot be package semantic values"
@@ -2022,9 +1926,7 @@ def analyze_expression(expr, environment):
 
         raise CompileError(f"Unsupported expression element: {type(node).__name__}")
 
-    result = analyze(expr)
-    if result is UNSUPPORTED:
-        return None
+    analyze(expr)
     if object_ids_by_binding is None:
         snapshot = None
     else:

@@ -1,8 +1,6 @@
 """Blender integration coverage for native NodeForge interface panels."""
 
 from helpers import *
-from NodeForge.values import make_value
-from NodeForge.constants import TYPE_FLOAT
 
 
 def _interface_inputs(group):
@@ -252,26 +250,6 @@ def test_interface_panel_duplicate_names_and_reserved_binding():
         "NFTest_panel_duplicate_name",
     )
     _expect_message('panel = 1\noutput("x", 1)', "Cannot assign to panel", "NFTest_panel_reserved_binding")
-
-
-def test_interface_input_resolver_rejects_foreign_owner_even_on_identifier_collision():
-    current = bpy.data.node_groups.new("NFTest_panel_resolver_current", "GeometryNodeTree")
-    current_iface = current.interface.new_socket(name="Current", in_out="INPUT", socket_type="NodeSocketFloat")
-    current_input = current.nodes.new("NodeGroupInput")
-    current_socket = current_input.outputs["Current"]
-    comp = compiler.Compiler(current, current_input)
-    comp._register_interface_input(current_socket, current_iface)
-
-    foreign = bpy.data.node_groups.new("NFTest_panel_resolver_foreign", "GeometryNodeTree")
-    foreign.interface.new_socket(name="Foreign", in_out="INPUT", socket_type="NodeSocketFloat")
-    foreign_input = foreign.nodes.new("NodeGroupInput")
-    foreign_socket = foreign_input.outputs["Foreign"]
-    check(
-        current_socket.identifier == foreign_socket.identifier,
-        "resolver fixture did not produce the intended cross-owner identifier collision",
-    )
-    foreign_value = make_value(foreign_socket, TYPE_FLOAT)
-    check(comp.interface_input_for_value(foreign_value) is None, "foreign owner resolved through identifier collision")
 
 
 def test_copy_interface_preserves_nested_native_panel_hierarchy():

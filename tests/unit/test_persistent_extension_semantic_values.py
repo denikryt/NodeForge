@@ -54,7 +54,6 @@ def _lower(tmp_path: Path, source: str, *, bindings=None, preprocess=False):
         stmts,
         initial_runtime_bindings=bindings or {},
         initial_compile_time=initial_compile_time,
-        legacy_binding_names=frozenset(),
         reserved_name_labels={},
         callable_environment=_callables(by_name),
         owner_scope="scope",
@@ -80,7 +79,6 @@ def test_extension_binding_environment_requires_bindingid_only_dependencies():
     )
     environment = build_semantic_environment(
         runtime_bindings={},
-        legacy_binding_names=frozenset(),
         compile_time=CompileTimeSnapshot({}),
         reserved_name_labels={},
         callable_environment=_callables({}),
@@ -97,8 +95,7 @@ def test_extension_binding_environment_requires_bindingid_only_dependencies():
     with pytest.raises(ValueError, match="BindingId-backed"):
         build_semantic_environment(
             runtime_bindings={},
-            legacy_binding_names=frozenset(),
-            compile_time=CompileTimeSnapshot({}),
+                compile_time=CompileTimeSnapshot({}),
             reserved_name_labels={},
             callable_environment=_callables({}),
             extension_bindings={"part": transient_payload},
@@ -591,8 +588,7 @@ def test_semantic_environment_rejects_duplicate_extension_and_runtime_ownership(
     with pytest.raises(CompileError, match="multiple semantic binding domains"):
         build_semantic_environment(
             runtime_bindings={"part": RuntimeBindingSymbol(BindingId("scope", 0), NFType.FLOAT)},
-            legacy_binding_names=frozenset(),
-            compile_time=CompileTimeSnapshot({}),
+                compile_time=CompileTimeSnapshot({}),
             reserved_name_labels={},
             callable_environment=callables,
             extension_bindings={"part": payload},
@@ -700,7 +696,6 @@ def test_persistent_storage_contains_no_package_python_instances(tmp_path):
     _session, registry, by_name = _registry(tmp_path / "owner-storage")
     env = build_semantic_environment(
         runtime_bindings={"x": RuntimeBindingSymbol(BindingId("scope", 0), NFType.INT)},
-        legacy_binding_names=frozenset(),
         compile_time=CompileTimeSnapshot({}),
         reserved_name_labels={},
         callable_environment=_callables(by_name),

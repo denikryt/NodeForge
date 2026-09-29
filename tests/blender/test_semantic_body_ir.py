@@ -2,7 +2,6 @@
 
 from helpers import *
 
-from NodeForge import statement_compiler
 from NodeForge import compiler as compiler_module
 
 
@@ -171,31 +170,21 @@ output("Result", b)
     bpy.data.node_groups.remove(group)
 
 
-def test_body_local_backend_values_are_not_published_to_compiler_session(monkeypatch):
-    """Migrated x/y/z body assignments stay in the body lowerer's private materialization map."""
-    from NodeForge import compiler as compiler_module
-
-    published_names = []
-    original = compiler_module.Compiler.bind_runtime_value
-
-    def wrapped(self, name, value):
-        published_names.append(name)
-        return original(self, name, value)
-
-    monkeypatch.setattr(compiler_module.Compiler, "bind_runtime_value", wrapped)
+def test_body_local_backend_values_materialize_only_declared_entry_input():
+    """Body-local assignments stay internal while the declared entry input remains observable."""
     group = compile_group(
-        '''
+        """
 x = a + 1
 y = x * 2
 z = y + x
 output(z)
-''',
+""",
         "NFTest_body_local_backend_values",
     )
-    check(not published_names, f"prepared body or entry bindings leaked through Compiler.bind_runtime_value: {published_names}")
     inputs = _interface_sockets(group, "INPUT")
     check([item.name for item in inputs] == ["a"], "prepared implicit body-entry input was not materialized")
     bpy.data.node_groups.remove(group)
+
 
 
 def test_duplicate_input_label_with_different_types_is_legal():
@@ -261,16 +250,8 @@ output("Unpacked", b)
     bpy.data.node_groups.remove(group)
 
 
-def test_flat_list_target_unpack_uses_structural_body_ir(monkeypatch):
+def test_flat_list_target_unpack_uses_structural_body_ir():
     """List-target unpack has the same fixed-tuple leaf binding semantics as tuple-target unpack."""
-    legacy_calls = []
-    original = statement_compiler.compile_statement
-
-    def wrapped(*args, **kwargs):
-        legacy_calls.append(args[1])
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(statement_compiler, "compile_statement", wrapped)
     group = compile_group(
         '''
 geo = input_geometry("Geometry")
@@ -279,23 +260,14 @@ output("Value", b)
 ''',
         "NFTest_structural_list_unpack_body_ir",
     )
-    check(not legacy_calls, "fixed tuple list-unpack unexpectedly entered legacy statement lowering")
     check(len([node for node in group.nodes if node.bl_idname == "GeometryNodeCaptureAttribute"]) == 1, "list unpack duplicated producer")
     bpy.data.node_groups.remove(group)
 
 
-def test_runtime_if_uses_structured_body_ir_and_distinct_branch_input_declarations(monkeypatch):
-    """Eligible runtime-if avoids legacy statements and keeps branch declaration identities distinct."""
+def test_runtime_if_uses_structured_body_ir_and_distinct_branch_input_declarations():
+    """Runtime-if keeps structured body IR and distinct branch declaration identities."""
     from NodeForge import interface
 
-    legacy_calls = []
-    original = statement_compiler.compile_statement
-
-    def forbidden(*args, **kwargs):
-        legacy_calls.append(args[1])
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(statement_compiler, "compile_statement", forbidden)
     group = compile_group(
         '''
 flag = input_bool("Flag")
@@ -307,7 +279,6 @@ output("X", x)
 ''',
         "NFTest_runtime_if_body_ir_inputs",
     )
-    check(not legacy_calls, "eligible runtime-if unexpectedly entered legacy statement lowering")
     switches = [node for node in group.nodes if getattr(node, "bl_idname", "") == "GeometryNodeSwitch"]
     check(len(switches) == 1, f"expected one runtime-if Switch, found {len(switches)}")
     records = list(interface._get_group_input_declarations(group).values())
@@ -416,12 +387,8 @@ output("X", x)
         ),
     ],
 )
-def test_structural_arrays_structural_array_bodies_never_enter_legacy_statement_lowering(monkeypatch, source, name):
-    """Migrated structural arrays and ordinary compile-time loops use production Semantic Body routing."""
-    def forbidden_legacy_statement(*_args, **_kwargs):
-        raise AssertionError("structural-array migration migrated fixture entered legacy compile_statement()")
-
-    monkeypatch.setattr(statement_compiler, "compile_statement", forbidden_legacy_statement)
+def test_structural_arrays_structural_array_bodies_use_permanent_body_lowering(source, name):
+    """Structural arrays and ordinary compile-time loops use permanent Semantic Body routing."""
     group = compile_group(source, f"NFTest_structural_arrays_{name}")
     check(
         not [node for node in group.nodes if node.bl_idname in {"GeometryNodeRepeatInput", "GeometryNodeRepeatOutput"}],
@@ -430,15 +397,8 @@ def test_structural_arrays_structural_array_bodies_never_enter_legacy_statement_
     bpy.data.node_groups.remove(group)
 
 
-def test_structural_arrays_alias_append_preserves_join_topology_without_repeat_zone(monkeypatch):
+def test_structural_arrays_alias_append_preserves_join_topology_without_repeat_zone():
     """Alias-visible append keeps the existing two-cube/one-Join graph shape on the Semantic Body path."""
-    monkeypatch.setattr(
-        statement_compiler,
-        "compile_statement",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("alias/append unexpectedly entered legacy statement lowering")
-        ),
-    )
     group = compile_group(
         'items = [cube(1)]\nalias = items\nalias.append(cube(2))\n'
         'output("Geometry", join(items))',
@@ -450,15 +410,8 @@ def test_structural_arrays_alias_append_preserves_join_topology_without_repeat_z
     bpy.data.node_groups.remove(group)
 
 
-def test_structural_arrays_ordinary_for_inside_repeat_range_fails_before_legacy_or_blender_effects(monkeypatch):
-    """The migrated ordinary-for frontend preserves Repeat grammar without fallback or leaked groups."""
-    monkeypatch.setattr(
-        statement_compiler,
-        "compile_statement",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("invalid nested ordinary for unexpectedly entered legacy lowering")
-        ),
-    )
+def test_structural_arrays_ordinary_for_inside_repeat_range_fails_before_blender_effects():
+    """The ordinary-for frontend preserves Repeat grammar without leaked groups."""
     before = {group.as_pointer() for group in bpy.data.node_groups}
     with pytest.raises(
         CompileError,

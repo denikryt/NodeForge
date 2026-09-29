@@ -11,7 +11,7 @@ from NodeForge.compile_time import CompileTimeSnapshot
 from NodeForge.compiler_identities import BindingId
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
-from NodeForge.semantic_body import BODY_UNSUPPORTED, lower_basic_body
+from NodeForge.semantic_body import lower_basic_body
 from NodeForge.semantic_geometry_builder import GeometryBuilderState, empty_geometry_program, join_binding_program
 from NodeForge.semantic_ir import IRBindLeaves, IRCall, IRIf, IROutput, IRRepeat
 
@@ -29,7 +29,6 @@ def _lower(source):
         ast.parse(source).body,
         initial_runtime_bindings={},
         initial_compile_time=CompileTimeSnapshot({}),
-        legacy_binding_names=frozenset(),
         reserved_name_labels={},
         callable_environment=_callables(),
         owner_scope="scope",
@@ -63,7 +62,7 @@ def test_builder_accumulation_helpers_use_existing_empty_and_join_call_ir():
 
 def test_builder_constructor_emits_no_body_statement_and_clears_auto_final_selection():
     result = _lower('builder = geometry_builder()')
-    assert result is not BODY_UNSUPPORTED
+    assert result.body is not None
     assert result.body.statements == ()
     assert result.clear_auto_final_output is True
 
@@ -84,7 +83,7 @@ def test_empty_extend_clears_prior_auto_final_selection_without_builder_runtime_
 
 def test_straight_line_builder_is_semantic_owned_and_single_snapshot_avoids_join():
     result = _lower('builder = geometry_builder()\nbuilder.add(cube(1.0))\noutput("Geometry", builder.geometry)')
-    assert result is not BODY_UNSUPPORTED
+    assert result.body is not None
     joins = [
         op
         for statement in result.body.statements
@@ -135,7 +134,7 @@ def test_post_snapshot_add_is_sequential_join_on_stable_hidden_binding():
 
 def test_builder_extend_validates_complete_flat_geometry_array():
     result = _lower('builder = geometry_builder()\nbuilder.extend([cube(1.0), cube(2.0)])\noutput("Geometry", builder.geometry)')
-    assert result is not BODY_UNSUPPORTED
+    assert result.body is not None
     with pytest.raises(CompileError, match="expects an array of Geometry values"):
         _lower('builder = geometry_builder()\nbuilder.extend([cube(1.0), 1.0])\noutput("Geometry", builder.geometry)')
 
@@ -210,7 +209,7 @@ def test_top_level_runtime_if_accepts_false_only_branch_local_builder():
         '    value = 2.0\n'
         'output(value)'
     )
-    assert result is not BODY_UNSUPPORTED
+    assert result.body is not None
     branch = next(statement for statement in result.body.statements if isinstance(statement, IRIf))
     assert [merge.source_name for merge in branch.merges] == ["value"]
 
@@ -299,7 +298,7 @@ def test_one_sided_builder_replacement_restores_parent_identity_after_runtime_if
         'after = builder.geometry\n'
         'output("Geometry", after)'
     )
-    assert result is not BODY_UNSUPPORTED
+    assert result.body is not None
     branch = next(statement for statement in result.body.statements if isinstance(statement, IRIf))
     assert [merge.source_name for merge in branch.merges] == ["value"]
 
@@ -322,7 +321,7 @@ def test_flat_tuple_target_builder_loop_uses_frontend_unrolling():
         '    builder.add(cube(x))\n'
         'output("Geometry", builder.geometry)'
     )
-    assert result is not BODY_UNSUPPORTED
+    assert result.body is not None
 
 
 def test_semantic_builder_module_has_no_backend_dependencies():
@@ -412,7 +411,7 @@ def test_builder_extend_accepts_body_owned_array_alias():
         'builder.extend(alias)\n'
         'output("Geometry", builder.geometry)'
     )
-    assert result is not BODY_UNSUPPORTED
+    assert result.body is not None
     joins = _top_level_join_calls(result)
     assert len(joins) == 1
     assert len(joins[0].arguments) == 2
@@ -484,7 +483,7 @@ def test_branch_local_builder_runtime_if_identity_assignment_remains_merge_eligi
         '    value = value\n'
         'output("Value", value)'
     )
-    assert result is not BODY_UNSUPPORTED
+    assert result.body is not None
     runtime_ifs = [statement for statement in result.body.statements if isinstance(statement, IRIf)]
     assert len(runtime_ifs) == 1
     assert [(merge.source_name, merge.typ) for merge in runtime_ifs[0].merges] == [("value", NFType.FLOAT)]
