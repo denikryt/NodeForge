@@ -94,6 +94,15 @@ class _FakeNode:
                 _FakeSocket(self, 2, "Rotation"),
                 _FakeSocket(self, 3, "Scale"),
             ])
+        elif bl_idname == "GeometryNodeSampleIndex":
+            self.domain = "POINT"
+            self.clamp = False
+            self.inputs = _FakeSockets([
+                _FakeSocket(self, 0, "Geometry"),
+                _FakeSocket(self, 1, "Value"),
+                _FakeSocket(self, 2, "Index"),
+            ])
+            self.outputs = _FakeSockets([_FakeSocket(self, 0, "Value")])
         else:
             self.inputs = _FakeSockets([_FakeSocket(self, i) for i in range(8)])
             self.outputs = _FakeSockets([_FakeSocket(self, i) for i in range(4)])
@@ -360,3 +369,105 @@ def test_object_info_frontend_state_is_embedded_in_property_ir_without_mutating_
     assert info.inputs[1].default_value is False
     assert obj._object_info_cache_config == ("RELATIVE", False)
     assert obj._object_info_outputs is not None
+
+
+def test_sample_index_materializes_one_typed_node_for_all_supported_types_and_index_modes():
+    """The real backend helper preserves every supported type and both index representations."""
+    cases = (
+        (
+            "sample_index(geo, value, 0)",
+            {"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT},
+            "FLOAT",
+            0,
+            "POINT",
+            False,
+        ),
+        (
+            "sample_index(geo, value, i)",
+            {"geo": TYPE_GEOMETRY, "value": TYPE_INT, "i": TYPE_INT},
+            "INT",
+            None,
+            "POINT",
+            False,
+        ),
+        (
+            "sample_index(geo, value, 2, clamp=True)",
+            {"geo": TYPE_GEOMETRY, "value": TYPE_BOOL},
+            "BOOLEAN",
+            2,
+            "POINT",
+            True,
+        ),
+        (
+            "sample_index(geo, value, 7, domain='face', clamp=True)",
+            {"geo": TYPE_GEOMETRY, "value": TYPE_VECTOR},
+            "FLOAT_VECTOR",
+            7,
+            "FACE",
+            True,
+        ),
+    )
+    for source, bindings, data_type, expected_index, domain, clamp in cases:
+        program = _accepted_program(source, bindings)
+        assert program is not None
+        group = _FakeGroup()
+        runtime_bindings = MappingProxyType({
+            BindingId("backend-contract", index): Value(_FakeSocket(), typ)
+            for index, (_, typ) in enumerate(bindings.items())
+        })
+        result = blender_ir_lowering.lower_expression(
+            blender_ir_lowering.BlenderIRLoweringContext(group, runtime_bindings),
+            program,
+        )
+        nodes = [node for node in group.nodes if node.bl_idname == "GeometryNodeSampleIndex"]
+        assert len(nodes) == 1
+        node = nodes[0]
+        assert result.typ is bindings["value"]
+        assert node.data_type == data_type
+        assert node.domain == domain
+        assert node.clamp is clamp
+        if expected_index is None:
+            assert any(link[1] is node.inputs["Index"] for link in group.links)
+        else:
+            assert not any(link[1] is node.inputs["Index"] for link in group.links)
+            assert node.inputs["Index"].default_value == expected_index
+
+
+def test_sample_index_backend_rejects_invalid_normalized_inputs_before_node_creation():
+    """Backend preconditions fail before Sample Index mutates the destination group."""
+    from NodeForge.geometry import _sample_index_geometry
+
+    cases = (
+        (Value(_FakeSocket(), TYPE_GEOMETRY), Value(_FakeSocket(), TYPE_VECTOR), True, "POINT", False, "signed 32-bit range"),
+        (Value(_FakeSocket(), TYPE_GEOMETRY), Value(_FakeSocket(), TYPE_OBJECT), 0, "POINT", False, "supports Float, Int, Bool and Vector"),
+        (Value(_FakeSocket(), TYPE_GEOMETRY), Value(_FakeSocket(), TYPE_FLOAT), Value(_FakeSocket(), TYPE_FLOAT), "POINT", False, "index must be Int"),
+        (Value(_FakeSocket(), TYPE_GEOMETRY), Value(_FakeSocket(), TYPE_FLOAT), 0, "", False, r"Unsupported sample_index\(\) domain"),
+        (Value(_FakeSocket(), TYPE_GEOMETRY), Value(_FakeSocket(), TYPE_FLOAT), 0, "POINT", 1, "clamp= must be a compile-time Bool"),
+    )
+    for geometry, value, index, domain, clamp, message in cases:
+        group = _FakeGroup()
+        with pytest.raises(CompileError, match=message):
+            _sample_index_geometry(group, geometry, value, index, domain=domain, clamp=clamp)
+        assert group.nodes == []
+
+
+def test_sample_index_uses_generic_call_result_type_validation(monkeypatch):
+    """A wrong Sample Index backend type is rejected by the generic IR-call result boundary."""
+    program = _accepted_program(
+        "sample_index(geo, value, 0)",
+        {"geo": TYPE_GEOMETRY, "value": TYPE_VECTOR},
+    )
+    assert program is not None
+    bindings = MappingProxyType({
+        BindingId("backend-contract", 0): Value(_FakeSocket(), TYPE_GEOMETRY),
+        BindingId("backend-contract", 1): Value(_FakeSocket(), TYPE_VECTOR),
+    })
+    context = blender_ir_lowering.BlenderIRLoweringContext(_FakeGroup(), bindings)
+
+    monkeypatch.setattr(
+        blender_ir_lowering,
+        "_sample_index_geometry",
+        lambda *args, **kwargs: Value(_FakeSocket(), TYPE_FLOAT),
+    )
+    with pytest.raises(CompileError, match="expected type VECTOR, got FLOAT"):
+        blender_ir_lowering.lower_expression(context, program)

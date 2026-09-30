@@ -26,6 +26,7 @@ from .geometry import (
     _realize_instances,
     _set_material_geometry,
     _set_position_geometry,
+    _sample_index_geometry,
     _store_named_attribute_geometry,
     _transform_geometry,
 )
@@ -436,8 +437,19 @@ def _lower_builtin_call(context, operation, operands, x, y):
             operands[0],
             operands[1],
             selection=selection,
-            domain=options.get("domain", "POINT"),
-            data_type=options.get("data_type"),
+            domain=options["domain"],
+            data_type=options["data_type"],
+            x=x,
+            y=y,
+        )
+    if name == "sample_index":
+        return _sample_index_geometry(
+            group,
+            operands[0],
+            operands[1],
+            _slot_value(options["index"], operands),
+            domain=options["domain"],
+            clamp=options["clamp"],
             x=x,
             y=y,
         )
@@ -453,8 +465,8 @@ def _lower_builtin_call(context, operation, operands, x, y):
             attr_name,
             value,
             selection=selection,
-            domain=options.get("domain", "POINT"),
-            data_type_override=options.get("data_type"),
+            domain=options["domain"],
+            data_type_override=options["data_type"],
             x=x,
             y=y,
         )
@@ -468,9 +480,9 @@ def _lower_builtin_call(context, operation, operands, x, y):
         return _transform_geometry(
             group,
             operands[0],
-            translation=_slot_value(options.get("translation"), operands),
-            scale=_slot_value(options.get("scale"), operands),
-            rotation=_slot_value(options.get("rotation"), operands),
+            translation=_slot_value(options["translation"], operands),
+            scale=_slot_value(options["scale"], operands),
+            rotation=_slot_value(options["rotation"], operands),
             x=x,
             y=y,
         )
@@ -487,9 +499,9 @@ def _lower_builtin_call(context, operation, operands, x, y):
             operands[0],
             operands[1],
             selection=selection,
-            scale=_slot_value(options.get("scale"), operands),
-            rotation=_slot_value(options.get("rotation"), operands),
-            realize=options.get("realize", True),
+            scale=_slot_value(options["scale"], operands),
+            rotation=_slot_value(options["rotation"], operands),
+            realize=options["realize"],
             x=x,
             y=y,
         )
@@ -503,7 +515,7 @@ def _lower_builtin_call(context, operation, operands, x, y):
         return build_bundle_set(group, operands[0], operands[1], operands[2], x=x, y=y)
     if name == "node":
         raw_inputs = {}
-        for socket_name, spec in options.get("inputs", ()):
+        for socket_name, spec in options["inputs"]:
             mode, payload = spec
             if mode == "literal":
                 raw_inputs[socket_name] = payload
@@ -513,14 +525,14 @@ def _lower_builtin_call(context, operation, operands, x, y):
                 raw_inputs[socket_name] = [operands[index] for index in payload]
             else:
                 raise CompileError(f"Internal error: unknown raw-node input mode {mode!r}")
-        outputs = options.get("outputs")
+        outputs = options["outputs"]
         return build_materialized_raw_node(
             group,
             bl_idname=options["bl_idname"],
-            props=dict(options.get("props", ())),
+            props=dict(options["props"]),
             inputs=raw_inputs,
-            output=options.get("output"),
-            typ=options.get("typ"),
+            output=options["output"],
+            typ=options["typ"],
             outputs=dict(outputs) if outputs is not None else None,
             x=x,
             y=y,

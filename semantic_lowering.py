@@ -363,7 +363,7 @@ def lower_analyzed_expression(expr, analysis, *, dependency_sources=None):
             raw_mode = None
             if target.kind is IRCallableKind.BUILTIN and target.name == "node":
                 option_map = dict(options)
-                mode = option_map.get("raw_output_mode")
+                mode = option_map["raw_output_mode"]
                 if mode == "SINGLE_OUTPUT":
                     raw_mode = IRRawNodeOutputMode.SINGLE_OUTPUT
                 elif mode == "NAMED_OUTPUTS":

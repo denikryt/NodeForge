@@ -45,6 +45,21 @@ output("Geometry", geo)
 
 The dedicated function is the more convenient form when NodeForge provides one. `node(...)` keeps the rest of Geometry Nodes available while the built-in library continues to grow.
 
+### Sampling a field by index
+
+`sample_index()` reads a field from geometry at an integer element index and returns the same NodeForge value type as the sampled field. It supports `Float`, `Int`, `Bool`, and `Vector` values.
+
+```python
+geo = grid(4, 4)
+sampled_position = sample_index(geo, position(), 3)
+sampled_id = sample_index(geo, index(), index(), domain="POINT", clamp=True)
+
+output("Position", sampled_position)
+output("ID", sampled_id)
+```
+
+The first two arguments are runtime Geometry Nodes values. `index` accepts either a compile-time `Int` or a runtime `Int` field. `domain` and `clamp` are compile-time options; `domain` defaults to `"POINT"` and accepts `POINT`, `EDGE`, `FACE`, `CORNER`, `CURVE`, or `INSTANCE`, while `clamp` defaults to `False`.
+
 ### Python extension packages
 
 Installable packages can add typed callables through extension API v2. A package declares public callable signatures and frozen semantic record types in declaration-only `interface.py`. Backend-only callables map directly to owner-local physical implementations; semantic-capable callables use `semantic.py` to construct package-defined frontend values or normalize private state before backend realization. All supported extension calls use permanent semantic analysis and ordinary typed Call IR.

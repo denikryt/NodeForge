@@ -1074,6 +1074,17 @@ def test_panel_frontend_provenance_preserves_alias_and_rejects_nonphysical_resul
         )
 
 
+def test_panel_omitted_collapsed_is_explicit_false_and_invalid_explicit_value_is_rejected():
+    """Panel default ownership stays in body semantics rather than the interface helper."""
+    result = _lower('x = input_float("X")\npanel([x], name="P")')
+    panel = result.body.statements[-1]
+    assert isinstance(panel, IRPanelDeclaration)
+    assert panel.collapsed is False
+
+    with pytest.raises(CompileError, match=r"panel\(\) collapsed= must be a compile-time bool"):
+        _lower('x = input_float("X")\npanel([x], name="P", collapsed=1)')
+
+
 def test_panel_explicit_input_uses_declaration_origin_and_rebinding_clears_stale_origin():
     accepted = _lower('x = input_float("X")\npanel([x], name="P")')
     assert isinstance(accepted.body.statements[-1], IRPanelDeclaration)

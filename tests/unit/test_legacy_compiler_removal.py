@@ -102,10 +102,13 @@ def test_i2_positive_repeat_and_store_helpers_live_with_permanent_backend_owners
     """Repeat-zone and Store Named Attribute realization live in their final backend modules."""
     repeat_source = (ROOT / "blender_ir_lowering.py").read_text(encoding="utf-8")
     geometry_source = (ROOT / "geometry.py").read_text(encoding="utf-8")
+    domain_source = (ROOT / "attribute_domains.py").read_text(encoding="utf-8")
     assert "def _create_repeat_zone(" in repeat_source
     assert "def _repeat_item_type_for_nf_type(" in repeat_source
     assert "def _store_named_attribute(" in geometry_source
-    assert "def _attribute_domain(" in geometry_source
+    assert "def normalize_attribute_domain(" in domain_source
+    assert "def _attribute_domain(" not in geometry_source
+    assert "_ALLOWED_DOMAINS" not in geometry_source
 
 
 def test_i2_negative_permanent_backend_does_not_import_deleted_mixed_owners():
@@ -294,16 +297,94 @@ def test_i9_negative_no_new_compat_or_stage36_migration_marker_exists():
     )
 
 
-# I10 — the coordinated contract is a 0.62.2 patch cutover, not a stale 0.62.1 core.
-def test_i10_positive_core_contract_reports_nodeforge_0622():
-    """The completed refactor advertises the coordinated NodeForge patch version."""
+# I10 — Stage 36 establishes a permanent legacy-free version floor, not an exact future pin.
+def test_i10_positive_core_contract_is_at_or_above_stage36_cutover_floor():
+    """Later releases retain the legacy-free cutover rather than pinning one patch version."""
     import NodeForge
 
-    assert NodeForge.bl_info["version"] == (0, 62, 2)
+    assert NodeForge.bl_info["version"] >= (0, 62, 2)
 
 
-def test_i10_negative_core_contract_no_longer_reports_pre_cutover_0621():
-    """The legacy-free artifact cannot masquerade as the pre-cutover core version."""
+def test_i10_negative_core_contract_cannot_report_a_pre_cutover_version():
+    """The legacy-free artifact cannot advertise any core version below the Stage-36 cutover."""
     import NodeForge
 
-    assert NodeForge.bl_info["version"] != (0, 62, 1)
+    assert NodeForge.bl_info["version"] >= (0, 62, 2)
+
+
+# I11 — normalized source defaults belong to frontend semantics, not physical helpers.
+def test_i11_positive_audited_physical_helpers_require_normalized_source_state_explicitly():
+    """Physical helpers expose no duplicate source-language defaults for audited arguments."""
+    import inspect
+    from NodeForge import geometry, interface
+    from NodeForge.builtins import raw_nodes
+
+    required = {
+        geometry._store_named_attribute: ("selection", "domain", "data_type_override"),
+        geometry._store_named_attribute_geometry: ("selection", "domain", "data_type_override"),
+        geometry._capture_attribute_geometry: ("selection", "domain", "data_type"),
+        geometry._instance_on_points: ("selection", "scale", "rotation", "realize"),
+        geometry._set_position_geometry: ("selection",),
+        geometry._transform_geometry: ("translation", "scale", "rotation"),
+        interface._create_interface_panel: ("collapsed",),
+        interface._create_group_input_socket: ("default",),
+        raw_nodes.build_materialized_raw_node: ("props", "inputs", "output", "typ", "outputs"),
+    }
+    for function, parameter_names in required.items():
+        signature = inspect.signature(function)
+        for parameter_name in parameter_names:
+            assert signature.parameters[parameter_name].default is inspect.Parameter.empty, (
+                function.__name__,
+                parameter_name,
+            )
+
+
+def test_i11_negative_lowering_does_not_reconstruct_audited_source_defaults():
+    """Guaranteed normalized options use required access rather than backend fallback defaults."""
+    source = (ROOT / "blender_ir_lowering.py").read_text(encoding="utf-8")
+    forbidden = (
+        'options.get("domain"',
+        'options.get("data_type"',
+        'options.get("scale"',
+        'options.get("rotation"',
+        'options.get("realize"',
+        'options.get("translation"',
+        'options.get("props"',
+        'options.get("inputs"',
+        'options.get("output"',
+        'options.get("typ"',
+        'options.get("outputs"',
+        'options.get("clamp"',
+    )
+    for token in forbidden:
+        assert token not in source, token
+
+    semantic_lowering_source = (ROOT / "semantic_lowering.py").read_text(encoding="utf-8")
+    assert 'option_map.get("raw_output_mode")' not in semantic_lowering_source
+    assert 'option_map["raw_output_mode"]' in semantic_lowering_source
+
+
+# I12 — Stage 37 carries its public minor-version and release-coupled fixture contract.
+def test_i12_positive_stage37_public_contract_reports_0630_and_compatible_fixture_ceiling():
+    """The new public core builtin ships as one 0.63.0 minor release contract."""
+    import NodeForge
+
+    assert NodeForge.bl_info["version"] == (0, 63, 0)
+    for relative in (
+        "tests/unit/test_extension_bootstrap.py",
+        "tests/unit/test_extension_packages.py",
+        "tests/blender/test_extension_api_v2.py",
+    ):
+        source = (ROOT / relative).read_text(encoding="utf-8")
+        assert '"nodeforge_max_version": "0.63.0"' in source, relative
+
+
+def test_i12_negative_stage37_release_contract_does_not_retain_the_old_fixture_ceiling():
+    """Release-coupled synthetic manifests do not reject the Stage-37 core version."""
+    for relative in (
+        "tests/unit/test_extension_bootstrap.py",
+        "tests/unit/test_extension_packages.py",
+        "tests/blender/test_extension_api_v2.py",
+    ):
+        source = (ROOT / relative).read_text(encoding="utf-8")
+        assert '"nodeforge_max_version": "0.62.2"' not in source, relative

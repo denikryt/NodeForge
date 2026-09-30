@@ -43,11 +43,11 @@ def build_materialized_raw_node(
     group,
     *,
     bl_idname,
-    props=None,
-    inputs=None,
-    output=None,
-    typ=None,
-    outputs=None,
+    props,
+    inputs,
+    output,
+    typ,
+    outputs,
     x=0,
     y=0,
     context="raw node",
@@ -58,8 +58,6 @@ def build_materialized_raw_node(
     non-empty lists/tuples of runtime Values for Blender multi-input fanout.
     Source AST and Compiler state never cross this backend helper boundary.
     """
-    props = dict(props or {})
-    inputs = dict(inputs or {})
     if not isinstance(bl_idname, str) or not bl_idname:
         raise CompileError(f"{context}: bl_idname must be a non-empty string")
     _validate_public_type(typ, f"{context}: typ") if typ is not None else None

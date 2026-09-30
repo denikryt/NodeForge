@@ -11,6 +11,7 @@ import ast
 from dataclasses import dataclass
 from typing import Callable
 
+from .attribute_domains import normalize_attribute_domain
 from .call_resolution import (
     AnalyzedCallOperand,
     ContextReadCallResult,
@@ -91,6 +92,7 @@ IR_CAPABLE_BUILTIN_NAMES = frozenset(
         "set_position",
         "store_named_attribute",
         "capture_attribute",
+        "sample_index",
         "set_material",
         "cube",
         "join",
@@ -540,6 +542,9 @@ def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: Runtime
         operands.append(AnalyzedCallOperand(parameter_name, typ))
         return typ
 
+    if name == "sample_index":
+        return _analyze_sample_index_operation(expr, consts, add_runtime)
+
     if name == "geometry_builder":
         if expr.args or expr.keywords:
             raise CompileError("geometry_builder() accepts no arguments")
@@ -734,7 +739,10 @@ def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: Runtime
                 raise CompileError("selection= must be a Bool expression")
         domain = "POINT"
         if "domain" in kws:
-            domain = _literal_string(kws["domain"], consts, "domain=")
+            domain = normalize_attribute_domain(
+                _literal_string(kws["domain"], consts, "domain="),
+                "capture_attribute()",
+            )
         data_type = None
         if "type" in kws:
             data_type = _literal_string(kws["type"], consts, "type=")
@@ -983,6 +991,96 @@ def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: Runtime
     raise CompileError(f"Internal error: missing semantic builtin analyzer for {name}")
 
 
+
+def _analyze_sample_index_operation(
+    expr: ast.Call,
+    consts,
+    add_runtime: RuntimeAnalyzer,
+) -> BuiltinCallSemantics:
+    """Normalize ``sample_index`` into ordinary typed builtin-call semantics."""
+    kws = _kw_dict(expr)
+    _check_extra(kws, {"domain", "clamp"})
+    if len(expr.args) != 3:
+        raise CompileError(
+            'sample_index(geometry, value, index, domain="POINT", clamp=False) '
+            'expects 3 positional arguments'
+        )
+
+    domain = "POINT"
+    if "domain" in kws:
+        raw_domain = _const(
+            kws["domain"],
+            consts,
+            "sample_index() domain= must be a compile-time string",
+        )
+        if type(raw_domain) is not str:
+            raise CompileError("sample_index() domain= must be a compile-time string")
+        if raw_domain == "":
+            raise CompileError("sample_index() domain= must be a non-empty compile-time string")
+        domain = normalize_attribute_domain(raw_domain, "sample_index()")
+
+    clamp = False
+    if "clamp" in kws:
+        clamp = _const(
+            kws["clamp"],
+            consts,
+            "sample_index() clamp= must be a compile-time Bool",
+        )
+        if type(clamp) is not bool:
+            raise CompileError("sample_index() clamp= must be a compile-time Bool")
+
+    index_selection = resolve_argument_evaluation(
+        expr.args[2],
+        consts,
+        _COMPILE_TIME_OR_RUNTIME,
+    )
+    if isinstance(index_selection, CompileTimeSelection):
+        if type(index_selection.value) is not int:
+            raise CompileError("sample_index() index must be Int")
+        index_slot = ("const", normalize_int_constant(index_selection.value))
+        runtime_index = False
+    elif isinstance(index_selection, RuntimeRequired):
+        index_slot = None
+        runtime_index = True
+    else:
+        raise TypeError("mixed sample_index evaluation returned an unknown selection")
+
+    operands: list[AnalyzedCallOperand] = []
+
+    def runtime(child, parameter_name, context):
+        typ = add_runtime(child, parameter_name, context)
+        operands.append(AnalyzedCallOperand(parameter_name, typ))
+        return typ
+
+    geometry_typ = runtime(expr.args[0], "geometry", "sample_index() geometry")
+    _require_type(
+        geometry_typ,
+        {TYPE_GEOMETRY},
+        "sample_index() first argument must be Geometry",
+    )
+
+    value_typ = runtime(expr.args[1], "value", "sample_index() value")
+    _require_type(
+        value_typ,
+        {TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR},
+        "sample_index() value supports Float, Int, Bool and Vector",
+    )
+
+    if runtime_index:
+        index_typ = runtime(expr.args[2], "index", "sample_index() index")
+        _require_type(index_typ, {TYPE_INT}, "sample_index() index must be Int")
+        index_slot = ("runtime", len(operands) - 1)
+
+    return BuiltinCallSemantics(
+        tuple(operands),
+        (
+            ("index", index_slot),
+            ("domain", domain),
+            ("clamp", clamp),
+        ),
+        RuntimeCallResult(value_typ),
+    )
+
 def _vector_operation(name):
     """Return the existing Blender Vector Math operation for one helper name."""
     if name in _VECTOR_MATH_FLOAT_OUTPUT:
@@ -1061,7 +1159,10 @@ def _analyze_store_operation(
             raise CompileError("selection= must be a Bool expression")
     domain = "POINT"
     if "domain" in kws:
-        domain = _literal_string(kws["domain"], consts, "domain=")
+        domain = normalize_attribute_domain(
+            _literal_string(kws["domain"], consts, "domain="),
+            "store()",
+        )
     data_type = None
     if "type" in kws:
         data_type = _literal_string(kws["type"], consts, "type=")

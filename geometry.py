@@ -1,10 +1,12 @@
 """Generic geometry helpers such as cube(), transform(), join(), and polyline()."""
 
 from .constants import *
+from .attribute_domains import normalize_attribute_domain
 from .errors import CompileError
 from .values import Value
 from .nodes import _new_node, _value, _combine_xyz, _combine_xyz_mixed, _is_number_type
 from .consteval import _as_float_const, _is_const_number, _is_const_vector_like
+from .numeric_semantics import normalize_int_constant
 
 
 
@@ -20,11 +22,8 @@ _ALLOWED_STORE_TYPES = {
     "BOOL": "BOOLEAN",
     "BOOLEAN": "BOOLEAN",
 }
-_ALLOWED_DOMAINS = {"POINT", "EDGE", "FACE", "CORNER", "CURVE", "INSTANCE"}
-
-
 def _attribute_data_type(typ):
-    """Map one supported NodeForge field type to Store Named Attribute data type."""
+    """Map one supported NodeForge field type to Blender attribute data type."""
     return {
         TYPE_FLOAT: "FLOAT",
         TYPE_INT: "INT",
@@ -33,19 +32,9 @@ def _attribute_data_type(typ):
     }.get(typ)
 
 
-def _attribute_domain(domain, context):
-    """Return a validated Geometry Nodes attribute domain token."""
-    normalized = (domain or "POINT").upper()
-    if normalized not in _ALLOWED_DOMAINS:
-        raise CompileError(
-            f"Unsupported {context} domain. Use POINT, EDGE, FACE, CORNER, CURVE or INSTANCE"
-        )
-    return normalized
-
-
 def _store_named_attribute(
-    group, geometry_socket, attr_name, value, selection=None, domain="POINT",
-    data_type_override=None, x=0, y=0,
+    group, geometry_socket, attr_name, value, *, selection, domain,
+    data_type_override, x=0, y=0,
 ):
     """Build the physical Store Named Attribute primitive from typed backend values."""
     if data_type_override:
@@ -56,7 +45,7 @@ def _store_named_attribute(
         data_type = _attribute_data_type(value.typ)
     if data_type is None:
         raise CompileError("store(name, value) supports Float, Int, Vector and Bool values")
-    domain = _attribute_domain(domain, "store()")
+    domain = normalize_attribute_domain(domain, "store()")
     node = _new_node(group, "GeometryNodeStoreNamedAttribute", x, y)
     node.data_type = data_type
     node.domain = domain
@@ -127,11 +116,21 @@ def _grid_geometry(group, width, height, x=0, y=0):
     _set_int_like_socket(group, node.inputs[3], height, x - 220, y - 150, "grid() height", minimum=2)
     return Value(node.outputs[0], TYPE_GEOMETRY), Value(node.outputs[1], TYPE_VECTOR)
 
-def _store_named_attribute_geometry(group, geo, attr_name, value, selection=None, domain="POINT", data_type_override=None, x=0, y=0):
+def _store_named_attribute_geometry(group, geo, attr_name, value, *, selection, domain, data_type_override, x=0, y=0):
     """Expression-form Store Named Attribute returning Geometry."""
     if geo.typ != TYPE_GEOMETRY:
         raise CompileError("store_named_attribute() first argument must be Geometry")
-    socket = _store_named_attribute(group, geo.socket, attr_name, value, selection, domain, data_type_override, x, y)
+    socket = _store_named_attribute(
+        group,
+        geo.socket,
+        attr_name,
+        value,
+        selection=selection,
+        domain=domain,
+        data_type_override=data_type_override,
+        x=x,
+        y=y,
+    )
     return Value(socket, TYPE_GEOMETRY)
 
 
@@ -308,7 +307,7 @@ def _polyline_geometry(group, points, x=0, y=0):
 
 
 
-def _transform_geometry(group, geo, translation=None, scale=None, rotation=None, x=0, y=0):
+def _transform_geometry(group, geo, *, translation, scale, rotation, x=0, y=0):
     """Function `_transform_geometry` used by the NodeForge addon."""
     if geo.typ != TYPE_GEOMETRY:
         raise CompileError("transform() expects Geometry")
@@ -377,17 +376,18 @@ def _points_geometry(group, count, x=0, y=0):
     return Value(node.outputs[0], TYPE_GEOMETRY)
 
 
-def _set_position_geometry(group, geo, pos, selection=None, x=0, y=0):
+def _set_position_geometry(group, geo, pos, *, selection, x=0, y=0):
     """Expression-form set_position(geometry, position, selection=...)."""
     if geo.typ != TYPE_GEOMETRY:
         raise CompileError("set_position(geo, position) first argument must be Geometry")
     if pos.typ != TYPE_VECTOR:
         raise CompileError("set_position(geo, position) second argument must be Vector")
+    if selection is not None and (not isinstance(selection, Value) or selection.typ != TYPE_BOOL):
+        raise CompileError("set_position(..., selection=...) expects Bool selection")
     node = _new_node(group, "GeometryNodeSetPosition", x, y)
     group.links.new(geo.socket, node.inputs[0])
+    node.inputs[1].default_value = True
     if selection is not None:
-        if selection.typ != TYPE_BOOL:
-            raise CompileError("set_position(..., selection=...) expects Bool selection")
         group.links.new(selection.socket, node.inputs[1])
     group.links.new(pos.socket, node.inputs[2])
     return Value(node.outputs[0], TYPE_GEOMETRY)
@@ -395,17 +395,18 @@ def _set_position_geometry(group, geo, pos, selection=None, x=0, y=0):
 
 
 
-def _instance_on_points(group, instance, points, selection=None, scale=None, rotation=None, realize=True, x=0, y=0):
+def _instance_on_points(group, instance, points, *, selection, scale, rotation, realize, x=0, y=0):
     """Place instance geometry on point geometry and optionally realize instances."""
     if instance.typ != TYPE_GEOMETRY:
         raise CompileError("instance_on_points(instance, points) first argument must be Geometry")
     if points.typ != TYPE_GEOMETRY:
         raise CompileError("instance_on_points(instance, points) second argument must be Geometry")
+    if selection is not None and (not isinstance(selection, Value) or selection.typ != TYPE_BOOL):
+        raise CompileError("instance_on_points selection= expects Bool")
     node = _new_node(group, "GeometryNodeInstanceOnPoints", x, y)
     group.links.new(points.socket, node.inputs[0])
+    node.inputs[1].default_value = True
     if selection is not None:
-        if selection.typ != TYPE_BOOL:
-            raise CompileError("instance_on_points selection= expects Bool")
         group.links.new(selection.socket, node.inputs[1])
     group.links.new(instance.socket, node.inputs[2])
     if scale is not None:
@@ -434,10 +435,42 @@ def _instance_on_points(group, instance, points, selection=None, scale=None, rot
     return out
 
 
-__all__ = ['_as_number_value', '_set_int_like_socket', '_set_float_like_socket', '_grid_geometry', '_store_named_attribute_geometry', '_set_material_geometry', '_set_vector_socket_default', '_set_rotation_socket_default', '_euler_to_rotation', '_is_const_number', '_is_const_vector_like', '_cube_geometry', '_join_geometry', '_normalize_points', '_polyline_geometry', '_transform_geometry', '_realize_instances', '_points_geometry', '_set_position_geometry', '_instance_on_points', '_capture_attribute_geometry']
+def _sample_index_geometry(group, geometry, value, index, *, domain, clamp, x=0, y=0):
+    """Build one typed Geometry Nodes Sample Index operation from normalized inputs."""
+    if not isinstance(geometry, Value) or geometry.typ != TYPE_GEOMETRY:
+        raise CompileError("sample_index() first argument must be Geometry")
+    if not isinstance(value, Value):
+        raise CompileError("sample_index() value must be a runtime field")
+    data_type = _attribute_data_type(value.typ)
+    if data_type is None:
+        raise CompileError("sample_index() value supports Float, Int, Bool and Vector")
+    domain = normalize_attribute_domain(domain, "sample_index()")
+    if type(clamp) is not bool:
+        raise CompileError("sample_index() clamp= must be a compile-time Bool")
+    if isinstance(index, Value):
+        if index.typ != TYPE_INT:
+            raise CompileError("sample_index() index must be Int")
+        constant_index = None
+    else:
+        constant_index = normalize_int_constant(index)
+
+    node = _new_node(group, "GeometryNodeSampleIndex", x, y)
+    node.data_type = data_type
+    node.domain = domain
+    node.clamp = clamp
+    group.links.new(geometry.socket, node.inputs["Geometry"])
+    group.links.new(value.socket, node.inputs["Value"])
+    if constant_index is None:
+        group.links.new(index.socket, node.inputs["Index"])
+    else:
+        node.inputs["Index"].default_value = constant_index
+    return Value(node.outputs["Value"], value.typ)
 
 
-def _capture_attribute_geometry(group, geometry, value, selection=None, domain="POINT", data_type=None, x=0, y=0):
+__all__ = ['_as_number_value', '_set_int_like_socket', '_set_float_like_socket', '_grid_geometry', '_store_named_attribute_geometry', '_set_material_geometry', '_set_vector_socket_default', '_set_rotation_socket_default', '_euler_to_rotation', '_is_const_number', '_is_const_vector_like', '_cube_geometry', '_join_geometry', '_normalize_points', '_polyline_geometry', '_transform_geometry', '_realize_instances', '_points_geometry', '_set_position_geometry', '_instance_on_points', '_capture_attribute_geometry', '_sample_index_geometry']
+
+
+def _capture_attribute_geometry(group, geometry, value, *, selection, domain, data_type, x=0, y=0):
     """Capture a field on geometry and return (geometry, anonymous attribute field)."""
     if not isinstance(geometry, Value) or geometry.typ != TYPE_GEOMETRY:
         raise CompileError("capture_attribute() expects Geometry")
@@ -458,7 +491,7 @@ def _capture_attribute_geometry(group, geometry, value, selection=None, domain="
     socket_type = (data_type.upper() if data_type else value_type_to_socket_type.get(value.typ))
     if socket_type not in socket_type_to_value_type:
         raise CompileError("capture_attribute() supports Float, Int, Bool and Vector values")
-    domain = _attribute_domain(domain, "capture_attribute()")
+    domain = normalize_attribute_domain(domain, "capture_attribute()")
     if selection is not None and (not isinstance(selection, Value) or selection.typ != TYPE_BOOL):
         raise CompileError("capture_attribute() selection= must be a Bool expression")
     node = _new_node(group, "GeometryNodeCaptureAttribute", x, y)

@@ -353,3 +353,8 @@ lifecycle.
 - Moved the remaining Repeat-zone and Store Named Attribute physical helpers to their permanent backend owners, reduced builtin registration to declarative namespace inventory, and removed obsolete legacy structural/backend compatibility containers and retry sentinels.
 - Removed the unsupported `nodeforge.math` Mandelbrot v1 hybrid artifact and coordinated Math/L-System package compatibility with the legacy-free core. Persisted Blender-data compatibility and fail-closed v1 package-layout recognition remain intact.
 - Fixed final Stage-36 backend-ownership regressions in relocated Repeat/raw-node helpers and updated Blender 5.2 regression infrastructure to exercise typed modifier inputs and Extension v2 wrapped backend failures directly.
+
+## 0.63.0
+
+- Added the first-class typed `sample_index()` core builtin for Float, Int, Bool, and Vector fields, with compile-time-or-runtime signed-32 Int indices and compile-time `domain` / `clamp` options lowered through ordinary typed Call IR to Blender Sample Index.
+- Moved the six-domain attribute vocabulary to one Blender-independent semantic authority shared by Sample Index and Store/Capture, and made audited source-language defaults frontend-owned so normalized IR is consumed strictly by lowering/helpers instead of reconstructed in the backend.

@@ -1222,6 +1222,13 @@ def test_contextual_group_semantic_route_preserves_store_set_position_and_grid_t
     check(len(grids) == 1, f"expected one Mesh Grid, got {len(grids)}")
     check(len(stores) == 2, f"expected two Store Named Attribute nodes, got {len(stores)}")
     check(len(positions) == 1, f"expected one Set Position node, got {len(positions)}")
+    for store in stores:
+        check(store.domain == "POINT", "omitted store domain did not remain POINT")
+        check(not store.inputs["Selection"].is_linked, "omitted store selection unexpectedly linked")
+        check(bool(store.inputs["Selection"].default_value) is True, "omitted store selection was not explicitly True")
+    position = positions[0]
+    check(not position.inputs["Selection"].is_linked, "omitted set_position selection unexpectedly linked")
+    check(bool(position.inputs["Selection"].default_value) is True, "omitted set_position selection was not explicitly True")
     check(grids[0].inputs["Vertices Y"].default_value == 3, "constant grid height was not written as a socket default")
     value_nodes = _nodes(group, "ShaderNodeValue") + _nodes(group, "FunctionNodeInputInt")
     check(not any(getattr(node, "label", "") in {"3", "3.0"} for node in value_nodes), "grid constant created a standalone Value node")
@@ -1417,6 +1424,20 @@ output("Geometry", geo)
     bpy.data.node_groups.remove(runtime_group)
 
 
+def test_transform_omitted_overrides_remain_explicit_semantic_omissions():
+    """Omitted transform options reach Blender as untouched native identity sockets."""
+    group = compile_group(
+        'geo = transform(cube(1.0))\noutput("Geometry", geo)',
+        "NFTest_transform_omitted_overrides",
+    )
+    nodes = _nodes(group, "GeometryNodeTransform")
+    check(len(nodes) == 1, "expected one Transform Geometry node")
+    node = nodes[0]
+    for name in ("Translation", "Rotation", "Scale"):
+        check(not node.inputs[name].is_linked, f"omitted {name} unexpectedly linked")
+    bpy.data.node_groups.remove(group)
+
+
 def test_stage28_invalid_static_mixed_options_fail_without_publishing_group():
     cases = [
         (
@@ -1441,3 +1462,17 @@ def test_stage28_invalid_static_mixed_options_fail_without_publishing_group():
         else:
             raise AssertionError(f"{name} unexpectedly compiled")
         check(bpy.data.node_groups.get(name) is None, f"failed Stage-28 compile published {name}")
+
+
+def test_set_position_omitted_selection_is_explicit_select_all():
+    group = compile_group('''
+geo = grid(2, 2)
+geo = set_position(geo, position() + vector(0.0, 0.0, 1.0))
+output("Geometry", geo)
+''', "NFTest_set_position_selection_default")
+    nodes = [node for node in group.nodes if node.bl_idname == "GeometryNodeSetPosition"]
+    check(len(nodes) == 1, f"expected one Set Position node, got {len(nodes)}")
+    selection = nodes[0].inputs.get("Selection")
+    check(selection is not None, "Set Position Selection input missing")
+    check(not selection.is_linked, "omitted Set Position selection unexpectedly linked")
+    check(bool(selection.default_value) is True, "omitted Set Position selection is not explicitly True")

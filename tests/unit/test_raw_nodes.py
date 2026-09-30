@@ -86,3 +86,49 @@ def test_raw_node_backend_module_has_no_source_ast_adapter():
     assert not hasattr(raw_nodes, "compile_call")
     assert not hasattr(raw_nodes, "_parse_node_call")
     assert not hasattr(raw_nodes, "build_raw_node")
+
+
+def test_raw_node_semantics_publish_complete_normalized_metadata_record():
+    """Omitted raw-node collections become explicit normalized state before semantic lowering."""
+    expr = ast.parse('node("ShaderNodeValue", output="Value", typ=Float)', mode="eval").body
+    result = analyze_builtin_call("node", expr, {}, _runtime_type)
+    options = dict(result.options)
+    assert tuple(options) == (
+        "bl_idname",
+        "props",
+        "inputs",
+        "raw_output_mode",
+        "output",
+        "typ",
+        "outputs",
+    )
+    assert options["props"] == ()
+    assert options["inputs"] == ()
+    assert options["raw_output_mode"] == "SINGLE_OUTPUT"
+    assert options["output"] == "Value"
+    assert options["typ"] is TYPE_FLOAT
+    assert options["outputs"] is None
+
+
+def test_raw_backend_helper_requires_complete_normalized_metadata_arguments():
+    """Backend raw-node construction cannot recreate omitted source metadata containers."""
+    from NodeForge.builtins.raw_nodes import build_materialized_raw_node
+
+    with pytest.raises(TypeError, match="props"):
+        build_materialized_raw_node(
+            object(),
+            bl_idname="ShaderNodeValue",
+            inputs={},
+            output="Value",
+            typ=TYPE_FLOAT,
+            outputs=None,
+        )
+    with pytest.raises(TypeError, match="inputs"):
+        build_materialized_raw_node(
+            object(),
+            bl_idname="ShaderNodeValue",
+            props={},
+            output="Value",
+            typ=TYPE_FLOAT,
+            outputs=None,
+        )

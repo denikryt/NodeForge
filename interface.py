@@ -411,7 +411,7 @@ def _create_group_input_socket(
     group_input,
     display_name: str,
     typ: NFType,
-    default=None,
+    default,
     *,
     declaration_id: InputDeclarationId | None = None,
 ):
@@ -495,7 +495,7 @@ def interface_item_for_group_input_value(group, group_input, value):
     return matches[0] if len(matches) == 1 else None
 
 
-def _create_interface_panel(group, sockets, name, *, collapsed=False):
+def _create_interface_panel(group, sockets, name, *, collapsed):
     """Create one root native interface panel and move validated input sockets into it."""
     sockets = list(sockets)
     if not sockets:

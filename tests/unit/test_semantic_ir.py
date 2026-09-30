@@ -4,7 +4,7 @@ import ast
 import dataclasses
 import sys
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 
@@ -22,6 +22,8 @@ from NodeForge.constants import (
     TYPE_VECTOR,
 )
 from NodeForge.errors import CompileError
+from NodeForge import blender_ir_lowering, geometry as geometry_backend
+from NodeForge.values import Value
 from NodeForge.group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
 from NodeForge.compiler_identities import BindingId, CallSiteId, local_function_id
 from NodeForge.semantic_ir import (
@@ -108,7 +110,7 @@ def _environment(*, bindings=None, consts=None, labels=None, backend_helpers=(),
     Object-focused frontend tests opt into the same persistent registry that
     ``lower_basic_body()`` owns.
     """
-    from types import MappingProxyType
+    from types import MappingProxyType, SimpleNamespace
 
     semantic_constants, const_eval_values = build_semantic_constant_snapshot(CompileTimeSnapshot(consts or {}))
     runtime_bindings = {
@@ -533,7 +535,7 @@ def test_ir_operations_store_no_ast_or_backend_objects():
 
 
 def test_ir_emitter_consumes_analyzed_operation_facts_without_renormalizing_ast():
-    from types import MappingProxyType
+    from types import MappingProxyType, SimpleNamespace
     from NodeForge.semantic_analysis import ExpressionAnalysis, ExpressionFact
 
     expr = _expr("a < b")
@@ -547,7 +549,7 @@ def test_ir_emitter_consumes_analyzed_operation_facts_without_renormalizing_ast(
 
 
 def test_ir_emitter_rejects_invalid_analysis_root_and_compare_fact_shape():
-    from types import MappingProxyType
+    from types import MappingProxyType, SimpleNamespace
     from NodeForge.semantic_analysis import ExpressionAnalysis, ExpressionFact
 
     expr = _expr("a < b")
@@ -648,7 +650,7 @@ def test_repeat_states_preserve_tuple_order_as_the_single_ordering_authority():
 
 def _backend_context(backend, bindings=None, group=None):
     """Build an immutable explicit backend context for unit lowering tests."""
-    from types import MappingProxyType
+    from types import MappingProxyType, SimpleNamespace
 
     return backend.BlenderIRLoweringContext(
         object() if group is None else group,
@@ -1205,6 +1207,312 @@ def test_raw_call_ir_enforces_syntax_mode_and_declared_result_cardinality():
             results=(IRValue(0, TYPE_FLOAT),),
             outputs=None,
         )
+
+
+
+
+def test_sample_index_uses_ordinary_builtin_call_ir_for_static_and_runtime_indices():
+    """Sample Index needs no feature-specific IR for either index representation."""
+    static_program = _lower(
+        'sample_index(geo, value, 3, domain="face", clamp=True)',
+        bindings={"geo": TYPE_GEOMETRY, "value": TYPE_VECTOR},
+    )
+    static_calls = _operations(static_program, IRCall)
+    assert len(static_calls) == 1
+    static_call = static_calls[0]
+    assert static_call.target.kind is IRCallableKind.BUILTIN
+    assert static_call.target.name == "sample_index"
+    assert tuple(argument.value.typ for argument in static_call.arguments) == (
+        TYPE_GEOMETRY,
+        TYPE_VECTOR,
+    )
+    assert dict(static_call.options) == {
+        "index": ("const", 3),
+        "domain": "FACE",
+        "clamp": True,
+    }
+    assert tuple(result.typ for result in static_call.results) == (TYPE_VECTOR,)
+
+    runtime_program = _lower(
+        "sample_index(geo, value, i)",
+        bindings={"geo": TYPE_GEOMETRY, "value": TYPE_INT, "i": TYPE_INT},
+    )
+    runtime_call = _operations(runtime_program, IRCall)[0]
+    assert tuple(argument.value.typ for argument in runtime_call.arguments) == (
+        TYPE_GEOMETRY,
+        TYPE_INT,
+        TYPE_INT,
+    )
+    assert dict(runtime_call.options)["index"] == ("runtime", 2)
+    assert tuple(result.typ for result in runtime_call.results) == (TYPE_INT,)
+
+    import NodeForge.semantic_ir as semantic_ir_module
+
+    assert not hasattr(semantic_ir_module, "IRSampleIndex")
+
+
+@pytest.mark.parametrize(
+    ("source", "bindings", "missing_key"),
+    [
+        ("sample_index(geo, value, 0)", {"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT}, "index"),
+        ("sample_index(geo, value, 0)", {"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT}, "domain"),
+        ("sample_index(geo, value, 0)", {"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT}, "clamp"),
+        ('capture_attribute(geo, value)', {"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT}, "domain"),
+        ('capture_attribute(geo, value)', {"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT}, "data_type"),
+        ('store_named_attribute(geo, "name", value)', {"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT}, "domain"),
+        ('store_named_attribute(geo, "name", value)', {"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT}, "data_type"),
+        ("transform(geo)", {"geo": TYPE_GEOMETRY}, "translation"),
+        ("transform(geo)", {"geo": TYPE_GEOMETRY}, "scale"),
+        ("transform(geo)", {"geo": TYPE_GEOMETRY}, "rotation"),
+        ("instance_on_points(instance, points)", {"instance": TYPE_GEOMETRY, "points": TYPE_GEOMETRY}, "scale"),
+        ("instance_on_points(instance, points)", {"instance": TYPE_GEOMETRY, "points": TYPE_GEOMETRY}, "rotation"),
+        ("instance_on_points(instance, points)", {"instance": TYPE_GEOMETRY, "points": TYPE_GEOMETRY}, "realize"),
+        ('node("ShaderNodeValue", output="Value", typ=Float)', {}, "bl_idname"),
+        ('node("ShaderNodeValue", output="Value", typ=Float)', {}, "props"),
+        ('node("ShaderNodeValue", output="Value", typ=Float)', {}, "inputs"),
+        ('node("ShaderNodeValue", output="Value", typ=Float)', {}, "outputs"),
+        ("cube()", {}, "size"),
+    ],
+)
+def test_builtin_backend_rejects_missing_guaranteed_normalized_option(source, bindings, missing_key):
+    """Blender lowering never reconstructs source defaults for guaranteed IR options."""
+    call = _operations(_lower(source, bindings=bindings), IRCall)[0]
+    bad = dataclasses.replace(
+        call,
+        options=tuple((name, value) for name, value in call.options if name != missing_key),
+    )
+    operands = [Value(object(), argument.value.typ) for argument in bad.arguments]
+    with pytest.raises(KeyError, match=missing_key):
+        blender_ir_lowering._lower_builtin_call(SimpleNamespace(group=object()), bad, operands, 0, 0)
+
+
+def test_builtin_backend_consumes_explicit_none_and_frontend_defaults_without_reconstructing_them(monkeypatch):
+    """Explicit omission/default values cross IR lowering unchanged and by required key."""
+    captures = {}
+
+    def fake_transform(group, geo, *, translation, scale, rotation, x, y):
+        captures["transform"] = (translation, scale, rotation)
+        return Value(object(), TYPE_GEOMETRY)
+
+    def fake_instances(group, instance, points, *, selection, scale, rotation, realize, x, y):
+        captures["instances"] = (selection, scale, rotation, realize)
+        return Value(object(), TYPE_GEOMETRY)
+
+    def fake_capture(group, geometry, value, *, selection, domain, data_type, x, y):
+        captures["capture"] = (selection, domain, data_type)
+        return (Value(object(), TYPE_GEOMETRY), Value(object(), value.typ))
+
+    monkeypatch.setattr(blender_ir_lowering, "_transform_geometry", fake_transform)
+    monkeypatch.setattr(blender_ir_lowering, "_instance_on_points", fake_instances)
+    monkeypatch.setattr(blender_ir_lowering, "_capture_attribute_geometry", fake_capture)
+
+    for source, bindings in (
+        ("transform(geo)", {"geo": TYPE_GEOMETRY}),
+        ("instance_on_points(instance, points)", {"instance": TYPE_GEOMETRY, "points": TYPE_GEOMETRY}),
+        ("capture_attribute(geo, value)", {"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT}),
+    ):
+        call = _operations(_lower(source, bindings=bindings), IRCall)[0]
+        operands = [Value(object(), argument.value.typ) for argument in call.arguments]
+        blender_ir_lowering._lower_builtin_call(SimpleNamespace(group=object()), call, operands, 0, 0)
+
+    assert captures["transform"] == (None, None, None)
+    assert captures["instances"] == (None, None, None, True)
+    assert captures["capture"] == (None, "POINT", None)
+
+
+def test_sample_index_backend_result_parity_is_owned_by_generic_call_storage():
+    """Sample Index relies on the ordinary call-result arity/type authority."""
+    call = _operations(
+        _lower("sample_index(geo, value, 0)", bindings={"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT}),
+        IRCall,
+    )[0]
+    materialized = {}
+    expected = Value(object(), TYPE_FLOAT)
+    blender_ir_lowering._store_call_results(materialized, call, expected)
+    assert materialized[call.results[0].id] is expected
+
+    with pytest.raises(CompileError, match="expected type"):
+        blender_ir_lowering._store_call_results({}, call, Value(object(), TYPE_INT))
+    with pytest.raises(CompileError, match="produced 2 values for 1 results"):
+        blender_ir_lowering._store_call_results(
+            {}, call, (Value(object(), TYPE_FLOAT), Value(object(), TYPE_FLOAT))
+        )
+
+
+class _SampleSocket:
+    """Minimal named Sample Index socket for helper-boundary unit coverage."""
+
+    def __init__(self, name):
+        self.name = name
+        self.default_value = None
+
+
+class _SampleNode:
+    """Sample Index stand-in that exposes dynamic sockets only after data_type is set."""
+
+    def __init__(self):
+        self._data_type = None
+        self.domain = None
+        self.clamp = None
+        self._inputs = {name: _SampleSocket(name) for name in ("Geometry", "Value", "Index")}
+        self.outputs = {"Value": _SampleSocket("Value")}
+
+    @property
+    def data_type(self):
+        return self._data_type
+
+    @data_type.setter
+    def data_type(self, value):
+        self._data_type = value
+
+    @property
+    def inputs(self):
+        if self._data_type is None:
+            raise AssertionError("Sample Index sockets accessed before data_type")
+        return self._inputs
+
+
+class _SampleLinks(list):
+    """Record links made by the Sample Index helper."""
+
+    def new(self, source, target):
+        self.append((source, target))
+
+
+@pytest.mark.parametrize(
+    ("value_type", "data_type"),
+    [
+        (TYPE_FLOAT, "FLOAT"),
+        (TYPE_INT, "INT"),
+        (TYPE_BOOL, "BOOLEAN"),
+        (TYPE_VECTOR, "FLOAT_VECTOR"),
+    ],
+)
+def test_sample_index_backend_helper_realizes_typed_constant_index_without_new_semantics(
+    monkeypatch, value_type, data_type
+):
+    """Physical realization consumes frontend facts and keeps result type frontend-owned."""
+    node = _SampleNode()
+    created = []
+
+    def new_node(group, bl_idname, x, y):
+        created.append((group, bl_idname, x, y))
+        return node
+
+    monkeypatch.setattr(geometry_backend, "_new_node", new_node)
+    group = SimpleNamespace(links=_SampleLinks())
+    geometry = Value(object(), TYPE_GEOMETRY)
+    value = Value(object(), value_type)
+    result = geometry_backend._sample_index_geometry(
+        group,
+        geometry,
+        value,
+        2147483647,
+        domain="face",
+        clamp=True,
+    )
+
+    assert created and created[0][1] == "GeometryNodeSampleIndex"
+    assert node.data_type == data_type
+    assert node.domain == "FACE"
+    assert node.clamp is True
+    assert node.inputs["Index"].default_value == 2147483647
+    assert result.socket is node.outputs["Value"]
+    assert result.typ is value_type
+    assert (geometry.socket, node.inputs["Geometry"]) in group.links
+    assert (value.socket, node.inputs["Value"]) in group.links
+
+
+def test_sample_index_backend_helper_links_runtime_int_index(monkeypatch):
+    """Runtime Int is linked directly without a cast or constant fallback."""
+    node = _SampleNode()
+    monkeypatch.setattr(geometry_backend, "_new_node", lambda *_args: node)
+    group = SimpleNamespace(links=_SampleLinks())
+    runtime_index = Value(object(), TYPE_INT)
+    geometry_backend._sample_index_geometry(
+        group,
+        Value(object(), TYPE_GEOMETRY),
+        Value(object(), TYPE_FLOAT),
+        runtime_index,
+        domain="POINT",
+        clamp=False,
+    )
+    assert (runtime_index.socket, node.inputs["Index"]) in group.links
+    assert node.inputs["Index"].default_value is None
+
+
+@pytest.mark.parametrize(
+    ("value_type", "index", "domain", "clamp", "message"),
+    [
+        (TYPE_OBJECT, 0, "POINT", False, "value supports Float, Int, Bool and Vector"),
+        (TYPE_FLOAT, True, "POINT", False, "signed 32-bit"),
+        (TYPE_FLOAT, 2147483648, "POINT", False, "signed 32-bit"),
+        (TYPE_FLOAT, Value(object(), TYPE_FLOAT), "POINT", False, "index must be Int"),
+        (TYPE_FLOAT, 0, "", False, "Unsupported sample_index"),
+        (TYPE_FLOAT, 0, "POINT", 1, "clamp= must be a compile-time Bool"),
+    ],
+)
+def test_sample_index_backend_helper_rejects_malformed_inputs_before_node_creation(
+    monkeypatch, value_type, index, domain, clamp, message
+):
+    """The nearest backend boundary rejects malformed internal state before graph mutation."""
+    monkeypatch.setattr(
+        geometry_backend,
+        "_new_node",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("node creation must not run")),
+    )
+    with pytest.raises(CompileError, match=message):
+        geometry_backend._sample_index_geometry(
+            SimpleNamespace(links=_SampleLinks()),
+            Value(object(), TYPE_GEOMETRY),
+            Value(object(), value_type),
+            index,
+            domain=domain,
+            clamp=clamp,
+        )
+
+
+def test_sample_index_ir_rejects_unsupported_value_before_ir_emission():
+    """Unsupported sampled types never produce a backend-facing Sample Index IR call."""
+    with pytest.raises(CompileError, match="value supports Float, Int, Bool and Vector"):
+        _lower(
+            "sample_index(geo, value, 0)",
+            bindings={"geo": TYPE_GEOMETRY, "value": TYPE_OBJECT},
+        )
+
+
+def test_raw_node_semantic_lowering_requires_normalized_output_mode_key():
+    """Missing raw output mode is malformed normalized semantics, not source omission."""
+    expr = _expr('node("ShaderNodeValue", output="Value", typ=Float)')
+    analysis = analyze_expression(expr, _environment())
+    fact = analysis.facts[expr]
+    call = fact.analyzed_call
+    assert call is not None
+    assert dict(call.options)["raw_output_mode"] == "SINGLE_OUTPUT"
+
+    bad_call = dataclasses.replace(
+        call,
+        options=tuple((key, value) for key, value in call.options if key != "raw_output_mode"),
+    )
+    facts = dict(analysis.facts)
+    facts[expr] = dataclasses.replace(fact, analyzed_call=bad_call)
+    bad_analysis = dataclasses.replace(analysis, facts=MappingProxyType(facts))
+    with pytest.raises(KeyError, match="raw_output_mode"):
+        lower_analyzed_expression(expr, bad_analysis)
+
+
+def test_raw_node_semantic_lowering_maps_both_explicit_output_modes():
+    """The strict normalized key still maps to the two established IR enums."""
+    single = _operations(
+        _lower('node("ShaderNodeValue", output="Value", typ=Float)'),
+        IRCall,
+    )[0]
+    named = _operations(
+        _lower('node("ShaderNodeSeparateXYZ", outputs={"X": Float})'),
+        IRCall,
+    )[0]
+    assert single.raw_output_mode is IRRawNodeOutputMode.SINGLE_OUTPUT
+    assert named.raw_output_mode is IRRawNodeOutputMode.NAMED_OUTPUTS
 
 
 def test_call_ir_all_analyzed_runtime_operand_and_result_types_are_nftype():

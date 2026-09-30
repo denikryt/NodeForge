@@ -14,7 +14,11 @@ from NodeForge.compiler_identities import InputDeclarationId
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
 from NodeForge import interface, update
-from NodeForge.builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
+from NodeForge.builtin_call_semantics import (
+    INPUT_DECLARATION_BUILTIN_NAMES,
+    IR_CAPABLE_BUILTIN_NAMES,
+    analyze_input_declaration_call,
+)
 from NodeForge.call_resolution import CallableEnvironment
 from NodeForge.semantic_body import lower_basic_body
 from NodeForge.semantic_ir import IRIf, IRInputDeclaration
@@ -184,6 +188,33 @@ def test_legacy_live_state_migrates_only_when_replacement_correspondence_is_unam
     with pytest.raises(CompileError, match="correspondence is ambiguous"):
         update._validate_group_external_state_for_replacement(ambiguous, _state_for(reference))
 
+
+
+def test_input_frontend_owns_existing_public_defaults_and_interface_helper_requires_explicit_default():
+    """Input omission is normalized before the physical interface helper is called."""
+    cases = {
+        'input_float("X")': 0.0,
+        'input_int("X")': 0,
+        'input_bool("X")': False,
+        'input_vector("X")': (0.0, 0.0, 0.0),
+        'input_string("X")': "",
+        'input_geometry("X")': None,
+        'input_material("X")': None,
+        'input_object("X")': None,
+        'input_bundle("X")': None,
+    }
+    for source, expected in cases.items():
+        expr = ast.parse(source, mode="eval").body
+        assert analyze_input_declaration_call(expr, {}).default == expected
+
+    with pytest.raises(TypeError, match="default"):
+        interface._create_group_input_socket(object(), object(), "X", NFType.FLOAT)
+
+
+def test_panel_interface_helper_requires_explicit_collapsed_state():
+    """Physical panel creation cannot reconstruct the source default for collapsed=."""
+    with pytest.raises(TypeError, match="collapsed"):
+        interface._create_interface_panel(object(), (), "P")
 
 def _control_flow_declaration_keys(source):
     """Return deterministic declaration stable keys from one pure root-body analysis."""

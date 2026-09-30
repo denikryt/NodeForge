@@ -12,13 +12,13 @@ from NodeForge.builtin_call_semantics import (
     analyze_builtin_call,
     analyze_input_declaration_call,
 )
-from NodeForge.builtins.registry import CALLABLE_BUILTIN_NAMES
+from NodeForge.builtins.registry import BUILTIN_NAMES, CALLABLE_BUILTIN_NAMES
 from NodeForge.call_resolution import (
     ContextReadCallResult, NamedOutputsCallResult, ProjectedCallResult, RuntimeCallResult, TupleCallResult,
 )
 from NodeForge.constants import (
     TYPE_BOOL, TYPE_BUNDLE, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_MATERIAL,
-    TYPE_STRING, TYPE_VECTOR,
+    TYPE_OBJECT, TYPE_ROTATION, TYPE_STRING, TYPE_VECTOR,
 )
 from NodeForge.errors import CompileError
 from NodeForge.group_context import GroupContextSlot
@@ -49,8 +49,395 @@ def _analyze(name, source, types=None, consts=None):
 def test_every_callable_builtin_is_explicitly_ir_capable_or_input_declaration():
     assert IR_CAPABLE_BUILTIN_NAMES.isdisjoint(INPUT_DECLARATION_BUILTIN_NAMES)
     assert IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES == frozenset(CALLABLE_BUILTIN_NAMES)
-    assert {"grid", "grid_uv"} <= IR_CAPABLE_BUILTIN_NAMES
+    assert {"grid", "grid_uv", "sample_index"} <= IR_CAPABLE_BUILTIN_NAMES
+    assert "sample_index" in CALLABLE_BUILTIN_NAMES
+    assert "sample_index" in BUILTIN_NAMES
     assert {"input_float", "input_bundle"} <= INPUT_DECLARATION_BUILTIN_NAMES
+
+
+def test_unknown_name_does_not_become_a_core_builtin_when_sample_index_is_registered():
+    """Stage 37 extends the existing inventory without widening builtin resolution."""
+    unknown = "definitely_not_a_nodeforge_builtin"
+    assert unknown not in IR_CAPABLE_BUILTIN_NAMES
+    assert unknown not in CALLABLE_BUILTIN_NAMES
+    assert unknown not in BUILTIN_NAMES
+    with pytest.raises(KeyError, match=unknown):
+        analyze_builtin_call(unknown, _call(f"{unknown}()"), {}, lambda *_args: TYPE_FLOAT)
+
+
+def test_sample_index_static_index_normalizes_options_before_runtime_operands():
+    """A compile-time Int index stays a static option and preserves value type."""
+    analyzed = _analyze(
+        "sample_index",
+        'sample_index(geo, value, 3, domain="face", clamp=True)',
+        types={"geo": TYPE_GEOMETRY, "value": TYPE_VECTOR},
+    )
+    assert tuple((operand.parameter_name, operand.typ) for operand in analyzed.operands) == (
+        ("geometry", TYPE_GEOMETRY),
+        ("value", TYPE_VECTOR),
+    )
+    assert dict(analyzed.options) == {
+        "index": ("const", 3),
+        "domain": "FACE",
+        "clamp": True,
+    }
+    assert isinstance(analyzed.result, RuntimeCallResult)
+    assert analyzed.result.typ is TYPE_VECTOR
+
+
+def test_sample_index_runtime_index_is_third_runtime_operand():
+    """Only CTFE unavailability selects a typed runtime Int index."""
+    analyzed = _analyze(
+        "sample_index",
+        "sample_index(geo, value, i)",
+        types={"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT, "i": TYPE_INT},
+    )
+    assert tuple((operand.parameter_name, operand.typ) for operand in analyzed.operands) == (
+        ("geometry", TYPE_GEOMETRY),
+        ("value", TYPE_FLOAT),
+        ("index", TYPE_INT),
+    )
+    assert dict(analyzed.options) == {
+        "index": ("runtime", 2),
+        "domain": "POINT",
+        "clamp": False,
+    }
+    assert analyzed.result.typ is TYPE_FLOAT
+
+
+@pytest.mark.parametrize("value_type", [TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR])
+def test_sample_index_preserves_each_supported_sampled_value_type(value_type):
+    """The semantic result type is exactly the sampled field type."""
+    analyzed = _analyze(
+        "sample_index",
+        "sample_index(geo, value, 0)",
+        types={"geo": TYPE_GEOMETRY, "value": value_type},
+    )
+    assert analyzed.result.typ is value_type
+
+
+@pytest.mark.parametrize(
+    "value_type",
+    [TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING, TYPE_BUNDLE, TYPE_GEOMETRY, TYPE_ROTATION],
+)
+def test_sample_index_rejects_unsupported_sampled_value_types_before_backend(value_type):
+    """Stage 37 does not widen Sample Index beyond the core attribute-field vocabulary."""
+    with pytest.raises(CompileError, match="value supports Float, Int, Bool and Vector"):
+        _analyze(
+            "sample_index",
+            "sample_index(geo, value, 0)",
+            types={"geo": TYPE_GEOMETRY, "value": value_type},
+        )
+
+
+@pytest.mark.parametrize("source", ["True", "3.0", '"3"'])
+def test_sample_index_rejects_non_int_compile_time_indices(source):
+    """Compile-time index acceptance uses exact Int identity rather than coercion."""
+    with pytest.raises(CompileError, match=r"sample_index\(\) index must be Int"):
+        _analyze(
+            "sample_index",
+            f"sample_index(geo, value, {source})",
+            types={"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT},
+        )
+
+
+@pytest.mark.parametrize("index", [-2147483648, -1, 0, 2147483647])
+def test_sample_index_accepts_signed32_compile_time_index_boundaries(index):
+    """Static Sample Index shares the canonical NodeForge signed-32 Int domain."""
+    analyzed = _analyze(
+        "sample_index",
+        f"sample_index(geo, value, {index})",
+        types={"geo": TYPE_GEOMETRY, "value": TYPE_INT},
+    )
+    assert dict(analyzed.options)["index"] == ("const", index)
+
+
+@pytest.mark.parametrize("index", [-2147483649, 2147483648])
+def test_sample_index_rejects_compile_time_index_outside_signed32_domain(index):
+    """Global Int validation rejects out-of-range indices before runtime analysis."""
+    calls = []
+
+    def add_runtime(node, parameter_name, context):
+        calls.append((parameter_name, context))
+        return TYPE_GEOMETRY
+
+    with pytest.raises(CompileError, match="signed 32-bit range"):
+        analyze_builtin_call(
+            "sample_index",
+            _call(f"sample_index(geo, value, {index})"),
+            {},
+            add_runtime,
+        )
+    assert calls == []
+
+
+@pytest.mark.parametrize("index_type", [TYPE_FLOAT, TYPE_BOOL, TYPE_VECTOR])
+def test_sample_index_rejects_non_int_runtime_index(index_type):
+    """Runtime representation availability never weakens the Int type contract."""
+    with pytest.raises(CompileError, match=r"sample_index\(\) index must be Int"):
+        _analyze(
+            "sample_index",
+            "sample_index(geo, value, i)",
+            types={"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT, "i": index_type},
+        )
+
+
+@pytest.mark.parametrize("domain", ["POINT", "edge", "Face", "corner", "CURVE", "instance"])
+def test_sample_index_accepts_and_canonicalizes_all_current_domains(domain):
+    """Sample Index consumes the shared six-domain NodeForge vocabulary."""
+    analyzed = _analyze(
+        "sample_index",
+        f'sample_index(geo, value, 0, domain="{domain}")',
+        types={"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT},
+    )
+    assert dict(analyzed.options)["domain"] == domain.upper()
+
+
+@pytest.mark.parametrize(
+    ("source", "message"),
+    [
+        ('sample_index(geo, value, 0, domain="")', "domain= must be a non-empty compile-time string"),
+        ('sample_index(geo, value, 0, domain="LAYER")', "Unsupported sample_index\\(\\) domain"),
+        ("sample_index(geo, value, 0, domain=1)", "domain= must be a compile-time string"),
+        ("sample_index(geo, value, 0, domain=runtime_domain)", "domain= must be a compile-time string"),
+    ],
+)
+def test_sample_index_rejects_invalid_or_runtime_domain_before_runtime_operands(source, message):
+    """Static domain failures do not acquire geometry/value runtime operands."""
+    calls = []
+
+    def add_runtime(node, parameter_name, context):
+        calls.append((parameter_name, context))
+        return TYPE_STRING
+
+    with pytest.raises(CompileError, match=message):
+        analyze_builtin_call("sample_index", _call(source), {}, add_runtime)
+    assert calls == []
+
+
+@pytest.mark.parametrize("clamp", ["True", "False"])
+def test_sample_index_accepts_compile_time_bool_clamp(clamp):
+    """Clamp is normalized to an explicit exact Bool option."""
+    analyzed = _analyze(
+        "sample_index",
+        f"sample_index(geo, value, 0, clamp={clamp})",
+        types={"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT},
+    )
+    assert dict(analyzed.options)["clamp"] is (clamp == "True")
+
+
+@pytest.mark.parametrize("source", ["0", "1", "1.0", '"true"', "runtime_clamp"])
+def test_sample_index_rejects_non_bool_or_runtime_clamp_before_runtime_operands(source):
+    """Clamp is compile-time-only and does not use Python truthiness coercion."""
+    calls = []
+
+    def add_runtime(node, parameter_name, context):
+        calls.append((parameter_name, context))
+        return TYPE_BOOL
+
+    with pytest.raises(CompileError, match="clamp= must be a compile-time Bool"):
+        analyze_builtin_call(
+            "sample_index",
+            _call(f"sample_index(geo, value, 0, clamp={source})"),
+            {},
+            add_runtime,
+        )
+    assert calls == []
+
+
+def test_sample_index_static_prefix_precedes_all_runtime_operand_analysis():
+    """A deterministic static error cannot trigger arbitrary runtime operand traversal."""
+    calls = []
+
+    def add_runtime(node, parameter_name, context):
+        calls.append((ast.unparse(node), parameter_name, context))
+        raise AssertionError("runtime analysis must not run before static validation")
+
+    with pytest.raises(CompileError, match="clamp= must be a compile-time Bool"):
+        analyze_builtin_call(
+            "sample_index",
+            _call("sample_index(extension_geometry(), value, i, clamp=1)"),
+            {},
+            add_runtime,
+        )
+    assert calls == []
+
+
+def test_sample_index_hard_ctfe_index_error_propagates_without_runtime_fallback():
+    """A proven semantic error is not reinterpreted as runtime-index unavailability."""
+    calls = []
+
+    def add_runtime(node, parameter_name, context):
+        calls.append((ast.unparse(node), parameter_name, context))
+        return TYPE_INT
+
+    with pytest.raises(CompileError, match="not expects Bool"):
+        analyze_builtin_call(
+            "sample_index",
+            _call("sample_index(geo, value, not 1)"),
+            {},
+            add_runtime,
+        )
+    assert calls == []
+
+
+def test_sample_index_runtime_index_analysis_occurs_after_geometry_and_value():
+    """Once static validation succeeds, runtime acquisition follows the documented order."""
+    calls = []
+    types = {"geo": TYPE_GEOMETRY, "value": TYPE_BOOL, "i": TYPE_INT}
+
+    def add_runtime(node, parameter_name, context):
+        calls.append(parameter_name)
+        return types[ast.unparse(node)]
+
+    analyzed = analyze_builtin_call(
+        "sample_index",
+        _call("sample_index(geo, value, i)"),
+        {},
+        add_runtime,
+    )
+    assert calls == ["geometry", "value", "index"]
+    assert dict(analyzed.options)["index"] == ("runtime", 2)
+
+
+def test_sample_index_wrong_geometry_type_is_rejected_at_first_runtime_boundary():
+    """Geometry type validation stops before sampled value/index runtime acquisition."""
+    calls = []
+    types = {"geo": TYPE_FLOAT, "value": TYPE_FLOAT, "i": TYPE_INT}
+
+    def add_runtime(node, parameter_name, context):
+        calls.append(parameter_name)
+        return types[ast.unparse(node)]
+
+    with pytest.raises(CompileError, match="first argument must be Geometry"):
+        analyze_builtin_call("sample_index", _call("sample_index(geo, value, i)"), {}, add_runtime)
+    assert calls == ["geometry"]
+
+
+def test_sample_index_shape_and_keyword_errors_use_existing_call_contracts():
+    """Arity and keyword syntax fail before feature runtime semantics."""
+    for source in (
+        "sample_index()",
+        "sample_index(geo)",
+        "sample_index(geo, value)",
+        "sample_index(geo, value, 0, extra)",
+    ):
+        with pytest.raises(CompileError, match="expects 3 positional arguments"):
+            _analyze("sample_index", source)
+    with pytest.raises(CompileError, match="Unsupported keyword argument"):
+        _analyze("sample_index", "sample_index(geo, value, 0, foo=True)")
+    with pytest.raises(CompileError, match="Duplicate keyword argument: clamp"):
+        _analyze("sample_index", "sample_index(geo, value, 0, clamp=True, clamp=False)")
+    with pytest.raises(CompileError, match=r"\*\*kwargs are not supported"):
+        _analyze("sample_index", "sample_index(geo, value, 0, **opts)")
+
+
+def test_store_and_capture_domains_are_normalized_in_frontend_options():
+    """Store/Capture publish canonical domains before Blender lowering."""
+    store = _analyze(
+        "store_named_attribute",
+        'store_named_attribute(geo, "name", value, domain="face")',
+        types={"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT},
+    )
+    capture = _analyze(
+        "capture_attribute",
+        'capture_attribute(geo, value, domain="curve")',
+        types={"geo": TYPE_GEOMETRY, "value": TYPE_VECTOR},
+    )
+    assert dict(store.options)["domain"] == "FACE"
+    assert dict(capture.options)["domain"] == "CURVE"
+
+
+@pytest.mark.parametrize("name", ["store_named_attribute", "capture_attribute"])
+def test_store_and_capture_reject_invalid_domains_before_backend(name):
+    """The shared frontend domain authority catches unsupported values before IR/backend."""
+    source = (
+        'store_named_attribute(geo, "name", value, domain="LAYER")'
+        if name == "store_named_attribute"
+        else 'capture_attribute(geo, value, domain="LAYER")'
+    )
+    with pytest.raises(CompileError, match="Unsupported .* domain"):
+        _analyze(name, source, types={"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT})
+
+
+def test_frontend_owned_builtin_defaults_are_explicit_in_normalized_options():
+    """Audited builtin defaults/omissions are explicit before backend lowering."""
+    store = _analyze(
+        "store_named_attribute",
+        'store_named_attribute(geo, "name", value)',
+        types={"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT},
+    )
+    capture = _analyze(
+        "capture_attribute",
+        "capture_attribute(geo, value)",
+        types={"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT},
+    )
+    transform = _analyze("transform", "transform(geo)", types={"geo": TYPE_GEOMETRY})
+    instances = _analyze(
+        "instance_on_points",
+        "instance_on_points(instance, points)",
+        types={"instance": TYPE_GEOMETRY, "points": TYPE_GEOMETRY},
+    )
+    cube = _analyze("cube", "cube()")
+
+    assert {"domain": "POINT", "data_type": None}.items() <= dict(store.options).items()
+    assert {"domain": "POINT", "data_type": None}.items() <= dict(capture.options).items()
+    assert dict(transform.options) == {"translation": None, "scale": None, "rotation": None}
+    assert dict(instances.options) == {"scale": None, "rotation": None, "realize": True}
+    assert dict(cube.options) == {"size": ("const", 1.0)}
+
+
+def test_frontend_owned_selection_omission_stays_out_of_runtime_operands():
+    """Omitted selection remains operand absence rather than a synthetic Bool constant."""
+    set_position = _analyze(
+        "set_position",
+        "set_position(geo, pos)",
+        types={"geo": TYPE_GEOMETRY, "pos": TYPE_VECTOR},
+    )
+    instances = _analyze(
+        "instance_on_points",
+        "instance_on_points(instance, points)",
+        types={"instance": TYPE_GEOMETRY, "points": TYPE_GEOMETRY},
+    )
+    store = _analyze(
+        "store_named_attribute",
+        'store_named_attribute(geo, "name", value)',
+        types={"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT},
+    )
+    capture = _analyze(
+        "capture_attribute",
+        "capture_attribute(geo, value)",
+        types={"geo": TYPE_GEOMETRY, "value": TYPE_FLOAT},
+    )
+
+    assert [operand.parameter_name for operand in set_position.operands] == ["geometry", "position"]
+    assert [operand.parameter_name for operand in instances.operands] == ["instance", "points"]
+    assert [operand.parameter_name for operand in store.operands] == ["geometry", "value"]
+    assert [operand.parameter_name for operand in capture.operands] == ["geometry", "value"]
+
+
+def test_raw_node_normalized_record_contains_explicit_empty_and_inactive_metadata():
+    """Raw-node omission becomes explicit normalized metadata before semantic lowering."""
+    single = _analyze("node", 'node("ShaderNodeValue", output="Value", typ=Float)')
+    single_options = dict(single.options)
+    assert tuple(single_options) == (
+        "bl_idname", "props", "inputs", "raw_output_mode", "output", "typ", "outputs"
+    )
+    assert single_options["props"] == ()
+    assert single_options["inputs"] == ()
+    assert single_options["raw_output_mode"] == "SINGLE_OUTPUT"
+    assert single_options["output"] == "Value"
+    assert single_options["typ"] is TYPE_FLOAT
+    assert single_options["outputs"] is None
+
+    named = _analyze("node", 'node("ShaderNodeSeparateXYZ", outputs={"X": Float})')
+    named_options = dict(named.options)
+    assert named_options["props"] == ()
+    assert named_options["inputs"] == ()
+    assert named_options["raw_output_mode"] == "NAMED_OUTPUTS"
+    assert named_options["output"] is None
+    assert named_options["typ"] is None
+    assert named_options["outputs"] == (("X", TYPE_FLOAT),)
 
 
 def test_raw_output_mode_is_syntax_driven_not_cardinality_driven():
