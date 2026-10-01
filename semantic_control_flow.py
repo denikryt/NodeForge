@@ -148,6 +148,27 @@ class RuntimeIfResult:
     merged_compile_time: object
 
 
+def _repeat_merge_candidate_ids(carried_ids, true_state, false_state) -> tuple[BindingId, ...]:
+    """Return changed Repeat states followed by convergent ordinary runtime locals.
+
+    Repeat-carried identities keep their established state order. Ordinary locals
+    are eligible only when both exits still expose the same runtime identity, and
+    are ordered by compiler allocation identity rather than source spelling.
+    """
+    carried_ids = tuple(carried_ids or ())
+    carried_set = set(carried_ids)
+    changed_ids = true_state.changed_runtime_ids | false_state.changed_runtime_ids
+    true_runtime_ids = {symbol.binding_id for symbol in true_state.runtime_bindings.values()}
+    false_runtime_ids = {symbol.binding_id for symbol in false_state.runtime_bindings.values()}
+
+    changed_carried_ids = tuple(binding_id for binding_id in carried_ids if binding_id in changed_ids)
+    local_ids = sorted(
+        (changed_ids & true_runtime_ids & false_runtime_ids) - carried_set,
+        key=lambda binding_id: binding_id.local_id,
+    )
+    return changed_carried_ids + tuple(local_ids)
+
+
 def lower_runtime_if(
     stmt: ast.If,
     *,
@@ -187,6 +208,7 @@ def lower_runtime_if(
         else lower_branch((), false_state, false_compile_time, policy)
     )
 
+    repeat_candidate_ids = ()
     if policy is BranchMergePolicy.TOP_LEVEL:
         changed_ids = true_state.changed_runtime_ids & false_state.changed_runtime_ids
         if identity_assignment_merge_eligible is not None and identity_assignment_merge_eligible(true_state, false_state):
@@ -205,9 +227,10 @@ def lower_runtime_if(
         if not changed_ids:
             raise CompileError("runtime if branches must assign at least one common variable")
     else:
-        changed_ids = true_state.changed_runtime_ids | false_state.changed_runtime_ids
-        if merge_binding_ids is not None:
-            changed_ids &= set(merge_binding_ids)
+        repeat_candidate_ids = _repeat_merge_candidate_ids(
+            merge_binding_ids, true_state, false_state
+        )
+        changed_ids = set(repeat_candidate_ids)
 
     symbol_by_id = {symbol.binding_id: symbol for symbol in merge_symbols}
     by_name = {}
@@ -220,12 +243,12 @@ def lower_runtime_if(
         if merge_symbol is not None:
             by_name.setdefault(merge_symbol.source_name, binding_id)
 
-    if policy is BranchMergePolicy.REPEAT and merge_binding_ids is not None:
+    if policy is BranchMergePolicy.REPEAT:
         name_by_binding_id = {binding_id: name for name, binding_id in by_name.items()}
         ordered_names = [
             name_by_binding_id[binding_id]
-            for binding_id in merge_binding_ids
-            if binding_id in changed_ids and binding_id in name_by_binding_id
+            for binding_id in repeat_candidate_ids
+            if binding_id in name_by_binding_id
         ]
     else:
         ordered_names = sorted(by_name)

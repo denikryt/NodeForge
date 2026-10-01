@@ -447,6 +447,33 @@ class _BodySemanticState:
         self.identities.next_object_id = max(self.identities.next_object_id, snapshot.next_object_id)
 
 
+def _runtime_if_invalidated_incoming_runtime_bindings(
+    incoming_runtime_bindings: dict[str, RuntimeBindingSymbol],
+    true_state: _BodySemanticState,
+    false_state: _BodySemanticState,
+) -> tuple[tuple[str, RuntimeBindingSymbol], ...]:
+    """Return incoming ordinary runtime bindings that do not survive both exits.
+
+    Survival is an identity property: both runtime exits must still expose the
+    exact incoming ``BindingId`` under the same source lookup name. Ownership
+    changes to structural, builder, array, or extension state therefore remove
+    the stale parent runtime mapping instead of synthesizing a cross-category join.
+    """
+    invalidated = []
+    for name, incoming in incoming_runtime_bindings.items():
+        true_symbol = true_state.runtime_bindings.get(name)
+        false_symbol = false_state.runtime_bindings.get(name)
+        if (
+            true_symbol is not None
+            and false_symbol is not None
+            and true_symbol.binding_id == incoming.binding_id
+            and false_symbol.binding_id == incoming.binding_id
+        ):
+            continue
+        invalidated.append((name, incoming))
+    return tuple(invalidated)
+
+
 def _program_is_binding_identity(program: IRProgram, binding_id: BindingId) -> bool:
     """Return whether lowering *program* preserves the exact backend binding identity."""
     if len(program.operations) != 1 or not isinstance(program.operations[0], IRBinding):
@@ -584,8 +611,8 @@ def lower_basic_body(
         name: str,
         value,
     ) -> None:
-        """Publish one source-level compile-time rebind and invalidate stale extension ownership."""
-        active.extension_bindings.pop(name, None)
+        """Publish one compile-time-owned rebind after clearing stale body ownership."""
+        _clear_nonbuilder_name_ownership(active, name)
         active_compile_time.bind(name, value)
 
     def replay_compile_time_effect(
@@ -1453,6 +1480,7 @@ def lower_basic_body(
                             return True
                     return False
 
+                incoming_runtime_bindings = dict(active.runtime_bindings)
                 result = lower_runtime_if(
                     stmt,
                     base_state=active,
@@ -1499,6 +1527,20 @@ def lower_basic_body(
                 emit(result.statement)
                 active_compile_time.replace(result.merged_compile_time)
                 active.extension_bindings = merged_extension_bindings
+
+                invalidated_runtime_bindings = _runtime_if_invalidated_incoming_runtime_bindings(
+                    incoming_runtime_bindings, result.true_state, result.false_state
+                )
+                for name, incoming_symbol in invalidated_runtime_bindings:
+                    current = active.runtime_bindings.get(name)
+                    if current is None or current.binding_id != incoming_symbol.binding_id:
+                        raise CompileError(
+                            "Internal error: runtime-if parent binding changed before convergence publication"
+                        )
+                    active.runtime_bindings.pop(name)
+                    clear_binding_object(active, incoming_symbol.binding_id)
+                    active.interface_input_origins.pop(incoming_symbol.binding_id, None)
+
                 # Runtime merge publication is independent of compile-time state.
                 for merge in result.statement.merges:
                     builder_state = active.builder_states.get(merge.source_name)

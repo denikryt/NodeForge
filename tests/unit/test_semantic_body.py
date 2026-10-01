@@ -1,7 +1,7 @@
 """Pure tests for Semantic Body IR migration straight-line Semantic Body IR."""
 
 import ast
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 
@@ -14,7 +14,7 @@ from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
 from NodeForge.runtime_bindings import RuntimeBindingSymbol
 from NodeForge.semantic_values import StructuralArrayRef, StructuralRuntimeLeaf
-from NodeForge.semantic_body import lower_basic_body
+from NodeForge.semantic_body import _runtime_if_invalidated_incoming_runtime_bindings, lower_basic_body
 from NodeForge.semantic_ir import (
     IRAssign, IRArray, IRBindLeaves, IRBody, IRFinalExpression, IRIf,
     IRContextRead, IRContextWrite, IRDiscardExpression, IRInputDeclaration, IROutput, IRPanelDeclaration,
@@ -1586,3 +1586,43 @@ def test_compile_time_for_effect_replay_rejects_more_iterations_than_preprocessi
             owner_scope="scope",
             trailing_compile_time_effects=(effect,),
         )
+
+
+def test_stage38_compile_time_owned_rebind_replaces_prior_runtime_owner_for_static_consumers():
+    """A compile-time-owned source rebind owns the name instead of retaining the old runtime slot."""
+    result = _lower(
+        'x = input_int("X", default=1)\n'
+        'x = [1, 2]\n'
+        'for item in x:\n    y = item\n'
+    )
+    assert result.final_compile_time.values["x"] == [1, 2]
+
+
+def test_stage38_compile_time_owned_rebind_cannot_fall_back_to_prior_runtime_owner():
+    """A runtime consumer after a compile-time-owned rebind cannot read the stale pre-rebind socket."""
+    with pytest.raises(CompileError, match=r"output\(\) cannot output an array directly"):
+        _lower(
+            'x = input_int("X", default=1)\n'
+            'x = [1, 2]\n'
+            'output(x)\n'
+        )
+
+def test_stage38_runtime_if_survival_uses_exact_binding_identity_positive():
+    """The convergence owner keeps an incoming runtime value when both exits retain its exact BindingId."""
+    incoming = RuntimeBindingSymbol(BindingId("scope", 7), NFType.FLOAT)
+    true_state = SimpleNamespace(runtime_bindings={"value": incoming})
+    false_state = SimpleNamespace(runtime_bindings={"value": incoming})
+    assert _runtime_if_invalidated_incoming_runtime_bindings(
+        {"value": incoming}, true_state, false_state
+    ) == ()
+
+
+def test_stage38_runtime_if_survival_rejects_same_name_with_different_binding_identity():
+    """Matching source spelling cannot preserve an incoming runtime owner with a different BindingId."""
+    incoming = RuntimeBindingSymbol(BindingId("scope", 7), NFType.FLOAT)
+    replacement = RuntimeBindingSymbol(BindingId("scope", 8), NFType.FLOAT)
+    true_state = SimpleNamespace(runtime_bindings={"value": replacement})
+    false_state = SimpleNamespace(runtime_bindings={"value": incoming})
+    assert _runtime_if_invalidated_incoming_runtime_bindings(
+        {"value": incoming}, true_state, false_state
+    ) == (("value", incoming),)

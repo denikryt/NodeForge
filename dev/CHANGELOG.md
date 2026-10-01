@@ -358,3 +358,8 @@ lifecycle.
 
 - Added the first-class typed `sample_index()` core builtin for Float, Int, Bool, and Vector fields, with compile-time-or-runtime signed-32 Int indices and compile-time `domain` / `clamp` options lowered through ordinary typed Call IR to Blender Sample Index.
 - Moved the six-domain attribute vocabulary to one Blender-independent semantic authority shared by Sample Index and Store/Capture, and made audited source-language defaults frontend-owned so normalized IR is consumed strictly by lowering/helpers instead of reconstructed in the backend.
+## 0.63.1
+
+- Fixed runtime `if` convergence so incoming ordinary runtime bindings cannot survive when either branch changes source ownership, and nested `repeat_range()` conditionals can merge changed iteration-local runtime temporaries without promoting them to Repeat state.
+- Kept Stage-30 exact branch/Repeat typing intact while avoiding redundant Switches for untouched carried state and preserving deterministic merge identity/order.
+- Added focused ownership, nested-control-flow, terrain/erosion, GeometryBuilder, and persistent-extension regressions for the stabilized structured-control-flow boundary.

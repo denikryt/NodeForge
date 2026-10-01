@@ -1476,3 +1476,67 @@ output("Geometry", geo)
     check(selection is not None, "Set Position Selection input missing")
     check(not selection.is_linked, "omitted Set Position selection unexpectedly linked")
     check(bool(selection.default_value) is True, "omitted Set Position selection is not explicitly True")
+
+
+def test_stage38_terrain_erosion_repeat_local_delta_merges_without_becoming_repeat_state():
+    """Evaluate a terrain-like Repeat where only height is carried and delta converges inside the iteration."""
+    group = compile_group(
+        '''
+height = 10.0
+flag = input_bool("Flag", default=True)
+for i in repeat_range(2):
+    capacity = height * 0.1
+    if flag:
+        delta = capacity * 0.5
+    else:
+        delta = -capacity * 0.25
+    height = height + delta
+output("Geometry", point(vector(height, 0.0, 0.0)))
+''',
+        "NFTest_stage38_terrain_erosion",
+    )
+
+    repeat_outputs = _nodes(group, "GeometryNodeRepeatOutput")
+    check(len(repeat_outputs) == 1, f"expected one Repeat Output, found {len(repeat_outputs)}")
+    repeat_names = [item.name for item in repeat_outputs[0].repeat_items]
+    check("height" in repeat_names, f"height is not Repeat-carried: {repeat_names!r}")
+    check("capacity" not in repeat_names, f"capacity unexpectedly became Repeat state: {repeat_names!r}")
+    check("delta" not in repeat_names, f"delta unexpectedly became Repeat state: {repeat_names!r}")
+
+    switches = _nodes(group, "GeometryNodeSwitch")
+    check(len(switches) == 1, f"expected exactly one nested delta Switch, found {len(switches)}")
+    check(switches[0].input_type == "FLOAT", f"delta Switch type changed: {switches[0].input_type!r}")
+
+    mesh = bpy.data.meshes.new("NFTest_stage38_terrain_erosion_Mesh")
+    obj = bpy.data.objects.new("NFTest_stage38_terrain_erosion_Object", mesh)
+    bpy.context.collection.objects.link(obj)
+    modifier = obj.modifiers.new("NodeForge", "NODES")
+    modifier.node_group = group
+
+    def evaluated_x(flag_value):
+        """Evaluate the generated point position for one runtime branch selection."""
+        _set_modifier_input(modifier, group, "Flag", flag_value)
+        obj.update_tag()
+        bpy.context.view_layer.update()
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        depsgraph.update()
+        evaluated = obj.evaluated_get(depsgraph)
+        evaluated_mesh = evaluated.to_mesh()
+        try:
+            check(len(evaluated_mesh.vertices) == 1, "terrain regression must evaluate to one point")
+            return float(evaluated_mesh.vertices[0].co.x)
+        finally:
+            evaluated.to_mesh_clear()
+
+    try:
+        true_x = evaluated_x(True)
+        false_x = evaluated_x(False)
+        check(abs(true_x - 11.025) < 1e-4, f"true branch erosion result changed: {true_x!r}")
+        check(abs(false_x - 9.50625) < 1e-4, f"false branch erosion result changed: {false_x!r}")
+    finally:
+        if bpy.data.objects.get(obj.name) is obj:
+            bpy.data.objects.remove(obj, do_unlink=True)
+        if bpy.data.meshes.get(mesh.name) is mesh:
+            bpy.data.meshes.remove(mesh, do_unlink=True)
+        if bpy.data.node_groups.get(group.name) is group:
+            bpy.data.node_groups.remove(group, do_unlink=True)

@@ -795,3 +795,36 @@ def test_semantic_star_rejects_structural_array(tmp_path):
             "items = []\nitems.append(x)\nconsume_star(*items)\n",
             bindings=dict([_binding("x", 0, NFType.INT)]),
         )
+
+
+def test_stage38_runtime_to_equal_extension_ownership_rebind_clears_stale_runtime_mapping(tmp_path):
+    """Equal extension exits replace an incoming runtime owner without leaving a second runtime domain."""
+    result = _lower(
+        tmp_path,
+        'if cond:\n    y = 1\n    part = make_static(1.0)\n'
+        'else:\n    y = 2\n    part = make_static(1.0)\n'
+        'consume(part)\n',
+        bindings=dict([
+            _binding("cond", 0, NFType.BOOL),
+            _binding("part", 1, NFType.FLOAT),
+        ]),
+    )
+    assert isinstance(result.body.statements[0], IRIf)
+    assert isinstance(result.body.statements[-1], IRFinalExpression)
+
+
+def test_stage38_runtime_to_one_sided_extension_rebind_keeps_category_conflict_diagnostic(tmp_path):
+    """General runtime invalidation does not turn a one-sided extension transition into an implicit join."""
+    with pytest.raises(
+        CompileError,
+        match="runtime if branches disagree on package semantic ownership for 'part'",
+    ):
+        _lower(
+            tmp_path,
+            'if cond:\n    y = 1\n    part = make_static(1.0)\n'
+            'else:\n    y = 2\n    part = part + 1.0\n',
+            bindings=dict([
+                _binding("cond", 0, NFType.BOOL),
+                _binding("part", 1, NFType.FLOAT),
+            ]),
+        )

@@ -525,3 +525,247 @@ def test_runtime_if_result_exposes_only_authoritative_compile_time_exit():
         "false_state",
         "merged_compile_time",
     ]
+
+
+# Stage 38 — runtime-if ownership and Repeat-local merge regressions.
+
+def test_stage38_repeat_if_merges_iteration_local_created_in_both_branches():
+    """A same-identity runtime local on both Repeat branch exits receives one ordinary merge."""
+    result = _lower(
+        'height = 10.0\nflag = input_bool("Flag")\n'
+        'for i in repeat_range(2):\n'
+        '    if flag:\n        delta = 1.0\n'
+        '    else:\n        delta = 2.0\n'
+        '    height = height + delta\n'
+        'output(height)'
+    )
+    repeat = next(statement for statement in result.body.statements if isinstance(statement, IRRepeat))
+    branch = next(statement for statement in repeat.body.statements if isinstance(statement, IRIf))
+    assert [state.source_name for state in repeat.states] == ["height"]
+    assert [(merge.source_name, merge.typ) for merge in branch.merges] == [("delta", NFType.FLOAT)]
+
+
+def test_stage38_repeat_if_one_branch_local_does_not_escape_convergence():
+    """A Repeat-local runtime name missing from one exit is unavailable after the nested if."""
+    with pytest.raises(CompileError, match="Unknown name: delta"):
+        _lower(
+            'height = 10.0\nflag = input_bool("Flag")\n'
+            'for i in repeat_range(2):\n'
+            '    if flag:\n        delta = 1.0\n'
+            '    else:\n        height = height + 1.0\n'
+            '    height = height + delta\n'
+            'output(height)'
+        )
+
+
+def test_stage38_repeat_if_merges_only_changed_carried_state():
+    """Unchanged carried state does not acquire a redundant nested Switch merge."""
+    result = _lower(
+        'height = 10.0\nwater = 1.0\nflag = input_bool("Flag")\n'
+        'for i in repeat_range(2):\n'
+        '    if flag:\n        water = water + 1.0\n'
+        '    else:\n        water = water + 2.0\n'
+        '    height = height + 1.0\n'
+        'output(height)'
+    )
+    repeat = next(statement for statement in result.body.statements if isinstance(statement, IRRepeat))
+    branch = next(statement for statement in repeat.body.statements if isinstance(statement, IRIf))
+    assert [state.source_name for state in repeat.states] == ["water", "height"]
+    assert [merge.source_name for merge in branch.merges] == ["water"]
+
+
+def test_stage38_repeat_if_orders_changed_carried_before_locals_by_binding_id():
+    """Repeat merge ordering is carried-state order, then local BindingId allocation order."""
+    result = _lower(
+        'state = 0\nflag = input_bool("Flag")\n'
+        'for i in repeat_range(2):\n'
+        '    z_local = i + 1\n'
+        '    a_local = i + 2\n'
+        '    if flag:\n'
+        '        state = state + 1\n'
+        '        z_local = z_local + 1\n'
+        '        a_local = a_local + 1\n'
+        '    else:\n'
+        '        state = state + 2\n'
+        '        z_local = z_local + 2\n'
+        '        a_local = a_local + 2\n'
+        '    state = state + z_local + a_local\n'
+        'output(state)'
+    )
+    repeat = next(statement for statement in result.body.statements if isinstance(statement, IRRepeat))
+    branch = next(statement for statement in repeat.body.statements if isinstance(statement, IRIf))
+    assert [merge.source_name for merge in branch.merges] == ["state", "z_local", "a_local"]
+    local_ids = [merge.binding_id.local_id for merge in branch.merges[1:]]
+    assert local_ids == sorted(local_ids)
+
+
+@pytest.mark.parametrize(
+    "true_assignment,false_assignment",
+    [
+        ("t = [1, 2]", "t = 2"),
+        ("t = 2", "t = [1, 2]"),
+        ("t = [1, 2]", "t = [3, 4]"),
+    ],
+)
+def test_stage38_top_level_if_invalidates_stale_runtime_after_structural_rebind(
+    true_assignment, false_assignment
+):
+    """An incoming runtime BindingId cannot survive when either exit loses runtime ownership."""
+    source = (
+        't = 1\nx = 0\nflag = input_bool("Flag")\n'
+        f'if flag:\n    {true_assignment}\n    x = x + 1\n'
+        f'else:\n    {false_assignment}\n    x = x + 2\n'
+        'output(t)'
+    )
+    with pytest.raises(CompileError, match="Unknown name: t"):
+        _lower(source)
+
+
+def test_stage38_top_level_if_preserves_incoming_runtime_when_both_exits_keep_identity():
+    """An untouched incoming runtime BindingId remains available after another value merges."""
+    result = _lower(
+        't = 1\nx = 0\nflag = input_bool("Flag")\n'
+        'if flag:\n    x = x + 1\nelse:\n    x = x + 2\n'
+        'output(t)'
+    )
+    branch = next(statement for statement in result.body.statements if isinstance(statement, IRIf))
+    assert [merge.source_name for merge in branch.merges] == ["x"]
+    assert result.body.statements[-1].value.operations[0].binding_id == BindingId("scope", 0)
+
+
+def test_stage38_top_level_if_one_branch_new_runtime_local_remains_unavailable():
+    """A one-sided new runtime local is not synthesized or inherited at convergence."""
+    with pytest.raises(CompileError, match="Unknown name: y"):
+        _lower(
+            'x = 0\nflag = input_bool("Flag")\n'
+            'if flag:\n    y = 1\n    x = x + 1\n'
+            'else:\n    x = x + 2\n'
+            'output(y)'
+        )
+
+
+def test_stage38_repeat_if_invalidates_stale_iteration_local_runtime_after_structural_rebind():
+    """Repeat-local stale runtime ownership is removed by the same convergence rule as top-level if."""
+    with pytest.raises(CompileError, match="Unknown name: t"):
+        _lower(
+            'height = 0\nflag = input_bool("Flag")\n'
+            'for i in repeat_range(2):\n'
+            '    t = i + 1\n'
+            '    if flag:\n        t = [1, 2]\n'
+            '    else:\n        t = i + 2\n'
+            '    height = height + t\n'
+            'output(height)'
+        )
+
+
+def test_stage38_repeat_if_runtime_local_merge_does_not_escape_repeat_boundary():
+    """An iteration-local merge is usable in the iteration but is not published as Repeat state."""
+    with pytest.raises(CompileError, match="Unknown name: delta"):
+        _lower(
+            'height = 0.0\nflag = input_bool("Flag")\n'
+            'for i in repeat_range(2):\n'
+            '    if flag:\n        delta = 1.0\n'
+            '    else:\n        delta = 2.0\n'
+            '    height = height + delta\n'
+            'output(delta)'
+        )
+
+
+def test_stage38_nested_if_invalidation_is_visible_to_outer_convergence():
+    """Outer runtime convergence sees the already-invalidated ordinary runtime state from the inner if."""
+    with pytest.raises(CompileError, match="Unknown name: t"):
+        _lower(
+            't = 1\nx = 0\nouter = input_bool("Outer")\ninner = input_bool("Inner")\n'
+            'if outer:\n'
+            '    if inner:\n        t = [1, 2]\n        x = x + 1\n'
+            '    else:\n        t = 2\n        x = x + 2\n'
+            '    x = x + 3\n'
+            'else:\n    t = 3\n    x = x + 4\n'
+            'output(t)'
+        )
+
+
+def test_stage38_branch_local_structural_values_remain_legal_when_only_runtime_result_escapes():
+    """Structural branch locals stay branch-owned while a same-type runtime projection merges normally."""
+    result = _lower(
+        'flag = input_bool("Flag")\n'
+        'if flag:\n    values = [1.0, 2.0]\n    t = values[0]\n'
+        'else:\n    values = [3.0, 4.0]\n    t = values[0]\n'
+        'output(t)'
+    )
+    branch = next(statement for statement in result.body.statements if isinstance(statement, IRIf))
+    assert [(merge.source_name, merge.typ) for merge in branch.merges] == [("t", NFType.FLOAT)]
+
+
+def test_stage38_repeat_if_merges_existing_local_changed_on_only_one_branch():
+    """A pre-branch iteration local merges against its unchanged runtime value on the other exit."""
+    result = _lower(
+        'state = 0\nflag = input_bool("Flag")\n'
+        'for i in repeat_range(2):\n'
+        '    t = i + 1\n'
+        '    if flag:\n        t = t + 1\n'
+        '    else:\n        state = state + 1\n'
+        '    state = state + t\n'
+        'output(state)'
+    )
+    repeat = next(statement for statement in result.body.statements if isinstance(statement, IRRepeat))
+    branch = next(statement for statement in repeat.body.statements if isinstance(statement, IRIf))
+    assert [merge.source_name for merge in branch.merges] == ["state", "t"]
+
+
+def test_stage38_top_level_if_invalidates_body_owned_array_rebind():
+    """A runtime-dependent structural array exit removes the incoming ordinary runtime owner."""
+    with pytest.raises(CompileError, match="Unknown name: t"):
+        _lower(
+            't = 1\nx = 0\nflag = input_bool("Flag")\n'
+            'if flag:\n    t = [index(), index() + 1]\n    x = x + 1\n'
+            'else:\n    t = 2\n    x = x + 2\n'
+            'output(t)'
+        )
+
+
+def test_stage38_top_level_if_invalidates_fixed_structural_rebind():
+    """A tuple/named-output structural exit removes the incoming ordinary runtime owner."""
+    with pytest.raises(CompileError, match="Unknown name: t"):
+        _lower(
+            'geo = input_geometry("Geometry")\nt = 1.0\nx = 0.0\nflag = input_bool("Flag")\n'
+            'if flag:\n    t = capture_attribute(geo, 1.0)\n    x = x + 1.0\n'
+            'else:\n    t = 2.0\n    x = x + 2.0\n'
+            'output(t)'
+        )
+
+def test_stage38_nested_if_runtime_merge_is_visible_to_outer_convergence_positive():
+    """Outer runtime-if lowering consumes the already-merged ordinary runtime state from an inner if."""
+    result = _lower(
+        't = 0\nouter = input_bool("Outer")\ninner = input_bool("Inner")\n'
+        'if outer:\n'
+        '    if inner:\n        t = t + 1\n'
+        '    else:\n        t = t + 2\n'
+        'else:\n    t = t + 3\n'
+        'output(t)'
+    )
+    outer = next(statement for statement in result.body.statements if isinstance(statement, IRIf))
+    inner = next(statement for statement in outer.true_body.statements if isinstance(statement, IRIf))
+    assert [merge.binding_id for merge in inner.merges] == [BindingId("scope", 0)]
+    assert [merge.binding_id for merge in outer.merges] == [BindingId("scope", 0)]
+
+def test_stage38_object_runtime_owner_survives_when_both_exits_keep_identity_positive():
+    """Object runtime metadata remains usable when runtime-if exits retain the incoming BindingId."""
+    result = _lower(
+        'obj = input_object("Object")\nx = 0\nflag = input_bool("Flag")\n'
+        'if flag:\n    x = x + 1\nelse:\n    x = x + 2\n'
+        'output(obj.location)'
+    )
+    branch = next(statement for statement in result.body.statements if isinstance(statement, IRIf))
+    assert [merge.source_name for merge in branch.merges] == ["x"]
+
+
+def test_stage38_object_runtime_owner_metadata_is_not_usable_after_cross_category_rebind():
+    """Invalidating an Object runtime owner also prevents stale object-state/property reuse."""
+    with pytest.raises(CompileError, match="Unknown name: obj"):
+        _lower(
+            'obj = input_object("Object")\nx = 0\nflag = input_bool("Flag")\n'
+            'if flag:\n    obj = [1, 2]\n    x = x + 1\n'
+            'else:\n    x = x + 2\n'
+            'output(obj.location)'
+        )
