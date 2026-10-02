@@ -7,12 +7,6 @@
         "socket_type": "NodeSocketFloat"
       },
       {
-        "default": 0.0,
-        "in_out": "INPUT",
-        "name": "len",
-        "socket_type": "NodeSocketFloat"
-      },
-      {
         "default": 1.0,
         "in_out": "INPUT",
         "name": "A",
@@ -35,11 +29,11 @@
       {
         "from": [
           "n0",
-          "Socket_3"
+          "Socket_2"
         ],
         "to": [
           "n1",
-          "Socket_4"
+          "Socket_3"
         ]
       }
     ],

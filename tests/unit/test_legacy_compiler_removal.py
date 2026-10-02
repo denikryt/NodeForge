@@ -365,26 +365,26 @@ def test_i11_negative_lowering_does_not_reconstruct_audited_source_defaults():
 
 
 # I12 — Release-coupled package fixtures track the current public core version.
-def test_i12_positive_stage38_public_contract_reports_0631_and_compatible_fixture_ceiling():
-    """The Stage-38 patch release and synthetic package ceilings advance together."""
+def test_i12_positive_current_public_contract_reports_0640_and_compatible_fixture_ceiling():
+    """The current public core release and synthetic package ceilings advance together."""
     import NodeForge
 
-    assert NodeForge.bl_info["version"] == (0, 63, 1)
+    assert NodeForge.bl_info["version"] == (0, 64, 0)
     for relative in (
         "tests/unit/test_extension_bootstrap.py",
         "tests/unit/test_extension_packages.py",
         "tests/blender/test_extension_api_v2.py",
     ):
         source = (ROOT / relative).read_text(encoding="utf-8")
-        assert '"nodeforge_max_version": "0.63.1"' in source, relative
+        assert '"nodeforge_max_version": "0.64.0"' in source, relative
 
 
-def test_i12_negative_stage38_release_contract_does_not_retain_the_prepatch_fixture_ceiling():
-    """Release-coupled synthetic manifests do not retain the pre-Stage-38 patch ceiling."""
+def test_i12_negative_current_release_contract_does_not_retain_the_previous_fixture_ceiling():
+    """Release-coupled synthetic manifests do not retain the previous public ceiling."""
     for relative in (
         "tests/unit/test_extension_bootstrap.py",
         "tests/unit/test_extension_packages.py",
         "tests/blender/test_extension_api_v2.py",
     ):
         source = (ROOT / relative).read_text(encoding="utf-8")
-        assert '"nodeforge_max_version": "0.63.0"' not in source, relative
+        assert '"nodeforge_max_version": "0.63.1"' not in source, relative

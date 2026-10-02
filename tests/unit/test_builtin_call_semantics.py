@@ -437,7 +437,91 @@ def test_raw_node_normalized_record_contains_explicit_empty_and_inactive_metadat
     assert named_options["raw_output_mode"] == "NAMED_OUTPUTS"
     assert named_options["output"] is None
     assert named_options["typ"] is None
-    assert named_options["outputs"] == (("X", TYPE_FLOAT),)
+    assert named_options["outputs"] == (("X", "X", TYPE_FLOAT),)
+
+
+def test_raw_socket_selectors_normalize_name_position_and_contextual_identifier():
+    """Raw selector syntax becomes detached canonical data before IR/backend work."""
+    analyzed = _analyze(
+        "node",
+        'node("ShaderNodeMath", inputs={"Value": 1.0, 1: 2.0, ID("Value_002"): 3.0}, output=ID("Value"), typ=Float)',
+    )
+    options = dict(analyzed.options)
+    assert tuple(selector for selector, _spec in options["inputs"]) == (
+        "Value",
+        1,
+        ("identifier", "Value_002"),
+    )
+    assert options["output"] == ("identifier", "Value")
+
+
+def test_raw_contextual_identifier_accepts_compile_time_string_binding():
+    analyzed = _analyze(
+        "node",
+        'node("ShaderNodeValue", output=ID(socket_id), typ=Float)',
+        consts={"socket_id": "Value"},
+    )
+    assert dict(analyzed.options)["output"] == ("identifier", "Value")
+
+
+@pytest.mark.parametrize(
+    ("selector", "message"),
+    [
+        ("True", "must be a non-empty compile-time string"),
+        ("-1", "must be a non-empty compile-time string"),
+        ('""', "must be a non-empty compile-time string"),
+        ('ID("")', "must be a non-empty compile-time string"),
+        ('ID("A", "B")', "expects exactly one positional"),
+        ('ID(value="A")', "does not accept keyword"),
+    ],
+)
+def test_raw_socket_selector_rejects_invalid_static_forms(selector, message):
+    with pytest.raises(CompileError, match=message):
+        _analyze("node", f'node("ShaderNodeValue", output={selector}, typ=Float)')
+
+
+def test_raw_socket_selector_rejects_runtime_dependency_before_backend():
+    with pytest.raises(CompileError, match="must be a non-empty compile-time string"):
+        _analyze(
+            "node",
+            'node("ShaderNodeValue", output=selector, typ=Float)',
+            types={"selector": TYPE_INT},
+        )
+
+
+def test_raw_inputs_reject_exact_duplicate_normalized_selectors():
+    with pytest.raises(CompileError, match="duplicate selector"):
+        _analyze(
+            "node",
+            'node("ShaderNodeMath", inputs={ID("Value"): 1.0, ID("Value"): 2.0}, output="Value", typ=Float)',
+        )
+
+
+def test_raw_named_outputs_keep_alias_separate_from_physical_selector():
+    analyzed = _analyze(
+        "node",
+        'node("ShaderNodeSeparateXYZ", outputs={"left": (0, Float), "exact": (ID("Y"), Float), "Z": Float})',
+    )
+    assert dict(analyzed.options)["outputs"] == (
+        ("left", 0, TYPE_FLOAT),
+        ("exact", ("identifier", "Y"), TYPE_FLOAT),
+        ("Z", "Z", TYPE_FLOAT),
+    )
+    assert isinstance(analyzed.result, NamedOutputsCallResult)
+    assert analyzed.result.items == (("left", TYPE_FLOAT), ("exact", TYPE_FLOAT), ("Z", TYPE_FLOAT))
+
+
+def test_raw_named_outputs_reject_duplicate_selector_even_with_distinct_aliases():
+    with pytest.raises(CompileError, match="duplicate selector"):
+        _analyze(
+            "node",
+            'node("ShaderNodeSeparateXYZ", outputs={"left": (0, Float), "also_left": (0, Float)})',
+        )
+
+
+def test_raw_named_outputs_reject_malformed_explicit_selector_tuple():
+    with pytest.raises(CompileError, match="type token or \\(selector, TypeToken\\)"):
+        _analyze("node", 'node("ShaderNodeSeparateXYZ", outputs={"left": (0,)})')
 
 
 def test_raw_output_mode_is_syntax_driven_not_cardinality_driven():

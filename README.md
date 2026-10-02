@@ -45,6 +45,36 @@ output("Geometry", geo)
 
 The dedicated function is the more convenient form when NodeForge provides one. `node(...)` keeps the rest of Geometry Nodes available while the built-in library continues to grow.
 
+Raw `node(...)` socket selectors have three explicit forms:
+
+```python
+# Exact Blender socket.name when it is unique among addressable sockets.
+inputs={"Geometry": geo}
+
+# Zero-based ordinal among addressable sockets after props= configure the node.
+inputs={0: left, 1: right}
+
+# Low-level exact Blender socket.identifier escape hatch.
+inputs={ID("Value_001"): right}
+```
+
+Plain strings match only `socket.name`. Integer selectors address the filtered addressable sequence after unavailable and virtual/Extend sockets are excluded. `ID(...)` is contextual syntax only in a raw socket-selector position; outside those positions, `ID` follows ordinary NodeForge name rules.
+
+The same selector forms work for `output=` and for explicit named outputs, while result aliases remain source names:
+
+```python
+parts = node(
+    "ShaderNodeSeparateXYZ",
+    inputs={"Vector": position()},
+    outputs={
+        "left": (0, Float),
+        "middle": (ID("Y"), Float),
+    },
+)
+```
+
+Persistent NodeForge-declared raw socket contracts require a non-empty Blender `socket.identifier`. NodeForge stores that identifier plus the Blender socket type in raw metadata schema v2 and resolves it exactly during future cutover/rollback. A socket without that mapping identifier is rejected during preflight before links/defaults are applied. Existing unversioned saved raw-node metadata remains readable through its version-scoped unique-name compatibility path.
+
 ### Sampling a field by index
 
 `sample_index()` reads a field from geometry at an integer element index and returns the same NodeForge value type as the sampled field. It supports `Float`, `Int`, `Bool`, and `Vector` values.

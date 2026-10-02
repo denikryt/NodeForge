@@ -267,6 +267,15 @@ def _collect_external_names(node, assigned, names, extra_builtin_names=None, con
             pass
         else:
             return
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        # Direct-call names denote callables, not implicit runtime numeric
+        # inputs. Attribute calls stay on the generic traversal path so their
+        # receiver remains discoverable (for example ``obj.info()`` -> obj).
+        for arg in node.args:
+            _collect_external_names(arg, assigned, names, extra_builtin_names, consts)
+        for keyword in node.keywords:
+            _collect_external_names(keyword.value, assigned, names, extra_builtin_names, consts)
+        return
     if isinstance(node, ast.Name):
         if (
             isinstance(node.ctx, ast.Load)

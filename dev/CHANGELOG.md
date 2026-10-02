@@ -363,3 +363,10 @@ lifecycle.
 - Fixed runtime `if` convergence so incoming ordinary runtime bindings cannot survive when either branch changes source ownership, and nested `repeat_range()` conditionals can merge changed iteration-local runtime temporaries without promoting them to Repeat state.
 - Kept Stage-30 exact branch/Repeat typing intact while avoiding redundant Switches for untouched carried state and preserving deterministic merge identity/order.
 - Added focused ownership, nested-control-flow, terrain/erosion, GeometryBuilder, and persistent-extension regressions for the stabilized structured-control-flow boundary.
+
+## 0.64.0
+
+- Added stable raw-node socket addressing: exact `socket.name`, addressable ordinals after `props=` configuration, and contextual `ID("...")` selectors for exact Blender `socket.identifier`, all converging on one backend resolver.
+- Added fail-closed raw metadata schema v2 using non-empty Blender socket identifiers plus socket-type assertions; fresh identifier-less declared raw sockets are rejected instead of persisted through structural index/name guesses, while existing unversioned v1 name metadata remains version-scoped compatible data.
+- Refactored raw-node construction to resolve and preflight every declared input/output before defaults, links, results, or v2 metadata are applied, and made cutover/validation resolve v2 contracts by exact physical identifier while preserving generic handling for undeclared links.
+- Corrected implicit-input discovery so a direct `ast.Name` call callee is treated as a callable reference rather than a numeric input, while call arguments/keyword values and attribute-call receivers keep their existing traversal semantics.

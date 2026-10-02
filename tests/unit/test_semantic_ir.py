@@ -1113,12 +1113,12 @@ def test_ir_records_never_carry_mutable_lists_or_ast_backend_objects_after_compl
 
 
 
-def _raw_call(*, mode, results, outputs=None, output=None, typ=None, options=()):
+def _raw_call(*, mode, results, outputs=None, output=None, typ=None, inputs=(), options=()):
     """Construct one hand-authored raw-node IR call for invariant tests."""
     base = (
         ("bl_idname", "ShaderNodeSeparateXYZ"),
         ("props", ()),
-        ("inputs", ()),
+        ("inputs", inputs),
         ("raw_output_mode", mode.value),
         ("output", output),
         ("typ", typ),
@@ -1176,7 +1176,7 @@ def test_raw_call_ir_enforces_syntax_mode_and_declared_result_cardinality():
     named_one = _raw_call(
         mode=IRRawNodeOutputMode.NAMED_OUTPUTS,
         results=(IRValue(0, TYPE_FLOAT),),
-        outputs=(("X", TYPE_FLOAT),),
+        outputs=(("X", "X", TYPE_FLOAT),),
     )
     structural = IRNamedOutputs((("X", named_one.results[0]),))
     assert isinstance(structural, IRNamedOutputs)
@@ -1186,13 +1186,13 @@ def test_raw_call_ir_enforces_syntax_mode_and_declared_result_cardinality():
         _raw_call(
             mode=IRRawNodeOutputMode.NAMED_OUTPUTS,
             results=(IRValue(0, TYPE_FLOAT),),
-            outputs=(("X", TYPE_FLOAT), ("Y", TYPE_FLOAT)),
+            outputs=(("X", "X", TYPE_FLOAT), ("Y", "Y", TYPE_FLOAT)),
         )
-    with pytest.raises(ValueError, match="unique output names"):
+    with pytest.raises(ValueError, match="unique output aliases"):
         _raw_call(
             mode=IRRawNodeOutputMode.NAMED_OUTPUTS,
             results=(IRValue(0, TYPE_FLOAT), IRValue(1, TYPE_FLOAT)),
-            outputs=(("X", TYPE_FLOAT), ("X", TYPE_FLOAT)),
+            outputs=(("X", "X", TYPE_FLOAT), ("X", "Y", TYPE_FLOAT)),
         )
     with pytest.raises(ValueError, match="exactly one result"):
         _raw_call(
@@ -1206,6 +1206,62 @@ def test_raw_call_ir_enforces_syntax_mode_and_declared_result_cardinality():
             mode=IRRawNodeOutputMode.NAMED_OUTPUTS,
             results=(IRValue(0, TYPE_FLOAT),),
             outputs=None,
+        )
+
+
+def test_raw_call_ir_accepts_all_canonical_selector_forms():
+    call = _raw_call(
+        mode=IRRawNodeOutputMode.NAMED_OUTPUTS,
+        results=(IRValue(0, TYPE_FLOAT), IRValue(1, TYPE_FLOAT), IRValue(2, TYPE_FLOAT)),
+        outputs=(
+            ("named", "Value", TYPE_FLOAT),
+            ("positioned", 1, TYPE_FLOAT),
+            ("identified", ("identifier", "Value_002"), TYPE_FLOAT),
+        ),
+        inputs=((0, ("literal", 1.0)), (("identifier", "Value_001"), ("literal", 2.0))),
+    )
+    assert dict(call.options)["outputs"][2][1] == ("identifier", "Value_002")
+
+
+@pytest.mark.parametrize(
+    "selector",
+    ["", True, -1, ("identifier", ""), ("identifier",), ("other", "Value")],
+)
+def test_raw_call_ir_rejects_noncanonical_output_selectors(selector):
+    with pytest.raises((TypeError, ValueError)):
+        _raw_call(
+            mode=IRRawNodeOutputMode.SINGLE_OUTPUT,
+            results=(IRValue(0, TYPE_FLOAT),),
+            output=selector,
+            typ=TYPE_FLOAT,
+        )
+
+
+def test_raw_call_ir_rejects_duplicate_named_output_selectors():
+    with pytest.raises(ValueError, match="unique output selectors"):
+        _raw_call(
+            mode=IRRawNodeOutputMode.NAMED_OUTPUTS,
+            results=(IRValue(0, TYPE_FLOAT), IRValue(1, TYPE_FLOAT)),
+            outputs=(("left", 0, TYPE_FLOAT), ("also_left", 0, TYPE_FLOAT)),
+        )
+
+
+def test_raw_call_ir_rejects_noncanonical_or_duplicate_input_selectors():
+    with pytest.raises(ValueError, match="canonical socket selectors"):
+        _raw_call(
+            mode=IRRawNodeOutputMode.SINGLE_OUTPUT,
+            results=(IRValue(0, TYPE_FLOAT),),
+            output="Value",
+            typ=TYPE_FLOAT,
+            inputs=((True, ("literal", 1.0)),),
+        )
+    with pytest.raises(ValueError, match="input selectors must be unique"):
+        _raw_call(
+            mode=IRRawNodeOutputMode.SINGLE_OUTPUT,
+            results=(IRValue(0, TYPE_FLOAT),),
+            output="Value",
+            typ=TYPE_FLOAT,
+            inputs=((0, ("literal", 1.0)), (0, ("literal", 2.0))),
         )
 
 
@@ -1269,7 +1325,6 @@ def test_sample_index_uses_ordinary_builtin_call_ir_for_static_and_runtime_indic
         ("instance_on_points(instance, points)", {"instance": TYPE_GEOMETRY, "points": TYPE_GEOMETRY}, "realize"),
         ('node("ShaderNodeValue", output="Value", typ=Float)', {}, "bl_idname"),
         ('node("ShaderNodeValue", output="Value", typ=Float)', {}, "props"),
-        ('node("ShaderNodeValue", output="Value", typ=Float)', {}, "inputs"),
         ('node("ShaderNodeValue", output="Value", typ=Float)', {}, "outputs"),
         ("cube()", {}, "size"),
     ],
@@ -1284,6 +1339,16 @@ def test_builtin_backend_rejects_missing_guaranteed_normalized_option(source, bi
     operands = [Value(object(), argument.value.typ) for argument in bad.arguments]
     with pytest.raises(KeyError, match=missing_key):
         blender_ir_lowering._lower_builtin_call(SimpleNamespace(group=object()), bad, operands, 0, 0)
+
+
+def test_raw_call_ir_rejects_missing_inputs_metadata_at_ir_boundary():
+    """Raw input selector invariants are authoritative before Blender lowering."""
+    call = _operations(_lower('node("ShaderNodeValue", output="Value", typ=Float)'), IRCall)[0]
+    with pytest.raises(TypeError, match="inputs metadata must be a tuple"):
+        dataclasses.replace(
+            call,
+            options=tuple((name, value) for name, value in call.options if name != "inputs"),
+        )
 
 
 def test_builtin_backend_consumes_explicit_none_and_frontend_defaults_without_reconstructing_them(monkeypatch):

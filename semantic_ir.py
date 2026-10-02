@@ -21,6 +21,21 @@ def _is_ir_option_value(value) -> bool:
     return False
 
 
+def _is_raw_socket_selector(value) -> bool:
+    """Return whether *value* is canonical detached raw socket selector data."""
+    if isinstance(value, str):
+        return bool(value)
+    if type(value) is int:
+        return value >= 0
+    return (
+        isinstance(value, tuple)
+        and len(value) == 2
+        and value[0] == "identifier"
+        and isinstance(value[1], str)
+        and bool(value[1])
+    )
+
+
 class IRFunctionMaterializationMode(str, Enum):
     """Select physical materialization semantics for one resolved reusable call."""
 
@@ -423,12 +438,25 @@ class IRCall:
             if not isinstance(self.raw_output_mode, IRRawNodeOutputMode):
                 raise ValueError("raw node IRCall requires an explicit raw output mode")
             option_map = dict(self.options)
+            inputs = option_map.get("inputs")
+            if not isinstance(inputs, tuple):
+                raise TypeError("raw node IRCall inputs metadata must be a tuple")
+            input_selectors = []
+            for input_item in inputs:
+                if not isinstance(input_item, tuple) or len(input_item) != 2:
+                    raise TypeError("raw node IRCall inputs metadata must contain (selector, spec) pairs")
+                selector, _spec = input_item
+                if not _is_raw_socket_selector(selector):
+                    raise ValueError("raw node IRCall input selectors must be canonical socket selectors")
+                input_selectors.append(selector)
+            if len(input_selectors) != len(set(input_selectors)):
+                raise ValueError("raw node IRCall input selectors must be unique")
             if self.raw_output_mode is IRRawNodeOutputMode.SINGLE_OUTPUT:
                 if len(self.results) != 1:
                     raise ValueError("SINGLE_OUTPUT raw node IRCall requires exactly one result")
                 if option_map.get("outputs") is not None:
                     raise ValueError("SINGLE_OUTPUT raw node IRCall cannot carry named outputs")
-                if not isinstance(option_map.get("output"), str) or not option_map.get("output"):
+                if not _is_raw_socket_selector(option_map.get("output")):
                     raise ValueError("SINGLE_OUTPUT raw node IRCall requires output metadata")
                 if not isinstance(option_map.get("typ"), NFType):
                     raise TypeError("SINGLE_OUTPUT raw node IRCall requires an NFType typ option")
@@ -437,17 +465,23 @@ class IRCall:
                 if not isinstance(outputs, tuple) or not outputs:
                     raise ValueError("NAMED_OUTPUTS raw node IRCall requires named output metadata")
                 names = []
+                selectors = []
                 for output_item in outputs:
-                    if not isinstance(output_item, tuple) or len(output_item) != 2:
-                        raise TypeError("NAMED_OUTPUTS metadata must contain (name, NFType) pairs")
-                    output_name, output_type = output_item
+                    if not isinstance(output_item, tuple) or len(output_item) != 3:
+                        raise TypeError("NAMED_OUTPUTS metadata must contain (alias, selector, NFType) triples")
+                    output_name, selector, output_type = output_item
                     if not isinstance(output_name, str) or not output_name:
-                        raise ValueError("NAMED_OUTPUTS names must be non-empty strings")
+                        raise ValueError("NAMED_OUTPUTS aliases must be non-empty strings")
+                    if not _is_raw_socket_selector(selector):
+                        raise ValueError("NAMED_OUTPUTS selectors must be canonical socket selectors")
                     if not isinstance(output_type, NFType):
                         raise TypeError("NAMED_OUTPUTS types must be NFType members")
                     names.append(output_name)
+                    selectors.append(selector)
                 if len(names) != len(set(names)):
-                    raise ValueError("NAMED_OUTPUTS raw node IRCall requires unique output names")
+                    raise ValueError("NAMED_OUTPUTS raw node IRCall requires unique output aliases")
+                if len(selectors) != len(set(selectors)):
+                    raise ValueError("NAMED_OUTPUTS raw node IRCall requires unique output selectors")
                 if len(outputs) != len(self.results):
                     raise ValueError("NAMED_OUTPUTS raw node IRCall result count must match declared outputs")
                 if option_map.get("output") is not None or option_map.get("typ") is not None:

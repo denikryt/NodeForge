@@ -514,17 +514,18 @@ def _lower_builtin_call(context, operation, operands, x, y):
     if name == "bundle_set":
         return build_bundle_set(group, operands[0], operands[1], operands[2], x=x, y=y)
     if name == "node":
-        raw_inputs = {}
-        for socket_name, spec in options["inputs"]:
+        raw_inputs = []
+        for selector, spec in options["inputs"]:
             mode, payload = spec
             if mode == "literal":
-                raw_inputs[socket_name] = payload
+                value_spec = payload
             elif mode == "runtime":
-                raw_inputs[socket_name] = operands[payload]
+                value_spec = operands[payload]
             elif mode == "multi":
-                raw_inputs[socket_name] = [operands[index] for index in payload]
+                value_spec = [operands[index] for index in payload]
             else:
                 raise CompileError(f"Internal error: unknown raw-node input mode {mode!r}")
+            raw_inputs.append((selector, value_spec))
         outputs = options["outputs"]
         return build_materialized_raw_node(
             group,
@@ -533,7 +534,7 @@ def _lower_builtin_call(context, operation, operands, x, y):
             inputs=raw_inputs,
             output=options["output"],
             typ=options["typ"],
-            outputs=dict(outputs) if outputs is not None else None,
+            outputs=list(outputs) if outputs is not None else None,
             x=x,
             y=y,
             context="node()",

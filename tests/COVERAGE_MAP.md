@@ -88,6 +88,13 @@
 - `tests/blender/test_semantic_ir_compile.py`: production routing for structural arrays, Vector literals/subscripts, Object properties, and explicit call-parent fallback; real Blender RNA coverage for arrays/unary identity, named Vector constants, Object property reuse/configuration, comparison-chain topology, cycle-safe unused constants, and fresh-build cleanup after semantic/backend failure.
 - `tests/blender/test_runtime_range_state.py` and statement/runtime regressions cover runtime-if/Repeat binding-map checkpoint restoration, nested loop-index shadowing, ordinary state rebinding, and builder state while preserving existing Geometry Nodes topology.
 
+## Raw node socket addressing / metadata schema v2
+
+- `tests/unit/test_builtin_call_semantics.py`: Blender-independent `node(...)` selector normalization for unique names, exact non-negative addressable positions, contextual `ID(...)`, malformed/runtime-dependent selector diagnostics, duplicate normalized selectors, and named-output alias/selector separation.
+- `tests/unit/test_raw_nodes.py`: generic direct-call-callee input-discovery semantics, centralized addressability (`NodeSocketVirtual`/unavailable exclusion), name/position/identifier resolver behavior, Blender-proxy physical equality, preflight-before-mutation, required non-empty durable identifiers, adversarial rejection of structural fallback identity, schema-v1/v2 parsing, exact v2 cutover identity, v1 name compatibility, and undeclared-link generic cutover behavior.
+- `tests/unit/test_semantic_ir.py`: detached raw selector invariants (`str`, exact `int`, tagged identifier tuple), unique selector contracts, and named-output alias/type shape without Blender objects or persisted physical refs in Semantic IR.
+- `tests/blender/test_raw_nodes.py`: real Blender 5.2 Math, Vector Math SCALE, Integer Math and Boolean Math duplicate-socket addressing; contextual identifier selection; positional/named output selectors; schema-v2 writes; v1-to-v2 update and rollback contracts; and existing raw literal/link/multi-input/update behavior.
+
 ## Semantic callable resolution and Call IR
 
 - `tests/unit/test_call_resolution.py`: immutable callable-environment snapshots, exact builtin/system/local/helper/library precedence, canonical imported `FunctionId`, detached `__unique__` parsing, unresolved diagnostic precedence, and pure-resolution dependency boundaries.

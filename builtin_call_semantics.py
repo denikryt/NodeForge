@@ -274,6 +274,52 @@ def _node_literal_string(expr, consts, context):
     raise CompileError(f"node(...) {context} must be a non-empty compile-time string")
 
 
+def _node_socket_selector(expr, consts, context):
+    """Normalize one contextual raw-node socket selector without Blender access."""
+    if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) and expr.func.id == "ID":
+        if expr.keywords:
+            raise CompileError(f"node(...) {context} ID() does not accept keyword arguments")
+        if len(expr.args) != 1:
+            raise CompileError(f"node(...) {context} ID() expects exactly one positional identifier argument")
+        identifier = _node_literal_string(expr.args[0], consts, f"{context} ID() identifier")
+        return ("identifier", identifier)
+
+    try:
+        selection = resolve_argument_evaluation(expr, consts, _COMPILE_TIME_ONLY)
+    except ConstEvalUnavailable as exc:
+        raise CompileError(
+            f"node(...) {context} must be a non-empty compile-time string, "
+            "non-negative integer, or ID(non-empty compile-time string)"
+        ) from exc
+    if not isinstance(selection, CompileTimeSelection):
+        raise TypeError("compile-time-only node selector evaluation unexpectedly selected runtime")
+    value = selection.value
+    if isinstance(value, str) and value:
+        return value
+    if type(value) is int and value >= 0:
+        return value
+    raise CompileError(
+        f"node(...) {context} must be a non-empty compile-time string, "
+        "non-negative integer, or ID(non-empty compile-time string)"
+    )
+
+
+def _raw_selector_label(selector):
+    """Return a stable diagnostic/runtime-operand label for one normalized selector."""
+    if isinstance(selector, str):
+        return selector
+    if type(selector) is int:
+        return f"position {selector}"
+    if (
+        isinstance(selector, tuple)
+        and len(selector) == 2
+        and selector[0] == "identifier"
+        and isinstance(selector[1], str)
+    ):
+        return f"ID({selector[1]!r})"
+    return repr(selector)
+
+
 def _kw_dict(expr):
     """Build the legacy keyword map and preserve duplicate/**kwargs diagnostics."""
     out = {}
@@ -430,7 +476,7 @@ def _analyze_raw_node(expr, consts, add_runtime):
     if extra:
         raise CompileError("node(...) got unsupported keyword argument(s): " + ", ".join(sorted(extra)))
 
-    output = _node_literal_string(kws["output"], consts, "output=") if "output" in kws else None
+    output = _node_socket_selector(kws["output"], consts, "output=") if "output" in kws else None
     typ = None
     if "typ" in kws:
         token = kws["typ"]
@@ -446,17 +492,32 @@ def _analyze_raw_node(expr, consts, add_runtime):
         if not raw.keys:
             raise CompileError("node(...) outputs= cannot be empty")
         items = []
-        seen = set()
+        seen_aliases = set()
+        seen_selectors = set()
         for key_expr, value_expr in zip(raw.keys, raw.values):
-            key = _node_literal_string(key_expr, consts, "outputs key")
-            if key in seen:
-                raise CompileError(f"node(...) outputs= has duplicate socket {key!r}")
-            seen.add(key)
-            if not isinstance(value_expr, ast.Name) or value_expr.id not in TYPE_TOKEN_NAMES:
+            alias = _node_literal_string(key_expr, consts, "outputs key")
+            if alias in seen_aliases:
+                raise CompileError(f"node(...) outputs= has duplicate alias {alias!r}")
+            seen_aliases.add(alias)
+            if isinstance(value_expr, ast.Name) and value_expr.id in TYPE_TOKEN_NAMES:
+                selector = alias
+                out_typ = TYPE_TOKEN_NAMES[value_expr.id]
+            elif isinstance(value_expr, ast.Tuple) and len(value_expr.elts) == 2:
+                selector = _node_socket_selector(value_expr.elts[0], consts, f"outputs[{alias!r}] selector")
+                token = value_expr.elts[1]
+                if not isinstance(token, ast.Name) or token.id not in TYPE_TOKEN_NAMES:
+                    raise CompileError(
+                        f"node(...) outputs[{alias!r}] type must be one of: {', '.join(sorted(TYPE_TOKEN_NAMES))}"
+                    )
+                out_typ = TYPE_TOKEN_NAMES[token.id]
+            else:
                 raise CompileError(
-                    f"node(...) outputs[{key!r}] must be one of: {', '.join(sorted(TYPE_TOKEN_NAMES))}"
+                    f"node(...) outputs[{alias!r}] must be a type token or (selector, TypeToken)"
                 )
-            items.append((key, TYPE_TOKEN_NAMES[value_expr.id]))
+            if selector in seen_selectors:
+                raise CompileError(f"node(...) outputs= has duplicate selector {_raw_selector_label(selector)!r}")
+            seen_selectors.add(selector)
+            items.append((alias, selector, out_typ))
         outputs = tuple(items)
 
     has_single = output is not None or typ is not None
@@ -494,29 +555,30 @@ def _analyze_raw_node(expr, consts, add_runtime):
             raise CompileError("node(...) inputs= must be written as a literal dict")
         seen = set()
         for key_expr, value_expr in zip(raw.keys, raw.values):
-            key = _node_literal_string(key_expr, consts, "inputs key")
-            if key in seen:
-                raise CompileError(f"node(...) inputs= has duplicate socket {key!r}")
-            seen.add(key)
+            selector = _node_socket_selector(key_expr, consts, "inputs key")
+            if selector in seen:
+                raise CompileError(f"node(...) inputs= has duplicate selector {_raw_selector_label(selector)!r}")
+            seen.add(selector)
+            parameter_name = _raw_selector_label(selector)
             if isinstance(value_expr, ast.List):
                 if not value_expr.elts:
-                    raise CompileError(f"node(...) input {key!r} list cannot be empty")
+                    raise CompileError(f"node(...) input {parameter_name!r} list cannot be empty")
                 refs = []
                 for item in value_expr.elts:
-                    typ_i = add_runtime(item, key, f"node() multi-input {key!r}")
+                    typ_i = add_runtime(item, parameter_name, f"node() multi-input {parameter_name!r}")
                     refs.append(len(operands))
-                    operands.append(AnalyzedCallOperand(key, typ_i))
-                input_specs.append((key, ("multi", tuple(refs))))
+                    operands.append(AnalyzedCallOperand(parameter_name, typ_i))
+                input_specs.append((selector, ("multi", tuple(refs))))
                 continue
             try:
                 literal = _const_eval(value_expr, consts)
             except ConstEvalUnavailable:
-                typ_i = add_runtime(value_expr, key, f"node() input {key!r}")
+                typ_i = add_runtime(value_expr, parameter_name, f"node() input {parameter_name!r}")
                 ref = len(operands)
-                operands.append(AnalyzedCallOperand(key, typ_i))
-                input_specs.append((key, ("runtime", ref)))
+                operands.append(AnalyzedCallOperand(parameter_name, typ_i))
+                input_specs.append((selector, ("runtime", ref)))
             else:
-                input_specs.append((key, ("literal", _raw_input_literal(literal, "node()", key))))
+                input_specs.append((selector, ("literal", _raw_input_literal(literal, "node()", parameter_name))))
 
     options = (
         ("bl_idname", bl_idname),
@@ -527,7 +589,9 @@ def _analyze_raw_node(expr, consts, add_runtime):
         ("typ", typ),
         ("outputs", outputs),
     )
-    result = RuntimeCallResult(typ) if has_single else NamedOutputsCallResult(outputs)
+    result = RuntimeCallResult(typ) if has_single else NamedOutputsCallResult(
+        tuple((alias, out_typ) for alias, _selector, out_typ in outputs)
+    )
     return BuiltinCallSemantics(tuple(operands), options, result)
 
 
