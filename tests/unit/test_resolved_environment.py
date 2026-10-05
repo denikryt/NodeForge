@@ -348,7 +348,7 @@ def test_package_namespace_alias_is_not_globally_reserved_inside_local_lexical_s
 
 
 def test_global_system_name_registry_is_removed_after_package_namespace_cutover():
-    """Stage 40 has no global system-constructor name authority."""
+    """qualified package-callable has no global system-constructor name authority."""
     root = Path(__file__).resolve().parents[2]
     assert not (root / "systems" / "registry.py").exists()
     assert "registry" not in (root / "systems" / "__init__.py").read_text(encoding="utf-8")

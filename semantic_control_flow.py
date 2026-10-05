@@ -54,7 +54,7 @@ def parse_repeat_range_for(stmt: ast.For):
 
 
 def repeat_body_has_nonruntime_for(stmts) -> bool:
-    """Return whether a Repeat body contains a compile-time/legacy ``for`` category."""
+    """Return whether a Repeat body contains a compile-time/non-repeat ``for`` category."""
     for stmt in stmts:
         if isinstance(stmt, ast.For):
             if parse_repeat_range_for(stmt) is None:
@@ -67,7 +67,7 @@ def repeat_body_has_nonruntime_for(stmts) -> bool:
     return False
 
 def repeat_mutation_names(stmts) -> tuple[str, ...]:
-    """Return assignment targets in the legacy recursive first-mutation traversal order.
+    """Return assignment targets in recursive first-mutation traversal order.
 
     This is a classification pre-scan only. It allocates no compiler identities and
     does not inspect backend state.
@@ -212,14 +212,9 @@ def lower_runtime_if(
     if policy is BranchMergePolicy.TOP_LEVEL:
         changed_ids = true_state.changed_runtime_ids & false_state.changed_runtime_ids
         if identity_assignment_merge_eligible is not None and identity_assignment_merge_eligible(true_state, false_state):
-            # GEOMETRY_BUILDER_BRANCH_LOCAL_IDENTITY_ASSIGNMENT_MERGE_COMPAT: Legacy top-level
-            # runtime-if accepted a branch-local GeometryBuilder alongside a common assignment
-            # target even when one branch assigned that target to its existing binding identity
-            # (for example ``value = value``). The caller enables this only after branch lowering
-            # confirms that a fresh builder identity actually survives in one fork; dead constructor
-            # syntax must not change runtime-if merge eligibility. Remove this marker when the
-            # remaining legacy runtime-if compatibility contract is retired or represented by a
-            # general frontend assignment/merge model.
+            # A fresh branch-local GeometryBuilder identity can make an explicit identity assignment to a
+            # common runtime target relevant to branch merging. Include explicitly assigned common runtime
+            # bindings only after the caller confirms that a fresh/replaced builder survives a branch.
             changed_ids |= (
                 true_state.explicitly_assigned_runtime_ids
                 & false_state.explicitly_assigned_runtime_ids

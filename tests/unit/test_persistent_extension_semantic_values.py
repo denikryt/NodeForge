@@ -175,7 +175,7 @@ def test_compile_time_rebind_drops_ownership_without_retroactive_snapshot_dce(tm
     snapshots = [statement for statement in result.body.statements if isinstance(statement, IRBindLeaves)]
     assert len(snapshots) == 1
     assert result.final_compile_time.values["part"] == [1, 2]
-    # The overwrite itself allocates no new persistent snapshot; Stage 34 does not perform retroactive IR DCE.
+    # The overwrite itself allocates no new persistent snapshot; persistent extension semantic-value does not perform retroactive IR DCE.
     assert len(snapshots[0].bindings) == 1
 
 
@@ -191,7 +191,7 @@ def test_runtime_if_equal_semantic_state_joins_only_with_ordinary_runtime_merge(
 
 
 def test_runtime_if_extension_only_branches_keep_existing_admissibility_error(tmp_path):
-    """Stage 34 does not create zero-runtime-merge IRIf for semantic-only branch state."""
+    """persistent extension semantic-value does not create zero-runtime-merge IRIf for semantic-only branch state."""
     with pytest.raises(CompileError, match="assign at least one common variable"):
         _lower(
             tmp_path,
@@ -367,7 +367,7 @@ def test_repeat_rejects_runtime_carried_state_becoming_extension_semantic(tmp_pa
 
 
 def test_literal_semantic_list_persists_and_star_expands_with_existing_hidden_dependencies(tmp_path):
-    """A literal list of sibling semantic records persists through generic Stage-34 state and star expansion."""
+    """A literal list of sibling semantic records persists through generic persistent extension semantic-value state and star expansion."""
     result = _lower(
         tmp_path,
         "a = make_alpha(x)\nb = make_beta(2.0)\nparts = [a, b]\nconsume_star(*parts)\n",
@@ -541,7 +541,7 @@ def test_persistence_uses_exact_carrier_result_leaves(tmp_path):
 
 
 def test_persistence_cannot_bind_nonresult_intermediate_leaf():
-    """Stage-34 snapshotting remains subject to the existing exact IRBindLeaves result-leaf boundary."""
+    """persistent extension semantic-value snapshotting remains subject to the existing exact IRBindLeaves result-leaf boundary."""
     from NodeForge.semantic_ir import IRLeafBinding, IRLiteral, IRProgram, IRValue
 
     intermediate = IRValue(0, NFType.FLOAT)
@@ -559,8 +559,8 @@ def test_persistence_cannot_bind_nonresult_intermediate_leaf():
             (IRLeafBinding(intermediate, BindingId("scope", 9), NFType.FLOAT),),
         )
 
-def test_persistent_wrapper_keeps_stage33_slot_storage_unchanged():
-    """Persistence changes dependency identity only; detached slot storage remains the Stage-33 representation."""
+def test_persistent_wrapper_keeps_package_semantic_values_slot_storage_unchanged():
+    """Persistence changes dependency identity only; detached slot storage remains the package-defined semantic-value representation."""
     type_id = ExtensionTypeId(("system", "test"), "Part")
     spec = TypeSpec("RECORD", record_type=type_id)
     value = ExtensionValue(type_id, (ExtensionDependencySlot(0, NFType.FLOAT),))
@@ -658,7 +658,7 @@ def test_repeated_persistent_reads_allocate_no_additional_snapshots(tmp_path):
 
 
 def test_transient_semantic_composition_creates_no_body_persistence_binding(tmp_path):
-    """Immediate Stage-33 composition remains free of hidden body snapshots."""
+    """Immediate package-defined semantic-value composition remains free of hidden body snapshots."""
     result = _lower(
         tmp_path,
         "y = consume(make(x))\n",
@@ -668,7 +668,7 @@ def test_transient_semantic_composition_creates_no_body_persistence_binding(tmp_
     assert any(statement.__class__.__name__ == "IRAssign" for statement in result.body.statements)
 
 
-def test_stage34_core_adds_no_extension_specific_ir_or_lsystem_branch():
+def test_persistent_extension_values_core_adds_no_extension_specific_ir_or_lsystem_branch():
     """Persistent semantic state stays generic and reuses ordinary body/Call IR mechanisms."""
     root = Path(__file__).resolve().parents[2]
     ir_source = (root / "semantic_ir.py").read_text(encoding="utf-8")
@@ -805,7 +805,7 @@ def test_semantic_star_rejects_structural_array(tmp_path):
         )
 
 
-def test_stage38_runtime_to_equal_extension_ownership_rebind_clears_stale_runtime_mapping(tmp_path):
+def test_runtime_to_equal_extension_ownership_rebind_clears_stale_runtime_mapping(tmp_path):
     """Equal extension exits replace an incoming runtime owner without leaving a second runtime domain."""
     result = _lower(
         tmp_path,
@@ -821,7 +821,7 @@ def test_stage38_runtime_to_equal_extension_ownership_rebind_clears_stale_runtim
     assert isinstance(result.body.statements[-1], IRFinalExpression)
 
 
-def test_stage38_runtime_to_one_sided_extension_rebind_keeps_category_conflict_diagnostic(tmp_path):
+def test_runtime_to_one_sided_extension_rebind_keeps_category_conflict_diagnostic(tmp_path):
     """General runtime invalidation does not turn a one-sided extension transition into an implicit join."""
     with pytest.raises(
         CompileError,

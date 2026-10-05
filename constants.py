@@ -6,11 +6,8 @@ from types import MappingProxyType
 
 from .nf_types import NFType
 
-# CANONICAL_NFTYPE_TYPE_ALIAS_MIGRATION: TYPE_* names temporarily preserve existing
-# NodeForge-owned imports while their values are canonical NFType members. Do not use
-# these aliases to accept or serialize raw type strings. Remove the alias block after
-# all NodeForge-owned runtime-type references use NFType directly and migration tests
-# confirm no supported public contract depends on TYPE_* symbol names.
+# TYPE_* names are internal convenience aliases for canonical NFType members. They never
+# authorize raw type strings or define a second runtime type vocabulary.
 TYPE_FLOAT = NFType.FLOAT
 TYPE_VECTOR = NFType.VECTOR
 TYPE_BOOL = NFType.BOOL

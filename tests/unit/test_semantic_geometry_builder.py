@@ -503,7 +503,7 @@ def test_identity_assignments_without_branch_local_builder_keep_existing_runtime
         )
 
 
-def test_stage38_runtime_to_one_sided_builder_rebind_does_not_leave_stale_runtime_value():
+def test_runtime_to_one_sided_builder_rebind_does_not_leave_stale_runtime_value():
     """A branch-local builder owner cannot leave the incoming ordinary runtime binding visible."""
     with pytest.raises(CompileError, match="Unknown name: t"):
         _lower(

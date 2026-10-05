@@ -1,4 +1,4 @@
-"""Blender integration coverage for Semantic Body IR migration straight-line Semantic Body IR."""
+"""Blender integration coverage for compiler-owned Semantic Body IR."""
 
 from helpers import *
 
@@ -438,7 +438,7 @@ x = input_float("X", default=d)
 y = d * position().x
 output("Y", y)
 ''',
-        "NFTest_stage28_input_default_and_runtime_use",
+        "NFTest_evaluation_modes_input_default_and_runtime_use",
     )
     inputs = [item for item in _interface_sockets(group, "INPUT") if item.name == "X"]
     check(len(inputs) == 1, "expected one explicit X input")

@@ -1,4 +1,4 @@
-"""Stage 40 end-to-end contracts for owner-qualified package callables."""
+"""qualified package-callable end-to-end contracts for owner-qualified package callables."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from NodeForge.source_callables import SourceCallableSession
 pytestmark = pytest.mark.unit
 
 
-def _identity(label: str = "ROOT/stage40") -> GroupCompilationIdentity:
+def _identity(label: str = "ROOT/package_namespaces") -> GroupCompilationIdentity:
     """Return one detached root semantic identity."""
     return GroupCompilationIdentity(None, label, label, label)
 
@@ -130,8 +130,8 @@ def part(value) -> Part: return Part(value)
     )
 
 
-def _compile(source: str, environment: ResolvedEnvironment, *, session=None, label="ROOT/stage40"):
-    """Compile one Stage-40 fixture through the production semantic group path."""
+def _compile(source: str, environment: ResolvedEnvironment, *, session=None, label="ROOT/package_namespaces"):
+    """Compile one qualified package-callable fixture through the production semantic group path."""
     session = session or SourceCallableSession(resolved_environment=environment)
     return analyze_group_source(
         source,

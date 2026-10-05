@@ -51,7 +51,7 @@ def test_extension_spec_requires_direct_parameters_and_exact_results():
 
 
 def test_blender_socket_authority_covers_rotation_and_every_nf_type():
-    """Stage-32 runtime types must all survive group-interface materialization."""
+    """Extension API v2 runtime types must all survive group-interface materialization."""
     mapping = {typ: socket_type_for_nf_type(typ) for typ in NFType}
     assert set(mapping) == set(NFType)
     assert mapping[NFType.ROTATION] == "NodeSocketRotation"

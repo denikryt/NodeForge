@@ -48,7 +48,7 @@ def allows_existing_top_level_shadow(label: str | None) -> bool:
 
 
 def validate_runtime_binding_target(name: str, reserved_name_labels) -> None:
-    """Apply the canonical assignment-target reservation rule with legacy diagnostics."""
+    """Apply the canonical assignment-target reservation rule with established diagnostics."""
     label = reserved_binding_label(reserved_name_labels, name)
     if label is not None and not allows_existing_top_level_shadow(label):
         from .errors import CompileError

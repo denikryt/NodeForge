@@ -1,4 +1,4 @@
-"""Pure value-based Semantic IR contracts and migration-boundary regressions."""
+"""Pure value-based Semantic IR contracts and boundary regressions."""
 
 import ast
 import dataclasses

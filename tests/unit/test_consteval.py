@@ -583,7 +583,7 @@ def test_compile_time_append_journal_savepoint_rolls_back_only_its_suffix():
 
 
 def test_shared_static_number_and_vector_like_predicates_preserve_backend_shapes():
-    """Frontend/backend static-shape authority keeps the pre-Stage-29 contract."""
+    """Frontend/backend static-shape authority keeps the pre-canonical numeric contract."""
     assert _is_const_number(1)
     assert _is_const_number(1.0)
     assert _is_const_number(_eval_expr("1 / 1.0"))

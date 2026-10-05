@@ -1,4 +1,4 @@
-"""Stage-29 regression coverage for canonical NodeForge numeric semantics."""
+"""canonical numeric regression coverage for canonical NodeForge numeric semantics."""
 
 import ast
 import math
@@ -48,14 +48,14 @@ def _bits(value):
 
 
 def _eval(source, env=None):
-    """Evaluate one Stage-29 compile-time expression."""
+    """Evaluate one canonical numeric compile-time expression."""
     return _const_eval(ast.parse(source, mode="eval").body, env or {})
 
 
 def _env(*, bindings=None, consts=None):
     """Build the smallest immutable semantic environment needed by numeric tests."""
     runtime_bindings = {
-        name: RuntimeBindingSymbol(BindingId("stage29", index), typ)
+        name: RuntimeBindingSymbol(BindingId("numeric_semantics", index), typ)
         for index, (name, typ) in enumerate((bindings or {}).items())
     }
     constants, const_eval_values = build_semantic_constant_snapshot(
@@ -232,7 +232,7 @@ def test_float_operation_overflow_is_ctfe_unavailable_not_leaf_error():
         _const_eval(expr, {})
 
 
-def test_core_consteval_uses_stage29_scalar_contract():
+def test_core_consteval_uses_numeric_semantics_scalar_contract():
     assert _eval("1 + 2") == 3
     assert type(_eval("1 + 2")) is int
     assert _eval("-3 // 2") == -2
@@ -755,7 +755,7 @@ def _lower_preprocessed_body(source):
         initial_compile_time=preprocessed.initial_compile_time,
         reserved_name_labels={},
         callable_environment=_body_callables(),
-        owner_scope="stage29-body",
+        owner_scope="numeric_semantics-body",
         compile_time_effects_before=preprocessed.effects_before,
         trailing_compile_time_effects=preprocessed.trailing_effects,
     )
@@ -882,7 +882,7 @@ def test_runtime_if_remains_runtime_and_merges_int_state():
     assert binary.result.typ is TYPE_INT
 
 
-def test_repeat_stage30_historical_type_split_and_marker_are_removed():
+def test_repeat_repeat_exact_type_historical_type_split_and_marker_are_removed():
     from pathlib import Path
     import NodeForge
 
@@ -898,7 +898,7 @@ def test_repeat_stage30_historical_type_split_and_marker_are_removed():
     assert "_coerce_branch_value" not in combined
 
 
-def test_stage29_does_not_reintroduce_legacy_numeric_parity_or_stage26_numeric_todo():
+def test_numeric_semantics_does_not_reintroduce_legacy_numeric_parity_or_residualization_numeric_todo():
     from pathlib import Path
     import NodeForge
 
@@ -921,7 +921,7 @@ def _materialize_bound_numeric_source(source, bindings):
     program = lower_analyzed_expression(expr, analysis)
     group = _FakeGroup()
     runtime_bindings = MappingProxyType({
-        BindingId("stage29", index): Value(_FakeSocket(), typ)
+        BindingId("numeric_semantics", index): Value(_FakeSocket(), typ)
         for index, (_, typ) in enumerate(bindings.items())
     })
     result = lower_expression(BlenderIRLoweringContext(group, runtime_bindings), program)

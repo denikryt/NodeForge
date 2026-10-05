@@ -1,4 +1,4 @@
-"""Blender integration coverage for Stage 29 type-directed numeric semantics."""
+"""Blender integration coverage for canonical numeric type-directed numeric semantics."""
 
 from helpers import *
 
@@ -50,7 +50,7 @@ def _evaluated_x(expression, name):
     return _evaluated_point_position(group, name)[0]
 
 
-def test_stage29_numeric_ir_uses_typed_integer_math_math_and_compare_nodes():
+def test_numeric_ir_uses_typed_integer_math_math_and_compare_nodes():
     """Typed numeric IR selects physical node families without backend type inference."""
     group = compile_group(
         '''
@@ -74,7 +74,7 @@ output("Int Cmp", int_cmp)
 output("Float Cmp", float_cmp)
 output("Power", power)
 ''',
-        "NFTest_stage29_numeric_backend_families",
+        "NFTest_numeric_backend_families",
     )
     try:
         integer_ops = [getattr(node, "operation", None) for node in _nodes(group, "FunctionNodeIntegerMath")]
@@ -98,7 +98,7 @@ output("Power", power)
         bpy.data.node_groups.remove(group, do_unlink=True)
 
 
-def test_stage29_vector_int_scalars_keep_scale_and_reciprocal_topology():
+def test_numeric_semantics_vector_int_scalars_keep_scale_and_reciprocal_topology():
     """Vector Int scalars reuse SCALE and vector division keeps reciprocal-plus-SCALE topology."""
     group = compile_group(
         '''
@@ -111,7 +111,7 @@ output("A", a)
 output("B", b)
 output("C", c)
 ''',
-        "NFTest_stage29_vector_int_scalar_topology",
+        "NFTest_numeric_semantics_vector_int_scalar_topology",
     )
     try:
         vector_ops = [getattr(node, "operation", None) for node in _nodes(group, "ShaderNodeVectorMath")]
@@ -133,21 +133,21 @@ output("C", c)
         ("int_min_modulo", "-2147483648 % -1"),
     ],
 )
-def test_stage29_direct_runtime_consumer_rejects_known_int_domain_errors(suffix, expression):
+def test_numeric_semantics_direct_runtime_consumer_rejects_known_int_domain_errors(suffix, expression):
     """Direct runtime consumers cannot bypass hard signed-32 semantic validation."""
     try:
         compile_group(
             f'output("X", {expression})\n',
-            f"NFTest_stage29_direct_int_domain_{suffix}",
+            f"NFTest_numeric_semantics_direct_int_domain_{suffix}",
         )
     except CompileError:
         return
     raise AssertionError(f"known invalid Int expression unexpectedly reached Blender lowering: {expression}")
 
 
-def test_stage29_direct_known_valid_int_expression_remains_integer_math_add():
+def test_numeric_semantics_direct_known_valid_int_expression_remains_integer_math_add():
     """Hard-domain validation does not fold a valid known runtime Int expression."""
-    group = compile_group('output("X", 1 + 2)\n', "NFTest_stage29_direct_valid_int_add")
+    group = compile_group('output("X", 1 + 2)\n', "NFTest_numeric_semantics_direct_valid_int_add")
     try:
         integer_add = _nodes(group, "FunctionNodeIntegerMath", "ADD")
         check(len(integer_add) == 1, f"expected one Integer Math ADD, got {len(integer_add)}")
@@ -176,9 +176,9 @@ def test_stage29_direct_known_valid_int_expression_remains_integer_math_add():
         ("floored_modulo", "932907.0625 % -1185.3480224609375", -1147.1875, 0xC48F6600),
     ],
 )
-def test_stage29_float_characterization_matches_actual_geometry_nodes(suffix, expression, expected, expected_bits):
+def test_numeric_semantics_float_characterization_matches_actual_geometry_nodes(suffix, expression, expected, expected_bits):
     """Characterized Float expressions match evaluated Blender binary32 results exactly."""
-    actual = _evaluated_x(expression, f"NFTest_stage29_float_eval_{suffix}")
+    actual = _evaluated_x(expression, f"NFTest_numeric_semantics_float_eval_{suffix}")
     check(actual == expected, f"{suffix}: runtime Float value mismatch: {actual!r}")
     check(_float_bits(actual) == expected_bits, f"{suffix}: runtime Float bits mismatch")
 
@@ -193,13 +193,13 @@ def test_stage29_float_characterization_matches_actual_geometry_nodes(suffix, ex
         ("zero", 1, 0, 0, 0),
     ],
 )
-def test_stage29_integer_floor_pair_matches_actual_integer_math(suffix, left, right, expected_q, expected_r):
+def test_numeric_semantics_integer_floor_pair_matches_actual_integer_math(suffix, left, right, expected_q, expected_r):
     """Integer floor quotient/remainder match evaluated Integer Math, including zero divisor."""
     group = compile_group(
         f'''\nq = {left} // {right}\nr = {left} % {right}\ngeo = point(vector(q, r, 0.0))\noutput("Geometry", geo)\n''',
-        f"NFTest_stage29_int_floor_pair_{suffix}",
+        f"NFTest_numeric_semantics_int_floor_pair_{suffix}",
     )
-    position = _evaluated_point_position(group, f"NFTest_stage29_int_floor_pair_{suffix}")
+    position = _evaluated_point_position(group, f"NFTest_numeric_semantics_int_floor_pair_{suffix}")
     check(position[0] == float(expected_q), f"{suffix}: Integer Math floor quotient mismatch: {position}")
     check(position[1] == float(expected_r), f"{suffix}: Integer Math floored remainder mismatch: {position}")
 
@@ -213,34 +213,34 @@ def test_stage29_integer_floor_pair_matches_actual_integer_math(suffix, left, ri
         ("mixed_false", "2 < 1.0", 0.0),
     ],
 )
-def test_stage29_float_and_mixed_comparisons_match_actual_geometry_nodes(suffix, condition, expected):
+def test_numeric_semantics_float_and_mixed_comparisons_match_actual_geometry_nodes(suffix, condition, expected):
     """Float/mixed Compare nodes expose the characterized binary32 comparison result."""
     actual = _evaluated_x(
         f"1.0 if ({condition}) else 0.0",
-        f"NFTest_stage29_compare_{suffix}",
+        f"NFTest_numeric_semantics_compare_{suffix}",
     )
     check(actual == expected, f"{suffix}: comparison result mismatch: {actual!r}")
     check(_float_bits(actual) == _float_bits(expected), f"{suffix}: comparison carrier bits mismatch")
 
 
-def test_stage29_runtime_float_overflow_remains_a_runtime_infinity():
+def test_numeric_semantics_runtime_float_overflow_remains_a_runtime_infinity():
     """Valid runtime Float arithmetic may overflow even when CTFE declines to publish the value."""
-    actual = _evaluated_x("3e38 * 2.0", "NFTest_stage29_runtime_float_overflow")
+    actual = _evaluated_x("3e38 * 2.0", "NFTest_numeric_semantics_runtime_float_overflow")
     check(math.isinf(actual) and actual > 0.0, f"runtime overflow did not produce +inf: {actual!r}")
     check(_float_bits(actual) == 0x7F800000, "runtime overflow did not preserve Float +inf bits")
 
 
-def test_stage29_vector_division_matches_reciprocal_then_scale_value():
+def test_numeric_semantics_vector_division_matches_reciprocal_then_scale_value():
     """Vector / scalar preserves DIVIDE then SCALE precision instead of direct component divide."""
     actual = _evaluated_x(
         "(vector(10000000000.0, 0.0, 0.0) / 3.0).x",
-        "NFTest_stage29_vector_divide_precision",
+        "NFTest_numeric_semantics_vector_divide_precision",
     )
     check(actual == 3333333504.0, f"unexpected reciprocal-plus-SCALE result: {actual!r}")
     check(_float_bits(actual) == 0x4F46AEA2, "Vector division used direct component divide semantics")
 
 
-def test_stage29_power_remains_runtime_capable():
-    """POWER stays runtime-capable even though Stage-29 CTFE intentionally declines it."""
-    actual = _evaluated_x("2.0 ** 3.0", "NFTest_stage29_power_runtime")
+def test_numeric_semantics_power_remains_runtime_capable():
+    """POWER stays runtime-capable even though canonical numeric CTFE intentionally declines it."""
+    actual = _evaluated_x("2.0 ** 3.0", "NFTest_numeric_semantics_power_runtime")
     check(actual == 8.0, f"runtime POWER returned {actual!r}")

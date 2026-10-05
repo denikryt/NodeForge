@@ -1,4 +1,4 @@
-"""Regression gates for the Stage-36 physical legacy-compiler removal."""
+"""Regression gates for the permanent legacy-free compiler boundary."""
 
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ def _lower(source: str, *, bindings=None):
         initial_compile_time=CompileTimeSnapshot({}),
         reserved_name_labels={},
         callable_environment=_callables(),
-        owner_scope="stage36-test",
+        owner_scope="legacy-free-core-test",
     )
 
 
@@ -126,7 +126,7 @@ def test_i2_negative_permanent_backend_does_not_import_deleted_mixed_owners():
 
 
 def test_i2_relocated_backend_helpers_retain_live_dependencies():
-    """Stage-36 backend ownership moves keep the dependencies their live helpers still use."""
+    """Relocated backend helpers retain the dependencies their live implementations require."""
     from NodeForge import blender_ir_lowering
     from NodeForge.builtins import raw_nodes
 
@@ -204,7 +204,7 @@ def test_i6_positive_runtime_if_and_repeat_still_lower_to_structured_ir():
     )
     assert any(isinstance(statement, IRIf) for statement in if_result.body.statements)
 
-    bindings = {"x": RuntimeBindingSymbol(BindingId("stage36-test", 0), NFType.INT)}
+    bindings = {"x": RuntimeBindingSymbol(BindingId("legacy-free-core-test", 0), NFType.INT)}
     repeat_result = _lower(
         "for i in repeat_range(2):\n"
         "    x = x + 1\n"
@@ -216,7 +216,7 @@ def test_i6_positive_runtime_if_and_repeat_still_lower_to_structured_ir():
 
 def test_i6_negative_repeat_still_rejects_type_changing_carried_state():
     """Removing the legacy executor does not weaken exact Repeat state typing."""
-    bindings = {"x": RuntimeBindingSymbol(BindingId("stage36-test", 0), NFType.INT)}
+    bindings = {"x": RuntimeBindingSymbol(BindingId("legacy-free-core-test", 0), NFType.INT)}
     with pytest.raises(CompileError, match="changed type from INT to FLOAT"):
         _lower(
             "for i in repeat_range(2):\n"
@@ -227,15 +227,15 @@ def test_i6_negative_repeat_still_rejects_type_changing_carried_state():
 
 
 # I7 — legacy package/data recognition remains diagnostic-only and separate from execution.
-def test_i7_positive_persisted_and_deferred_v2_compatibility_boundaries_remain_present():
-    """Persisted Blender compatibility and the deferred v2-hybrid diagnostic survive compiler deletion."""
+def test_i7_positive_persisted_and_unsupported_owner_boundaries_remain_present():
+    """Persisted Blender compatibility and mixed source/interface rejection remain explicit."""
     interface_source = (ROOT / "interface.py").read_text(encoding="utf-8")
     library_source = (ROOT / "library.py").read_text(encoding="utf-8")
     semantic_source = (ROOT / "semantic_analysis.py").read_text(encoding="utf-8")
     assert "def _legacy_socket_type(" in interface_source
-    marker = "Source-backed library owners with interface.py are reserved for the"
-    assert marker in library_source
-    assert marker in semantic_source
+    assert "both source.nf and interface.py is intentionally unsupported" in library_source
+    assert "Mixed source.nf + interface.py owners are outside the supported callable model" in semantic_source
+    assert "uses an unsupported mixed source.nf + interface.py package owner" in semantic_source
 
 
 def test_i7_negative_v1_package_recognition_has_no_executable_registry_api():
@@ -262,31 +262,24 @@ def test_i8_negative_permanent_extension_path_contains_no_v1_callable_kinds_or_c
         assert token not in combined
 
 
-# I9 — deletion must not be replaced by new temporary compatibility lanes.
-def test_i9_positive_only_preexisting_deferred_migration_markers_remain():
-    """The two deferred hybrid and two Stage-26 residualization markers remain explicit."""
-    occurrences = []
-    for path in _production_python_sources():
-        for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if "TODO(nodeforge-migration):" in line:
-                occurrences.append((path.relative_to(ROOT).as_posix(), line_no, line.strip()))
-    assert [item[0] for item in occurrences].count("library.py") == 1
-    assert [item[0] for item in occurrences].count("semantic_analysis.py") == 1
-    assert [item[0] for item in occurrences].count("consteval.py") == 2
-    assert len(occurrences) == 4
-
-
-def test_i9_negative_no_new_compat_or_stage36_migration_marker_exists():
-    """Stage 36 introduces neither fallback compatibility markers nor a checked-in broken workflow."""
+# I9 — permanent production code contains no temporary migration/fallback markers.
+def test_i9_positive_production_python_has_no_temporary_migration_markers():
+    """Completed compiler boundaries are documented as permanent contracts, not deferred migrations."""
     combined = "\n".join(path.read_text(encoding="utf-8") for path in _production_python_sources())
+    assert "TODO(nodeforge-migration):" not in combined
     assert "TODO(nodeforge-compat):" not in combined
-    assert "Stage 36" not in "\n".join(
-        line for line in combined.splitlines() if "TODO(nodeforge-migration):" in line
-    )
 
 
-# I10 — Stage 36 establishes a permanent legacy-free version floor, not an exact future pin.
-def test_i10_positive_core_contract_is_at_or_above_stage36_cutover_floor():
+def test_i9_negative_removed_temporary_marker_vocabulary_is_not_reintroduced():
+    """Production code must not reopen a temporary fallback lane after the legacy-free cutover."""
+    for path in _production_python_sources():
+        source = path.read_text(encoding="utf-8")
+        assert "TODO(nodeforge-migration):" not in source, path
+        assert "TODO(nodeforge-compat):" not in source, path
+
+
+# I10 — the permanent compiler contract has a legacy-free version floor, not an exact future pin.
+def test_i10_positive_core_contract_is_at_or_above_legacy_free_core_cutover_floor():
     """Later releases retain the legacy-free cutover rather than pinning one patch version."""
     import NodeForge
 
@@ -294,7 +287,7 @@ def test_i10_positive_core_contract_is_at_or_above_stage36_cutover_floor():
 
 
 def test_i10_negative_core_contract_cannot_report_a_pre_cutover_version():
-    """The legacy-free artifact cannot advertise any core version below the Stage-36 cutover."""
+    """The legacy-free artifact cannot advertise a core version below the permanent cutover floor."""
     import NodeForge
 
     assert NodeForge.bl_info["version"] >= (0, 62, 2)
@@ -353,26 +346,16 @@ def test_i11_negative_lowering_does_not_reconstruct_audited_source_defaults():
 
 
 # I12 — Release-coupled package fixtures track the current public core version.
-def test_i12_positive_current_public_contract_reports_0651_and_compatible_fixture_ceiling():
+def test_i12_positive_release_coupled_fixture_ceiling_matches_current_core_version():
     """The current public core release and synthetic package ceilings advance together."""
     import NodeForge
 
-    assert NodeForge.bl_info["version"] == (0, 65, 1)
+    current = ".".join(str(part) for part in NodeForge.bl_info["version"])
+    expected = f'"nodeforge_max_version": "{current}"'
     for relative in (
         "tests/unit/test_extension_bootstrap.py",
         "tests/unit/test_extension_packages.py",
         "tests/blender/test_extension_api_v2.py",
     ):
         source = (ROOT / relative).read_text(encoding="utf-8")
-        assert '"nodeforge_max_version": "0.65.1"' in source, relative
-
-
-def test_i12_negative_current_release_contract_does_not_retain_the_previous_fixture_ceiling():
-    """Release-coupled synthetic manifests do not retain the previous public ceiling."""
-    for relative in (
-        "tests/unit/test_extension_bootstrap.py",
-        "tests/unit/test_extension_packages.py",
-        "tests/blender/test_extension_api_v2.py",
-    ):
-        source = (ROOT / relative).read_text(encoding="utf-8")
-        assert '"nodeforge_max_version": "0.63.1"' not in source, relative
+        assert expected in source, relative

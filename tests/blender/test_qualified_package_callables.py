@@ -1,4 +1,4 @@
-"""Blender integration regressions for Stage 40 package callable namespaces."""
+"""Blender integration regressions for qualified package-callable package callable namespaces."""
 
 from helpers import *
 
@@ -19,7 +19,7 @@ def _write_source_package(root: Path, package_id: str, functions: dict[str, str]
         "name": package_id,
         "version": "1.0.0",
         "author": "Tests",
-        "description": "Stage 40 Blender namespace regression fixture.",
+        "description": "qualified package-callable Blender namespace regression fixture.",
         "nodeforge_min_version": "0.65.0",
         "nodeforge_max_version": None,
         "contents": {"functions": "functions"},

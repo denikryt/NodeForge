@@ -1136,7 +1136,7 @@ output("Mask", mask)
 
 
 def test_semantic_call_ir_raw_mixed_invalid_prefers_frontend_operand_error():
-    """Semantic Call IR migration explicitly permits operand diagnostics before independent Blender raw-node errors."""
+    """Semantic Call IR permits operand diagnostics before independent Blender raw-node errors."""
     try:
         compile_group(
             '''
@@ -1325,7 +1325,7 @@ def test_source_ordered_ct_handoff_literal_ordinary_if_stays_runtime():
     check(defaults == [(1.0, 1.0), (1.0, 2.0)], f"source-order literal-if seed changed: {defaults!r}")
 
 
-def test_stage28_instance_on_points_static_and_runtime_mixed_options_preserve_backend_shape():
+def test_evaluation_modes_instance_on_points_static_and_runtime_mixed_options_preserve_backend_shape():
     static_group = compile_group(
         '''
 geo = instance_on_points(
@@ -1337,7 +1337,7 @@ geo = instance_on_points(
 )
 output("Geometry", geo)
 ''',
-        "NFTest_stage28_instance_static",
+        "NFTest_evaluation_modes_instance_static",
     )
     static_nodes = _nodes(static_group, "GeometryNodeInstanceOnPoints")
     check(len(static_nodes) == 1, "expected one static Instance on Points node")
@@ -1357,7 +1357,7 @@ rotation = input_vector("Rotation", default=(0.0, 0.0, 0.25))
 geo = instance_on_points(cube(0.5), points(2), scale=scale, rotation=rotation, realize=False)
 output("Geometry", geo)
 ''',
-        "NFTest_stage28_instance_runtime",
+        "NFTest_evaluation_modes_instance_runtime",
     )
     runtime_nodes = _nodes(runtime_group, "GeometryNodeInstanceOnPoints")
     check(len(runtime_nodes) == 1, "expected one runtime Instance on Points node")
@@ -1367,7 +1367,7 @@ output("Geometry", geo)
     bpy.data.node_groups.remove(runtime_group)
 
 
-def test_stage28_transform_static_and_runtime_mixed_options_preserve_backend_shape():
+def test_evaluation_modes_transform_static_and_runtime_mixed_options_preserve_backend_shape():
     static_group = compile_group(
         '''
 geo = transform(
@@ -1378,7 +1378,7 @@ geo = transform(
 )
 output("Geometry", geo)
 ''',
-        "NFTest_stage28_transform_static",
+        "NFTest_evaluation_modes_transform_static",
     )
     static_nodes = _nodes(static_group, "GeometryNodeTransform")
     check(len(static_nodes) == 1, "expected one static Transform Geometry node")
@@ -1396,7 +1396,7 @@ rotation = input_vector("Rotation", default=(0.0, 0.0, 0.25))
 geo = transform(cube(1.0), translation=translation, scale=scale, rotation=rotation)
 output("Geometry", geo)
 ''',
-        "NFTest_stage28_transform_runtime",
+        "NFTest_evaluation_modes_transform_runtime",
     )
     runtime_nodes = _nodes(runtime_group, "GeometryNodeTransform")
     check(len(runtime_nodes) == 1, "expected one runtime Transform Geometry node")
@@ -1421,16 +1421,16 @@ def test_transform_omitted_overrides_remain_explicit_semantic_omissions():
     bpy.data.node_groups.remove(group)
 
 
-def test_stage28_invalid_static_mixed_options_fail_without_publishing_group():
+def test_evaluation_modes_invalid_static_mixed_options_fail_without_publishing_group():
     cases = [
         (
             'geo = instance_on_points(cube(0.5), points(2), scale="bad", realize=False)\noutput("Geometry", geo)',
-            "NFTest_stage28_invalid_instance_scale",
+            "NFTest_evaluation_modes_invalid_instance_scale",
             "instance_on_points scale= expects Float/Int or Vector",
         ),
         (
             'geo = transform(cube(1.0), rotation="bad")\noutput("Geometry", geo)',
-            "NFTest_stage28_invalid_transform_rotation",
+            "NFTest_evaluation_modes_invalid_transform_rotation",
             "rotation= must be Vector in radians",
         ),
     ]
@@ -1441,10 +1441,10 @@ def test_stage28_invalid_static_mixed_options_fail_without_publishing_group():
         try:
             compile_group(source, name)
         except CompileError as exc:
-            check(str(exc) == message, f"unexpected Stage-28 semantic diagnostic: {exc}")
+            check(str(exc) == message, f"unexpected declarative evaluation-mode semantic diagnostic: {exc}")
         else:
             raise AssertionError(f"{name} unexpectedly compiled")
-        check(bpy.data.node_groups.get(name) is None, f"failed Stage-28 compile published {name}")
+        check(bpy.data.node_groups.get(name) is None, f"failed declarative evaluation-mode compile published {name}")
 
 
 def test_set_position_omitted_selection_is_explicit_select_all():
@@ -1461,7 +1461,7 @@ output("Geometry", geo)
     check(bool(selection.default_value) is True, "omitted Set Position selection is not explicitly True")
 
 
-def test_stage38_terrain_erosion_repeat_local_delta_merges_without_becoming_repeat_state():
+def test_runtime_control_flow_terrain_erosion_repeat_local_delta_merges_without_becoming_repeat_state():
     """Evaluate a terrain-like Repeat where only height is carried and delta converges inside the iteration."""
     group = compile_group(
         '''
@@ -1476,7 +1476,7 @@ for i in repeat_range(2):
     height = height + delta
 output("Geometry", point(vector(height, 0.0, 0.0)))
 ''',
-        "NFTest_stage38_terrain_erosion",
+        "NFTest_runtime_control_flow_terrain_erosion",
     )
 
     repeat_outputs = _nodes(group, "GeometryNodeRepeatOutput")
@@ -1490,8 +1490,8 @@ output("Geometry", point(vector(height, 0.0, 0.0)))
     check(len(switches) == 1, f"expected exactly one nested delta Switch, found {len(switches)}")
     check(switches[0].input_type == "FLOAT", f"delta Switch type changed: {switches[0].input_type!r}")
 
-    mesh = bpy.data.meshes.new("NFTest_stage38_terrain_erosion_Mesh")
-    obj = bpy.data.objects.new("NFTest_stage38_terrain_erosion_Object", mesh)
+    mesh = bpy.data.meshes.new("NFTest_runtime_control_flow_terrain_erosion_Mesh")
+    obj = bpy.data.objects.new("NFTest_runtime_control_flow_terrain_erosion_Object", mesh)
     bpy.context.collection.objects.link(obj)
     modifier = obj.modifiers.new("NodeForge", "NODES")
     modifier.node_group = group

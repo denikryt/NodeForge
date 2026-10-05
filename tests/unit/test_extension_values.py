@@ -197,8 +197,8 @@ def test_pack_detaches_mutable_containers_and_preserves_dict_order(tmp_path):
     assert reconstructed.maybe is None
 
 
-def test_stage34_compaction_preserves_complete_detached_record_grammar(tmp_path):
-    """Persistence normalization is grammar-agnostic across the complete Stage-33 detached storage model."""
+def test_persistent_extension_values_compaction_preserves_complete_detached_record_grammar(tmp_path):
+    """Persistence normalization is grammar-agnostic across the complete package-defined semantic-value detached storage model."""
     _session, registry, specs, classes = _fixture(tmp_path)
     part_token = object()
     list_token = object()
@@ -252,7 +252,7 @@ def test_stage34_compaction_preserves_complete_detached_record_grammar(tmp_path)
     assert reconstructed.maybe.value == (0, NFType.INT)
 
 
-def test_stage34_payload_compaction_rejects_out_of_range_or_mismatched_nested_slot(tmp_path):
+def test_persistent_extension_values_payload_compaction_rejects_out_of_range_or_mismatched_nested_slot(tmp_path):
     """Malformed runtime slots fail at canonical payload construction instead of later persistence/lowering."""
     _session, _registry, specs, _classes = _fixture(tmp_path)
     spec = type_spec_for(specs["Part"])

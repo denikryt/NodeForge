@@ -247,7 +247,7 @@ def _const(expr, consts, context):
 
 
 def _literal_string(expr, consts, context):
-    """Return a non-empty detached compile-time string with legacy diagnostics."""
+    """Return a non-empty detached compile-time string with established diagnostics."""
     try:
         selection = resolve_argument_evaluation(expr, consts, _COMPILE_TIME_ONLY)
     except ConstEvalUnavailable as exc:
@@ -321,7 +321,7 @@ def _raw_selector_label(selector):
 
 
 def _kw_dict(expr):
-    """Build the legacy keyword map and preserve duplicate/**kwargs diagnostics."""
+    """Build the shared keyword map and preserve duplicate/**kwargs diagnostics."""
     out = {}
     for kw in expr.keywords:
         if kw.arg is None:
@@ -333,7 +333,7 @@ def _kw_dict(expr):
 
 
 def _check_extra(kws, allowed):
-    """Apply the shared legacy unsupported-keyword diagnostic."""
+    """Apply the shared unsupported-keyword diagnostic."""
     extra = set(kws) - set(allowed)
     if extra:
         raise CompileError("Unsupported keyword argument(s): " + ", ".join(sorted(extra)))
@@ -356,7 +356,7 @@ def _const_or_runtime(expr, consts, add_runtime, name, context):
 
 
 def _ordered_vector_args(expr):
-    """Return vector component expressions after legacy keyword binding."""
+    """Return vector component expressions after shared keyword binding."""
     names = ["x", "y", "z"]
     if len(expr.args) > 3:
         raise CompileError("vector(x, y, z) expects 3 arguments")

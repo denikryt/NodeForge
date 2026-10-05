@@ -1,1 +1,1 @@
-"""Legacy placeholder; package-backed examples live in installed package inventory."""
+"""Compatibility placeholder; package-backed examples live in installed package inventory."""

@@ -14,7 +14,7 @@ pytestmark = pytest.mark.blender
 def _context():
     """Create one detached candidate group/context/transaction fixture."""
     group = bpy.data.node_groups.new("NFTest_extension_resource_context", "GeometryNodeTree")
-    tx = generated_resources.GeneratedResourceTransaction(owner_group_uuid="stage32-owner")
+    tx = generated_resources.GeneratedResourceTransaction(owner_group_uuid="extension_v2-owner")
     return group, tx, ExtensionBackendContext(
         group=group,
         location=(0.0, 0.0),

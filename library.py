@@ -553,10 +553,9 @@ def _candidate_records_from_inputs(
                 )
                 if interface_path is not None:
                     if source_path is not None:
-                        # TODO(nodeforge-migration): Source-backed library owners with interface.py are reserved for the
-                        # later hybrid-extension migration. This backend-only platform supports pure source entries and
-                        # native-only v2 extension owners only; do not construct an owner-local helper view here. Remove
-                        # this marker when hybrid source/interface execution and its resource-mutation contract are implemented.
+                        # A single owner containing both source.nf and interface.py is intentionally unsupported.
+                        # Keep it explicitly classified so resolution can produce the dedicated mixed-owner diagnostic
+                        # instead of silently choosing source execution or Extension API v2 execution.
                         kind = "v2_hybrid"
                     else:
                         kind = "extension"
@@ -889,9 +888,8 @@ def _module_path_for_entry(namespace: str, name: str) -> Path | None:
 def has_module_library_entry(namespace: str, name: str) -> bool:
     """Return whether discovery found a legacy native Python library owner.
 
-    This is structural characterization only. Stage 35 never imports or executes
-    the native module; supported Python extensions use ``interface.py`` through
-    Extension API v2.
+    This is structural characterization only; supported Python extensions execute through
+    ``interface.py`` / Extension API v2, and this native module is never executed.
     """
     return _module_path_for_entry(namespace, name) is not None
 

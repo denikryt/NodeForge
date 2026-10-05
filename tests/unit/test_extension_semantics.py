@@ -99,11 +99,11 @@ def test_exact_float_overload_is_selected_without_order_tiebreak(tmp_path):
     assert analyzed.result.typ is NFType.FLOAT
 
 
-def test_v2_hybrid_library_is_migration_blocked_before_source_preparation(tmp_path):
+def test_mixed_source_interface_owner_is_rejected_before_source_preparation(tmp_path):
     """A source.nf + interface.py record must not be treated as a pure source callable."""
     class _Session:
         def prepare_library(self, **kwargs):
-            raise AssertionError("hybrid migration block must run before source preparation")
+            raise AssertionError("mixed-owner rejection must run before source preparation")
 
     record = SimpleNamespace(
         namespace="functions",
@@ -131,5 +131,5 @@ def test_v2_hybrid_library_is_migration_blocked_before_source_preparation(tmp_pa
         source_call_site_allocator=lambda _function_id: 0,
     )
     root = ast.parse("hybrid(1.0)", mode="eval").body
-    with pytest.raises(Exception, match="v2 hybrid source/interface"):
+    with pytest.raises(Exception, match=r"unsupported mixed source\.nf \+ interface\.py package owner"):
         analyze_expression(root, environment)

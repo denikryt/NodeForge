@@ -18,7 +18,7 @@ def _package(root, package_id, namespace, *, python=False):
     (root / namespace).mkdir()
     (root / 'nodeforge_package.json').write_text(json.dumps({
         'schema_version': 1, 'id': package_id, 'name': package_id,
-        'version': '1.0.0', 'author': 'Tests', 'description': 'Stage 40 review',
+        'version': '1.0.0', 'author': 'Tests', 'description': 'qualified package-callable review',
         'nodeforge_min_version': '0.65.0', 'nodeforge_max_version': None,
         'contents': {namespace: namespace}, 'permissions': {'python': python},
     }))

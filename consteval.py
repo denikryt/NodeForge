@@ -655,11 +655,9 @@ def _handle_compile_time_stmt(
             state.bind(target.id, replacement)
             recorder.effect(CompileTimeBindExpression(target.id, stmt.value))
             return
-        # TODO(nodeforge-migration): Known non-foldable runtime-capable RHS values are
-        # conservatively retained because this stage has no binding-level runtime-demand analysis.
-        # Consumer contracts and typed numeric materialization land first; after those stages,
-        # audit whether eager assignment lowering still forces unnecessary runtime form and,
-        # if so, replace it with a narrow demand-driven materialization mechanism.
+        # A known compile-time value does not authorize removal of a runtime-capable assignment.
+        # Keep the source residual unless the explicit runtime-fold policy proves replacement safe;
+        # compile-time-only consumers may still use the independently known value.
         recorder.retain(stmt)
         return
     if isinstance(stmt, ast.AugAssign):
@@ -699,11 +697,8 @@ def _handle_compile_time_stmt(
     if isinstance(stmt, ast.If):
         written_names = _collect_preprocessing_written_names((*stmt.body, *stmt.orelse))
         recorder.retain(stmt)
-        # TODO(nodeforge-migration): Preprocessing still carries CompileTimeState across residual
-        # runtime control flow, so every retained ordinary if must conservatively discard names
-        # that either branch may write before later source transformation. Remove this syntactic
-        # barrier only when preprocessing no longer propagates pre-if facts across runtime control
-        # flow, or an equally sound replacement owns that boundary.
+        # Ordinary if remains runtime control flow. Discard compile-time facts for every name
+        # either retained branch may write so later preprocessing cannot observe a stale pre-branch value.
         for name in written_names:
             state.discard(name)
         return

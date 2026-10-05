@@ -1,0 +1,146 @@
+{
+  "hydraulic_grid": {
+    "nodes": 561,
+    "links": 816,
+    "cases": [
+      {
+        "settings": {
+          "Resolution": 16,
+          "Steps": 10,
+          "Open Edges": false,
+          "Evaporation": 0.0
+        },
+        "seconds": 0.04691520100004709,
+        "height_delta_min": -0.011724352836608887,
+        "height_delta_max": 0.0,
+        "height_delta_rms": 0.0038807139043697983,
+        "solid_balance_error": -1.675702833381365e-06,
+        "water_balance_error": -9.439093973107049e-08,
+        "sediment_export": 0.0,
+        "water_export": 0.0,
+        "erosion": 0.840197215502442,
+        "deposition": 6.5052128895101846e-21,
+        "water_min": 5.820766091346741e-11,
+        "water_max": 0.07414551824331284
+      },
+      {
+        "settings": {
+          "Resolution": 32,
+          "Steps": 100,
+          "Open Edges": true
+        },
+        "seconds": 0.3573179199997867,
+        "height_delta_min": -0.22259581089019775,
+        "height_delta_max": 0.004712343215942383,
+        "height_delta_rms": 0.050644326949387856,
+        "solid_balance_error": 9.90492885932781e-06,
+        "water_balance_error": -3.4198750924474552e-06,
+        "sediment_export": 38.816193457648296,
+        "water_export": 56.474263824522495,
+        "erosion": 42.220352370367394,
+        "deposition": 0.020936332676456004,
+        "water_min": 0.0,
+        "water_max": 0.04716185852885246
+      },
+      {
+        "settings": {
+          "Resolution": 96,
+          "Steps": 500,
+          "Open Edges": true
+        },
+        "seconds": 10.228114454000206,
+        "height_delta_min": -2.9257349967956543,
+        "height_delta_max": 0.10634052753448486,
+        "height_delta_rms": 0.40024057704271815,
+        "solid_balance_error": 0.007501092434381462,
+        "water_balance_error": 2.6825281565834302e-05,
+        "sediment_export": 1790.632361650787,
+        "water_export": 2515.001618027687,
+        "erosion": 2008.5728439054974,
+        "deposition": 27.17383730829292,
+        "water_min": 0.0,
+        "water_max": 0.33384692668914795
+      }
+    ]
+  },
+  "stream_power_d8": {
+    "nodes": 611,
+    "links": 871,
+    "cases": [
+      {
+        "settings": {
+          "Resolution": 16,
+          "Steps": 0
+        },
+        "seconds": 0.009941514999809442,
+        "height_delta_min": 0.0,
+        "height_delta_max": 0.0,
+        "height_delta_rms": 0.0
+      },
+      {
+        "settings": {
+          "Resolution": 16,
+          "Steps": 1,
+          "Routing Passes": 256
+        },
+        "seconds": 0.06018373100005192,
+        "height_delta_min": -0.040402889251708984,
+        "height_delta_max": 0.0,
+        "height_delta_rms": 0.016515012376179927,
+        "max_drainage_area": 9.777778625488281
+      },
+      {
+        "settings": {
+          "Resolution": 96,
+          "Steps": 24,
+          "Routing Passes": 160
+        },
+        "seconds": 4.960959413000182,
+        "height_delta_min": -0.6186838150024414,
+        "height_delta_max": 0.0,
+        "height_delta_rms": 0.16054158443162747,
+        "max_drainage_area": 12.6759033203125
+      }
+    ]
+  },
+  "stream_power_mfd": {
+    "nodes": 657,
+    "links": 931,
+    "cases": [
+      {
+        "settings": {
+          "Resolution": 16,
+          "Steps": 0
+        },
+        "seconds": 0.01074222999977792,
+        "height_delta_min": 0.0,
+        "height_delta_max": 0.0,
+        "height_delta_rms": 0.0
+      },
+      {
+        "settings": {
+          "Resolution": 16,
+          "Steps": 1,
+          "Routing Passes": 512
+        },
+        "seconds": 0.11911995999980718,
+        "height_delta_min": -0.03072357177734375,
+        "height_delta_max": 0.0,
+        "height_delta_rms": 0.014382514212515152,
+        "max_drainage_area": 4.44624137878418
+      },
+      {
+        "settings": {
+          "Resolution": 96,
+          "Steps": 24,
+          "Routing Passes": 512
+        },
+        "seconds": 13.224940458999754,
+        "height_delta_min": -0.4567852020263672,
+        "height_delta_max": 0.0,
+        "height_delta_rms": 0.14506865466826066,
+        "max_drainage_area": 16.218339920043945
+      }
+    ]
+  }
+}

@@ -1,4 +1,4 @@
-"""Structural/Object/Bundle semantics migration compiler-owned structural and Object semantic contracts."""
+"""Compiler-owned structural, Object, and Bundle semantic contracts."""
 
 import ast
 from pathlib import Path

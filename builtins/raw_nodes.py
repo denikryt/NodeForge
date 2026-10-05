@@ -783,7 +783,7 @@ def resolve_cutover_socket(src_node, src_socket, dst_node, *, direction):
             )
 
     # Undeclared/manual/external raw links retain the generic physical-position
-    # copy behavior and never become Stage-39 declared metadata.
+    # copy behavior and never become NodeForge-declared raw metadata.
     return dst_collection[_physical_collection_index(src_collection, src_socket)]
 
 

@@ -31,7 +31,7 @@ def _owner(tmp_path: Path, operations: str):
 
 def test_implementation_module_is_lazy_and_executes_captured_bytes(tmp_path):
     """Implementation resolution must stay lazy and use captured, not live, bytes."""
-    marker = "_nodeforge_stage32_registry_hits"
+    marker = "_nodeforge_extension_v2_registry_hits"
     if hasattr(builtins, marker):
         delattr(builtins, marker)
     snapshot = _owner(

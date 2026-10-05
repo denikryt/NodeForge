@@ -1,4 +1,4 @@
-"""Pure tests for Semantic Body IR migration straight-line Semantic Body IR."""
+"""Pure tests for compiler-owned Semantic Body IR."""
 
 import ast
 from types import MappingProxyType, SimpleNamespace
@@ -310,7 +310,7 @@ def test_rejected_semantic_body_does_not_mutate_inherited_compile_time_list():
     assert shared == [1]
 
 def test_migrated_arrays_and_loops_are_accepted_without_legacy_fallback():
-    """Permanent body constructs stay accepted without relying on the removed source-call migration failure."""
+    """Permanent body constructs stay accepted without relying on removed source-call failure routing."""
     array_result = _lower("items = [a]\nitems[0]", bindings=dict([_binding("a", 0)]))
     assert array_result.body.statements
     with pytest.raises(CompileError, match="Cannot unpack scalar result into 2 names"):
@@ -1600,7 +1600,7 @@ def test_compile_time_for_effect_replay_rejects_more_iterations_than_preprocessi
         )
 
 
-def test_stage38_compile_time_owned_rebind_replaces_prior_runtime_owner_for_static_consumers():
+def test_runtime_control_flow_compile_time_owned_rebind_replaces_prior_runtime_owner_for_static_consumers():
     """A compile-time-owned source rebind owns the name instead of retaining the old runtime slot."""
     result = _lower(
         'x = input_int("X", default=1)\n'
@@ -1610,7 +1610,7 @@ def test_stage38_compile_time_owned_rebind_replaces_prior_runtime_owner_for_stat
     assert result.final_compile_time.values["x"] == [1, 2]
 
 
-def test_stage38_compile_time_owned_rebind_cannot_fall_back_to_prior_runtime_owner():
+def test_runtime_control_flow_compile_time_owned_rebind_cannot_fall_back_to_prior_runtime_owner():
     """A runtime consumer after a compile-time-owned rebind cannot read the stale pre-rebind socket."""
     with pytest.raises(CompileError, match=r"output\(\) cannot output an array directly"):
         _lower(
@@ -1619,7 +1619,7 @@ def test_stage38_compile_time_owned_rebind_cannot_fall_back_to_prior_runtime_own
             'output(x)\n'
         )
 
-def test_stage38_runtime_if_survival_uses_exact_binding_identity_positive():
+def test_runtime_if_survival_uses_exact_binding_identity_positive():
     """The convergence owner keeps an incoming runtime value when both exits retain its exact BindingId."""
     incoming = RuntimeBindingSymbol(BindingId("scope", 7), NFType.FLOAT)
     true_state = SimpleNamespace(runtime_bindings={"value": incoming})
@@ -1629,7 +1629,7 @@ def test_stage38_runtime_if_survival_uses_exact_binding_identity_positive():
     ) == ()
 
 
-def test_stage38_runtime_if_survival_rejects_same_name_with_different_binding_identity():
+def test_runtime_if_survival_rejects_same_name_with_different_binding_identity():
     """Matching source spelling cannot preserve an incoming runtime owner with a different BindingId."""
     incoming = RuntimeBindingSymbol(BindingId("scope", 7), NFType.FLOAT)
     replacement = RuntimeBindingSymbol(BindingId("scope", 8), NFType.FLOAT)

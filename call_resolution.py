@@ -311,7 +311,7 @@ class AnalyzedCall:
 
 @dataclass(frozen=True)
 class _UnresolvedCallable:
-    """Sentinel preserving legacy diagnostics after pure name resolution."""
+    """Sentinel preserving established diagnostics after pure name resolution."""
 
 
 UNRESOLVED = _UnresolvedCallable()

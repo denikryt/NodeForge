@@ -680,7 +680,7 @@ def test_caller_side_star_rejects_semantic_record_not_list(tmp_path):
         analyze_expression(root, _environment(registry, by_name))
 
 def test_double_star_remains_unsupported_for_semantic_extensions(tmp_path):
-    """Stage 34 adds only caller-side semantic LIST star expansion, not ** mapping expansion."""
+    """persistent extension semantic-value adds only caller-side semantic LIST star expansion, not ** mapping expansion."""
     _session, registry, by_name = _registry(tmp_path)
     root = ast.parse("consume_star(**{})", mode="eval").body
     with pytest.raises(CompileError, match=r"caller-side \*\*"):

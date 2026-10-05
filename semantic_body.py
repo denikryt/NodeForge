@@ -1,9 +1,8 @@
-"""Pure Semantic IR construction for basic straight-line executable bodies.
+"""Construct compiler-owned Semantic IR for executable function bodies.
 
-this migration owns ordinary runtime assignments, fixed tuple/named-output
-structural bindings, direct explicit inputs, explicit outputs, and migrated
-Object semantics. Unsupported categories reject the complete body before
-Blender lowering begins.
+This module owns ordinary runtime assignments, fixed tuple/named-output structural
+bindings, direct explicit inputs, explicit outputs, and Object semantics. Unsupported
+categories reject the complete body before Blender lowering begins.
 """
 
 from __future__ import annotations
@@ -265,7 +264,7 @@ def validate_input_declaration_placement(stmts) -> None:
 
 
 def _tuple_target_names(target_node: ast.Tuple | ast.List) -> list[str]:
-    """Validate one legacy-compatible flat tuple/list unpack target and return its names."""
+    """Validate one supported flat tuple/list unpack target and return its names."""
     if any(isinstance(item, ast.Starred) for item in target_node.elts):
         raise CompileError("Starred tuple unpacking is not supported")
     if not target_node.elts or not all(isinstance(item, ast.Name) for item in target_node.elts):
@@ -1507,11 +1506,10 @@ def lower_basic_body(
                     ),
                 )
 
-                # A builder identity created/replaced independently in both runtime branches was
-                # historically a common changed compile-time object and therefore failed at the
-                # legacy branch merge. Preserve that diagnostic instead of silently treating two
-                # fresh branch-local identities as mergeable or discardable. One-sided branch-local
-                # construction remains compatible and is discarded with its branch state.
+                # A builder identity created/replaced independently in both runtime branches is not
+                # mergeable as one frontend identity. Preserve the diagnostic instead of silently
+                # treating two fresh branch-local identities as equivalent. One-sided branch-local
+                # construction is discarded with its branch state.
                 if policy is BranchMergePolicy.TOP_LEVEL:
                     common_builder_names = set(result.true_state.builder_states) & set(result.false_state.builder_states)
                     for builder_name in sorted(common_builder_names):
@@ -1847,9 +1845,8 @@ def lower_basic_body(
                 compile_time_value = None
                 has_compile_time_value = False
                 if control_policy is BranchMergePolicy.REPEAT:
-                    # Legacy Repeat assignments are runtime-state operations: compile_runtime_stmt()
-                    # always invalidates the assigned name in compile-time state instead of publishing a
-                    # newly const-evaluated value. Preserve that contextual contract so a carried
+                    # Repeat assignments are runtime-state operations. Invalidate the assigned name in
+                    # compile-time state instead of publishing a newly const-evaluated value so carried
                     # state cannot become a stale compile-time constant after Repeat construction.
                     pass
                 elif isinstance(stmt.value, ast.List) and not stmt.value.elts:
@@ -2033,8 +2030,8 @@ def lower_basic_body(
                         active.adopt_object_snapshot(analyzed.object_semantics)
                         for _result, binding_id in bindings:
                             _append_builder_binding(active, builder_name, binding_id, statements)
-                    # Legacy builder mutation clears implicit final-output selection even when no
-                    # executable IR is needed (for example, extend([])).
+                    # Builder mutation clears implicit final-output selection even when no executable
+                    # IR is needed (for example, extend([])).
                     active.clear_auto_final_output = True
                     continue
 

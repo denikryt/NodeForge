@@ -56,7 +56,7 @@ def test_every_callable_builtin_is_explicitly_ir_capable_or_input_declaration():
 
 
 def test_unknown_name_does_not_become_a_core_builtin_when_sample_index_is_registered():
-    """Stage 37 extends the existing inventory without widening builtin resolution."""
+    """Sample Index extends the existing inventory without widening builtin resolution."""
     unknown = "definitely_not_a_nodeforge_builtin"
     assert unknown not in IR_CAPABLE_BUILTIN_NAMES
     assert unknown not in CALLABLE_BUILTIN_NAMES
@@ -121,7 +121,7 @@ def test_sample_index_preserves_each_supported_sampled_value_type(value_type):
     [TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING, TYPE_BUNDLE, TYPE_GEOMETRY, TYPE_ROTATION],
 )
 def test_sample_index_rejects_unsupported_sampled_value_types_before_backend(value_type):
-    """Stage 37 does not widen Sample Index beyond the core attribute-field vocabulary."""
+    """Sample Index does not widen Sample Index beyond the core attribute-field vocabulary."""
     with pytest.raises(CompileError, match="value supports Float, Int, Bool and Vector"):
         _analyze(
             "sample_index",
@@ -737,7 +737,7 @@ def test_transform_validates_runtime_options_in_backend_order_after_compiling_al
 
 
 def test_bundle_semantics_remain_opaque_runtime_type_without_schema_inference():
-    """Structural/Object/Bundle semantics migration keeps Bundle as one ordinary runtime leaf and requires explicit get typing."""
+    """Bundle semantics keep Bundle as one ordinary runtime leaf and require explicit get typing."""
     from NodeForge.nf_types import NFType
 
     assert TYPE_BUNDLE is NFType.BUNDLE

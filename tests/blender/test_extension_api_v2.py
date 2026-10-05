@@ -34,7 +34,7 @@ def _write_extension_package(
                 "author": "Tests",
                 "description": "Physical extension fixture",
                 "nodeforge_min_version": "0.59.0",
-                "nodeforge_max_version": "0.65.1",
+                "nodeforge_max_version": "0.65.2",
                 "contents": {"systems": "systems"},
                 "permissions": {"python": True},
             }
@@ -64,7 +64,7 @@ def ext_scale(
         f"""
 import builtins
 from NodeForge.extension_api import ExtensionBackendValue, NFType
-builtins._nodeforge_stage32_blender_impl_hits = getattr(builtins, "_nodeforge_stage32_blender_impl_hits", 0) + 1
+builtins._nodeforge_extension_v2_blender_impl_hits = getattr(builtins, "_nodeforge_extension_v2_blender_impl_hits", 0) + 1
 
 def build_scale(context, value, *, factor=2.0):
     {"context.new_generated_mesh(role=\"rollback-probe\", name_hint=\"Probe\")" if create_resource else ""}
@@ -96,7 +96,7 @@ def _write_rotation_extension_package(root: Path) -> None:
                 "author": "Tests",
                 "description": "Rotation physical-type fixture",
                 "nodeforge_min_version": "0.59.0",
-                "nodeforge_max_version": "0.65.1",
+                "nodeforge_max_version": "0.65.2",
                 "contents": {"systems": "systems"},
                 "permissions": {"python": True},
             }
@@ -150,7 +150,7 @@ def _write_nested_import_extension_package(root: Path) -> None:
                 "author": "Tests",
                 "description": "Nested owner-local import fixture",
                 "nodeforge_min_version": "0.59.0",
-                "nodeforge_max_version": "0.65.1",
+                "nodeforge_max_version": "0.65.2",
                 "contents": {"systems": "systems"},
                 "permissions": {"python": True},
             }
@@ -208,7 +208,7 @@ def _write_semantic_extension_package(root: Path) -> None:
                 "author": "Tests",
                 "description": "Package semantic-state Blender fixture",
                 "nodeforge_min_version": "0.60.0",
-                "nodeforge_max_version": "0.65.1",
+                "nodeforge_max_version": "0.65.2",
                 "contents": {"systems": "systems"},
                 "permissions": {"python": True},
             }
@@ -330,13 +330,13 @@ def bad_consume_part(context, semantic_state):
 
 def test_v2_system_dispatch_is_lazy_and_uses_public_backend_context():
     """Installation leaves implementation lazy; first compile realizes one ordinary Blender node."""
-    if hasattr(builtins, "_nodeforge_stage32_blender_impl_hits"):
-        delattr(builtins, "_nodeforge_stage32_blender_impl_hits")
+    if hasattr(builtins, "_nodeforge_extension_v2_blender_impl_hits"):
+        delattr(builtins, "_nodeforge_extension_v2_blender_impl_hits")
     with tempfile.TemporaryDirectory() as tmp:
         source = Path(tmp) / "package"
         _write_extension_package(source)
         packages.install_package_directory(source, allow_python=True)
-        assert not hasattr(builtins, "_nodeforge_stage32_blender_impl_hits")
+        assert not hasattr(builtins, "_nodeforge_extension_v2_blender_impl_hits")
 
         group = compile_group(
             'from packages import v2\n'
@@ -350,9 +350,9 @@ def test_v2_system_dispatch_is_lazy_and_uses_public_backend_context():
         assert len(math_nodes) == 1
         assert math_nodes[0].operation == "MULTIPLY"
         assert math_nodes[0].inputs[1].default_value == pytest.approx(2.0)
-        assert getattr(builtins, "_nodeforge_stage32_blender_impl_hits") == 1
-    if hasattr(builtins, "_nodeforge_stage32_blender_impl_hits"):
-        delattr(builtins, "_nodeforge_stage32_blender_impl_hits")
+        assert getattr(builtins, "_nodeforge_extension_v2_blender_impl_hits") == 1
+    if hasattr(builtins, "_nodeforge_extension_v2_blender_impl_hits"):
+        delattr(builtins, "_nodeforge_extension_v2_blender_impl_hits")
 
 
 def test_nested_owner_local_imports_work_through_install_and_physical_dispatch():
@@ -547,7 +547,7 @@ def test_discarded_runtime_extension_argument_creates_no_backend_or_resource():
 
 
 def test_persistent_semantic_backend_failure_still_rolls_back_resources():
-    """Stage-32 transaction ownership remains authoritative after Stage-34 body persistence."""
+    """Extension API v2 transaction ownership remains authoritative after persistent extension semantic-value body persistence."""
     builtins._nodeforge_semantic_backend_calls = []
     try:
         with tempfile.TemporaryDirectory() as tmp:

@@ -387,3 +387,9 @@ lifecycle.
 - Restore native/Python Examples owner snapshots and normalized sessions in the compilation registry, with deferred catalog failures and atomic publication of selected sessions. Examples remain outside package callable namespaces.
 - Resolve Functions, Examples and Local reload records from the same environment snapshot supplied to the backend. The library reload adapter reuses its backend's source-callable session rather than discovering another environment.
 - Add paired admission, Examples and reload snapshot regressions, plus Blender integration coverage for Python Example materialization and Functions reload. Blender integration tests require a separate Blender run.
+
+## 0.65.2
+
+- Finalized release-facing compiler/package cleanup by replacing remaining temporary migration and refactor-chronology labels with permanent semantic contracts and adding repository hygiene regressions.
+- Kept mixed `source.nf` + `interface.py` owners explicitly unsupported, preserved conservative residualization/runtime-control-flow invariants, and refreshed current architecture/coverage wording without changing DSL semantics.
+- Advanced release-coupled synthetic extension compatibility fixtures to the current core version and prepared the legacy-free compiler for final core/Blender/downstream artifact validation.

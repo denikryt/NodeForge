@@ -47,7 +47,7 @@ def test_from_functions_is_removed_with_migration_diagnostic():
 
 
 def test_package_star_import_is_rejected():
-    """Packages bind namespaces; Stage 40 does not flatten them with star imports."""
+    """Packages bind namespaces; qualified package-callable does not flatten them with star imports."""
     with pytest.raises(CompileError, match=r"from packages import \* is not supported"):
         _parse_source('from packages import *\nx = 1')
 

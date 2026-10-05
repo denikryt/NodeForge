@@ -39,7 +39,7 @@ def _manifest(root: Path, package_id: str, *, systems: bool = False, functions: 
                 "author": "Tests",
                 "description": "declarative extension installer fixture",
                 "nodeforge_min_version": "0.59.0",
-                "nodeforge_max_version": "0.65.1",
+                "nodeforge_max_version": "0.65.2",
                 "contents": contents,
                 "permissions": {"python": True},
             }
@@ -67,7 +67,7 @@ def {public_name}(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float
 
 def test_native_library_interface_executes_once_during_candidate_install(tmp_path):
     """Collision validation reuses the candidate's retained normalized v2 inventory."""
-    marker = "_nodeforge_stage32_install_native_hits"
+    marker = "_nodeforge_extension_v2_install_native_hits"
     if hasattr(builtins, marker):
         delattr(builtins, marker)
     source = tmp_path / "source"
@@ -99,7 +99,7 @@ def foo(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...
 
 def test_retained_system_declaration_validator_does_not_execute_v2_interface(tmp_path):
     """Active-package validation remains v1-only and never executes v2 Python."""
-    marker = "_nodeforge_stage32_v1_validator_v2_hits"
+    marker = "_nodeforge_extension_v2_v1_validator_v2_hits"
     if hasattr(builtins, marker):
         delattr(builtins, marker)
     source = tmp_path / "source"

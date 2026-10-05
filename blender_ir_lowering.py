@@ -319,7 +319,7 @@ def _lower_compare(context, operation, materialized, x, y):
 
 
 def _lower_conditional(context, operation, materialized, x, y):
-    """Materialize one conditional IR operation with legacy socket ordering."""
+    """Materialize one conditional IR operation with the established socket ordering."""
     condition = _materialized_value(materialized, operation.condition)
     true_value = _materialized_value(materialized, operation.true_value)
     false_value = _materialized_value(materialized, operation.false_value)

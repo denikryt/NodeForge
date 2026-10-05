@@ -46,7 +46,7 @@ def _write_manifest(root: Path, package_id: str) -> None:
                 "author": "Tests",
                 "description": "declarative extension bootstrap fixture",
                 "nodeforge_min_version": "0.59.0",
-                "nodeforge_max_version": "0.65.1",
+                "nodeforge_max_version": "0.65.2",
                 "contents": {"systems": "systems", "functions": "functions"},
                 "permissions": {"python": True},
             }

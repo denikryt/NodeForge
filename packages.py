@@ -273,8 +273,8 @@ def _fsync_directory(path: Path) -> None:
 def invalidate_caches() -> None:
     """Invalidate package-related runtime caches.
 
-    Stage 40 removed the global system-name registry; package resolution now
-    snapshots owner-qualified exports per compilation, so no name cache remains.
+    Package resolution snapshots owner-qualified exports per compilation, so no
+    process-global package-name cache remains.
     """
     return None
 

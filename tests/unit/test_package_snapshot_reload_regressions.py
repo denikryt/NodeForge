@@ -1,4 +1,4 @@
-"""Admission, Examples registry and reload snapshot regressions for Stage 40."""
+"""Admission, Examples registry and reload snapshot regressions for qualified package-callable."""
 
 import json
 import sys
@@ -42,7 +42,7 @@ def write_package(root, package_id, *, import_name='shared', examples=False):
     (root / 'nodeforge_package.json').write_text(json.dumps({
         'schema_version': 1, 'id': package_id, 'import_name': import_name,
         'name': package_id, 'version': '1.0.0', 'author': 'Tests',
-        'description': 'Stage 40 review regression', 'contents': {catalog: catalog},
+        'description': 'qualified package-callable review regression', 'contents': {catalog: catalog},
         'nodeforge_min_version': '0.65.0', 'nodeforge_max_version': None,
         'permissions': {'python': examples},
     }))

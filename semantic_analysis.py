@@ -366,7 +366,7 @@ def _normalize_semantic_constant_inner(value, active):
 
 
 def _normalize_semantic_constant(value):
-    """Return the immutable semantic runtime view of one legacy constant value, cycle-safely."""
+    """Return the immutable semantic runtime view of one detached compile-time constant, cycle-safely."""
     constant, _ = _normalize_semantic_constant_inner(value, set())
     return constant
 
@@ -952,7 +952,7 @@ def _analyze_extension_call(
     )
 
 def _unregistered_keyword_error(name):
-    """Create the exact legacy diagnostic for keywords on an unresolved call."""
+    """Create the established diagnostic for keywords on an unresolved call."""
     return CompileError(
         f"Keyword arguments are only supported for builtins, library functions, local functions or local backend helpers; {name} is not registered as one"
     )
@@ -1876,12 +1876,10 @@ def analyze_expression(expr, environment):
                     getattr(library_record, "interface_path", None) is not None
                     and getattr(library_record, "source_path", None) is not None
                 ):
-                    # TODO(nodeforge-migration): Source-backed library owners with interface.py are reserved for the
-                    # later hybrid-extension migration. This backend-only platform supports pure source entries and
-                    # native-only v2 extension owners only; do not construct an owner-local helper view here. Remove
-                    # this marker when hybrid source/interface execution and its resource-mutation contract are implemented.
+                    # Mixed source.nf + interface.py owners are outside the supported callable model.
+                    # Reject the owner before source preparation or backend dispatch rather than selecting one side implicitly.
                     raise CompileError(
-                        f"{name}() is temporarily unavailable while v2 hybrid source/interface callables are being migrated"
+                        f"{name}() uses an unsupported mixed source.nf + interface.py package owner"
                     )
                 if getattr(library_record, "source_path", None) is None or getattr(library_record, "module_path", None) is not None:
                     raise CompileError(

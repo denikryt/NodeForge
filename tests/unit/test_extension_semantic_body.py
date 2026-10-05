@@ -133,7 +133,7 @@ def test_local_source_body_may_use_semantic_state_internally_when_runtime_result
 
 
 def test_transient_semantic_composition_in_group_body_has_no_persistence_statement(tmp_path):
-    """A semantic value consumed in the same expression never crosses the Stage-34 persistence boundary."""
+    """A semantic value consumed in the same expression never crosses the persistent extension semantic-value persistence boundary."""
     _session, environment, identity = _fixture(tmp_path)
     compilation = analyze_group_source(
         'from packages import semantic\nx = input_float("X")\ny = consume(make(x))\noutput(y)\n',
