@@ -197,7 +197,7 @@ def test_installed_library_object_input_and_output_keep_object_behavior():
         try:
             group = compile_group(
                 '''
-from functions import object_passthrough
+from packages import objecttest
 obj = input_object("Source")
 returned = object_passthrough(obj)
 returned.info(transform_space="RELATIVE", as_instance=False)

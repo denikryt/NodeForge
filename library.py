@@ -9,7 +9,7 @@ import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Collection, Iterable, TYPE_CHECKING
+from typing import Iterable, TYPE_CHECKING
 
 import bpy
 
@@ -24,7 +24,6 @@ from .function_materializer import (
     LibraryFunctionMaterializationSpec,
     LibraryFunctionUpdateSpec,
 )
-from .systems import registry as systems_registry
 from . import packages
 from .function_instances import (
     FUNCTION_DEFINITION_OWNER_PROP,
@@ -33,7 +32,7 @@ from .function_instances import (
 )
 
 if TYPE_CHECKING:
-    from .resolved_environment import ResolvedCatalog
+    from .resolved_environment import ResolvedCatalog, ResolvedEnvironment
 
 _SOURCE_EXTENSIONS = (".nf", ".nodeforge")
 _PACKAGE_SOURCE_NAME = "source.nf"
@@ -327,19 +326,10 @@ def _is_public_function_name(name: str) -> bool:
     return _is_valid_function_name(name) and not name.startswith("_")
 
 
-def _validate_public_entry_name(
-    name: str,
-    context: str = "Library entry",
-    *,
-    system_constructor_names: Collection[str] | None = None,
-) -> str:
-    """Return a validated public library entry name."""
+def _validate_public_entry_name(name: str, context: str = "Library entry") -> str:
+    """Return a validated public library entry name without global callable reservation."""
     if not _is_public_function_name(name):
         raise CompileError(f"{context} name must be a valid public NodeForge import name")
-    if system_constructor_names is None:
-        systems_registry.validate_no_reserved_collision(name, context)
-    elif name in system_constructor_names:
-        raise CompileError(f"{context} {name!r} collides with reserved system constructor name")
     return name
 
 
@@ -730,17 +720,11 @@ def local_browser_records(current_path: str = "") -> list[dict[str, object]]:
 def _unique_records_from_candidates(
     namespace: str,
     candidates: Iterable[LibraryEntryRecord],
-    *,
-    system_constructor_names: Collection[str],
 ) -> dict[str, LibraryEntryRecord]:
-    """Select one record per public name from explicit discovery candidates."""
+    """Select one record per public name for catalogs that remain globally unique."""
     by_name: dict[str, list[LibraryEntryRecord]] = {}
     for record in candidates:
-        _validate_public_entry_name(
-            record.name,
-            f"{namespace} library entry",
-            system_constructor_names=system_constructor_names,
-        )
+        _validate_public_entry_name(record.name, f"{namespace} library entry")
         by_name.setdefault(record.name, []).append(record)
     unique: dict[str, LibraryEntryRecord] = {}
     for name, records in by_name.items():
@@ -755,7 +739,6 @@ def resolve_catalog(
     namespace: str,
     *,
     package_roots: Iterable[packages.LibraryRoot],
-    system_constructor_names: Collection[str],
 ) -> "ResolvedCatalog":
     """Resolve one catalog from explicit package/system inputs as success or failure."""
     from .resolved_environment import (
@@ -771,11 +754,7 @@ def resolve_catalog(
             package_roots=tuple(package_roots),
             local_registry=local_registry,
         )
-        entries = _unique_records_from_candidates(
-            namespace,
-            candidates,
-            system_constructor_names=system_constructor_names,
-        )
+        entries = _unique_records_from_candidates(namespace, candidates)
     except CompileError as exc:
         failure = ResolvedCompileErrorFailure(tuple(exc.args))
     except OSError as exc:
@@ -793,30 +772,77 @@ def resolve_catalog(
     return ResolvedCatalog(namespace, {}, failure)
 
 
+def _package_function_records() -> tuple[LibraryEntryRecord, ...]:
+    """Return owner-qualified package function records from one resolved environment."""
+    from .resolved_environment import resolve_environment
+
+    return resolve_environment().package_function_records()
+
+
 def _unique_records(namespace: str) -> dict[str, LibraryEntryRecord]:
-    """Return one live unique record per public name or replay discovery failure."""
+    """Return one live unique record per name, failing if a name-only API is ambiguous."""
+    if namespace == "functions":
+        unique: dict[str, LibraryEntryRecord] = {}
+        for record in _package_function_records():
+            previous = unique.get(record.name)
+            if previous is not None and previous.package_id != record.package_id:
+                raise CompileError(
+                    f"Ambiguous functions library entry {record.name!r}: "
+                    f"{previous.package_id} and {record.package_id}"
+                )
+            unique[record.name] = record
+        return unique
     catalog = resolve_catalog(
         namespace,
         package_roots=() if namespace == "local" else packages.library_roots(namespace),
-        system_constructor_names=systems_registry.constructor_names(),
     )
     return {record.name: record for record in catalog.records()}
 
 
 def library_entry_records(namespace: str) -> list[dict[str, str]]:
-    """Return discovered records for a catalog with unique public names."""
-    return [record.as_dict() for record in sorted(_unique_records(namespace).values(), key=lambda r: r.name.lower())]
+    """Return catalog records, retaining package ownership for duplicate function names."""
+    if namespace == "functions":
+        records = _package_function_records()
+    else:
+        records = tuple(_unique_records(namespace).values())
+    return [record.as_dict() for record in sorted(
+        records,
+        key=lambda r: (r.name.lower(), r.package_id, str(r.path)),
+    )]
 
 
 def library_entry_names(namespace: str) -> set[str]:
-    """Return all callable public names from one catalog namespace."""
+    """Return public member spellings from one catalog namespace."""
+    if namespace == "functions":
+        return {record.name for record in _package_function_records()}
     return set(_unique_records(namespace).keys())
 
 
-def find_library_entry_record(namespace: str, name: str) -> LibraryEntryRecord | None:
-    """Return the unique source/native record for a public catalog name."""
+def find_library_entry_record(
+    namespace: str,
+    name: str,
+    *,
+    package_id: str | None = None,
+) -> LibraryEntryRecord | None:
+    """Return an exact catalog record, requiring owner identity when function names collide."""
     _validate_public_entry_name(name, f"{namespace} library entry")
-    return _unique_records(namespace).get(name)
+    if namespace != "functions":
+        if package_id not in (None, ""):
+            raise CompileError(f"{namespace} catalog entries are not selected by package id")
+        return _unique_records(namespace).get(name)
+
+    matches = [
+        record for record in _package_function_records()
+        if record.name == name and (package_id is None or record.package_id == package_id)
+    ]
+    if not matches:
+        return None
+    if len(matches) > 1:
+        owners = ", ".join(sorted(record.package_id for record in matches))
+        raise CompileError(
+            f"Ambiguous functions library entry {name!r}: {owners}. Select a package owner explicitly."
+        )
+    return matches[0]
 
 
 def has_library_entry(namespace: str, name: str) -> bool:
@@ -902,13 +928,11 @@ def _group_catalog_provenance(group) -> tuple[str, str]:
     return namespace, name
 
 
-def resolve_reloadable_library_entry(group, namespace: str | None = None, name: str | None = None) -> LibraryEntryRecord:
-    """Resolve the current editable catalog record compatible with an existing group.
-
-    Package version is intentionally not stable ownership for reloads: a group
-    may move to a newer installed version of the same package. Package identity
-    itself remains stable so an unrelated package cannot claim the datablock.
-    """
+def resolve_reloadable_library_entry(
+    group, namespace: str | None = None, name: str | None = None,
+    *, resolved_environment: ResolvedEnvironment | None = None,
+) -> LibraryEntryRecord:
+    """Resolve persisted ownership from the supplied compilation snapshot or UI discovery."""
     stored_namespace, stored_name = _group_catalog_provenance(group)
     namespace = stored_namespace if namespace is None else namespace
     name = stored_name if name is None else name
@@ -916,9 +940,25 @@ def resolve_reloadable_library_entry(group, namespace: str | None = None, name: 
         raise CompileError(
             f"Selected node group belongs to {stored_namespace}/{stored_name}, not {namespace}/{name}"
         )
-    record = find_library_entry_record(namespace, name)
+    package_id = None
+    if namespace == "functions":
+        try:
+            package_id = str(group.get("nodeforge_package_id") or "")
+        except Exception as exc:
+            raise CompileError("Selected package function has no readable package provenance") from exc
+        if not package_id or package_id == CORE_PACKAGE_ID:
+            raise CompileError("Selected package function has no canonical package owner")
+    if resolved_environment is None:
+        record = find_library_entry_record(namespace, name, package_id=package_id)
+    elif namespace == "functions":
+        record = resolved_environment.package_function_record(package_id, name)
+    else:
+        record = resolved_environment.catalog(namespace).find(name)
     if record is None:
-        raise CompileError(f"Current source for {namespace} library entry {name!r} is unavailable")
+        owner = f" from package {package_id!r}" if package_id else ""
+        raise CompileError(
+            f"Current source for {namespace} library entry {name!r}{owner} is unavailable"
+        )
     return validate_reloadable_library_entry_record(group, record)
 
 
@@ -947,17 +987,24 @@ def validate_reloadable_library_entry_record(group, record: LibraryEntryRecord) 
 
 def update_materialized_library_entry_group(namespace: str, name: str, group, group_backend):
     """Recompile the current editable catalog source into an existing root group."""
-    record = resolve_reloadable_library_entry(group, namespace, name)
-    return update_materialized_library_entry_group_for_record(record, group, group_backend)
+    session = group_backend.new_source_callable_session()
+    record = resolve_reloadable_library_entry(
+        group, namespace, name, resolved_environment=session.resolved_environment
+    )
+    return update_materialized_library_entry_group_for_record(
+        record, group, group_backend, source_callable_session=session
+    )
 
 
-def update_materialized_library_entry_group_for_record(record: LibraryEntryRecord, group, group_backend):
+def update_materialized_library_entry_group_for_record(
+    record: LibraryEntryRecord, group, group_backend, *, source_callable_session=None,
+):
     """Update an existing root group through one prepared semantic compilation."""
     validate_reloadable_library_entry_record(group, record)
     source = load_library_entry_source_for_record(record)
     function_id = library_function_id(record.namespace, record.package_id, record.name)
     identity = _direct_library_compilation_identity(function_id)
-    session = group_backend.new_source_callable_session()
+    session = source_callable_session or group_backend.new_source_callable_session()
     prepared = group_backend.prepare_source_compilation(
         source,
         compilation_identity=identity,

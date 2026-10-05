@@ -9,7 +9,7 @@ from typing import Mapping
 from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR
 from .nf_types import NFType
 from .errors import CompileError
-from .compiler_identities import BindingId, InputDeclarationId, normalize_library_package_id
+from .compiler_identities import BindingId, InputDeclarationId
 from .group_context import GroupContextSlot
 from .nodes import _boolean_math, _combine_xyz_mixed, _compare, _int_value, _integer_math, _math, _new_node, _separate_xyz, _string_value, _switch, _value, _vector_math
 from .geometry import (
@@ -595,9 +595,9 @@ def _lower_source_call(context, operation, operands, x, y):
         )
         materialized_group = materializer.materialize_local(spec, materialization_context)
     else:
-        record = session.resolved_environment.catalog(function_id.namespace).find(function_id.name)
-        if record is None or normalize_library_package_id(getattr(record, "package_id", "")) != function_id.package_id:
-            raise CompileError("Internal error: prepared library callable no longer matches resolved catalog")
+        record = prepared_callable.source_record
+        if record is None:
+            raise CompileError("Internal error: prepared library callable lost its resolved source record")
         materialized_group = materialize_prepared_library_callable(
             record,
             materializer,

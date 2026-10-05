@@ -12,7 +12,6 @@ import pytest
 from NodeForge import packages
 from NodeForge.errors import CompileError
 from NodeForge.resolved_environment import resolve_environment
-from NodeForge.systems import registry as systems_registry
 
 pytestmark = pytest.mark.unit
 
@@ -30,10 +29,8 @@ def _isolated_packages(tmp_path, monkeypatch):
     if loaded_library is not None:
         monkeypatch.setattr(loaded_library, "bpy", fake_bpy, raising=False)
     packages.set_packages_dir_for_tests(tmp_path / "inventory")
-    systems_registry.invalidate_cache()
     yield
     packages.set_packages_dir_for_tests(None)
-    systems_registry.invalidate_cache()
 
 
 def _write_manifest(root: Path, package_id: str) -> None:
@@ -49,7 +46,7 @@ def _write_manifest(root: Path, package_id: str) -> None:
                 "author": "Tests",
                 "description": "declarative extension bootstrap fixture",
                 "nodeforge_min_version": "0.59.0",
-                "nodeforge_max_version": "0.64.0",
+                "nodeforge_max_version": "0.65.1",
                 "contents": {"systems": "systems", "functions": "functions"},
                 "permissions": {"python": True},
             }
@@ -124,12 +121,12 @@ def test_invalid_system_suppresses_deferred_broken_library_owner(tmp_path):
 
     environment = resolve_environment()
 
-    assert environment.system_names() == ()
+    assert environment.package_by_id("vendor.atomic") is None
     assert environment.catalog("functions").names() == frozenset()
 
 
-def test_admitted_package_replays_deferred_library_snapshot_failure(tmp_path):
-    """A library snapshot failure becomes observable once its package is admitted."""
+def test_library_snapshot_failure_suppresses_owner_qualified_package_namespace(tmp_path):
+    """Any callable-owner snapshot failure rejects the package atomically for the session."""
     source = tmp_path / "source"
     _write_manifest(source, "vendor.replay")
     _write_system(source)
@@ -144,6 +141,5 @@ def test_admitted_package_replays_deferred_library_snapshot_failure(tmp_path):
 
     environment = resolve_environment()
 
-    assert "sys_value" in environment.system_names()
-    with pytest.raises(CompileError, match="symlink"):
-        environment.catalog("functions").names()
+    assert environment.package_by_id("vendor.replay") is None
+    assert environment.catalog("functions").names() == frozenset()

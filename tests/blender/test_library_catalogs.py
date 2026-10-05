@@ -58,6 +58,26 @@ def test_resolved_environment_defers_local_failure_without_repeating_discovery(m
     check(calls == [True], "deferred Local lookup repeated registry discovery")
 
 
+def test_explicit_local_import_replays_deferred_local_failure(monkeypatch):
+    """Local catalog failures remain lazy until source syntax actually needs Local resolution."""
+    calls = []
+
+    def malformed_registry():
+        calls.append(True)
+        raise CompileError("Unsupported Local source registry format")
+
+    monkeypatch.setattr(library, "_read_local_source_registry", malformed_registry)
+    environment = resolved_environment.resolve_environment()
+    backend = compiler._new_group_backend(environment)
+    with pytest.raises(CompileError, match="Unsupported Local source registry format"):
+        prepared_create_or_update(
+            'from local import missing\nvalue = 2.0\noutput("Value", value)\n',
+            "NFTest_deferred_local_failure_used",
+            backend=backend,
+        )
+    check(calls == [True], "explicit Local use repeated registry discovery")
+
+
 def test_root_and_nested_local_source_calls_share_snapshot_without_live_rediscovery(monkeypatch):
     """Root, parent, and leaf semantic preparations share one frozen environment/session."""
     from NodeForge import source_callables
@@ -591,7 +611,11 @@ def test_library_reload_allows_same_package_upgrade_and_rejects_package_takeover
             try:
                 compiler.update_library_catalog_group(group, "functions", "reload_value")
             except Exception as exc:
-                check("different package" in str(exc), f"unexpected cross-package reload error: {exc}")
+                message = str(exc)
+                check(
+                    "vendor.reload" in message and "unavailable" in message,
+                    f"unexpected owner-aware reload error: {exc}",
+                )
             else:
                 raise AssertionError("different package took over an existing library group")
             check(group.as_pointer() == pointer, "rejected package takeover replaced the root datablock")

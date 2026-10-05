@@ -46,7 +46,7 @@ def test_directory_zip_replace_uninstall_and_reinstall_lifecycle():
             assert installed.package_id == "vendor.lifecycle"
             assert library.has_library_function("vendor_value")
             compile_group(
-                'from functions import vendor_value\nx = vendor_value(2.0)\noutput("Value", x)',
+                'from packages import lifecycle\nx = vendor_value(2.0)\noutput("Value", x)',
                 "NFTest_vendor_lifecycle_directory",
             )
 
@@ -64,7 +64,7 @@ def test_directory_zip_replace_uninstall_and_reinstall_lifecycle():
             packages.uninstall_package("vendor.lifecycle")
             assert not library.has_library_function("vendor_value")
             expect_compile_error(
-                'from functions import vendor_value\nx = vendor_value(2.0)\noutput("Value", x)',
+                'from packages import lifecycle\nx = vendor_value(2.0)\noutput("Value", x)',
                 "NFTest_vendor_lifecycle_uninstalled",
             )
 

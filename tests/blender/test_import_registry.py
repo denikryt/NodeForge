@@ -11,7 +11,7 @@ def test_import_and_registry_checks():
         'source_callables',
         'callable_contracts',
         'blender_ir_lowering',
-        'systems.registry',
+        'systems',
     ]:
         __import__('NodeForge.' + modname)
     check(registry.CALLABLE_BUILTIN_NAMES, 'callable builtin registry is empty')

@@ -809,40 +809,23 @@ def test_semantic_backend_dispatch_signatures_realize_on_blender_rna():
 
 
 
-def test_structural_arrays_flat_unpack_append_loop_is_rejected_before_blender_effects():
-    """Flat ordinary-for unpacking is rejected directly without leaking Blender state."""
+def test_structural_arrays_flat_unpack_append_loop_preserves_graph():
+    """The semantic frontend realizes the existing array-append graph contract."""
+    from expression_characterization.harness import load_manifest, load_case_baseline, run_case, assert_case_result
+    case = next(case for case in load_manifest() if case["id"] == "for_unpack_append_compat")
     before = set(bpy.data.node_groups)
-    try:
-        compile_group(
-            "items = []\n"
-            "for x, y in [[1.0, 2.0]]:\n"
-            "    items.append(x + y)\n"
-            'output("Value", items[0])',
-            "NFTest_structural_arrays_flat_unpack_rejected",
-        )
-    except CompileError as exc:
-        check(str(exc) == "Only simple compile-time for targets are supported", f"unexpected flat-unpack diagnostic: {exc}")
-    else:
-        raise AssertionError("flat ordinary-for unpacking unexpectedly compiled")
-    check(set(bpy.data.node_groups) == before, "failed flat-unpack compilation leaked a generated node group")
+    assert_case_result(case["id"], run_case(case), load_case_baseline(case["id"]))
+    check(set(bpy.data.node_groups) == before, "array-unpack case cleanup leaked a group")
 
-def test_structural_arrays_runtime_dependent_flat_unpack_is_rejected_before_blender_effects():
-    """Runtime-valued flat ordinary-for unpacking is rejected directly without partial effects."""
+
+def test_structural_arrays_runtime_dependent_flat_unpack_preserves_graph():
+    """Runtime inputs retain their original connections through flat loop targets."""
+    from expression_characterization.harness import load_manifest, load_case_baseline, run_case, assert_case_result
+    case = next(case for case in load_manifest() if case["id"] == "for_unpack_runtime_array_compat")
     before = set(bpy.data.node_groups)
-    try:
-        compile_group(
-            'a = input_float("A", default=1.0)\n'
-            'pairs = [[a, a]]\n'
-            'for x, y in pairs:\n'
-            '    result = x + y\n'
-            'output("Result", result)',
-            "NFTest_structural_arrays_runtime_dependent_flat_unpack_rejected",
-        )
-    except CompileError as exc:
-        check(str(exc) == "Only simple compile-time for targets are supported", f"unexpected runtime flat-unpack diagnostic: {exc}")
-    else:
-        raise AssertionError("runtime-valued flat ordinary-for unpacking unexpectedly compiled")
-    check(set(bpy.data.node_groups) == before, "failed runtime flat-unpack compilation leaked a generated node group")
+    assert_case_result(case["id"], run_case(case), load_case_baseline(case["id"]))
+    check(set(bpy.data.node_groups) == before, "runtime-unpack case cleanup leaked a group")
+
 
 def test_frontend_geometry_builder_core_route_preserves_permanent_topology():
     """Accepted core builder bodies lower through the permanent Semantic Body route."""

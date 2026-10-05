@@ -24,6 +24,8 @@ from NodeForge.extension_values import (
 )
 from NodeForge.nf_types import NFType
 from NodeForge.runtime_bindings import RuntimeBindingSymbol
+from NodeForge.resolved_environment import PackageCallableExport, ResolvedPackageNamespace
+from NodeForge.semantic_group import PackageNamespaceBinding
 from NodeForge.semantic_analysis import SemanticEnvironment, analyze_expression
 from NodeForge.semantic_ir import IRCall, IRCallOperandRef
 from NodeForge.semantic_lowering import lower_analyzed_expression
@@ -244,11 +246,16 @@ def _registry(tmp_path: Path, *, owner_key=("system", "vendor.semantic", "record
 
 def _environment(registry, by_name):
     runtime = {"x": RuntimeBindingSymbol(BindingId("scope", 0), NFType.INT)}
+    exports = {
+        name: PackageCallableExport("vendor.semantic", name, extension_callable_id=callable_id)
+        for name, callable_id in by_name.items()
+    }
+    namespace = ResolvedPackageNamespace("vendor.semantic", "semantic", "Semantic", "1.0.0", exports)
     callables = CallableEnvironment(
         callable_builtins=frozenset(),
         local_functions={},
         imported_functions={},
-        extension_system_callables=by_name,
+        package_namespaces={"semantic": PackageNamespaceBinding("semantic", namespace)},
     )
     return SemanticEnvironment(
         MappingProxyType(runtime),

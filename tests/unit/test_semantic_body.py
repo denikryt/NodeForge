@@ -828,33 +828,45 @@ def test_ordinary_for_restores_outer_array_alias_after_loop_target_shadowing():
     assert len(arrays.states[arrays.bindings["items"]].items) == 1
 
 
-def test_direct_semantic_body_rejects_non_name_ordinary_for_target():
-    """A non-name ordinary-for target receives the permanent source diagnostic."""
-    with pytest.raises(CompileError, match="Only simple compile-time for targets are supported"):
-        _lower(
-            "pairs = [[a, b], [b, a]]\n"
-            "for x, y in pairs:\n"
-            "    total = x + y\n",
-            bindings=dict([_binding("a", 0), _binding("b", 1)]),
-        )
+def test_structural_array_loop_unpacks_runtime_items():
+    """Runtime structural items support flat targets and restore shadowed bindings."""
+    result = _lower(
+        "pairs = [[a, b], [b, a]]\n"
+        "for a, y in pairs:\n"
+        "    total = a + y\n"
+        "output(a)\n",
+        bindings=dict([_binding("a", 0), _binding("b", 1)]),
+    )
+    assert result.body is not None
+    output = result.body.statements[-1]
+    assert output.value.operations[0].binding_id == BindingId("scope", 0)
+    assert "a" not in result.final_compile_time.values
+    assert "y" not in result.final_compile_time.values
 
-def test_flat_loop_target_with_direct_append_is_rejected_before_body_fallback():
-    """Flat ordinary-for unpacking is a controlled source error even when the body mutates an array."""
-    source = (
+
+def test_flat_loop_target_with_array_append_preserves_runtime_arithmetic():
+    """Array mutation loops lower literal operands rather than folding the graph away."""
+    result = _lower(
         "items = []\n"
         "for x, y in [[1.0, 2.0]]:\n"
         "    items.append(x + y)\n"
         "output(items[0])"
     )
-    with pytest.raises(CompileError, match="Only simple compile-time for targets are supported"):
-        lower_basic_body(
-            _stmts(source),
-            initial_runtime_bindings={},
-            initial_compile_time=CompileTimeSnapshot({}),
-                reserved_name_labels={},
-            callable_environment=_callables(),
-            owner_scope="scope",
-        )
+    assert result.body is not None
+    assert result.body.statements[-1].value.result.typ is NFType.FLOAT
+    arrays = result.final_structural_arrays
+    assert len(arrays.states[arrays.bindings["items"]].items) == 1
+
+
+@pytest.mark.parametrize("item, message", [
+    ("[a]", "expected 2 values, got 1"),
+    ("a", "Cannot unpack scalar"),
+])
+def test_structural_array_loop_rejects_invalid_unpacking(item, message):
+    with pytest.raises(CompileError, match=message):
+        _lower(f"pairs = [{item}]\nfor x, y in pairs:\n    total = x + y\n",
+               bindings=dict([_binding("a", 0)]))
+
 
 def test_runtime_range_keeps_repeat_range_guidance():
     """Ordinary range with runtime arguments stays rejected with the established guidance."""

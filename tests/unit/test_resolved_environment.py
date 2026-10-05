@@ -16,13 +16,14 @@ from NodeForge import packages
 from NodeForge.errors import CompileError
 from NodeForge.compiler_identities import library_function_id, local_function_id
 from NodeForge.resolved_environment import (
+    PackageCallableExport,
     ResolvedCatalog,
     ResolvedCompileErrorFailure,
     ResolvedEnvironment,
     ResolvedOSErrorFailure,
+    ResolvedPackageNamespace,
     resolve_environment,
 )
-from NodeForge.systems import registry as systems_registry
 
 
 @dataclass(frozen=True)
@@ -56,7 +57,6 @@ def test_catalog_and_environment_defensively_freeze_nested_mappings():
     assert environment.catalog("functions").find("demo") is record
     assert environment.catalog("functions").names() == frozenset({"demo"})
     assert environment.catalog("functions").records() == (record,)
-    assert environment.system_names() == ()
     with pytest.raises(TypeError):
         environment.catalogs["extra"] = ResolvedCatalog("local", {})
     with pytest.raises(TypeError):
@@ -74,11 +74,9 @@ def test_environment_rejects_incomplete_and_mismatched_maps():
                 "local": ResolvedCatalog("local", {}),
             }
         )
-    with pytest.raises(ValueError, match="v2 system mapping"):
-        ResolvedEnvironment(
-            _catalogs(),
-            extension_system_callables={"wrong": types.SimpleNamespace(name="actual")},
-        )
+    bad_namespace = ResolvedPackageNamespace("vendor.demo", "demo", "Demo", "1.0", {})
+    with pytest.raises(ValueError, match="package namespace key"):
+        ResolvedEnvironment(_catalogs(), package_namespaces={"wrong.owner": bad_namespace})
 
 
 def test_catalog_rejects_bad_record_placement_and_partial_failure():
@@ -167,9 +165,11 @@ def test_oserror_failure_preserves_winerror_when_platform_exposes_it():
     assert str(exc_info.value) == str(original)
 
 
-def test_resolve_environment_reads_active_inventory_once_and_uses_explicit_derivation(monkeypatch):
+def test_resolve_environment_reads_manifest_snapshot_once_and_builds_owner_namespace(monkeypatch):
+    """One compilation snapshot derives owner-qualified namespaces without live name registries."""
     manifest = packages.PackageManifest(
         package_id="vendor.demo",
+        import_name="demo",
         name="Demo",
         version="1.0.0",
         author="",
@@ -178,90 +178,66 @@ def test_resolve_environment_reads_active_inventory_once_and_uses_explicit_deriv
         contents={},
         permissions={},
     )
-    active = packages.ActivePackage(manifest, {}, False)
-    calls = {"active": 0, "roots": [], "systems": 0, "catalogs": []}
+    calls = {"snapshot": 0}
 
-    def active_records(*, include_invalid=False):
-        assert include_invalid is False
-        calls["active"] += 1
-        return [active]
-
-    def roots(namespace, manifests):
-        assert tuple(manifests) == (manifest,)
-        calls["roots"].append(namespace)
-        return ()
-
-    def system_records(manifests):
-        assert tuple(manifests) == (manifest,)
-        calls["systems"] += 1
-        return ()
+    def snapshot():
+        calls["snapshot"] += 1
+        return (manifest,)
 
     fake_library = types.ModuleType("NodeForge.library")
-
-    def resolve_catalog(namespace, *, package_roots, system_constructor_names):
-        assert tuple(package_roots) == ()
-        assert system_constructor_names == frozenset()
-        calls["catalogs"].append(namespace)
-        return ResolvedCatalog(namespace, {})
-
-    fake_library.resolve_catalog = resolve_catalog
-    monkeypatch.setattr(packages, "active_package_records", active_records)
-    monkeypatch.setattr(packages, "library_roots_from_manifests", roots)
-    monkeypatch.setattr(packages, "system_package_records_from_manifests", system_records)
+    fake_library._read_local_source_registry = lambda: ()
+    fake_library._candidate_records_from_inputs = lambda *args, **kwargs: ()
+    fake_library._unique_records_from_candidates = lambda namespace, candidates: {}
+    monkeypatch.setattr(packages, "active_package_manifest_snapshot", snapshot)
+    monkeypatch.setattr(packages, "library_roots_from_manifests", lambda namespace, manifests: ())
+    monkeypatch.setattr(packages, "system_package_records_from_manifests", lambda manifests: ())
     monkeypatch.setitem(sys.modules, "NodeForge.library", fake_library)
     monkeypatch.setattr(NodeForge, "library", fake_library, raising=False)
 
     environment = resolve_environment()
 
-    assert calls == {
-        "active": 1,
-        "roots": ["functions", "examples", "local"],
-        "systems": 1,
-        "catalogs": ["functions", "examples", "local"],
-    }
-    assert environment.system_names() == ()
+    assert calls == {"snapshot": 1}
+    namespace = environment.package_by_id("vendor.demo")
+    assert namespace is not None
+    assert namespace.import_name == "demo"
+    assert environment.package_by_import_name("demo") is namespace
 
 
-def test_existing_environment_is_stable_and_later_resolution_observes_new_state(monkeypatch):
-    """Session selections stay fixed while the next session receives fresh records."""
+def test_existing_environment_is_stable_and_later_resolution_observes_new_owner_snapshot(monkeypatch):
+    """Resolved package ownership is immutable per session and refreshed for later sessions."""
     generations = iter(("first", "second"))
-    current = {"generation": None}
 
-    def active_records(*, include_invalid=False):
-        assert include_invalid is False
-        current["generation"] = next(generations)
-        manifest = packages.PackageManifest(
-            package_id=f"vendor.{current['generation']}",
-            name=current["generation"],
+    def snapshot():
+        generation = next(generations)
+        return (packages.PackageManifest(
+            package_id=f"vendor.{generation}",
+            import_name=generation,
+            name=generation,
             version="1.0.0",
             author="",
             description="",
             root=Path("/package"),
             contents={},
             permissions={},
-        )
-        return [packages.ActivePackage(manifest, {}, False)]
-
-    monkeypatch.setattr(packages, "active_package_records", active_records)
-    monkeypatch.setattr(packages, "system_package_records_from_manifests", lambda manifests: ())
-    monkeypatch.setattr(packages, "library_roots_from_manifests", lambda namespace, manifests: ())
+        ),)
 
     fake_library = types.ModuleType("NodeForge.library")
-
-    def resolve_catalog(namespace, *, package_roots, system_constructor_names):
-        record = _Record(namespace, current["generation"], f"vendor.{current['generation']}", "1.0.0")
-        return ResolvedCatalog(namespace, {record.name: record})
-
-    fake_library.resolve_catalog = resolve_catalog
+    fake_library._read_local_source_registry = lambda: ()
+    fake_library._candidate_records_from_inputs = lambda *args, **kwargs: ()
+    fake_library._unique_records_from_candidates = lambda namespace, candidates: {}
+    monkeypatch.setattr(packages, "active_package_manifest_snapshot", snapshot)
+    monkeypatch.setattr(packages, "library_roots_from_manifests", lambda namespace, manifests: ())
+    monkeypatch.setattr(packages, "system_package_records_from_manifests", lambda manifests: ())
     monkeypatch.setitem(sys.modules, "NodeForge.library", fake_library)
     monkeypatch.setattr(NodeForge, "library", fake_library, raising=False)
 
     first = resolve_environment()
     second = resolve_environment()
 
-    assert first.catalog("functions").names() == frozenset({"first"})
-    assert second.catalog("functions").names() == frozenset({"second"})
-    assert first.catalog("functions").find("first").package_id == "vendor.first"
+    assert first.package_by_id("vendor.first") is not None
+    assert first.package_by_id("vendor.second") is None
+    assert second.package_by_id("vendor.second") is not None
+    assert first.package_by_import_name("first").package_id == "vendor.first"
 
 
 def test_malformed_local_registry_is_captured_once_and_replayed_without_discovery(
@@ -288,7 +264,6 @@ def test_malformed_local_registry_is_captured_once_and_replayed_without_discover
     catalog = library.resolve_catalog(
         "local",
         package_roots=(),
-        system_constructor_names=frozenset(),
     )
     registry_path.write_text('{"version": 1, "roots": []}', encoding="utf-8")
 
@@ -312,7 +287,6 @@ def test_unsupported_nested_local_source_layout_is_stored_failure(monkeypatch, t
     catalog = library.resolve_catalog(
         "local",
         package_roots=(),
-        system_constructor_names=frozenset(),
     )
 
     assert dict(catalog.entries) == {}
@@ -336,14 +310,14 @@ def test_import_validation_binds_exact_snapshot_records_and_preserves_sorting(mo
     from NodeForge import semantic_group
     from NodeForge.parsing import FunctionImport
 
-    alpha = _Record("functions", "alpha")
-    zeta = _Record("functions", "zeta")
+    alpha = _Record("examples", "alpha")
+    zeta = _Record("examples", "zeta")
     environment = ResolvedEnvironment(
-        _catalogs(functions={"zeta": zeta, "alpha": alpha}),
+        _catalogs(examples={"zeta": zeta, "alpha": alpha}),
     )
     imports = (
-        FunctionImport("functions", "zeta", "renamed"),
-        FunctionImport("functions", None, None, is_star=True),
+        FunctionImport("examples", "zeta", "renamed"),
+        FunctionImport("examples", None, None, is_star=True),
     )
 
     bindings = semantic_group._validate_import_bindings(imports, (), {}, environment)
@@ -357,34 +331,27 @@ def test_import_validation_binds_exact_snapshot_records_and_preserves_sorting(mo
 def test_inherited_import_requires_same_record_identity(monkeypatch):
     """Nested compilation may not silently rebind an inherited callable."""
     from NodeForge import semantic_group
-    selected = _Record("functions", "alpha")
-    different = _Record("functions", "alpha")
-    environment = ResolvedEnvironment(_catalogs(functions={"alpha": selected}))
-    inherited = {"alias": semantic_group.LibraryBinding("functions", "alpha", different)}
+    selected = _Record("examples", "alpha")
+    different = _Record("examples", "alpha")
+    environment = ResolvedEnvironment(_catalogs(examples={"alpha": selected}))
+    inherited = {"alias": semantic_group.LibraryBinding("examples", "alpha", different)}
 
     with pytest.raises(CompileError, match="inherited library binding does not match"):
         semantic_group._validate_import_bindings((), (), {}, environment, inherited)
 
 
-def test_reserved_name_labels_use_snapshot_system_names(monkeypatch):
-    """Compiler reservation labels consume the supplied v2 system-name view."""
+def test_package_namespace_alias_is_not_globally_reserved_inside_local_lexical_scope():
+    """Package aliases are direct-scope bindings; local lexical names may shadow them."""
     from NodeForge import semantic_group
-    labels = semantic_group._registered_name_labels({}, {}, ("snapshot_marker",))
-    assert labels["snapshot_marker"] == "extension system callable"
+    labels = semantic_group._registered_name_labels({}, {}, {"math": object()})
+    assert "math" not in labels
 
 
-def test_v1_system_execution_api_is_absent_after_cutover():
-    """Recognized legacy system owners cannot reach executable handler APIs."""
-    for name in (
-        "ResolvedSystemConstructor",
-        "get_handler",
-        "get_resolved_handler",
-        "compile_call",
-        "compile_resolved_call",
-        "resolve_constructors",
-        "_load_handlers",
-    ):
-        assert not hasattr(systems_registry, name)
+def test_global_system_name_registry_is_removed_after_package_namespace_cutover():
+    """Stage 40 has no global system-constructor name authority."""
+    root = Path(__file__).resolve().parents[2]
+    assert not (root / "systems" / "registry.py").exists()
+    assert "registry" not in (root / "systems" / "__init__.py").read_text(encoding="utf-8")
 
 
 def test_source_call_migration_removes_v1_extension_execution_and_keeps_v2_boundary():
@@ -455,6 +422,19 @@ def test_group_backend_public_callback_uses_semantic_preparation_before_publicat
     assert "def prepare(source, *, compilation_identity" in source
     assert "analyze_group_source(" in source
 
+
+
+def test_blender_test_harness_does_not_import_removed_system_registry():
+    """Blender regressions use the owner-qualified package inventory, not the removed flat registry."""
+    root = Path(__file__).resolve().parents[2]
+    for relative in (
+        "tests/blender/conftest.py",
+        "tests/blender/helpers.py",
+        "tests/blender/expression_characterization/harness.py",
+    ):
+        source = (root / relative).read_text(encoding="utf-8")
+        assert "NodeForge.systems import registry" not in source
+        assert "systems_registry." not in source
 
 
 def test_compilation_modules_do_not_call_live_resolution_apis():

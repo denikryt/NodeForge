@@ -17,7 +17,7 @@ from .compiler import (
     _get_or_create_scratch_text,
     _replace_text_contents,
     create_library_catalog_group,
-    create_library_function_group,
+    create_package_function_group,
     update_library_catalog_group,
 )
 from .library import (
@@ -34,7 +34,6 @@ from .library import (
     delete_local_folder,
     save_local_source,
     delete_local_source,
-    resolve_reloadable_library_entry,
 )
 from . import packages
 from . import generated_resources
@@ -244,10 +243,12 @@ def _refresh_catalog_items(props, namespace: str):
     old_name = ""
     old_path = ""
     old_kind = ""
+    old_package_id = ""
     if 0 <= old_index < len(items):
         old_name = items[old_index].name
         old_path = getattr(items[old_index], "path", "")
         old_kind = getattr(items[old_index], "kind", "")
+        old_package_id = getattr(items[old_index], "package_id", "")
     items.clear()
     records = local_browser_records(getattr(props, "local_browser_path", "")) if namespace == "local" else library_entry_records(namespace)
     for record in records:
@@ -268,6 +269,10 @@ def _refresh_catalog_items(props, namespace: str):
         for index, item in enumerate(items):
             if namespace == "local":
                 if item.name == old_name and item.path == old_path and item.kind == old_kind:
+                    setattr(props, index_prop, index)
+                    break
+            elif namespace == "functions":
+                if item.name == old_name and getattr(item, "package_id", "") == old_package_id:
                     setattr(props, index_prop, index)
                     break
             elif item.name == old_name:
@@ -420,15 +425,9 @@ class NODEFORGE_OT_reload_selected_library_group(Operator):
         if node is None:
             self.report({'ERROR'}, "Select exactly one reloadable NodeForge library group")
             return {'CANCELLED'}
-        try:
-            record = resolve_reloadable_library_entry(node.node_tree)
-        except Exception as exc:
-            self.report({'ERROR'}, str(exc))
-            return {'CANCELLED'}
-
         old_name = node.node_tree.name
         try:
-            update_library_catalog_group(node.node_tree, record.namespace, record.name)
+            update_library_catalog_group(node.node_tree)
         except Exception as exc:
             traceback.print_exc()
             self.report({'ERROR'}, str(exc))
@@ -623,7 +622,10 @@ class NODEFORGE_OT_create_function_group(Operator):
             return {'CANCELLED'}
 
         try:
-            group = create_library_catalog_group(self.namespace, item.name)
+            if self.namespace == "functions":
+                group = create_package_function_group(item.package_id, item.name)
+            else:
+                group = create_library_catalog_group(self.namespace, item.name)
         except Exception as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
@@ -889,14 +891,20 @@ class NODEFORGE_OT_save_to_local(Operator):
         return context.window_manager.invoke_props_dialog(self)
 
     def execute(self, context):
-        props = context.scene.gn_script_mvp
+        props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
+        if props is None or props.text_block is None:
+            self.report({'ERROR'}, "Select a Text Block to save")
+            return {'CANCELLED'}
         current = _managed_local_browser_directory(props)
         if current is None:
             self.report({'ERROR'}, "External Local folders are read-only")
             return {'CANCELLED'}
-        source = _source_from_props(props)
         root = ensure_local_catalog_dir().resolve()
         try:
+            source = props.text_block.as_string()
+            if not source.strip():
+                self.report({'ERROR'}, "The selected Text Block is empty")
+                return {'CANCELLED'}
             rel = current.relative_to(root)
             folder_path = str(rel).replace("\\", "/") if rel.parts else ""
             path = save_local_source(self.script_name, source, folder_path=folder_path, overwrite=self.overwrite)

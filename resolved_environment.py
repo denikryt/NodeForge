@@ -108,16 +108,78 @@ class ResolvedCatalog:
 
 
 @dataclass(frozen=True)
+class PackageCallableExport:
+    """One owner-qualified public callable slot in a resolved package namespace."""
+
+    package_id: str
+    name: str
+    record: "LibraryEntryRecord | None" = None
+    extension_callable_id: object | None = None
+
+    def __post_init__(self) -> None:
+        """Validate owner/name provenance without retaining implementation objects."""
+        from .extension_contracts import ExtensionCallableId
+
+        if not isinstance(self.package_id, str) or not self.package_id:
+            raise ValueError("package callable export requires package_id")
+        if not isinstance(self.name, str) or not self.name:
+            raise ValueError("package callable export requires a public member name")
+        record = self.record
+        extension_id = self.extension_callable_id
+        if record is None and extension_id is None:
+            raise ValueError("package callable export requires one semantic target")
+        if record is not None:
+            if (
+                getattr(record, "namespace", None) != "functions"
+                or getattr(record, "name", None) != self.name
+                or getattr(record, "package_id", None) != self.package_id
+            ):
+                raise ValueError("package callable export record does not match owner/member")
+        if extension_id is not None:
+            if not isinstance(extension_id, ExtensionCallableId) or extension_id.name != self.name:
+                raise TypeError("package callable export extension target must match member name")
+            owner = tuple(extension_id.owner)
+            if self.package_id not in owner:
+                raise ValueError("package callable export extension target does not match package owner")
+        if record is not None and extension_id is not None and getattr(record, "source_path", None) is not None:
+            raise ValueError("source-backed package export cannot also select an extension target")
+
+
+@dataclass(frozen=True)
+class ResolvedPackageNamespace:
+    """Immutable callable namespace published by one canonical package owner."""
+
+    package_id: str
+    import_name: str
+    package_name: str
+    package_version: str
+    exports: Mapping[str, PackageCallableExport]
+
+    def __post_init__(self) -> None:
+        """Freeze exports and require every member to belong to this package."""
+        copied = dict(self.exports)
+        if not self.package_id or not self.import_name:
+            raise ValueError("resolved package namespace requires package_id and import_name")
+        for name, export in copied.items():
+            if name != export.name or export.package_id != self.package_id:
+                raise ValueError("resolved package export key does not match package owner/member")
+        object.__setattr__(self, "exports", MappingProxyType(copied))
+
+    def find(self, name: str) -> PackageCallableExport | None:
+        """Return one exact public member from this package namespace."""
+        return self.exports.get(name)
+
+
+@dataclass(frozen=True)
 class ResolvedEnvironment:
     """Immutable external callable selection shared by one root compilation."""
 
     catalogs: Mapping[str, ResolvedCatalog]
+    package_namespaces: Mapping[str, ResolvedPackageNamespace] = field(default_factory=dict)
     extension_registry: object | None = None
-    extension_system_callables: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Validate and defensively freeze catalogs and both system generations."""
-        from .extension_contracts import ExtensionCallableId
+        """Validate and freeze catalogs, owner-qualified packages, and extension registry."""
         from .extension_registry import ExtensionRegistry
 
         catalogs = dict(self.catalogs)
@@ -126,32 +188,77 @@ class ResolvedEnvironment:
         for namespace, catalog in catalogs.items():
             if catalog.namespace != namespace:
                 raise ValueError("Resolved environment catalog key does not match catalog namespace")
-        extension_systems = dict(self.extension_system_callables)
-        for name, callable_id in extension_systems.items():
-            if not isinstance(callable_id, ExtensionCallableId) or callable_id.name != name:
-                raise ValueError("Resolved v2 system mapping key does not match extension callable identity")
+
+        namespaces = dict(self.package_namespaces)
+        import_index: dict[str, str] = {}
+        for package_id, namespace in namespaces.items():
+            if not isinstance(namespace, ResolvedPackageNamespace) or namespace.package_id != package_id:
+                raise ValueError("Resolved package namespace key does not match canonical package id")
+            previous = import_index.get(namespace.import_name)
+            if previous is not None and previous != package_id:
+                raise ValueError("Resolved environment package import names must be unique")
+            import_index[namespace.import_name] = package_id
+
         registry = self.extension_registry
         if registry is None:
             registry = ExtensionRegistry.empty()
         if not isinstance(registry, ExtensionRegistry):
             raise TypeError("extension_registry must be an ExtensionRegistry")
-        for callable_id in extension_systems.values():
-            if not registry.contains(callable_id):
-                raise ValueError("Resolved v2 system callable is missing from extension registry")
+        for namespace in namespaces.values():
+            for export in namespace.exports.values():
+                callable_id = export.extension_callable_id
+                if callable_id is not None and not registry.contains(callable_id):
+                    raise ValueError("Resolved package extension callable is missing from extension registry")
+
         object.__setattr__(self, "catalogs", MappingProxyType(catalogs))
+        object.__setattr__(self, "package_namespaces", MappingProxyType(namespaces))
+        object.__setattr__(self, "_package_import_index", MappingProxyType(import_index))
         object.__setattr__(self, "extension_registry", registry)
-        object.__setattr__(self, "extension_system_callables", MappingProxyType(extension_systems))
 
     def catalog(self, namespace: str) -> ResolvedCatalog:
-        """Return one supported resolved catalog."""
+        """Return one supported non-package/global catalog snapshot."""
         try:
             return self.catalogs[namespace]
         except KeyError as exc:
             raise CompileError(f"Unknown library catalog: {namespace}") from exc
 
-    def system_names(self) -> tuple[str, ...]:
-        """Return active Extension API v2 system callable names in deterministic order."""
-        return tuple(sorted(self.extension_system_callables))
+    def package_by_import_name(self, import_name: str) -> ResolvedPackageNamespace | None:
+        """Return the exact active package namespace for one source import name."""
+        package_id = self._package_import_index.get(import_name)
+        return None if package_id is None else self.package_namespaces[package_id]
+
+    def package_by_id(self, package_id: str) -> ResolvedPackageNamespace | None:
+        """Return the exact active package namespace for one canonical package id."""
+        return self.package_namespaces.get(package_id)
+
+    def package_function_record(self, package_id: str, name: str) -> "LibraryEntryRecord | None":
+        """Return one exact source/native Functions record for a canonical package member."""
+        namespace = self.package_by_id(package_id)
+        if namespace is None:
+            return None
+        export = namespace.find(name)
+        if export is None:
+            return None
+        return export.record
+
+    def package_function_records(self) -> tuple["LibraryEntryRecord", ...]:
+        """Return all package Functions records without collapsing same-named owners."""
+        records = []
+        for namespace in self.package_namespaces.values():
+            for export in namespace.exports.values():
+                record = export.record
+                if record is not None:
+                    records.append(record)
+        return tuple(
+            sorted(
+                records,
+                key=lambda record: (
+                    self.package_namespaces[record.package_id].import_name.lower(),
+                    record.name.lower(),
+                    record.package_id,
+                ),
+            )
+        )
 
 
 def _resolved_failure_from_exception(exc: Exception) -> ResolvedCatalogFailure:
@@ -171,16 +278,9 @@ def _resolved_failure_from_exception(exc: Exception) -> ResolvedCatalogFailure:
     return ResolvedCompileErrorFailure((str(exc),))
 
 
-def _core_validate_system_name(name: str, package_id: str) -> None:
-    """Apply the package-owned core callable collision rule during root admission."""
-    try:
-        packages._validate_not_core_callable_name(name, package_id)
-    except packages.PackageError as exc:
-        raise CompileError(str(exc)) from exc
-
 
 def resolve_environment() -> ResolvedEnvironment:
-    """Resolve one coherent permanent external callable environment snapshot."""
+    """Resolve one coherent owner-qualified external callable environment snapshot."""
     from . import library
     from .extension_registry import (
         ExtensionOwnerSession,
@@ -192,6 +292,15 @@ def resolve_environment() -> ResolvedEnvironment:
 
     manifests = tuple(packages.active_package_manifest_snapshot())
     manifests_by_id = {manifest.package_id: manifest for manifest in manifests}
+    import_owners: dict[str, str] = {}
+    for manifest in manifests:
+        previous = import_owners.get(manifest.import_name)
+        if previous is not None and previous != manifest.package_id:
+            raise CompileError(
+                f"Package import name {manifest.import_name!r} is owned by both {previous} and {manifest.package_id}"
+            )
+        import_owners[manifest.import_name] = manifest.package_id
+
     raw_system_records = tuple(packages.system_package_records_from_manifests(manifests))
 
     raw_candidates: dict[str, tuple[object, ...]] = {}
@@ -199,8 +308,6 @@ def resolve_environment() -> ResolvedEnvironment:
     deferred_package_discovery_failures: dict[tuple[str, str], Exception] = {}
     for namespace in ("functions", "examples"):
         collected: list[object] = []
-        # Built-in examples are not package-owned and retain ordinary immediate
-        # catalog failure behavior. Functions have no built-in package root.
         if namespace == "examples":
             try:
                 collected.extend(
@@ -224,6 +331,7 @@ def resolve_environment() -> ResolvedEnvironment:
             except (CompileError, OSError) as exc:
                 deferred_package_discovery_failures[(namespace, root.package_id)] = exc
         raw_candidates[namespace] = tuple(collected)
+
     try:
         local_registry = tuple(library._read_local_source_registry())
         raw_candidates["local"] = tuple(
@@ -240,8 +348,6 @@ def resolve_environment() -> ResolvedEnvironment:
     system_sessions: dict[tuple[str, ...], ExtensionOwnerSession] = {}
     system_snapshot_failures: dict[str, Exception] = {}
     for record in raw_system_records:
-        if record.interface_path is None:
-            continue
         try:
             snapshot = capture_owner_code_snapshot(system_owner_key(record), record.root)
             system_sessions[system_owner_key(record)] = ExtensionOwnerSession(snapshot)
@@ -250,7 +356,6 @@ def resolve_environment() -> ResolvedEnvironment:
 
     library_sessions: dict[tuple[str, ...], ExtensionOwnerSession] = {}
     deferred_library_failures: dict[tuple[str, ...], Exception] = {}
-    immediate_library_failures: dict[str, Exception] = {}
     for namespace in ("functions", "examples"):
         for record in raw_candidates.get(namespace, ()):
             if getattr(record, "interface_path", None) is None or getattr(record, "source_path", None) is not None:
@@ -260,69 +365,97 @@ def resolve_environment() -> ResolvedEnvironment:
                 snapshot = capture_owner_code_snapshot(key, record.interface_path.parent)
                 library_sessions[key] = ExtensionOwnerSession(snapshot)
             except (CompileError, OSError) as exc:
-                if record.package_id:
-                    deferred_library_failures[key] = exc
-                else:
-                    immediate_library_failures.setdefault(namespace, exc)
+                deferred_library_failures[key] = exc
 
-    records_by_package: dict[str, list[object]] = {package_id: [] for package_id in manifests_by_id}
+    systems_by_package: dict[str, list[object]] = {package_id: [] for package_id in manifests_by_id}
     for record in raw_system_records:
-        records_by_package.setdefault(record.package_id, []).append(record)
+        systems_by_package.setdefault(record.package_id, []).append(record)
+    functions_by_package: dict[str, list[object]] = {package_id: [] for package_id in manifests_by_id}
+    for record in raw_candidates.get("functions", ()):
+        functions_by_package.setdefault(record.package_id, []).append(record)
 
+    package_namespaces: dict[str, ResolvedPackageNamespace] = {}
     admitted_packages: set[str] = set()
-    admitted_v2_sessions: list[ExtensionOwnerSession] = []
-    v2_system_map: dict[str, object] = {}
+    registry_sessions: list[ExtensionOwnerSession] = []
+
     for package_id in sorted(manifests_by_id):
-        package_records = records_by_package.get(package_id, [])
+        manifest = manifests_by_id[package_id]
         try:
+            discovery_failure = deferred_package_discovery_failures.get(("functions", package_id))
+            if discovery_failure is not None:
+                raise discovery_failure
             snapshot_failure = system_snapshot_failures.get(package_id)
             if snapshot_failure is not None:
                 raise snapshot_failure
-            local_names: dict[str, str] = {}
-            package_v1 = [record for record in package_records if record.interface_path is None]
-            if package_v1:
-                # Valid manifests reject system.py-only owners structurally. Keep
-                # bootstrap fail-closed without importing legacy handler modules.
-                raise CompileError(
-                    f"Package {package_id!r} contains unsupported Extension API v1 system owner"
-                )
-            package_v2 = list(package_records)
-            normalized_sessions: list[ExtensionOwnerSession] = []
-            normalized_ids: list[object] = []
-            for record in package_v2:
+
+            exports: dict[str, PackageCallableExport] = {}
+            package_sessions: list[ExtensionOwnerSession] = []
+
+            for record in systems_by_package.get(package_id, ()):
+                if record.interface_path is None:
+                    raise CompileError(
+                        f"Package {package_id!r} contains unsupported Extension API v1 system owner"
+                    )
                 session = system_sessions[system_owner_key(record)]
                 families, _refs = session.normalize_interface()
-                normalized_sessions.append(session)
+                package_sessions.append(session)
                 for callable_id in families:
                     name = callable_id.name
-                    _core_validate_system_name(name, package_id)
-                    if name in local_names:
-                        raise CompileError(f"Duplicate system constructor {name!r} inside {package_id}")
-                    local_names[name] = record.system_id
-                    normalized_ids.append(callable_id)
+                    if name in exports:
+                        raise CompileError(f"Duplicate package callable {name!r} inside {package_id}")
+                    exports[name] = PackageCallableExport(package_id, name, extension_callable_id=callable_id)
+
+            for record in functions_by_package.get(package_id, ()):
+                name = record.name
+                if name in exports:
+                    raise CompileError(f"Duplicate package callable {name!r} inside {package_id}")
+                extension_callable_id = None
+                if getattr(record, "interface_path", None) is not None and getattr(record, "source_path", None) is None:
+                    key = library_owner_key(record)
+                    deferred = deferred_library_failures.get(key)
+                    if deferred is not None:
+                        raise deferred
+                    session = library_sessions.get(key)
+                    if session is None:
+                        raise CompileError(f"Extension library owner {record.name!r} has no captured owner snapshot")
+                    families, _refs = session.normalize_interface()
+                    family_names = [callable_id.name for callable_id in families]
+                    if family_names != [record.name]:
+                        raise CompileError(
+                            f"Native-only functions extension {record.name!r} must declare exactly one EXTENSIONS key with the same name"
+                        )
+                    extension_callable_id = next(iter(families))
+                    package_sessions.append(session)
+                exports[name] = PackageCallableExport(
+                    package_id,
+                    name,
+                    record=record,
+                    extension_callable_id=extension_callable_id,
+                )
+
+            namespace = ResolvedPackageNamespace(
+                package_id=package_id,
+                import_name=manifest.import_name,
+                package_name=manifest.name,
+                package_version=manifest.version,
+                exports=exports,
+            )
         except (CompileError, OSError, packages.PackageError):
-            # Declaration-invalid packages are admission-filtered atomically. Their
-            # package-owned library candidates/failures are discarded below.
             continue
+
+        package_namespaces[package_id] = namespace
         admitted_packages.add(package_id)
-        admitted_v2_sessions.extend(normalized_sessions)
-        for callable_id in normalized_ids:
-            if callable_id.name in v2_system_map:
-                raise CompileError(f"Duplicate system constructor {callable_id.name!r} across active packages")
-            v2_system_map[callable_id.name] = callable_id
+        registry_sessions.extend(package_sessions)
 
-    complete_system_names = frozenset(v2_system_map)
-
-    catalogs: dict[str, ResolvedCatalog] = {}
-    selected_library_sessions: list[ExtensionOwnerSession] = []
-    for namespace in ("functions", "examples", "local"):
-        failure = discovery_failures.get(namespace) or immediate_library_failures.get(namespace)
+    catalogs: dict[str, ResolvedCatalog] = {"functions": ResolvedCatalog("functions", {})}
+    for namespace in ("examples", "local"):
+        failure = discovery_failures.get(namespace)
         candidates = []
-        if failure is None and namespace in {"functions", "examples"}:
+        if failure is None and namespace == "examples":
             for package_id in sorted(admitted_packages):
-                deferred_discovery = deferred_package_discovery_failures.get((namespace, package_id))
-                if deferred_discovery is not None:
-                    failure = deferred_discovery
+                deferred = deferred_package_discovery_failures.get((namespace, package_id))
+                if deferred is not None:
+                    failure = deferred
                     break
         if failure is None:
             for record in raw_candidates.get(namespace, ()):
@@ -330,55 +463,53 @@ def resolve_environment() -> ResolvedEnvironment:
                 if package_id and package_id not in admitted_packages:
                     continue
                 candidates.append(record)
-                deferred = deferred_library_failures.get(library_owner_key(record))
-                if deferred is not None:
-                    failure = deferred
-                    break
         if failure is not None:
-            catalogs[namespace] = ResolvedCatalog(namespace, {}, _resolved_failure_from_exception(failure))
+            catalogs[namespace] = ResolvedCatalog(
+                namespace, {}, _resolved_failure_from_exception(failure)
+            )
             continue
         try:
-            entries = library._unique_records_from_candidates(
-                namespace,
-                tuple(candidates),
-                system_constructor_names=complete_system_names,
-            )
+            entries = library._unique_records_from_candidates(namespace, tuple(candidates))
+            selected_sessions = []
             for record in entries.values():
-                # Hybrid source/interface records remain discoverable so an unused
-                # entry cannot poison the entire catalog. Semantic preparation owns
-                # the deterministic migration diagnostic when such a callable is used.
-                if getattr(record, "interface_path", None) is not None and getattr(record, "source_path", None) is not None:
+                if getattr(record, "interface_path", None) is None or getattr(record, "source_path", None) is not None:
                     continue
-                if getattr(record, "interface_path", None) is None:
-                    continue
-                session = library_sessions.get(library_owner_key(record))
+                key = library_owner_key(record)
+                deferred = deferred_library_failures.get(key)
+                if deferred is not None:
+                    raise deferred
+                session = library_sessions.get(key)
                 if session is None:
                     raise CompileError(f"Extension library owner {record.name!r} has no captured owner snapshot")
                 families, _refs = session.normalize_interface()
-                family_names = [callable_id.name for callable_id in families]
-                if family_names != [record.name]:
+                if [callable_id.name for callable_id in families] != [record.name]:
                     raise CompileError(
                         f"Native-only {namespace} extension {record.name!r} must declare exactly one EXTENSIONS key with the same name"
                     )
-                selected_library_sessions.append(session)
+                selected_sessions.append(session)
         except (CompileError, OSError) as exc:
-            catalogs[namespace] = ResolvedCatalog(namespace, {}, _resolved_failure_from_exception(exc))
+            catalogs[namespace] = ResolvedCatalog(
+                namespace, {}, _resolved_failure_from_exception(exc)
+            )
         else:
             catalogs[namespace] = ResolvedCatalog(namespace, entries)
+            registry_sessions.extend(selected_sessions)
 
-    registry = ExtensionRegistry((*admitted_v2_sessions, *selected_library_sessions))
+    registry = ExtensionRegistry(tuple(registry_sessions))
     return ResolvedEnvironment(
         catalogs=catalogs,
+        package_namespaces=package_namespaces,
         extension_registry=registry,
-        extension_system_callables=v2_system_map,
     )
 
 
 __all__ = [
+    "PackageCallableExport",
     "ResolvedCatalog",
     "ResolvedCatalogFailure",
     "ResolvedCompileErrorFailure",
     "ResolvedEnvironment",
     "ResolvedOSErrorFailure",
+    "ResolvedPackageNamespace",
     "resolve_environment",
 ]

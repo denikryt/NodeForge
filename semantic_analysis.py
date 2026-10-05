@@ -27,6 +27,9 @@ from .call_resolution import (
     RuntimeCallResult,
     TupleCallResult,
     UNRESOLVED,
+    non_callable_source_binding_error,
+    package_candidates_for_unqualified,
+    resolve_package_callable,
     resolve_simple_callable,
 )
 from .builtin_call_semantics import (
@@ -102,9 +105,11 @@ from .extension_values import (
 from .source_callables import (
     analyze_local_captures,
     analyze_local_return_shape,
+    local_binding_names,
     local_function_source,
     resolve_local_parameter_annotation,
     serialize_local_signature,
+    has_source_value_binding,
 )
 from .semantic_values import (
     ArrayResultShape,
@@ -1117,6 +1122,8 @@ def analyze_expression(expr, environment):
         if isinstance(node, ast.Name):
             if node.id in TYPE_TOKEN_NAMES:
                 raise CompileError(f"Type token {node.id} may only be used in node(...) type declarations")
+            if node.id in environment.callable_environment.package_namespaces:
+                raise CompileError(f"Package namespace {node.id!r} cannot be used as a value")
             if node.id in environment.runtime_bindings:
                 symbol = environment.runtime_bindings[node.id]
                 if symbol.typ is NFType.OBJECT:
@@ -1505,70 +1512,102 @@ def analyze_expression(expr, environment):
 
         if isinstance(node, ast.Call):
             if isinstance(node.func, ast.Attribute):
-                if node.func.attr != "info":
-                    raise CompileError("Object values support only the .info() method")
-                require_body_object_semantics()
-                receiver = analyze(node.func.value)
-                if _require_runtime_type(receiver, ".info() receiver") != TYPE_OBJECT:
-                    raise CompileError(".info() can only be used on Object values")
-                object_id = receiver.result_shape.object_id
-                if not isinstance(object_id, ObjectSemanticId):
-                    raise CompileError("Internal error: Object.info receiver has no ObjectSemanticId")
-                state = object_states.get(object_id)
-                if not isinstance(state, ObjectInfoState):
-                    raise CompileError("Internal error: Object.info receiver has no ObjectInfoState")
-                if state.resolved:
-                    raise CompileError("Object.info() cannot be changed after Object Info has been resolved")
-                if node.args:
-                    raise CompileError("Object.info() accepts only keyword arguments")
-                if any(kw.arg is None for kw in node.keywords):
-                    raise CompileError("Object.info() does not support **kwargs")
-                kws = {kw.arg: kw.value for kw in node.keywords}
-                extra = set(kws) - {"transform_space", "as_instance"}
-                if extra:
-                    raise CompileError("Object.info() accepts only transform_space= and as_instance=")
-                transform_space = state.transform_space
-                as_instance = state.as_instance
-                if "transform_space" in kws:
-                    try:
-                        transform_space = _const_eval(kws["transform_space"], environment.const_eval_values)
-                    except ConstEvalUnavailable as exc:
-                        raise CompileError("Object.info() transform_space must be 'ORIGINAL' or 'RELATIVE'") from exc
-                    if transform_space not in {"ORIGINAL", "RELATIVE"}:
-                        raise CompileError("Object.info() transform_space must be 'ORIGINAL' or 'RELATIVE'")
-                if "as_instance" in kws:
-                    try:
-                        as_instance = _const_eval(kws["as_instance"], environment.const_eval_values)
-                    except ConstEvalUnavailable as exc:
-                        raise CompileError("Object.info() as_instance must be a compile-time Bool") from exc
-                    if type(as_instance) is not bool:
-                        raise CompileError("Object.info() as_instance must be a compile-time Bool")
-                new_state = ObjectInfoState(transform_space=transform_space, as_instance=as_instance, resolved=False)
-                object_states[object_id] = new_state
-                target = ResolvedCallable(CallableKind.OBJECT_INFO, "Object.info", target="Object.info")
-                analyzed_call = AnalyzedCall(
-                    target=target,
-                    runtime_operands=(AnalyzedCallOperand("receiver", TYPE_OBJECT),),
-                    options=(),
-                    result=RuntimeCallResult(TYPE_OBJECT),
+                if (
+                    isinstance(node.func.value, ast.Name)
+                    and node.func.value.id in environment.callable_environment.package_namespaces
+                ):
+                    package_alias = node.func.value.id
+                    name = f"{package_alias}.{node.func.attr}"
+                    resolved = resolve_package_callable(
+                        package_alias, node.func.attr, environment.callable_environment
+                    )
+                    cleaned_call, modifiers = extract_function_call_modifiers(
+                        node, name, environment.const_eval_values
+                    )
+                else:
+                    if node.func.attr != "info":
+                        raise CompileError("Object values support only the .info() method")
+                    require_body_object_semantics()
+                    receiver = analyze(node.func.value)
+                    if _require_runtime_type(receiver, ".info() receiver") != TYPE_OBJECT:
+                        raise CompileError(".info() can only be used on Object values")
+                    object_id = receiver.result_shape.object_id
+                    if not isinstance(object_id, ObjectSemanticId):
+                        raise CompileError("Internal error: Object.info receiver has no ObjectSemanticId")
+                    state = object_states.get(object_id)
+                    if not isinstance(state, ObjectInfoState):
+                        raise CompileError("Internal error: Object.info receiver has no ObjectInfoState")
+                    if state.resolved:
+                        raise CompileError("Object.info() cannot be changed after Object Info has been resolved")
+                    if node.args:
+                        raise CompileError("Object.info() accepts only keyword arguments")
+                    if any(kw.arg is None for kw in node.keywords):
+                        raise CompileError("Object.info() does not support **kwargs")
+                    kws = {kw.arg: kw.value for kw in node.keywords}
+                    extra = set(kws) - {"transform_space", "as_instance"}
+                    if extra:
+                        raise CompileError("Object.info() accepts only transform_space= and as_instance=")
+                    transform_space = state.transform_space
+                    as_instance = state.as_instance
+                    if "transform_space" in kws:
+                        try:
+                            transform_space = _const_eval(kws["transform_space"], environment.const_eval_values)
+                        except ConstEvalUnavailable as exc:
+                            raise CompileError("Object.info() transform_space must be 'ORIGINAL' or 'RELATIVE'") from exc
+                        if transform_space not in {"ORIGINAL", "RELATIVE"}:
+                            raise CompileError("Object.info() transform_space must be 'ORIGINAL' or 'RELATIVE'")
+                    if "as_instance" in kws:
+                        try:
+                            as_instance = _const_eval(kws["as_instance"], environment.const_eval_values)
+                        except ConstEvalUnavailable as exc:
+                            raise CompileError("Object.info() as_instance must be a compile-time Bool") from exc
+                        if type(as_instance) is not bool:
+                            raise CompileError("Object.info() as_instance must be a compile-time Bool")
+                    new_state = ObjectInfoState(transform_space=transform_space, as_instance=as_instance, resolved=False)
+                    object_states[object_id] = new_state
+                    target = ResolvedCallable(CallableKind.OBJECT_INFO, "Object.info", target="Object.info")
+                    analyzed_call = AnalyzedCall(
+                        target=target,
+                        runtime_operands=(AnalyzedCallOperand("receiver", TYPE_OBJECT),),
+                        options=(),
+                        result=RuntimeCallResult(TYPE_OBJECT),
+                    )
+                    return record(
+                        node,
+                        runtime_fact(
+                            TYPE_OBJECT,
+                            object_id=object_id,
+                            analyzed_call=analyzed_call,
+                            call_operand_nodes=(node.func.value,),
+                            object_info_state=new_state,
+                        ),
+                    )
+            elif isinstance(node.func, ast.Name):
+                name = node.func.id
+                if name in environment.callable_environment.package_namespaces:
+                    raise CompileError(
+                        f"Package namespace {name!r} cannot be called directly; use {name}.<member>(...)"
+                    )
+                package_candidates = package_candidates_for_unqualified(
+                    name, environment.callable_environment
                 )
-                return record(
-                    node,
-                    runtime_fact(
-                        TYPE_OBJECT,
-                        object_id=object_id,
-                        analyzed_call=analyzed_call,
-                        call_operand_nodes=(node.func.value,),
-                        object_info_state=new_state,
-                    ),
+                if package_candidates and has_source_value_binding(
+                    name,
+                    runtime_bindings=environment.runtime_bindings,
+                    compile_time_values=environment.const_eval_values,
+                    structural_binding_names=environment.structural_bindings,
+                    structural_array_names=environment.structural_arrays.bindings,
+                    builder_binding_names=environment.builder_bindings,
+                    extension_binding_names=environment.extension_bindings,
+                ):
+                    raise non_callable_source_binding_error(name, environment.callable_environment)
+                resolved = resolve_simple_callable(name, environment.callable_environment)
+                cleaned_call, modifiers = extract_function_call_modifiers(
+                    node, name, environment.const_eval_values
                 )
-            if not isinstance(node.func, ast.Name):
-                raise CompileError("Only simple function calls are supported")
-            name = node.func.id
-            resolved = resolve_simple_callable(name, environment.callable_environment)
-            cleaned_call, modifiers = extract_function_call_modifiers(
-                node, name, environment.const_eval_values
-            )
+            else:
+                raise CompileError("Only simple or package-qualified function calls are supported")
+
             if resolved is UNRESOLVED:
                 if cleaned_call.keywords:
                     raise _unregistered_keyword_error(name)
@@ -1704,10 +1743,11 @@ def analyze_expression(expr, environment):
                     runtime_bindings=environment.runtime_bindings,
                     compile_time_values=environment.const_eval_values,
                     reserved_name_labels=environment.reserved_name_labels,
-                    structural_binding_names=frozenset(environment.structural_bindings),
-                    structural_array_names=frozenset(environment.structural_arrays.bindings),
-                    builder_binding_names=frozenset(environment.builder_bindings),
-                    extension_binding_names=frozenset(environment.extension_bindings),
+                    structural_binding_names=environment.structural_bindings,
+                    structural_array_names=environment.structural_arrays.bindings,
+                    builder_binding_names=environment.builder_bindings,
+                    extension_binding_names=environment.extension_bindings,
+                    callable_environment=environment.callable_environment,
                 )
                 for capture in captures:
                     bound_types[capture.name] = capture.typ
@@ -1740,6 +1780,12 @@ def analyze_expression(expr, environment):
                     hidden_captures=tuple(capture.name for capture in captures),
                     return_shape=return_shape,
                 )
+                local_names = local_binding_names(fn)
+                inherited_package_namespaces = {
+                    alias: binding
+                    for alias, binding in environment.callable_environment.package_namespaces.items()
+                    if alias not in local_names
+                }
                 prepared = session.prepare_local(
                     function_id=function_id,
                     identity=identity,
@@ -1748,6 +1794,7 @@ def analyze_expression(expr, environment):
                     hidden_capture_names=tuple(capture.name for capture in captures),
                     local_functions=environment.callable_environment.local_functions,
                     imported_library_functions=environment.callable_environment.imported_functions,
+                    package_namespaces=inherited_package_namespaces,
                     helper_namespace=environment.helper_namespace,
                     return_shape=return_shape,
                 )

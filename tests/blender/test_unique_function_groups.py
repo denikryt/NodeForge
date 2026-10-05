@@ -242,7 +242,7 @@ def test_imported_unique_function_preserves_shared_and_occurrence_identity():
         )
         packages.install_package_directory(root, allow_python=False)
         try:
-            source = """from functions import import_unique_probe
+            source = """from packages import unique_identity
 shared = import_unique_probe(1.0)
 first = import_unique_probe(2.0, __unique__=True)
 second = import_unique_probe(3.0, __unique__=True)
@@ -297,7 +297,7 @@ def _write_imported_dependency_package(root: Path, *, version: str, offset: floa
 
 def test_imported_cached_dependency_invalidates_both_unique_parents():
     """Every parent observes an imported child even when the shared cache supplies it."""
-    source = """from functions import imported_dependency_probe
+    source = """from packages import imported_dependency
 def imported_parent_left(x):
     factor = node("ShaderNodeFloatCurve", inputs={"Factor": 1.0, "Value": x}, output="Value", typ=Float)
     return imported_dependency_probe(factor)

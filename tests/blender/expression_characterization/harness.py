@@ -20,7 +20,6 @@ import bpy
 
 from NodeForge import compiler, packages
 from NodeForge.errors import CompileError
-from NodeForge.systems import registry as systems_registry
 
 HERE = Path(__file__).resolve().parent
 CASES_DIR = HERE / "cases"
@@ -483,7 +482,6 @@ def _configure_isolated_packages():
     temp = TemporaryDirectory(prefix="nodeforge-characterization-")
     packages.set_packages_dir_for_tests(Path(temp.name) / "packages")
     packages.invalidate_caches()
-    systems_registry.invalidate_cache()
     return temp
 
 
@@ -491,7 +489,6 @@ def _reset_isolated_packages(temp):
     """Restore package inventory configuration after a direct recorder run."""
     packages.set_packages_dir_for_tests(None)
     packages.invalidate_caches()
-    systems_registry.invalidate_cache()
     temp.cleanup()
 
 

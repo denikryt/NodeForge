@@ -174,7 +174,7 @@ def test_packaged_library_function_accepts_runtime_and_constant_string_arguments
         try:
             packages.install_package_directory(root, allow_python=False)
             group = compile_group('''
-from functions import string_identity
+from packages import string as string_pkg
 source = input_string("Source", default="Weight_A")
 runtime = string_identity(source)
 literal = string_identity("Weight_B")

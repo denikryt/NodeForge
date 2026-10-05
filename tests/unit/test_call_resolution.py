@@ -28,31 +28,51 @@ def _call(source):
     return ast.parse(source, mode="eval").body
 
 
-def _extension_id(name: str) -> ExtensionCallableId:
-    """Return one detached system-extension identity for resolver tests."""
-    return ExtensionCallableId(("system", "vendor.pkg", "demo"), name)
+def _extension_id(name: str, package_id: str = "vendor.pkg") -> ExtensionCallableId:
+    """Return one detached package-extension identity for resolver tests."""
+    return ExtensionCallableId(("system", package_id, "demo"), name)
+
+
+def _package_binding(alias: str, exports: dict[str, ExtensionCallableId], *, package_id="vendor.pkg"):
+    """Return one exact source package binding for pure resolver tests."""
+    from NodeForge.resolved_environment import PackageCallableExport, ResolvedPackageNamespace
+    from NodeForge.semantic_group import PackageNamespaceBinding
+
+    namespace = ResolvedPackageNamespace(
+        package_id=package_id,
+        import_name=package_id.rsplit(".", 1)[-1],
+        package_name=package_id,
+        package_version="1.0",
+        exports={
+            name: PackageCallableExport(package_id, name, extension_callable_id=callable_id)
+            for name, callable_id in exports.items()
+        },
+    )
+    return PackageNamespaceBinding(alias, namespace)
 
 
 def _environment(**overrides):
     """Return an immutable resolver namespace with every permanent category represented."""
-    record = SimpleNamespace(package_id="vendor.pkg")
+    record = SimpleNamespace(package_id="vendor.pkg", namespace="functions", name="lib_fn")
     binding = SimpleNamespace(namespace="functions", canonical_name="lib_fn", record=record)
+    package = _package_binding(
+        "pkg",
+        {"same": _extension_id("same"), "extension": _extension_id("extension")},
+    )
     values = {
         "callable_builtins": {"same", "builtin"},
-        "local_functions": {"same": object(), "local": object()},
-        "imported_functions": {"same": binding, "lib": binding},
-        "extension_system_callables": {"same": _extension_id("same"), "extension": _extension_id("extension")},
+        "local_functions": {"local": object()},
+        "imported_functions": {"lib": binding},
+        "package_namespaces": {"pkg": package},
     }
     values.update(overrides)
     return CallableEnvironment(**values)
 
 
-def test_resolution_precedence_uses_permanent_callable_categories():
+def test_core_bare_call_is_reserved_while_package_member_remains_qualified():
     env = _environment()
     assert resolve_simple_callable("same", env).kind is CallableKind.BUILTIN
-    extension = resolve_simple_callable("extension", env)
-    assert extension.kind is CallableKind.EXTENSION
-    assert extension.target == _extension_id("extension")
+    assert resolve_simple_callable("extension", env).kind is CallableKind.EXTENSION
     assert resolve_simple_callable("local", env).kind is CallableKind.LOCAL_FUNCTION
     library = resolve_simple_callable("lib", env)
     assert library.kind is CallableKind.LIBRARY
@@ -61,18 +81,57 @@ def test_resolution_precedence_uses_permanent_callable_categories():
     assert resolve_simple_callable("store", env).kind is CallableKind.TOP_LEVEL_ONLY
     assert resolve_simple_callable("missing", env) is UNRESOLVED
 
+    from NodeForge.call_resolution import resolve_package_callable
 
-def test_environment_defensively_freezes_all_namespace_collections():
+    qualified = resolve_package_callable("pkg", "same", env)
+    assert qualified.kind is CallableKind.EXTENSION
+    assert qualified.target == _extension_id("same")
+
+
+def test_environment_defensively_freezes_package_namespace_bindings():
     builtins = {"builtin"}
-    extensions = {"extension": _extension_id("extension")}
-    env = CallableEnvironment(builtins, {}, {}, extensions)
+    package = _package_binding("pkg", {"extension": _extension_id("extension")})
+    namespaces = {"pkg": package}
+    env = CallableEnvironment(builtins, {}, {}, namespaces)
     builtins.add("later")
-    extensions["later"] = _extension_id("later")
+    namespaces["later"] = package
     assert "later" not in env.callable_builtins
-    assert "later" not in env.extension_system_callables
+    assert "later" not in env.package_namespaces
     with pytest.raises(TypeError):
-        env.extension_system_callables["x"] = _extension_id("x")
+        env.package_namespaces["x"] = package
 
+
+def test_two_package_candidates_are_ambiguous_but_qualified_targets_remain_distinct():
+    from NodeForge.call_resolution import resolve_package_callable
+
+    a_id = _extension_id("foo", "vendor.a")
+    b_id = _extension_id("foo", "vendor.b")
+    env = CallableEnvironment(
+        frozenset(),
+        {},
+        {},
+        {
+            "a": _package_binding("a", {"foo": a_id}, package_id="vendor.a"),
+            "b": _package_binding("b", {"foo": b_id}, package_id="vendor.b"),
+        },
+    )
+    with pytest.raises(Exception, match=r"Ambiguous callable 'foo'.*a\.foo.*b\.foo"):
+        resolve_simple_callable("foo", env)
+    assert resolve_package_callable("a", "foo", env).target == a_id
+    assert resolve_package_callable("b", "foo", env).target == b_id
+
+
+def test_qualified_missing_member_has_no_fallback_to_core_or_other_package():
+    from NodeForge.call_resolution import resolve_package_callable
+
+    env = CallableEnvironment(
+        {"points"},
+        {},
+        {},
+        {"pkg": _package_binding("pkg", {"other": _extension_id("other")})},
+    )
+    with pytest.raises(Exception, match="has no callable member 'points'"):
+        resolve_package_callable("pkg", "points", env)
 
 def test_modifier_extraction_uses_detached_constants_and_preserves_explicit_false():
     cleaned, modifiers = extract_function_call_modifiers(
@@ -126,62 +185,28 @@ def test_unresolved_valid_bool_constant_unique_preserves_unsupported_modifier_di
 def test_top_level_only_and_non_simple_call_diagnostics_are_preserved():
     with pytest.raises(Exception, match=r"output\(\) is only supported as a top-level call"):
         _analyze_unresolved("output()")
-    with pytest.raises(Exception, match="Only simple function calls are supported"):
+    with pytest.raises(Exception, match="Only simple or package-qualified function calls are supported"):
         _analyze_unresolved("factory()()")
 
-@pytest.mark.parametrize(
-    ("first_kind", "second_kind", "expected"),
-    [
-        ("builtin", "extension", CallableKind.BUILTIN),
-        ("builtin", "local", CallableKind.BUILTIN),
-        ("builtin", "library", CallableKind.BUILTIN),
-        ("extension", "local", CallableKind.EXTENSION),
-        ("extension", "library", CallableKind.EXTENSION),
-        ("local", "library", CallableKind.LOCAL_FUNCTION),
-    ],
-)
-def test_every_pairwise_callable_collision_uses_permanent_precedence(first_kind, second_kind, expected):
-    """Every permanent pairwise namespace collision selects the earlier category."""
-    record = SimpleNamespace(package_id="pkg", namespace="functions", name="same")
-    binding = SimpleNamespace(namespace="functions", canonical_name="same", record=record)
-    namespaces = {
-        "builtin": {"callable_builtins": {"same"}},
-        "extension": {"extension_system_callables": {"same": _extension_id("same")}},
-        "local": {"local_functions": {"same": object()}},
-        "library": {"imported_functions": {"same": binding}},
-    }
-    values = {
-        "callable_builtins": set(),
-        "local_functions": {},
-        "imported_functions": {},
-        "extension_system_callables": {},
-    }
-    for category in (first_kind, second_kind):
-        for field, payload in namespaces[category].items():
-            if isinstance(values[field], set):
-                values[field].update(payload)
-            else:
-                values[field].update(payload)
-    assert resolve_simple_callable("same", CallableEnvironment(**values)).kind is expected
+def test_local_or_explicit_import_collision_with_package_is_ambiguous():
+    package = _package_binding("pkg", {"foo": _extension_id("foo")})
+    record = SimpleNamespace(package_id="vendor.local", namespace="functions", name="foo")
+    binding = SimpleNamespace(namespace="functions", canonical_name="foo", record=record)
+
+    with pytest.raises(Exception, match="Ambiguous callable 'foo'"):
+        resolve_simple_callable("foo", CallableEnvironment(frozenset(), {"foo": object()}, {}, {"pkg": package}))
+    with pytest.raises(Exception, match="Ambiguous callable 'foo'"):
+        resolve_simple_callable("foo", CallableEnvironment(frozenset(), {}, {"foo": binding}, {"pkg": package}))
 
 
-def test_resolution_preserves_extension_and_library_snapshot_identity():
-    """Extension/library targets retain only canonical snapshot identities."""
-    extension_id = _extension_id("extension")
-    record = SimpleNamespace(package_id="vendor.pkg", namespace="functions", name="entry")
-    binding = SimpleNamespace(namespace="functions", canonical_name="entry", record=record)
-    env = CallableEnvironment(
-        frozenset(),
-        {},
-        {"alias": binding},
-        {"extension": extension_id},
-    )
-    resolved_extension = resolve_simple_callable("extension", env)
-    resolved_library = resolve_simple_callable("alias", env)
-    assert resolved_extension.kind is CallableKind.EXTENSION
-    assert resolved_extension.target is extension_id
-    assert resolved_library.target is binding
-    assert resolved_library.library_function_id == library_function_id("functions", "vendor.pkg", "entry")
+def test_different_source_aliases_preserve_canonical_package_target():
+    from NodeForge.call_resolution import resolve_package_callable
+
+    target = _extension_id("sin")
+    first = CallableEnvironment(frozenset(), {}, {}, {"math": _package_binding("math", {"sin": target})})
+    second = CallableEnvironment(frozenset(), {}, {}, {"m": _package_binding("m", {"sin": target})})
+    assert resolve_package_callable("math", "sin", first).target == target
+    assert resolve_package_callable("m", "sin", second).target == target
 
 
 def test_resolver_module_has_no_live_catalog_package_or_system_discovery_imports():

@@ -17,7 +17,9 @@ from NodeForge.extension_contracts import ExtensionTypeId, TypeSpec
 from NodeForge.extension_semantics import ExtensionDependencySource, ExtensionSemanticPayload
 from NodeForge.extension_values import ExtensionDependencySlot, ExtensionValue
 from NodeForge.nf_types import NFType
+from NodeForge.resolved_environment import PackageCallableExport, ResolvedPackageNamespace
 from NodeForge.runtime_bindings import RuntimeBindingSymbol
+from NodeForge.semantic_group import PackageNamespaceBinding
 from NodeForge.semantic_analysis import build_semantic_environment
 from NodeForge.semantic_body import lower_basic_body
 from NodeForge.semantic_ir import (
@@ -30,11 +32,17 @@ pytestmark = pytest.mark.unit
 
 
 def _callables(by_name):
+    """Expose one owner-qualified imported semantic package to body tests."""
+    exports = {
+        name: PackageCallableExport("vendor.semantic", name, extension_callable_id=callable_id)
+        for name, callable_id in by_name.items()
+    }
+    namespace = ResolvedPackageNamespace("vendor.semantic", "semantic", "Semantic", "1.0.0", exports)
     return CallableEnvironment(
         callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
         local_functions={},
         imported_functions={},
-        extension_system_callables=by_name,
+        package_namespaces={"semantic": PackageNamespaceBinding("semantic", namespace)},
     )
 
 
@@ -583,7 +591,7 @@ def test_semantic_environment_rejects_duplicate_extension_and_runtime_ownership(
         callable_builtins=frozenset(),
         local_functions={},
         imported_functions={},
-        extension_system_callables={},
+        package_namespaces={},
     )
     with pytest.raises(CompileError, match="multiple semantic binding domains"):
         build_semantic_environment(

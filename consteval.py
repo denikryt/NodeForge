@@ -573,23 +573,23 @@ def _collect_preprocessing_written_names(stmts):
     return names
 
 
-def _contains_builder_method_stmt(stmts):
-    """Return True if a statement list contains geometry_builder mutation syntax."""
+def _contains_collection_mutation_stmt(stmts):
+    """Detect builder or array mutation requiring runtime loop lowering."""
     for stmt in stmts:
         if isinstance(stmt, ast.Expr):
             call = stmt.value
             if (
                 isinstance(call, ast.Call)
                 and isinstance(call.func, ast.Attribute)
-                and call.func.attr in {"add", "extend"}
+                and call.func.attr in {"add", "extend", "append"}
                 and isinstance(call.func.value, ast.Name)
             ):
                 return True
         if isinstance(stmt, ast.If):
-            if _contains_builder_method_stmt(stmt.body) or _contains_builder_method_stmt(stmt.orelse):
+            if _contains_collection_mutation_stmt(stmt.body) or _contains_collection_mutation_stmt(stmt.orelse):
                 return True
         if isinstance(stmt, ast.For):
-            if _contains_builder_method_stmt(stmt.body) or _contains_builder_method_stmt(stmt.orelse):
+            if _contains_collection_mutation_stmt(stmt.body) or _contains_collection_mutation_stmt(stmt.orelse):
                 return True
     return False
 
@@ -715,8 +715,8 @@ def _handle_compile_time_stmt(
             return
         except CompileError:
             raise
-        if _contains_builder_method_stmt(stmt.body) and not isinstance(stmt.target, ast.Name):
-            # Preserve the historical flat builder-loop target for Semantic Body's explicit frontend rule.
+        if _contains_collection_mutation_stmt(stmt.body) and not isinstance(stmt.target, ast.Name):
+            # Collection loops retain their flat targets for semantic lowering.
             recorder.retain(stmt)
             return
         if not isinstance(iterable, (list, tuple)):

@@ -29,11 +29,11 @@ def test_nodeforge_import_uses_package_init_from_repo_root():
     assert Path(NodeForge.__file__).resolve() == repo_root / "__init__.py"
 
 
-def test_pure_system_registry_import_works_with_package_parent_on_pythonpath():
-    """The generic package-backed systems registry should import outside pytest."""
+def test_pure_system_package_import_works_with_package_parent_on_pythonpath():
+    """The systems package remains importable after removal of the global name registry."""
     repo_root = Path(__file__).resolve().parents[2]
     script = (
-        "import NodeForge.systems.registry\n"
+        "import NodeForge.systems\n"
         "print('NODEFORGE_PURE_IMPORTS_OK')\n"
     )
     result = subprocess.run(

@@ -149,7 +149,7 @@ def test_trace_child_fingerprint_changes_parent_fingerprint():
     with trace.group(owner, {"source": "out = x"}) as frame:
         frame.record_dependency(materialization, "def")
         second = frame.finish("contract")
-    assert first.fingerprint == "552f3cf08c1a25d771bb9cdfb003d40b964377efe451a677cfcef18e7a8c9522"
+    assert first.fingerprint == "25b781554e1ae6f95a7577ac3044936cc39c1656800df6fa7b629a96f5ae529e"
     assert second.fingerprint
     assert first.fingerprint != second.fingerprint
 

@@ -13,7 +13,9 @@ from NodeForge.function_instances import (
     FunctionCompilationTrace,
     function_group_owner_scope,
 )
-from NodeForge.resolved_environment import ResolvedCatalog, ResolvedEnvironment
+from NodeForge.resolved_environment import (
+    PackageCallableExport, ResolvedCatalog, ResolvedEnvironment, ResolvedPackageNamespace,
+)
 from NodeForge.semantic_group import analyze_group_source
 
 pytestmark = pytest.mark.unit
@@ -38,14 +40,21 @@ def foo(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...
     session = ExtensionOwnerSession(capture_owner_code_snapshot(owner_key, owner))
     registry = ExtensionRegistry((session,))
     callable_id = next(iter(session.normalize_interface()[0]))
+    namespace = ResolvedPackageNamespace(
+        "vendor.demo",
+        "demo",
+        "Demo",
+        "1.0.0",
+        {"foo": PackageCallableExport("vendor.demo", "foo", extension_callable_id=callable_id)},
+    )
     environment = ResolvedEnvironment(
         {
             "functions": ResolvedCatalog("functions", {}),
             "examples": ResolvedCatalog("examples", {}),
             "local": ResolvedCatalog("local", {}),
         },
+        package_namespaces={"vendor.demo": namespace},
         extension_registry=registry,
-        extension_system_callables={"foo": callable_id},
     )
     identity = GroupCompilationIdentity(None, "ROOT/freshness", "ROOT/freshness", "ROOT/freshness")
     return session, environment, identity
@@ -55,7 +64,7 @@ def test_semantic_use_records_one_deduplicated_owner_dependency(tmp_path):
     """Repeated accepted extension calls freeze one deterministic owner/fingerprint row."""
     session, environment, identity = _fixture(tmp_path)
     compilation = analyze_group_source(
-        "a = foo(x)\nb = foo(a)\noutput(b)\n",
+        "from packages import demo\na = foo(x)\nb = foo(a)\noutput(b)\n",
         compilation_identity=identity,
         resolved_environment=environment,
     )

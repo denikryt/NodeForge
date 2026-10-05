@@ -34,7 +34,7 @@ def _write_extension_package(
                 "author": "Tests",
                 "description": "Physical extension fixture",
                 "nodeforge_min_version": "0.59.0",
-                "nodeforge_max_version": "0.64.0",
+                "nodeforge_max_version": "0.65.1",
                 "contents": {"systems": "systems"},
                 "permissions": {"python": True},
             }
@@ -96,7 +96,7 @@ def _write_rotation_extension_package(root: Path) -> None:
                 "author": "Tests",
                 "description": "Rotation physical-type fixture",
                 "nodeforge_min_version": "0.59.0",
-                "nodeforge_max_version": "0.64.0",
+                "nodeforge_max_version": "0.65.1",
                 "contents": {"systems": "systems"},
                 "permissions": {"python": True},
             }
@@ -150,7 +150,7 @@ def _write_nested_import_extension_package(root: Path) -> None:
                 "author": "Tests",
                 "description": "Nested owner-local import fixture",
                 "nodeforge_min_version": "0.59.0",
-                "nodeforge_max_version": "0.64.0",
+                "nodeforge_max_version": "0.65.1",
                 "contents": {"systems": "systems"},
                 "permissions": {"python": True},
             }
@@ -208,7 +208,7 @@ def _write_semantic_extension_package(root: Path) -> None:
                 "author": "Tests",
                 "description": "Package semantic-state Blender fixture",
                 "nodeforge_min_version": "0.60.0",
-                "nodeforge_max_version": "0.64.0",
+                "nodeforge_max_version": "0.65.1",
                 "contents": {"systems": "systems"},
                 "permissions": {"python": True},
             }
@@ -339,6 +339,7 @@ def test_v2_system_dispatch_is_lazy_and_uses_public_backend_context():
         assert not hasattr(builtins, "_nodeforge_stage32_blender_impl_hits")
 
         group = compile_group(
+            'from packages import v2\n'
             'value = input_float("Value", default=3.0)\n'
             'result = ext_scale(value)\n'
             'output("Result", result)\n',
@@ -361,6 +362,7 @@ def test_nested_owner_local_imports_work_through_install_and_physical_dispatch()
         _write_nested_import_extension_package(source)
         packages.install_package_directory(source, allow_python=True)
         group = compile_group(
+            'from packages import nested\n'
             'value = input_float("Value", default=3.0)\n'
             'result = nested_scale(value)\n'
             'output("Result", result)\n',
@@ -380,6 +382,7 @@ def test_rotation_extension_result_can_cross_another_extension_and_group_output(
         _write_rotation_extension_package(source)
         packages.install_package_directory(source, allow_python=True)
         group = compile_group(
+            'from packages import rotation as rotpkg\n'
             'value = input_vector("Euler")\n'
             'rotation = make_rotation(value)\n'
             'result = identity_rotation(rotation)\n'
@@ -405,6 +408,7 @@ def test_direct_wrapper_cannot_return_an_input_socket_as_runtime_result():
         before = set(bpy.data.node_groups)
         with pytest.raises(CompileError, match="output sockets"):
             compile_group(
+                'from packages import v2\n'
                 'value = input_float("Value", default=3.0)\n'
                 'result = ext_scale(value)\n'
                 'output("Result", result)\n',
@@ -424,6 +428,7 @@ def test_invalid_extension_result_rolls_back_generated_resources():
 
         with pytest.raises(CompileError, match="output sockets"):
             compile_group(
+                'from packages import v2\n'
                 'value = input_float("Value", default=3.0)\n'
                 'result = ext_scale(value)\n'
                 'output("Result", result)\n',
@@ -443,6 +448,7 @@ def test_semantic_state_reconstructs_exact_records_and_runtime_leaf():
             _write_semantic_extension_package(source)
             packages.install_package_directory(source, allow_python=True)
             group = compile_group(
+                'from packages import semantic\n'
                 'value = input_int("Value", default=3)\n'
                 'result = consume_part(make_part(value))\n'
                 'output("Result", result)\n',
@@ -473,6 +479,7 @@ def test_semantic_backend_result_failure_rolls_back_generated_resources():
 
             with pytest.raises(CompileError) as exc_info:
                 compile_group(
+                    'from packages import semantic\n'
                     'value = input_int("Value", default=3)\n'
                     'result = bad_consume_part(make_part(value))\n'
                     'output("Result", result)\n',
@@ -499,6 +506,7 @@ def test_persistent_semantic_assignment_reconstructs_runtime_leaf_later():
             _write_semantic_extension_package(source)
             packages.install_package_directory(source, allow_python=True)
             group = compile_group(
+                'from packages import semantic\n'
                 'value = input_int("Value", default=3)\n'
                 'part = make_part(value)\n'
                 'result = consume_part(part)\n'
@@ -525,6 +533,7 @@ def test_discarded_runtime_extension_argument_creates_no_backend_or_resource():
             packages.install_package_directory(source, allow_python=True)
             before_meshes = {mesh.as_pointer() for mesh in bpy.data.meshes}
             group = compile_group(
+                'from packages import semantic\n'
                 'value = input_int("Value", default=3)\n'
                 'part = ignore_part_input(runtime_resource(value))\n'
                 'output("Value", value)\n',
@@ -550,6 +559,7 @@ def test_persistent_semantic_backend_failure_still_rolls_back_resources():
             before_objects = {obj.as_pointer() for obj in bpy.data.objects}
             with pytest.raises(CompileError) as exc_info:
                 compile_group(
+                    'from packages import semantic\n'
                     'value = input_int("Value", default=3)\n'
                     'part = make_part(value)\n'
                     'result = bad_consume_part(part)\n'
@@ -573,6 +583,7 @@ def test_nodeforge_math_v2_reference_package():
     packages.install_package_directory(Path(package_path), allow_python=True)
 
     sine_group = compile_group(
+        'from packages import math\n'
         'value = input_float("Value", default=0.5)\n'
         'result = sin(value)\n'
         'output("Result", result)\n',
@@ -585,6 +596,7 @@ def test_nodeforge_math_v2_reference_package():
     assert len(sine_nodes) == 1
 
     select_group = compile_group(
+        'from packages import math\n'
         'cond = input_bool("Condition", default=True)\n'
         'a = input_int("A", default=1)\n'
         'b = input_int("B", default=2)\n'

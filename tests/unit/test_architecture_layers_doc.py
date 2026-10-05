@@ -10,7 +10,7 @@ def test_architecture_layers_doc_exists_with_entry_contract():
 
     assert "# Architecture Layers" in text
     assert "functions/name.nf" in text
-    assert "from functions import *" in text
+    assert "from packages import pkg" in text
     assert "does not mutate `builtins/registry.py`" in text
     assert "package-local backend helper names" in text
     assert "Conflicts raise controlled `CompileError`s" in text

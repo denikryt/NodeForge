@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 
 from NodeForge import packages
-from NodeForge.systems import registry as systems_registry
 
 pytestmark = pytest.mark.unit
 
@@ -18,10 +17,8 @@ pytestmark = pytest.mark.unit
 def _isolated_packages(tmp_path):
     """Use one empty package inventory for every installer fixture."""
     packages.set_packages_dir_for_tests(tmp_path / "inventory")
-    systems_registry.invalidate_cache()
     yield
     packages.set_packages_dir_for_tests(None)
-    systems_registry.invalidate_cache()
 
 
 def _manifest(root: Path, package_id: str, *, systems: bool = False, functions: bool = False) -> None:
@@ -42,7 +39,7 @@ def _manifest(root: Path, package_id: str, *, systems: bool = False, functions: 
                 "author": "Tests",
                 "description": "declarative extension installer fixture",
                 "nodeforge_min_version": "0.59.0",
-                "nodeforge_max_version": "0.64.0",
+                "nodeforge_max_version": "0.65.1",
                 "contents": contents,
                 "permissions": {"python": True},
             }
@@ -121,8 +118,8 @@ def test_retained_system_declaration_validator_does_not_execute_v2_interface(tmp
     assert not hasattr(builtins, marker)
 
 
-def test_candidate_function_collides_with_existing_v2_system_inventory(tmp_path):
-    """Existing installed v2 system names participate in candidate collision validation."""
+def test_cross_package_function_and_v2_system_member_names_are_legal(tmp_path):
+    """Different package owners may export the same public callable member name."""
     first = tmp_path / "first"
     _manifest(first, "vendor.system", systems=True)
     _system(first, "taken")
@@ -132,6 +129,6 @@ def test_candidate_function_collides_with_existing_v2_system_inventory(tmp_path)
     _manifest(second, "vendor.function", functions=True)
     (second / "functions").mkdir(parents=True, exist_ok=True)
     (second / "functions" / "taken.nf").write_text("output(1.0)\n", encoding="utf-8")
+    packages.install_package_directory(second, allow_python=True)
 
-    with pytest.raises(packages.PackageError, match="Public name collision 'taken'"):
-        packages.install_package_directory(second, allow_python=True)
+    assert {"vendor.system", "vendor.function"} <= set(packages.load_package_state()["packages"])

@@ -283,19 +283,19 @@ def _ordinary_for_target_names(target_node) -> list[str]:
     raise CompileError("Only simple compile-time for targets are supported")
 
 
-def _builder_loop_target_names(target_node, body) -> list[str] | None:
-    """Return historical flat tuple/list targets only for loops that mutate a builder."""
+def _unpacking_loop_target_names(target_node, body, *, structural_iterable=False) -> list[str] | None:
+    """Accept flat targets for structural arrays and collection mutation loops."""
     if not isinstance(target_node, (ast.Tuple, ast.List)):
         return None
-    has_builder_method = any(
+    has_collection_method = any(
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and node.func.attr in {"add", "extend"}
+        and node.func.attr in {"add", "extend", "append"}
         and isinstance(node.func.value, ast.Name)
         for statement in body
         for node in ast.walk(statement)
     )
-    if not has_builder_method:
+    if not structural_iterable and not has_collection_method:
         return None
     return _tuple_target_names(target_node)
 
@@ -1560,9 +1560,12 @@ def lower_basic_body(
             if isinstance(stmt, ast.For):
                 parsed = parse_repeat_range_for(stmt)
                 if parsed is None:
-                    builder_target_names = _builder_loop_target_names(stmt.target, stmt.body)
+                    unpacking_target_names = _unpacking_loop_target_names(
+                        stmt.target, stmt.body,
+                        structural_iterable=isinstance(stmt.iter, ast.Name) and stmt.iter.id in active.array_bindings,
+                    )
                     iterable_items = _iterable_items(stmt.iter, active, active_compile_time)
-                    target_names = builder_target_names or _ordinary_for_target_names(stmt.target)
+                    target_names = unpacking_target_names or _ordinary_for_target_names(stmt.target)
                     for name in target_names:
                         validate_runtime_binding_target(name, reserved_name_labels)
                         if name in active.builder_states:
@@ -1597,6 +1600,8 @@ def lower_basic_body(
                             if len(target_names) == 1:
                                 assignments = (item,)
                             else:
+                                if isinstance(item, StructuralArrayRef):
+                                    item = active.array_states[item.array_id].items
                                 if not isinstance(item, (list, tuple)):
                                     raise CompileError(f"Cannot unpack scalar compile-time loop item into {len(target_names)} names")
                                 if len(item) != len(target_names):
@@ -1610,7 +1615,7 @@ def lower_basic_body(
                                     name,
                                     value,
                                     temp_binding_ids[name],
-                                    materialize_literal=builder_target_names is not None,
+                                    materialize_literal=unpacking_target_names is not None,
                                 )
                                 if bound is not None:
                                     prelude.append(bound)

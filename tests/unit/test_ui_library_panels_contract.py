@@ -86,7 +86,8 @@ def test_reload_poll_keeps_catalog_resolution_out_of_ui_hot_path():
     assert "nodeforge_library_namespace" in poll_block
     assert "nodeforge_library_name" in poll_block
     assert "resolve_reloadable_library_entry" not in poll_block
-    assert "resolve_reloadable_library_entry" in execute_block
+    assert "resolve_reloadable_library_entry" not in execute_block
+    assert "update_library_catalog_group(node.node_tree)" in execute_block
 
 
 def test_main_panel_extracts_embedded_source_once_per_draw():
@@ -125,3 +126,19 @@ def test_local_folder_rows_remain_selectable_and_use_separate_open_action():
     assert 'text=""' in open_call
     assert "icon='FORWARD'" in open_call
     assert "text=item.name" not in open_call
+
+
+def test_functions_ui_preserves_and_forwards_package_owner_identity():
+    """Functions rows persist package ownership and materialize the exact selected owner."""
+    source = UI_SOURCE.read_text(encoding="utf-8")
+    refresh_start = source.index("def _refresh_catalog_items")
+    refresh_end = source.index("def _selected_catalog_item", refresh_start)
+    refresh_block = source[refresh_start:refresh_end]
+    assert 'item.package_id = record.get("package_id", "")' in refresh_block
+    assert 'item.name == old_name and getattr(item, "package_id", "") == old_package_id' in refresh_block
+
+    operator_start = source.index("class NODEFORGE_OT_create_function_group")
+    operator_end = source.index("class ", operator_start + 1)
+    operator_block = source[operator_start:operator_end]
+    assert "create_package_function_group(item.package_id, item.name)" in operator_block
+    assert 'create_library_catalog_group("functions", item.name)' not in operator_block

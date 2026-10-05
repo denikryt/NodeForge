@@ -24,6 +24,7 @@ from .update import (
 )
 from .library import (
     materialize_library_entry_group_for_record,
+    resolve_reloadable_library_entry,
     update_materialized_library_entry_group_for_record,
 )
 from .function_instances import (
@@ -300,25 +301,38 @@ def create_expression_group(source: str, name: str = "NodeForge Group"):
 
 
 def create_library_catalog_group(namespace: str, name: str):
-    """Create or update a reusable node group for a catalog entry."""
+    """Create a name-unique catalog group; Functions callers should pass owner identity."""
     environment = resolve_environment()
-    record = environment.catalog(namespace).find(name)
+    if namespace == "functions":
+        matches = [record for record in environment.package_function_records() if record.name == name]
+        if len(matches) > 1:
+            owners = ", ".join(sorted(record.package_id for record in matches))
+            raise CompileError(
+                f"Ambiguous functions library entry {name!r}: {owners}. Select a package owner explicitly."
+            )
+        record = matches[0] if matches else None
+    else:
+        record = environment.catalog(namespace).find(name)
     if record is None:
         raise CompileError(f"Unknown {namespace} library entry: {name}")
     return materialize_library_entry_group_for_record(record, _new_group_backend(environment))
 
 
-def create_library_function_group(name: str):
-    """Create or update a reusable node group for a function-library entry."""
-    return create_library_catalog_group("functions", name)
-
-
-def update_library_catalog_group(group, namespace: str, name: str):
-    """Reload a catalog-backed group through prepared semantic compilation."""
+def create_package_function_group(package_id: str, name: str):
+    """Create or update one exact package-owned Functions entry."""
     environment = resolve_environment()
-    record = environment.catalog(namespace).find(name)
+    record = environment.package_function_record(package_id, name)
     if record is None:
-        raise CompileError(f"Current source for {namespace} library entry {name!r} is unavailable")
+        raise CompileError(f"Unknown package function {package_id}/{name}")
+    return materialize_library_entry_group_for_record(record, _new_group_backend(environment))
+
+
+def update_library_catalog_group(group, namespace: str | None = None, name: str | None = None):
+    """Reload a catalog-backed group using persisted owner identity where required."""
+    environment = resolve_environment()
+    record = resolve_reloadable_library_entry(
+        group, namespace, name, resolved_environment=environment
+    )
     return update_materialized_library_entry_group_for_record(
         record, group, _new_group_backend(environment)
     )
@@ -344,7 +358,7 @@ __all__ = [
     "update_expression_group",
     "update_library_catalog_group",
     "create_library_catalog_group",
-    "create_library_function_group",
+    "create_package_function_group",
     "_apply_group_defaults_to_node",
     "_capture_node_external_state",
     "_restore_node_external_state",

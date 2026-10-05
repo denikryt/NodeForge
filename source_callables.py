@@ -7,12 +7,17 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Mapping
 
+from .call_resolution import (
+    CallableEnvironment,
+    non_callable_source_binding_error,
+    package_candidates_for_unqualified,
+)
 from .callable_contracts import (
     SourceCallableContract,
     SourceCallableParameter,
     normalize_callable_keyword,
 )
-from .compiler_identities import FunctionId, GroupCompilationIdentity
+from .compiler_identities import FunctionId, GroupCompilationIdentity, normalize_library_package_id
 from .constants import TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
 from .consteval import _is_const_vector
 from .errors import CompileError
@@ -71,16 +76,30 @@ class SourceCallablePreparationKey:
 
 @dataclass(frozen=True)
 class PreparedSourceCallable:
-    """Pair one source-call contract with the exact owner-specific group compilation."""
+    """Pair one source-call contract with its exact semantic artifact and source owner record."""
 
     contract: SourceCallableContract
     group: "SemanticGroupCompilation"
+    source_record: object | None = None
 
     def __post_init__(self) -> None:
-        """Validate that the prepared group exposes final compiler identity."""
+        """Validate final compiler identity and exact library-record ownership."""
         identity = getattr(self.group, "identity", None)
         if not isinstance(identity, GroupCompilationIdentity):
             raise TypeError("prepared source callable group must expose GroupCompilationIdentity")
+        function_id = self.contract.function_id
+        if function_id.kind == "LOCAL_DEF":
+            if self.source_record is not None:
+                raise TypeError("prepared local callable must not carry a library source record")
+            return
+        if self.source_record is None:
+            raise TypeError("prepared library callable must carry its exact source record")
+        if (
+            getattr(self.source_record, "namespace", None) != function_id.namespace
+            or getattr(self.source_record, "name", None) != function_id.name
+            or normalize_library_package_id(getattr(self.source_record, "package_id", None)) != function_id.package_id
+        ):
+            raise TypeError("prepared library callable source record does not match FunctionId")
 
 
 def value_type_for_const(value) -> NFType:
@@ -222,24 +241,58 @@ def _binding_names_in_local_function(fn: ast.FunctionDef) -> set[str]:
     return names
 
 
-class _FreeNameVisitor(ast.NodeVisitor):
-    """Collect value-load free names while excluding simple callable-name positions."""
+def local_binding_names(fn: ast.FunctionDef) -> frozenset[str]:
+    """Return lexical names owned by one local function body/parameter scope."""
+    return frozenset(_binding_names_in_local_function(fn))
 
-    def __init__(self, local_names) -> None:
-        """Initialize free-name collection for one lexical local-name set."""
+
+@dataclass(frozen=True)
+class _LocalNameAnalysis:
+    """Invocation-local facts shared by capture and callable validation filters."""
+
+    free_names: tuple[str, ...]
+    callee_names: tuple[str, ...]
+    local_bindings: frozenset[str]
+
+
+class _LocalNameVisitor(ast.NodeVisitor):
+    """Collect free value names and all simple callees in source order."""
+
+    def __init__(self, local_names, package_namespaces=None) -> None:
+        """Initialize lexical facts for one function and inherited package scope."""
         self.local_names = set(local_names)
+        self.package_namespaces = dict(package_namespaces or {})
         self.names: list[str] = []
         self._seen: set[str] = set()
+        self.callee_names: list[str] = []
+        self._seen_callees: set[str] = set()
 
     def _add(self, name: str) -> None:
-        """Record one unseen free name in stable source-discovery order."""
+        """Record one unseen free value name in stable source order."""
         if name not in self.local_names and name not in self._seen:
             self._seen.add(name)
             self.names.append(name)
 
+    def _add_callee(self, name: str) -> None:
+        """Record a simple callee even when its spelling is lexically bound."""
+        if name not in self._seen_callees:
+            self._seen_callees.add(name)
+            self.callee_names.append(name)
+
     def visit_Call(self, node) -> None:
-        """Visit call arguments while treating a simple callee name as callable identity."""
-        if not isinstance(node.func, ast.Name):
+        """Classify callable positions while traversing every ordinary operand."""
+        if isinstance(node.func, ast.Name):
+            self._add_callee(node.func.id)
+        elif (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id not in self.local_names
+            and node.func.value.id in self.package_namespaces
+        ):
+            # Package alias is resolver syntax only in this exact qualified-callee
+            # position. Arguments remain ordinary value expressions/captures.
+            pass
+        else:
             self.visit(node.func)
         for arg in node.args:
             self.visit(arg)
@@ -256,47 +309,77 @@ class _FreeNameVisitor(ast.NodeVisitor):
         return
 
 
-def free_names(fn: ast.FunctionDef) -> tuple[str, ...]:
-    """Return free value-load names in stable first-required order."""
-    visitor = _FreeNameVisitor(_binding_names_in_local_function(fn))
+def _analyze_local_names(fn: ast.FunctionDef, package_namespaces=None) -> _LocalNameAnalysis:
+    """Collect lexical bindings once and share one call/value traversal."""
+    local_bindings = local_binding_names(fn)
+    visitor = _LocalNameVisitor(local_bindings, package_namespaces)
     for stmt in fn.body:
         visitor.visit(stmt)
-    return tuple(visitor.names)
+    return _LocalNameAnalysis(tuple(visitor.names), tuple(visitor.callee_names), local_bindings)
 
 
-class _LocalFunctionCallVisitor(ast.NodeVisitor):
-    """Collect local function calls in stable first-seen order."""
+def free_names(fn: ast.FunctionDef, package_namespaces=None) -> tuple[str, ...]:
+    """Return free value-load names in stable first-required order."""
+    return _analyze_local_names(fn, package_namespaces).free_names
 
-    def __init__(self, local_function_names) -> None:
-        """Initialize local-callee collection for the visible function names."""
-        self.local_function_names = set(local_function_names)
-        self.names: list[str] = []
-        self._seen: set[str] = set()
 
-    def visit_Call(self, node) -> None:
-        """Record simple local callees and traverse ordinary operands."""
-        if isinstance(node.func, ast.Name):
-            if node.func.id in self.local_function_names and node.func.id not in self._seen:
-                self._seen.add(node.func.id)
-                self.names.append(node.func.id)
-        else:
-            self.visit(node.func)
-        for arg in node.args:
-            self.visit(arg)
-        for keyword in node.keywords:
-            self.visit(keyword.value)
+def has_source_value_binding(
+    name: str,
+    *,
+    runtime_bindings: Mapping[str, object],
+    compile_time_values: Mapping[str, object],
+    structural_binding_names=frozenset(),
+    structural_array_names=frozenset(),
+    builder_binding_names=frozenset(),
+    extension_binding_names=frozenset(),
+) -> bool:
+    """Return whether an existing frontend value domain owns *name*."""
+    if name in runtime_bindings:
+        return True
+    if name in structural_binding_names:
+        return True
+    if name in structural_array_names:
+        return True
+    if name in builder_binding_names:
+        return True
+    if name in extension_binding_names:
+        return True
+    return name in compile_time_values
 
-    def visit_FunctionDef(self, node) -> None:
-        """Do not traverse nested function definitions."""
-        return
+
+def _validate_local_bare_package_calls(
+    analysis: _LocalNameAnalysis,
+    *,
+    callable_environment: CallableEnvironment,
+    runtime_bindings: Mapping[str, object],
+    compile_time_values: Mapping[str, object],
+    structural_binding_names=frozenset(),
+    structural_array_names=frozenset(),
+    builder_binding_names=frozenset(),
+    extension_binding_names=frozenset(),
+) -> None:
+    """Reject outer source values that invalidate the function's bare package calls."""
+    for name in analysis.callee_names:
+        if name in analysis.local_bindings:
+            continue
+        if not package_candidates_for_unqualified(name, callable_environment):
+            continue
+        if has_source_value_binding(
+            name,
+            runtime_bindings=runtime_bindings,
+            compile_time_values=compile_time_values,
+            structural_binding_names=structural_binding_names,
+            structural_array_names=structural_array_names,
+            builder_binding_names=builder_binding_names,
+            extension_binding_names=extension_binding_names,
+        ):
+            raise non_callable_source_binding_error(name, callable_environment)
 
 
 def called_local_functions(fn: ast.FunctionDef, local_functions: Mapping[str, ast.FunctionDef]) -> tuple[str, ...]:
     """Return local callees used by *fn* in stable first-seen order."""
-    visitor = _LocalFunctionCallVisitor(local_functions)
-    for stmt in fn.body:
-        visitor.visit(stmt)
-    return tuple(visitor.names)
+    analysis = _analyze_local_names(fn)
+    return tuple(name for name in analysis.callee_names if name in local_functions)
 
 
 def _reserved_capture_label(reserved_name_labels: Mapping[str, str], name: str) -> str | None:
@@ -324,12 +407,27 @@ def analyze_local_captures(
     structural_array_names=frozenset(),
     builder_binding_names=frozenset(),
     extension_binding_names=frozenset(),
+    callable_environment: CallableEnvironment | None = None,
     _stack=(),
 ) -> tuple[LocalCapture, ...]:
-    """Resolve direct/transitive captures entirely from frontend-owned semantic state."""
+    """Resolve direct/transitive captures and invocation-time package-call validity."""
     if fn.name in _stack:
         cycle = " -> ".join(_stack + (fn.name,))
         raise CompileError(f"Recursive local function calls are not supported: {cycle}")
+
+    package_namespaces = {} if callable_environment is None else callable_environment.package_namespaces
+    analysis = _analyze_local_names(fn, package_namespaces)
+    if callable_environment is not None:
+        _validate_local_bare_package_calls(
+            analysis,
+            callable_environment=callable_environment,
+            runtime_bindings=runtime_bindings,
+            compile_time_values=compile_time_values,
+            structural_binding_names=structural_binding_names,
+            structural_array_names=structural_array_names,
+            builder_binding_names=builder_binding_names,
+            extension_binding_names=extension_binding_names,
+        )
 
     captures: list[LocalCapture] = []
     seen: set[str] = set()
@@ -340,9 +438,11 @@ def analyze_local_captures(
             seen.add(capture.name)
             captures.append(capture)
 
-    for name in free_names(fn):
+    for name in analysis.free_names:
         if name in _ALLOWED_CONSTS:
             continue
+        if name in package_namespaces:
+            raise CompileError(f"Package namespace {name!r} cannot be used as a value")
         reserved = _reserved_capture_label(reserved_name_labels, name)
         if reserved is not None:
             raise CompileError(f"Local function {fn.name}() cannot capture {name}: name is {reserved}")
@@ -372,8 +472,9 @@ def analyze_local_captures(
             continue
         raise CompileError(f"Local function {fn.name}() cannot capture {name}: name is not available in the outer scope")
 
-    local_names = _binding_names_in_local_function(fn)
-    for called_name in called_local_functions(fn, local_functions):
+    for called_name in analysis.callee_names:
+        if called_name not in local_functions:
+            continue
         if called_name == fn.name or called_name in _stack:
             cycle = " -> ".join(_stack + (fn.name, called_name))
             raise CompileError(f"Recursive local function calls are not supported: {cycle}")
@@ -387,9 +488,10 @@ def analyze_local_captures(
             structural_array_names=structural_array_names,
             builder_binding_names=builder_binding_names,
             extension_binding_names=extension_binding_names,
+            callable_environment=callable_environment,
             _stack=_stack + (fn.name,),
         ):
-            if capture.name in local_names and capture.name not in seen:
+            if capture.name in analysis.local_bindings and capture.name not in seen:
                 raise CompileError(
                     f"Local function {fn.name}() cannot forward capture {capture.name} "
                     f"required by {called_name}(): name is local to {fn.name}()"
@@ -426,10 +528,12 @@ class SourceCallableSession:
         source_supplier,
         local_functions,
         imported_library_functions,
+        package_namespaces,
         helper_namespace: str,
         local_public_names: tuple[str, ...] | None = None,
         local_hidden_names: tuple[str, ...] = (),
         local_output_count: int | None = None,
+        source_record=None,
     ) -> PreparedSourceCallable:
         """Prepare/cache one exact owner-specific semantic group and callable contract."""
         key = SourceCallablePreparationKey(function_id, identity.owner_scope)
@@ -450,6 +554,7 @@ class SourceCallableSession:
                 resolved_environment=self.resolved_environment,
                 inherited_local_functions=local_functions,
                 inherited_imported_library_functions=imported_library_functions,
+                inherited_package_namespaces=package_namespaces,
                 helper_namespace=helper_namespace,
                 source_callable_session=self,
             )
@@ -504,7 +609,7 @@ class SourceCallableSession:
         contract = SourceCallableContract(function_id, parameters, outputs)
         if contract.function_id != key.function_id or group.identity.owner_scope != key.owner_scope:
             raise CompileError("Internal error: prepared source callable cache key does not match semantic result")
-        prepared = PreparedSourceCallable(contract, group)
+        prepared = PreparedSourceCallable(contract, group, source_record)
         self.prepared[key] = prepared
         return prepared
 
@@ -518,6 +623,7 @@ class SourceCallableSession:
         hidden_capture_names: tuple[str, ...],
         local_functions,
         imported_library_functions,
+        package_namespaces,
         helper_namespace: str,
         return_shape: LocalReturnShape,
     ) -> PreparedSourceCallable:
@@ -528,6 +634,7 @@ class SourceCallableSession:
             source_supplier=lambda: generated_source,
             local_functions=local_functions,
             imported_library_functions=imported_library_functions,
+            package_namespaces=package_namespaces,
             helper_namespace=helper_namespace,
             local_public_names=tuple(explicit_parameter_names),
             local_hidden_names=tuple(hidden_capture_names),
@@ -551,7 +658,9 @@ class SourceCallableSession:
             source_supplier=lambda: source_path.read_text(encoding="utf-8"),
             local_functions={},
             imported_library_functions={},
+            package_namespaces={},
             helper_namespace=getattr(record, "name", function_id.name),
+            source_record=record,
         )
 
     def get_prepared(self, key: SourceCallablePreparationKey) -> PreparedSourceCallable:

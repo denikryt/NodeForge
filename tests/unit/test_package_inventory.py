@@ -13,17 +13,14 @@ import pytest
 
 from NodeForge import packages
 from NodeForge.errors import CompileError
-from NodeForge.systems import registry as systems_registry
 
 
 @pytest.fixture(autouse=True)
 def package_inventory(tmp_path):
     """Use an isolated inventory with packages installed explicitly by the test setup."""
     packages.set_packages_dir_for_tests(tmp_path)
-    systems_registry.invalidate_cache()
     yield tmp_path
     packages.set_packages_dir_for_tests(None)
-    systems_registry.invalidate_cache()
 
 
 
@@ -133,6 +130,7 @@ def _write_manifest(
     version="1.0.0",
     nodeforge_min_version="0.49.47",
     nodeforge_max_version=None,
+    import_name=None,
 ):
     if contents is None:
         contents = {"functions": "functions"}
@@ -140,6 +138,7 @@ def _write_manifest(
     (root / "nodeforge_package.json").write_text(
         json.dumps(
             {
+                **({"import_name": import_name} if import_name is not None else {}),
                 "schema_version": 1,
                 "id": package_id,
                 "name": package_id,
@@ -244,10 +243,9 @@ def test_system_resolution_uses_v2_interface_without_v1_handler_dispatch(package
     records = tuple(packages.system_package_records())
     assert len(records) == 1
     assert records[0].interface_path.name == "interface.py"
-    assert systems_registry.constructor_names() == ("resolved_marker",)
-    assert systems_registry.constructor_owner("resolved_marker") == records[0]
-    assert not hasattr(systems_registry, "get_resolved_handler")
-    assert not hasattr(systems_registry, "compile_resolved_call")
+    manifest = packages.active_package_manifests()[0]
+    inventory = packages._normalize_package_callable_inventory(manifest, normalize_native_libraries=True)
+    assert inventory.systems == {"resolved_marker": "marker"}
 def test_uninstall_validates_state_pointer_before_deleting_files(package_inventory, tmp_path):
     source_a = tmp_path / "source_a"
     (source_a / "functions").mkdir(parents=True)
@@ -481,7 +479,6 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
 
     packages.uninstall_package("vendor.a")
     packages.install_package_directory(source_b, allow_python=False)
-    systems_registry.invalidate_cache()
 
     group_b = library.materialize_library_entry_group("examples", "demo", _FakeGroupBackend(compile_group))
 
@@ -510,6 +507,7 @@ def test_library_materialization_contract_discriminator_is_explicit(package_inve
     fake_bpy = types.SimpleNamespace(
         data=types.SimpleNamespace(node_groups=fake_groups),
         app=types.SimpleNamespace(driver_namespace={}),
+        utils=types.SimpleNamespace(user_resource=lambda *_args, **_kwargs: str(tmp_path / "user_data")),
     )
     monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
     import NodeForge.library as library
@@ -640,7 +638,7 @@ def test_package_id_regex_matches_manifest_contract(package_inventory, tmp_path)
     valid = tmp_path / "valid_3d"
     (valid / "functions").mkdir(parents=True)
     (valid / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
-    _write_manifest(valid, package_id="vendor.3d")
+    _write_manifest(valid, package_id="vendor.3d", import_name="pkg3d")
     manifest = packages.install_package_directory(valid, allow_python=False)
     assert manifest.package_id == "vendor.3d"
 
@@ -657,9 +655,72 @@ def test_package_id_allows_underscore_after_dot(package_inventory, tmp_path):
         source = tmp_path / package_id.replace(".", "_")
         (source / "functions").mkdir(parents=True)
         (source / "functions" / f"demo_{index}.nf").write_text("output(value=1)\n", encoding="utf-8")
-        _write_manifest(source, package_id=package_id)
+        _write_manifest(source, package_id=package_id, import_name=f"tools_{index}")
         manifest = packages.install_package_directory(source, allow_python=False)
         assert manifest.package_id == package_id
+
+
+def test_package_import_name_explicit_and_default_are_manifest_owned(package_inventory, tmp_path):
+    """Import spelling is validated manifest metadata and defaults to the final package-id segment."""
+    explicit = tmp_path / "explicit_import"
+    (explicit / "functions").mkdir(parents=True)
+    (explicit / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
+    _write_manifest(explicit, package_id="vendor.explicit", import_name="tools")
+    assert packages.install_package_directory(explicit, allow_python=False).import_name == "tools"
+
+    defaulted = tmp_path / "default_import"
+    (defaulted / "functions").mkdir(parents=True)
+    (defaulted / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
+    _write_manifest(defaulted, package_id="vendor.defaulted")
+    assert packages.install_package_directory(defaulted, allow_python=False).import_name == "defaulted"
+
+
+@pytest.mark.parametrize("import_name", ["class", "_private", "not-valid"])
+def test_package_import_name_rejects_non_public_source_identifiers(package_inventory, tmp_path, import_name):
+    """Keyword/private/non-identifier spellings never enter the package source namespace."""
+    source = tmp_path / import_name.replace("-", "_")
+    (source / "functions").mkdir(parents=True)
+    (source / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
+    _write_manifest(source, package_id=f"vendor.bad{len(import_name)}", import_name=import_name)
+    with pytest.raises(packages.PackageError, match="import_name"):
+        packages.install_package_directory(source, allow_python=False)
+
+
+def test_package_import_names_are_unique_across_active_owners(package_inventory, tmp_path):
+    """Two canonical owners cannot publish the same source package import spelling."""
+    for package_id in ("vendor.first", "vendor.second"):
+        source = tmp_path / package_id.replace(".", "_")
+        (source / "functions").mkdir(parents=True)
+        (source / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
+        _write_manifest(source, package_id=package_id, import_name="shared")
+        if package_id.endswith("first"):
+            packages.install_package_directory(source, allow_python=False)
+        else:
+            with pytest.raises(packages.PackageError, match=r"Package import name 'shared'.*vendor\.first"):
+                packages.install_package_directory(source, allow_python=False)
+
+
+def test_package_replace_rechecks_import_name_collision_before_commit(package_inventory, tmp_path):
+    """Replacing one owner cannot steal another active owner's import spelling."""
+    first = tmp_path / "first"
+    (first / "functions").mkdir(parents=True)
+    (first / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
+    _write_manifest(first, package_id="vendor.first", import_name="shared")
+    packages.install_package_directory(first, allow_python=False)
+
+    second = tmp_path / "second"
+    (second / "functions").mkdir(parents=True)
+    (second / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
+    _write_manifest(second, package_id="vendor.second", import_name="second", version="1.0.0")
+    packages.install_package_directory(second, allow_python=False)
+
+    replacement = tmp_path / "second_v2"
+    (replacement / "functions").mkdir(parents=True)
+    (replacement / "functions" / "demo.nf").write_text("output(value=2)\n", encoding="utf-8")
+    _write_manifest(replacement, package_id="vendor.second", import_name="shared", version="2.0.0")
+    with pytest.raises(packages.PackageError, match=r"Package import name 'shared'.*vendor\.first"):
+        packages.install_package_directory(replacement, allow_python=False, replace=True)
+    assert packages.load_package_state()["packages"]["vendor.second"]["installed_version"] == "1.0.0"
 
 def test_zip_rejects_duplicate_casefold_destinations(package_inventory, tmp_path):
     archive = tmp_path / "demo.zip"
@@ -805,7 +866,6 @@ def test_install_rejects_v1_system_owner_without_executing_module(package_invent
         packages.install_package_directory(source, allow_python=True)
 
     assert not sentinel.exists()
-    assert "test_marker" not in systems_registry.constructor_names()
 
 def test_install_rejects_v1_system_before_state_commit(package_inventory, tmp_path):
     source = tmp_path / "bad_sys_pkg"
@@ -820,48 +880,45 @@ def test_install_rejects_v1_system_before_state_commit(package_inventory, tmp_pa
         packages.install_package_directory(source, allow_python=True)
 
     assert "vendor.bad" not in packages.load_package_state()["packages"]
-    assert "bad_call" not in systems_registry.constructor_names()
 
 
-def test_install_rejects_system_constructor_colliding_with_core_builtin(package_inventory, tmp_path):
+def test_install_allows_package_export_colliding_with_core_builtin(package_inventory, tmp_path):
+    """Owner-qualified exports may use a core callable spelling such as cube."""
     source = tmp_path / "core_collision"
     (source / "systems" / "test").mkdir(parents=True)
     _write_manifest(source, package_id="vendor.corecollision", contents={"systems": "systems"}, python=True)
     _write_v2_system(source / "systems" / "test", "cube")
 
-    with pytest.raises(packages.PackageError, match="core callable"):
-        packages.install_package_directory(source, allow_python=True)
+    packages.install_package_directory(source, allow_python=True)
 
-    assert "vendor.corecollision" not in packages.load_package_state()["packages"]
-    assert not systems_registry.has_system_constructor("cube")
+    manifest = next(item for item in packages.active_package_manifests() if item.package_id == "vendor.corecollision")
+    inventory = packages._normalize_package_callable_inventory(manifest, normalize_native_libraries=True)
+    assert inventory.systems == {"cube": "test"}
 
 
-def test_replace_rejects_core_builtin_constructor_collision_and_keeps_old_pointer(package_inventory, tmp_path):
+def test_replace_allows_new_export_colliding_with_core_builtin(package_inventory, tmp_path):
+    """Replacing a package may add a core-spelled export without retaining the old member."""
     original = tmp_path / "original"
     (original / "systems" / "test").mkdir(parents=True)
     _write_manifest(original, package_id="vendor.replace", contents={"systems": "systems"}, python=True)
     _write_v2_system(original / "systems" / "test", "replace_marker")
     packages.install_package_directory(original, allow_python=True)
-    old_pointer = packages.load_package_state()["packages"]["vendor.replace"]["installed_path"]
-    assert systems_registry.has_system_constructor("replace_marker")
 
     replacement = tmp_path / "replacement"
     (replacement / "systems" / "test").mkdir(parents=True)
     _write_manifest(replacement, package_id="vendor.replace", contents={"systems": "systems"}, python=True, version="2.0.0")
     _write_v2_system(replacement / "systems" / "test", "cube")
-
-    with pytest.raises(packages.PackageError, match="core callable"):
-        packages.install_package_directory(replacement, allow_python=True, replace=True)
+    packages.install_package_directory(replacement, allow_python=True, replace=True)
 
     state_record = packages.load_package_state()["packages"]["vendor.replace"]
-    assert state_record["installed_path"] == old_pointer
-    assert state_record["installed_version"] == "1.0.0"
-    systems_registry.invalidate_cache()
-    assert systems_registry.has_system_constructor("replace_marker")
-    assert not systems_registry.has_system_constructor("cube")
+    assert state_record["installed_version"] == "2.0.0"
+    manifest = next(item for item in packages.active_package_manifests() if item.package_id == "vendor.replace")
+    inventory = packages._normalize_package_callable_inventory(manifest, normalize_native_libraries=True)
+    assert inventory.systems == {"cube": "test"}
 
 
-def test_install_rejects_function_name_colliding_with_active_constructor(package_inventory, tmp_path):
+def test_cross_package_function_and_extension_names_may_overlap(package_inventory, tmp_path):
+    """Same member spelling in different package owners is legal admission state."""
     owner = tmp_path / "active_constructor"
     (owner / "systems" / "test").mkdir(parents=True)
     _write_manifest(owner, package_id="vendor.constructorowner", contents={"systems": "systems"}, python=True)
@@ -872,14 +929,13 @@ def test_install_rejects_function_name_colliding_with_active_constructor(package
     (source / "functions").mkdir(parents=True)
     (source / "functions" / "active_marker.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(source, package_id="vendor.funcconstructor", contents={"functions": "functions"})
+    packages.install_package_directory(source, allow_python=False)
 
-    with pytest.raises(packages.PackageError, match="Public name collision.*active_marker"):
-        packages.install_package_directory(source, allow_python=False)
-
-    assert "vendor.funcconstructor" not in packages.load_package_state()["packages"]
+    assert {"vendor.constructorowner", "vendor.funcconstructor"} <= set(packages.load_package_state()["packages"])
 
 
-def test_install_rejects_constructor_name_colliding_with_active_function(package_inventory, tmp_path):
+def test_cross_package_extension_and_function_names_may_overlap_reverse_order(package_inventory, tmp_path):
+    """Admission overlap is symmetric with respect to installation order."""
     owner = tmp_path / "active_function"
     (owner / "functions").mkdir(parents=True)
     (owner / "functions" / "active_function.nf").write_text("output(value=1)\n", encoding="utf-8")
@@ -890,11 +946,9 @@ def test_install_rejects_constructor_name_colliding_with_active_function(package
     (source / "systems" / "test").mkdir(parents=True)
     _write_manifest(source, package_id="vendor.constructorfunc", contents={"systems": "systems"}, python=True)
     _write_v2_system(source / "systems" / "test", "active_function")
+    packages.install_package_directory(source, allow_python=True)
 
-    with pytest.raises(packages.PackageError, match="Public name collision.*active_function"):
-        packages.install_package_directory(source, allow_python=True)
-
-    assert "vendor.constructorfunc" not in packages.load_package_state()["packages"]
+    assert {"vendor.functionowner", "vendor.constructorfunc"} <= set(packages.load_package_state()["packages"])
 
 
 def test_install_rejects_same_package_function_and_constructor_name(package_inventory, tmp_path):
@@ -916,13 +970,13 @@ def test_install_rejects_same_package_function_and_constructor_name(package_inve
     assert "vendor.samecollision" not in packages.load_package_state()["packages"]
 
 
-def test_replace_rejects_cross_kind_collision_and_keeps_old_pointer(package_inventory, tmp_path):
+def test_replace_allows_cross_owner_member_overlap(package_inventory, tmp_path):
+    """Package replacement is not blocked by another owner's same-named export."""
     original = tmp_path / "original_cross_kind"
     (original / "functions").mkdir(parents=True)
     (original / "functions" / "original.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(original, package_id="vendor.crossreplace", contents={"functions": "functions"})
     packages.install_package_directory(original, allow_python=False)
-    old_pointer = packages.load_package_state()["packages"]["vendor.crossreplace"]["installed_path"]
 
     owner = tmp_path / "active_cross_constructor"
     (owner / "systems" / "test").mkdir(parents=True)
@@ -933,19 +987,12 @@ def test_replace_rejects_cross_kind_collision_and_keeps_old_pointer(package_inve
     replacement = tmp_path / "replacement_cross_kind"
     (replacement / "functions").mkdir(parents=True)
     (replacement / "functions" / "cross_marker.nf").write_text("output(value=2)\n", encoding="utf-8")
-    _write_manifest(
-        replacement,
-        package_id="vendor.crossreplace",
-        contents={"functions": "functions"},
-        version="2.0.0",
-    )
-
-    with pytest.raises(packages.PackageError, match="Public name collision.*cross_marker"):
-        packages.install_package_directory(replacement, allow_python=False, replace=True)
+    _write_manifest(replacement, package_id="vendor.crossreplace", contents={"functions": "functions"}, version="2.0.0")
+    packages.install_package_directory(replacement, allow_python=False, replace=True)
 
     state_record = packages.load_package_state()["packages"]["vendor.crossreplace"]
-    assert state_record["installed_path"] == old_pointer
-    assert state_record["installed_version"] == "1.0.0"
+    assert state_record["installed_version"] == "2.0.0"
+    assert {"vendor.crossowner", "vendor.crossreplace"} <= set(packages.load_package_state()["packages"])
 
 
 def test_malformed_active_system_record_is_invalid_diagnostic_not_global_registry_failure(package_inventory, tmp_path):
@@ -970,9 +1017,7 @@ def test_malformed_active_system_record_is_invalid_diagnostic_not_global_registr
         "origin": "user",
     }
     packages.save_package_state(state)
-    systems_registry.invalidate_cache()
 
-    assert "bad_call" not in systems_registry.constructor_names()
     diagnostics = packages.active_package_manifests(include_invalid=True)
     assert any(
         getattr(item, "package_id", None) == "vendor.bad" and "unsupported Extension API v1 system.py" in getattr(item, "message", "")
@@ -1021,11 +1066,9 @@ def test_invalid_package_diagnostic_exposes_python_consent_fields(package_invent
 
 def test_inventory_does_not_auto_install_packages(tmp_path):
     packages.set_packages_dir_for_tests(tmp_path / "empty")
-    systems_registry.invalidate_cache()
 
     assert packages.active_package_manifests() == []
     assert packages.load_package_state()["packages"] == {}
-    assert systems_registry.constructor_names() == ()
 
 
 def test_uninstall_removes_invalid_record_without_deleting_untrusted_target(package_inventory, tmp_path):
@@ -1135,3 +1178,94 @@ def test_local_catalog_adapter_uses_build_local_transaction_cache(monkeypatch, t
         (owner, "local-fingerprint"),
         (owner, "local-fingerprint"),
     ]
+
+
+def test_functions_catalog_keeps_duplicate_member_rows_owner_qualified(monkeypatch, tmp_path):
+    """Functions discovery preserves duplicate/core-spelled members instead of flattening by name."""
+    fake_bpy = types.SimpleNamespace(
+        data=types.SimpleNamespace(node_groups=[]),
+        app=types.SimpleNamespace(driver_namespace={}),
+    )
+    monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
+    import NodeForge.library as library
+    library = importlib.reload(library)
+
+    def record(package_id: str, name: str) -> library.LibraryEntryRecord:
+        """Create one detached package-owned source record."""
+        path = tmp_path / f"{package_id.replace('.', '_')}_{name}.nf"
+        path.write_text("output(value=1)\n", encoding="utf-8")
+        return library.LibraryEntryRecord(
+            namespace="functions",
+            name=name,
+            kind="source",
+            path=path,
+            source_path=path,
+            package_id=package_id,
+            package_name=package_id,
+            package_version="1.0.0",
+        )
+
+    a = record("vendor.a", "foo")
+    b = record("vendor.b", "foo")
+    points = record("nodeforge.lsystem", "points")
+    monkeypatch.setattr(library, "_package_function_records", lambda: (a, b, points))
+
+    rows = library.library_entry_records("functions")
+    assert [(row["name"], row["package_id"]) for row in rows] == [
+        ("foo", "vendor.a"),
+        ("foo", "vendor.b"),
+        ("points", "nodeforge.lsystem"),
+    ]
+    assert library.find_library_entry_record("functions", "foo", package_id="vendor.a") is a
+    assert library.find_library_entry_record("functions", "points", package_id="nodeforge.lsystem") is points
+    with pytest.raises(CompileError, match="Ambiguous functions library entry 'foo'"):
+        library.find_library_entry_record("functions", "foo")
+
+
+def test_package_function_reload_uses_persisted_owner_and_never_substitutes_same_name(monkeypatch, tmp_path):
+    """Reload resolves stored package ownership before member text and fails closed when that owner disappears."""
+    fake_bpy = types.SimpleNamespace(
+        data=types.SimpleNamespace(node_groups=[]),
+        app=types.SimpleNamespace(driver_namespace={}),
+    )
+    monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
+    import NodeForge.library as library
+    library = importlib.reload(library)
+
+    def record(package_id: str, name: str) -> library.LibraryEntryRecord:
+        """Create one reloadable owner-specific source record."""
+        path = tmp_path / f"{package_id.replace('.', '_')}_{name}.nf"
+        path.write_text("output(value=1)\n", encoding="utf-8")
+        return library.LibraryEntryRecord(
+            namespace="functions",
+            name=name,
+            kind="source",
+            path=path,
+            source_path=path,
+            package_id=package_id,
+            package_name=package_id,
+            package_version="1.0.0",
+        )
+
+    owner_a = record("vendor.a", "foo")
+    owner_b = record("vendor.b", "foo")
+    monkeypatch.setattr(library, "_package_function_records", lambda: (owner_a, owner_b))
+    group = {
+        "nodeforge_library_namespace": "functions",
+        "nodeforge_library_name": "foo",
+        "nodeforge_package_id": "vendor.a",
+    }
+    assert library.resolve_reloadable_library_entry(group) is owner_a
+
+    monkeypatch.setattr(library, "_package_function_records", lambda: (owner_b,))
+    with pytest.raises(CompileError, match=r"Current source.*'foo'.*vendor\.a.*unavailable"):
+        library.resolve_reloadable_library_entry(group)
+
+    core_spelled = record("nodeforge.lsystem", "points")
+    monkeypatch.setattr(library, "_package_function_records", lambda: (core_spelled,))
+    points_group = {
+        "nodeforge_library_namespace": "functions",
+        "nodeforge_library_name": "points",
+        "nodeforge_package_id": "nodeforge.lsystem",
+    }
+    assert library.resolve_reloadable_library_entry(points_group) is core_spelled

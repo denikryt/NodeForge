@@ -20,6 +20,14 @@ class FunctionImport:
     is_star: bool = False
 
 
+@dataclass(frozen=True)
+class PackageImport:
+    """One source-level package namespace import binding request."""
+
+    import_name: str
+    exposed_name: str
+
+
 def _target_binding_names(target):
     """Yield simple names bound by a supported assignment/loop target."""
     if isinstance(target, ast.Name):
@@ -103,34 +111,44 @@ def _parse_source(source: str):
             if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], (ast.Name, ast.Tuple, ast.List)):
                 raise CompileError("Assignment supports one name or one flat unpacking target")
         elif isinstance(stmt, ast.ImportFrom):
-            if stmt.level != 0 or stmt.module not in {"functions", "examples", "local"}:
-                raise CompileError("Only 'from functions/examples/local import name' imports are supported")
+            if stmt.level != 0:
+                raise CompileError("Import statements must use absolute NodeForge namespaces")
+            if stmt.module == "functions":
+                raise CompileError(
+                    "The 'functions' source namespace was removed; import the owning package with "
+                    "'from packages import <package>'"
+                )
+            if stmt.module not in {"packages", "examples", "local"}:
+                raise CompileError("Only 'from packages/examples/local import name' imports are supported")
             if not stmt.names:
-                raise CompileError("Import statement must name at least one function")
+                raise CompileError("Import statement must name at least one entry")
             for alias in stmt.names:
                 if alias.name == "*":
+                    if stmt.module == "packages":
+                        raise CompileError(
+                            "from packages import * is not supported; import package namespaces explicitly"
+                        )
                     if alias.asname is not None:
                         raise CompileError("Function star imports cannot use aliases")
                     continue
                 if not isinstance(alias.name, str) or not alias.name:
-                    raise CompileError("Function imports must use simple names")
+                    raise CompileError("Imports must use simple names")
                 if alias.asname is not None and not alias.asname:
-                    raise CompileError("Function import aliases must be non-empty names")
+                    raise CompileError("Import aliases must be non-empty names")
     return tree.body
 
 
 def _extract_function_imports(stmts):
-    """Return body statements and raw from-functions import requests.
-
-    Validation against the available function library and reserved namespaces is
-    owned by the compiler, where all relevant registries are available. Star
-    imports are preserved as a distinct request so parsing does not own library
-    discovery.
-    """
+    """Return residual statements, catalog imports, and package namespace imports."""
     body = []
     imports = []
+    package_imports = []
     for stmt in stmts:
         if isinstance(stmt, ast.ImportFrom):
+            if stmt.module == "packages":
+                for alias in stmt.names:
+                    package_imports.append(PackageImport(alias.name, alias.asname or alias.name))
+                continue
             for alias in stmt.names:
                 if alias.name == "*":
                     imports.append(FunctionImport(stmt.module, None, None, is_star=True))
@@ -138,7 +156,7 @@ def _extract_function_imports(stmts):
                     imports.append(FunctionImport(stmt.module, alias.name, alias.asname or alias.name))
         else:
             body.append(stmt)
-    return body, imports
+    return body, imports, package_imports
 
 
 def _assigned_names(stmts):

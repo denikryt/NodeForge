@@ -5,13 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from types import MappingProxyType
-from typing import Mapping
+from typing import Mapping, TYPE_CHECKING
 
 from .compiler_identities import FunctionId, library_function_id
+from .errors import CompileError
 from .group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
 from .extension_contracts import ExtensionCallableId, TypeSpec, validate_extension_argument_positions
 from .nf_types import NFType
 from .semantic_ir import IRFunctionMaterialization
+
+if TYPE_CHECKING:
+    from .resolved_environment import PackageCallableExport
 
 
 class CallableKind(Enum):
@@ -59,17 +63,18 @@ class CallableEnvironment:
     callable_builtins: frozenset[str]
     local_functions: Mapping[str, object]
     imported_functions: Mapping[str, object]
-    extension_system_callables: Mapping[str, ExtensionCallableId] = field(default_factory=dict)
+    package_namespaces: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Defensively freeze all name collections for one analysis invocation."""
         object.__setattr__(self, "callable_builtins", frozenset(self.callable_builtins))
         object.__setattr__(self, "local_functions", MappingProxyType(dict(self.local_functions)))
         object.__setattr__(self, "imported_functions", MappingProxyType(dict(self.imported_functions)))
-        extension_systems = dict(self.extension_system_callables)
-        if not all(isinstance(value, ExtensionCallableId) for value in extension_systems.values()):
-            raise TypeError("extension_system_callables values must be ExtensionCallableId records")
-        object.__setattr__(self, "extension_system_callables", MappingProxyType(extension_systems))
+        package_namespaces = dict(self.package_namespaces)
+        for alias, binding in package_namespaces.items():
+            if not isinstance(alias, str) or not alias or getattr(binding, "source_name", None) != alias:
+                raise TypeError("package_namespaces must map source aliases to package bindings")
+        object.__setattr__(self, "package_namespaces", MappingProxyType(package_namespaces))
 
 
 @dataclass(frozen=True)
@@ -312,31 +317,118 @@ class _UnresolvedCallable:
 UNRESOLVED = _UnresolvedCallable()
 
 
+def _resolved_from_library_binding(source_name: str, binding) -> ResolvedCallable:
+    """Build the existing canonical call target for one exact library binding."""
+    extension_callable_id = getattr(binding, "extension_callable_id", None)
+    if extension_callable_id is not None:
+        return ResolvedCallable(CallableKind.EXTENSION, source_name, target=extension_callable_id)
+    record = binding.record
+    function_id = library_function_id(binding.namespace, record.package_id, binding.canonical_name)
+    return ResolvedCallable(
+        CallableKind.LIBRARY,
+        source_name,
+        target=binding,
+        library_function_id=function_id,
+    )
+
+
+def _resolved_from_package_export(source_name: str, export) -> ResolvedCallable:
+    """Convert one owner-qualified package export to the existing canonical target kind."""
+    extension_callable_id = getattr(export, "extension_callable_id", None)
+    record = getattr(export, "record", None)
+    if extension_callable_id is not None:
+        return ResolvedCallable(CallableKind.EXTENSION, source_name, target=extension_callable_id)
+    if record is None:
+        raise ValueError("package export has no semantic target")
+    from .semantic_group import LibraryBinding
+
+    binding = LibraryBinding("functions", export.name, record, None)
+    function_id = library_function_id("functions", export.package_id, export.name)
+    return ResolvedCallable(
+        CallableKind.LIBRARY,
+        source_name,
+        target=binding,
+        library_function_id=function_id,
+    )
+
+
+def package_candidates_for_unqualified(
+    name: str, environment: CallableEnvironment
+) -> tuple[tuple[str, PackageCallableExport], ...]:
+    """Return exact imported-package candidates eligible for one bare source call."""
+    if name in environment.callable_builtins or name in {"output", "store", "panel"}:
+        return ()
+    candidates = []
+    for alias, binding in sorted(
+        environment.package_namespaces.items(),
+        key=lambda item: (item[0].lower(), getattr(item[1], "package_id", "")),
+    ):
+        namespace = binding.namespace
+        export = namespace.find(name)
+        if export is not None:
+            candidates.append((alias, export))
+    return tuple(candidates)
+
+
+def qualified_package_spellings(name: str, environment: CallableEnvironment) -> tuple[str, ...]:
+    """Return deterministic source-usable package qualifications for one member name."""
+    return tuple(f"{alias}.{name}" for alias, _ in package_candidates_for_unqualified(name, environment))
+
+
+
+def non_callable_source_binding_error(name: str, environment: CallableEnvironment) -> CompileError:
+    """Return the shared diagnostic for a value-bound bare package call name."""
+    spellings = qualified_package_spellings(name, environment)
+    message = f"Cannot call {name!r}: the name is bound to a source value."
+    if len(spellings) == 1:
+        message += f" Use {spellings[0]}(...) to call the package function."
+    elif spellings:
+        message += " Use a qualified package call: " + ", ".join(f"{item}(...)" for item in spellings) + "."
+    return CompileError(message)
+
+def resolve_package_callable(
+    package_alias: str, member: str, environment: CallableEnvironment
+) -> ResolvedCallable:
+    """Resolve one explicit package alias/member without consulting bare namespaces."""
+    binding = environment.package_namespaces.get(package_alias)
+    if binding is None:
+        raise CompileError(f"Unknown package namespace: {package_alias}")
+    export = binding.namespace.find(member)
+    if export is None:
+        raise CompileError(f"Package {package_alias!r} has no callable member {member!r}")
+    return _resolved_from_package_export(f"{package_alias}.{member}", export)
+
+
 def resolve_simple_callable(name: str, environment: CallableEnvironment):
-    """Resolve *name* with the exact legacy callable precedence."""
+    """Resolve one bare callable with core reservation and candidate ambiguity rules."""
     if name in environment.callable_builtins:
         return ResolvedCallable(CallableKind.BUILTIN, name, target=name)
-    extension_system = environment.extension_system_callables.get(name)
-    if extension_system is not None:
-        return ResolvedCallable(CallableKind.EXTENSION, name, target=extension_system)
-    if name in environment.local_functions:
-        return ResolvedCallable(CallableKind.LOCAL_FUNCTION, name, target=name)
-    binding = environment.imported_functions.get(name)
-    if binding is not None:
-        extension_callable_id = getattr(binding, "extension_callable_id", None)
-        if extension_callable_id is not None:
-            return ResolvedCallable(CallableKind.EXTENSION, name, target=extension_callable_id)
-        record = binding.record
-        function_id = library_function_id(binding.namespace, record.package_id, binding.canonical_name)
-        return ResolvedCallable(
-            CallableKind.LIBRARY,
-            name,
-            target=binding,
-            library_function_id=function_id,
-        )
     if name in {"output", "store"}:
         return ResolvedCallable(CallableKind.TOP_LEVEL_ONLY, name, target=name)
-    return UNRESOLVED
+
+    is_local = name in environment.local_functions
+    binding = environment.imported_functions.get(name)
+    package_candidates = package_candidates_for_unqualified(name, environment)
+    labels = []
+    if is_local:
+        labels.append(f"local function {name}")
+    if binding is not None:
+        labels.append(f"imported {name}")
+    labels.extend(f"{alias}.{name}" for alias, _ in package_candidates)
+
+    if not labels:
+        return UNRESOLVED
+    if len(labels) > 1:
+        raise CompileError(
+            f"Ambiguous callable {name!r}: {', '.join(labels)}. "
+            "Use a qualified package call or an import alias to select one candidate."
+        )
+    if is_local:
+        return ResolvedCallable(CallableKind.LOCAL_FUNCTION, name, target=name)
+    if binding is not None:
+        return _resolved_from_library_binding(name, binding)
+    _, export = package_candidates[0]
+    return _resolved_from_package_export(name, export)
 
 
 __all__ = [
@@ -353,5 +445,9 @@ __all__ = [
     "RuntimeCallResult",
     "TupleCallResult",
     "UNRESOLVED",
+    "non_callable_source_binding_error",
+    "package_candidates_for_unqualified",
+    "qualified_package_spellings",
+    "resolve_package_callable",
     "resolve_simple_callable",
 ]

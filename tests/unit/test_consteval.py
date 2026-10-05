@@ -525,15 +525,17 @@ def test_nested_speculative_loop_append_journal_rolls_back_to_outer_savepoint():
     assert state.get("items") is shared
 
 
-def test_preprocess_rejects_flat_unpack_for_even_when_body_contains_append():
-    """Generic tuple/list compile-time loop targets no longer escape preprocessing for legacy routing."""
-    with pytest.raises(CompileError, match="Only simple compile-time for targets are supported"):
-        _preprocess_source(
-            "items = []\n"
-            "for x, y in [[1, 2]]:\n"
-            "    items.append(x + y)\n"
-            "output(items[0])\n"
-        )
+def test_preprocess_retains_flat_unpack_for_array_mutation():
+    """Array append loops retain flat targets for semantic lowering, preserving graph behavior."""
+    retained, constants = _preprocess_source(
+        "items = []\n"
+        "for x, y in [[1, 2]]:\n"
+        "    items.append(x + y)\n"
+        "output(items[0])\n"
+    )
+    assert any(isinstance(stmt, ast.For) for stmt in retained)
+    assert "items" not in constants
+    assert isinstance(retained[0], ast.Assign)
 
 
 def test_preprocess_rejects_flat_unpack_for_without_builder_specific_semantics():

@@ -25,7 +25,7 @@ from .function_instances import normalized_statements
 from .nf_types import NFType
 from .extension_contracts import ExtensionCallableId
 from .extension_registry import library_owner_key
-from .parsing import _binding_names, _collect_inputs, _extract_function_imports, _needs_geometry_io, _parse_source
+from .parsing import _assigned_names, _binding_names, _collect_inputs, _extract_function_imports, _needs_geometry_io, _parse_source
 from .runtime_bindings import RuntimeBindingSymbol
 from .semantic_body import BasicBodyCompilation, lower_basic_body
 from .semantic_ir import IRBody, IRIf, IRInputDeclaration, IRPanelDeclaration, IRRepeat
@@ -46,6 +46,28 @@ class LibraryBinding:
             raise ValueError("Library binding does not match its resolved record")
         if self.extension_callable_id is not None and not isinstance(self.extension_callable_id, ExtensionCallableId):
             raise TypeError("LibraryBinding.extension_callable_id must be ExtensionCallableId or None")
+
+
+@dataclass(frozen=True)
+class PackageNamespaceBinding:
+    """Bind one source-local alias to an exact resolved package namespace."""
+
+    source_name: str
+    namespace: object
+
+    def __post_init__(self) -> None:
+        """Require a source alias and canonical resolved package namespace."""
+        from .resolved_environment import ResolvedPackageNamespace
+
+        if not isinstance(self.source_name, str) or not self.source_name:
+            raise ValueError("Package namespace binding requires a non-empty source name")
+        if not isinstance(self.namespace, ResolvedPackageNamespace):
+            raise TypeError("Package namespace binding requires ResolvedPackageNamespace")
+
+    @property
+    def package_id(self) -> str:
+        """Return canonical package identity independently from source alias spelling."""
+        return self.namespace.package_id
 
 
 @dataclass(frozen=True)
@@ -92,6 +114,7 @@ def _validate_import_bindings(
     local_function_defs,
     resolved_environment,
     inherited_imports=None,
+    additional_reserved_names=frozenset(),
 ):
     """Validate and return source-local namespace-aware catalog bindings."""
     imported: dict[str, LibraryBinding] = {}
@@ -100,8 +123,8 @@ def _validate_import_bindings(
         set(builtin_registry.BUILTIN_NAMES)
         | {"output", "store", "panel"}
         | set(_ALLOWED_CONSTS)
-        | set(resolved_environment.system_names())
         | set(TYPE_TOKEN_NAMES)
+        | set(additional_reserved_names)
     )
 
     def validate_pair(namespace, canonical_name, exposed_name, *, inherited=False, inherited_record=None):
@@ -145,11 +168,68 @@ def _validate_import_bindings(
                 inherited_record=inherited_binding.record,
             )
         else:
-            validate_pair("functions", inherited_binding, exposed_name, inherited=True)
+            raise CompileError("Internal error: inherited library binding is not owner-resolved")
     return imported
 
 
-def _registered_name_labels(local_function_defs, imported_library_functions, system_names):
+def _validate_package_import_bindings(
+    requests,
+    body_stmts,
+    local_function_defs,
+    resolved_environment,
+    inherited_package_bindings=None,
+):
+    """Resolve exact package namespace imports for one source scope."""
+    bindings: dict[str, PackageNamespaceBinding] = {}
+    package_ids: dict[str, str] = {}
+    local_bindings = _assigned_names(body_stmts)
+    reserved_names = (
+        set(builtin_registry.BUILTIN_NAMES)
+        | {"output", "store", "panel"}
+        | set(_ALLOWED_CONSTS)
+        | set(TYPE_TOKEN_NAMES)
+    )
+
+    def add_binding(import_name, exposed_name, *, inherited=False, inherited_binding=None):
+        namespace = resolved_environment.package_by_import_name(import_name)
+        if namespace is None:
+            raise CompileError(f"Unknown package import: {import_name}")
+        binding = PackageNamespaceBinding(exposed_name, namespace)
+        if inherited_binding is not None:
+            if not isinstance(inherited_binding, PackageNamespaceBinding):
+                raise CompileError("Internal error: inherited package binding is not resolved")
+            if inherited_binding.namespace is not namespace or inherited_binding.source_name != exposed_name:
+                raise CompileError("Internal error: inherited package binding does not match resolved environment")
+        existing = bindings.get(exposed_name)
+        if existing is not None:
+            if inherited and existing == binding:
+                return
+            raise CompileError(f"Duplicate package import name: {exposed_name}")
+        existing_alias = package_ids.get(namespace.package_id)
+        if existing_alias is not None and existing_alias != exposed_name:
+            raise CompileError(
+                f"Package {namespace.import_name!r} is already imported as {existing_alias!r}"
+            )
+        if exposed_name in local_bindings or exposed_name in local_function_defs:
+            raise CompileError(f"Package import name conflicts with local binding: {exposed_name}")
+        if exposed_name in reserved_names:
+            raise CompileError(f"Package import name conflicts with reserved name: {exposed_name}")
+        bindings[exposed_name] = binding
+        package_ids[namespace.package_id] = exposed_name
+
+    for request in requests:
+        add_binding(request.import_name, request.exposed_name)
+    for exposed_name, inherited_binding in dict(inherited_package_bindings or {}).items():
+        add_binding(
+            inherited_binding.namespace.import_name,
+            exposed_name,
+            inherited=True,
+            inherited_binding=inherited_binding,
+        )
+    return bindings
+
+
+def _registered_name_labels(local_function_defs, imported_library_functions, package_namespaces):
     """Return active DSL-owned names and their established reservation labels."""
     labels = {}
 
@@ -161,7 +241,6 @@ def _registered_name_labels(local_function_defs, imported_library_functions, sys
     add(builtin_registry.BUILTIN_NAMES, "DSL builtin")
     add({"output", "store", "panel"}, "reserved helper")
     add(_ALLOWED_CONSTS, "compile-time constant")
-    add(system_names, "extension system callable")
     add(TYPE_TOKEN_NAMES, "type token")
     add(imported_library_functions, "imported function")
     add(local_function_defs, "local function")
@@ -178,6 +257,8 @@ def _format_reserved_label(label):
         return "already registered as local function"
     if label == "type token":
         return "reserved by type token"
+    if label == "package namespace":
+        return "reserved by package namespace"
     return f"reserved by {label}"
 
 
@@ -352,6 +433,7 @@ def analyze_group_source(
     resolved_environment,
     inherited_local_functions=None,
     inherited_imported_library_functions=None,
+    inherited_package_namespaces=None,
     helper_namespace: str = "NodeForge Group",
     source_callable_session=None,
 ) -> SemanticGroupCompilation:
@@ -359,34 +441,35 @@ def analyze_group_source(
     if not isinstance(compilation_identity, GroupCompilationIdentity):
         raise TypeError("compilation_identity must be GroupCompilationIdentity")
     raw_stmts = _parse_source(source)
-    raw_body_stmts, import_pairs = _extract_function_imports(raw_stmts)
-    system_names = resolved_environment.system_names()
+    raw_body_stmts, import_pairs, package_imports = _extract_function_imports(raw_stmts)
 
     local_function_defs = dict(inherited_local_functions or {})
-    for existing_name in local_function_defs:
-        if existing_name in system_names:
-            raise CompileError(f"Local function {existing_name!r} collides with reserved system constructor name")
     body_stmts = []
     for stmt in raw_body_stmts:
         if isinstance(stmt, ast.FunctionDef):
-            if stmt.name in system_names:
-                raise CompileError(f"Local function {stmt.name!r} collides with reserved system constructor name")
             if stmt.name in local_function_defs:
                 raise CompileError(f"Duplicate local function: {stmt.name}")
             local_function_defs[stmt.name] = stmt
         else:
             body_stmts.append(stmt)
 
-    for namespace in ("functions", "examples"):
-        resolved_environment.catalog(namespace).names()
+    resolved_environment.catalog("examples").names()
+    package_bindings = _validate_package_import_bindings(
+        package_imports,
+        raw_body_stmts,
+        local_function_defs,
+        resolved_environment,
+        inherited_package_bindings=inherited_package_namespaces,
+    )
     imported = _validate_import_bindings(
         import_pairs,
         raw_body_stmts,
         local_function_defs,
         resolved_environment,
         inherited_imports=inherited_imported_library_functions,
+        additional_reserved_names=frozenset(package_bindings),
     )
-    reserved_name_labels = _registered_name_labels(local_function_defs, imported, system_names)
+    reserved_name_labels = _registered_name_labels(local_function_defs, imported, package_bindings)
     _validate_registered_name_bindings(
         raw_body_stmts,
         reserved_name_labels,
@@ -396,7 +479,7 @@ def analyze_group_source(
 
     preprocessed = _preprocess_compile_time(body_stmts)
     stmts = list(preprocessed.statements)
-    callable_names = set(imported) | set(local_function_defs) | set(system_names)
+    callable_names = set(imported) | set(local_function_defs) | set(package_bindings)
     input_names = sorted(
         set(_collect_inputs(stmts, extra_builtin_names=callable_names, consts=preprocessed.final_compile_time.values))
         - set(preprocessed.final_compile_time.values.keys())
@@ -419,7 +502,7 @@ def analyze_group_source(
         callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
         local_functions=local_function_defs,
         imported_functions=imported,
-        extension_system_callables=resolved_environment.extension_system_callables,
+        package_namespaces=package_bindings,
     )
     extension_dependencies: dict[tuple[str, ...], str] = {}
     body_compilation = lower_basic_body(
@@ -460,6 +543,7 @@ def analyze_group_source(
 
 __all__ = [
     "LibraryBinding",
+    "PackageNamespaceBinding",
     "SemanticGroupCompilation",
     "analyze_group_source",
 ]

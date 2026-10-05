@@ -20,7 +20,6 @@ from NodeForge import compiler, library, blender_group_backend
 from NodeForge.errors import CompileError
 from NodeForge import generated_resources
 from NodeForge.builtins import registry
-from NodeForge.systems import registry as systems_registry
 from NodeForge.values import Value
 
 

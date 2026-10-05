@@ -90,6 +90,25 @@ output("ID", sampled_id)
 
 The first two arguments are runtime Geometry Nodes values. `index` accepts either a compile-time `Int` or a runtime `Int` field. `domain` and `clamp` are compile-time options; `domain` defaults to `"POINT"` and accepts `POINT`, `EDGE`, `FACE`, `CORNER`, `CURVE`, or `INSTANCE`, while `clamp` defaults to `False`.
 
+### Package callables
+
+Import installed package APIs through the package namespace:
+
+```python
+from packages import math
+from packages import lsystem as ls
+
+x = sin(input_float("X"))
+y = math.floor(x)
+geo = ls.system(ls.axiom("F"), ls.iterations(2), ls.angle(25), ls.step(1))
+```
+
+Importing a package makes its exported callables eligible for unqualified lookup and also creates a qualifier for exact package-member access. An unqualified package call is accepted only when one visible package export is eligible and the name is not already bound as a source value. Use qualification to resolve package-package or package-local name conflicts. Package aliases such as `ls` are source-scope names only; they do not change package identity.
+
+Core callable names stay reserved for bare calls. A package may still export the same member name and expose it through qualification. For example, core `points(...)` remains the bare callable while `lsystem.points(...)` selects the L-System package member.
+
+Reusable source-backed package functions use the same package namespace as Python extension callables. The former `from functions import ...` source namespace is no longer supported. Local source functions remain explicit with `from local import ...`.
+
 ### Python extension packages
 
 Installable packages can add typed callables through extension API v2. A package declares public callable signatures and frozen semantic record types in declaration-only `interface.py`. Backend-only callables map directly to owner-local physical implementations; semantic-capable callables use `semantic.py` to construct package-defined frontend values or normalize private state before backend realization. All supported extension calls use permanent semantic analysis and ordinary typed Call IR.

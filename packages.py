@@ -9,6 +9,7 @@ user package inventory.
 from __future__ import annotations
 
 import json
+import keyword
 import os
 import re
 import shutil
@@ -106,6 +107,7 @@ class PackageManifest:
     """Validated package manifest and owning package root."""
 
     package_id: str
+    import_name: str
     name: str
     version: str
     author: str
@@ -269,13 +271,12 @@ def _fsync_directory(path: Path) -> None:
 
 
 def invalidate_caches() -> None:
-    """Invalidate package-related runtime caches."""
-    try:
-        from .systems import registry as systems_registry
+    """Invalidate package-related runtime caches.
 
-        systems_registry.invalidate_cache()
-    except Exception:
-        pass
+    Stage 40 removed the global system-name registry; package resolution now
+    snapshots owner-qualified exports per compilation, so no name cache remains.
+    """
+    return None
 
 
 def validate_package_root(root: Path, *, origin: str = "user") -> PackageManifest:
@@ -295,6 +296,7 @@ def validate_package_root(root: Path, *, origin: str = "user") -> PackageManifes
     package_id = _require_string(raw, "id")
     if not _PACKAGE_ID_RE.match(package_id):
         raise PackageError("Package id must be a dotted lowercase identifier")
+    import_name = _package_import_name(raw, package_id)
     name = _require_string(raw, "name")
     version = _require_string(raw, "version")
     _validate_nodeforge_version_bounds(raw)
@@ -321,7 +323,31 @@ def validate_package_root(root: Path, *, origin: str = "user") -> PackageManifes
     if python_required and not permissions["python"]:
         raise PackageError("Package contains Python or systems but permissions.python is false")
     _validate_root_contents(root, contents)
-    return PackageManifest(package_id, name, version, author, description, root, contents, permissions, origin)
+    return PackageManifest(
+        package_id=package_id,
+        import_name=import_name,
+        name=name,
+        version=version,
+        author=author,
+        description=description,
+        root=root,
+        contents=contents,
+        permissions=permissions,
+        origin=origin,
+    )
+
+
+def _package_import_name(raw: dict[str, Any], package_id: str) -> str:
+    """Return one validated source import spelling for a canonical package id."""
+    value = raw.get("import_name")
+    if value is None:
+        value = package_id.rsplit(".", 1)[-1]
+    if not isinstance(value, str) or not value.strip():
+        raise PackageError("Package manifest import_name must be a non-empty source identifier")
+    name = value.strip()
+    if not _PUBLIC_NAME_RE.match(name) or name.startswith("_") or keyword.iskeyword(name):
+        raise PackageError("Package manifest import_name must be a valid public source identifier")
+    return name
 
 
 def _require_string(raw: dict[str, Any], key: str) -> str:
@@ -384,7 +410,7 @@ def _validate_root_contents(root: Path, contents: dict[str, str]) -> None:
 
 
 def _validate_public_name(name: str, context: str) -> None:
-    if not _PUBLIC_NAME_RE.match(name) or name.startswith("_"):
+    if not _PUBLIC_NAME_RE.match(name) or name.startswith("_") or keyword.iskeyword(name):
         raise PackageError(f"{context} {name!r} must be a valid public identifier")
 
 
@@ -415,15 +441,6 @@ def validate_package_system_declarations(manifest: PackageManifest) -> None:
             raise PackageError(
                 f"System {record.system_id!r} uses unsupported Extension API v1 system.py"
             )
-
-def _validate_not_core_callable_name(name: str, package_id: str) -> None:
-    """Reject package-backed constructors that shadow core DSL callables."""
-    from .builtins import registry as builtin_registry
-
-    if name in builtin_registry.BUILTIN_NAMES or name in builtin_registry.CALLABLE_BUILTIN_NAMES:
-        raise PackageError(
-            f"System constructor {name!r} from {package_id} collides with core callable namespace"
-        )
 
 
 def active_package_records(include_invalid: bool = False) -> list[ActivePackage | PackageDiagnostic]:
@@ -849,7 +866,7 @@ def _normalize_package_callable_inventory(
                     raise PackageError(
                         f"Duplicate system constructor {name!r} inside {manifest.package_id}"
                     )
-                _validate_not_core_callable_name(name, manifest.package_id)
+                _validate_public_name(name, "system constructor")
                 system_names[name] = record.system_id
 
         libraries: dict[str, dict[str, Path]] = {"functions": {}, "examples": {}}
@@ -885,6 +902,13 @@ def _normalize_package_callable_inventory(
                     raise PackageError(
                         f"Native-only library {namespace}/{name} must declare exactly one EXTENSIONS key equal to {name!r}"
                     )
+        for name, system_id in system_names.items():
+            function_path = libraries["functions"].get(name)
+            if function_path is not None:
+                raise PackageError(
+                    f"Public name collision {name!r}: function and constructor both declared by "
+                    f"{manifest.package_id} ({function_path} and system {system_id})"
+                )
         return _PackageCallableInventory(system_names, libraries)
     except PackageError:
         raise
@@ -924,61 +948,35 @@ def _validate_no_package_name_collisions(
     ignore_package_id: str | None = None,
     new_inventory: _PackageCallableInventory | None = None,
 ) -> None:
-    """Reject public names that would become ambiguous after installation."""
+    """Reject only package/source namespaces that must remain globally unambiguous."""
     candidate = new_inventory or _normalize_package_callable_inventory(
         new_manifest,
         normalize_native_libraries=True,
     )
-    existing_by_namespace: dict[str, dict[str, tuple[str, Path]]] = {
-        "functions": {},
-        "examples": {},
-    }
-    existing_system_names: dict[str, tuple[str, str]] = {}
+
+    # Source import ownership belongs to the structurally valid manifest, even
+    # when callable declarations are damaged and the package is not admitted.
+    for manifest in active_package_manifest_snapshot():
+        if manifest.package_id == ignore_package_id:
+            continue
+        if manifest.import_name == new_manifest.import_name:
+            raise PackageError(
+                f"Package import name {new_manifest.import_name!r} is already owned by {manifest.package_id}"
+            )
     for manifest, inventory in _existing_package_validation_inventories(
         ignore_package_id=ignore_package_id
     ):
-        for namespace in ("functions", "examples"):
-            for name, path in inventory.libraries[namespace].items():
-                existing_by_namespace[namespace][name] = (manifest.package_id, path)
-        for name, system_id in inventory.systems.items():
-            existing_system_names[name] = (manifest.package_id, system_id)
-
-    for namespace in ("functions", "examples"):
-        for name, path in candidate.libraries[namespace].items():
-            owner = existing_by_namespace[namespace].get(name)
-            if owner is not None:
+        for name, path in candidate.libraries["examples"].items():
+            other = inventory.libraries["examples"].get(name)
+            if other is not None:
                 raise PackageError(
-                    f"Duplicate {namespace} library entry {name!r}: "
-                    f"{owner[0]} at {owner[1]} and {new_manifest.package_id} at {path}"
+                    f"Duplicate examples library entry {name!r}: "
+                    f"{manifest.package_id} at {other} and {new_manifest.package_id} at {path}"
                 )
 
-    new_function_names = candidate.libraries["functions"]
-    for name, path in new_function_names.items():
-        owner = existing_system_names.get(name)
-        if owner is not None:
-            raise PackageError(
-                f"Public name collision {name!r}: function from {new_manifest.package_id} at {path} "
-                f"and constructor from {owner[0]}/{owner[1]}"
-            )
-
-    for name, system_id in candidate.systems.items():
-        owner = existing_system_names.get(name)
-        if owner is not None:
-            raise PackageError(
-                f"Duplicate system constructor {name!r}: {owner[0]}/{owner[1]} and {new_manifest.package_id}/{system_id}"
-            )
-        function_owner = existing_by_namespace["functions"].get(name)
-        if function_owner is not None:
-            raise PackageError(
-                f"Public name collision {name!r}: constructor from {new_manifest.package_id}/{system_id} "
-                f"and function from {function_owner[0]} at {function_owner[1]}"
-            )
-        function_path = new_function_names.get(name)
-        if function_path is not None:
-            raise PackageError(
-                f"Public name collision {name!r}: function and constructor both declared by "
-                f"{new_manifest.package_id} ({function_path} and system {system_id})"
-            )
+    # Functions and Extension-v2 members are owner-qualified declarations.
+    # Cross-package duplicate member names are intentionally legal. Same-owner
+    # contradictions are rejected while normalizing ``candidate`` above.
 
 
 def _public_entry_entries(root: Path) -> dict[str, Path]:

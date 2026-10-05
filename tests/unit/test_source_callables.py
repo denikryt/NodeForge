@@ -27,7 +27,9 @@ from NodeForge.consteval import _preprocess_compile_time
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
 from NodeForge.function_instances import normalized_statements
-from NodeForge.resolved_environment import ResolvedCatalog, ResolvedEnvironment
+from NodeForge.resolved_environment import (
+    PackageCallableExport, ResolvedCatalog, ResolvedEnvironment, ResolvedPackageNamespace,
+)
 from NodeForge.semantic_group import analyze_group_source
 from NodeForge.semantic_ir import IRPanelDeclaration
 from NodeForge.source_callables import SourceCallablePreparationKey, SourceCallableSession
@@ -47,12 +49,23 @@ class _Record:
 
 def _environment(*, functions=None, examples=None, local=None):
     """Return one complete immutable resolved-environment fixture."""
+    functions = functions or {}
+    package_namespaces = {}
+    if functions:
+        exports = {
+            name: PackageCallableExport("vendor.pkg", name, record=record)
+            for name, record in functions.items()
+        }
+        package_namespaces["vendor.pkg"] = ResolvedPackageNamespace(
+            "vendor.pkg", "pkg", "Vendor Package", "1.0.0", exports
+        )
     return ResolvedEnvironment(
         {
-            "functions": ResolvedCatalog("functions", functions or {}),
+            "functions": ResolvedCatalog("functions", {}),
             "examples": ResolvedCatalog("examples", examples or {}),
             "local": ResolvedCatalog("local", local or {}),
         },
+        package_namespaces=package_namespaces,
     )
 
 
@@ -219,7 +232,7 @@ def test_source_session_caches_snapshot_by_function_and_preparation_by_owner(tmp
 def test_source_session_cycle_detection_is_function_id_based(tmp_path):
     source_path = tmp_path / "recurse.nf"
     source_path.write_text(
-        'from functions import recurse\nx = recurse(1.0, __unique__=True)\noutput(x)\n',
+        'from packages import pkg\nx = recurse(1.0, __unique__=True)\noutput(x)\n',
         encoding="utf-8",
     )
     record = _Record("functions", "recurse", source_path)
@@ -471,8 +484,8 @@ def test_group_interface_contract_rejects_duplicate_canonical_origins():
         GroupInterfaceContract(inputs, ())
 
 
-def test_source_callable_records_do_not_duplicate_derivable_or_unused_state():
-    """Keep one authority for whole-group state, interface origin, and preparation keys."""
+def test_source_callable_records_keep_only_required_preparation_boundary_state():
+    """Keep only state required by semantic preparation and exact backend materialization."""
     from dataclasses import fields
     from NodeForge.semantic_group import SemanticGroupCompilation
     from NodeForge.source_callables import PreparedSourceCallable
@@ -490,7 +503,7 @@ def test_source_callable_records_do_not_duplicate_derivable_or_unused_state():
     assert "index" not in {field.name for field in fields(GroupInputContract)}
     assert "index" in {field.name for field in fields(GroupOutputContract)}
     assert "required" not in {field.name for field in fields(SourceCallableParameter)}
-    assert tuple(field.name for field in fields(PreparedSourceCallable)) == ("contract", "group")
+    assert tuple(field.name for field in fields(PreparedSourceCallable)) == ("contract", "group", "source_record")
 
 
 def test_local_source_call_ir_owns_monotonic_shared_and_unique_identity():
@@ -552,7 +565,11 @@ def test_pure_source_catalog_namespaces_route_through_source_function_ir(tmp_pat
     catalogs[namespace] = {"demo": record}
     environment = _environment(**catalogs)
     session = SourceCallableSession(resolved_environment=environment)
-    root_source = f"from {namespace} import demo\ny = demo(2.0)\noutput(y)\n"
+    root_source = (
+        "from packages import pkg\ny = demo(2.0)\noutput(y)\n"
+        if namespace == "functions"
+        else f"from {namespace} import demo\ny = demo(2.0)\noutput(y)\n"
+    )
     compilation = analyze_group_source(
         root_source,
         compilation_identity=_identity(f"ROOT/{namespace}", f"ROOT/{namespace}"),
@@ -585,7 +602,7 @@ def test_source_call_known_but_not_foldable_argument_remains_runtime(tmp_path):
     environment = _environment(functions={"demo": record})
     session = SourceCallableSession(resolved_environment=environment)
     compilation = analyze_group_source(
-        'from functions import demo\ny = demo(1 / 2)\noutput(y)\n',
+        'from packages import pkg\ny = demo(1 / 2)\noutput(y)\n',
         compilation_identity=_identity("ROOT/runtime-arg", "ROOT/runtime-arg"),
         resolved_environment=environment,
         source_callable_session=session,

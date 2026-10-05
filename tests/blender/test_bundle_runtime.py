@@ -172,7 +172,7 @@ def test_bundle_packaged_library_function_round_trip():
         try:
             packages.install_package_directory(root, allow_python=False)
             group = compile_group('''
-from functions import bundle_identity
+from packages import bundle as bundle_pkg
 state = bundle(value=2.0)
 result = bundle_identity(state)
 value = bundle_get(result, "value", typ=Float)

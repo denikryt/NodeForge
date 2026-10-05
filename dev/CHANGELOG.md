@@ -370,3 +370,20 @@ lifecycle.
 - Added fail-closed raw metadata schema v2 using non-empty Blender socket identifiers plus socket-type assertions; fresh identifier-less declared raw sockets are rejected instead of persisted through structural index/name guesses, while existing unversioned v1 name metadata remains version-scoped compatible data.
 - Refactored raw-node construction to resolve and preflight every declared input/output before defaults, links, results, or v2 metadata are applied, and made cutover/validation resolve v2 contracts by exact physical identifier while preserving generic handling for undeclared links.
 - Corrected implicit-input discovery so a direct `ast.Name` call callee is treated as a callable reference rather than a numeric input, while call arguments/keyword values and attribute-call receivers keep their existing traversal semantics.
+
+## 0.65.0
+
+- Added owner-qualified package callable namespaces with `from packages import ...`, optional source aliases, exact `package.member(...)` resolution, owner-aware Functions discovery/reload, and package exports that may legally share names with other packages or core callables.
+- Removed the package-source `from functions import ...` namespace; source-backed package functions and Extension API v2 callables now share one package-owned public namespace, while Local and Examples retain their existing explicit catalogs.
+- Made bare package-call resolution fail deterministically on ambiguity or same-name source-value bindings, including local/transitive/cached source-callable preparation, without turning package qualifiers or diagnostic-only callee facts into runtime captures or callable identity.
+- Coordinated `nodeforge.math` 2.7 and `nodeforge.lsystem` 3.0 for the new package namespace contract; L-System public `ls_*` names are now `axiom`, `rule`, `iterations`, `angle`, `step`, `param`, `marker`, `system`, and qualified `lsystem.points`.
+
+## 0.65.1
+
+- Fixed owner-qualified source-function Blender lowering so prepared package callables carry and materialize their exact canonical package record instead of being re-resolved through the removed flat Functions catalog.
+- Restored deferred Local-catalog failure semantics during package namespace analysis and updated the Blender regression harness to use the owner-aware package inventory after removal of the legacy system registry.
+- Added Blender integration regressions for duplicate package members, core/package callable-name overlap, qualified local-helper calls and source-value collisions, and completed Stage-40 L-System update-source import migration.
+- Reserve package import names from structurally active manifests even when an installed package's callable inventory is invalid; replacing that same canonical package owner remains allowed.
+- Restore native/Python Examples owner snapshots and normalized sessions in the compilation registry, with deferred catalog failures and atomic publication of selected sessions. Examples remain outside package callable namespaces.
+- Resolve Functions, Examples and Local reload records from the same environment snapshot supplied to the backend. The library reload adapter reuses its backend's source-callable session rather than discovering another environment.
+- Add paired admission, Examples and reload snapshot regressions, plus Blender integration coverage for Python Example materialization and Functions reload. Blender integration tests require a separate Blender run.
