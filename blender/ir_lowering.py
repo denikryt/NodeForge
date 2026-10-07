@@ -9,7 +9,7 @@ from typing import Mapping
 from ..semantic.constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR
 from ..nf_types import NFType
 from ..errors import CompileError
-from ..compiler_identities import BindingId, InputDeclarationId
+from ..compiler_identities import BindingId
 from ..semantic.group_context import GroupContextSlot
 from .nodes import _boolean_math, _combine_xyz_mixed, _compare, _int_value, _integer_math, _math, _new_node, _separate_xyz, _string_value, _switch, _value, _vector_math
 from .geometry import (

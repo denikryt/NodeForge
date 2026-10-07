@@ -173,12 +173,9 @@ def test_trace_dependency_requires_materialization_and_missing_fingerprint_is_un
         assert frame.finish("contract").freshness_unproven is True
 
 
-def test_trace_marks_unproven_and_detects_cycles():
+def test_trace_detects_cycles():
     trace = FunctionCompilationTrace()
     owner = function_group_owner_scope("ROOT", "r")
-    with trace.group(owner, {"source": "x"}) as frame:
-        frame.mark_unproven("local")
-        assert frame.finish("contract").freshness_unproven is True
     with pytest.raises(CompileError):
         with trace.group(owner, {}):
             with trace.group(owner, {}):

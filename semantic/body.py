@@ -17,6 +17,8 @@ from .builtin_calls import (
     analyze_input_declaration_call,
     analyze_contextual_store_call,
     analyze_contextual_set_position_call,
+    _kw_dict,
+    _check_extra,
 )
 from ..compiler_identities import BindingId, CallSiteId, FunctionId, InputDeclarationId, InterfaceInputOrigin
 from .constants import TYPE_OBJECT
@@ -83,7 +85,6 @@ from .geometry_builder import (
 )
 from .values import (
     ArrayResultShape,
-    ExtensionResultShape,
     NamedOutputsResultShape,
     ObjectInfoState,
     ObjectSemanticId,
@@ -194,24 +195,6 @@ class _AnalyzedBodyExpression:
         if has_program == has_payload:
             raise ValueError("body expression requires exactly one of program or semantic_payload")
 
-
-def _kw_dict(call: ast.Call) -> dict[str, ast.expr]:
-    """Build the existing output keyword map with duplicate/**kwargs diagnostics."""
-    result = {}
-    for kw in call.keywords:
-        if kw.arg is None:
-            raise CompileError("**kwargs are not supported")
-        if kw.arg in result:
-            raise CompileError(f"Duplicate keyword argument: {kw.arg}")
-        result[kw.arg] = kw.value
-    return result
-
-
-def _check_no_extra_keywords(kws, allowed) -> None:
-    """Apply the existing unsupported-keyword diagnostic."""
-    extra = set(kws) - set(allowed)
-    if extra:
-        raise CompileError("Unsupported keyword argument(s): " + ", ".join(sorted(extra)))
 
 
 def _unique_output_name(existing: set[str], requested: str) -> str:
@@ -409,25 +392,6 @@ class _BodySemanticState:
             clear_auto_final_output=self.clear_auto_final_output,
         )
 
-    def adopt(self, other: "_BodySemanticState") -> None:
-        """Replace active state from one successfully analyzed lexical path."""
-        self.runtime_bindings = dict(other.runtime_bindings)
-        self.structural_bindings = dict(other.structural_bindings)
-        self.array_bindings = dict(other.array_bindings)
-        self.array_states = dict(other.array_states)
-        self.builder_states = dict(other.builder_states)
-        self.extension_bindings = dict(other.extension_bindings)
-        self.object_ids_by_binding = dict(other.object_ids_by_binding)
-        self.object_states = dict(other.object_states)
-        self.interface_input_origins = dict(other.interface_input_origins)
-        # Root-only panel registries are attempt-owned shared objects; nested semantic
-        # states cannot declare panels and therefore never publish branch-local copies.
-        if self.panel_member_origins is not other.panel_member_origins or self.panel_names is not other.panel_names:
-            raise CompileError("Internal error: panel semantic registries were forked")
-        self.changed_runtime_ids.update(other.changed_runtime_ids)
-        self.explicitly_assigned_runtime_ids.update(other.explicitly_assigned_runtime_ids)
-        self.lexical_iteration_ids = set(other.lexical_iteration_ids)
-        self.clear_auto_final_output = other.clear_auto_final_output
 
     def array_snapshot(self) -> StructuralArraySnapshot:
         """Build one detached expression-facing structural-array snapshot."""
@@ -1952,7 +1916,7 @@ def lower_basic_body(
                         raise CompileError("output() is only supported as a top-level call")
                     if call.keywords:
                         kws = _kw_dict(call)
-                        _check_no_extra_keywords(kws, {"name", "value"})
+                        _check_extra(kws, {"name", "value"})
                         if call.args:
                             raise CompileError("output() cannot mix positional and keyword arguments")
                         if "value" not in kws:
@@ -2050,7 +2014,7 @@ def lower_basic_body(
                     if not all(isinstance(member, ast.Name) for member in members_expr.elts):
                         raise CompileError("panel() items must be simple input variable names")
                     kws = _kw_dict(call)
-                    _check_no_extra_keywords(kws, {"name", "collapsed"})
+                    _check_extra(kws, {"name", "collapsed"})
                     if "name" not in kws:
                         raise CompileError("panel() requires name=")
                     panel_name = _literal_string(kws["name"], "panel() name", active_compile_time.values)

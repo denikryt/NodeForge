@@ -29,7 +29,7 @@ def test_bundle_is_not_registered_through_deleted_executable_builtin_modules():
 
     assert not hasattr(registry, "compile_call")
     assert not hasattr(registry, "_HANDLERS")
-    assert registry.has_callable_builtin("bundle")
+    assert "bundle" in registry.CALLABLE_BUILTIN_NAMES
 
 
 def test_local_function_bundle_parameter_is_runtime_only():

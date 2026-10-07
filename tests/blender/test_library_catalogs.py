@@ -116,11 +116,6 @@ def test_root_and_nested_local_source_calls_share_snapshot_without_live_rediscov
             "find_local_entry_record",
             lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("nested catalog rediscovery")),
         )
-        monkeypatch.setattr(
-            local_sources,
-            "local_entry_names",
-            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("nested catalog-name rediscovery")),
-        )
 
         backend = compiler._new_group_backend(environment)
         prepared_create_or_update(
@@ -218,7 +213,7 @@ def test_local_recursive_catalog_duplicate_and_save_contracts():
         _write(duplicate_flat, 'x = input_float("X")\noutput("x", x)\n')
         _write(duplicate_nested, 'x = input_float("X")\noutput("x", x)\n')
         try:
-            local_sources.local_entry_names()
+            local_sources.find_local_entry_record('local_duplicate_probe')
         except CompileError:
             pass
         else:
@@ -244,7 +239,7 @@ def test_local_recursive_catalog_duplicate_and_save_contracts():
 
         _write(unsupported_source_layout / 'source.nf', 'x = input_float("X")\noutput("x", x)\n')
         try:
-            local_sources.local_entry_names()
+            local_sources.find_local_entry_record('local_package_style_probe')
         except CompileError:
             pass
         else:

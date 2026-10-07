@@ -227,7 +227,7 @@ def test_source_session_caches_snapshot_by_function_and_preparation_by_owner(tmp
         SourceCallablePreparationKey(function_id, "LIBRARY/one"),
         SourceCallablePreparationKey(function_id, "LIBRARY/two"),
     }
-    assert session.snapshot_view()[function_id] == first.group.source
+    assert session.source_snapshots[function_id] == first.group.source
 
 
 def test_source_session_cycle_detection_is_function_id_based(tmp_path):

@@ -19,7 +19,6 @@ from .function_materializer import (
     LibraryFunctionUpdateSpec,
 )
 from ..function_instances import (
-    FUNCTION_DEFINITION_OWNER_PROP,
     FUNCTION_INSTANCE_KEY_PROP,
     direct_library_owner_scope,
 )
@@ -260,22 +259,6 @@ def update_materialized_library_entry_group_for_record(
         write_package_metadata=_write_package_metadata,
     )
     return FunctionMaterializer(group_backend=group_backend).update_library_group(spec)
-
-
-def _assert_owned_materialized_group(existing, record: LibraryEntryRecord, group_name: str) -> None:
-    """Reject cross-package reuse for catalog-generated datablocks."""
-    try:
-        owned = existing.get("nodeforge_library_namespace") == record.namespace and existing.get("nodeforge_library_name") == record.name
-        if record.package_id:
-            owned = (
-                owned
-                and existing.get("nodeforge_package_id") == record.package_id
-                and existing.get("nodeforge_package_version") == record.package_version
-            )
-    except Exception:
-        owned = False
-    if not owned:
-        raise CompileError(f"{record.namespace} library group name collision: {getattr(existing, 'name', group_name)}")
 
 
 def _write_package_metadata(group, record: LibraryEntryRecord) -> None:

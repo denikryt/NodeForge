@@ -4,7 +4,7 @@ from ..semantic.constants import *
 from ..semantic.attribute_domains import normalize_attribute_domain
 from ..errors import CompileError
 from .values import Value
-from .nodes import _new_node, _value, _combine_xyz, _combine_xyz_mixed, _is_number_type
+from .nodes import _new_node, _combine_xyz, _combine_xyz_mixed, _is_number_type
 from ..semantic.compile_time import _as_float_const, _is_const_number, _is_const_vector, _is_const_vector_like
 from ..semantic.numeric_semantics import normalize_int_constant
 
@@ -62,15 +62,6 @@ def _store_named_attribute(
     group.links.new(value.socket, node.inputs["Value"])
     return node.outputs["Geometry"]
 
-
-
-def _as_number_value(group, value, x=0, y=0, label="value"):
-    """Return a numeric compile-time constant or Value as a node Value."""
-    if _is_const_number(value):
-        return _value(group, value, x, y)
-    if isinstance(value, Value) and _is_number_type(value.typ):
-        return value
-    raise CompileError(f"{label} expects Float/Int")
 
 
 def _set_int_like_socket(group, socket, value, x=0, y=0, label="value", minimum=None):
@@ -467,7 +458,7 @@ def _sample_index_geometry(group, geometry, value, index, *, domain, clamp, x=0,
     return Value(node.outputs["Value"], value.typ)
 
 
-__all__ = ['_as_number_value', '_set_int_like_socket', '_set_float_like_socket', '_grid_geometry', '_store_named_attribute_geometry', '_set_material_geometry', '_set_vector_socket_default', '_set_rotation_socket_default', '_euler_to_rotation', '_is_const_number', '_is_const_vector_like', '_cube_geometry', '_join_geometry', '_normalize_points', '_polyline_geometry', '_transform_geometry', '_realize_instances', '_points_geometry', '_set_position_geometry', '_instance_on_points', '_capture_attribute_geometry', '_sample_index_geometry']
+__all__ = ['_set_int_like_socket', '_set_float_like_socket', '_grid_geometry', '_store_named_attribute_geometry', '_set_material_geometry', '_set_vector_socket_default', '_set_rotation_socket_default', '_euler_to_rotation', '_is_const_number', '_is_const_vector_like', '_cube_geometry', '_join_geometry', '_normalize_points', '_polyline_geometry', '_transform_geometry', '_realize_instances', '_points_geometry', '_set_position_geometry', '_instance_on_points', '_capture_attribute_geometry', '_sample_index_geometry']
 
 
 def _capture_attribute_geometry(group, geometry, value, *, selection, domain, data_type, x=0, y=0):

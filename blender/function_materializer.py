@@ -19,7 +19,6 @@ from ..semantic.ir import IRFunctionMaterialization
 from ..semantic.group import SemanticGroupCompilation
 from ..function_instances import (
     direct_library_owner_scope,
-    function_group_owner_scope,
     function_materialization_owner_scope,
     instance_key_for_materialization,
     stamp_function_metadata,

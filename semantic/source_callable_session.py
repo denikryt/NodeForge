@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from types import MappingProxyType
 from typing import Mapping
 
 from .callable_contracts import SourceCallableContract, SourceCallableParameter, normalize_callable_keyword
@@ -179,11 +178,6 @@ class SourceCallableSession:
             return self.prepared[key]
         except KeyError as exc:
             raise CompileError("Internal error: source-call backend requested an unprepared callable") from exc
-
-    def snapshot_view(self) -> Mapping[FunctionId, str]:
-        """Return a read-only view useful for deterministic unit assertions."""
-        return MappingProxyType(dict(self.source_snapshots))
-
 
 
 

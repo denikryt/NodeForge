@@ -197,7 +197,6 @@ class FunctionCompilationResult:
 class FunctionCompilationFrame:
     """Mutable trace frame populated by real child materialization paths."""
 
-    trace: "FunctionCompilationTrace"
     owner_identity: str
     own_inputs: dict
     child_rows: list = field(default_factory=list)
@@ -225,12 +224,6 @@ class FunctionCompilationFrame:
             function_materialization_owner_scope(materialization),
             fingerprint,
         )
-
-    def mark_unproven(self, reason: str) -> None:
-        """Mark this frame ineligible for untouched reuse."""
-
-        self.freshness_unproven = True
-        self.child_rows.append({"unproven": str(reason)})
 
     def finish(self, contract: str) -> FunctionCompilationResult:
         """Finalize this frame's effective fingerprint."""
@@ -270,7 +263,7 @@ class FunctionCompilationTrace:
         if owner_identity in {frame.owner_identity for frame in self._stack}:
             chain = " -> ".join([frame.owner_identity for frame in self._stack] + [owner_identity])
             raise CompileError(f"Cyclic function-group dependency: {chain}")
-        frame = FunctionCompilationFrame(self, owner_identity, dict(own_inputs or {}))
+        frame = FunctionCompilationFrame(owner_identity, dict(own_inputs or {}))
         self._stack.append(frame)
         try:
             yield frame

@@ -1,13 +1,10 @@
 """Blender UI, operators, panels, and registration for NodeForge."""
 
 import bpy
-import sys
-import importlib
 import traceback
-import addon_utils
 from pathlib import Path
 from bpy.types import Operator, Panel, PropertyGroup, UIList, AddonPreferences
-from bpy.props import StringProperty, PointerProperty, CollectionProperty, IntProperty, BoolProperty, EnumProperty
+from bpy.props import StringProperty, PointerProperty, CollectionProperty, IntProperty, BoolProperty
 
 from .compiler import (
     create_expression_group,
@@ -291,11 +288,6 @@ def _refresh_catalog_items(props, namespace: str):
     return len(records)
 
 
-def _refresh_function_items(props):
-    """Reload the functions folder into the Scene collection property."""
-    return _refresh_catalog_items(props, "functions")
-
-
 def _selected_catalog_item(props, namespace: str):
     """Return the selected catalog-library item, or None."""
     if props is None:
@@ -306,10 +298,6 @@ def _selected_catalog_item(props, namespace: str):
         return items[index]
     return None
 
-
-def _selected_function_item(props):
-    """Return the currently selected function-library item, or None."""
-    return _selected_catalog_item(props, "functions")
 
 class GNSCRIPT_MVP_Properties(PropertyGroup):
     """Properties stored on the current Scene for NodeForge UI state."""

@@ -304,9 +304,6 @@ class AnalyzedCall:
         if not isinstance(self.result, (RuntimeCallResult, TupleCallResult, NamedOutputsCallResult, ProjectedCallResult, ContextReadCallResult)):
             raise TypeError("result must be a call result specification")
 
-    def option_map(self) -> Mapping[str, object]:
-        """Return a read-only mapping view of normalized call options."""
-        return MappingProxyType(dict(self.options))
 
 
 @dataclass(frozen=True)

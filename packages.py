@@ -149,11 +149,9 @@ class SystemPackageRecord:
     package_version: str
     system_id: str
     root: Path
-    module_path: Path | None
+    interface_path: Path
     origin: str
     permissions: dict[str, bool]
-    interface_path: Path | None = None
-    legacy_system_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -435,12 +433,7 @@ def validate_package_system_declarations(manifest: PackageManifest) -> None:
     function runs. Keeping this public validator structural guarantees that active
     package/UI enumeration never imports package implementation modules.
     """
-    records = system_package_records_from_manifests((manifest,))
-    for record in records:
-        if record.interface_path is None:
-            raise PackageError(
-                f"System {record.system_id!r} uses unsupported Extension API v1 system.py"
-            )
+    system_package_records_from_manifests((manifest,))
 
 
 def active_package_records(include_invalid: bool = False) -> list[ActivePackage | PackageDiagnostic]:
@@ -604,9 +597,6 @@ def system_package_records_from_manifests(
                 raise PackageError(
                     f"System {child.name!r} must use interface.py (EXTENSION_API = 2)"
                 )
-            interface = interface_path.resolve()
-            legacy = None
-            module_path = None
             records.append(
                 SystemPackageRecord(
                     package_id=item.package_id,
@@ -614,11 +604,9 @@ def system_package_records_from_manifests(
                     package_version=item.version,
                     system_id=child.name,
                     root=child.resolve(),
-                    module_path=module_path,
+                    interface_path=interface_path.resolve(),
                     origin=item.origin,
                     permissions=item.permissions,
-                    interface_path=interface,
-                    legacy_system_path=legacy,
                 )
             )
     return tuple(records)
@@ -852,10 +840,6 @@ def _normalize_package_callable_inventory(
     system_names: dict[str, str] = {}
     try:
         for record in system_package_records_from_manifests((manifest,)):
-            if record.interface_path is None:
-                raise PackageError(
-                    f"System {record.system_id!r} uses unsupported Extension API v1 system.py"
-                )
             session = ExtensionOwnerSession(
                 capture_owner_code_snapshot(system_owner_key(record), record.root)
             )

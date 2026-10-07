@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
-from types import MappingProxyType
-from typing import Mapping
 
 from .builtin_calls import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
 from . import builtin_registry
@@ -26,7 +24,7 @@ from ..extensions.contracts import ExtensionCallableId
 from .source_bindings import LibraryBinding, PackageNamespaceBinding
 from ..extensions.registry import library_owner_key
 from .parsing import _assigned_names, _binding_names, _collect_inputs, _extract_function_imports, _needs_geometry_io, _parse_source, normalized_statements
-from .runtime_bindings import RuntimeBindingSymbol
+from .runtime_bindings import RuntimeBindingSymbol, allows_existing_top_level_shadow, format_reserved_binding_label
 from .body import BasicBodyCompilation, lower_basic_body
 from .ir import IRBody, IRIf, IRInputDeclaration, IRPanelDeclaration, IRRepeat
 
@@ -208,36 +206,16 @@ def _registered_name_labels(local_function_defs, imported_library_functions, pac
     return labels
 
 
-def _format_reserved_label(label):
-    """Format one reservation label with existing diagnostics."""
-    if label == "DSL builtin":
-        return "reserved by DSL builtin"
-    if label == "imported function":
-        return "already registered as imported function"
-    if label == "local function":
-        return "already registered as local function"
-    if label == "type token":
-        return "reserved by type token"
-    if label == "package namespace":
-        return "reserved by package namespace"
-    return f"reserved by {label}"
-
-
-def _allows_existing_top_level_shadow(label):
-    """Return whether top-level value rebinding historically shadows this category."""
-    return label in {"DSL builtin", "compile-time constant"}
-
-
 def _check_registered_binding(name, labels, *, context="assign", allow_existing_shadow=False):
     """Reject source bindings that collide with non-shadowable registered names."""
     label = labels.get(name)
     if label is None:
         return
-    if allow_existing_shadow and _allows_existing_top_level_shadow(label):
+    if allow_existing_shadow and allows_existing_top_level_shadow(label):
         return
     if context == "parameter":
-        raise CompileError(f"Local function parameter {name} is {_format_reserved_label(label)}")
-    raise CompileError(f"Cannot assign to {name}: name is {_format_reserved_label(label)}")
+        raise CompileError(f"Local function parameter {name} is {format_reserved_binding_label(label)}")
+    raise CompileError(f"Cannot assign to {name}: name is {format_reserved_binding_label(label)}")
 
 
 def _validate_registered_name_bindings(stmts, labels, *, top_level_function_names=None):

@@ -1,4 +1,5 @@
 from helpers import *
+from NodeForge.extension_api import ExtensionBackendContext
 
 
 
@@ -30,19 +31,29 @@ def test_addon_unregister_preserves_live_generated_resources_and_geometry():
     group_output = group.nodes.new("NodeGroupOutput")
     group_output.is_active_output = True
 
-    transaction = generated_resources.create_transaction(group)
-    point_type = type("Point", (), {})
-    segment_type = type("Segment", (), {})
-    segment = segment_type()
-    segment.start = point_type()
-    segment.end = point_type()
-    segment.start.x = segment.start.y = segment.start.z = 0.0
-    segment.end.x, segment.end.y, segment.end.z = 1.0, 0.0, 0.0
-    curve, generated_obj = generated_resources.create_curve_object_from_segments(
-        transaction,
-        [segment],
-        name_hint="UnregisterPersistence",
+    transaction = generated_resources.GeneratedResourceTransaction(
+        owner_group_uuid=generated_resources.ensure_owner_group_uuid(group)
     )
+    resource_context = ExtensionBackendContext(
+        group=group,
+        location=(0.0, 0.0),
+        generated_resource_transaction=transaction,
+    )
+    curve = resource_context.new_generated_curve(
+        role="static_baked_curve", name_hint="UnregisterPersistence"
+    )
+    curve.dimensions = "3D"
+    curve.resolution_u = 1
+    spline = curve.splines.new("POLY")
+    spline.points.add(1)
+    spline.points[0].co = (0.0, 0.0, 0.0, 1.0)
+    spline.points[1].co = (1.0, 0.0, 0.0, 1.0)
+    generated_obj = resource_context.new_generated_object(
+        curve, role="static_baked_object", name_hint="UnregisterPersistence"
+    )
+    bpy.context.collection.objects.link(generated_obj)
+    generated_obj.hide_viewport = True
+    generated_obj.hide_render = True
     generated_resources.write_group_manifest(group, transaction.manifest())
     transaction.mark_committed()
 

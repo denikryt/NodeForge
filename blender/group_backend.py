@@ -795,12 +795,6 @@ class BlenderGroupBackend:
         function_compilation_trace = kwargs.pop("function_compilation_trace", None)
         function_compilation_inputs = kwargs.pop("function_compilation_inputs", None)
         function_instance_key = kwargs.pop("function_instance_key", None)
-        legacy_identity = {
-            "function_group_owner_scope": kwargs.pop("function_group_owner_scope", None),
-            "function_definition_owner": kwargs.pop("function_definition_owner", None),
-            "function_definition_identity": kwargs.pop("function_definition_identity", None),
-            "root_owner_id": kwargs.pop("root_owner_id", None),
-        }
         if kwargs:
             unknown = ", ".join(sorted(kwargs))
             raise TypeError(f"Unsupported Blender group build option(s): {unknown}")
@@ -813,15 +807,6 @@ class BlenderGroupBackend:
             inherited_imported_library_functions=imported_library_functions,
             source_callable_session=source_callable_session,
         )
-        for option_name, expected in (
-            ("function_group_owner_scope", identity.owner_scope),
-            ("function_definition_owner", identity.definition_owner),
-            ("function_definition_identity", identity.declaration_owner),
-            ("root_owner_id", identity.root_owner_id),
-        ):
-            supplied = legacy_identity[option_name]
-            if supplied is not None and supplied != expected:
-                raise CompileError(f"Internal error: prepared group identity disagrees with {option_name}")
         request = BlenderGroupBuildRequest(
             prepared_compilation=prepared,
             name=name,

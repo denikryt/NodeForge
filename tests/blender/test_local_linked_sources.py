@@ -30,7 +30,7 @@ def test_linked_local_folder_is_live_and_does_not_copy_sources():
         linked = local_sources.link_local_source_folder(str(root))
         try:
             check(linked == root.resolve(), 'linked source root path changed unexpectedly')
-            check(local_sources.has_local_entry('linked_live_probe'), 'linked Local script was not discovered')
+            check(local_sources.find_local_entry_record('linked_live_probe') is not None, 'linked Local script was not discovered')
             record = local_sources.find_local_entry_record('linked_live_probe')
             check(record.source_path == source.resolve(), 'linked Local source was copied instead of read in place')
 
@@ -61,7 +61,7 @@ def test_linked_local_folder_is_live_and_does_not_copy_sources():
             local_sources.unlink_local_source_folder(str(root))
 
         check(source.exists(), 'unlink deleted an external source file')
-        check(not local_sources.has_local_entry('linked_live_probe'), 'unlinked source remained discoverable')
+        check(local_sources.find_local_entry_record('linked_live_probe') is None, 'unlinked source remained discoverable')
 
 
 def test_local_browser_shows_direct_managed_folders_and_linked_roots():
@@ -96,7 +96,7 @@ def test_duplicate_names_across_managed_and_linked_roots_remain_rejected():
         local_sources.link_local_source_folder(str(root))
         try:
             try:
-                local_sources.local_entry_names()
+                local_sources.find_local_entry_record('linked_duplicate_probe')
             except CompileError:
                 pass
             else:

@@ -85,11 +85,6 @@ class _PreprocessRecorder:
         """Return an empty recorder for speculative preprocessing."""
         return _PreprocessRecorder()
 
-    def adopt(self, other: "_PreprocessRecorder") -> None:
-        """Append a successful erased speculative sequence to this recorder."""
-        if other.statements:
-            raise ValueError("cannot adopt speculative preprocessing with retained statements")
-        self.pending_effects.extend(other.pending_effects)
 
 
 def _collect_preprocessing_written_names(stmts):

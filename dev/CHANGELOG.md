@@ -398,3 +398,9 @@ lifecycle.
 - Reorganized compiler internals around explicit `semantic/`, `extensions/`, and `blender/` owners, split environment/catalog/Local discovery and physical group assembly responsibilities, and removed retired flat/builtins/systems implementation paths without changing DSL behavior.
 - Added executable module-boundary and layout regressions for canonical ownership, transitive semantic/extension isolation from Blender realization, Local-to-catalog dependency direction, resolvable relative imports, and an acyclic production module-scope graph.
 - Preserved public extension entry points, Local persistent user-data paths, resolved-environment identity/freshness contracts, and Blender transaction/resource ownership while updating architecture and coverage references to the final module layout.
+
+## 0.65.4
+
+- Removed verified dead internal helpers, obsolete Extension-v1 compatibility state, and unused generated-resource/test-only wrappers left after the module reorganization.
+- Consolidated duplicate semantic reserved-name and keyword-normalization authorities, keeping existing diagnostics and behavior while reducing parallel implementations.
+- Removed redundant package snapshot/reload regression modules and refreshed release-coupled extension compatibility fixtures for the cleanup release.

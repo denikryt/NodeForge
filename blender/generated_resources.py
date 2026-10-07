@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass, field
-from typing import Iterable
-
 import bpy
 
 from .group_authority import is_authority_ineligible_group
@@ -15,10 +13,6 @@ from .group_authority import is_authority_ineligible_group
 GROUP_MANIFEST_PROP = "nodeforge_generated_resources_v1"
 ID_METADATA_PROP = "nodeforge_generated_id_v1"
 SCHEMA_VERSION = 1
-_TEST_FAIL_AFTER_OBJECT_CREATE = False
-_TEST_FAIL_AFTER_MESH_CREATE = False
-_TEST_FAIL_AFTER_MESH_ATTRIBUTE_WRITE = False
-_CLEANUP_WARNINGS: list[str] = []
 
 
 def _json_load(value):
@@ -38,10 +32,6 @@ def _json_load(value):
 def _json_dump(data) -> str:
     return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
-
-
-def _record_cleanup_warning(message: str) -> None:
-    _CLEANUP_WARNINGS.append(message)
 
 
 def _id_collection(kind: str):
@@ -314,10 +304,6 @@ def _verified_id_for_ref(ref: GeneratedResourceRef):
             matches.append(candidate)
     if len(matches) == 1:
         return matches[0]
-    if len(matches) > 1:
-        _record_cleanup_warning(
-            f"Skipped generated {ref.kind} cleanup because ownership metadata matched multiple IDs: {ref.name}"
-        )
     return None
 
 
@@ -376,17 +362,11 @@ def delete_generated_id_object(id_obj, *, expected_owner_group_uuid: str | None 
             # user Objects from their data-block.  Cleanup paths delete generated
             # Objects first, then re-enter this branch for the Curve.
             if _data_block_has_non_owned_object_users(id_obj, meta.owner_group_uuid):
-                _record_cleanup_warning(
-                    f"Skipped generated Curve deletion because non-owned Object users remain: {getattr(id_obj, 'name', '<unknown>')}"
-                )
                 return False
             bpy.data.curves.remove(id_obj, do_unlink=True)
             return True
         if kind == "MESH":
             if _data_block_has_non_owned_object_users(id_obj, meta.owner_group_uuid):
-                _record_cleanup_warning(
-                    f"Skipped generated Mesh deletion because non-owned Object users remain: {getattr(id_obj, 'name', '<unknown>')}"
-                )
                 return False
             bpy.data.meshes.remove(id_obj, do_unlink=True)
             return True
@@ -453,7 +433,7 @@ def cleanup_restart_orphans_deferred():
     try:
         bpy.app.timers.register(_run_when_unrestricted, first_interval=0.0)
     except Exception:
-        _record_cleanup_warning("Could not schedule generated-resource restart cleanup while bpy.data is restricted")
+        pass
     return None
 
 def cleanup_restart_orphans() -> None:
@@ -480,164 +460,15 @@ def cleanup_restart_orphans() -> None:
             delete_generated_id_object(id_obj, expected_owner_group_uuid=ref.owner_group_uuid)
 
 
-def cleanup_live_group_resources() -> None:
-    """Explicitly remove verified generated IDs listed by live group metadata."""
-    for group in list(bpy.data.node_groups):
-        if getattr(group, "bl_idname", None) != "GeometryNodeTree":
-            continue
-        manifest = read_group_manifest(group)
-        for ref in sorted(manifest_resources(manifest), key=_resource_delete_order):
-            delete_generated_ref(ref)
-        if manifest is not None:
-            write_empty_manifest(group, manifest["owner_group_uuid"])
-
-
-def create_transaction(group) -> GeneratedResourceTransaction:
-    return GeneratedResourceTransaction(owner_group_uuid=ensure_owner_group_uuid(group))
-
-
-def create_curve_object_from_segments(transaction: GeneratedResourceTransaction, segments: Iterable, *, name_hint: str):
-    """Create a generated Curve plus hidden Object for static baked segments."""
-    safe_hint = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in (name_hint or "NodeForge"))[:48]
-    base = f"NodeForge.{safe_hint}.{transaction.owner_group_uuid[:8]}.{transaction.generation_uuid[:8]}"
-    curve = bpy.data.curves.new(base + ".Curve", "CURVE")
-    curve.dimensions = "3D"
-    curve.resolution_u = 1
-    try:
-        curve.use_fake_user = False
-    except Exception:
-        pass
-    transaction.add(curve, "CURVE", "static_baked_curve")
-    try:
-        for segment in segments:
-            spline = curve.splines.new("POLY")
-            spline.points.add(1)
-            spline.points[0].co = (float(segment.start.x), float(segment.start.y), float(segment.start.z), 1.0)
-            spline.points[1].co = (float(segment.end.x), float(segment.end.y), float(segment.end.z), 1.0)
-    except Exception:
-        transaction.rollback()
-        raise
-    obj = bpy.data.objects.new(base + ".Object", curve)
-    transaction.add(obj, "OBJECT", "static_baked_object")
-    global _TEST_FAIL_AFTER_OBJECT_CREATE
-    if _TEST_FAIL_AFTER_OBJECT_CREATE:
-        _TEST_FAIL_AFTER_OBJECT_CREATE = False
-        transaction.rollback()
-        raise RuntimeError("Injected NodeForge generated-object failure")
-    try:
-        scene = getattr(bpy.context, "scene", None)
-        collection = getattr(scene, "collection", None) or getattr(bpy.context, "collection", None)
-        if collection is not None:
-            collection.objects.link(obj)
-    except Exception:
-        pass
-    obj.hide_viewport = True
-    obj.hide_render = True
-    try:
-        obj.hide_select = True
-    except Exception:
-        pass
-    try:
-        obj.use_fake_user = False
-    except Exception:
-        pass
-    return curve, obj
 
 
 
-def _safe_name_hint(name_hint: str) -> str:
-    return "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in (name_hint or "NodeForge"))[:48]
-
-
-def _hide_generated_object(obj) -> None:
-    obj.hide_viewport = True
-    obj.hide_render = True
-    try:
-        obj.hide_select = True
-    except Exception:
-        pass
-    try:
-        obj.use_fake_user = False
-    except Exception:
-        pass
-
-
-def _link_object_to_context_collection(obj) -> None:
-    try:
-        scene = getattr(bpy.context, "scene", None)
-        collection = getattr(scene, "collection", None) or getattr(bpy.context, "collection", None)
-        if collection is not None:
-            collection.objects.link(obj)
-    except Exception:
-        pass
-
-
-def _write_attribute_values(attribute, values) -> None:
-    """Write scalar or vector values into a Blender geometry attribute."""
-    data = attribute.data
-    if len(data) != len(values):
-        raise RuntimeError(f"Generated attribute {attribute.name} length mismatch")
-    if values and isinstance(values[0], (tuple, list)):
-        flat = [float(component) for value in values for component in value]
-        try:
-            data.foreach_set("vector", flat)
-            return
-        except Exception:
-            pass
-        for item, value in zip(data, values):
-            item.vector = tuple(float(component) for component in value)
-        return
-    try:
-        data.foreach_set("value", values)
-        return
-    except Exception:
-        pass
-    for item, value in zip(data, values):
-        item.value = value
-
-
-def _create_command_mesh_object_from_specs(transaction: GeneratedResourceTransaction, table, *, name_hint: str, mesh_role: str, object_role: str, point_attributes, edge_attributes):
-    """Create generated Mesh/Object command data from explicit attribute specs."""
-    safe_hint = _safe_name_hint(name_hint)
-    base = f"NodeForge.{safe_hint}.{transaction.owner_group_uuid[:8]}.{transaction.generation_uuid[:8]}"
-    mesh = bpy.data.meshes.new(base + ".CommandMesh")
-    transaction.add(mesh, "MESH", mesh_role)
-    global _TEST_FAIL_AFTER_MESH_CREATE, _TEST_FAIL_AFTER_MESH_ATTRIBUTE_WRITE, _TEST_FAIL_AFTER_OBJECT_CREATE
-    if _TEST_FAIL_AFTER_MESH_CREATE:
-        _TEST_FAIL_AFTER_MESH_CREATE = False
-        transaction.rollback()
-        raise RuntimeError("Injected NodeForge generated-mesh failure")
-    try:
-        mesh.from_pydata(list(table.vertices), list(table.edges), [])
-        mesh.update()
-        for attr_name, data_type, values in point_attributes:
-            attr = mesh.attributes.new(attr_name, data_type, "POINT")
-            _write_attribute_values(attr, values)
-        for attr_name, data_type, values in edge_attributes:
-            attr = mesh.attributes.new(attr_name, data_type, "EDGE")
-            _write_attribute_values(attr, values)
-        if _TEST_FAIL_AFTER_MESH_ATTRIBUTE_WRITE:
-            _TEST_FAIL_AFTER_MESH_ATTRIBUTE_WRITE = False
-            raise RuntimeError("Injected NodeForge command-mesh attribute failure")
-        mesh.update()
-    except Exception:
-        transaction.rollback()
-        raise
-    obj = bpy.data.objects.new(base + ".CommandObject", mesh)
-    transaction.add(obj, "OBJECT", object_role)
-    if _TEST_FAIL_AFTER_OBJECT_CREATE:
-        _TEST_FAIL_AFTER_OBJECT_CREATE = False
-        transaction.rollback()
-        raise RuntimeError("Injected NodeForge generated-object failure")
-    _link_object_to_context_collection(obj)
-    _hide_generated_object(obj)
-    return mesh, obj
 
 
 __all__ = [
     "GROUP_MANIFEST_PROP", "ID_METADATA_PROP", "SCHEMA_VERSION",
-    "GeneratedResourceRef", "GeneratedResourceTransaction", "create_transaction",
+    "GeneratedResourceRef", "GeneratedResourceTransaction",
     "read_group_manifest", "write_group_manifest", "write_empty_manifest", "clear_group_manifest",
     "manifest_resources", "cleanup_previous_after_commit", "cleanup_restart_orphans",
-    "cleanup_live_group_resources", "create_curve_object_from_segments", "delete_generated_ref",
+    "delete_generated_ref",
 ]

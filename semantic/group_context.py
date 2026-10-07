@@ -40,7 +40,3 @@ class GroupContextAvailabilityCursor:
     def replace(self, slots: Iterable[GroupContextSlot]) -> None:
         """Replace the available slots with the values from *slots*."""
         self.available_slots = set(slots)
-
-    def mark_available(self, slot: GroupContextSlot) -> None:
-        """Mark *slot* as available for subsequent semantic operations."""
-        self.available_slots.add(slot)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import copy
 import inspect
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Mapping
 
@@ -60,7 +60,7 @@ from .constants import (
     _COMPARE_OPS,
 )
 from .consteval import NOT_FOLDABLE, ConstEvalUnavailable, _const_eval, try_runtime_fold
-from .compile_time import CompileTimeSnapshot, ConstVector, _is_const_vector
+from .compile_time import CompileTimeSnapshot, _is_const_vector
 from ..errors import CompileError
 from ..nf_types import NFType, NUMERIC_NF_TYPES
 from .numeric_semantics import (
@@ -83,9 +83,7 @@ from ..evaluation_modes import EvaluationMode
 from .evaluation_resolution import CompileTimeSelection, RuntimeRequired, resolve_argument_evaluation
 from ..extensions.contracts import (
     ExtensionCallableSpec,
-    ExtensionParameterSpec,
     TypeSpec,
-    is_frontend_semantic_type_spec,
 )
 from ..extensions.semantics import (
     ExtensionDependencySource,

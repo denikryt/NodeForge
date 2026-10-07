@@ -347,16 +347,6 @@ def _require_type(typ, expected, message):
         raise CompileError(message)
 
 
-def _const_or_runtime(expr, consts, add_runtime, name, context):
-    """Return a normalized const/runtime slot while preserving const-first topology."""
-    try:
-        value = _freeze(_const_eval(expr, consts))
-        return ("const", value), None
-    except ConstEvalUnavailable:
-        typ = add_runtime(expr, name, context)
-        return ("runtime", None), typ
-
-
 def _ordered_vector_args(expr):
     """Return vector component expressions after shared keyword binding."""
     names = ["x", "y", "z"]

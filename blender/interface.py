@@ -93,20 +93,6 @@ def _interface_socket_key(group, item, typ: NFType | None = None):
     raise CompileError(f'Internal error: input interface item {name!r} is not attached to the group')
 
 
-def _set_interface_socket_default(group, name, in_out, value):
-    """Apply a default to every matching legacy interface item by display name."""
-    if value is None:
-        return False
-    ok = False
-    try:
-        for item in group.interface.items_tree:
-            if getattr(item, "item_type", None) == "SOCKET" and getattr(item, "name", None) == name and getattr(item, "in_out", None) == in_out:
-                ok = _set_socket_default(item, value) or ok
-    except Exception:
-        pass
-    return ok
-
-
 def _record_group_input_default(group, name, typ: NFType, default, *, interface_item=None):
     """Persist one exact input default using occurrence-aware physical identity."""
     if not isinstance(typ, NFType):
@@ -447,54 +433,6 @@ def _is_root_interface_item(item):
     return getattr(parent, "name", "") == ""
 
 
-def interface_item_for_group_input_value(group, group_input, value):
-    """Resolve a backend Value only when it is this group's exact Group Input output."""
-    from .values import Value
-
-    if not isinstance(value, Value):
-        return None
-    socket = getattr(value, "socket", None)
-    if socket is None:
-        return None
-    socket_node = getattr(socket, "node", None)
-    if socket_node is None:
-        return None
-
-    # Blender RNA wrappers are not required to preserve Python object identity.  Compare the
-    # underlying RNA pointer when available, and fall back to object identity for test doubles.
-    def _same_rna_object(left, right):
-        if left is right:
-            return True
-        left_pointer = getattr(left, "as_pointer", None)
-        right_pointer = getattr(right, "as_pointer", None)
-        if callable(left_pointer) and callable(right_pointer):
-            try:
-                return left_pointer() == right_pointer()
-            except (ReferenceError, RuntimeError):
-                return False
-        return False
-
-    if not _same_rna_object(socket_node, group_input):
-        return None
-    identifier = getattr(socket, "identifier", None)
-    if identifier:
-        for item in getattr(group.interface, "items_tree", []):
-            if (
-                getattr(item, "item_type", None) == "SOCKET"
-                and getattr(item, "in_out", None) == "INPUT"
-                and getattr(item, "identifier", None) == identifier
-            ):
-                return item
-    matches = [
-        item
-        for item in getattr(group.interface, "items_tree", [])
-        if getattr(item, "item_type", None) == "SOCKET"
-        and getattr(item, "in_out", None) == "INPUT"
-        and getattr(item, "name", None) == getattr(socket, "name", None)
-    ]
-    return matches[0] if len(matches) == 1 else None
-
-
 def _create_interface_panel(group, sockets, name, *, collapsed):
     """Create one root native interface panel and move validated input sockets into it."""
     sockets = list(sockets)
@@ -526,7 +464,6 @@ def _create_interface_panel(group, sockets, name, *, collapsed):
 __all__ = [
     "_json_safe_default",
     "_set_socket_default",
-    "_set_interface_socket_default",
     "_record_group_input_default",
     "_record_group_input_declaration",
     "_idprop_to_plain",
@@ -535,5 +472,4 @@ __all__ = [
     "_create_group_input_socket",
     "_interface_socket_key",
     "_create_interface_panel",
-    "interface_item_for_group_input_value",
 ]

@@ -1,14 +1,12 @@
 """Compile-time value evaluation and conservative runtime-fold probing."""
 
 import ast
-from .constants import TYPE_INT, _ALLOWED_CONSTS, _BIN_OPS, _COMPARE_OPS
+from .constants import _ALLOWED_CONSTS, _BIN_OPS, _COMPARE_OPS
 from ..errors import CompileError
 from .compile_time import (
     ConstVector,
     _as_float_const,
-    _is_const_number,
     _is_const_vector,
-    _is_const_vector_like,
 )
 from ..nf_types import NFType
 from .numeric_semantics import (

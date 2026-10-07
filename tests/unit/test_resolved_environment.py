@@ -271,25 +271,6 @@ def test_malformed_local_registry_is_captured_once_and_replayed_without_discover
     assert reads == [True]
 
 
-def test_unsupported_nested_local_source_layout_is_stored_failure(monkeypatch, tmp_path):
-    """Nested package-style Local sources are deferred without exposing partial entries."""
-    _import_compiler_with_fake_bpy(monkeypatch)
-    from NodeForge import catalog
-
-    local_root = tmp_path / "local"
-    (local_root / "nested").mkdir(parents=True)
-    (local_root / "nested" / "source.nf").write_text('output("Value", 1.0)\n', encoding="utf-8")
-    resolved = catalog.resolve_catalog(
-        "local",
-        package_roots=(),
-        local_roots=(local_root,),
-        local_files=(),
-    )
-
-    assert dict(resolved.entries) == {}
-    with pytest.raises(CompileError, match="Unsupported local source layout: nested/source.nf"):
-        resolved.names()
-
 
 def _import_compiler_with_fake_bpy(monkeypatch):
     """Import compiler-owned binding helpers without requiring Blender runtime."""

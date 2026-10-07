@@ -13,8 +13,6 @@ from .call_resolution import (
 )
 from .callable_contracts import (
     SourceCallableContract,
-    SourceCallableParameter,
-    normalize_callable_keyword,
 )
 from ..compiler_identities import FunctionId, GroupCompilationIdentity, normalize_library_package_id
 from .constants import TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
@@ -38,12 +36,6 @@ class LocalReturnShape:
     """Describe the fixed scalar/tuple return surface of one local function."""
 
     elements: tuple[LocalReturnElement, ...]
-
-    @property
-    def is_tuple(self) -> bool:
-        """Return whether the source used tuple-return syntax."""
-        return len(self.elements) > 1
-
 
 @dataclass(frozen=True)
 class LocalCapture:

@@ -25,10 +25,6 @@ def _apply_group_defaults_to_node(node, *, preserve_existing=None):
         if key in preserve_existing:
             _set_socket_default(sock, preserve_existing[key])
             continue
-        # Compatibility for old direct callers that still provide {display_name: value}.
-        if sock.name in preserve_existing:
-            _set_socket_default(sock, preserve_existing[sock.name])
-            continue
         entry = defaults.get(key[1:])
         if isinstance(entry, dict) and entry.get("has_default", True) and "default" in entry:
             _set_socket_default(sock, entry.get("default"))
@@ -216,61 +212,6 @@ def _captured_node_input_overrides(node):
         elif not _is_zero_like_default(value):
             yield socket, value
 
-def _capture_node_external_state(tree, node):
-    """Capture links and only real user-overridden input values before recompiling.
-
-    If a visible Group-node value is still equal to the previous script default,
-    it is not preserved; after update it should receive the new script default.
-    If it differs, preserve it as a user override.
-    """
-    state = {"input_defaults": {}, "incoming": [], "outgoing": []}
-    input_keys = {socket.as_pointer(): key for socket, key in _socket_keys(node.inputs, "INPUT")}
-    output_keys = {socket.as_pointer(): key for socket, key in _socket_keys(node.outputs, "OUTPUT")}
-    for socket, value in _captured_node_input_overrides(node):
-        state["input_defaults"][input_keys[socket.as_pointer()]] = value
-    for link in list(getattr(tree, "links", [])):
-        if link.to_node == node:
-            state["incoming"].append({"to_key": input_keys.get(link.to_socket.as_pointer()), "from_socket": link.from_socket})
-        elif link.from_node == node:
-            state["outgoing"].append({"from_key": output_keys.get(link.from_socket.as_pointer()), "to_socket": link.to_socket})
-    return state
-
-def _find_socket_by_name(sockets, name):
-    """Function `_find_socket_by_name` used by the NodeForge addon."""
-    for sock in sockets:
-        if sock.name == name:
-            return sock
-    return None
-
-def _restore_node_external_state(tree, node, state):
-    """Function `_restore_node_external_state` used by the NodeForge addon."""
-    _apply_group_defaults_to_node(node, preserve_existing=state.get("input_defaults", {}))
-    restored = 0
-    for item in state.get("incoming", []):
-        to_socket = _resolve_socket(node, "INPUT", item.get("to_key"))
-        from_socket = item.get("from_socket")
-        if to_socket is None or from_socket is None:
-            continue
-        try:
-            if not any(l.from_socket == from_socket and l.to_socket == to_socket for l in tree.links):
-                tree.links.new(from_socket, to_socket)
-                restored += 1
-        except Exception:
-            pass
-    for item in state.get("outgoing", []):
-        from_socket = _resolve_socket(node, "OUTPUT", item.get("from_key"))
-        to_socket = item.get("to_socket")
-        if from_socket is None or to_socket is None:
-            continue
-        try:
-            if not any(l.from_socket == from_socket and l.to_socket == to_socket for l in tree.links):
-                tree.links.new(from_socket, to_socket)
-                restored += 1
-        except Exception:
-            pass
-    return restored
-
-
 def _find_group_node_users(group):
     """Return every GeometryNodeGroup instance that references ``group``."""
     users = []
@@ -395,7 +336,6 @@ def _restore_group_external_state(group, state, *, strict=False):
 
 __all__ = [
     '_apply_group_defaults_to_node', '_copy_socket_default_value', '_defaults_equal',
-    '_is_zero_like_default', '_capture_node_external_state', '_find_socket_by_name',
-    '_restore_node_external_state', '_find_group_node_users', '_capture_group_external_state',
+    '_is_zero_like_default', '_find_group_node_users', '_capture_group_external_state',
     '_restore_group_external_state', '_validate_group_external_state_for_replacement',
 ]

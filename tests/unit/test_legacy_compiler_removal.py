@@ -140,8 +140,8 @@ def test_i3_positive_builtin_registry_exactly_matches_permanent_semantic_invento
     expected_callable = frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES)
     assert builtin_registry.CALLABLE_BUILTIN_NAMES == expected_callable
     assert builtin_registry.BUILTIN_NAMES == expected_callable | {"range", "repeat_range"}
-    assert builtin_registry.has_callable_builtin("cube")
-    assert builtin_registry.has_builtin("repeat_range")
+    assert "cube" in builtin_registry.CALLABLE_BUILTIN_NAMES
+    assert "repeat_range" in builtin_registry.BUILTIN_NAMES
 
 
 def test_i3_negative_builtin_registry_exposes_no_ast_execution_dispatch():

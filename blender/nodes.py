@@ -168,31 +168,6 @@ def _switch(group, cond, false_val, true_val, x=0, y=0):
     group.links.new(true_val.socket, node.inputs[2])
     return Value(node.outputs[0], false_val.typ)
 
-def _mix(group, a, b, factor, x=0, y=0):
-    """Function `_mix` used by the NodeForge addon."""
-    if a.typ != b.typ or a.typ not in {TYPE_FLOAT, TYPE_VECTOR}:
-        raise CompileError("mix(a, b, factor) supports Float or Vector a/b of same type")
-    if not _is_number_type(factor.typ):
-        raise CompileError("mix() factor must be numeric")
-    node = _new_node(group, "ShaderNodeMix", x, y)
-    node.data_type = "VECTOR" if a.typ == TYPE_VECTOR else "FLOAT"
-    node.factor_mode = "UNIFORM"
-    node.clamp_factor = True
-    group.links.new(factor.socket, node.inputs[0])
-    if a.typ == TYPE_FLOAT:
-        group.links.new(a.socket, node.inputs[2]); group.links.new(b.socket, node.inputs[3]); out_i = 0
-    else:
-        group.links.new(a.socket, node.inputs[4]); group.links.new(b.socket, node.inputs[5]); out_i = 1
-    return Value(node.outputs[out_i], a.typ)
-
-def _clamp(group, val, minv, maxv, x=0, y=0):
-    """Function `_clamp` used by the NodeForge addon."""
-    if not (_is_number_type(val.typ) and _is_number_type(minv.typ) and _is_number_type(maxv.typ)):
-        raise CompileError("clamp(value, min, max) expects numeric arguments")
-    node = _new_node(group, "ShaderNodeClamp", x, y)
-    group.links.new(val.socket, node.inputs[0]); group.links.new(minv.socket, node.inputs[1]); group.links.new(maxv.socket, node.inputs[2])
-    return Value(node.outputs[0], TYPE_FLOAT)
-
 def _position(group, x=0, y=0):
     """Function `_position` used by the NodeForge addon."""
     node = _new_node(group, "GeometryNodeInputPosition", x, y)
@@ -213,21 +188,4 @@ def _id(group, x=0, y=0):
     node = _new_node(group, "GeometryNodeInputID", x, y)
     return Value(node.outputs[0], TYPE_INT)
 
-def _map_range(group, args, x=0, y=0):
-    """Function `_map_range` used by the NodeForge addon."""
-    if len(args) != 5:
-        raise CompileError("map_range(value, from_min, from_max, to_min, to_max) expects 5 arguments")
-    if not all(_is_number_type(arg.typ) for arg in args):
-        raise CompileError("map_range() currently supports numeric arguments")
-    node = _new_node(group, "ShaderNodeMapRange", x, y)
-    node.data_type = "FLOAT"
-    for i, arg in enumerate(args):
-        group.links.new(arg.socket, node.inputs[i])
-    return Value(node.outputs[0], TYPE_FLOAT)
-
-def _ensure_float(v):
-    """Function `_ensure_float` used by the NodeForge addon."""
-    if v.typ != TYPE_FLOAT:
-        raise CompileError("Expected Float")
-
-__all__ = ['_socket_type_for', '_new_node', '_value', '_string_value', '_int_value', '_is_number_type', '_math', '_integer_math', '_vector_math', '_combine_xyz', '_combine_xyz_mixed', '_separate_xyz', '_compare', '_boolean_math', '_switch', '_mix', '_clamp', '_position', '_normal', '_index', '_id', '_map_range', '_ensure_float']
+__all__ = ['_socket_type_for', '_new_node', '_value', '_string_value', '_int_value', '_is_number_type', '_math', '_integer_math', '_vector_math', '_combine_xyz', '_combine_xyz_mixed', '_separate_xyz', '_compare', '_boolean_math', '_switch', '_position', '_normal', '_index', '_id']

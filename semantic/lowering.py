@@ -18,15 +18,12 @@ from .call_resolution import (
 from ..errors import CompileError
 from .analysis import ExpressionAnalysis, SemanticConstant
 from .values import (
-    ArrayResultShape,
-    NamedOutputsResultShape,
     RuntimeResultShape,
     StructuralArrayId,
     StructuralArrayRef,
     StructuralBindingKind,
     StructuralBindingSymbol,
     StructuralRuntimeLeaf,
-    TupleResultShape,
 )
 from .ir import (
     IRArray,

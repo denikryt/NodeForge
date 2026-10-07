@@ -145,10 +145,6 @@ def resolve_environment() -> ResolvedEnvironment:
             package_sessions: list[ExtensionOwnerSession] = []
 
             for record in systems_by_package.get(package_id, ()):
-                if record.interface_path is None:
-                    raise CompileError(
-                        f"Package {package_id!r} contains unsupported Extension API v1 system owner"
-                    )
                 session = system_sessions[system_owner_key(record)]
                 families, _refs = session.normalize_interface()
                 package_sessions.append(session)

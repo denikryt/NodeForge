@@ -23,13 +23,12 @@ class LibraryCatalog:
     dirname: str
     allow_native: bool
     native_module_file: str | None
-    display_label: str
 
 
 CATALOGS = {
-    "functions": LibraryCatalog("functions", "functions", True, "function.py", "Functions"),
-    "examples": LibraryCatalog("examples", "examples", True, "backend.py", "Examples"),
-    "local": LibraryCatalog("local", "local", False, None, "Local"),
+    "functions": LibraryCatalog("functions", "functions", True, "function.py"),
+    "examples": LibraryCatalog("examples", "examples", True, "backend.py"),
+    "local": LibraryCatalog("local", "local", False, None),
 }
 
 
@@ -44,7 +43,6 @@ class LibraryEntryRecord:
     source_path: Path | None = None
     module_path: Path | None = None
     interface_path: Path | None = None
-    legacy_module_path: Path | None = None
     folder_path: str = ""
     package_id: str = ""
     package_name: str = ""
@@ -246,7 +244,6 @@ def candidate_records_from_inputs(
                             source_path=source_path,
                             module_path=None,
                             interface_path=interface_path,
-                            legacy_module_path=legacy_module_path,
                             package_id=package_id,
                             package_name=package_name,
                             package_version=package_version,
@@ -262,7 +259,6 @@ def candidate_records_from_inputs(
                             source_path=source_path,
                             module_path=legacy_module_path,
                             interface_path=None,
-                            legacy_module_path=legacy_module_path,
                             package_id=package_id,
                             package_name=package_name,
                             package_version=package_version,
@@ -304,40 +300,6 @@ def unique_records_from_candidates(
     return unique
 
 
-def resolve_catalog(
-    namespace: str,
-    *,
-    package_roots: Iterable[packages.LibraryRoot],
-    local_roots: Iterable[Path | str | dict[str, object]] = (),
-    local_files: Iterable[Path | str | dict[str, object]] = (),
-) -> "ResolvedCatalog":
-    """Resolve one catalog from explicit discovery inputs as success or failure."""
-    from .resolved_environment import ResolvedCatalog, ResolvedCompileErrorFailure, ResolvedOSErrorFailure
-
-    try:
-        candidates = candidate_records_from_inputs(
-            namespace,
-            package_roots=tuple(package_roots),
-            local_roots=tuple(local_roots),
-            local_files=tuple(local_files),
-        )
-        entries = unique_records_from_candidates(namespace, candidates)
-    except CompileError as exc:
-        failure = ResolvedCompileErrorFailure(tuple(exc.args))
-    except OSError as exc:
-        failure = ResolvedOSErrorFailure(
-            exception_type=type(exc),
-            exception_args=tuple(exc.args),
-            errno=exc.errno,
-            strerror=exc.strerror,
-            filename=exc.filename,
-            filename2=exc.filename2,
-            winerror=getattr(exc, "winerror", None),
-        )
-    else:
-        return ResolvedCatalog(namespace, entries)
-    return ResolvedCatalog(namespace, {}, failure)
-
 
 def _validate_resolved_record(record: LibraryEntryRecord) -> None:
     """Validate the intrinsic namespace/name/path contract of a selected record."""
@@ -363,6 +325,5 @@ __all__ = [
     "candidate_records_from_inputs",
     "catalog_dir",
     "load_library_entry_source_for_record",
-    "resolve_catalog",
     "unique_records_from_candidates",
 ]

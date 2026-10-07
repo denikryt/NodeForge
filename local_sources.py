@@ -243,16 +243,6 @@ def local_candidate_records() -> tuple[catalog.LibraryEntryRecord, ...]:
     )
 
 
-def local_entry_records() -> tuple[catalog.LibraryEntryRecord, ...]:
-    """Return unique Local source records in deterministic name order."""
-    entries = catalog.unique_records_from_candidates("local", local_candidate_records())
-    return tuple(sorted(entries.values(), key=lambda record: record.name.lower()))
-
-
-def local_entry_names() -> set[str]:
-    """Return current public Local source names."""
-    return {record.name for record in local_entry_records()}
-
 
 def find_local_entry_record(name: str) -> catalog.LibraryEntryRecord | None:
     """Return one current Local source record by public name."""
@@ -260,20 +250,6 @@ def find_local_entry_record(name: str) -> catalog.LibraryEntryRecord | None:
     entries = catalog.unique_records_from_candidates("local", local_candidate_records())
     return entries.get(name)
 
-
-def has_local_entry(name: str) -> bool:
-    """Return whether one valid Local source name is currently available."""
-    if not catalog._is_public_function_name(name):
-        return False
-    return find_local_entry_record(name) is not None
-
-
-def load_local_entry_source(name: str) -> str:
-    """Load one current Local source by public name."""
-    record = find_local_entry_record(name)
-    if record is None:
-        raise CompileError(f"local library entry {name!r} has no editable .nf source")
-    return catalog.load_library_entry_source_for_record(record)
 
 
 def local_browser_records(current_path: str = "") -> list[dict[str, object]]:
