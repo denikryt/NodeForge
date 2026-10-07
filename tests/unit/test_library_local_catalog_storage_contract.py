@@ -3,19 +3,24 @@
 from pathlib import Path
 
 
-LIBRARY_SOURCE = Path(__file__).resolve().parents[2] / "library.py"
+ROOT = Path(__file__).resolve().parents[2]
+LOCAL_SOURCE = ROOT / "local_sources.py"
+CATALOG_SOURCE = ROOT / "catalog.py"
 
 
 def test_local_catalog_uses_blender_user_resource_not_package_local_dir():
-    """Local catalog files must persist outside the installed add-on package."""
-    source = LIBRARY_SOURCE.read_text(encoding="utf-8")
+    """Positive: Local catalog files persist at the same Blender user-data path."""
+    source = LOCAL_SOURCE.read_text(encoding="utf-8")
     helper_start = source.index("def _default_local_catalog_dir")
-    catalog_start = source.index("def catalog_dir", helper_start)
-    helper = source[helper_start:catalog_start]
+    helper_end = source.index("def _catalog_input_paths", helper_start)
+    helper = source[helper_start:helper_end]
     assert 'bpy.utils.user_resource("DATAFILES", path="nodeforge/local", create=True)' in helper
+    assert "path.mkdir(parents=True, exist_ok=True)" in source
 
-    catalog_end = source.index("def _is_valid_function_name", catalog_start)
-    catalog = source[catalog_start:catalog_end]
-    assert 'catalog.namespace == "local"' in catalog
-    assert "return _default_local_catalog_dir()" in catalog
-    assert "return _package_root() / catalog.dirname" in catalog
+
+def test_catalog_has_no_local_persistent_root_special_case():
+    """Negative: catalog_dir cannot perform platform-specific Local path discovery."""
+    source = CATALOG_SOURCE.read_text(encoding="utf-8")
+    assert "bpy.utils.user_resource" not in source
+    assert "_default_local_catalog_dir" not in source
+    assert "ensure_local_catalog_dir" not in source

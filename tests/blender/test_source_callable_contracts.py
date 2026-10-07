@@ -4,7 +4,7 @@ import bpy
 import pytest
 
 from helpers import check, compile_group
-from NodeForge import compiler, library
+from NodeForge import compiler, local_sources
 from NodeForge.errors import CompileError
 
 
@@ -143,7 +143,7 @@ output("Result", first([1.0, 2.0]))
 
 def test_selected_local_catalog_reload_reuses_direct_library_owner_policy():
     """Selected Local reload uses the same direct LIBRARY owner before and after preparation."""
-    local_dir = library.ensure_local_catalog_dir()
+    local_dir = local_sources.ensure_local_catalog_dir()
     source = local_dir / "source_callable_selected_local_reload.nf"
     group = None
     try:
@@ -194,7 +194,7 @@ def test_public_materialize_group_callback_prepares_before_backend_publication()
 def test_source_backed_production_routes_compile_without_legacy_compiler():
     """Supported local and imported source calls compile on the permanent source-call route."""
 
-    local_dir = library.ensure_local_catalog_dir()
+    local_dir = local_sources.ensure_local_catalog_dir()
     source_path = local_dir / "source_callable_route_tripwire.nf"
     roots = []
     helpers = []
@@ -244,7 +244,7 @@ output("Value", value)
 
 def test_imported_punctuation_only_label_remains_positionally_callable():
     """Public labels without a keyword alias remain addressable by final input position."""
-    local_dir = library.ensure_local_catalog_dir()
+    local_dir = local_sources.ensure_local_catalog_dir()
     source_path = local_dir / "punctuation_only_label.nf"
     root = helper = None
     try:

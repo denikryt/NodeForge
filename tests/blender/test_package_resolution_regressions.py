@@ -8,9 +8,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from NodeForge import compiler, library, packages, storage, ui
+from NodeForge import compiler, catalog, local_sources, packages, ui
+from NodeForge.blender import library_groups
+from NodeForge import storage
 from NodeForge.errors import CompileError
-from NodeForge.resolved_environment import resolve_environment
+from NodeForge.environment_resolution import resolve_environment
 
 
 def _package(root, package_id, namespace, *, python=False):
@@ -67,13 +69,13 @@ def test_functions_reload_uses_one_environment_without_live_rediscovery(tmp_path
     def forbidden(*args, **kwargs):
         pytest.fail('Reload repeated live catalog discovery')
     monkeypatch.setattr(compiler, 'resolve_environment', one_snapshot)
-    monkeypatch.setattr(library, 'find_library_entry_record', forbidden)
+    monkeypatch.setattr(catalog, 'candidate_records_from_inputs', forbidden)
     updated = compiler.update_library_catalog_group(group, 'functions', 'foo')
     check(updated is group, 'Reload replaced the selected group identity')
     check(group.get('nodeforge_package_id') == 'vendor.review', 'Reload lost canonical owner')
     assert calls == [snapshot]
     with pytest.raises(CompileError, match='belongs to'):
-        library.resolve_reloadable_library_entry(group, 'functions', 'other', resolved_environment=snapshot)
+        library_groups.resolve_reloadable_library_entry(group, 'functions', 'other', resolved_environment=snapshot)
 
 
 @pytest.mark.parametrize('style', ['bare', 'qualified', 'local'])
@@ -133,7 +135,7 @@ def test_ui_reload_uses_one_snapshot_and_preserves_owner(tmp_path, monkeypatch, 
     node = SimpleNamespace(node_tree=group, name='')
     operator = SimpleNamespace(report=lambda level, message: reports.append((level, message)))
     monkeypatch.setattr(compiler, 'resolve_environment', one_snapshot)
-    monkeypatch.setattr(library, 'find_library_entry_record', forbidden)
+    monkeypatch.setattr(catalog, 'candidate_records_from_inputs', forbidden)
     monkeypatch.setattr(ui, '_selected_group_node', lambda context: node)
     result = ui.NODEFORGE_OT_reload_selected_library_group.execute(operator, SimpleNamespace())
     assert calls == [snapshot]
@@ -166,8 +168,8 @@ def save_setup(tmp_path, monkeypatch):
     reports = []
     operator = SimpleNamespace(script_name="saved", overwrite=False,
                                report=lambda level, message: reports.append((level, message)))
-    original_catalog_dir = library.catalog_dir
-    monkeypatch.setattr(library, 'catalog_dir', lambda namespace: tmp_path if namespace == 'local' else original_catalog_dir(namespace))
+    original_catalog_dir = catalog.catalog_dir
+    monkeypatch.setattr(local_sources, 'ensure_local_catalog_dir', lambda: tmp_path)
     monkeypatch.setattr(ui, '_refresh_catalog_items', lambda props, namespace: None)
 
     def forbidden(*args, **kwargs):

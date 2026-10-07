@@ -1,13 +1,13 @@
 """Blender integration coverage for third-party package lifecycle operations."""
 
-from helpers import compile_group, expect_compile_error
+from helpers import compile_group, expect_compile_error, has_package_function
 
 import json
 import tempfile
 import zipfile
 from pathlib import Path
 
-from NodeForge import library, packages
+from NodeForge import packages
 
 
 def _make_package(root: Path, *, version: str = "1.0.0", value: float = 1.0) -> None:
@@ -44,7 +44,7 @@ def test_directory_zip_replace_uninstall_and_reinstall_lifecycle():
             _make_package(source_v1, version="1.0.0", value=1.0)
             installed = packages.install_package_directory(source_v1, allow_python=False)
             assert installed.package_id == "vendor.lifecycle"
-            assert library.has_library_function("vendor_value")
+            assert has_package_function("vendor_value")
             compile_group(
                 'from packages import lifecycle\nx = vendor_value(2.0)\noutput("Value", x)',
                 "NFTest_vendor_lifecycle_directory",
@@ -62,14 +62,14 @@ def test_directory_zip_replace_uninstall_and_reinstall_lifecycle():
             assert packages.load_package_state()["packages"]["vendor.lifecycle"]["installed_version"] == "2.0.0"
 
             packages.uninstall_package("vendor.lifecycle")
-            assert not library.has_library_function("vendor_value")
+            assert not has_package_function("vendor_value")
             expect_compile_error(
                 'from packages import lifecycle\nx = vendor_value(2.0)\noutput("Value", x)',
                 "NFTest_vendor_lifecycle_uninstalled",
             )
 
             packages.install_package_directory(source_v1, allow_python=False)
-            assert library.has_library_function("vendor_value")
+            assert has_package_function("vendor_value")
         finally:
             packages.set_packages_dir_for_tests(None)
             packages.invalidate_caches()

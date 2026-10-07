@@ -7,9 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from NodeForge import compiler, library, packages
+from NodeForge import compiler, catalog, local_sources, packages
+from NodeForge.blender import library_groups
 from NodeForge.errors import CompileError
-from NodeForge.resolved_environment import resolve_environment
+from NodeForge.environment_resolution import resolve_environment
 
 
 def _package(root, package_id, namespace, *, python=False):
@@ -66,10 +67,10 @@ def test_functions_reload_uses_one_environment_without_live_rediscovery(tmp_path
     def forbidden(*args, **kwargs):
         pytest.fail('Reload repeated live catalog discovery')
     monkeypatch.setattr(compiler, 'resolve_environment', one_snapshot)
-    monkeypatch.setattr(library, 'find_library_entry_record', forbidden)
+    monkeypatch.setattr(catalog, 'candidate_records_from_inputs', forbidden)
     updated = compiler.update_library_catalog_group(group, 'functions', 'foo')
     check(updated is group, 'Reload replaced the selected group identity')
     check(group.get('nodeforge_package_id') == 'vendor.review', 'Reload lost canonical owner')
     assert calls == [snapshot]
     with pytest.raises(CompileError, match='belongs to'):
-        library.resolve_reloadable_library_entry(group, 'functions', 'other', resolved_environment=snapshot)
+        library_groups.resolve_reloadable_library_entry(group, 'functions', 'other', resolved_environment=snapshot)

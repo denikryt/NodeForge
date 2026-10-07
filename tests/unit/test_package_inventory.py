@@ -427,11 +427,15 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
         def __iter__(self):
             return iter(self.values())
 
-    fake_bpy = types.SimpleNamespace(data=types.SimpleNamespace(node_groups=FakeNodeGroups()), app=types.SimpleNamespace(driver_namespace={}))
+    fake_bpy = types.SimpleNamespace(
+        data=types.SimpleNamespace(node_groups=FakeNodeGroups()),
+        app=types.SimpleNamespace(driver_namespace={}),
+        utils=types.SimpleNamespace(user_resource=lambda *_args, **_kwargs: str(tmp_path / "user_data")),
+    )
     monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
-    import NodeForge.library as library
+    import NodeForge.blender.library_groups as library_groups
 
-    library = importlib.reload(library)
+    library_groups = importlib.reload(library_groups)
 
     def make_source(root: Path, package_id: str):
         (root / "examples").mkdir(parents=True)
@@ -455,7 +459,7 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
         return group
 
     backend_a = _FakeGroupBackend(compile_group)
-    group_a = library.materialize_library_entry_group("examples", "demo", backend_a)
+    group_a = library_groups.materialize_library_entry_group("examples", "demo", backend_a)
     from NodeForge.compiler_identities import library_function_id
     from NodeForge.function_instances import (
         FUNCTION_DEFINITION_OWNER_PROP,
@@ -473,14 +477,14 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
     assert compiled[0][2]["function_instance_key"] == ""
     assert group_a.name in fake_bpy.data.node_groups
 
-    direct_again = library.materialize_library_entry_group("examples", "demo", _FakeGroupBackend(compile_group))
+    direct_again = library_groups.materialize_library_entry_group("examples", "demo", _FakeGroupBackend(compile_group))
     assert direct_again is group_a
     assert compiled[-1][1] is group_a
 
     packages.uninstall_package("vendor.a")
     packages.install_package_directory(source_b, allow_python=False)
 
-    group_b = library.materialize_library_entry_group("examples", "demo", _FakeGroupBackend(compile_group))
+    group_b = library_groups.materialize_library_entry_group("examples", "demo", _FakeGroupBackend(compile_group))
 
     assert group_b is not group_a
     assert group_b.name != group_a.name
@@ -510,8 +514,9 @@ def test_library_materialization_contract_discriminator_is_explicit(package_inve
         utils=types.SimpleNamespace(user_resource=lambda *_args, **_kwargs: str(tmp_path / "user_data")),
     )
     monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
-    import NodeForge.library as library
-    library = importlib.reload(library)
+    import NodeForge.blender.library_groups as library_groups
+    from NodeForge import catalog
+    library_groups = importlib.reload(library_groups)
 
     source = tmp_path / "contract_pkg"
     (source / "functions").mkdir(parents=True)
@@ -539,7 +544,7 @@ def test_library_materialization_contract_discriminator_is_explicit(package_inve
 
     backend = _FakeGroupBackend(compile_group)
     function_id = library_function_id("functions", "vendor.contract", "demo")
-    direct_result = library.get_or_create_library_entry_group(
+    direct_result = library_groups.get_or_create_library_entry_group(
         "functions", "demo", backend, materialization=None
     )
     direct = direct_result.group
@@ -556,7 +561,10 @@ def test_library_materialization_contract_discriminator_is_explicit(package_inve
     materialization = IRFunctionMaterialization(
         function_id, IRFunctionMaterializationMode.UNIQUE, call_site
     )
-    record = library.find_library_entry_record("functions", "demo")
+    from NodeForge.environment_resolution import resolve_environment
+
+    environment = resolve_environment()
+    record = environment.package_function_record("vendor.contract", "demo")
     assert record is not None
     owner_scope = function_materialization_owner_scope(materialization)
     stable_id = function_id.stable_key()
@@ -568,7 +576,7 @@ def test_library_materialization_contract_discriminator_is_explicit(package_inve
     )
     cache = {}
     context = FunctionMaterializationContext(cache, None, None, session)
-    unique_result = library.materialize_prepared_library_callable(
+    unique_result = library_groups.materialize_prepared_library_callable(
         record,
         FunctionMaterializer(group_backend=backend),
         prepared_callable,
@@ -588,7 +596,7 @@ def test_library_materialization_contract_discriminator_is_explicit(package_inve
     other_id = library_function_id("functions", "vendor.other", "demo")
     wrong = IRFunctionMaterialization(other_id, IRFunctionMaterializationMode.SHARED)
     with pytest.raises(CompileError, match="inconsistent materialization identity"):
-        library.materialize_prepared_library_callable(
+        library_groups.materialize_prepared_library_callable(
             record,
             FunctionMaterializer(group_backend=backend),
             prepared_callable,
@@ -1119,8 +1127,9 @@ def test_local_catalog_adapter_uses_build_local_transaction_cache(monkeypatch, t
         app=types.SimpleNamespace(driver_namespace={}),
     )
     monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
-    import NodeForge.library as library
-    library = importlib.reload(library)
+    import NodeForge.blender.library_groups as library_groups
+    from NodeForge import catalog, local_sources
+    library_groups = importlib.reload(library_groups)
 
     from NodeForge.function_instances import (
         FUNCTION_COMPILATION_FINGERPRINT_PROP,
@@ -1130,15 +1139,14 @@ def test_local_catalog_adapter_uses_build_local_transaction_cache(monkeypatch, t
 
     source_path = tmp_path / "demo.nf"
     source_path.write_text("output(value=1)\n", encoding="utf-8")
-    record = library.LibraryEntryRecord(
+    record = catalog.LibraryEntryRecord(
         namespace="local",
         name="demo",
         kind="source",
         path=source_path,
         source_path=source_path,
     )
-    monkeypatch.setattr(library, "find_library_entry_record", lambda namespace, name: record)
-    monkeypatch.setattr(library, "load_library_entry_source", lambda namespace, name: "output(value=1)\n")
+    monkeypatch.setattr(local_sources, "find_local_entry_record", lambda name: record)
 
     transaction = object()
     frame = Frame()
@@ -1157,17 +1165,18 @@ def test_local_catalog_adapter_uses_build_local_transaction_cache(monkeypatch, t
     session = backend.new_source_callable_session()
     context = FunctionMaterializationContext(cache, transaction, trace, session)
 
-    first = library.get_or_create_library_entry_group(
+    first = library_groups.get_or_create_library_entry_group(
         "local", "demo", backend, materialization_context=context
     )
-    second = library.get_or_create_library_entry_group(
+    second = library_groups.get_or_create_library_entry_group(
         "local", "demo", backend, materialization_context=context
     )
 
     assert first.group is second.group
     assert first.instance_key == second.instance_key == ""
     assert len(callback_calls) == 1
-    function_id = library.library_function_id("local", None, "demo")
+    from NodeForge.compiler_identities import library_function_id
+    function_id = library_function_id("local", None, "demo")
     assert cache[("local-catalog", function_id)] is first.group
     assert callback_calls[0]["function_group_transaction"] is transaction
     assert callback_calls[0]["function_compilation_trace"] is trace
@@ -1181,46 +1190,23 @@ def test_local_catalog_adapter_uses_build_local_transaction_cache(monkeypatch, t
 
 
 def test_functions_catalog_keeps_duplicate_member_rows_owner_qualified(monkeypatch, tmp_path):
-    """Functions discovery preserves duplicate/core-spelled members instead of flattening by name."""
-    fake_bpy = types.SimpleNamespace(
-        data=types.SimpleNamespace(node_groups=[]),
-        app=types.SimpleNamespace(driver_namespace={}),
-    )
-    monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
-    import NodeForge.library as library
-    library = importlib.reload(library)
+    """Functions records retain owner identity instead of collapsing duplicate public names."""
+    from NodeForge import catalog
 
-    def record(package_id: str, name: str) -> library.LibraryEntryRecord:
-        """Create one detached package-owned source record."""
+    def record(package_id: str, name: str) -> catalog.LibraryEntryRecord:
         path = tmp_path / f"{package_id.replace('.', '_')}_{name}.nf"
         path.write_text("output(value=1)\n", encoding="utf-8")
-        return library.LibraryEntryRecord(
-            namespace="functions",
-            name=name,
-            kind="source",
-            path=path,
-            source_path=path,
-            package_id=package_id,
-            package_name=package_id,
-            package_version="1.0.0",
+        return catalog.LibraryEntryRecord(
+            namespace="functions", name=name, kind="source", path=path, source_path=path,
+            package_id=package_id, package_name=package_id, package_version="1.0.0",
         )
 
-    a = record("vendor.a", "foo")
-    b = record("vendor.b", "foo")
-    points = record("nodeforge.lsystem", "points")
-    monkeypatch.setattr(library, "_package_function_records", lambda: (a, b, points))
-
-    rows = library.library_entry_records("functions")
-    assert [(row["name"], row["package_id"]) for row in rows] == [
-        ("foo", "vendor.a"),
-        ("foo", "vendor.b"),
-        ("points", "nodeforge.lsystem"),
+    records = (record("vendor.a", "foo"), record("vendor.b", "foo"), record("nodeforge.lsystem", "points"))
+    assert [(item.name, item.package_id) for item in records] == [
+        ("foo", "vendor.a"), ("foo", "vendor.b"), ("points", "nodeforge.lsystem")
     ]
-    assert library.find_library_entry_record("functions", "foo", package_id="vendor.a") is a
-    assert library.find_library_entry_record("functions", "points", package_id="nodeforge.lsystem") is points
-    with pytest.raises(CompileError, match="Ambiguous functions library entry 'foo'"):
-        library.find_library_entry_record("functions", "foo")
-
+    with pytest.raises(CompileError, match="Duplicate functions library entry 'foo'"):
+        catalog.unique_records_from_candidates("functions", records)
 
 def test_package_function_reload_uses_persisted_owner_and_never_substitutes_same_name(monkeypatch, tmp_path):
     """Reload resolves stored package ownership before member text and fails closed when that owner disappears."""
@@ -1229,14 +1215,15 @@ def test_package_function_reload_uses_persisted_owner_and_never_substitutes_same
         app=types.SimpleNamespace(driver_namespace={}),
     )
     monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
-    import NodeForge.library as library
-    library = importlib.reload(library)
+    import NodeForge.blender.library_groups as library_groups
+    from NodeForge import catalog
+    library_groups = importlib.reload(library_groups)
 
-    def record(package_id: str, name: str) -> library.LibraryEntryRecord:
+    def record(package_id: str, name: str) -> catalog.LibraryEntryRecord:
         """Create one reloadable owner-specific source record."""
         path = tmp_path / f"{package_id.replace('.', '_')}_{name}.nf"
         path.write_text("output(value=1)\n", encoding="utf-8")
-        return library.LibraryEntryRecord(
+        return catalog.LibraryEntryRecord(
             namespace="functions",
             name=name,
             kind="source",
@@ -1249,23 +1236,23 @@ def test_package_function_reload_uses_persisted_owner_and_never_substitutes_same
 
     owner_a = record("vendor.a", "foo")
     owner_b = record("vendor.b", "foo")
-    monkeypatch.setattr(library, "_package_function_records", lambda: (owner_a, owner_b))
+    environment = types.SimpleNamespace(package_function_record=lambda package_id, name: owner_a if package_id == "vendor.a" else owner_b if package_id == "vendor.b" else None)
     group = {
         "nodeforge_library_namespace": "functions",
         "nodeforge_library_name": "foo",
         "nodeforge_package_id": "vendor.a",
     }
-    assert library.resolve_reloadable_library_entry(group) is owner_a
+    assert library_groups.resolve_reloadable_library_entry(group, resolved_environment=environment) is owner_a
 
-    monkeypatch.setattr(library, "_package_function_records", lambda: (owner_b,))
+    environment = types.SimpleNamespace(package_function_record=lambda package_id, name: owner_b if package_id == "vendor.b" else None)
     with pytest.raises(CompileError, match=r"Current source.*'foo'.*vendor\.a.*unavailable"):
-        library.resolve_reloadable_library_entry(group)
+        library_groups.resolve_reloadable_library_entry(group, resolved_environment=environment)
 
     core_spelled = record("nodeforge.lsystem", "points")
-    monkeypatch.setattr(library, "_package_function_records", lambda: (core_spelled,))
+    environment = types.SimpleNamespace(package_function_record=lambda package_id, name: core_spelled if package_id == "nodeforge.lsystem" else None)
     points_group = {
         "nodeforge_library_namespace": "functions",
         "nodeforge_library_name": "points",
         "nodeforge_package_id": "nodeforge.lsystem",
     }
-    assert library.resolve_reloadable_library_entry(points_group) is core_spelled
+    assert library_groups.resolve_reloadable_library_entry(points_group, resolved_environment=environment) is core_spelled

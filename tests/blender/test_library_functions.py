@@ -32,9 +32,9 @@ def test_packaged_library_functions_and_helper_scoping():
     flat_probe.write_text("def compile_call(comp, expr, depth=0):\n    raise AssertionError('legacy flat layout loaded')\n", encoding='utf-8')
     flat_source.write_text('value = input_float("Value", default=2.0)\noutput("Value", value)\n', encoding='utf-8')
     try:
-        check(not library.has_module_library_function('flat_legacy_probe'), 'legacy flat function module was discovered')
-        check(not library.has_library_function('flat_legacy_probe'), 'legacy flat function appeared as library function')
-        check(not library.has_library_function('library_flat_probe'), 'legacy flat .nf function appeared without package inventory')
+        check(not has_native_package_function('flat_legacy_probe'), 'legacy flat function module was discovered')
+        check(not has_package_function('flat_legacy_probe'), 'legacy flat function appeared as library function')
+        check(not has_package_function('library_flat_probe'), 'legacy flat .nf function appeared without package inventory')
     finally:
         flat_probe.unlink(missing_ok=True)
         flat_source.unlink(missing_ok=True)
@@ -48,8 +48,8 @@ def test_packaged_library_functions_and_helper_scoping():
         (functions / 'library_vector_probe.nf').write_text('value = input_vector("Value", default=vector(1, 2, 3))\noutput("Value", value)\n', encoding='utf-8')
         packages.install_package_directory(root, allow_python=False)
         try:
-            check(library.has_library_function('library_flat_probe'), 'package flat .nf function was not discovered')
-            names = library.library_function_names()
+            check(has_package_function('library_flat_probe'), 'package flat .nf function was not discovered')
+            names = package_function_names()
             check('library_flat_probe' in names, 'package flat .nf function missing from public function names')
             compile_group('from packages import library_probe\nx = library_flat_probe(3)\noutput("x", x)', 'NFTest_flat_function_import')
             expect_compile_error('from packages import *\nx = library_flat_probe(3)\noutput("x", x)', 'NFTest_package_star_import_rejected')

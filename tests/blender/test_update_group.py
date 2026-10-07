@@ -1,4 +1,5 @@
 from helpers import *
+from NodeForge import local_sources
 
 
 
@@ -601,7 +602,7 @@ output("Geometry", point(vector(x, 0, 0)))
 
 def test_library_reload_preserves_all_instance_values_defaults_and_links():
     """Library reload must preserve every group-node user of the catalog group."""
-    local = library.ensure_local_catalog_dir()
+    local = local_sources.ensure_local_catalog_dir()
     source = local / "local_reload_state.nf"
     group = wrapper = second_wrapper = None
     try:

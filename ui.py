@@ -20,21 +20,20 @@ from .compiler import (
     create_package_function_group,
     update_library_catalog_group,
 )
-from .library import (
-    library_entry_records,
-    library_function_records,
+from .local_sources import (
     local_browser_records,
     local_source_roots,
     link_local_source_folder,
     unlink_local_source_folder,
     unlink_local_source_file,
     ensure_local_catalog_dir,
-    apply_function_node_display_name,
     create_local_folder,
     delete_local_folder,
     save_local_source,
     delete_local_source,
 )
+from .blender.library_groups import apply_function_node_display_name
+from .environment_resolution import resolve_environment
 from . import packages
 from . import generated_resources
 
@@ -250,7 +249,11 @@ def _refresh_catalog_items(props, namespace: str):
         old_kind = getattr(items[old_index], "kind", "")
         old_package_id = getattr(items[old_index], "package_id", "")
     items.clear()
-    records = local_browser_records(getattr(props, "local_browser_path", "")) if namespace == "local" else library_entry_records(namespace)
+    if namespace == "local":
+        records = local_browser_records(getattr(props, "local_browser_path", ""))
+    else:
+        environment = resolve_environment()
+        records = [record.as_dict() for record in environment.catalog(namespace).records()]
     for record in records:
         item = items.add()
         item.name = record.get("name", "")

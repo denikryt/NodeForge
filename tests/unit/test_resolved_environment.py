@@ -22,8 +22,8 @@ from NodeForge.resolved_environment import (
     ResolvedEnvironment,
     ResolvedOSErrorFailure,
     ResolvedPackageNamespace,
-    resolve_environment,
 )
+from NodeForge.environment_resolution import resolve_environment
 
 
 @dataclass(frozen=True)
@@ -184,15 +184,14 @@ def test_resolve_environment_reads_manifest_snapshot_once_and_builds_owner_names
         calls["snapshot"] += 1
         return (manifest,)
 
-    fake_library = types.ModuleType("NodeForge.library")
-    fake_library._read_local_source_registry = lambda: ()
-    fake_library._candidate_records_from_inputs = lambda *args, **kwargs: ()
-    fake_library._unique_records_from_candidates = lambda namespace, candidates: {}
+    from NodeForge import catalog, local_sources
+
     monkeypatch.setattr(packages, "active_package_manifest_snapshot", snapshot)
     monkeypatch.setattr(packages, "library_roots_from_manifests", lambda namespace, manifests: ())
     monkeypatch.setattr(packages, "system_package_records_from_manifests", lambda manifests: ())
-    monkeypatch.setitem(sys.modules, "NodeForge.library", fake_library)
-    monkeypatch.setattr(NodeForge, "library", fake_library, raising=False)
+    monkeypatch.setattr(catalog, "candidate_records_from_inputs", lambda *args, **kwargs: ())
+    monkeypatch.setattr(catalog, "unique_records_from_candidates", lambda namespace, candidates: {})
+    monkeypatch.setattr(local_sources, "_catalog_input_paths", lambda: ((), ()))
 
     environment = resolve_environment()
 
@@ -221,15 +220,14 @@ def test_existing_environment_is_stable_and_later_resolution_observes_new_owner_
             permissions={},
         ),)
 
-    fake_library = types.ModuleType("NodeForge.library")
-    fake_library._read_local_source_registry = lambda: ()
-    fake_library._candidate_records_from_inputs = lambda *args, **kwargs: ()
-    fake_library._unique_records_from_candidates = lambda namespace, candidates: {}
+    from NodeForge import catalog, local_sources
+
     monkeypatch.setattr(packages, "active_package_manifest_snapshot", snapshot)
     monkeypatch.setattr(packages, "library_roots_from_manifests", lambda namespace, manifests: ())
     monkeypatch.setattr(packages, "system_package_records_from_manifests", lambda manifests: ())
-    monkeypatch.setitem(sys.modules, "NodeForge.library", fake_library)
-    monkeypatch.setattr(NodeForge, "library", fake_library, raising=False)
+    monkeypatch.setattr(catalog, "candidate_records_from_inputs", lambda *args, **kwargs: ())
+    monkeypatch.setattr(catalog, "unique_records_from_candidates", lambda namespace, candidates: {})
+    monkeypatch.setattr(local_sources, "_catalog_input_paths", lambda: ((), ()))
 
     first = resolve_environment()
     second = resolve_environment()
@@ -246,28 +244,28 @@ def test_malformed_local_registry_is_captured_once_and_replayed_without_discover
 ):
     """Actual Local registry parsing becomes one completed deferred failure result."""
     _import_compiler_with_fake_bpy(monkeypatch)
-    from NodeForge import library
+    from NodeForge import local_sources
 
     registry_path = tmp_path / "local_sources.json"
     local_root = tmp_path / "local"
     registry_path.write_text('{"version": 999, "roots": []}', encoding="utf-8")
     reads = []
-    real_read = library._read_local_source_registry
+    real_read = local_sources._read_local_source_registry
 
     def counted_read():
         reads.append(True)
         return real_read()
 
-    monkeypatch.setattr(library, "_local_sources_registry_path", lambda: registry_path)
-    monkeypatch.setattr(library, "_default_local_catalog_dir", lambda: local_root)
-    monkeypatch.setattr(library, "_read_local_source_registry", counted_read)
-    catalog = library.resolve_catalog(
-        "local",
-        package_roots=(),
-    )
+    monkeypatch.setattr(local_sources, "_local_sources_registry_path", lambda: registry_path)
+    monkeypatch.setattr(local_sources, "_default_local_catalog_dir", lambda: local_root)
+    monkeypatch.setattr(local_sources, "_read_local_source_registry", counted_read)
+    monkeypatch.setattr(packages, "active_package_manifest_snapshot", lambda: ())
+    monkeypatch.setattr(packages, "library_roots_from_manifests", lambda namespace, manifests: ())
+    monkeypatch.setattr(packages, "system_package_records_from_manifests", lambda manifests: ())
+    local_catalog = resolve_environment().catalog("local")
     registry_path.write_text('{"version": 1, "roots": []}', encoding="utf-8")
 
-    for lookup in (catalog.names, catalog.records, lambda: catalog.find("demo")):
+    for lookup in (local_catalog.names, local_catalog.records, lambda: local_catalog.find("demo")):
         with pytest.raises(CompileError, match="Unsupported Local source registry format"):
             lookup()
     assert reads == [True]
@@ -276,22 +274,21 @@ def test_malformed_local_registry_is_captured_once_and_replayed_without_discover
 def test_unsupported_nested_local_source_layout_is_stored_failure(monkeypatch, tmp_path):
     """Nested package-style Local sources are deferred without exposing partial entries."""
     _import_compiler_with_fake_bpy(monkeypatch)
-    from NodeForge import library
+    from NodeForge import catalog
 
     local_root = tmp_path / "local"
     (local_root / "nested").mkdir(parents=True)
     (local_root / "nested" / "source.nf").write_text('output("Value", 1.0)\n', encoding="utf-8")
-    monkeypatch.setattr(library, "_read_local_source_registry", lambda: [])
-    monkeypatch.setattr(library, "_default_local_catalog_dir", lambda: local_root)
-
-    catalog = library.resolve_catalog(
+    resolved = catalog.resolve_catalog(
         "local",
         package_roots=(),
+        local_roots=(local_root,),
+        local_files=(),
     )
 
-    assert dict(catalog.entries) == {}
+    assert dict(resolved.entries) == {}
     with pytest.raises(CompileError, match="Unsupported local source layout: nested/source.nf"):
-        catalog.names()
+        resolved.names()
 
 
 def _import_compiler_with_fake_bpy(monkeypatch):
@@ -362,12 +359,13 @@ def test_source_call_migration_removes_v1_extension_execution_and_keeps_v2_bound
     assert not (root / "statement_compiler.py").exists()
     local_source = (root / "local_functions.py").read_text(encoding="utf-8")
     semantic_source = (root / "semantic_analysis.py").read_text(encoding="utf-8")
-    library_source = (root / "library.py").read_text(encoding="utf-8")
+    catalog_source = (root / "catalog.py").read_text(encoding="utf-8")
+    library_group_source = (root / "blender" / "library_groups.py").read_text(encoding="utf-8")
     assert "def compile_local_function_call" not in local_source
     assert "CallableKind.SYSTEM" not in semantic_source
     assert "CallableKind.BACKEND_HELPER" not in semantic_source
-    assert "compile_module_library_entry_call" not in library_source
-    assert "backend_builtins_for_entry" not in library_source
+    assert "compile_module_library_entry_call" not in catalog_source
+    assert "backend_builtins_for_entry" not in library_group_source
 
 
 def test_source_callable_session_uses_exact_resolved_record_without_live_discovery(tmp_path):

@@ -11,7 +11,7 @@ import pytest
 
 from NodeForge import packages
 from NodeForge.errors import CompileError
-from NodeForge.resolved_environment import resolve_environment
+from NodeForge.environment_resolution import resolve_environment
 
 pytestmark = pytest.mark.unit
 
@@ -25,9 +25,6 @@ def _isolated_packages(tmp_path, monkeypatch):
     )
     fake_bpy.data = types.SimpleNamespace(node_groups=())
     monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
-    loaded_library = sys.modules.get("NodeForge.library")
-    if loaded_library is not None:
-        monkeypatch.setattr(loaded_library, "bpy", fake_bpy, raising=False)
     packages.set_packages_dir_for_tests(tmp_path / "inventory")
     yield
     packages.set_packages_dir_for_tests(None)

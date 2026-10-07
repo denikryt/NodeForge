@@ -1,0 +1,230 @@
+"""Incremental executable dependency checks for NodeForge module ownership."""
+
+from __future__ import annotations
+
+import ast
+from collections import deque
+from pathlib import Path
+
+
+PACKAGE_ROOT = Path(__file__).resolve().parents[2]
+PACKAGE_NAME = "NodeForge"
+_IGNORED_TOP_LEVEL = {"tests", "dev", "plans", "examples", "erosion_study", "local"}
+
+
+def _production_python_files(root: Path = PACKAGE_ROOT) -> list[Path]:
+    """Return production Python sources that participate in internal dependencies."""
+    files = []
+    for path in root.rglob("*.py"):
+        relative = path.relative_to(root)
+        if any(part in {".git", "__pycache__", ".pytest_cache"} for part in relative.parts):
+            continue
+        if relative.parts and relative.parts[0] in _IGNORED_TOP_LEVEL:
+            continue
+        files.append(path)
+    return sorted(files)
+
+
+def _module_name(path: Path, root: Path = PACKAGE_ROOT) -> str:
+    """Map one package source path to its fully qualified module name."""
+    relative = path.relative_to(root)
+    parts = list(relative.parts)
+    if parts[-1] == "__init__.py":
+        parts = parts[:-1]
+    else:
+        parts[-1] = path.stem
+    suffix = ".".join(parts)
+    return PACKAGE_NAME if not suffix else f"{PACKAGE_NAME}.{suffix}"
+
+
+def _module_scope_import_nodes(tree: ast.Module) -> list[ast.Import | ast.ImportFrom]:
+    """Collect imports executed at module initialization, excluding function/class bodies."""
+    imports: list[ast.Import | ast.ImportFrom] = []
+
+    def visit_statements(statements: list[ast.stmt]) -> None:
+        for statement in statements:
+            if isinstance(statement, (ast.Import, ast.ImportFrom)):
+                imports.append(statement)
+                continue
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            for field in ("body", "orelse", "finalbody"):
+                nested = getattr(statement, field, None)
+                if isinstance(nested, list):
+                    visit_statements(nested)
+            if isinstance(statement, ast.Try):
+                for handler in statement.handlers:
+                    visit_statements(handler.body)
+            if isinstance(statement, ast.Match):
+                for case in statement.cases:
+                    visit_statements(case.body)
+
+    visit_statements(tree.body)
+    return imports
+
+
+def _resolve_import_targets(
+    node: ast.Import | ast.ImportFrom,
+    *,
+    current_module: str,
+    is_package: bool,
+    known_modules: set[str],
+) -> set[str]:
+    """Resolve statically named internal import targets for one AST import node."""
+    if isinstance(node, ast.Import):
+        return {alias.name for alias in node.names if alias.name in known_modules}
+
+    current_package = current_module if is_package else current_module.rsplit(".", 1)[0]
+    if node.level:
+        parts = current_package.split(".")
+        parent_hops = node.level - 1
+        if parent_hops >= len(parts):
+            return set()
+        base = ".".join(parts[: len(parts) - parent_hops])
+        target = f"{base}.{node.module}" if node.module else base
+    else:
+        target = node.module or ""
+
+    submodules = {
+        f"{target}.{alias.name}" if target else alias.name
+        for alias in node.names
+        if (f"{target}.{alias.name}" if target else alias.name) in known_modules
+    }
+    if submodules:
+        return submodules
+    if node.module is not None and target in known_modules:
+        return {target}
+    return set()
+
+
+def _build_import_graph(*, module_scope_only: bool) -> dict[str, set[str]]:
+    """Build a static graph of resolvable NodeForge imports."""
+    files = _production_python_files()
+    paths = {_module_name(path): path for path in files}
+    known_modules = set(paths)
+    graph = {module: set() for module in paths}
+    for module, path in paths.items():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        nodes = _module_scope_import_nodes(tree) if module_scope_only else [
+            node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))
+        ]
+        for node in nodes:
+            graph[module].update(
+                _resolve_import_targets(
+                    node,
+                    current_module=module,
+                    is_package=path.name == "__init__.py",
+                    known_modules=known_modules,
+                )
+            )
+    return graph
+
+
+def _find_path(graph: dict[str, set[str]], start: str, forbidden_prefix: str) -> list[str] | None:
+    """Return one dependency path from start into a forbidden module prefix."""
+    queue = deque([(start, [start])])
+    visited = {start}
+    while queue:
+        module, path = queue.popleft()
+        for target in graph.get(module, ()):
+            next_path = [*path, target]
+            if target == forbidden_prefix or target.startswith(f"{forbidden_prefix}."):
+                return next_path
+            if target not in visited:
+                visited.add(target)
+                queue.append((target, next_path))
+    return None
+
+
+def _strongly_connected_components(graph: dict[str, set[str]]) -> list[list[str]]:
+    """Return non-trivial strongly connected components for a directed graph."""
+    index = 0
+    indices: dict[str, int] = {}
+    lowlinks: dict[str, int] = {}
+    stack: list[str] = []
+    on_stack: set[str] = set()
+    components: list[list[str]] = []
+
+    def visit(module: str) -> None:
+        nonlocal index
+        indices[module] = index
+        lowlinks[module] = index
+        index += 1
+        stack.append(module)
+        on_stack.add(module)
+        for target in graph.get(module, ()):
+            if target not in graph:
+                continue
+            if target not in indices:
+                visit(target)
+                lowlinks[module] = min(lowlinks[module], lowlinks[target])
+            elif target in on_stack:
+                lowlinks[module] = min(lowlinks[module], indices[target])
+        if lowlinks[module] != indices[module]:
+            return
+        component = []
+        while True:
+            target = stack.pop()
+            on_stack.remove(target)
+            component.append(target)
+            if target == module:
+                break
+        if len(component) > 1:
+            components.append(sorted(component))
+
+    for module in graph:
+        if module not in indices:
+            visit(module)
+    return sorted(components)
+
+
+def test_dependency_path_helper_accepts_disconnected_layers():
+    """Positive: disconnected semantic and Blender nodes have no forbidden path."""
+    graph = {"semantic.a": {"root.types"}, "root.types": set(), "blender.x": set()}
+    assert _find_path(graph, "semantic.a", "blender") is None
+
+
+def test_dependency_path_helper_reports_indirect_boundary_violation():
+    """Negative: an indirect physical dependency reports the whole path."""
+    graph = {"semantic.a": {"root.bridge"}, "root.bridge": {"blender.x"}, "blender.x": set()}
+    assert _find_path(graph, "semantic.a", "blender") == ["semantic.a", "root.bridge", "blender.x"]
+
+
+def test_cycle_helper_accepts_acyclic_graph():
+    """Positive: a one-way dependency graph has no SCC violation."""
+    assert _strongly_connected_components({"a": {"b"}, "b": {"c"}, "c": set()}) == []
+
+
+def test_cycle_helper_detects_module_scope_cycle():
+    """Negative: a cycle between production modules is detected."""
+    assert _strongly_connected_components({"a": {"b"}, "b": {"a"}}) == [["a", "b"]]
+
+
+def test_new_owner_packages_do_not_introduce_module_scope_cycles():
+    """Owner-package scaffolding itself is acyclic before production moves begin."""
+    graph = _build_import_graph(module_scope_only=True)
+    prefixes = tuple(f"{PACKAGE_NAME}.{name}" for name in ("semantic", "extensions", "blender"))
+    modules = {
+        module for module in graph
+        if any(module == prefix or module.startswith(f"{prefix}.") for prefix in prefixes)
+    }
+    owner_graph = {
+        module: {target for target in targets if target in modules}
+        for module, targets in graph.items() if module in modules
+    }
+    assert _strongly_connected_components(owner_graph) == []
+
+
+def test_catalog_owner_does_not_depend_on_local_source_or_blender_owners():
+    """Positive: pure catalog discovery consumes paths rather than Local/platform state."""
+    graph = _build_import_graph(module_scope_only=False)
+    assert _find_path(graph, f"{PACKAGE_NAME}.catalog", f"{PACKAGE_NAME}.local_sources") is None
+    assert _find_path(graph, f"{PACKAGE_NAME}.catalog", f"{PACKAGE_NAME}.blender") is None
+
+
+def test_catalog_boundary_helper_detects_reverse_local_dependency():
+    """Negative: the graph helper detects a forbidden catalog-to-Local dependency."""
+    graph = {"NodeForge.catalog": {"NodeForge.local_sources"}, "NodeForge.local_sources": set()}
+    assert _find_path(graph, "NodeForge.catalog", "NodeForge.local_sources") == [
+        "NodeForge.catalog", "NodeForge.local_sources"
+    ]

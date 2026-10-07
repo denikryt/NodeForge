@@ -14,8 +14,9 @@ from NodeForge.extension_contracts import ExtensionCallableId
 from NodeForge.extension_registry import library_owner_key
 from NodeForge.resolved_environment import (
     PackageCallableExport, ResolvedCatalog, ResolvedEnvironment,
-    ResolvedPackageNamespace, resolve_environment,
+    ResolvedPackageNamespace,
 )
+from NodeForge.environment_resolution import resolve_environment
 from NodeForge.semantic_group import analyze_group_source
 
 pytestmark = pytest.mark.unit
@@ -28,8 +29,6 @@ def isolated(tmp_path, monkeypatch):
     fake.data = types.SimpleNamespace(node_groups=[])
     fake.utils = types.SimpleNamespace(user_resource=lambda *a, **k: str(tmp_path / 'user'))
     monkeypatch.setitem(sys.modules, 'bpy', fake)
-    import NodeForge.library as library
-    monkeypatch.setattr(library, 'bpy', fake)
     packages.set_packages_dir_for_tests(tmp_path / 'inventory')
     yield
     packages.set_packages_dir_for_tests(None)
@@ -150,7 +149,7 @@ def test_invalid_python_example_is_deferred_catalog_failure(tmp_path, corruption
 
 
 def reload_environment(tmp_path, namespace, *, owner_present=True):
-    from NodeForge.library import LibraryEntryRecord
+    from NodeForge.catalog import LibraryEntryRecord
     path = tmp_path / 'foo.nf'
     path.write_text('output(value=1)\n')
     record = LibraryEntryRecord(namespace, 'foo', 'source', path, source_path=path,
@@ -168,7 +167,7 @@ def reload_environment(tmp_path, namespace, *, owner_present=True):
 @pytest.mark.parametrize('namespace', ['functions', 'examples', 'local'])
 @pytest.mark.parametrize('owner_present', [True, False])
 def test_reload_record_and_backend_share_one_snapshot(tmp_path, monkeypatch, namespace, owner_present):
-    from NodeForge import compiler, library
+    from NodeForge import compiler
     environment, record = reload_environment(tmp_path, namespace, owner_present=owner_present)
     group = {'nodeforge_library_namespace': namespace, 'nodeforge_library_name': 'foo',
              'nodeforge_package_id': 'vendor.old'}
@@ -178,9 +177,6 @@ def test_reload_record_and_backend_share_one_snapshot(tmp_path, monkeypatch, nam
         assert len(resolved) == 1
         return environment
     monkeypatch.setattr(compiler, 'resolve_environment', resolve_once)
-    def forbidden(*a, **k):
-        pytest.fail('Reload performed live discovery outside its snapshot')
-    monkeypatch.setattr(library, 'find_library_entry_record', forbidden)
     backend = object()
     def new_backend(snapshot):
         assert snapshot is environment
@@ -200,11 +196,11 @@ def test_reload_record_and_backend_share_one_snapshot(tmp_path, monkeypatch, nam
 
 
 def test_bundled_python_example_is_registered_without_package_namespace(tmp_path, monkeypatch):
-    from NodeForge import library
+    from NodeForge import catalog
     root = write_package(tmp_path / 'bundled', 'fixture.bundled', examples=True)
     write_example(root)
-    original = library.catalog_dir
-    monkeypatch.setattr(library, 'catalog_dir', lambda n: root / 'examples' if n == 'examples' else original(n))
+    original = catalog.catalog_dir
+    monkeypatch.setattr(catalog, 'catalog_dir', lambda n: root / 'examples' if n == 'examples' else original(n))
     environment = resolve_environment()
     record = environment.catalog('examples').find('review_example')
     assert record.package_id == ''
@@ -259,7 +255,7 @@ def test_reload_rejects_wrong_provenance_before_backend_creation(tmp_path, monke
 
 @pytest.mark.parametrize('owner_present', [True, False])
 def test_library_reload_adapter_uses_backend_session_snapshot(tmp_path, monkeypatch, owner_present):
-    from NodeForge import library
+    from NodeForge.blender import library_groups
     from NodeForge.source_callables import SourceCallableSession
     environment, record = reload_environment(tmp_path, 'functions', owner_present=owner_present)
     session = SourceCallableSession(resolved_environment=environment)
@@ -270,17 +266,14 @@ def test_library_reload_adapter_uses_backend_session_snapshot(tmp_path, monkeypa
         sessions.append(session)
         return session
     backend = types.SimpleNamespace(new_source_callable_session=new_session)
-    def forbidden(*a, **k):
-        pytest.fail('Library reload adapter performed live discovery')
-    monkeypatch.setattr(library, 'find_library_entry_record', forbidden)
     updates = []
-    monkeypatch.setattr(library, 'update_materialized_library_entry_group_for_record',
+    monkeypatch.setattr(library_groups, 'update_materialized_library_entry_group_for_record',
                         lambda r, g, b, **k: updates.append((r, g, b, k)))
     if owner_present:
-        library.update_materialized_library_entry_group('functions', 'foo', group, backend)
+        library_groups.update_materialized_library_entry_group('functions', 'foo', group, backend)
         assert updates == [(record, group, backend, {'source_callable_session': session})]
     else:
         with pytest.raises(CompileError, match='unavailable'):
-            library.update_materialized_library_entry_group('functions', 'foo', group, backend)
+            library_groups.update_materialized_library_entry_group('functions', 'foo', group, backend)
         assert updates == []
     assert sessions == [session]

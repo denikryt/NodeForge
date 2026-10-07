@@ -230,10 +230,10 @@ def test_i6_negative_repeat_still_rejects_type_changing_carried_state():
 def test_i7_positive_persisted_and_unsupported_owner_boundaries_remain_present():
     """Persisted Blender compatibility and mixed source/interface rejection remain explicit."""
     interface_source = (ROOT / "interface.py").read_text(encoding="utf-8")
-    library_source = (ROOT / "library.py").read_text(encoding="utf-8")
+    catalog_source = (ROOT / "catalog.py").read_text(encoding="utf-8")
     semantic_source = (ROOT / "semantic_analysis.py").read_text(encoding="utf-8")
     assert "def _legacy_socket_type(" in interface_source
-    assert "both source.nf and interface.py is intentionally unsupported" in library_source
+    assert "both source.nf and interface.py is intentionally unsupported" in catalog_source
     assert "Mixed source.nf + interface.py owners are outside the supported callable model" in semantic_source
     assert "uses an unsupported mixed source.nf + interface.py package owner" in semantic_source
 

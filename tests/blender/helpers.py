@@ -16,12 +16,31 @@ import bpy
 import pytest
 
 import NodeForge
-from NodeForge import compiler, library, blender_group_backend
+from NodeForge import compiler, blender_group_backend
 from NodeForge.errors import CompileError
 from NodeForge import generated_resources
 from NodeForge.builtins import registry
 from NodeForge.values import Value
+from NodeForge.environment_resolution import resolve_environment
 
+
+
+def has_package_function(name):
+    """Return whether the resolved package inventory exposes a function name."""
+    return any(record.name == name for record in resolve_environment().package_function_records())
+
+
+def package_function_names():
+    """Return package function names from the authoritative environment snapshot."""
+    return {record.name for record in resolve_environment().package_function_records()}
+
+
+def has_native_package_function(name):
+    """Return whether a package function uses a native/module-backed owner."""
+    return any(
+        record.name == name and record.module_path is not None
+        for record in resolve_environment().package_function_records()
+    )
 
 
 def check(condition, message):

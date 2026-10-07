@@ -2,6 +2,8 @@
 
 from helpers import *
 
+from NodeForge import local_sources
+
 import json
 import math
 import tempfile
@@ -190,7 +192,7 @@ output("Value", value)
 
 
 def test_bundle_local_catalog_round_trip():
-    local = library.ensure_local_catalog_dir()
+    local = local_sources.ensure_local_catalog_dir()
     source = local / "bundle_local_catalog_probe.nf"
     try:
         source.write_text(

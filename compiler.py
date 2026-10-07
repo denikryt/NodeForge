@@ -22,7 +22,7 @@ from .update import (
     _capture_group_external_state,
     _restore_group_external_state,
 )
-from .library import (
+from .blender.library_groups import (
     materialize_library_entry_group_for_record,
     resolve_reloadable_library_entry,
     update_materialized_library_entry_group_for_record,
@@ -40,7 +40,8 @@ from .function_materializer import FunctionMaterializationContext, FunctionMater
 from .group_context import GroupContextSlot
 from .callable_contracts import canonicalize_group_input_default
 from .blender_group_backend import BlenderGroupBackend, BlenderGroupBuildRequest
-from .resolved_environment import ResolvedEnvironment, resolve_environment
+from .resolved_environment import ResolvedEnvironment
+from .environment_resolution import resolve_environment
 
 
 class _ResolvedEnvironmentSlot:

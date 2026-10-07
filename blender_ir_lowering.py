@@ -556,7 +556,7 @@ def _source_call_owner_scope(operation):
 
 def _lower_source_call(context, operation, operands, x, y):
     """Materialize one prepared source callable and wire a GeometryNodeGroup by positions."""
-    from .library import (
+    from .blender.library_groups import (
         _input_sockets as _group_node_inputs,
         _output_sockets as _group_node_outputs,
         apply_function_node_display_name,
