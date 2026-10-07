@@ -24,6 +24,7 @@ from NodeForge.semantic_ir import (
     IRVectorComponent, IRVectorLiteral,
 )
 from NodeForge.values import Value, make_value
+from NodeForge.blender import group_assembly as group_assembly_module
 
 
 
@@ -71,7 +72,7 @@ def _body_programs(body):
 
 def test_semantic_ir_route_materializes_representative_runtime_expressions(monkeypatch):
     calls = []
-    original = compiler_module.lower_body
+    original = group_assembly_module.lower_body
 
     def wrapped(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):
         for program in _body_programs(body):
@@ -80,7 +81,7 @@ def test_semantic_ir_route_materializes_representative_runtime_expressions(monke
             context, body, initial_runtime_bindings, base_depth, group_input=group_input
         )
 
-    monkeypatch.setattr(compiler_module, "lower_body", wrapped)
+    monkeypatch.setattr(group_assembly_module, "lower_body", wrapped)
     group = compile_group(
         '''
 a = input_float("A", default=2.0)
@@ -199,7 +200,7 @@ def test_supported_core_root_matrix_compiles_through_permanent_pipeline():
 
 def test_structural_array_parent_uses_semantic_body_and_preserves_nested_expression_topology(monkeypatch):
     calls = []
-    original = compiler_module.lower_body
+    original = group_assembly_module.lower_body
 
     def wrapped(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):
         for program in _body_programs(body):
@@ -208,7 +209,7 @@ def test_structural_array_parent_uses_semantic_body_and_preserves_nested_express
             context, body, initial_runtime_bindings, base_depth, group_input=group_input
         )
 
-    monkeypatch.setattr(compiler_module, "lower_body", wrapped)
+    monkeypatch.setattr(group_assembly_module, "lower_body", wrapped)
     group = compile_group(
         """
 a = input_float("A", default=2.0)
@@ -344,7 +345,7 @@ def test_semantic_backend_failure_propagates_and_cleans_fresh_group(monkeypatch)
         context.group.nodes.new("ShaderNodeValue")
         raise backend_error
 
-    monkeypatch.setattr(compiler_module, "lower_body", fail_backend)
+    monkeypatch.setattr(group_assembly_module, "lower_body", fail_backend)
 
     try:
         compiler.create_expression_group(
@@ -901,7 +902,7 @@ output("Geometry", result)
 def test_permanent_expression_routing_keeps_structures_frontend_owned_and_runtime_forms_in_ir(monkeypatch):
     """Body-owned structure stays frontend-side while runtime expression forms reach typed IR."""
     programs = []
-    original_body = compiler_module.lower_body
+    original_body = group_assembly_module.lower_body
 
     def wrapped_body(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):
         programs.extend(_body_programs(body))
@@ -909,7 +910,7 @@ def test_permanent_expression_routing_keeps_structures_frontend_owned_and_runtim
             context, body, initial_runtime_bindings, base_depth, group_input=group_input
         )
 
-    monkeypatch.setattr(compiler_module, "lower_body", wrapped_body)
+    monkeypatch.setattr(group_assembly_module, "lower_body", wrapped_body)
 
     def compile_and_remove(source, name):
         group = compile_group(source, name)
@@ -1046,7 +1047,7 @@ output("Location", info.location)
 def test_semantic_call_ir_materializes_core_calls_with_existing_layout(monkeypatch):
     """Stateless core calls enter body IR and retain the existing depth-derived placement."""
     calls = []
-    original = compiler_module.lower_body
+    original = group_assembly_module.lower_body
 
     def wrapped(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):
         for program in _body_programs(body):
@@ -1057,7 +1058,7 @@ def test_semantic_call_ir_materializes_core_calls_with_existing_layout(monkeypat
             context, body, initial_runtime_bindings, base_depth, group_input=group_input
         )
 
-    monkeypatch.setattr(compiler_module, "lower_body", wrapped)
+    monkeypatch.setattr(group_assembly_module, "lower_body", wrapped)
     group = compile_group(
         '''
 v = input_vector("V", default=(1, 2, 3))

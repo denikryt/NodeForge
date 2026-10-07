@@ -74,3 +74,16 @@ def test_source_callable_analysis_session_bindings_and_parsing_have_semantic_own
 def test_old_mixed_source_callable_and_parsing_paths_are_absent():
     """Negative: split source-call owners cannot survive behind flat forwarding modules."""
     _assert_paths_absent({"source_callables.py", "parsing.py"})
+
+
+def test_physical_group_assembly_has_blender_owner():
+    """Positive: prepared semantic groups are physically assembled by the Blender layer."""
+    _assert_paths_exist({"blender/group_assembly.py"})
+
+
+def test_compiler_facade_no_longer_owns_group_assembly_implementation():
+    """Negative: compiler.py must not retain a second physical group assembly implementation."""
+    source = (PACKAGE_ROOT / "compiler.py").read_text(encoding="utf-8")
+    assert "def _populate_group(" not in source
+    assert "def _assert_prepared_interface_parity(" not in source
+    assert "lower_body(" not in source

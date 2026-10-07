@@ -357,3 +357,25 @@ def test_function_instance_boundary_helper_detects_ctfe_leak():
     assert _find_path(
         graph, "NodeForge.function_instances", "NodeForge.semantic.consteval"
     ) == ["NodeForge.function_instances", "NodeForge.semantic.consteval"]
+
+
+def test_compiler_facade_delegates_group_population_to_blender_owner():
+    """Positive: compiler orchestration reaches physical assembly through the canonical Blender owner."""
+    graph = _build_import_graph(module_scope_only=False)
+    path = _find_path(
+        graph,
+        f"{PACKAGE_NAME}.compiler",
+        f"{PACKAGE_NAME}.blender.group_assembly",
+    )
+    assert path is not None
+
+
+def test_group_assembly_boundary_helper_detects_physical_logic_in_facade():
+    """Negative: the dependency helper exposes a facade bypass around the Blender assembly owner."""
+    graph = {
+        "NodeForge.compiler": {"NodeForge.blender_ir_lowering"},
+        "NodeForge.blender_ir_lowering": set(),
+    }
+    assert _find_path(graph, "NodeForge.compiler", "NodeForge.blender_ir_lowering") == [
+        "NodeForge.compiler", "NodeForge.blender_ir_lowering"
+    ]

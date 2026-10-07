@@ -6,6 +6,7 @@ import pytest
 from helpers import check, compile_group
 from NodeForge import compiler, local_sources
 from NodeForge.errors import CompileError
+from NodeForge.blender import group_assembly as group_assembly_module
 
 
 def _remove_group(group):
@@ -290,7 +291,7 @@ def test_trace_context_is_released_when_physical_lowering_raises(monkeypatch):
         observed["owner"] = frame.owner_identity if frame is not None else None
         raise RuntimeError("trace-context-sentinel")
 
-    monkeypatch.setattr(compiler, "lower_body", fail_lowering)
+    monkeypatch.setattr(group_assembly_module, "lower_body", fail_lowering)
     backend = compiler._new_group_backend()
     with pytest.raises(RuntimeError, match="trace-context-sentinel"):
         backend.compile_group_callback(
