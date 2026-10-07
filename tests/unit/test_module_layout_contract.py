@@ -133,3 +133,28 @@ def test_old_flat_semantic_owner_paths_are_absent():
         "attribute_domains.py",
         "semantic_group.py",
     })
+
+
+def test_extension_v2_internals_have_canonical_package_owners():
+    """Positive: internal Extension v2 contracts, registry and semantic values live under extensions/."""
+    _assert_paths_exist({
+        "extensions/contracts.py",
+        "extensions/interface.py",
+        "extensions/registry.py",
+        "extensions/semantics.py",
+        "extensions/values.py",
+        "extension_api.py",
+        "extension_annotations.py",
+        "extension_semantic_api.py",
+    })
+
+
+def test_old_internal_extension_owner_paths_are_absent():
+    """Negative: internal Extension v2 modules cannot remain as root forwarding aliases."""
+    _assert_paths_absent({
+        "extension_contracts.py",
+        "extension_interface.py",
+        "extension_registry.py",
+        "extension_semantics.py",
+        "extension_values.py",
+    })

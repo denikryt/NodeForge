@@ -8,7 +8,7 @@ import pytest
 
 from NodeForge.errors import CompileError
 from NodeForge.evaluation_modes import EvaluationMode
-from NodeForge.extension_contracts import (
+from NodeForge.extensions.contracts import (
     ExtensionCallableId,
     ExtensionCallableSpec,
     ExtensionParameterSpec,
@@ -16,7 +16,7 @@ from NodeForge.extension_contracts import (
     PythonScalarKind,
     TypeSpec,
 )
-from NodeForge.extension_semantics import ExtensionExecutionForm, classify_extension_execution
+from NodeForge.extensions.semantics import ExtensionExecutionForm, classify_extension_execution
 from NodeForge.nf_types import NFType
 
 pytestmark = pytest.mark.unit

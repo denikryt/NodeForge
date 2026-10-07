@@ -34,7 +34,7 @@ def _resolved_failure_from_exception(exc: Exception) -> ResolvedCatalogFailure:
 
 def resolve_environment() -> ResolvedEnvironment:
     """Resolve one coherent owner-qualified external callable environment snapshot."""
-    from .extension_registry import (
+    from .extensions.registry import (
         ExtensionOwnerSession,
         ExtensionRegistry,
         capture_owner_code_snapshot,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..extension_contracts import ExtensionCallableId
+from ..extensions.contracts import ExtensionCallableId
 from ..resolved_environment import ResolvedPackageNamespace
 
 

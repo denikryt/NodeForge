@@ -6,16 +6,16 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Callable, Iterator, Mapping
 
-from .semantic.callable_contracts import canonicalize_group_input_default, source_argument_type_matches
-from .semantic.compile_time import ConstVector
-from .errors import CompileError
-from .extension_contracts import (
+from ..semantic.callable_contracts import canonicalize_group_input_default, source_argument_type_matches
+from ..semantic.compile_time import ConstVector
+from ..errors import CompileError
+from .contracts import (
     ExtensionTypeId,
     PythonScalarKind,
     TypeSpec,
 )
-from .extension_semantic_api import RuntimeRef
-from .nf_types import NFType
+from ..extension_semantic_api import RuntimeRef
+from ..nf_types import NFType
 
 
 @dataclass(frozen=True)

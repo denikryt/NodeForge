@@ -11,14 +11,14 @@ import pytest
 from NodeForge.semantic.call_resolution import CallableEnvironment
 from NodeForge.compiler_identities import BindingId
 from NodeForge.errors import CompileError
-from NodeForge.extension_contracts import ExtensionTypeId, TypeSpec
-from NodeForge.extension_registry import ExtensionOwnerSession, ExtensionRegistry, capture_owner_code_snapshot
-from NodeForge.extension_semantics import (
+from NodeForge.extensions.contracts import ExtensionTypeId, TypeSpec
+from NodeForge.extensions.registry import ExtensionOwnerSession, ExtensionRegistry, capture_owner_code_snapshot
+from NodeForge.extensions.semantics import (
     ExtensionDependencySource,
     ExtensionSemanticPayload,
     compact_extension_semantic_payload,
 )
-from NodeForge.extension_values import (
+from NodeForge.extensions.values import (
     ExtensionDependencySlot,
     ExtensionValue,
 )
@@ -459,7 +459,7 @@ def test_semantic_static_parameter_arrives_detached_without_runtime_dependency(t
 
 def test_semantic_state_ir_validator_rejects_in_range_incompatible_operand_type():
     """Tagged operand refs are validated against their paired NF_SET rather than range alone."""
-    from NodeForge.extension_contracts import ExtensionTypeId, TypeSpec
+    from NodeForge.extensions.contracts import ExtensionTypeId, TypeSpec
     from NodeForge.semantic.ir import IRCallArgument, IRCallOperandRef, IRValue, validate_extension_ir_state
 
     spec = TypeSpec("NF_SET", frozenset({NFType.FLOAT}))

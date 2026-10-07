@@ -13,9 +13,9 @@ from NodeForge.semantic.compile_time import CompileTimeSnapshot
 from NodeForge.compiler_identities import BindingId
 from NodeForge.semantic.residualization import _preprocess_compile_time
 from NodeForge.errors import CompileError
-from NodeForge.extension_contracts import ExtensionTypeId, TypeSpec
-from NodeForge.extension_semantics import ExtensionDependencySource, ExtensionSemanticPayload
-from NodeForge.extension_values import ExtensionDependencySlot, ExtensionValue
+from NodeForge.extensions.contracts import ExtensionTypeId, TypeSpec
+from NodeForge.extensions.semantics import ExtensionDependencySource, ExtensionSemanticPayload
+from NodeForge.extensions.values import ExtensionDependencySlot, ExtensionValue
 from NodeForge.nf_types import NFType
 from NodeForge.resolved_environment import PackageCallableExport, ResolvedPackageNamespace
 from NodeForge.semantic.runtime_bindings import RuntimeBindingSymbol
@@ -674,7 +674,7 @@ def test_persistent_extension_values_core_adds_no_extension_specific_ir_or_lsyst
     ir_source = (root / "semantic/ir.py").read_text(encoding="utf-8")
     assert "ExtensionRuntimeLeaf" not in ir_source
     assert "IRExtension" not in ir_source
-    for name in ("semantic/body.py", "semantic/analysis.py", "extension_semantics.py"):
+    for name in ("semantic/body.py", "semantic/analysis.py", "extensions/semantics.py"):
         source = (root / name).read_text(encoding="utf-8")
         assert "nodeforge.lsystem" not in source.lower()
         assert "lsystem" not in source.lower()
@@ -710,7 +710,7 @@ def test_persistent_storage_contains_no_package_python_instances(tmp_path):
         extension_registry=registry,
     )
     from NodeForge.semantic.analysis import analyze_expression
-    from NodeForge.extension_semantics import compact_extension_semantic_payload
+    from NodeForge.extensions.semantics import compact_extension_semantic_payload
 
     root = ast.parse("make(x)", mode="eval").body
     analysis = analyze_expression(root, env)
@@ -732,7 +732,7 @@ def test_persistent_storage_contains_no_package_python_instances(tmp_path):
 
 def test_persistence_does_not_reinvoke_semantic_callback(tmp_path, monkeypatch):
     """Body persistence emits dependency IR from the original analysis rather than re-running semantic code."""
-    from NodeForge.extension_registry import ExtensionRegistry
+    from NodeForge.extensions.registry import ExtensionRegistry
 
     original = ExtensionRegistry.invoke_semantic
     calls = []

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from NodeForge.compiler_identities import GroupCompilationIdentity
-from NodeForge.extension_registry import ExtensionOwnerSession, ExtensionRegistry, capture_owner_code_snapshot
+from NodeForge.extensions.registry import ExtensionOwnerSession, ExtensionRegistry, capture_owner_code_snapshot
 from NodeForge.function_instances import (
     FUNCTION_COMPILER_VERSION,
     FunctionCompilationTrace,

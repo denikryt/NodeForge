@@ -9,15 +9,15 @@ import pytest
 
 from NodeForge.compiler_identities import BindingId
 from NodeForge.errors import CompileError
-from NodeForge.extension_contracts import PythonScalarKind, TypeSpec
-from NodeForge.extension_registry import ExtensionOwnerSession, ExtensionRegistry, capture_owner_code_snapshot
+from NodeForge.extensions.contracts import PythonScalarKind, TypeSpec
+from NodeForge.extensions.registry import ExtensionOwnerSession, ExtensionRegistry, capture_owner_code_snapshot
 from NodeForge.extension_semantic_api import RuntimeRef
-from NodeForge.extension_semantics import (
+from NodeForge.extensions.semantics import (
     ExtensionDependencySource,
     ExtensionSemanticPayload,
     compact_extension_semantic_payload,
 )
-from NodeForge.extension_values import (
+from NodeForge.extensions.values import (
     ExtensionDependencySlot,
     ExtensionValue,
     pack_value,

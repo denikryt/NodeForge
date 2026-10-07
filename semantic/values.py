@@ -9,7 +9,7 @@ from typing import Mapping, TypeAlias
 
 from ..compiler_identities import BindingId
 from ..errors import CompileError
-from ..extension_contracts import ExtensionTypeId
+from ..extensions.contracts import ExtensionTypeId
 from ..nf_types import NFType
 
 

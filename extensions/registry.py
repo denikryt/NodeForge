@@ -17,9 +17,9 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Iterable, Mapping
 
-from .compiler_identities import normalize_library_package_id
-from .errors import CompileError
-from .extension_contracts import (
+from ..compiler_identities import normalize_library_package_id
+from ..errors import CompileError
+from .contracts import (
     ExtensionCallableId,
     ExtensionCallableSpec,
     ExtensionImplementationRef,
@@ -27,7 +27,7 @@ from .extension_contracts import (
     ExtensionTypeSpec,
     TypeSpec,
 )
-from .extension_interface import (
+from .interface import (
     normalize_interface_module,
     normalize_interface_records,
     normalize_semantic_type_annotation,

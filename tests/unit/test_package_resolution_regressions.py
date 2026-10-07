@@ -10,8 +10,8 @@ import pytest
 from NodeForge import packages
 from NodeForge.compiler_identities import GroupCompilationIdentity
 from NodeForge.errors import CompileError
-from NodeForge.extension_contracts import ExtensionCallableId
-from NodeForge.extension_registry import library_owner_key
+from NodeForge.extensions.contracts import ExtensionCallableId
+from NodeForge.extensions.registry import library_owner_key
 from NodeForge.resolved_environment import (
     PackageCallableExport, ResolvedCatalog, ResolvedEnvironment,
     ResolvedPackageNamespace,

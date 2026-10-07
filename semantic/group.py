@@ -22,9 +22,9 @@ from .constants import TYPE_FLOAT, TYPE_INT, TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
 from .residualization import _infer_input_types, _preprocess_compile_time
 from ..errors import CompileError
 from ..nf_types import NFType
-from ..extension_contracts import ExtensionCallableId
+from ..extensions.contracts import ExtensionCallableId
 from .source_bindings import LibraryBinding, PackageNamespaceBinding
-from ..extension_registry import library_owner_key
+from ..extensions.registry import library_owner_key
 from .parsing import _assigned_names, _binding_names, _collect_inputs, _extract_function_imports, _needs_geometry_io, _parse_source, normalized_statements
 from .runtime_bindings import RuntimeBindingSymbol
 from .body import BasicBodyCompilation, lower_basic_body

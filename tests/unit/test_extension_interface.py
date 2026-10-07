@@ -6,7 +6,7 @@ import pytest
 
 from NodeForge import Bool, Float
 from NodeForge.errors import CompileError
-from NodeForge.extension_registry import ExtensionOwnerSession, capture_owner_code_snapshot
+from NodeForge.extensions.registry import ExtensionOwnerSession, capture_owner_code_snapshot
 from NodeForge.nf_types import NFType
 
 pytestmark = pytest.mark.unit

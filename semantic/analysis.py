@@ -81,13 +81,13 @@ from .callable_contracts import (
 from .ir import IRFunctionMaterialization, IRFunctionMaterializationMode
 from ..evaluation_modes import EvaluationMode
 from .evaluation_resolution import CompileTimeSelection, RuntimeRequired, resolve_argument_evaluation
-from ..extension_contracts import (
+from ..extensions.contracts import (
     ExtensionCallableSpec,
     ExtensionParameterSpec,
     TypeSpec,
     is_frontend_semantic_type_spec,
 )
-from ..extension_semantics import (
+from ..extensions.semantics import (
     ExtensionDependencySource,
     ExtensionExecutionForm,
     ExtensionSemanticPayload,
@@ -96,7 +96,7 @@ from ..extension_semantics import (
     classify_extension_execution,
     semantic_type_compatible,
 )
-from ..extension_values import (
+from ..extensions.values import (
     ExtensionValue,
     select_declared_nf_type,
     static_nf_type,

@@ -8,7 +8,7 @@ import pytest
 
 from NodeForge.semantic.call_resolution import CallableEnvironment
 from NodeForge.compiler_identities import BindingId
-from NodeForge.extension_registry import ExtensionOwnerSession, ExtensionRegistry, capture_owner_code_snapshot
+from NodeForge.extensions.registry import ExtensionOwnerSession, ExtensionRegistry, capture_owner_code_snapshot
 from NodeForge.nf_types import NFType
 from NodeForge.semantic.runtime_bindings import RuntimeBindingSymbol
 from NodeForge.resolved_environment import PackageCallableExport, ResolvedPackageNamespace

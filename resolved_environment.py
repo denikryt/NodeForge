@@ -114,7 +114,7 @@ class PackageCallableExport:
 
     def __post_init__(self) -> None:
         """Validate owner/name provenance without retaining implementation objects."""
-        from .extension_contracts import ExtensionCallableId
+        from .extensions.contracts import ExtensionCallableId
 
         if not isinstance(self.package_id, str) or not self.package_id:
             raise ValueError("package callable export requires package_id")
@@ -176,7 +176,7 @@ class ResolvedEnvironment:
 
     def __post_init__(self) -> None:
         """Validate and freeze catalogs, owner-qualified packages, and extension registry."""
-        from .extension_registry import ExtensionRegistry
+        from .extensions.registry import ExtensionRegistry
 
         catalogs = dict(self.catalogs)
         if frozenset(catalogs) != _CATALOG_NAMES:

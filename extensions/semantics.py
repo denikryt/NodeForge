@@ -6,22 +6,22 @@ import ast
 from dataclasses import dataclass
 from enum import Enum
 
-from .compiler_identities import BindingId
-from .errors import CompileError
-from .extension_contracts import (
+from ..compiler_identities import BindingId
+from ..errors import CompileError
+from .contracts import (
     ExtensionCallableSpec,
     TypeSpec,
     is_executable_result_type_spec,
     is_frontend_semantic_type_spec,
 )
-from .extension_semantic_api import RuntimeRef
-from .extension_values import (
+from ..extension_semantic_api import RuntimeRef
+from .values import (
     ExtensionDependencySlot,
     pack_value,
     remap_dependency_slots,
     unpack_value,
 )
-from .nf_types import NFType
+from ..nf_types import NFType
 
 
 
@@ -102,7 +102,7 @@ def _dependency_slot_indices(value: object):
     if isinstance(value, ExtensionDependencySlot):
         yield value.dependency_index, value.typ
         return
-    from .extension_values import ExtensionValue
+    from .values import ExtensionValue
     if isinstance(value, ExtensionValue):
         yield from _dependency_slot_indices(value.storage)
         return

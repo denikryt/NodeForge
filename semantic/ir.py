@@ -9,7 +9,7 @@ from typing import TypeAlias
 from ..compiler_identities import BindingId, CallSiteId, FunctionId, InputDeclarationId, InterfaceInputOrigin
 from ..nf_types import NFType
 from .group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
-from ..extension_contracts import ExtensionCallableId, PythonScalarKind, TypeSpec, validate_extension_argument_positions
+from ..extensions.contracts import ExtensionCallableId, PythonScalarKind, TypeSpec, validate_extension_argument_positions
 
 
 def _is_ir_option_value(value) -> bool:
@@ -216,7 +216,7 @@ def _detached_nf_type(value):
 def validate_extension_ir_state(type_spec: TypeSpec, state, arguments, registry) -> None:
     """Validate detached extension semantic state against TypeSpec and referenced IRValue types."""
     from .callable_contracts import source_argument_type_matches
-    from ..extension_values import ExtensionValue
+    from ..extensions.values import ExtensionValue
 
     def validate(spec, value):
         if spec.kind == "OPTIONAL":

@@ -6,7 +6,7 @@ import pytest
 
 from NodeForge.blender_socket_types import socket_type_for_nf_type
 from NodeForge.evaluation_modes import EvaluationMode
-from NodeForge.extension_contracts import (
+from NodeForge.extensions.contracts import (
     ExtensionCallableId,
     ExtensionCallableSpec,
     ExtensionImplementationRef,

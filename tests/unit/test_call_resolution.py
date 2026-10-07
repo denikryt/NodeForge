@@ -17,7 +17,7 @@ from NodeForge.semantic.call_resolution import (
 )
 from NodeForge.compiler_identities import library_function_id
 from NodeForge.semantic.call_modifiers import extract_function_call_modifiers
-from NodeForge.extension_contracts import ExtensionCallableId
+from NodeForge.extensions.contracts import ExtensionCallableId
 
 
 pytestmark = pytest.mark.unit

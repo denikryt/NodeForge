@@ -32,7 +32,7 @@ from .residualization import (
 )
 from .compile_time import CompileTimeSnapshot, CompileTimeState
 from ..errors import CompileError
-from ..extension_semantics import ExtensionDependencySource, ExtensionSemanticPayload
+from ..extensions.semantics import ExtensionDependencySource, ExtensionSemanticPayload
 from ..nf_types import NFType
 from .numeric_semantics import normalize_float_constant, normalize_int_constant
 from .group_context import GroupContextAvailabilityCursor, GroupContextSlot

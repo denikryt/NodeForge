@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Literal
 
-from .evaluation_modes import EvaluationMode
-from .nf_types import NFType
+from ..evaluation_modes import EvaluationMode
+from ..nf_types import NFType
 
 
 @dataclass(frozen=True)

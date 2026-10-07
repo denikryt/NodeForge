@@ -55,7 +55,7 @@ from .ir import (
     IRVectorLiteral,
     validate_extension_ir_state,
 )
-from ..extension_values import ExtensionDependencySlot, ExtensionValue
+from ..extensions.values import ExtensionDependencySlot, ExtensionValue
 
 
 def _detach_extension_state(value, runtime_operands):

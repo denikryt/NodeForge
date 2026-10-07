@@ -405,3 +405,29 @@ def test_semantic_to_blender_boundary_helper_detects_indirect_leak():
     assert _find_path(graph, "NodeForge.semantic.analysis", "NodeForge.blender") == [
         "NodeForge.semantic.analysis", "NodeForge.bridge", "NodeForge.blender.nodes"
     ]
+
+
+def test_extensions_layer_has_no_transitive_blender_dependency():
+    """Positive: package-facing Extension v2 internals cannot depend on physical Blender owners."""
+    graph = _build_import_graph(module_scope_only=False)
+    extension_prefix = f"{PACKAGE_NAME}.extensions"
+    blender_prefix = f"{PACKAGE_NAME}.blender"
+    offenders = []
+    for module in sorted(graph):
+        if module == extension_prefix or module.startswith(f"{extension_prefix}."):
+            path = _find_path(graph, module, blender_prefix)
+            if path is not None:
+                offenders.append(" -> ".join(path))
+    assert not offenders, "Extension layer reaches Blender layer:\n" + "\n".join(offenders)
+
+
+def test_extension_to_blender_boundary_helper_detects_indirect_leak():
+    """Negative: a package contract reaching Blender through any root bridge is rejected."""
+    graph = {
+        "NodeForge.extensions.contracts": {"NodeForge.bridge"},
+        "NodeForge.bridge": {"NodeForge.blender.nodes"},
+        "NodeForge.blender.nodes": set(),
+    }
+    assert _find_path(graph, "NodeForge.extensions.contracts", "NodeForge.blender") == [
+        "NodeForge.extensions.contracts", "NodeForge.bridge", "NodeForge.blender.nodes"
+    ]

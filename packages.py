@@ -842,7 +842,7 @@ def _normalize_package_callable_inventory(
     normalize_native_libraries: bool,
 ) -> _PackageCallableInventory:
     """Normalize one package's callable inventory exactly once for validation."""
-    from .extension_registry import (
+    from .extensions.registry import (
         ExtensionOwnerSession,
         capture_owner_code_snapshot,
         library_owner_key,

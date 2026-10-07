@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from NodeForge.errors import CompileError
-from NodeForge.extension_registry import ExtensionOwnerSession, ExtensionRegistry, capture_owner_code_snapshot
+from NodeForge.extensions.registry import ExtensionOwnerSession, ExtensionRegistry, capture_owner_code_snapshot
 
 pytestmark = pytest.mark.unit
 

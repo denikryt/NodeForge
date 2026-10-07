@@ -256,7 +256,7 @@ def test_i8_negative_permanent_extension_path_contains_no_v1_callable_kinds_or_c
     """The permanent extension path has no SYSTEM/BACKEND_HELPER/Compiler.compile escape lane."""
     combined = "\n".join(
         (ROOT / relative).read_text(encoding="utf-8")
-        for relative in ("semantic/analysis.py", "semantic/lowering.py", "extension_registry.py")
+        for relative in ("semantic/analysis.py", "semantic/lowering.py", "extensions/registry.py")
     )
     for token in ("CallableKind.SYSTEM", "CallableKind.BACKEND_HELPER", "Compiler.compile("):
         assert token not in combined

@@ -10,7 +10,7 @@ from typing import Mapping, TYPE_CHECKING
 from ..compiler_identities import FunctionId, library_function_id
 from ..errors import CompileError
 from .group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
-from ..extension_contracts import ExtensionCallableId, TypeSpec, validate_extension_argument_positions
+from ..extensions.contracts import ExtensionCallableId, TypeSpec, validate_extension_argument_positions
 from ..nf_types import NFType
 from .ir import IRFunctionMaterialization
 
