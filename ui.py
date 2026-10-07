@@ -12,13 +12,15 @@ from bpy.props import StringProperty, PointerProperty, CollectionProperty, IntPr
 from .compiler import (
     create_expression_group,
     update_expression_group,
-    _apply_group_defaults_to_node,
-    _extract_group_source,
-    _get_or_create_scratch_text,
-    _replace_text_contents,
     create_library_catalog_group,
     create_package_function_group,
     update_library_catalog_group,
+)
+from .blender.update import _apply_group_defaults_to_node
+from .blender.storage import (
+    _extract_group_source,
+    _get_or_create_scratch_text,
+    _replace_text_contents,
 )
 from .local_sources import (
     local_browser_records,
@@ -35,7 +37,7 @@ from .local_sources import (
 from .blender.library_groups import apply_function_node_display_name
 from .environment_resolution import resolve_environment
 from . import packages
-from . import generated_resources
+from .blender import generated_resources
 
 def _source_from_props(props):
     """Return source code from the selected Blender Text datablock only."""
@@ -253,7 +255,12 @@ def _refresh_catalog_items(props, namespace: str):
         records = local_browser_records(getattr(props, "local_browser_path", ""))
     else:
         environment = resolve_environment()
-        records = [record.as_dict() for record in environment.catalog(namespace).records()]
+        selected = (
+            environment.package_function_records()
+            if namespace == "functions"
+            else environment.catalog(namespace).records()
+        )
+        records = [record.as_dict() for record in selected]
     for record in records:
         item = items.add()
         item.name = record.get("name", "")

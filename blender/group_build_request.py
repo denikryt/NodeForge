@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
-from .semantic.group import SemanticGroupCompilation
+from ..semantic.group import SemanticGroupCompilation
 
 
 @dataclass(frozen=True)

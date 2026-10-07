@@ -315,7 +315,7 @@ def _prepared_group(source: str, identity: GroupCompilationIdentity):
 def test_materialization_specs_have_one_prepared_source_authority():
     """Prepared semantic artifacts replace duplicate raw-source fields on every permanent spec."""
     from dataclasses import fields
-    from NodeForge.function_materializer import (
+    from NodeForge.blender.function_materializer import (
         LibraryFunctionMaterializationSpec,
         LibraryFunctionUpdateSpec,
         LocalFunctionMaterializationSpec,
@@ -339,7 +339,7 @@ def test_local_catalog_cache_miss_supplies_real_fingerprint_inputs_and_hit_reuse
         FunctionCompilationTrace,
         function_group_owner_scope,
     )
-    from NodeForge.function_materializer import (
+    from NodeForge.blender.function_materializer import (
         FunctionMaterializationContext,
         FunctionMaterializer,
         LibraryFunctionMaterializationSpec,
@@ -412,7 +412,7 @@ def test_selected_library_update_forwards_prepared_semantics_only():
     """Selected-root reload cannot reintroduce a raw-source backend authority."""
     from types import SimpleNamespace
     from NodeForge.function_instances import function_group_owner_scope
-    from NodeForge.function_materializer import FunctionMaterializer, LibraryFunctionUpdateSpec
+    from NodeForge.blender.function_materializer import FunctionMaterializer, LibraryFunctionUpdateSpec
 
     class Backend:
         """Capture one selected-root backend publication request."""
@@ -618,7 +618,7 @@ def test_source_call_known_but_not_foldable_argument_remains_runtime(tmp_path):
 def test_legacy_source_call_entrypoints_are_absent():
     """Permanent source calls have no fallback adapter or legacy dispatch entrypoint."""
     root = Path(__file__).resolve().parents[2]
-    local_source = (root / "local_functions.py").read_text(encoding="utf-8")
+    local_source = (root / "blender/local_functions.py").read_text(encoding="utf-8")
     semantic_source = (root / "semantic/analysis.py").read_text(encoding="utf-8")
     lowering_source = (root / "semantic/lowering.py").read_text(encoding="utf-8")
 

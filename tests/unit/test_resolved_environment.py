@@ -348,8 +348,7 @@ def test_package_namespace_alias_is_not_globally_reserved_inside_local_lexical_s
 def test_global_system_name_registry_is_removed_after_package_namespace_cutover():
     """qualified package-callable has no global system-constructor name authority."""
     root = Path(__file__).resolve().parents[2]
-    assert not (root / "systems" / "registry.py").exists()
-    assert "registry" not in (root / "systems" / "__init__.py").read_text(encoding="utf-8")
+    assert not (root / "systems").exists()
 
 
 def test_source_call_migration_removes_v1_extension_execution_and_keeps_v2_boundary():
@@ -358,7 +357,7 @@ def test_source_call_migration_removes_v1_extension_execution_and_keeps_v2_bound
     assert not (root / "library_calls.py").exists()
     assert not (root / "expression_compiler.py").exists()
     assert not (root / "statement_compiler.py").exists()
-    local_source = (root / "local_functions.py").read_text(encoding="utf-8")
+    local_source = (root / "blender/local_functions.py").read_text(encoding="utf-8")
     semantic_source = (root / "semantic/analysis.py").read_text(encoding="utf-8")
     catalog_source = (root / "catalog.py").read_text(encoding="utf-8")
     library_group_source = (root / "blender" / "library_groups.py").read_text(encoding="utf-8")
@@ -401,7 +400,7 @@ def test_group_backend_public_callback_uses_semantic_preparation_before_publicat
     """Raw source remains only at the public callback facade, not the permanent backend request."""
     compiler = _import_compiler_with_fake_bpy(monkeypatch)
     from dataclasses import fields
-    from NodeForge.blender_group_backend import BlenderGroupBuildRequest
+    from NodeForge.blender.group_backend import BlenderGroupBuildRequest
 
     request_fields = {field.name for field in fields(BlenderGroupBuildRequest)}
     assert request_fields == {
@@ -444,8 +443,8 @@ def test_compilation_modules_do_not_call_live_resolution_apis():
             "compiler.py",
             "semantic/analysis.py",
             "blender/ir_lowering.py",
-            "function_materializer.py",
-            "local_functions.py",
+            "blender/function_materializer.py",
+            "blender/local_functions.py",
             "semantic/group.py",
             "semantic/source_callables.py",
             "semantic/source_callable_session.py",
@@ -463,8 +462,8 @@ def test_compilation_modules_do_not_call_live_resolution_apis():
         for call in forbidden:
             assert call not in source, f"{name} still calls live resolver {call}"
 
-    backend_source = (root / "blender_group_backend.py").read_text(encoding="utf-8")
-    materializer_source = (root / "function_materializer.py").read_text(encoding="utf-8")
+    backend_source = (root / "blender/group_backend.py").read_text(encoding="utf-8")
+    materializer_source = (root / "blender/function_materializer.py").read_text(encoding="utf-8")
     assert "resolved_environment" not in backend_source
     assert "resolved_environment" not in materializer_source
     assert "ResolvedEnvironment" not in backend_source

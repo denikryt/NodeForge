@@ -9,7 +9,7 @@ from typing import Iterable
 
 import bpy
 
-from .blender_group_authority import is_authority_ineligible_group
+from .group_authority import is_authority_ineligible_group
 
 
 GROUP_MANIFEST_PROP = "nodeforge_generated_resources_v1"

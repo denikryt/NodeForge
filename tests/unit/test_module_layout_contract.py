@@ -190,3 +190,59 @@ def test_old_low_level_blender_owner_paths_are_absent():
         "blender_extension_backend.py",
         "blender_ir_lowering.py",
     })
+
+
+def test_blender_group_lifecycle_has_canonical_physical_owners():
+    """Positive: group/resource/storage lifecycle modules live under the Blender owner."""
+    _assert_paths_exist({
+        "blender/group_authority.py",
+        "blender/group_backend.py",
+        "blender/group_build_request.py",
+        "blender/function_materializer.py",
+        "blender/local_functions.py",
+        "blender/generated_resources.py",
+        "blender/storage.py",
+        "blender/update.py",
+        "blender/group_assembly.py",
+        "blender/library_groups.py",
+    })
+
+
+def test_old_group_lifecycle_and_historical_package_paths_are_absent():
+    """Negative: moved lifecycle modules and retired packages cannot return as aliases."""
+    _assert_paths_absent({
+        "blender_group_authority.py",
+        "blender_group_backend.py",
+        "group_build_request.py",
+        "function_materializer.py",
+        "local_functions.py",
+        "generated_resources.py",
+        "storage.py",
+        "update.py",
+        "builtins",
+        "systems",
+    })
+
+
+def test_ui_uses_physical_storage_update_owners_directly():
+    """Positive: UI depends on final Blender storage/update owners rather than compiler re-exports."""
+    source = (PACKAGE_ROOT / "ui.py").read_text(encoding="utf-8")
+    assert "from .blender.update import _apply_group_defaults_to_node" in source
+    assert "from .blender.storage import (" in source
+
+
+def test_compiler_does_not_reexport_storage_update_private_helpers():
+    """Negative: compiler facade cannot regain accidental storage/update helper ownership."""
+    source = (PACKAGE_ROOT / "compiler.py").read_text(encoding="utf-8")
+    forbidden = (
+        "_apply_group_defaults_to_node",
+        "_extract_group_source",
+        "_get_or_create_scratch_text",
+        "_replace_text_contents",
+        "_capture_node_external_state",
+        "_restore_node_external_state",
+        "_capture_group_external_state",
+        "_restore_group_external_state",
+    )
+    for token in forbidden:
+        assert token not in source

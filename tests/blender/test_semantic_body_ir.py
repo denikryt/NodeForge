@@ -3,7 +3,8 @@
 from helpers import *
 
 from NodeForge import compiler as compiler_module
-from NodeForge.blender import group_assembly as group_assembly_module
+from NodeForge.blender import group_assembly as blender_group_assembly
+from NodeForge.blender import ir_lowering as blender_ir_lowering
 
 
 def _interface_sockets(group, in_out):
@@ -30,13 +31,13 @@ def _node_signature(group):
 def test_basic_assignment_chain_uses_one_body_lowering_session(monkeypatch):
     """Eligible straight-line assignments are analyzed as one IRBody before Blender lowering."""
     calls = []
-    original = group_assembly_module.lower_body
+    original = blender_group_assembly.lower_body
 
     def wrapped(context, body, initial_runtime_bindings, base_depth=1, **kwargs):
         calls.append((body, dict(initial_runtime_bindings), base_depth))
         return original(context, body, initial_runtime_bindings, base_depth, **kwargs)
 
-    monkeypatch.setattr(group_assembly_module, "lower_body", wrapped)
+    monkeypatch.setattr(blender_group_assembly, "lower_body", wrapped)
     group = compile_group(
         '''
 x = a + b
@@ -227,13 +228,13 @@ def test_nested_input_calls_fail_before_interface_socket_creation():
 def test_fixed_tuple_storage_and_unpack_stay_in_one_irbody_and_one_producer(monkeypatch):
     """Stored/projected and unpacked capture_attribute tuples avoid whole-body legacy lowering."""
     calls = []
-    original = group_assembly_module.lower_body
+    original = blender_group_assembly.lower_body
 
     def wrapped(context, body, initial_runtime_bindings, base_depth=1, **kwargs):
         calls.append(body)
         return original(context, body, initial_runtime_bindings, base_depth, **kwargs)
 
-    monkeypatch.setattr(group_assembly_module, "lower_body", wrapped)
+    monkeypatch.setattr(blender_group_assembly, "lower_body", wrapped)
     group = compile_group(
         '''
 geo = input_geometry("Geometry")

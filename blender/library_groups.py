@@ -8,10 +8,10 @@ from typing import TYPE_CHECKING
 import bpy
 
 from ..errors import CompileError
-from ..blender_group_authority import is_authority_ineligible_group
+from .group_authority import is_authority_ineligible_group
 from ..compiler_identities import CORE_PACKAGE_ID, FunctionId, GroupCompilationIdentity, library_function_id, normalize_library_package_id
 from ..semantic.ir import IRFunctionMaterialization
-from ..function_materializer import (
+from .function_materializer import (
     FunctionMaterializationContext,
     FunctionMaterializer,
     MaterializedFunctionGroup,

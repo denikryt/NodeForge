@@ -71,7 +71,7 @@ from ..function_instances import (
     function_group_owner_scope,
     function_materialization_owner_scope,
 )
-from ..function_materializer import FunctionMaterializationContext, FunctionMaterializer
+from .function_materializer import FunctionMaterializationContext, FunctionMaterializer
 from ..semantic.source_callables import SourceCallablePreparationKey
 
 
@@ -586,7 +586,7 @@ def _lower_source_call(context, operation, operands, x, y):
     if function_id.kind == "LOCAL_DEF":
         if operation.materialization is None:
             raise CompileError("Internal error: script-local function call requires materialization policy")
-        from ..local_functions import build_prepared_local_materialization_spec
+        from .local_functions import build_prepared_local_materialization_spec
 
         spec = build_prepared_local_materialization_spec(
             prepared_callable,

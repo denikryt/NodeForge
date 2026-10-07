@@ -7,7 +7,7 @@ from ..errors import CompileError
 from ..compiler_identities import BindingId
 from .values import Value, make_value
 from .nodes import _new_node, _socket_type_for
-from ..storage import _store_group_source, INPUT_DEFAULTS_PROP
+from .storage import _store_group_source, INPUT_DEFAULTS_PROP
 from .interface import _create_group_input_socket
 from ..function_instances import (
     FUNCTION_ROOT_OWNER_ID_PROP,
@@ -17,10 +17,10 @@ from ..function_instances import (
 )
 from ..semantic.group import SemanticGroupCompilation
 from .ir_lowering import BlenderIRLoweringContext, lower_body
-from ..function_materializer import FunctionMaterializationContext, FunctionMaterializer
+from .function_materializer import FunctionMaterializationContext, FunctionMaterializer
 from ..semantic.group_context import GroupContextSlot
 from ..semantic.callable_contracts import canonicalize_group_input_default
-from ..blender_group_backend import BlenderGroupBuildRequest
+from .group_backend import BlenderGroupBuildRequest
 
 def _assert_prepared_interface_parity(group, prepared: SemanticGroupCompilation) -> None:
     """Assert realized public sockets match the frontend-owned final callable contract."""

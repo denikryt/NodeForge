@@ -1,5 +1,7 @@
 from helpers import *
+
 from NodeForge import local_sources
+from NodeForge.blender import update as blender_update
 
 
 
@@ -232,7 +234,7 @@ output("Result", x + y + z + w)
     math = wrapper_b.nodes.new("ShaderNodeMath")
 
     for node in (leaf_1, leaf_2, leaf_3):
-        compiler._apply_group_defaults_to_node(node)
+        blender_update._apply_group_defaults_to_node(node)
     for socket_name, value in zip(("X", "Y", "Z"), (1.1, 1.2, 1.3)):
         leaf_1.inputs[socket_name].default_value = value
     for socket_name, value in zip(("X", "Y", "Z"), (2.1, 2.2, 2.3)):
@@ -292,7 +294,7 @@ output("Result", x + y + z + w)
     ]
     check(not leaked, f"shared rollback leaked temporary groups: {leaked}")
 
-    strict_state = compiler._capture_group_external_state(group)
+    strict_state = blender_update._capture_group_external_state(group)
     affected_endpoint = next(
         endpoint
         for link in strict_state["links"]
@@ -329,7 +331,7 @@ output("Changed", changed)
     wrapper = bpy.data.node_groups.new("NFTest_update_removed_incompatible_wrapper", "GeometryNodeTree")
     group_node = wrapper.nodes.new("GeometryNodeGroup")
     group_node.node_tree = group
-    compiler._apply_group_defaults_to_node(group_node)
+    blender_update._apply_group_defaults_to_node(group_node)
     group_node.inputs["Keep"].default_value = 1.5
     group_node.inputs["Removed"].default_value = 2.5
     group_node.inputs["Changed"].default_value = 3.5
@@ -364,7 +366,7 @@ output("Vector", vector_value)
     wrapper = bpy.data.node_groups.new("NFTest_update_pointer_values_wrapper", "GeometryNodeTree")
     group_node = wrapper.nodes.new("GeometryNodeGroup")
     group_node.node_tree = group
-    compiler._apply_group_defaults_to_node(group_node)
+    blender_update._apply_group_defaults_to_node(group_node)
     mesh = bpy.data.meshes.new("NFTest_update_pointer_mesh")
     obj = bpy.data.objects.new("NFTest_update_pointer_object", mesh)
     material = bpy.data.materials.new("NFTest_update_pointer_material")
@@ -392,7 +394,7 @@ def test_deferred_group_transaction_rollback_restores_first_external_snapshot():
     output = wrapper.nodes.new("NodeGroupOutput")
     group_node = wrapper.nodes.new("GeometryNodeGroup")
     group_node.node_tree = group
-    compiler._apply_group_defaults_to_node(group_node)
+    blender_update._apply_group_defaults_to_node(group_node)
     group_node.inputs["X"].default_value = 1.5
     wrapper.links.new(group_node.outputs["X"], output.inputs["X"])
 
@@ -626,7 +628,7 @@ def test_library_reload_preserves_all_instance_values_defaults_and_links():
         second_wrapper = bpy.data.node_groups.new("NFTest_library_reload_state_second_wrapper", "GeometryNodeTree")
         second_node = second_wrapper.nodes.new("GeometryNodeGroup")
         second_node.node_tree = group
-        compiler._apply_group_defaults_to_node(second_node)
+        blender_update._apply_group_defaults_to_node(second_node)
         second_node.inputs["Radius"].default_value = 0.44
         math = second_wrapper.nodes.new("ShaderNodeMath")
         second_wrapper.links.new(second_node.outputs["Radius"], math.inputs[0])
@@ -676,7 +678,7 @@ output("Second", second)
     wrapper_input = wrapper.nodes.new("NodeGroupInput")
     group_node = wrapper.nodes.new("GeometryNodeGroup")
     group_node.node_tree = group
-    compiler._apply_group_defaults_to_node(group_node)
+    blender_update._apply_group_defaults_to_node(group_node)
     old_scale = [socket for socket in group_node.inputs if socket.name == "Scale"]
     check(len(old_scale) == 2, "fixture did not create duplicate Scale sockets")
     old_scale[1].default_value = 9.0
@@ -710,7 +712,7 @@ output("Second", second)
     wrapper = bpy.data.node_groups.new("NFTest_legacy_duplicate_input_ambiguity_wrapper", "GeometryNodeTree")
     group_node = wrapper.nodes.new("GeometryNodeGroup")
     group_node.node_tree = group
-    compiler._apply_group_defaults_to_node(group_node)
+    blender_update._apply_group_defaults_to_node(group_node)
     scale = [socket for socket in group_node.inputs if socket.name == "Scale"]
     scale[1].default_value = 3.0
     if interface_module.INPUT_DECLARATIONS_PROP in group:
@@ -739,7 +741,7 @@ def test_legacy_unique_input_live_state_migrates_unambiguously():
     wrapper = bpy.data.node_groups.new("NFTest_legacy_unique_input_wrapper", "GeometryNodeTree")
     group_node = wrapper.nodes.new("GeometryNodeGroup")
     group_node.node_tree = group
-    compiler._apply_group_defaults_to_node(group_node)
+    blender_update._apply_group_defaults_to_node(group_node)
     group_node.inputs["Scale"].default_value = 3.0
     if interface_module.INPUT_DECLARATIONS_PROP in group:
         del group[interface_module.INPUT_DECLARATIONS_PROP]
@@ -851,7 +853,7 @@ output("Result", x)
     wrapper = bpy.data.node_groups.new("NFTest_update_mixed_input_defaults_wrapper", "GeometryNodeTree")
     group_node = wrapper.nodes.new("GeometryNodeGroup")
     group_node.node_tree = group
-    compiler._apply_group_defaults_to_node(group_node)
+    blender_update._apply_group_defaults_to_node(group_node)
 
     check(int(group_node.inputs["iterations"].default_value) == 1, "implicit script default was not applied")
     check(abs(float(group_node.inputs["Scale"].default_value) - 1.0) < 1e-6, "explicit script default was not applied")
@@ -896,7 +898,7 @@ output("X", x)
     wrapper_input = wrapper.nodes.new("NodeGroupInput")
     group_node = wrapper.nodes.new("GeometryNodeGroup")
     group_node.node_tree = group
-    compiler._apply_group_defaults_to_node(group_node)
+    blender_update._apply_group_defaults_to_node(group_node)
     group_node.inputs["A"].default_value = 11.0
     group_node.inputs["B"].default_value = 22.0
     wrapper.links.new(wrapper_input.outputs["External B"], group_node.inputs["B"])

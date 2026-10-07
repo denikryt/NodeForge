@@ -12,13 +12,12 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Callable, Mapping, MutableMapping
 
-from .errors import CompileError
+from ..errors import CompileError
 from .group_build_request import BlenderGroupBuildRequest
-from .compiler_identities import FunctionId
-from .semantic.ir import IRFunctionMaterialization
-from .semantic.group import SemanticGroupCompilation
-from .semantic.parsing import normalized_source
-from .function_instances import (
+from ..compiler_identities import FunctionId
+from ..semantic.ir import IRFunctionMaterialization
+from ..semantic.group import SemanticGroupCompilation
+from ..function_instances import (
     direct_library_owner_scope,
     function_group_owner_scope,
     function_materialization_owner_scope,
@@ -26,6 +25,7 @@ from .function_instances import (
     stamp_function_metadata,
     stored_fingerprint,
 )
+from ..semantic.parsing import normalized_source
 
 
 def _frozen_mapping(value: Mapping | None) -> Mapping:

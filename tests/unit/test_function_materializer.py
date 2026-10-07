@@ -19,7 +19,7 @@ from NodeForge.function_instances import (
     function_materialization_owner_scope,
     instance_key_for,
 )
-from NodeForge.function_materializer import (
+from NodeForge.blender.function_materializer import (
     FunctionMaterializationContext,
     FunctionMaterializer,
     LibraryFunctionMaterializationSpec,
@@ -647,7 +647,7 @@ def test_materializer_source_has_no_compiler_backchannel_and_specs_are_ast_indep
     """Keep the physical authority independent of Compiler objects and raw AST calls."""
     from pathlib import Path
 
-    source = (Path(__file__).resolve().parents[2] / "function_materializer.py").read_text(encoding="utf-8")
+    source = (Path(__file__).resolve().parents[2] / "blender/function_materializer.py").read_text(encoding="utf-8")
     assert "__self__" not in source
     assert "__closure__" not in source
     assert "from .compiler import" not in source

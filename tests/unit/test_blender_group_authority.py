@@ -32,8 +32,8 @@ def _load_authority(monkeypatch, groups, driver_namespace):
     fake_bpy.data = SimpleNamespace(node_groups=groups)
     fake_bpy.app = SimpleNamespace(driver_namespace=driver_namespace)
     monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
-    sys.modules.pop("NodeForge.blender_group_authority", None)
-    return importlib.import_module("NodeForge.blender_group_authority")
+    sys.modules.pop("NodeForge.blender.group_authority", None)
+    return importlib.import_module("NodeForge.blender.group_authority")
 
 
 def test_transaction_private_marker_is_persistent_authority_filter(monkeypatch):
@@ -61,8 +61,8 @@ def test_provisional_registry_survives_module_reload_and_publishes_infallibly(mo
     assert authority.is_authority_ineligible_group(group) is True
     assert authority.PROVISIONAL_REGISTRY_KEY in driver_namespace
 
-    sys.modules.pop("NodeForge.blender_group_authority", None)
-    authority = importlib.import_module("NodeForge.blender_group_authority")
+    sys.modules.pop("NodeForge.blender.group_authority", None)
+    authority = importlib.import_module("NodeForge.blender.group_authority")
     assert authority.is_provisional(group) is True
 
     authority.publish([group])

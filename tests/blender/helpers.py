@@ -16,31 +16,33 @@ import bpy
 import pytest
 
 import NodeForge
-from NodeForge import compiler, blender_group_backend
+from NodeForge import compiler
+from NodeForge.blender.group_build_request import BlenderGroupBuildRequest
 from NodeForge.errors import CompileError
-from NodeForge import generated_resources
-from NodeForge.semantic import builtin_registry as registry
+from NodeForge.blender import generated_resources
+from NodeForge.blender import group_backend as blender_group_backend
 from NodeForge.blender.values import Value
 from NodeForge.environment_resolution import resolve_environment
-
+from NodeForge.semantic import builtin_registry as registry
 
 
 def has_package_function(name):
-    """Return whether the resolved package inventory exposes a function name."""
+    """Return whether the current resolved package inventory exposes one source/native function name."""
     return any(record.name == name for record in resolve_environment().package_function_records())
 
 
 def package_function_names():
-    """Return package function names from the authoritative environment snapshot."""
+    """Return package function names from the authoritative resolved environment snapshot."""
     return {record.name for record in resolve_environment().package_function_records()}
 
 
 def has_native_package_function(name):
-    """Return whether a package function uses a native/module-backed owner."""
+    """Return whether a resolved package function uses a native/module-backed owner."""
     return any(
         record.name == name and record.module_path is not None
         for record in resolve_environment().package_function_records()
     )
+
 
 
 def check(condition, message):
@@ -91,7 +93,7 @@ def prepared_create_or_update(source, name, *, existing_group=None, build_option
     )
     options = dict(build_options or {})
     function_tx = options.pop("function_group_transaction", None) or options.pop("local_helper_transaction", None)
-    request = blender_group_backend.BlenderGroupBuildRequest(
+    request = BlenderGroupBuildRequest(
         prepared_compilation=prepared,
         name=name,
         existing_group=existing_group,

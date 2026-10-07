@@ -29,11 +29,13 @@ def test_nodeforge_import_uses_package_init_from_repo_root():
     assert Path(NodeForge.__file__).resolve() == repo_root / "__init__.py"
 
 
-def test_pure_system_package_import_works_with_package_parent_on_pythonpath():
-    """The systems package remains importable after removal of the global name registry."""
+def test_removed_systems_package_is_not_a_supported_import_surface():
+    """The historical systems namespace is absent while the root package remains importable."""
     repo_root = Path(__file__).resolve().parents[2]
     script = (
-        "import NodeForge.systems\n"
+        "import importlib.util\n"
+        "import NodeForge\n"
+        "assert importlib.util.find_spec('NodeForge.systems') is None\n"
         "print('NODEFORGE_PURE_IMPORTS_OK')\n"
     )
     result = subprocess.run(

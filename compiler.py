@@ -1,27 +1,16 @@
-"""Public compiler facade and high-level Geometry Nodes group assembly."""
+"""Public compiler facade and root build orchestration."""
 
 from .errors import CompileError
-from .storage import (
-    _extract_group_source,
-    _get_or_create_scratch_text,
-    _replace_text_contents,
-)
-from .update import (
-    _apply_group_defaults_to_node,
-    _capture_node_external_state,
-    _restore_node_external_state,
-    _capture_group_external_state,
-    _restore_group_external_state,
-)
 from .blender.library_groups import (
     materialize_library_entry_group_for_record,
     resolve_reloadable_library_entry,
     update_materialized_library_entry_group_for_record,
 )
-from .semantic.group import analyze_group_source
 from .semantic.source_callable_session import SourceCallableSession
-from .blender_group_backend import BlenderGroupBackend, BlenderGroupBuildRequest
+from .semantic.group import analyze_group_source
 from .blender.group_assembly import _populate_group
+from .blender.group_backend import BlenderGroupBackend
+from .blender.group_build_request import BlenderGroupBuildRequest
 from .resolved_environment import ResolvedEnvironment
 from .environment_resolution import resolve_environment
 
@@ -165,12 +154,4 @@ __all__ = [
     "update_library_catalog_group",
     "create_library_catalog_group",
     "create_package_function_group",
-    "_apply_group_defaults_to_node",
-    "_capture_node_external_state",
-    "_restore_node_external_state",
-    "_capture_group_external_state",
-    "_restore_group_external_state",
-    "_extract_group_source",
-    "_get_or_create_scratch_text",
-    "_replace_text_contents",
 ]

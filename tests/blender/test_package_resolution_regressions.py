@@ -9,8 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from NodeForge import compiler, catalog, local_sources, packages, ui
-from NodeForge.blender import library_groups
-from NodeForge import storage
+from NodeForge.blender import library_groups, storage
 from NodeForge.errors import CompileError
 from NodeForge.environment_resolution import resolve_environment
 

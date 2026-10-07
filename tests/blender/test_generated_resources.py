@@ -5,7 +5,7 @@ from __future__ import annotations
 import bpy
 import pytest
 
-from NodeForge import generated_resources
+from NodeForge.blender import generated_resources
 from NodeForge.extension_api import ExtensionBackendContext
 
 pytestmark = pytest.mark.blender

@@ -168,7 +168,7 @@ def test_update_defaults_and_override_capture_distinguish_duplicate_input_labels
     import types
 
     monkeypatch.setitem(sys.modules, "bpy", types.SimpleNamespace())
-    update = importlib.import_module("NodeForge.update")
+    update = importlib.import_module("NodeForge.blender.update")
     interface = importlib.import_module("NodeForge.blender.interface")
 
     class Group(dict):
@@ -242,7 +242,7 @@ def test_explicit_declaration_defaults_merge_with_implicit_defaults_for_override
 
     monkeypatch.setitem(sys.modules, "bpy", types.SimpleNamespace())
     interface = importlib.import_module("NodeForge.blender.interface")
-    update = importlib.import_module("NodeForge.update")
+    update = importlib.import_module("NodeForge.blender.update")
 
     class Group(dict):
         """Minimal group carrying both persisted input-default metadata stores."""

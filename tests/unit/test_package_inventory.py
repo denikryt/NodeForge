@@ -90,7 +90,7 @@ class _FakeGroupBackend:
 
     def compile_group_callback(self, source, name="NodeForge Group", **kwargs):
         """Provide the package-facing callback while keeping source out of physical publication."""
-        from NodeForge.blender_group_backend import BlenderGroupBuildRequest
+        from NodeForge.blender.group_backend import BlenderGroupBuildRequest
         from NodeForge.compiler_identities import GroupCompilationIdentity
         existing_group = kwargs.pop("existing_group", None)
         preserve = bool(kwargs.pop("preserve_if_equivalent", False))
@@ -540,7 +540,7 @@ def test_library_materialization_contract_discriminator_is_explicit(package_inve
         instance_key_for,
     )
     from NodeForge.semantic.ir import IRFunctionMaterialization, IRFunctionMaterializationMode
-    from NodeForge.function_materializer import FunctionMaterializationContext, FunctionMaterializer
+    from NodeForge.blender.function_materializer import FunctionMaterializationContext, FunctionMaterializer
 
     backend = _FakeGroupBackend(compile_group)
     function_id = library_function_id("functions", "vendor.contract", "demo")
@@ -1135,7 +1135,7 @@ def test_local_catalog_adapter_uses_build_local_transaction_cache(monkeypatch, t
         FUNCTION_COMPILATION_FINGERPRINT_PROP,
         direct_library_owner_scope,
     )
-    from NodeForge.function_materializer import FunctionMaterializationContext
+    from NodeForge.blender.function_materializer import FunctionMaterializationContext
 
     source_path = tmp_path / "demo.nf"
     source_path.write_text("output(value=1)\n", encoding="utf-8")

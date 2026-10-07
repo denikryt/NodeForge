@@ -45,14 +45,14 @@ def _load_backend(monkeypatch):
     fake_bpy.data = SimpleNamespace(node_groups=[])
     monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
     for name in (
-        "NodeForge.blender_group_backend",
-        "NodeForge.blender_group_authority",
-        "NodeForge.generated_resources",
-        "NodeForge.storage",
-        "NodeForge.update",
+        "NodeForge.blender.group_backend",
+        "NodeForge.blender.group_authority",
+        "NodeForge.blender.generated_resources",
+        "NodeForge.blender.storage",
+        "NodeForge.blender.update",
     ):
         sys.modules.pop(name, None)
-    return importlib.import_module("NodeForge.blender_group_backend")
+    return importlib.import_module("NodeForge.blender.group_backend")
 
 
 def test_backend_private_properties_are_destination_sticky_and_source_nonpropagating(monkeypatch):

@@ -78,7 +78,7 @@ def test_local_call_hands_physical_materialization_to_function_materializer():
     root = Path(__file__).resolve().parents[2]
     semantic_source = (root / "semantic/analysis.py").read_text(encoding="utf-8")
     lowering_source = (root / "blender/ir_lowering.py").read_text(encoding="utf-8")
-    physical_source = (root / "local_functions.py").read_text(encoding="utf-8")
+    physical_source = (root / "blender/local_functions.py").read_text(encoding="utf-8")
 
     assert "session.prepare_local(" in semantic_source
     assert "IRFunctionMaterialization(" in semantic_source

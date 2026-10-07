@@ -9,19 +9,14 @@ def test_import_and_registry_checks():
         'semantic.body',
         'semantic.group',
         'semantic.source_callables',
-        'semantic.source_callable_session',
-        'semantic.source_bindings',
-        'semantic.call_modifiers',
-        'semantic.parsing',
         'semantic.callable_contracts',
         'blender.ir_lowering',
-        'systems',
+        'extensions.registry',
     ]:
         __import__('NodeForge.' + modname)
     check(registry.CALLABLE_BUILTIN_NAMES, 'callable builtin registry is empty')
     check(registry.BUILTIN_NAMES >= registry.CALLABLE_BUILTIN_NAMES, 'builtin registry lost callable names')
     print('IMPORT_AND_REGISTRY_OK')
-
 
 
 def test_helpers_star_import_exports_private_migration_helpers():

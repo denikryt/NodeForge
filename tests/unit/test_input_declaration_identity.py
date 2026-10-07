@@ -14,7 +14,7 @@ from NodeForge.compiler_identities import InputDeclarationId
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
 from NodeForge.blender import interface
-from NodeForge import update
+from NodeForge.blender import update
 from NodeForge.semantic.builtin_calls import (
     INPUT_DECLARATION_BUILTIN_NAMES,
     IR_CAPABLE_BUILTIN_NAMES,

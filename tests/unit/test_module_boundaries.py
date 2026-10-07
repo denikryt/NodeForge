@@ -431,3 +431,21 @@ def test_extension_to_blender_boundary_helper_detects_indirect_leak():
     assert _find_path(graph, "NodeForge.extensions.contracts", "NodeForge.blender") == [
         "NodeForge.extensions.contracts", "NodeForge.bridge", "NodeForge.blender.nodes"
     ]
+
+
+def test_compiler_facade_reaches_group_backend_through_blender_owner():
+    """Positive: root orchestration reaches physical publication through the Blender package."""
+    graph = _build_import_graph(module_scope_only=False)
+    path = _find_path(graph, f"{PACKAGE_NAME}.compiler", f"{PACKAGE_NAME}.blender.group_backend")
+    assert path is not None
+
+
+def test_lifecycle_boundary_helper_detects_root_physical_owner_leak():
+    """Negative: a resurrected root physical backend is detectable as the wrong owner path."""
+    graph = {
+        "NodeForge.compiler": {"NodeForge.blender_group_backend"},
+        "NodeForge.blender_group_backend": set(),
+    }
+    assert _find_path(graph, "NodeForge.compiler", "NodeForge.blender_group_backend") == [
+        "NodeForge.compiler", "NodeForge.blender_group_backend"
+    ]

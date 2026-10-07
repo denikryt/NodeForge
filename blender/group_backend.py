@@ -14,8 +14,8 @@ from typing import Callable
 
 import bpy
 
-from .errors import CompileError
-from .compiler_identities import GroupCompilationIdentity
+from ..errors import CompileError
+from ..compiler_identities import GroupCompilationIdentity
 from .group_build_request import BlenderGroupBuildRequest
 from .storage import _reset_node_group
 from .update import (
@@ -24,7 +24,7 @@ from .update import (
     _validate_group_external_state_for_replacement,
 )
 from . import generated_resources
-from .blender_group_authority import (
+from .group_authority import (
     BACKEND_PRIVATE_GROUP_PROPERTIES,
     forget as forget_provisional,
     is_authority_ineligible_group,
@@ -32,7 +32,7 @@ from .blender_group_authority import (
     mark_transaction_private,
     publish as publish_provisional,
 )
-from .function_instances import (
+from ..function_instances import (
     FUNCTION_ROOT_OWNER_ID_PROP,
     FunctionCompilationTrace,
     function_group_owner_scope as make_function_group_owner_scope,
@@ -274,7 +274,7 @@ def _copy_group_contents(src_group, dst_group, *, copy_role=None):
         _TEST_BACKUP_COPY_FAIL_AFTER_RESET = False
         raise RuntimeError("Injected NodeForge rollback-backup copy failure after reset")
     _copy_interface(src_group, dst_group)
-    from .blender import raw_nodes as _raw_nodes
+    from . import raw_nodes as _raw_nodes
 
     node_map = {}
     for src_node in src_group.nodes:

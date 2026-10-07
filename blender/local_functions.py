@@ -6,16 +6,16 @@ import re
 
 import bpy
 
-from .blender_group_authority import is_authority_ineligible_group
-from .errors import CompileError
-from .function_instances import (
+from .group_authority import is_authority_ineligible_group
+from ..errors import CompileError
+from ..function_instances import (
     FUNCTION_DEFINITION_OWNER_PROP,
     FUNCTION_INSTANCE_KEY_PROP,
     stamp_function_metadata,
 )
 from .function_materializer import LocalFunctionMaterializationSpec
-from .nf_types import serialize_nf_type
-from .semantic.source_callables import LocalReturnElement, LocalReturnShape
+from ..nf_types import serialize_nf_type
+from ..semantic.source_callables import LocalReturnElement, LocalReturnShape
 
 
 LOCAL_HELPER_KIND_PROP = "nodeforge_generated_kind"
