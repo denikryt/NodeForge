@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from NodeForge.callable_contracts import (
+from NodeForge.semantic.callable_contracts import (
     GroupInputContract,
     GroupOutputContract,
     SourceCallableParameter,
@@ -30,8 +30,8 @@ from NodeForge.semantic.parsing import normalized_statements
 from NodeForge.resolved_environment import (
     PackageCallableExport, ResolvedCatalog, ResolvedEnvironment, ResolvedPackageNamespace,
 )
-from NodeForge.semantic_group import analyze_group_source
-from NodeForge.semantic_ir import IRPanelDeclaration
+from NodeForge.semantic.group import analyze_group_source
+from NodeForge.semantic.ir import IRPanelDeclaration
 from NodeForge.semantic.source_callables import SourceCallablePreparationKey
 from NodeForge.semantic.source_callable_session import SourceCallableSession
 
@@ -298,9 +298,9 @@ def test_imported_semantic_contract_derives_optional_unicode_keyword_aliases(tmp
 
 def _prepared_group(source: str, identity: GroupCompilationIdentity):
     """Return a minimal immutable semantic artifact for materializer-boundary tests."""
-    from NodeForge.callable_contracts import GroupInterfaceContract
-    from NodeForge.semantic_group import SemanticGroupCompilation
-    from NodeForge.semantic_ir import IRBody
+    from NodeForge.semantic.callable_contracts import GroupInterfaceContract
+    from NodeForge.semantic.group import SemanticGroupCompilation
+    from NodeForge.semantic.ir import IRBody
 
     return SemanticGroupCompilation(
         source=source,
@@ -462,7 +462,7 @@ def test_selected_library_update_forwards_prepared_semantics_only():
 
 
 def test_source_callable_contract_rejects_duplicate_positions_and_hidden_keywords():
-    from NodeForge.callable_contracts import SourceCallableContract
+    from NodeForge.semantic.callable_contracts import SourceCallableContract
 
     function_id = library_function_id("functions", "vendor.pkg", "demo")
     first = SourceCallableParameter(0, "a", "A", "a", NFType.FLOAT, True)
@@ -474,7 +474,7 @@ def test_source_callable_contract_rejects_duplicate_positions_and_hidden_keyword
 
 
 def test_group_interface_contract_rejects_duplicate_canonical_origins():
-    from NodeForge.callable_contracts import GroupInterfaceContract
+    from NodeForge.semantic.callable_contracts import GroupInterfaceContract
 
     origin = BindingId("scope", 0)
     inputs = (
@@ -488,7 +488,7 @@ def test_group_interface_contract_rejects_duplicate_canonical_origins():
 def test_source_callable_records_keep_only_required_preparation_boundary_state():
     """Keep only state required by semantic preparation and exact backend materialization."""
     from dataclasses import fields
-    from NodeForge.semantic_group import SemanticGroupCompilation
+    from NodeForge.semantic.group import SemanticGroupCompilation
     from NodeForge.semantic.source_callables import PreparedSourceCallable
 
     assert {field.name for field in fields(SemanticGroupCompilation)} == {
@@ -509,7 +509,7 @@ def test_source_callable_records_keep_only_required_preparation_boundary_state()
 
 def test_local_source_call_ir_owns_monotonic_shared_and_unique_identity():
     """Semantic traversal allocates stable unique ordinals without backend participation."""
-    from NodeForge.semantic_ir import IRCall, IRCallableKind, IRFunctionMaterializationMode
+    from NodeForge.semantic.ir import IRCall, IRCallableKind, IRFunctionMaterializationMode
     from NodeForge.semantic.source_callable_session import SourceCallableSession
 
     environment = _environment()
@@ -555,7 +555,7 @@ def test_local_source_call_ir_owns_monotonic_shared_and_unique_identity():
 @pytest.mark.parametrize("namespace", ["functions", "examples", "local"])
 def test_pure_source_catalog_namespaces_route_through_source_function_ir(tmp_path, namespace):
     """Functions, Examples, and Local pure-source calls all use permanent source Call IR."""
-    from NodeForge.semantic_ir import IRCall, IRCallableKind, IRFunctionMaterializationMode
+    from NodeForge.semantic.ir import IRCall, IRCallableKind, IRFunctionMaterializationMode
     from NodeForge.semantic.source_callable_session import SourceCallableSession
 
     source_path = tmp_path / f"{namespace}_demo.nf"
@@ -594,7 +594,7 @@ def test_pure_source_catalog_namespaces_route_through_source_function_ir(tmp_pat
 
 def test_source_call_known_but_not_foldable_argument_remains_runtime(tmp_path):
     """Compile-time knowledge never erases a NOT_FOLDABLE runtime source-call operand."""
-    from NodeForge.semantic_ir import IRBinary, IRCall, IRCallableKind
+    from NodeForge.semantic.ir import IRBinary, IRCall, IRCallableKind
     from NodeForge.semantic.source_callable_session import SourceCallableSession
 
     source_path = tmp_path / "demo.nf"
@@ -619,8 +619,8 @@ def test_legacy_source_call_entrypoints_are_absent():
     """Permanent source calls have no fallback adapter or legacy dispatch entrypoint."""
     root = Path(__file__).resolve().parents[2]
     local_source = (root / "local_functions.py").read_text(encoding="utf-8")
-    semantic_source = (root / "semantic_analysis.py").read_text(encoding="utf-8")
-    lowering_source = (root / "semantic_lowering.py").read_text(encoding="utf-8")
+    semantic_source = (root / "semantic/analysis.py").read_text(encoding="utf-8")
+    lowering_source = (root / "semantic/lowering.py").read_text(encoding="utf-8")
 
     assert "def compile_local_function_call" not in local_source
     assert not (root / "library_calls.py").exists()

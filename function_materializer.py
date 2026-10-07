@@ -15,8 +15,8 @@ from typing import Callable, Mapping, MutableMapping
 from .errors import CompileError
 from .group_build_request import BlenderGroupBuildRequest
 from .compiler_identities import FunctionId
-from .semantic_ir import IRFunctionMaterialization
-from .semantic_group import SemanticGroupCompilation
+from .semantic.ir import IRFunctionMaterialization
+from .semantic.group import SemanticGroupCompilation
 from .semantic.parsing import normalized_source
 from .function_instances import (
     direct_library_owner_scope,

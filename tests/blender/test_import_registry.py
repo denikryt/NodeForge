@@ -5,15 +5,15 @@ def test_import_and_registry_checks():
     """Permanent compiler modules import and the declarative builtin registry is populated."""
     for modname in [
         'compiler',
-        'semantic_analysis',
-        'semantic_body',
-        'semantic_group',
+        'semantic.analysis',
+        'semantic.body',
+        'semantic.group',
         'semantic.source_callables',
         'semantic.source_callable_session',
         'semantic.source_bindings',
         'semantic.call_modifiers',
         'semantic.parsing',
-        'callable_contracts',
+        'semantic.callable_contracts',
         'blender_ir_lowering',
         'systems',
     ]:

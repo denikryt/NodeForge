@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..constants import (
+from ..semantic.constants import (
     TYPE_BOOL, TYPE_BUNDLE, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_MATERIAL,
     TYPE_OBJECT, TYPE_STRING, TYPE_VECTOR,
 )

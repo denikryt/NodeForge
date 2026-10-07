@@ -5,8 +5,8 @@ from __future__ import annotations
 import math
 import struct
 
-from .errors import CompileError
-from .nf_types import NFType, NUMERIC_NF_TYPES
+from ..errors import CompileError
+from ..nf_types import NFType, NUMERIC_NF_TYPES
 
 
 INT_MIN = -2_147_483_648

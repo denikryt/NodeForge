@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from NodeForge.builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
-from NodeForge.call_resolution import CallableEnvironment
+from NodeForge.semantic.builtin_calls import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
+from NodeForge.semantic.call_resolution import CallableEnvironment
 from NodeForge.semantic.compile_time import CompileTimeSnapshot
 from NodeForge.compiler_identities import BindingId
 from NodeForge.semantic.residualization import _preprocess_compile_time
@@ -18,14 +18,14 @@ from NodeForge.extension_semantics import ExtensionDependencySource, ExtensionSe
 from NodeForge.extension_values import ExtensionDependencySlot, ExtensionValue
 from NodeForge.nf_types import NFType
 from NodeForge.resolved_environment import PackageCallableExport, ResolvedPackageNamespace
-from NodeForge.runtime_bindings import RuntimeBindingSymbol
+from NodeForge.semantic.runtime_bindings import RuntimeBindingSymbol
 from NodeForge.semantic.source_bindings import PackageNamespaceBinding
-from NodeForge.semantic_analysis import build_semantic_environment
-from NodeForge.semantic_body import lower_basic_body
-from NodeForge.semantic_ir import (
+from NodeForge.semantic.analysis import build_semantic_environment
+from NodeForge.semantic.body import lower_basic_body
+from NodeForge.semantic.ir import (
     IRBindLeaves, IRCall, IRFinalExpression, IRIf, IRLeafBinding, IRProgram, IRRepeat, IRValue,
 )
-from NodeForge.semantic_values import StructuralRuntimeLeaf
+from NodeForge.semantic.values import StructuralRuntimeLeaf
 from NodeForge.tests.unit.test_extension_semantic_values import _registry
 
 pytestmark = pytest.mark.unit
@@ -523,7 +523,7 @@ def test_repeat_loop_local_extension_value_does_not_escape(tmp_path):
 
 def test_persistence_uses_exact_carrier_result_leaves(tmp_path):
     """Hidden snapshots bind exact carrier-result leaves and do not broaden IRBindLeaves semantics."""
-    from NodeForge.semantic_ir import IRTuple
+    from NodeForge.semantic.ir import IRTuple
 
     result = _lower(
         tmp_path,
@@ -542,7 +542,7 @@ def test_persistence_uses_exact_carrier_result_leaves(tmp_path):
 
 def test_persistence_cannot_bind_nonresult_intermediate_leaf():
     """persistent extension semantic-value snapshotting remains subject to the existing exact IRBindLeaves result-leaf boundary."""
-    from NodeForge.semantic_ir import IRLeafBinding, IRLiteral, IRProgram, IRValue
+    from NodeForge.semantic.ir import IRLeafBinding, IRLiteral, IRProgram, IRValue
 
     intermediate = IRValue(0, NFType.FLOAT)
     result = IRValue(1, NFType.FLOAT)
@@ -671,10 +671,10 @@ def test_transient_semantic_composition_creates_no_body_persistence_binding(tmp_
 def test_persistent_extension_values_core_adds_no_extension_specific_ir_or_lsystem_branch():
     """Persistent semantic state stays generic and reuses ordinary body/Call IR mechanisms."""
     root = Path(__file__).resolve().parents[2]
-    ir_source = (root / "semantic_ir.py").read_text(encoding="utf-8")
+    ir_source = (root / "semantic/ir.py").read_text(encoding="utf-8")
     assert "ExtensionRuntimeLeaf" not in ir_source
     assert "IRExtension" not in ir_source
-    for name in ("semantic_body.py", "semantic_analysis.py", "extension_semantics.py"):
+    for name in ("semantic/body.py", "semantic/analysis.py", "extension_semantics.py"):
         source = (root / name).read_text(encoding="utf-8")
         assert "nodeforge.lsystem" not in source.lower()
         assert "lsystem" not in source.lower()
@@ -709,7 +709,7 @@ def test_persistent_storage_contains_no_package_python_instances(tmp_path):
         callable_environment=_callables(by_name),
         extension_registry=registry,
     )
-    from NodeForge.semantic_analysis import analyze_expression
+    from NodeForge.semantic.analysis import analyze_expression
     from NodeForge.extension_semantics import compact_extension_semantic_payload
 
     root = ast.parse("make(x)", mode="eval").body

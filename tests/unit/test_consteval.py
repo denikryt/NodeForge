@@ -17,7 +17,7 @@ from NodeForge.semantic.compile_time import (
 from NodeForge.semantic.residualization import _collect_preprocessing_written_names
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
-from NodeForge.numeric_semantics import normalize_float_constant
+from NodeForge.semantic.numeric_semantics import normalize_float_constant
 
 pytestmark = pytest.mark.unit
 
@@ -101,7 +101,7 @@ def test_compile_time_f_string_rejects_non_string_or_formatted_interpolation(sou
 
 
 def test_literal_string_and_input_discovery_use_compile_time_fstrings():
-    from NodeForge.builtin_call_semantics import analyze_builtin_call
+    from NodeForge.semantic.builtin_calls import analyze_builtin_call
     from NodeForge.semantic.parsing import _collect_inputs, _literal_string, _parse_source
 
     expr = ast.parse('f"{prefix} Name"', mode="eval").body
@@ -387,7 +387,7 @@ output("Geometry", geo)
     assert "count" not in consts
 
     from NodeForge.semantic.residualization import _infer_input_types
-    from NodeForge.constants import TYPE_INT
+    from NodeForge.semantic.constants import TYPE_INT
 
     assert _infer_input_types(retained).get("count") == TYPE_INT
 
@@ -468,7 +468,7 @@ output("x", x)
 
 def test_infer_input_types_finds_implicit_nested_repeat_count():
     from NodeForge.semantic.residualization import _infer_input_types
-    from NodeForge.constants import TYPE_INT
+    from NodeForge.semantic.constants import TYPE_INT
     from NodeForge.semantic.parsing import _parse_source
 
     stmts = _parse_source(

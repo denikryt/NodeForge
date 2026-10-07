@@ -7,13 +7,13 @@ from types import MappingProxyType
 
 import pytest
 
-from NodeForge.call_resolution import CallableEnvironment
+from NodeForge.semantic.call_resolution import CallableEnvironment
 from NodeForge.semantic.compile_time import CompileTimeSnapshot, ConstVector
 from NodeForge.compiler_identities import BindingId
-from NodeForge.constants import TYPE_BOOL, TYPE_FLOAT, TYPE_INT, TYPE_VECTOR
+from NodeForge.semantic.constants import TYPE_BOOL, TYPE_FLOAT, TYPE_INT, TYPE_VECTOR
 from NodeForge.semantic.consteval import ConstEvalUnavailable, NOT_FOLDABLE, _const_eval, try_runtime_fold
 from NodeForge.errors import CompileError
-from NodeForge.numeric_semantics import (
+from NodeForge.semantic.numeric_semantics import (
     FLOAT_MAX,
     INT_MAX,
     INT_MIN,
@@ -28,15 +28,15 @@ from NodeForge.numeric_semantics import (
     normalize_int_constant,
     resolve_numeric_binary,
 )
-from NodeForge.semantic_analysis import (
+from NodeForge.semantic.analysis import (
     RuntimeBindingSymbol,
     RuntimeResultShape,
     SemanticEnvironment,
     analyze_expression,
     build_semantic_constant_snapshot,
 )
-from NodeForge.semantic_lowering import lower_analyzed_expression
-from NodeForge.semantic_ir import IRBinary, IRLiteral
+from NodeForge.semantic.lowering import lower_analyzed_expression
+from NodeForge.semantic.ir import IRBinary, IRLiteral
 
 
 pytestmark = pytest.mark.unit
@@ -378,11 +378,11 @@ def test_detached_compile_time_float_and_int_keep_canonical_semantic_types():
 
 def test_compile_time_range_items_materialize_as_int_for_runtime_arithmetic():
     """Compile-time range unrolling publishes Int literals into permanent runtime expressions."""
-    from NodeForge.builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
-    from NodeForge.call_resolution import CallableEnvironment
+    from NodeForge.semantic.builtin_calls import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
+    from NodeForge.semantic.call_resolution import CallableEnvironment
     from NodeForge.semantic.residualization import _preprocess_compile_time
-    from NodeForge.semantic_body import lower_basic_body
-    from NodeForge.semantic_ir import IRAssign
+    from NodeForge.semantic.body import lower_basic_body
+    from NodeForge.semantic.ir import IRAssign
 
     source = """
 for i in range(3):
@@ -423,7 +423,7 @@ output(x)
 def test_backend_numeric_lowering_selects_typed_node_families(monkeypatch):
     """Blender lowering realizes typed numeric IR without re-deciding semantic result types."""
     from NodeForge import blender_ir_lowering as backend
-    from NodeForge.semantic_ir import IRValue
+    from NodeForge.semantic.ir import IRValue
     from NodeForge.values import Value
 
     calls = []
@@ -592,7 +592,7 @@ def test_runtime_fold_keeps_all_required_numeric_roots_fail_closed():
 
 
 def test_input_defaults_keep_consumer_specific_numeric_conversion_rules():
-    from NodeForge.builtin_call_semantics import analyze_input_declaration_call
+    from NodeForge.semantic.builtin_calls import analyze_input_declaration_call
 
     def analyze(source):
         return analyze_input_declaration_call(ast.parse(source, mode="eval").body, {})
@@ -732,7 +732,7 @@ def test_backend_compare_uses_int_or_float_data_type_and_explicit_zero_epsilon()
 
 def _body_callables():
     """Return the permanent builtin callable environment used by body numeric tests."""
-    from NodeForge.builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
+    from NodeForge.semantic.builtin_calls import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
 
     return CallableEnvironment(
         frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
@@ -745,7 +745,7 @@ def _body_callables():
 def _lower_preprocessed_body(source):
     """Run source through real preprocessing and permanent Semantic Body lowering."""
     from NodeForge.semantic.residualization import _preprocess_compile_time
-    from NodeForge.semantic_body import lower_basic_body
+    from NodeForge.semantic.body import lower_basic_body
 
     statements = ast.parse(source, mode="exec").body
     preprocessed = _preprocess_compile_time(statements)
@@ -780,7 +780,7 @@ def test_direct_output_rejects_statically_known_int_domain_errors(expression):
 
 def test_direct_output_known_valid_int_expression_remains_runtime_add():
     """Hard-domain validation does not turn a valid known expression into a fold."""
-    from NodeForge.semantic_ir import IRBinary, IROutput
+    from NodeForge.semantic.ir import IRBinary, IROutput
 
     result = _lower_preprocessed_body('output("X", 1 + 2)\n')
     output = next(statement for statement in result.body.statements if isinstance(statement, IROutput))
@@ -791,7 +791,7 @@ def test_direct_output_known_valid_int_expression_remains_runtime_add():
 
 
 def test_range_loop_items_materialize_as_int_and_feed_int_add():
-    from NodeForge.semantic_ir import IRAssign
+    from NodeForge.semantic.ir import IRAssign
 
     result = _lower_preprocessed_body(
         "for i in range(3):\n"
@@ -821,7 +821,7 @@ def test_range_loop_items_materialize_as_int_and_feed_int_add():
 
 
 def test_len_and_sum_results_feed_permanent_int_runtime_arithmetic():
-    from NodeForge.semantic_ir import IRAssign
+    from NodeForge.semantic.ir import IRAssign
 
     result = _lower_preprocessed_body(
         "items = [1, 2, 3]\n"
@@ -843,7 +843,7 @@ def test_len_and_sum_results_feed_permanent_int_runtime_arithmetic():
 
 
 def test_input_float_runtime_value_plus_int_literal_remains_float():
-    from NodeForge.semantic_ir import IRAssign
+    from NodeForge.semantic.ir import IRAssign
 
     result = _lower_preprocessed_body(
         'value = input_float("Value", default=1)\n'
@@ -860,7 +860,7 @@ def test_input_float_runtime_value_plus_int_literal_remains_float():
 
 
 def test_runtime_if_remains_runtime_and_merges_int_state():
-    from NodeForge.semantic_ir import IRAssign, IRIf
+    from NodeForge.semantic.ir import IRAssign, IRIf
 
     result = _lower_preprocessed_body(
         'condition = input_bool("C")\n'
@@ -887,8 +887,8 @@ def test_repeat_repeat_exact_type_historical_type_split_and_marker_are_removed()
     import NodeForge
 
     root = Path(NodeForge.__file__).resolve().parent
-    control_flow_source = (root / "semantic_control_flow.py").read_text()
-    ir_source = (root / "semantic_ir.py").read_text()
+    control_flow_source = (root / "semantic/control_flow.py").read_text()
+    ir_source = (root / "semantic/ir.py").read_text()
     backend_source = (root / "blender_ir_lowering.py").read_text()
     combined = "\n".join((control_flow_source, ir_source, backend_source))
     assert "repeat_state_output_type" not in combined

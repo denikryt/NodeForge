@@ -1,6 +1,6 @@
 """Declarative namespace inventory for NodeForge DSL builtins."""
 
-from ..builtin_call_semantics import (
+from .builtin_calls import (
     INPUT_DECLARATION_BUILTIN_NAMES,
     IR_CAPABLE_BUILTIN_NAMES,
 )

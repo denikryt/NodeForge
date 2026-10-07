@@ -4,8 +4,8 @@ import ast
 
 import pytest
 
-from NodeForge.constants import TYPE_MATERIAL, TYPE_TOKEN_NAMES
-from NodeForge.builtin_call_semantics import analyze_builtin_call
+from NodeForge.semantic.constants import TYPE_MATERIAL, TYPE_TOKEN_NAMES
+from NodeForge.semantic.builtin_calls import analyze_builtin_call
 
 pytestmark = pytest.mark.unit
 

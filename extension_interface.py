@@ -8,7 +8,7 @@ import types
 import typing
 from collections.abc import Callable, Mapping
 
-from .callable_contracts import canonicalize_group_input_default, source_argument_type_matches
+from .semantic.callable_contracts import canonicalize_group_input_default, source_argument_type_matches
 from .errors import CompileError
 from .evaluation_modes import EvaluationMode
 from .extension_annotations import MARKER_TO_NF_TYPE

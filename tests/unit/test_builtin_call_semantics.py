@@ -6,22 +6,22 @@ import ast
 
 import pytest
 
-from NodeForge.builtin_call_semantics import (
+from NodeForge.semantic.builtin_calls import (
     INPUT_DECLARATION_BUILTIN_NAMES,
     IR_CAPABLE_BUILTIN_NAMES,
     analyze_builtin_call,
     analyze_input_declaration_call,
 )
-from NodeForge.builtins.registry import BUILTIN_NAMES, CALLABLE_BUILTIN_NAMES
-from NodeForge.call_resolution import (
+from NodeForge.semantic.builtin_registry import BUILTIN_NAMES, CALLABLE_BUILTIN_NAMES
+from NodeForge.semantic.call_resolution import (
     ContextReadCallResult, NamedOutputsCallResult, ProjectedCallResult, RuntimeCallResult, TupleCallResult,
 )
-from NodeForge.constants import (
+from NodeForge.semantic.constants import (
     TYPE_BOOL, TYPE_BUNDLE, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_MATERIAL,
     TYPE_OBJECT, TYPE_ROTATION, TYPE_STRING, TYPE_VECTOR,
 )
 from NodeForge.errors import CompileError
-from NodeForge.group_context import GroupContextSlot
+from NodeForge.semantic.group_context import GroupContextSlot
 
 
 pytestmark = pytest.mark.unit

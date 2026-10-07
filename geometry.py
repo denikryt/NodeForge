@@ -1,12 +1,12 @@
 """Generic geometry helpers such as cube(), transform(), join(), and polyline()."""
 
-from .constants import *
-from .attribute_domains import normalize_attribute_domain
+from .semantic.constants import *
+from .semantic.attribute_domains import normalize_attribute_domain
 from .errors import CompileError
 from .values import Value
 from .nodes import _new_node, _value, _combine_xyz, _combine_xyz_mixed, _is_number_type
 from .semantic.compile_time import _as_float_const, _is_const_number, _is_const_vector_like
-from .numeric_semantics import normalize_int_constant
+from .semantic.numeric_semantics import normalize_int_constant
 
 
 

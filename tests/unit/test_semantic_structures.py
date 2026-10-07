@@ -8,7 +8,7 @@ import pytest
 
 from NodeForge.compiler_identities import BindingId
 from NodeForge.nf_types import NFType
-from NodeForge.semantic_ir import (
+from NodeForge.semantic.ir import (
     IRArray,
     IRBindLeaves,
     IRBinding,
@@ -19,7 +19,7 @@ from NodeForge.semantic_ir import (
     IRTuple,
     IRValue,
 )
-from NodeForge.semantic_values import (
+from NodeForge.semantic.values import (
     ObjectInfoState,
     ObjectSemanticId,
     ObjectSemanticSnapshot,
@@ -180,11 +180,11 @@ def test_ir_discard_expression_accepts_structural_program_and_is_detached():
 def test_semantic_modules_are_blender_independent_and_no_aggregate_nftypes_exist():
     root = Path(__file__).resolve().parents[2]
     for relative in (
-        "semantic_values.py",
-        "semantic_ir.py",
-        "semantic_analysis.py",
-        "semantic_lowering.py",
-        "semantic_body.py",
+        "semantic/values.py",
+        "semantic/ir.py",
+        "semantic/analysis.py",
+        "semantic/lowering.py",
+        "semantic/body.py",
     ):
         source = (root / relative).read_text(encoding="utf-8")
         assert "import bpy" not in source

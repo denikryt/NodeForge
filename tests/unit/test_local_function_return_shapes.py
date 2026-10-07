@@ -6,7 +6,7 @@ import types
 
 import pytest
 
-from NodeForge.constants import TYPE_FLOAT, TYPE_TOKEN_NAMES
+from NodeForge.semantic.constants import TYPE_FLOAT, TYPE_TOKEN_NAMES
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
 

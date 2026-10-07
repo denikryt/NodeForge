@@ -11,35 +11,35 @@ import ast
 from dataclasses import dataclass, fields, is_dataclass, replace
 from typing import Mapping
 
-from .builtin_call_semantics import (
+from .builtin_calls import (
     INPUT_DECLARATION_BUILTIN_NAMES,
     INPUT_DECLARATION_PLACEMENT_ERROR,
     analyze_input_declaration_call,
     analyze_contextual_store_call,
     analyze_contextual_set_position_call,
 )
-from .compiler_identities import BindingId, CallSiteId, FunctionId, InputDeclarationId, InterfaceInputOrigin
+from ..compiler_identities import BindingId, CallSiteId, FunctionId, InputDeclarationId, InterfaceInputOrigin
 from .constants import TYPE_OBJECT
-from .semantic.consteval import (
+from .consteval import (
     ConstEvalUnavailable,
     _const_eval,
     _is_compile_time_owned_assignment_rhs,
 )
-from .semantic.residualization import (
+from .residualization import (
     CompileTimeAppendExpression,
     CompileTimeBindExpression,
     CompileTimeForEffect,
 )
-from .semantic.compile_time import CompileTimeSnapshot, CompileTimeState
-from .errors import CompileError
-from .extension_semantics import ExtensionDependencySource, ExtensionSemanticPayload
-from .nf_types import NFType
+from .compile_time import CompileTimeSnapshot, CompileTimeState
+from ..errors import CompileError
+from ..extension_semantics import ExtensionDependencySource, ExtensionSemanticPayload
+from ..nf_types import NFType
 from .numeric_semantics import normalize_float_constant, normalize_int_constant
 from .group_context import GroupContextAvailabilityCursor, GroupContextSlot
-from .semantic.parsing import _literal_string
+from .parsing import _literal_string
 from .runtime_bindings import RuntimeBindingSymbol, validate_runtime_binding_target
-from .semantic_analysis import analyze_expression, build_semantic_environment
-from .semantic_ir import (
+from .analysis import analyze_expression, build_semantic_environment
+from .ir import (
     IRAssign,
     IRBindLeaves,
     IRBody,
@@ -66,8 +66,8 @@ from .semantic_ir import (
     IRValue,
     IRBinding,
 )
-from .semantic_lowering import lower_analyzed_dependency_sources, lower_analyzed_expression
-from .semantic_control_flow import (
+from .lowering import lower_analyzed_dependency_sources, lower_analyzed_expression
+from .control_flow import (
     BranchMergePolicy,
     lower_runtime_if,
     parse_repeat_range_for,
@@ -76,12 +76,12 @@ from .semantic_control_flow import (
     require_repeat_state_assignment,
     RuntimeMergeSymbol,
 )
-from .semantic_geometry_builder import (
+from .geometry_builder import (
     GeometryBuilderState,
     join_binding_program as builder_join_binding_program,
     validate_geometry_builder_constructor,
 )
-from .semantic_values import (
+from .values import (
     ArrayResultShape,
     ExtensionResultShape,
     NamedOutputsResultShape,

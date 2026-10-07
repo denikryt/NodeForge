@@ -7,10 +7,10 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Mapping, TypeAlias
 
-from .compiler_identities import BindingId
-from .errors import CompileError
-from .extension_contracts import ExtensionTypeId
-from .nf_types import NFType
+from ..compiler_identities import BindingId
+from ..errors import CompileError
+from ..extension_contracts import ExtensionTypeId
+from ..nf_types import NFType
 
 
 @dataclass(frozen=True, order=True)

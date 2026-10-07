@@ -7,7 +7,7 @@ import pytest
 from NodeForge.compiler_identities import BindingId
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
-from NodeForge.runtime_bindings import (
+from NodeForge.semantic.runtime_bindings import (
     RuntimeBindingSymbol,
     allows_existing_top_level_shadow,
     format_reserved_binding_label,
@@ -58,7 +58,7 @@ def test_runtime_binding_module_has_no_backend_or_legacy_binding_store_dependenc
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2]
-    source = (root / "runtime_bindings.py").read_text(encoding="utf-8")
+    source = (root / "semantic/runtime_bindings.py").read_text(encoding="utf-8")
     assert "from .values" not in source
     assert "import bpy" not in source
     assert "FrontendRuntimeBindings" not in source

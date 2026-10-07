@@ -8,19 +8,19 @@ from pathlib import Path
 
 import pytest
 
-from NodeForge.builtin_call_semantics import (
+from NodeForge.semantic.builtin_calls import (
     INPUT_DECLARATION_BUILTIN_NAMES,
     IR_CAPABLE_BUILTIN_NAMES,
 )
-from NodeForge.builtins import registry as builtin_registry
-from NodeForge.call_resolution import CallableEnvironment
+from NodeForge.semantic import builtin_registry
+from NodeForge.semantic.call_resolution import CallableEnvironment
 from NodeForge.semantic.compile_time import CompileTimeSnapshot
 from NodeForge.compiler_identities import BindingId
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
-from NodeForge.runtime_bindings import RuntimeBindingSymbol
-from NodeForge.semantic_body import lower_basic_body
-from NodeForge.semantic_ir import IRIf, IRRepeat
+from NodeForge.semantic.runtime_bindings import RuntimeBindingSymbol
+from NodeForge.semantic.body import lower_basic_body
+from NodeForge.semantic.ir import IRIf, IRRepeat
 from NodeForge.values import ObjectValue, Value
 
 
@@ -102,7 +102,7 @@ def test_i2_positive_repeat_and_store_helpers_live_with_permanent_backend_owners
     """Repeat-zone and Store Named Attribute realization live in their final backend modules."""
     repeat_source = (ROOT / "blender_ir_lowering.py").read_text(encoding="utf-8")
     geometry_source = (ROOT / "geometry.py").read_text(encoding="utf-8")
-    domain_source = (ROOT / "attribute_domains.py").read_text(encoding="utf-8")
+    domain_source = (ROOT / "semantic/attribute_domains.py").read_text(encoding="utf-8")
     assert "def _create_repeat_zone(" in repeat_source
     assert "def _repeat_item_type_for_nf_type(" in repeat_source
     assert "def _store_named_attribute(" in geometry_source
@@ -148,7 +148,7 @@ def test_i3_negative_builtin_registry_exposes_no_ast_execution_dispatch():
     """The builtin namespace cannot execute source AST or retain handler tables."""
     assert not hasattr(builtin_registry, "compile_call")
     assert not hasattr(builtin_registry, "_HANDLERS")
-    source = (ROOT / "builtins" / "registry.py").read_text(encoding="utf-8")
+    source = (ROOT / "semantic" / "builtin_registry.py").read_text(encoding="utf-8")
     assert "compile_call" not in source
     assert "_HANDLERS" not in source
 
@@ -185,7 +185,7 @@ def test_i5_negative_invalid_body_raises_instead_of_returning_legacy_retry_senti
     """Unsupported source is rejected at the semantic boundary rather than delegated elsewhere."""
     with pytest.raises(CompileError):
         _lower("x = definitely_not_a_callable(1)\noutput(x)")
-    for relative in ("semantic_analysis.py", "semantic_body.py", "semantic_control_flow.py", "semantic_group.py"):
+    for relative in ("semantic/analysis.py", "semantic/body.py", "semantic/control_flow.py", "semantic/group.py"):
         source = (ROOT / relative).read_text(encoding="utf-8")
         for token in ("BODY_UNSUPPORTED", "legacy_binding_names", "unsupported_sentinel", "_BuiltinOperandUnsupported"):
             assert token not in source, (relative, token)
@@ -231,7 +231,7 @@ def test_i7_positive_persisted_and_unsupported_owner_boundaries_remain_present()
     """Persisted Blender compatibility and mixed source/interface rejection remain explicit."""
     interface_source = (ROOT / "interface.py").read_text(encoding="utf-8")
     catalog_source = (ROOT / "catalog.py").read_text(encoding="utf-8")
-    semantic_source = (ROOT / "semantic_analysis.py").read_text(encoding="utf-8")
+    semantic_source = (ROOT / "semantic/analysis.py").read_text(encoding="utf-8")
     assert "def _legacy_socket_type(" in interface_source
     assert "both source.nf and interface.py is intentionally unsupported" in catalog_source
     assert "Mixed source.nf + interface.py owners are outside the supported callable model" in semantic_source
@@ -246,8 +246,8 @@ def test_i7_negative_v1_package_recognition_has_no_executable_registry_api():
 # I8 — Extension v2 remains the package execution boundary.
 def test_i8_positive_extension_calls_lower_through_extension_ir_kind():
     """Permanent extension analysis/lowering retains the typed Extension v2 IR boundary."""
-    analysis_source = (ROOT / "semantic_analysis.py").read_text(encoding="utf-8")
-    lowering_source = (ROOT / "semantic_lowering.py").read_text(encoding="utf-8")
+    analysis_source = (ROOT / "semantic/analysis.py").read_text(encoding="utf-8")
+    lowering_source = (ROOT / "semantic/lowering.py").read_text(encoding="utf-8")
     assert "CallableKind.EXTENSION" in analysis_source
     assert "IRCallableKind.EXTENSION" in lowering_source
 
@@ -256,7 +256,7 @@ def test_i8_negative_permanent_extension_path_contains_no_v1_callable_kinds_or_c
     """The permanent extension path has no SYSTEM/BACKEND_HELPER/Compiler.compile escape lane."""
     combined = "\n".join(
         (ROOT / relative).read_text(encoding="utf-8")
-        for relative in ("semantic_analysis.py", "semantic_lowering.py", "extension_registry.py")
+        for relative in ("semantic/analysis.py", "semantic/lowering.py", "extension_registry.py")
     )
     for token in ("CallableKind.SYSTEM", "CallableKind.BACKEND_HELPER", "Compiler.compile("):
         assert token not in combined
@@ -340,7 +340,7 @@ def test_i11_negative_lowering_does_not_reconstruct_audited_source_defaults():
     for token in forbidden:
         assert token not in source, token
 
-    semantic_lowering_source = (ROOT / "semantic_lowering.py").read_text(encoding="utf-8")
+    semantic_lowering_source = (ROOT / "semantic/lowering.py").read_text(encoding="utf-8")
     assert 'option_map.get("raw_output_mode")' not in semantic_lowering_source
     assert 'option_map["raw_output_mode"]' in semantic_lowering_source
 

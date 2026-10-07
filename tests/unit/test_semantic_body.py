@@ -7,15 +7,15 @@ import pytest
 
 from NodeForge.semantic.compile_time import CompileTimeSnapshot
 
-from NodeForge.builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
-from NodeForge.call_resolution import CallableEnvironment
+from NodeForge.semantic.builtin_calls import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
+from NodeForge.semantic.call_resolution import CallableEnvironment
 from NodeForge.compiler_identities import BindingId, InputDeclarationId
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
-from NodeForge.runtime_bindings import RuntimeBindingSymbol
-from NodeForge.semantic_values import StructuralArrayRef, StructuralRuntimeLeaf
-from NodeForge.semantic_body import _runtime_if_invalidated_incoming_runtime_bindings, lower_basic_body
-from NodeForge.semantic_ir import (
+from NodeForge.semantic.runtime_bindings import RuntimeBindingSymbol
+from NodeForge.semantic.values import StructuralArrayRef, StructuralRuntimeLeaf
+from NodeForge.semantic.body import _runtime_if_invalidated_incoming_runtime_bindings, lower_basic_body
+from NodeForge.semantic.ir import (
     IRAssign, IRArray, IRBindLeaves, IRBody, IRFinalExpression, IRIf,
     IRContextRead, IRContextWrite, IRDiscardExpression, IRInputDeclaration, IROutput, IRPanelDeclaration,
     IRBinary, IRLiteral, IRProgram, IRRepeat, IRValue,
@@ -117,7 +117,7 @@ def test_augassign_desugars_to_assign_and_keeps_existing_binding_identity():
     assigns = [statement for statement in result.body.statements if isinstance(statement, IRAssign)]
     assert len(assigns) == 2
     assert assigns[0].binding_id == assigns[1].binding_id
-    assert "IRAugAssign" not in __import__("NodeForge.semantic_ir", fromlist=["*"]).__dict__
+    assert "IRAugAssign" not in __import__("NodeForge.semantic.ir", fromlist=["*"]).__dict__
 
 
 def test_unknown_augassign_keeps_existing_public_diagnostic():
@@ -378,7 +378,7 @@ def test_group_semantic_preparation_publishes_entry_binding_identity_through_int
     """Implicit group inputs expose their final owner-scoped BindingId through the canonical interface."""
     from NodeForge.compiler_identities import GroupCompilationIdentity
     from NodeForge.resolved_environment import ResolvedCatalog, ResolvedEnvironment
-    from NodeForge.semantic_group import analyze_group_source
+    from NodeForge.semantic.group import analyze_group_source
 
     environment = ResolvedEnvironment(
         {name: ResolvedCatalog(name, {}) for name in ("functions", "examples", "local")},
@@ -402,7 +402,7 @@ def test_basic_body_frontend_has_no_backend_dependencies_or_compiler_mutation():
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2]
-    source = (root / "semantic_body.py").read_text(encoding="utf-8")
+    source = (root / "semantic/body.py").read_text(encoding="utf-8")
     import io
     import tokenize
     code_only = "".join(
@@ -437,7 +437,7 @@ def test_body_lowerer_is_ast_free():
 
 def test_library_duplicate_display_labels_bind_positionally_and_reject_ambiguous_keywords():
     """Imported source-call binding uses final positions and rejects ambiguous display labels."""
-    from NodeForge.callable_contracts import SourceCallableParameter, bind_imported_source_arguments
+    from NodeForge.semantic.callable_contracts import SourceCallableParameter, bind_imported_source_arguments
 
     parameters = (
         SourceCallableParameter(0, "a", "Scale", "scale", NFType.FLOAT, True),
@@ -477,7 +477,7 @@ def test_generated_local_function_source_prologue_is_basic_body_eligible():
 
 def test_imported_source_call_argument_slots_are_final_interface_positions():
     """Semantic imported-call binding carries physical input positions without socket-name lookup."""
-    from NodeForge.callable_contracts import SourceCallableParameter, bind_imported_source_arguments
+    from NodeForge.semantic.callable_contracts import SourceCallableParameter, bind_imported_source_arguments
 
     parameters = (
         SourceCallableParameter(0, "left", "Scale", "scale", NFType.FLOAT, True),
@@ -503,7 +503,7 @@ def test_fixed_tuple_assignment_projection_and_unpack_use_one_leaf_binding_ir():
         "output('Captured', pair[1])",
         bindings=bindings,
     )
-    from NodeForge.semantic_ir import IRBindLeaves, IROutput, IRBinding
+    from NodeForge.semantic.ir import IRBindLeaves, IROutput, IRBinding
 
     assert isinstance(stored.body.statements[0], IRBindLeaves)
     assert isinstance(stored.body.statements[1], IROutput)
@@ -530,7 +530,7 @@ def test_fixed_tuple_assignment_projection_and_unpack_use_one_leaf_binding_ir():
 
 def test_fixed_named_outputs_are_stored_and_selected_without_legacy_structural_state():
     """Raw named outputs remain frontend structure across later statements."""
-    from NodeForge.semantic_ir import IRBindLeaves, IROutput, IRBinding
+    from NodeForge.semantic.ir import IRBindLeaves, IROutput, IRBinding
 
     result = _lower(
         'parts = node("ShaderNodeSeparateXYZ", outputs={"X": Float, "Y": Float})\n'
@@ -549,7 +549,7 @@ def test_named_outputs_do_not_unpack_positionally():
 
 def test_object_info_alias_configuration_is_frontend_owned_in_basic_body():
     """Aliases share one Object identity and explicit Object Info configuration."""
-    from NodeForge.semantic_ir import IRAssign, IRDiscardExpression, IRObjectProperty, IROutput
+    from NodeForge.semantic.ir import IRAssign, IRDiscardExpression, IRObjectProperty, IROutput
 
     result = _lower(
         'obj = input_object("Source")\n'
@@ -591,7 +591,7 @@ def test_object_reassignment_to_scalar_does_not_fail_on_stale_semantic_state():
 
 
 def test_standalone_object_info_is_discard_not_automatic_output():
-    from NodeForge.semantic_ir import IRDiscardExpression, IRFinalExpression
+    from NodeForge.semantic.ir import IRDiscardExpression, IRFinalExpression
 
     result = _lower('obj = input_object("Source")\nobj.info(as_instance=False)')
     assert isinstance(result.body.statements[-1], IRDiscardExpression)
@@ -599,7 +599,7 @@ def test_standalone_object_info_is_discard_not_automatic_output():
 
 
 def test_temporary_object_info_statement_is_accepted_before_later_output():
-    from NodeForge.semantic_ir import IRDiscardExpression, IROutput
+    from NodeForge.semantic.ir import IRDiscardExpression, IROutput
 
     result = _lower(
         'node("GeometryNodeObjectInfo", output="Object", typ=Object).info(as_instance=False)\n'
@@ -611,7 +611,7 @@ def test_temporary_object_info_statement_is_accepted_before_later_output():
 
 def test_structural_projection_binding_ids_are_stable_by_key_and_never_recycled():
     """Historical projection slots reuse only the same source/key and new keys stay monotonic."""
-    from NodeForge.semantic_ir import IRBindLeaves
+    from NodeForge.semantic.ir import IRBindLeaves
 
     bindings = dict([_binding("geo", 0, NFType.GEOMETRY), _binding("value", 1, NFType.FLOAT)])
     result = _lower(
@@ -633,7 +633,7 @@ def test_structural_projection_binding_ids_are_stable_by_key_and_never_recycled(
 
 def test_ordinary_and_structural_ownership_are_mutually_exclusive_with_historical_reuse():
     """Rebinding a name across scalar/structural forms keeps separate stable slot identities."""
-    from NodeForge.semantic_ir import IRAssign, IRBindLeaves
+    from NodeForge.semantic.ir import IRAssign, IRBindLeaves
 
     result = _lower(
         'x = 1.0\n'
@@ -664,7 +664,7 @@ def test_tuple_unpack_clears_stale_compile_time_constants():
 
 def test_partial_object_info_configuration_merges_before_resolution():
     """Separate pre-resolution info calls update one shared Object state rather than resetting it."""
-    from NodeForge.semantic_ir import IRObjectProperty
+    from NodeForge.semantic.ir import IRObjectProperty
 
     result = _lower(
         'obj = input_object("Source")\n'
@@ -698,12 +698,12 @@ def test_structural_object_leaves_preserve_independent_provenance():
         'b.info(as_instance=False)\n'
         'output("Geometry", ga)'
     )
-    from NodeForge.semantic_ir import IRDiscardExpression
+    from NodeForge.semantic.ir import IRDiscardExpression
     assert any(isinstance(statement, IRDiscardExpression) for statement in result.body.statements)
 
 
 def test_stored_tuple_negative_index_selects_existing_leaf_binding():
-    from NodeForge.semantic_ir import IRBindLeaves, IROutput, IRBinding
+    from NodeForge.semantic.ir import IRBindLeaves, IROutput, IRBinding
 
     bindings = dict([_binding("geo", 0, NFType.GEOMETRY), _binding("value", 1, NFType.FLOAT)])
     result = _lower(
@@ -1017,7 +1017,7 @@ def test_contextual_store_and_statement_set_position_lower_to_context_call_write
         assert any(isinstance(op, IRContextRead) for op in operations)
         assert any(getattr(getattr(op, "target", None), "name", None) == target for op in operations)
         assert any(isinstance(op, IRContextWrite) for op in operations)
-    import NodeForge.semantic_ir as semantic_ir
+    import NodeForge.semantic.ir as semantic_ir
     assert not hasattr(semantic_ir, "IRStore")
     assert not hasattr(semantic_ir, "IRSetPosition")
 

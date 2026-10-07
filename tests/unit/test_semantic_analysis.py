@@ -8,7 +8,7 @@ import pytest
 
 from NodeForge.semantic.compile_time import CompileTimeSnapshot
 
-from NodeForge.constants import (
+from NodeForge.semantic.constants import (
     TYPE_BOOL,
     TYPE_BUNDLE,
     TYPE_FLOAT,
@@ -22,8 +22,8 @@ from NodeForge.constants import (
 from NodeForge.errors import CompileError
 from NodeForge.semantic.consteval import _const_eval
 from NodeForge.compiler_identities import BindingId
-from NodeForge.call_resolution import CallableEnvironment
-from NodeForge.semantic_values import (
+from NodeForge.semantic.call_resolution import CallableEnvironment
+from NodeForge.semantic.values import (
     ObjectInfoState,
     ObjectSemanticId,
     ObjectSemanticSnapshot,
@@ -33,7 +33,7 @@ from NodeForge.semantic_values import (
     StructuralArrayState,
     StructuralRuntimeLeaf,
 )
-from NodeForge.semantic_analysis import (
+from NodeForge.semantic.analysis import (
     ArrayResultShape, RuntimeBindingSymbol, RuntimeResultShape, SemanticEnvironment,
     analyze_expression, build_semantic_constant_snapshot,
 )

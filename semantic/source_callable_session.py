@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import MappingProxyType
 from typing import Mapping
 
-from ..callable_contracts import SourceCallableContract, SourceCallableParameter, normalize_callable_keyword
+from .callable_contracts import SourceCallableContract, SourceCallableParameter, normalize_callable_keyword
 from ..compiler_identities import FunctionId, GroupCompilationIdentity
 from ..errors import CompileError
 from .source_callables import LocalReturnShape, PreparedSourceCallable, SourceCallablePreparationKey
@@ -56,7 +56,7 @@ class SourceCallableSession:
         source = self._source_snapshot(function_id, source_supplier)
         self._active_stack.append(function_id)
         try:
-            from ..semantic_group import analyze_group_source
+            from .group import analyze_group_source
 
             group = analyze_group_source(
                 source,

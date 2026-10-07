@@ -5,11 +5,11 @@ from __future__ import annotations
 import unicodedata
 from dataclasses import dataclass
 
-from .compiler_identities import BindingId, FunctionId, InputDeclarationId, InterfaceInputOrigin
-from .errors import CompileError
-from .nf_types import NFType
+from ..compiler_identities import BindingId, FunctionId, InputDeclarationId, InterfaceInputOrigin
+from ..errors import CompileError
+from ..nf_types import NFType
 from .numeric_semantics import normalize_float_constant, normalize_int_constant
-from .semantic_ir import IRPanelDeclaration
+from .ir import IRPanelDeclaration
 
 
 @dataclass(frozen=True)

@@ -85,7 +85,7 @@ def test_callsite_identity_and_digest_are_owner_callee_and_ordinal_sensitive():
 
 def test_body_identity_allocator_owns_monotonic_source_call_occurrence_sequence():
     """Unique source-call ordinals belong to the non-rewinding semantic body allocator."""
-    from NodeForge.semantic_body import _BodyIdentityAllocator
+    from NodeForge.semantic.body import _BodyIdentityAllocator
 
     first = local_function_id(_ROOT_OWNER, "first", "x:FLOAT")
     second = local_function_id(_ROOT_OWNER, "second", "x:FLOAT")

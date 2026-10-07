@@ -14,14 +14,14 @@ from NodeForge.compiler_identities import InputDeclarationId
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
 from NodeForge import interface, update
-from NodeForge.builtin_call_semantics import (
+from NodeForge.semantic.builtin_calls import (
     INPUT_DECLARATION_BUILTIN_NAMES,
     IR_CAPABLE_BUILTIN_NAMES,
     analyze_input_declaration_call,
 )
-from NodeForge.call_resolution import CallableEnvironment
-from NodeForge.semantic_body import lower_basic_body
-from NodeForge.semantic_ir import IRIf, IRInputDeclaration
+from NodeForge.semantic.call_resolution import CallableEnvironment
+from NodeForge.semantic.body import lower_basic_body
+from NodeForge.semantic.ir import IRIf, IRInputDeclaration
 
 pytestmark = pytest.mark.unit
 

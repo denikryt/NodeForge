@@ -2,11 +2,11 @@
 
 import ast
 
-from NodeForge.builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES
-from NodeForge.constants import TYPE_STRING, TYPE_TOKEN_NAMES
+from NodeForge.semantic.builtin_calls import INPUT_DECLARATION_BUILTIN_NAMES
+from NodeForge.semantic.constants import TYPE_STRING, TYPE_TOKEN_NAMES
 from NodeForge.builtins import raw_nodes
 from NodeForge.semantic.source_callables import input_call_for_type, value_type_for_const
-from NodeForge.callable_contracts import source_argument_type_matches
+from NodeForge.semantic.callable_contracts import source_argument_type_matches
 
 
 def test_string_type_token_and_permanent_input_registration():

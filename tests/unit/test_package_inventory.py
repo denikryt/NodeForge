@@ -54,7 +54,7 @@ class _FakeGroupBackend:
         self, source, *, compilation_identity, source_callable_session=None, **kwargs
     ):
         """Prepare source semantics before the fake physical callback is invoked."""
-        from NodeForge.semantic_group import analyze_group_source
+        from NodeForge.semantic.group import analyze_group_source
         session = source_callable_session or self.new_source_callable_session()
         return analyze_group_source(
             source,
@@ -539,7 +539,7 @@ def test_library_materialization_contract_discriminator_is_explicit(package_inve
         function_materialization_owner_scope,
         instance_key_for,
     )
-    from NodeForge.semantic_ir import IRFunctionMaterialization, IRFunctionMaterializationMode
+    from NodeForge.semantic.ir import IRFunctionMaterialization, IRFunctionMaterializationMode
     from NodeForge.function_materializer import FunctionMaterializationContext, FunctionMaterializer
 
     backend = _FakeGroupBackend(compile_group)

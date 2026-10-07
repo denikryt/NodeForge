@@ -2,7 +2,7 @@
 
 from contextlib import nullcontext
 
-from ..constants import TYPE_GEOMETRY
+from ..semantic.constants import TYPE_GEOMETRY
 from ..errors import CompileError
 from ..compiler_identities import BindingId
 from ..values import Value, make_value
@@ -15,11 +15,11 @@ from ..function_instances import (
     interface_contract,
     stamp_function_metadata,
 )
-from ..semantic_group import SemanticGroupCompilation
+from ..semantic.group import SemanticGroupCompilation
 from ..blender_ir_lowering import BlenderIRLoweringContext, lower_body
 from ..function_materializer import FunctionMaterializationContext, FunctionMaterializer
-from ..group_context import GroupContextSlot
-from ..callable_contracts import canonicalize_group_input_default
+from ..semantic.group_context import GroupContextSlot
+from ..semantic.callable_contracts import canonicalize_group_input_default
 from ..blender_group_backend import BlenderGroupBuildRequest
 
 def _assert_prepared_interface_parity(group, prepared: SemanticGroupCompilation) -> None:

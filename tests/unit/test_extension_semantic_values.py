@@ -8,7 +8,7 @@ from types import MappingProxyType
 
 import pytest
 
-from NodeForge.call_resolution import CallableEnvironment
+from NodeForge.semantic.call_resolution import CallableEnvironment
 from NodeForge.compiler_identities import BindingId
 from NodeForge.errors import CompileError
 from NodeForge.extension_contracts import ExtensionTypeId, TypeSpec
@@ -23,13 +23,13 @@ from NodeForge.extension_values import (
     ExtensionValue,
 )
 from NodeForge.nf_types import NFType
-from NodeForge.runtime_bindings import RuntimeBindingSymbol
+from NodeForge.semantic.runtime_bindings import RuntimeBindingSymbol
 from NodeForge.resolved_environment import PackageCallableExport, ResolvedPackageNamespace
 from NodeForge.semantic.source_bindings import PackageNamespaceBinding
-from NodeForge.semantic_analysis import SemanticEnvironment, analyze_expression
-from NodeForge.semantic_ir import IRCall, IRCallOperandRef
-from NodeForge.semantic_lowering import lower_analyzed_expression
-from NodeForge.semantic_values import ArrayResultShape, ExtensionResultShape
+from NodeForge.semantic.analysis import SemanticEnvironment, analyze_expression
+from NodeForge.semantic.ir import IRCall, IRCallOperandRef
+from NodeForge.semantic.lowering import lower_analyzed_expression
+from NodeForge.semantic.values import ArrayResultShape, ExtensionResultShape
 
 pytestmark = pytest.mark.unit
 
@@ -460,7 +460,7 @@ def test_semantic_static_parameter_arrives_detached_without_runtime_dependency(t
 def test_semantic_state_ir_validator_rejects_in_range_incompatible_operand_type():
     """Tagged operand refs are validated against their paired NF_SET rather than range alone."""
     from NodeForge.extension_contracts import ExtensionTypeId, TypeSpec
-    from NodeForge.semantic_ir import IRCallArgument, IRCallOperandRef, IRValue, validate_extension_ir_state
+    from NodeForge.semantic.ir import IRCallArgument, IRCallOperandRef, IRValue, validate_extension_ir_state
 
     spec = TypeSpec("NF_SET", frozenset({NFType.FLOAT}))
     arguments = (IRCallArgument(None, IRValue(0, NFType.VECTOR)),)
@@ -470,8 +470,8 @@ def test_semantic_state_ir_validator_rejects_in_range_incompatible_operand_type(
 
 def test_dependency_slot_actual_type_mismatch_fails_before_ir_emission():
     """Frontend slot type metadata cannot drift from the corresponding analyzed runtime operand."""
-    from NodeForge.call_resolution import AnalyzedCallOperand
-    from NodeForge.semantic_lowering import _detach_extension_state
+    from NodeForge.semantic.call_resolution import AnalyzedCallOperand
+    from NodeForge.semantic.lowering import _detach_extension_state
 
     slot = ExtensionDependencySlot(0, NFType.INT)
     operands = (AnalyzedCallOperand(None, NFType.FLOAT),)

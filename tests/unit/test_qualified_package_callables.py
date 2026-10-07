@@ -16,8 +16,8 @@ from NodeForge.resolved_environment import (
     ResolvedEnvironment,
     ResolvedPackageNamespace,
 )
-from NodeForge.semantic_group import analyze_group_source
-from NodeForge.semantic_ir import IRCall, IRCallableKind
+from NodeForge.semantic.group import analyze_group_source
+from NodeForge.semantic.ir import IRCall, IRCallableKind
 from NodeForge.semantic.source_callable_session import SourceCallableSession
 
 pytestmark = pytest.mark.unit
@@ -527,7 +527,7 @@ def test_local_parameter_can_shadow_outer_package_alias(tmp_path):
 
 @pytest.mark.parametrize('case', ['selected', 'value_collision', 'ambiguous'])
 def test_package_target_is_constructed_only_after_selection(tmp_path, monkeypatch, case):
-    from NodeForge import call_resolution
+    from NodeForge.semantic import call_resolution
     specs = [('nodeforge.math', 'math', ('sin',))]
     if case == 'ambiguous':
         specs.append(('vendor.other', 'other', ('sin',)))

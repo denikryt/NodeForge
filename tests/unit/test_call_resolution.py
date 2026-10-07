@@ -9,7 +9,7 @@ import pytest
 
 from NodeForge.semantic.compile_time import CompileTimeSnapshot
 
-from NodeForge.call_resolution import (
+from NodeForge.semantic.call_resolution import (
     CallableEnvironment,
     CallableKind,
     UNRESOLVED,
@@ -81,7 +81,7 @@ def test_core_bare_call_is_reserved_while_package_member_remains_qualified():
     assert resolve_simple_callable("store", env).kind is CallableKind.TOP_LEVEL_ONLY
     assert resolve_simple_callable("missing", env) is UNRESOLVED
 
-    from NodeForge.call_resolution import resolve_package_callable
+    from NodeForge.semantic.call_resolution import resolve_package_callable
 
     qualified = resolve_package_callable("pkg", "same", env)
     assert qualified.kind is CallableKind.EXTENSION
@@ -102,7 +102,7 @@ def test_environment_defensively_freezes_package_namespace_bindings():
 
 
 def test_two_package_candidates_are_ambiguous_but_qualified_targets_remain_distinct():
-    from NodeForge.call_resolution import resolve_package_callable
+    from NodeForge.semantic.call_resolution import resolve_package_callable
 
     a_id = _extension_id("foo", "vendor.a")
     b_id = _extension_id("foo", "vendor.b")
@@ -122,7 +122,7 @@ def test_two_package_candidates_are_ambiguous_but_qualified_targets_remain_disti
 
 
 def test_qualified_missing_member_has_no_fallback_to_core_or_other_package():
-    from NodeForge.call_resolution import resolve_package_callable
+    from NodeForge.semantic.call_resolution import resolve_package_callable
 
     env = CallableEnvironment(
         {"points"},
@@ -145,7 +145,7 @@ def test_modifier_extraction_uses_detached_constants_and_preserves_explicit_fals
 def _analyze_unresolved(source, *, consts=None):
     """Analyze one unresolved call through the production diagnostic ordering."""
     from types import MappingProxyType
-    from NodeForge.semantic_analysis import SemanticEnvironment, analyze_expression, build_semantic_constant_snapshot
+    from NodeForge.semantic.analysis import SemanticEnvironment, analyze_expression, build_semantic_constant_snapshot
 
     constants, detached = build_semantic_constant_snapshot(CompileTimeSnapshot(consts or {}))
     environment = SemanticEnvironment(
@@ -200,7 +200,7 @@ def test_local_or_explicit_import_collision_with_package_is_ambiguous():
 
 
 def test_different_source_aliases_preserve_canonical_package_target():
-    from NodeForge.call_resolution import resolve_package_callable
+    from NodeForge.semantic.call_resolution import resolve_package_callable
 
     target = _extension_id("sin")
     first = CallableEnvironment(frozenset(), {}, {}, {"math": _package_binding("math", {"sin": target})})
@@ -212,7 +212,7 @@ def test_different_source_aliases_preserve_canonical_package_target():
 def test_resolver_module_has_no_live_catalog_package_or_system_discovery_imports():
     """Pure resolution depends only on the immutable environment supplied by the caller."""
     from pathlib import Path
-    import NodeForge.call_resolution as module
+    import NodeForge.semantic.call_resolution as module
 
     source = Path(module.__file__).read_text(encoding="utf-8")
     assert "from .library import" not in source
@@ -227,15 +227,15 @@ def test_object_info_method_syntax_is_classified_by_semantic_analysis():
     """Object.info is represented as a resolved compiler-owned call, not dynamic dispatch."""
     from types import MappingProxyType
     from NodeForge.compiler_identities import BindingId
-    from NodeForge.constants import TYPE_OBJECT
-    from NodeForge.semantic_analysis import (
+    from NodeForge.semantic.constants import TYPE_OBJECT
+    from NodeForge.semantic.analysis import (
         RuntimeBindingSymbol,
         SemanticEnvironment,
         analyze_expression,
         build_semantic_constant_snapshot,
     )
 
-    from NodeForge.semantic_values import ObjectInfoState, ObjectSemanticId, ObjectSemanticSnapshot
+    from NodeForge.semantic.values import ObjectInfoState, ObjectSemanticId, ObjectSemanticSnapshot
 
     constants, detached = build_semantic_constant_snapshot(CompileTimeSnapshot({}))
     binding_id = BindingId("object-info", 0)

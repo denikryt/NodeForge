@@ -6,10 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from NodeForge.builtin_call_semantics import IR_CAPABLE_BUILTIN_NAMES, analyze_builtin_call
+from NodeForge.semantic.builtin_calls import IR_CAPABLE_BUILTIN_NAMES, analyze_builtin_call
 from NodeForge.builtins import raw_nodes
-from NodeForge.call_resolution import NamedOutputsCallResult, RuntimeCallResult
-from NodeForge.constants import (
+from NodeForge.semantic.call_resolution import NamedOutputsCallResult, RuntimeCallResult
+from NodeForge.semantic.constants import (
     TYPE_BOOL, TYPE_BUNDLE, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT,
     TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING, TYPE_TOKEN_NAMES, TYPE_VECTOR,
 )

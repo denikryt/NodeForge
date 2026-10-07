@@ -5,8 +5,8 @@ import ast
 import pytest
 
 from NodeForge.compiler_identities import BindingId, local_function_id
-from NodeForge.constants import TYPE_FLOAT
-from NodeForge.runtime_bindings import RuntimeBindingSymbol
+from NodeForge.semantic.constants import TYPE_FLOAT
+from NodeForge.semantic.runtime_bindings import RuntimeBindingSymbol
 from NodeForge.semantic.source_callables import analyze_local_captures
 
 pytestmark = pytest.mark.unit

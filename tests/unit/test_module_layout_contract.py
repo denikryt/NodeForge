@@ -87,3 +87,49 @@ def test_compiler_facade_no_longer_owns_group_assembly_implementation():
     assert "def _populate_group(" not in source
     assert "def _assert_prepared_interface_parity(" not in source
     assert "lower_body(" not in source
+
+
+def test_semantic_frontend_cluster_has_canonical_package_owners():
+    """Positive: permanent frontend responsibilities live under semantic/."""
+    _assert_paths_exist({
+        "semantic/analysis.py",
+        "semantic/body.py",
+        "semantic/ir.py",
+        "semantic/lowering.py",
+        "semantic/control_flow.py",
+        "semantic/geometry_builder.py",
+        "semantic/values.py",
+        "semantic/builtin_calls.py",
+        "semantic/builtin_registry.py",
+        "semantic/call_resolution.py",
+        "semantic/callable_contracts.py",
+        "semantic/constants.py",
+        "semantic/numeric_semantics.py",
+        "semantic/runtime_bindings.py",
+        "semantic/group_context.py",
+        "semantic/attribute_domains.py",
+        "semantic/group.py",
+    })
+
+
+def test_old_flat_semantic_owner_paths_are_absent():
+    """Negative: canonical semantic owners cannot survive as flat compatibility modules."""
+    _assert_paths_absent({
+        "semantic_analysis.py",
+        "semantic_body.py",
+        "semantic_ir.py",
+        "semantic_lowering.py",
+        "semantic_control_flow.py",
+        "semantic_geometry_builder.py",
+        "semantic_values.py",
+        "builtin_call_semantics.py",
+        "builtins/registry.py",
+        "call_resolution.py",
+        "callable_contracts.py",
+        "constants.py",
+        "numeric_semantics.py",
+        "runtime_bindings.py",
+        "group_context.py",
+        "attribute_domains.py",
+        "semantic_group.py",
+    })

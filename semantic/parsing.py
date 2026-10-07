@@ -3,7 +3,7 @@
 import ast
 from dataclasses import dataclass
 
-from ..constants import _ALLOWED_CONSTS, TYPE_TOKEN_NAMES
+from .constants import _ALLOWED_CONSTS, TYPE_TOKEN_NAMES
 from .consteval import ConstEvalUnavailable, _const_eval
 from ..errors import CompileError
 
@@ -262,7 +262,7 @@ def _binding_names(stmts):
 
 
 def _builtin_names():
-    from ..builtins import registry as builtin_registry
+    from . import builtin_registry
     return set(builtin_registry.BUILTIN_NAMES) | {"output", "store", "panel"}
 
 

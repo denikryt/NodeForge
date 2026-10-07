@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .errors import CompileError
+from ..errors import CompileError
 
 
 ATTRIBUTE_DOMAINS = frozenset({"POINT", "EDGE", "FACE", "CORNER", "CURVE", "INSTANCE"})

@@ -12,7 +12,7 @@ from pathlib import Path
 import bpy
 
 from NodeForge import compiler, packages
-from NodeForge.constants import TYPE_BUNDLE
+from NodeForge.semantic.constants import TYPE_BUNDLE
 
 
 def _one_node(group, bl_idname):

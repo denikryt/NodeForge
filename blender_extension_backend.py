@@ -10,7 +10,7 @@ from .errors import CompileError
 from .extension_api import ExtensionBackendContext, ExtensionBackendValue
 from .extension_contracts import ExtensionCallableSpec, TypeSpec
 from .extension_values import unpack_value
-from .semantic_ir import IRCallOperandRef
+from .semantic.ir import IRCallOperandRef
 from .nf_types import NFType
 from .values import Value, make_value
 

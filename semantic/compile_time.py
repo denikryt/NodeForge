@@ -5,7 +5,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 from ..errors import CompileError
-from ..numeric_semantics import normalize_float_constant
+from .numeric_semantics import normalize_float_constant
 
 
 class ConstVector(tuple):

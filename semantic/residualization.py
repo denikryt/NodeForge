@@ -9,7 +9,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 
-from ..constants import TYPE_INT
+from .constants import TYPE_INT
 from ..errors import CompileError
 from .compile_time import CompileTimeState
 from .consteval import (

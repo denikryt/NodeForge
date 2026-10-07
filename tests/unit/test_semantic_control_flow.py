@@ -6,14 +6,14 @@ import pytest
 
 from NodeForge.semantic.compile_time import CompileTimeSnapshot
 
-from NodeForge.builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
-from NodeForge.call_resolution import CallableEnvironment
+from NodeForge.semantic.builtin_calls import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
+from NodeForge.semantic.call_resolution import CallableEnvironment
 from NodeForge.compiler_identities import BindingId, InputDeclarationId
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
-from NodeForge.runtime_bindings import RuntimeBindingSymbol
-from NodeForge.semantic_body import lower_basic_body
-from NodeForge.semantic_ir import IRBranchMerge, IRIf, IRInputDeclaration, IRRepeat
+from NodeForge.semantic.runtime_bindings import RuntimeBindingSymbol
+from NodeForge.semantic.body import lower_basic_body
+from NodeForge.semantic.ir import IRBranchMerge, IRIf, IRInputDeclaration, IRRepeat
 
 
 def _callables():
@@ -114,7 +114,7 @@ def test_runtime_if_input_declaration_ordinals_are_root_owned_and_non_rewinding(
 
 def test_runtime_if_object_identity_watermark_is_shared_and_non_rewinding(monkeypatch):
     """Branch-local Object maps share one monotonic root identity watermark."""
-    import NodeForge.semantic_body as semantic_body
+    import NodeForge.semantic.body as semantic_body
 
     original = semantic_body.analyze_expression
     snapshots = []
@@ -487,7 +487,7 @@ def test_repeat_local_if_rejects_float_to_int_assignment_before_merge():
 
 
 def test_post_repeat_int_remains_int_for_downstream_arithmetic():
-    from NodeForge.semantic_ir import IRAssign, IRBinary
+    from NodeForge.semantic.ir import IRAssign, IRBinary
 
     result = _lower(
         'x = input_int("X", default=1)\n'
@@ -517,7 +517,7 @@ def test_contextual_store_inside_runtime_if_no_longer_forces_whole_body_fallback
 def test_runtime_if_result_exposes_only_authoritative_compile_time_exit():
     """Branch-local CT exits remain private to lower_runtime_if()."""
     from dataclasses import fields
-    from NodeForge.semantic_control_flow import RuntimeIfResult
+    from NodeForge.semantic.control_flow import RuntimeIfResult
 
     assert [field.name for field in fields(RuntimeIfResult)] == [
         "statement",

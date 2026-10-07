@@ -79,9 +79,9 @@ def test_frontend_compile_time_modules_do_not_import_bpy():
         "semantic/consteval.py",
         "semantic/residualization.py",
         "semantic/evaluation_resolution.py",
-        "semantic_body.py",
-        "semantic_control_flow.py",
-        "semantic_analysis.py",
+        "semantic/body.py",
+        "semantic/control_flow.py",
+        "semantic/analysis.py",
     ):
         source = (root / relative).read_text(encoding="utf-8")
         assert "import bpy" not in source, relative
@@ -106,8 +106,8 @@ def test_compile_time_state_source_contracts_have_one_owner():
                 direct_accesses.append((str(path.relative_to(root)), node.lineno))
     assert direct_accesses == []
 
-    semantic_body_source = (root / "semantic_body.py").read_text(encoding="utf-8")
-    control_source = (root / "semantic_control_flow.py").read_text(encoding="utf-8")
+    semantic_body_source = (root / "semantic/body.py").read_text(encoding="utf-8")
+    control_source = (root / "semantic/control_flow.py").read_text(encoding="utf-8")
     assert "constants: dict[str, object]" not in semantic_body_source
     assert "CONTROL_FLOW_IR_LEGACY_CONSTANT_THREADING_COMPAT" not in control_source
     assert not (root / "statement_compiler.py").exists()

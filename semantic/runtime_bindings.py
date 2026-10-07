@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .compiler_identities import BindingId
-from .nf_types import NFType
+from ..compiler_identities import BindingId
+from ..nf_types import NFType
 
 
 @dataclass(frozen=True)
@@ -51,7 +51,7 @@ def validate_runtime_binding_target(name: str, reserved_name_labels) -> None:
     """Apply the canonical assignment-target reservation rule with established diagnostics."""
     label = reserved_binding_label(reserved_name_labels, name)
     if label is not None and not allows_existing_top_level_shadow(label):
-        from .errors import CompileError
+        from ..errors import CompileError
         raise CompileError(f"Cannot assign to {name}: name is {format_reserved_binding_label(label)}")
 
 

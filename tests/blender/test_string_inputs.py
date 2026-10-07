@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 from NodeForge import packages
-from NodeForge.constants import TYPE_STRING
+from NodeForge.semantic.constants import TYPE_STRING
 from NodeForge.interface import _get_group_input_defaults
 
 

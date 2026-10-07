@@ -5,21 +5,21 @@ from helpers import *
 import ast
 from types import MappingProxyType, SimpleNamespace
 
-from NodeForge import semantic_body
+from NodeForge.semantic import body as semantic_body
 from NodeForge import compiler as compiler_module
 from NodeForge.blender_ir_lowering import BlenderIRLoweringContext, lower_expression as lower_ir_program
-from NodeForge.constants import (
+from NodeForge.semantic.constants import (
     TYPE_BOOL, TYPE_BUNDLE, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_MATERIAL,
     TYPE_OBJECT, TYPE_STRING, TYPE_VECTOR,
 )
 from NodeForge.errors import CompileError
 from NodeForge.compiler_identities import BindingId
 from NodeForge.nodes import _socket_type_for
-from NodeForge.call_resolution import CallableEnvironment
+from NodeForge.semantic.call_resolution import CallableEnvironment
 from NodeForge.semantic.compile_time import CompileTimeSnapshot
-from NodeForge.semantic_analysis import RuntimeBindingSymbol, SemanticEnvironment, analyze_expression, build_semantic_constant_snapshot
-from NodeForge.semantic_lowering import lower_analyzed_expression
-from NodeForge.semantic_ir import (
+from NodeForge.semantic.analysis import RuntimeBindingSymbol, SemanticEnvironment, analyze_expression, build_semantic_constant_snapshot
+from NodeForge.semantic.lowering import lower_analyzed_expression
+from NodeForge.semantic.ir import (
     IRArray, IRBinary, IRBinding, IRBoolBinary, IRCall, IRCompare, IRConditional, IRLiteral, IRObjectProperty, IRUnary,
     IRVectorComponent, IRVectorLiteral,
 )
@@ -883,7 +883,7 @@ output("Geometry", result)
     check(_nodes(group, "GeometryNodeMeshCube"), "GeometryBuilder semantic expression behavior changed")
     builder_envs = [env for env in environments if "builder" in env.builder_bindings]
     check(builder_envs, "GeometryBuilder hidden BindingId was not exported to semantic expression analysis")
-    from NodeForge.runtime_bindings import RuntimeBindingSymbol
+    from NodeForge.semantic.runtime_bindings import RuntimeBindingSymbol
 
     for environment in builder_envs:
         check("builder" not in environment.runtime_bindings, "GeometryBuilder leaked into ordinary runtime binding names")

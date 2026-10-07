@@ -35,25 +35,25 @@ from .constants import (
     _VECTOR_MATH_VECTOR_OUTPUT_1,
     _VECTOR_MATH_VECTOR_OUTPUT_2,
 )
-from .semantic.compile_time import (
+from .compile_time import (
     ConstVector,
     _as_float_const,
     _is_const_number,
     _is_const_vector,
     _is_const_vector_like,
 )
-from .semantic.consteval import (
+from .consteval import (
     ConstEvalUnavailable,
     _const_eval,
 )
-from .errors import CompileError
-from .evaluation_modes import EvaluationMode
-from .semantic.evaluation_resolution import (
+from ..errors import CompileError
+from ..evaluation_modes import EvaluationMode
+from .evaluation_resolution import (
     CompileTimeSelection,
     RuntimeRequired,
     resolve_argument_evaluation,
 )
-from .nf_types import NFType, NUMERIC_NF_TYPES
+from ..nf_types import NFType, NUMERIC_NF_TYPES
 from .numeric_semantics import normalize_float_constant, normalize_int_constant
 from .group_context import GroupContextSlot
 

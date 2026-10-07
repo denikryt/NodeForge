@@ -2,8 +2,8 @@
 
 import ast
 
-from NodeForge.builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES
-from NodeForge.constants import TYPE_OBJECT, TYPE_TOKEN_NAMES
+from NodeForge.semantic.builtin_calls import INPUT_DECLARATION_BUILTIN_NAMES
+from NodeForge.semantic.constants import TYPE_OBJECT, TYPE_TOKEN_NAMES
 from NodeForge.semantic.source_callables import input_call_for_type
 from NodeForge.builtins import raw_nodes
 from NodeForge.values import ObjectValue, make_value

@@ -17,7 +17,7 @@ from NodeForge.resolved_environment import (
     ResolvedPackageNamespace,
 )
 from NodeForge.environment_resolution import resolve_environment
-from NodeForge.semantic_group import analyze_group_source
+from NodeForge.semantic.group import analyze_group_source
 
 pytestmark = pytest.mark.unit
 

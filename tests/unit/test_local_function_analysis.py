@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 from NodeForge.compiler_identities import BindingId, local_function_id
-from NodeForge.constants import TYPE_FLOAT
-from NodeForge.runtime_bindings import RuntimeBindingSymbol
+from NodeForge.semantic.constants import TYPE_FLOAT
+from NodeForge.semantic.runtime_bindings import RuntimeBindingSymbol
 from NodeForge.semantic.source_callables import analyze_local_captures
 
 pytestmark = pytest.mark.unit
@@ -76,7 +76,7 @@ def test_local_function_definition_owner_identity_is_non_lossy():
 def test_local_call_hands_physical_materialization_to_function_materializer():
     """Frontend source-call analysis and physical local-helper realization stay separate."""
     root = Path(__file__).resolve().parents[2]
-    semantic_source = (root / "semantic_analysis.py").read_text(encoding="utf-8")
+    semantic_source = (root / "semantic/analysis.py").read_text(encoding="utf-8")
     lowering_source = (root / "blender_ir_lowering.py").read_text(encoding="utf-8")
     physical_source = (root / "local_functions.py").read_text(encoding="utf-8")
 

@@ -304,7 +304,7 @@ def _import_compiler_with_fake_bpy(monkeypatch):
 
 def test_import_validation_binds_exact_snapshot_records_and_preserves_sorting(monkeypatch):
     """Explicit, aliased, and star imports retain selected record object identity."""
-    from NodeForge import semantic_group
+    from NodeForge.semantic import group as semantic_group
     from NodeForge.semantic.parsing import FunctionImport
 
     alpha = _Record("examples", "alpha")
@@ -327,7 +327,7 @@ def test_import_validation_binds_exact_snapshot_records_and_preserves_sorting(mo
 
 def test_inherited_import_requires_same_record_identity(monkeypatch):
     """Nested compilation may not silently rebind an inherited callable."""
-    from NodeForge import semantic_group
+    from NodeForge.semantic import group as semantic_group
     selected = _Record("examples", "alpha")
     different = _Record("examples", "alpha")
     environment = ResolvedEnvironment(_catalogs(examples={"alpha": selected}))
@@ -340,7 +340,7 @@ def test_inherited_import_requires_same_record_identity(monkeypatch):
 
 def test_package_namespace_alias_is_not_globally_reserved_inside_local_lexical_scope():
     """Package aliases are direct-scope bindings; local lexical names may shadow them."""
-    from NodeForge import semantic_group
+    from NodeForge.semantic import group as semantic_group
     labels = semantic_group._registered_name_labels({}, {}, {"math": object()})
     assert "math" not in labels
 
@@ -359,7 +359,7 @@ def test_source_call_migration_removes_v1_extension_execution_and_keeps_v2_bound
     assert not (root / "expression_compiler.py").exists()
     assert not (root / "statement_compiler.py").exists()
     local_source = (root / "local_functions.py").read_text(encoding="utf-8")
-    semantic_source = (root / "semantic_analysis.py").read_text(encoding="utf-8")
+    semantic_source = (root / "semantic/analysis.py").read_text(encoding="utf-8")
     catalog_source = (root / "catalog.py").read_text(encoding="utf-8")
     library_group_source = (root / "blender" / "library_groups.py").read_text(encoding="utf-8")
     assert "def compile_local_function_call" not in local_source
@@ -442,11 +442,11 @@ def test_compilation_modules_do_not_call_live_resolution_apis():
         name: (root / name).read_text(encoding="utf-8")
         for name in (
             "compiler.py",
-            "semantic_analysis.py",
+            "semantic/analysis.py",
             "blender_ir_lowering.py",
             "function_materializer.py",
             "local_functions.py",
-            "semantic_group.py",
+            "semantic/group.py",
             "semantic/source_callables.py",
             "semantic/source_callable_session.py",
         )

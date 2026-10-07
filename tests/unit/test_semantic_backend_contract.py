@@ -10,7 +10,7 @@ import pytest
 from NodeForge.semantic.compile_time import CompileTimeSnapshot, CompileTimeState
 
 from NodeForge import blender_ir_lowering
-from NodeForge.constants import (
+from NodeForge.semantic.constants import (
     TYPE_BOOL,
     TYPE_BUNDLE,
     TYPE_FLOAT,
@@ -23,11 +23,11 @@ from NodeForge.constants import (
 )
 from NodeForge.errors import CompileError
 from NodeForge.compiler_identities import BindingId
-from NodeForge.call_resolution import CallableEnvironment
-from NodeForge.builtin_call_semantics import IR_CAPABLE_BUILTIN_NAMES
-from NodeForge.semantic_analysis import RuntimeBindingSymbol, SemanticEnvironment, analyze_expression, build_semantic_constant_snapshot
-from NodeForge.semantic_values import ObjectInfoState, ObjectSemanticId, ObjectSemanticSnapshot
-from NodeForge.semantic_lowering import lower_analyzed_expression
+from NodeForge.semantic.call_resolution import CallableEnvironment
+from NodeForge.semantic.builtin_calls import IR_CAPABLE_BUILTIN_NAMES
+from NodeForge.semantic.analysis import RuntimeBindingSymbol, SemanticEnvironment, analyze_expression, build_semantic_constant_snapshot
+from NodeForge.semantic.values import ObjectInfoState, ObjectSemanticId, ObjectSemanticSnapshot
+from NodeForge.semantic.lowering import lower_analyzed_expression
 from NodeForge.values import ObjectValue, Value
 
 
@@ -285,7 +285,7 @@ def test_array_program_result_reconstructs_legacy_python_lists_with_exact_value_
 
 
 def test_vector_literal_uses_real_combine_xyz_helper_contract():
-    from NodeForge.semantic_analysis import build_semantic_constant_snapshot
+    from NodeForge.semantic.analysis import build_semantic_constant_snapshot
 
     expr = _expr("vec")
     constants, const_eval_values = build_semantic_constant_snapshot(CompileTimeSnapshot({"vec": (1, 2, 3)}))
@@ -330,7 +330,7 @@ def test_object_property_uses_exact_object_value_and_reuses_object_info_node():
 
 
 def test_hand_constructed_unary_plus_is_rejected_by_backend():
-    from NodeForge.semantic_ir import IRBinding, IRProgram, IRUnary, IRValue
+    from NodeForge.semantic.ir import IRBinding, IRProgram, IRUnary, IRValue
 
     binding_id = BindingId("backend-contract", 0)
     operand = IRValue(0, TYPE_FLOAT)

@@ -4,7 +4,7 @@ import ast
 import math
 from types import MappingProxyType
 
-from .nf_types import NFType
+from ..nf_types import NFType
 
 # TYPE_* names are internal convenience aliases for canonical NFType members. They never
 # authorize raw type strings or define a second runtime type vocabulary.
@@ -54,4 +54,7 @@ _BOOLEAN_OPS = {ast.And: "AND", ast.Or: "OR"}
 _VECTOR_MATH_FLOAT_OUTPUT = {"length": "LENGTH", "distance": "DISTANCE", "dot": "DOT_PRODUCT"}
 _VECTOR_MATH_VECTOR_OUTPUT_1 = {"normalize": "NORMALIZE"}
 _VECTOR_MATH_VECTOR_OUTPUT_2 = {"cross": "CROSS_PRODUCT", "reflect": "REFLECT", "project": "PROJECT"}
-__all__ = [name for name in globals() if name.startswith('_') or name.startswith('TYPE_')] + ['OBJECT_PROPERTY_TYPES']
+__all__ = [
+    name for name in globals()
+    if (name.startswith('_') and not name.startswith('__')) or name.startswith('TYPE_')
+] + ['OBJECT_PROPERTY_TYPES']

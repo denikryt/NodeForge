@@ -6,16 +6,16 @@ from types import MappingProxyType, SimpleNamespace
 
 import pytest
 
-from NodeForge.call_resolution import CallableEnvironment
+from NodeForge.semantic.call_resolution import CallableEnvironment
 from NodeForge.compiler_identities import BindingId
 from NodeForge.extension_registry import ExtensionOwnerSession, ExtensionRegistry, capture_owner_code_snapshot
 from NodeForge.nf_types import NFType
-from NodeForge.runtime_bindings import RuntimeBindingSymbol
+from NodeForge.semantic.runtime_bindings import RuntimeBindingSymbol
 from NodeForge.resolved_environment import PackageCallableExport, ResolvedPackageNamespace
 from NodeForge.semantic.source_bindings import LibraryBinding, PackageNamespaceBinding
-from NodeForge.semantic_analysis import SemanticEnvironment, analyze_expression
-from NodeForge.semantic_ir import IRCall, IRCallableKind
-from NodeForge.semantic_lowering import lower_analyzed_expression
+from NodeForge.semantic.analysis import SemanticEnvironment, analyze_expression
+from NodeForge.semantic.ir import IRCall, IRCallableKind
+from NodeForge.semantic.lowering import lower_analyzed_expression
 
 pytestmark = pytest.mark.unit
 

@@ -18,7 +18,7 @@ from .blender.library_groups import (
     resolve_reloadable_library_entry,
     update_materialized_library_entry_group_for_record,
 )
-from .semantic_group import analyze_group_source
+from .semantic.group import analyze_group_source
 from .semantic.source_callable_session import SourceCallableSession
 from .blender_group_backend import BlenderGroupBackend, BlenderGroupBuildRequest
 from .blender.group_assembly import _populate_group

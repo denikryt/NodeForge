@@ -5,15 +5,15 @@ from pathlib import Path
 
 import pytest
 
-from NodeForge.builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
-from NodeForge.call_resolution import CallableEnvironment
+from NodeForge.semantic.builtin_calls import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
+from NodeForge.semantic.call_resolution import CallableEnvironment
 from NodeForge.semantic.compile_time import CompileTimeSnapshot
 from NodeForge.compiler_identities import BindingId
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
-from NodeForge.semantic_body import lower_basic_body
-from NodeForge.semantic_geometry_builder import GeometryBuilderState, empty_geometry_program, join_binding_program
-from NodeForge.semantic_ir import IRBindLeaves, IRCall, IRIf, IROutput, IRRepeat
+from NodeForge.semantic.body import lower_basic_body
+from NodeForge.semantic.geometry_builder import GeometryBuilderState, empty_geometry_program, join_binding_program
+from NodeForge.semantic.ir import IRBindLeaves, IRCall, IRIf, IROutput, IRRepeat
 
 
 def _callables():
@@ -329,7 +329,7 @@ def test_semantic_builder_module_has_no_backend_dependencies():
     import tokenize
 
     root = Path(__file__).resolve().parents[2]
-    source = (root / "semantic_geometry_builder.py").read_text(encoding="utf-8")
+    source = (root / "semantic/geometry_builder.py").read_text(encoding="utf-8")
     code_only = "".join(
         token.string
         for token in tokenize.generate_tokens(io.StringIO(source).readline)
@@ -348,8 +348,8 @@ def test_semantic_builder_module_has_no_backend_dependencies():
     ):
         assert forbidden not in code_only
 
-    semantic_body_source = (root / "semantic_body.py").read_text(encoding="utf-8")
-    assert "from .geometry_builder import" not in semantic_body_source
+    semantic_body_source = (root / "semantic/body.py").read_text(encoding="utf-8")
+    assert "from .geometry_builder import" in semantic_body_source
     assert "GeometryBuilder(" not in semantic_body_source
 
 

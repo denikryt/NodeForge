@@ -26,9 +26,9 @@ from NodeForge.function_materializer import (
     LibraryFunctionUpdateSpec,
     LocalFunctionMaterializationSpec,
 )
-from NodeForge.callable_contracts import GroupInterfaceContract
-from NodeForge.semantic_group import SemanticGroupCompilation
-from NodeForge.semantic_ir import IRBody, IRFunctionMaterialization, IRFunctionMaterializationMode
+from NodeForge.semantic.callable_contracts import GroupInterfaceContract
+from NodeForge.semantic.group import SemanticGroupCompilation
+from NodeForge.semantic.ir import IRBody, IRFunctionMaterialization, IRFunctionMaterializationMode
 
 
 class FakeGroup(dict):

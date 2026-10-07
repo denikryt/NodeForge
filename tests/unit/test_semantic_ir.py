@@ -10,7 +10,7 @@ import pytest
 
 from NodeForge.semantic.compile_time import CompileTimeSnapshot
 
-from NodeForge.constants import (
+from NodeForge.semantic.constants import (
     TYPE_BOOL,
     TYPE_BUNDLE,
     TYPE_FLOAT,
@@ -24,9 +24,9 @@ from NodeForge.constants import (
 from NodeForge.errors import CompileError
 from NodeForge import blender_ir_lowering, geometry as geometry_backend
 from NodeForge.values import Value
-from NodeForge.group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
+from NodeForge.semantic.group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
 from NodeForge.compiler_identities import BindingId, CallSiteId, local_function_id
-from NodeForge.semantic_ir import (
+from NodeForge.semantic.ir import (
     IRArray,
     IRBinary,
     IRCall,
@@ -58,16 +58,16 @@ from NodeForge.semantic_ir import (
     IRVectorComponent,
     IRVectorLiteral,
 )
-from NodeForge.builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
-from NodeForge.call_resolution import CallableEnvironment, ContextReadCallResult, ProjectedCallResult
-from NodeForge.semantic_analysis import (
+from NodeForge.semantic.builtin_calls import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
+from NodeForge.semantic.call_resolution import CallableEnvironment, ContextReadCallResult, ProjectedCallResult
+from NodeForge.semantic.analysis import (
     RuntimeBindingSymbol,
     SemanticConstant,
     SemanticEnvironment,
     analyze_expression,
     build_semantic_constant_snapshot,
 )
-from NodeForge.semantic_values import (
+from NodeForge.semantic.values import (
     ArrayResultShape,
     ObjectInfoState,
     ObjectSemanticId,
@@ -79,7 +79,7 @@ from NodeForge.semantic_values import (
     StructuralArrayState,
     StructuralRuntimeLeaf,
 )
-from NodeForge.semantic_lowering import lower_analyzed_expression
+from NodeForge.semantic.lowering import lower_analyzed_expression
 
 
 pytestmark = pytest.mark.unit
@@ -200,11 +200,11 @@ def test_function_materialization_ir_enforces_shared_unique_invariants():
 
 
 def test_semantic_modules_are_blender_independent_and_ir_is_immutable():
-    import NodeForge.semantic_analysis as semantic_analysis_module
-    import NodeForge.semantic_body as semantic_body_module
-    import NodeForge.semantic_control_flow as semantic_control_flow_module
-    import NodeForge.semantic_ir as semantic_ir_module
-    import NodeForge.semantic_lowering as semantic_lowering_module
+    import NodeForge.semantic.analysis as semantic_analysis_module
+    import NodeForge.semantic.body as semantic_body_module
+    import NodeForge.semantic.control_flow as semantic_control_flow_module
+    import NodeForge.semantic.ir as semantic_ir_module
+    import NodeForge.semantic.lowering as semantic_lowering_module
 
     semantic_modules = (
         semantic_analysis_module,
@@ -536,7 +536,7 @@ def test_ir_operations_store_no_ast_or_backend_objects():
 
 def test_ir_emitter_consumes_analyzed_operation_facts_without_renormalizing_ast():
     from types import MappingProxyType, SimpleNamespace
-    from NodeForge.semantic_analysis import ExpressionAnalysis, ExpressionFact
+    from NodeForge.semantic.analysis import ExpressionAnalysis, ExpressionFact
 
     expr = _expr("a < b")
     analysis = analyze_expression(expr, _environment(bindings={"a": TYPE_FLOAT, "b": TYPE_FLOAT}))
@@ -550,7 +550,7 @@ def test_ir_emitter_consumes_analyzed_operation_facts_without_renormalizing_ast(
 
 def test_ir_emitter_rejects_invalid_analysis_root_and_compare_fact_shape():
     from types import MappingProxyType, SimpleNamespace
-    from NodeForge.semantic_analysis import ExpressionAnalysis, ExpressionFact
+    from NodeForge.semantic.analysis import ExpressionAnalysis, ExpressionFact
 
     expr = _expr("a < b")
     other = _expr("a < b")
@@ -670,7 +670,7 @@ def test_obsolete_structural_array_fallback_markers_are_retired():
     root = Path(__file__).resolve().parents[2]
     obsolete = {
         "compiler.py": ("COMPILE_TIME_STATE_LEGACY_STRUCTURAL_COMPAT", "STRUCTURAL_ARRAYS_LEGACY_STRUCTURAL_COMPAT"),
-        "semantic_body.py": (
+        "semantic/body.py": (
             "CONTROL_FLOW_IR_BODY_REMAINING_FALLBACK",
             "CONTROL_FLOW_IR_NESTED_ATOMIC_FALLBACK",
         ),
@@ -1302,7 +1302,7 @@ def test_sample_index_uses_ordinary_builtin_call_ir_for_static_and_runtime_indic
     assert dict(runtime_call.options)["index"] == ("runtime", 2)
     assert tuple(result.typ for result in runtime_call.results) == (TYPE_INT,)
 
-    import NodeForge.semantic_ir as semantic_ir_module
+    import NodeForge.semantic.ir as semantic_ir_module
 
     assert not hasattr(semantic_ir_module, "IRSampleIndex")
 

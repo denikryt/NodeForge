@@ -321,7 +321,7 @@ def test_pure_source_callable_analysis_does_not_reach_group_orchestration():
     path = _find_path(
         graph,
         f"{PACKAGE_NAME}.semantic.source_callables",
-        f"{PACKAGE_NAME}.semantic_group",
+        f"{PACKAGE_NAME}.semantic.group",
     )
     assert path is None, " -> ".join(path or ())
 
@@ -329,12 +329,12 @@ def test_pure_source_callable_analysis_does_not_reach_group_orchestration():
 def test_source_callable_boundary_helper_detects_group_orchestration_leak():
     """Negative: pure callable analysis reaching group orchestration is detectable."""
     graph = {
-        "NodeForge.semantic.source_callables": {"NodeForge.semantic_group"},
-        "NodeForge.semantic_group": set(),
+        "NodeForge.semantic.source_callables": {"NodeForge.semantic.group"},
+        "NodeForge.semantic.group": set(),
     }
     assert _find_path(
-        graph, "NodeForge.semantic.source_callables", "NodeForge.semantic_group"
-    ) == ["NodeForge.semantic.source_callables", "NodeForge.semantic_group"]
+        graph, "NodeForge.semantic.source_callables", "NodeForge.semantic.group"
+    ) == ["NodeForge.semantic.source_callables", "NodeForge.semantic.group"]
 
 
 def test_function_instance_identity_owner_does_not_reach_ctfe():
@@ -378,4 +378,30 @@ def test_group_assembly_boundary_helper_detects_physical_logic_in_facade():
     }
     assert _find_path(graph, "NodeForge.compiler", "NodeForge.blender_ir_lowering") == [
         "NodeForge.compiler", "NodeForge.blender_ir_lowering"
+    ]
+
+
+def test_semantic_layer_has_no_transitive_blender_dependency():
+    """Positive: frontend semantic modules cannot reach physical Blender owners indirectly."""
+    graph = _build_import_graph(module_scope_only=False)
+    semantic_prefix = f"{PACKAGE_NAME}.semantic"
+    blender_prefix = f"{PACKAGE_NAME}.blender"
+    offenders = []
+    for module in sorted(graph):
+        if module == semantic_prefix or module.startswith(f"{semantic_prefix}."):
+            path = _find_path(graph, module, blender_prefix)
+            if path is not None:
+                offenders.append(" -> ".join(path))
+    assert not offenders, "Semantic layer reaches Blender layer:\n" + "\n".join(offenders)
+
+
+def test_semantic_to_blender_boundary_helper_detects_indirect_leak():
+    """Negative: a semantic dependency routed through a root bridge is still rejected."""
+    graph = {
+        "NodeForge.semantic.analysis": {"NodeForge.bridge"},
+        "NodeForge.bridge": {"NodeForge.blender.nodes"},
+        "NodeForge.blender.nodes": set(),
+    }
+    assert _find_path(graph, "NodeForge.semantic.analysis", "NodeForge.blender") == [
+        "NodeForge.semantic.analysis", "NodeForge.bridge", "NodeForge.blender.nodes"
     ]

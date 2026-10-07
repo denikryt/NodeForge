@@ -20,7 +20,7 @@ from .compiler_identities import (
     CallSiteId,
     CORE_PACKAGE_ID,
 )
-from .semantic_ir import IRFunctionMaterialization, IRFunctionMaterializationMode
+from .semantic.ir import IRFunctionMaterialization, IRFunctionMaterializationMode
 
 FUNCTION_INSTANCE_KEY_PROP = "nodeforge_function_instance_key"
 FUNCTION_DEFINITION_OWNER_PROP = "nodeforge_function_definition_owner"

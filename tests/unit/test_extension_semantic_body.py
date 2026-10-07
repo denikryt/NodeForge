@@ -13,7 +13,7 @@ from NodeForge.extension_registry import ExtensionOwnerSession, ExtensionRegistr
 from NodeForge.resolved_environment import (
     PackageCallableExport, ResolvedCatalog, ResolvedEnvironment, ResolvedPackageNamespace,
 )
-from NodeForge.semantic_group import analyze_group_source
+from NodeForge.semantic.group import analyze_group_source
 from NodeForge.semantic.source_callable_session import SourceCallableSession
 
 pytestmark = pytest.mark.unit
@@ -140,7 +140,7 @@ def test_transient_semantic_composition_in_group_body_has_no_persistence_stateme
         compilation_identity=identity,
         resolved_environment=environment,
     )
-    from NodeForge.semantic_ir import IRBindLeaves
+    from NodeForge.semantic.ir import IRBindLeaves
     assert not any(isinstance(statement, IRBindLeaves) for statement in compilation.body.statements)
 
 

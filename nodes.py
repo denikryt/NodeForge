@@ -1,9 +1,9 @@
 """Low-level helpers for creating and wiring Blender nodes."""
 
-from .constants import *
+from .semantic.constants import *
 from .blender_socket_types import socket_type_for_nf_type
 from .errors import CompileError
-from .numeric_semantics import normalize_float_constant, normalize_int_constant
+from .semantic.numeric_semantics import normalize_float_constant, normalize_int_constant
 from .values import Value
 
 

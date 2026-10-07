@@ -16,7 +16,7 @@ from NodeForge.function_instances import (
 from NodeForge.resolved_environment import (
     PackageCallableExport, ResolvedCatalog, ResolvedEnvironment, ResolvedPackageNamespace,
 )
-from NodeForge.semantic_group import analyze_group_source
+from NodeForge.semantic.group import analyze_group_source
 
 pytestmark = pytest.mark.unit
 

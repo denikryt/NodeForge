@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from ..constants import (
+from ..semantic.constants import (
     TYPE_BOOL,
     TYPE_BUNDLE,
     TYPE_FLOAT,

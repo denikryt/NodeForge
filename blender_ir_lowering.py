@@ -6,11 +6,11 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
-from .constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR
+from .semantic.constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR
 from .nf_types import NFType
 from .errors import CompileError
 from .compiler_identities import BindingId, InputDeclarationId
-from .group_context import GroupContextSlot
+from .semantic.group_context import GroupContextSlot
 from .nodes import _boolean_math, _combine_xyz_mixed, _compare, _int_value, _integer_math, _math, _new_node, _separate_xyz, _string_value, _switch, _value, _vector_math
 from .geometry import (
     _capture_attribute_geometry,
@@ -35,7 +35,7 @@ from .builtins.bundle import build_bundle, build_bundle_get, build_bundle_set
 from .builtins.object_info import resolve_object_property_explicit
 from .builtins.raw_nodes import build_materialized_raw_node
 from .blender_extension_backend import lower_extension_call
-from .semantic_ir import (
+from .semantic.ir import (
     IRBinary,
     IRCall,
     IRCallableKind,

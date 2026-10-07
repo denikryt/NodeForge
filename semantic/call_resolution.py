@@ -7,15 +7,15 @@ from enum import Enum, auto
 from types import MappingProxyType
 from typing import Mapping, TYPE_CHECKING
 
-from .compiler_identities import FunctionId, library_function_id
-from .errors import CompileError
+from ..compiler_identities import FunctionId, library_function_id
+from ..errors import CompileError
 from .group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
-from .extension_contracts import ExtensionCallableId, TypeSpec, validate_extension_argument_positions
-from .nf_types import NFType
-from .semantic_ir import IRFunctionMaterialization
+from ..extension_contracts import ExtensionCallableId, TypeSpec, validate_extension_argument_positions
+from ..nf_types import NFType
+from .ir import IRFunctionMaterialization
 
 if TYPE_CHECKING:
-    from .resolved_environment import PackageCallableExport
+    from ..resolved_environment import PackageCallableExport
 
 
 class CallableKind(Enum):
@@ -340,7 +340,7 @@ def _resolved_from_package_export(source_name: str, export) -> ResolvedCallable:
         return ResolvedCallable(CallableKind.EXTENSION, source_name, target=extension_callable_id)
     if record is None:
         raise ValueError("package export has no semantic target")
-    from .semantic.source_bindings import LibraryBinding
+    from .source_bindings import LibraryBinding
 
     binding = LibraryBinding("functions", export.name, record, None)
     function_id = library_function_id("functions", export.package_id, export.name)

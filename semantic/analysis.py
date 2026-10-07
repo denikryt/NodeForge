@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Mapping
 
-from .compiler_identities import (
+from ..compiler_identities import (
     BindingId,
     GroupCompilationIdentity,
     local_function_id,
@@ -32,17 +32,17 @@ from .call_resolution import (
     resolve_package_callable,
     resolve_simple_callable,
 )
-from .builtin_call_semantics import (
+from .builtin_calls import (
     IR_CAPABLE_BUILTIN_NAMES,
     INPUT_DECLARATION_BUILTIN_NAMES,
     INPUT_DECLARATION_PLACEMENT_ERROR,
     analyze_builtin_call,
 )
-from .semantic.call_modifiers import extract_function_call_modifiers, unsupported_unique
-from .function_instances import (
+from ..function_instances import (
     function_group_owner_scope,
     function_materialization_owner_scope,
 )
+from .call_modifiers import extract_function_call_modifiers, unsupported_unique
 from .constants import (
     OBJECT_PROPERTY_TYPES,
     TYPE_BOOL,
@@ -59,10 +59,10 @@ from .constants import (
     _BOOLEAN_OPS,
     _COMPARE_OPS,
 )
-from .semantic.consteval import NOT_FOLDABLE, ConstEvalUnavailable, _const_eval, try_runtime_fold
-from .semantic.compile_time import CompileTimeSnapshot, ConstVector, _is_const_vector
-from .errors import CompileError
-from .nf_types import NFType, NUMERIC_NF_TYPES
+from .consteval import NOT_FOLDABLE, ConstEvalUnavailable, _const_eval, try_runtime_fold
+from .compile_time import CompileTimeSnapshot, ConstVector, _is_const_vector
+from ..errors import CompileError
+from ..nf_types import NFType, NUMERIC_NF_TYPES
 from .numeric_semantics import (
     INT_MIN,
     normalize_float_constant,
@@ -78,16 +78,16 @@ from .callable_contracts import (
     canonicalize_group_input_default,
     source_argument_type_matches,
 )
-from .semantic_ir import IRFunctionMaterialization, IRFunctionMaterializationMode
-from .evaluation_modes import EvaluationMode
-from .semantic.evaluation_resolution import CompileTimeSelection, RuntimeRequired, resolve_argument_evaluation
-from .extension_contracts import (
+from .ir import IRFunctionMaterialization, IRFunctionMaterializationMode
+from ..evaluation_modes import EvaluationMode
+from .evaluation_resolution import CompileTimeSelection, RuntimeRequired, resolve_argument_evaluation
+from ..extension_contracts import (
     ExtensionCallableSpec,
     ExtensionParameterSpec,
     TypeSpec,
     is_frontend_semantic_type_spec,
 )
-from .extension_semantics import (
+from ..extension_semantics import (
     ExtensionDependencySource,
     ExtensionExecutionForm,
     ExtensionSemanticPayload,
@@ -96,13 +96,13 @@ from .extension_semantics import (
     classify_extension_execution,
     semantic_type_compatible,
 )
-from .extension_values import (
+from ..extension_values import (
     ExtensionValue,
     select_declared_nf_type,
     static_nf_type,
     type_spec_accepts_nf,
 )
-from .semantic.source_callables import (
+from .source_callables import (
     analyze_local_captures,
     analyze_local_return_shape,
     local_binding_names,
@@ -111,7 +111,7 @@ from .semantic.source_callables import (
     serialize_local_signature,
     has_source_value_binding,
 )
-from .semantic_values import (
+from .values import (
     ArrayResultShape,
     ExtensionResultShape,
     NamedOutputsResultShape,

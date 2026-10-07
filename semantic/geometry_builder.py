@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .compiler_identities import BindingId
-from .errors import CompileError
-from .nf_types import NFType
-from .semantic_ir import IRBinding, IRCall, IRCallArgument, IRCallableKind, IRCallableTarget, IRProgram, IRValue
+from ..compiler_identities import BindingId
+from ..errors import CompileError
+from ..nf_types import NFType
+from .ir import IRBinding, IRCall, IRCallArgument, IRCallableKind, IRCallableTarget, IRProgram, IRValue
 
 
 @dataclass(frozen=True)

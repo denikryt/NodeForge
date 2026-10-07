@@ -6,18 +6,18 @@ import ast
 from dataclasses import dataclass
 from typing import Mapping
 
-from ..call_resolution import (
+from .call_resolution import (
     CallableEnvironment,
     non_callable_source_binding_error,
     package_candidates_for_unqualified,
 )
-from ..callable_contracts import (
+from .callable_contracts import (
     SourceCallableContract,
     SourceCallableParameter,
     normalize_callable_keyword,
 )
 from ..compiler_identities import FunctionId, GroupCompilationIdentity, normalize_library_package_id
-from ..constants import TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
+from .constants import TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
 from .compile_time import _is_const_vector
 from ..errors import CompileError
 from ..nf_types import NFType, serialize_nf_type

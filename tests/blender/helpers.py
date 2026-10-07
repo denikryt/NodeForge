@@ -19,7 +19,7 @@ import NodeForge
 from NodeForge import compiler, blender_group_backend
 from NodeForge.errors import CompileError
 from NodeForge import generated_resources
-from NodeForge.builtins import registry
+from NodeForge.semantic import builtin_registry as registry
 from NodeForge.values import Value
 from NodeForge.environment_resolution import resolve_environment
 

@@ -2,7 +2,7 @@
 
 import pytest
 
-from NodeForge.attribute_domains import ATTRIBUTE_DOMAINS, normalize_attribute_domain
+from NodeForge.semantic.attribute_domains import ATTRIBUTE_DOMAINS, normalize_attribute_domain
 from NodeForge.errors import CompileError
 
 

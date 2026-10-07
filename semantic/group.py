@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
-from .builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
-from .builtins import registry as builtin_registry
+from .builtin_calls import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
+from . import builtin_registry
 from .call_resolution import CallableEnvironment
 from .callable_contracts import (
     GroupInputContract,
@@ -17,18 +17,18 @@ from .callable_contracts import (
     canonicalize_group_input_default,
     project_group_input_layout,
 )
-from .compiler_identities import BindingId, GroupCompilationIdentity
+from ..compiler_identities import BindingId, GroupCompilationIdentity
 from .constants import TYPE_FLOAT, TYPE_INT, TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
-from .semantic.residualization import _infer_input_types, _preprocess_compile_time
-from .errors import CompileError
-from .nf_types import NFType
-from .extension_contracts import ExtensionCallableId
-from .extension_registry import library_owner_key
-from .semantic.parsing import _assigned_names, _binding_names, _collect_inputs, _extract_function_imports, _needs_geometry_io, _parse_source, normalized_statements
+from .residualization import _infer_input_types, _preprocess_compile_time
+from ..errors import CompileError
+from ..nf_types import NFType
+from ..extension_contracts import ExtensionCallableId
+from .source_bindings import LibraryBinding, PackageNamespaceBinding
+from ..extension_registry import library_owner_key
+from .parsing import _assigned_names, _binding_names, _collect_inputs, _extract_function_imports, _needs_geometry_io, _parse_source, normalized_statements
 from .runtime_bindings import RuntimeBindingSymbol
-from .semantic.source_bindings import LibraryBinding, PackageNamespaceBinding
-from .semantic_body import BasicBodyCompilation, lower_basic_body
-from .semantic_ir import IRBody, IRIf, IRInputDeclaration, IRPanelDeclaration, IRRepeat
+from .body import BasicBodyCompilation, lower_basic_body
+from .ir import IRBody, IRIf, IRInputDeclaration, IRPanelDeclaration, IRRepeat
 
 
 @dataclass(frozen=True)

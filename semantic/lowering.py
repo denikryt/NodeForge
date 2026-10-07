@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import ast
 
-from .compiler_identities import BindingId
+from ..compiler_identities import BindingId
 from .constants import TYPE_BOOL, TYPE_OBJECT
-from .nf_types import NFType
+from ..nf_types import NFType
 from .call_resolution import (
     CallableKind,
     ContextReadCallResult,
@@ -15,9 +15,9 @@ from .call_resolution import (
     RuntimeCallResult,
     TupleCallResult,
 )
-from .errors import CompileError
-from .semantic_analysis import ExpressionAnalysis, SemanticConstant
-from .semantic_values import (
+from ..errors import CompileError
+from .analysis import ExpressionAnalysis, SemanticConstant
+from .values import (
     ArrayResultShape,
     NamedOutputsResultShape,
     RuntimeResultShape,
@@ -28,7 +28,7 @@ from .semantic_values import (
     StructuralRuntimeLeaf,
     TupleResultShape,
 )
-from .semantic_ir import (
+from .ir import (
     IRArray,
     IRCall,
     IRCallArgument,
@@ -55,7 +55,7 @@ from .semantic_ir import (
     IRVectorLiteral,
     validate_extension_ir_state,
 )
-from .extension_values import ExtensionDependencySlot, ExtensionValue
+from ..extension_values import ExtensionDependencySlot, ExtensionValue
 
 
 def _detach_extension_state(value, runtime_operands):
