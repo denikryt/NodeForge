@@ -22,7 +22,8 @@ from NodeForge.semantic.constants import (
     TYPE_VECTOR,
 )
 from NodeForge.errors import CompileError
-from NodeForge.blender import ir_lowering as blender_ir_lowering, geometry as geometry_backend
+from NodeForge.blender import ir_lowering as blender_ir_lowering
+from NodeForge.blender import geometry as geometry_backend
 from NodeForge.blender.values import Value
 from NodeForge.semantic.group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
 from NodeForge.compiler_identities import BindingId, CallSiteId, local_function_id

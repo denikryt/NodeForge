@@ -235,3 +235,9 @@ Package-defined semantic values may persist in source-variable/body state throug
 - `tests/unit/test_repository_hygiene.py`: Python filenames/content use semantic terminology instead of refactor chronology, and production Python contains no temporary compatibility/migration TODO markers.
 - `tests/unit/test_legacy_compiler_removal.py`: release-coupled synthetic package ceilings derive from the current core version while legacy execution APIs remain physically absent.
 - Final release validation additionally requires the complete unit/Blender regression matrix plus downstream package and extracted-artifact checks described by the release process.
+
+## Module organization contract
+
+- `tests/unit/test_module_boundaries.py`: production import-graph reachability, module-scope acyclicity, `semantic/` and `extensions/` isolation from Blender realization, one-way catalog/Local ownership, and relative-import integrity. The tests enforce dependency directions rather than an exhaustive internal module inventory.
+- `tests/unit/test_module_layout_contract.py`: a small filesystem contract for public/cross-phase anchors, the three internal owner packages, and retired mixed ownership namespaces. Internal implementation filenames are intentionally not snapshotted.
+- `tests/unit/test_architecture_layers_doc.py`: developer architecture reference names the same three internal owner packages and Local/catalog/import-graph boundaries enforced by executable architecture tests.

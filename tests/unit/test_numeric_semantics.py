@@ -905,11 +905,13 @@ def test_numeric_semantics_does_not_reintroduce_legacy_numeric_parity_or_residua
     root = Path(NodeForge.__file__).resolve().parent
     compiler_source = (root / "compiler.py").read_text()
     consteval_source = (root / "semantic" / "consteval.py").read_text()
+    residualization_source = (root / "semantic" / "residualization.py").read_text()
+    staging_source = consteval_source + "\n" + residualization_source
     assert "numeric_semantics" not in compiler_source
     assert "TODO(nodeforge-compat):" not in "\n".join(
-        line for line in consteval_source.splitlines() if "numeric" in line.lower()
+        line for line in staging_source.splitlines() if "numeric" in line.lower()
     )
-    assert "TODO(nodeforge-migration): Keep numeric runtime expressions" not in consteval_source
+    assert "TODO(nodeforge-migration): Keep numeric runtime expressions" not in staging_source
 
 
 def _materialize_bound_numeric_source(source, bindings):

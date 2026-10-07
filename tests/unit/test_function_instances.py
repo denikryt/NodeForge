@@ -5,7 +5,6 @@ import pytest
 from NodeForge.errors import CompileError
 from NodeForge.compiler_identities import CallSiteId, FunctionId, library_function_id, local_function_id
 from NodeForge.semantic.ir import IRFunctionMaterialization, IRFunctionMaterializationMode
-from NodeForge.semantic.call_modifiers import FunctionCallModifiers, extract_function_call_modifiers
 from NodeForge.function_instances import (
     FUNCTION_ROOT_OWNER_ID_PROP,
     FunctionCompilationTrace,
@@ -14,6 +13,11 @@ from NodeForge.function_instances import (
     instance_key_for,
     instance_key_for_materialization,
     validate_root_owner_id,
+)
+from NodeForge.semantic.call_modifiers import (
+    FunctionCallModifiers,
+    extract_function_call_modifiers,
+    unsupported_unique,
 )
 
 

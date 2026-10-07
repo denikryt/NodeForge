@@ -109,7 +109,7 @@ class _FakeNode:
 
 
 class _FakeNodes(list):
-    """Node collection implementing the subset used by NodeForge.nodes helpers."""
+    """Node collection implementing the subset used by NodeForge.blender.nodes helpers."""
 
     def new(self, bl_idname):
         node = _FakeNode(bl_idname)

@@ -393,3 +393,8 @@ lifecycle.
 - Finalized release-facing compiler/package cleanup by replacing remaining temporary migration and refactor-chronology labels with permanent semantic contracts and adding repository hygiene regressions.
 - Kept mixed `source.nf` + `interface.py` owners explicitly unsupported, preserved conservative residualization/runtime-control-flow invariants, and refreshed current architecture/coverage wording without changing DSL semantics.
 - Advanced release-coupled synthetic extension compatibility fixtures to the current core version and prepared the legacy-free compiler for final core/Blender/downstream artifact validation.
+## 0.65.3
+
+- Reorganized compiler internals around explicit `semantic/`, `extensions/`, and `blender/` owners, split environment/catalog/Local discovery and physical group assembly responsibilities, and removed retired flat/builtins/systems implementation paths without changing DSL behavior.
+- Added executable module-boundary and layout regressions for canonical ownership, transitive semantic/extension isolation from Blender realization, Local-to-catalog dependency direction, resolvable relative imports, and an acyclic production module-scope graph.
+- Preserved public extension entry points, Local persistent user-data paths, resolved-environment identity/freshness contracts, and Blender transaction/resource ownership while updating architecture and coverage references to the final module layout.

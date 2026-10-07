@@ -92,7 +92,7 @@ def test_i1_negative_old_ast_executor_modules_are_physically_absent():
         "NodeForge.statement_compiler",
         "NodeForge.runtime",
         "NodeForge.statements",
-        "NodeForge.geometry_builder",
+        "NodeForge.blender.geometry_builder",
     ):
         assert importlib.util.find_spec(module_name) is None, module_name
 
@@ -297,8 +297,7 @@ def test_i10_negative_core_contract_cannot_report_a_pre_cutover_version():
 def test_i11_positive_audited_physical_helpers_require_normalized_source_state_explicitly():
     """Physical helpers expose no duplicate source-language defaults for audited arguments."""
     import inspect
-    from NodeForge.blender import geometry, interface
-    from NodeForge.blender import raw_nodes
+    from NodeForge.blender import geometry, interface, raw_nodes
 
     required = {
         geometry._store_named_attribute: ("selection", "domain", "data_type_override"),
