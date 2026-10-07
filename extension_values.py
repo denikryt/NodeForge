@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Callable, Iterator, Mapping
 
 from .callable_contracts import canonicalize_group_input_default, source_argument_type_matches
-from .compile_time import ConstVector
+from .semantic.compile_time import ConstVector
 from .errors import CompileError
 from .extension_contracts import (
     ExtensionTypeId,

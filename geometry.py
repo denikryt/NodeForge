@@ -5,7 +5,7 @@ from .attribute_domains import normalize_attribute_domain
 from .errors import CompileError
 from .values import Value
 from .nodes import _new_node, _value, _combine_xyz, _combine_xyz_mixed, _is_number_type
-from .consteval import _as_float_const, _is_const_number, _is_const_vector_like
+from .semantic.compile_time import _as_float_const, _is_const_number, _is_const_vector_like
 from .numeric_semantics import normalize_int_constant
 
 

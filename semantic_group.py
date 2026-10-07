@@ -19,7 +19,7 @@ from .callable_contracts import (
 )
 from .compiler_identities import BindingId, GroupCompilationIdentity
 from .constants import TYPE_FLOAT, TYPE_INT, TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
-from .consteval import _infer_input_types, _preprocess_compile_time
+from .semantic.residualization import _infer_input_types, _preprocess_compile_time
 from .errors import CompileError
 from .function_instances import normalized_statements
 from .nf_types import NFType

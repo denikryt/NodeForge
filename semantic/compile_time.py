@@ -1,12 +1,41 @@
-"""Compiler-owned compile-time knowledge snapshots and control-flow merge helpers."""
+"""Compile-time value carriers, predicates, snapshots, and merge helpers."""
 
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
+from ..errors import CompileError
+from ..numeric_semantics import normalize_float_constant
+
 
 class ConstVector(tuple):
     """Immutable three-component compile-time vector carrier."""
+
+
+def _is_const_vector(value):
+    """Return True for a three-component compiler-owned constant vector."""
+    return isinstance(value, ConstVector) and len(value) == 3
+
+
+def _is_const_number(value):
+    """Return True for static scalar numbers, excluding booleans."""
+    return type(value) in {int, float}
+
+
+def _is_const_vector_like(value):
+    """Return True for accepted static three-component vector carriers."""
+    return _is_const_vector(value) or (
+        isinstance(value, (tuple, list))
+        and len(value) == 3
+        and all(_is_const_number(component) for component in value)
+    )
+
+
+def _as_float_const(value, context="value"):
+    """Return one compile-time Number as a canonical NodeForge Float."""
+    if _is_const_number(value):
+        return normalize_float_constant(value)
+    raise CompileError(f"Expected numeric compile-time {context}")
 
 
 @dataclass(frozen=True)
@@ -118,6 +147,10 @@ def merge_runtime_if_compile_time(
 
 __all__ = [
     "ConstVector",
+    "_is_const_vector",
+    "_is_const_number",
+    "_is_const_vector_like",
+    "_as_float_const",
     "CompileTimeSnapshot",
     "CompileTimeState",
     "merge_runtime_if_compile_time",

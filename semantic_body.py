@@ -20,15 +20,17 @@ from .builtin_call_semantics import (
 )
 from .compiler_identities import BindingId, CallSiteId, FunctionId, InputDeclarationId, InterfaceInputOrigin
 from .constants import TYPE_OBJECT
-from .consteval import (
-    CompileTimeAppendExpression,
-    CompileTimeBindExpression,
-    CompileTimeForEffect,
+from .semantic.consteval import (
     ConstEvalUnavailable,
     _const_eval,
     _is_compile_time_owned_assignment_rhs,
 )
-from .compile_time import CompileTimeSnapshot, CompileTimeState
+from .semantic.residualization import (
+    CompileTimeAppendExpression,
+    CompileTimeBindExpression,
+    CompileTimeForEffect,
+)
+from .semantic.compile_time import CompileTimeSnapshot, CompileTimeState
 from .errors import CompileError
 from .extension_semantics import ExtensionDependencySource, ExtensionSemanticPayload
 from .nf_types import NFType

@@ -228,3 +228,88 @@ def test_catalog_boundary_helper_detects_reverse_local_dependency():
     assert _find_path(graph, "NodeForge.catalog", "NodeForge.local_sources") == [
         "NodeForge.catalog", "NodeForge.local_sources"
     ]
+
+
+def test_resolved_environment_model_does_not_reach_discovery_or_blender():
+    """Positive: immutable environment data is isolated from discovery and physical work."""
+    graph = _build_import_graph(module_scope_only=False)
+    for prefix in (f"{PACKAGE_NAME}.catalog", f"{PACKAGE_NAME}.local_sources", f"{PACKAGE_NAME}.blender"):
+        path = _find_path(graph, f"{PACKAGE_NAME}.resolved_environment", prefix)
+        assert path is None, " -> ".join(path or ())
+
+
+def test_environment_model_boundary_helper_detects_discovery_leak():
+    """Negative: a model-to-discovery dependency is detected by the architecture guard."""
+    graph = {
+        "NodeForge.resolved_environment": {"NodeForge.catalog"},
+        "NodeForge.catalog": set(),
+    }
+    assert _find_path(graph, "NodeForge.resolved_environment", "NodeForge.catalog") == [
+        "NodeForge.resolved_environment", "NodeForge.catalog"
+    ]
+
+
+def test_root_evaluation_vocabulary_has_no_semantic_ctfe_dependency():
+    """Positive: public EvaluationMode vocabulary does not load semantic CTFE implementation."""
+    graph = _build_import_graph(module_scope_only=False)
+    for forbidden in (
+        f"{PACKAGE_NAME}.semantic.consteval",
+        f"{PACKAGE_NAME}.semantic.evaluation_resolution",
+    ):
+        path = _find_path(graph, f"{PACKAGE_NAME}.evaluation_modes", forbidden)
+        assert path is None, " -> ".join(path or ())
+
+
+def test_evaluation_boundary_helper_detects_semantic_implementation_leak():
+    """Negative: transitive CTFE dependency from public evaluation vocabulary is detectable."""
+    graph = {
+        "NodeForge.evaluation_modes": {"NodeForge.bridge"},
+        "NodeForge.bridge": {"NodeForge.semantic.consteval"},
+        "NodeForge.semantic.consteval": set(),
+    }
+    assert _find_path(graph, "NodeForge.evaluation_modes", "NodeForge.semantic.consteval") == [
+        "NodeForge.evaluation_modes", "NodeForge.bridge", "NodeForge.semantic.consteval"
+    ]
+
+
+def test_compile_time_carrier_owner_is_reusable_without_ctfe_evaluator_dependency():
+    """Positive: physical geometry can consume carriers without importing the evaluator."""
+    graph = _build_import_graph(module_scope_only=False)
+    start = f"{PACKAGE_NAME}.geometry"
+    assert _find_path(graph, start, f"{PACKAGE_NAME}.semantic.compile_time") is not None
+    path = _find_path(graph, start, f"{PACKAGE_NAME}.semantic.consteval")
+    assert path is None, " -> ".join(path or ())
+
+
+def test_compile_time_carrier_boundary_detects_backend_to_ctfe_leak():
+    """Negative: routing physical helpers through the CTFE evaluator is detected."""
+    graph = {
+        "NodeForge.geometry": {"NodeForge.semantic.consteval"},
+        "NodeForge.semantic.consteval": {"NodeForge.semantic.compile_time"},
+        "NodeForge.semantic.compile_time": set(),
+    }
+    assert _find_path(graph, "NodeForge.geometry", "NodeForge.semantic.consteval") == [
+        "NodeForge.geometry", "NodeForge.semantic.consteval"
+    ]
+
+
+def test_ctfe_does_not_depend_on_residualization_owner():
+    """Positive: value evaluation stays independent from source residualization."""
+    graph = _build_import_graph(module_scope_only=False)
+    path = _find_path(
+        graph,
+        f"{PACKAGE_NAME}.semantic.consteval",
+        f"{PACKAGE_NAME}.semantic.residualization",
+    )
+    assert path is None, " -> ".join(path or ())
+
+
+def test_ctfe_residualization_boundary_detects_reverse_ownership():
+    """Negative: a CTFE-to-residualization dependency is an ownership violation."""
+    graph = {
+        "NodeForge.semantic.consteval": {"NodeForge.semantic.residualization"},
+        "NodeForge.semantic.residualization": set(),
+    }
+    assert _find_path(
+        graph, "NodeForge.semantic.consteval", "NodeForge.semantic.residualization"
+    ) == ["NodeForge.semantic.consteval", "NodeForge.semantic.residualization"]

@@ -7,7 +7,7 @@ from types import MappingProxyType, ModuleType, SimpleNamespace
 
 import pytest
 
-from NodeForge.compile_time import CompileTimeSnapshot, CompileTimeState
+from NodeForge.semantic.compile_time import CompileTimeSnapshot, CompileTimeState
 
 from NodeForge import blender_ir_lowering
 from NodeForge.constants import (

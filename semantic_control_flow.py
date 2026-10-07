@@ -13,7 +13,7 @@ from enum import Enum
 from typing import Callable
 
 from .compiler_identities import BindingId
-from .compile_time import merge_runtime_if_compile_time
+from .semantic.compile_time import merge_runtime_if_compile_time
 from .errors import CompileError
 from .nf_types import NFType
 from .semantic_ir import IRBranchMerge, IRIf

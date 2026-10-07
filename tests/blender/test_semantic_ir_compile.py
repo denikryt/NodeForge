@@ -16,7 +16,7 @@ from NodeForge.errors import CompileError
 from NodeForge.compiler_identities import BindingId
 from NodeForge.nodes import _socket_type_for
 from NodeForge.call_resolution import CallableEnvironment
-from NodeForge.compile_time import CompileTimeSnapshot
+from NodeForge.semantic.compile_time import CompileTimeSnapshot
 from NodeForge.semantic_analysis import RuntimeBindingSymbol, SemanticEnvironment, analyze_expression, build_semantic_constant_snapshot
 from NodeForge.semantic_lowering import lower_analyzed_expression
 from NodeForge.semantic_ir import (

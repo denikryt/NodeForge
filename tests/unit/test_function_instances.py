@@ -23,7 +23,7 @@ class DummyCompiler:
         self.consts = dict(consts or {})
 
     def _const_eval_macro_arg(self, expr):
-        from NodeForge.consteval import _const_eval
+        from NodeForge.semantic.consteval import _const_eval
 
         return _const_eval(expr, self.consts)
 

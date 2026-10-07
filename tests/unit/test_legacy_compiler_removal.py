@@ -14,7 +14,7 @@ from NodeForge.builtin_call_semantics import (
 )
 from NodeForge.builtins import registry as builtin_registry
 from NodeForge.call_resolution import CallableEnvironment
-from NodeForge.compile_time import CompileTimeSnapshot
+from NodeForge.semantic.compile_time import CompileTimeSnapshot
 from NodeForge.compiler_identities import BindingId
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType

@@ -2,16 +2,19 @@ import ast
 
 import pytest
 
-from NodeForge.consteval import (
+from NodeForge.semantic.consteval import (
     ConstEvalUnavailable,
     NOT_FOLDABLE,
-    _collect_preprocessing_written_names,
     _const_eval,
-    _is_const_number,
-    _is_const_vector_like,
     try_runtime_fold,
 )
-from NodeForge.compile_time import CompileTimeState, ConstVector
+from NodeForge.semantic.compile_time import (
+    CompileTimeState,
+    ConstVector,
+    _is_const_number,
+    _is_const_vector_like,
+)
+from NodeForge.semantic.residualization import _collect_preprocessing_written_names
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
 from NodeForge.numeric_semantics import normalize_float_constant
@@ -124,7 +127,7 @@ def test_literal_string_and_input_discovery_use_compile_time_fstrings():
     assert dict(semantics.options)["data_type"] == "FLOAT"
 
     stmts = _parse_source('prefix = "Result"\nvalue = input_float(f"{prefix} Value")\noutput(f"{prefix} Output", value)')
-    from NodeForge.consteval import _preprocess_compile_time
+    from NodeForge.semantic.residualization import _preprocess_compile_time
 
     preprocessed = _preprocess_compile_time(stmts)
     assert _collect_inputs(
@@ -145,7 +148,7 @@ def test_literal_string_and_input_discovery_use_compile_time_fstrings():
 
 
 def _preprocess_source(source):
-    from NodeForge.consteval import _preprocess_compile_time
+    from NodeForge.semantic.residualization import _preprocess_compile_time
     from NodeForge.parsing import _parse_source
 
     preprocessed = _preprocess_compile_time(_parse_source(source))
@@ -250,7 +253,7 @@ def test_preprocess_retains_literal_ordinary_if_and_invalidates_branch_writes(co
 
 
 def test_runtime_if_seed_prescan_is_removed():
-    import NodeForge.consteval as consteval
+    import NodeForge.semantic.consteval as consteval
 
     assert not hasattr(consteval, "_collect_runtime_if_seed_names")
 
@@ -347,7 +350,7 @@ output("x", 1)
 
 
 def test_handle_stmt_invalidates_integer_candidate_for_preserved_repeat_range_state():
-    from NodeForge.consteval import _PreprocessRecorder, _handle_compile_time_stmt
+    from NodeForge.semantic.residualization import _PreprocessRecorder, _handle_compile_time_stmt
 
     stmt = ast.parse("COUNT = 16").body[0]
     env = {"COUNT": 8}
@@ -383,7 +386,7 @@ output("Geometry", geo)
     assert any(isinstance(stmt, ast.For) for stmt in retained)
     assert "count" not in consts
 
-    from NodeForge.consteval import _infer_input_types
+    from NodeForge.semantic.residualization import _infer_input_types
     from NodeForge.constants import TYPE_INT
 
     assert _infer_input_types(retained).get("count") == TYPE_INT
@@ -464,7 +467,7 @@ output("x", x)
 
 
 def test_infer_input_types_finds_implicit_nested_repeat_count():
-    from NodeForge.consteval import _infer_input_types
+    from NodeForge.semantic.residualization import _infer_input_types
     from NodeForge.constants import TYPE_INT
     from NodeForge.parsing import _parse_source
 
@@ -508,7 +511,7 @@ def test_compile_time_append_preserves_legacy_ignored_keyword_compatibility():
 
 def test_nested_speculative_loop_append_journal_rolls_back_to_outer_savepoint():
     """Successful inner trials remain rollback-visible when a later outer statement rejects the trial."""
-    from NodeForge.consteval import _PreprocessRecorder, _handle_compile_time_stmt
+    from NodeForge.semantic.residualization import _PreprocessRecorder, _handle_compile_time_stmt
 
     shared = []
     state = CompileTimeState({"items": shared})
@@ -562,7 +565,7 @@ def test_geometry_builder_simple_name_loop_has_no_builder_specific_preprocess_ro
 
 def test_compile_time_append_journal_savepoint_rolls_back_only_its_suffix():
     """Nested speculative transactions preserve parent journal entries below their savepoint."""
-    from NodeForge.consteval import (
+    from NodeForge.semantic.residualization import (
         _compile_time_list_append_savepoint,
         _rollback_compile_time_list_appends_to,
     )

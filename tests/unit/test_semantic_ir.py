@@ -8,7 +8,7 @@ from types import MappingProxyType, SimpleNamespace
 
 import pytest
 
-from NodeForge.compile_time import CompileTimeSnapshot
+from NodeForge.semantic.compile_time import CompileTimeSnapshot
 
 from NodeForge.constants import (
     TYPE_BOOL,
@@ -674,7 +674,7 @@ def test_obsolete_structural_array_fallback_markers_are_retired():
             "CONTROL_FLOW_IR_BODY_REMAINING_FALLBACK",
             "CONTROL_FLOW_IR_NESTED_ATOMIC_FALLBACK",
         ),
-        "consteval.py": ("STRUCTURAL_ARRAYS_GEOMETRY_BUILDER_LOOP_COMPAT",),
+        "semantic/residualization.py": ("STRUCTURAL_ARRAYS_GEOMETRY_BUILDER_LOOP_COMPAT",),
     }
     for relative, marker_names in obsolete.items():
         source = (root / relative).read_text(encoding="utf-8")
@@ -1052,7 +1052,7 @@ def test_detached_const_eval_snapshot_preserves_list_tuple_semantics_and_ownersh
 
     cyclic = [1]
     cyclic.append(cyclic)
-    from NodeForge.consteval import _const_eval
+    from NodeForge.semantic.consteval import _const_eval
 
     _, cyclic_detached = build_semantic_constant_snapshot(CompileTimeSnapshot({"xs": cyclic}))
     assert _const_eval(_expr("xs[1] == xs"), cyclic_detached) is True

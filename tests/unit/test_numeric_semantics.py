@@ -8,10 +8,10 @@ from types import MappingProxyType
 import pytest
 
 from NodeForge.call_resolution import CallableEnvironment
-from NodeForge.compile_time import CompileTimeSnapshot, ConstVector
+from NodeForge.semantic.compile_time import CompileTimeSnapshot, ConstVector
 from NodeForge.compiler_identities import BindingId
 from NodeForge.constants import TYPE_BOOL, TYPE_FLOAT, TYPE_INT, TYPE_VECTOR
-from NodeForge.consteval import ConstEvalUnavailable, NOT_FOLDABLE, _const_eval, try_runtime_fold
+from NodeForge.semantic.consteval import ConstEvalUnavailable, NOT_FOLDABLE, _const_eval, try_runtime_fold
 from NodeForge.errors import CompileError
 from NodeForge.numeric_semantics import (
     FLOAT_MAX,
@@ -380,7 +380,7 @@ def test_compile_time_range_items_materialize_as_int_for_runtime_arithmetic():
     """Compile-time range unrolling publishes Int literals into permanent runtime expressions."""
     from NodeForge.builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
     from NodeForge.call_resolution import CallableEnvironment
-    from NodeForge.consteval import _preprocess_compile_time
+    from NodeForge.semantic.residualization import _preprocess_compile_time
     from NodeForge.semantic_body import lower_basic_body
     from NodeForge.semantic_ir import IRAssign
 
@@ -744,7 +744,7 @@ def _body_callables():
 
 def _lower_preprocessed_body(source):
     """Run source through real preprocessing and permanent Semantic Body lowering."""
-    from NodeForge.consteval import _preprocess_compile_time
+    from NodeForge.semantic.residualization import _preprocess_compile_time
     from NodeForge.semantic_body import lower_basic_body
 
     statements = ast.parse(source, mode="exec").body
@@ -904,7 +904,7 @@ def test_numeric_semantics_does_not_reintroduce_legacy_numeric_parity_or_residua
 
     root = Path(NodeForge.__file__).resolve().parent
     compiler_source = (root / "compiler.py").read_text()
-    consteval_source = (root / "consteval.py").read_text()
+    consteval_source = (root / "semantic" / "consteval.py").read_text()
     assert "numeric_semantics" not in compiler_source
     assert "TODO(nodeforge-compat):" not in "\n".join(
         line for line in consteval_source.splitlines() if "numeric" in line.lower()

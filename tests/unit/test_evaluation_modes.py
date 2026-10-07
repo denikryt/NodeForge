@@ -6,14 +6,15 @@ import inspect
 import pytest
 
 from NodeForge import evaluation_modes
+from NodeForge.semantic import evaluation_resolution
 from NodeForge.errors import CompileError
-from NodeForge.evaluation_modes import (
+from NodeForge.evaluation_modes import EvaluationMode
+from NodeForge.semantic.evaluation_resolution import (
     CompileTimeSelection,
-    EvaluationMode,
     RuntimeRequired,
     resolve_argument_evaluation,
 )
-from NodeForge.consteval import ConstEvalUnavailable
+from NodeForge.semantic.consteval import ConstEvalUnavailable
 
 
 pytestmark = pytest.mark.unit
@@ -49,7 +50,7 @@ def test_runtime_only_never_probes_consteval(monkeypatch):
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError("runtime-only selection probed CTFE")
 
-    monkeypatch.setattr(evaluation_modes, "_const_eval", fail_if_called)
+    monkeypatch.setattr(evaluation_resolution, "_const_eval", fail_if_called)
     selection = resolve_argument_evaluation(
         _expr("anything"), {}, EvaluationMode.RUNTIME_ONLY
     )

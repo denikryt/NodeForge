@@ -19,7 +19,7 @@ from .callable_contracts import (
 )
 from .compiler_identities import FunctionId, GroupCompilationIdentity, normalize_library_package_id
 from .constants import TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
-from .consteval import _is_const_vector
+from .semantic.compile_time import _is_const_vector
 from .errors import CompileError
 from .nf_types import NFType, serialize_nf_type
 
@@ -104,7 +104,7 @@ class PreparedSourceCallable:
 
 def value_type_for_const(value) -> NFType:
     """Infer the canonical NodeForge type represented by one materializable constant."""
-    from .compile_time import ConstVector
+    from .semantic.compile_time import ConstVector
     from .nf_types import NFType
 
     if isinstance(value, ConstVector) or _is_const_vector(value) or (

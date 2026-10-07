@@ -68,7 +68,7 @@ def test_parser_accepts_flat_unpacking_for_statement_lowering():
 
 
 def test_compile_time_preprocessor_preserves_runtime_unpacking():
-    from NodeForge.consteval import _preprocess_compile_time
+    from NodeForge.semantic.residualization import _preprocess_compile_time
 
     statements = ast.parse("a = 1\nb = 2\na, b = split(value)").body
     preprocessed = _preprocess_compile_time(statements)

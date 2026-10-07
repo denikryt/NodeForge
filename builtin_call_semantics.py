@@ -35,19 +35,21 @@ from .constants import (
     _VECTOR_MATH_VECTOR_OUTPUT_1,
     _VECTOR_MATH_VECTOR_OUTPUT_2,
 )
-from .compile_time import ConstVector
-from .consteval import (
-    ConstEvalUnavailable,
+from .semantic.compile_time import (
+    ConstVector,
     _as_float_const,
-    _const_eval,
     _is_const_number,
     _is_const_vector,
     _is_const_vector_like,
 )
+from .semantic.consteval import (
+    ConstEvalUnavailable,
+    _const_eval,
+)
 from .errors import CompileError
-from .evaluation_modes import (
+from .evaluation_modes import EvaluationMode
+from .semantic.evaluation_resolution import (
     CompileTimeSelection,
-    EvaluationMode,
     RuntimeRequired,
     resolve_argument_evaluation,
 )

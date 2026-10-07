@@ -9,9 +9,9 @@ import pytest
 
 from NodeForge.builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
 from NodeForge.call_resolution import CallableEnvironment
-from NodeForge.compile_time import CompileTimeSnapshot
+from NodeForge.semantic.compile_time import CompileTimeSnapshot
 from NodeForge.compiler_identities import BindingId
-from NodeForge.consteval import _preprocess_compile_time
+from NodeForge.semantic.residualization import _preprocess_compile_time
 from NodeForge.errors import CompileError
 from NodeForge.extension_contracts import ExtensionTypeId, TypeSpec
 from NodeForge.extension_semantics import ExtensionDependencySource, ExtensionSemanticPayload

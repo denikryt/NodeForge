@@ -23,7 +23,7 @@ from NodeForge.compiler_identities import (
     InputDeclarationId,
     library_function_id,
 )
-from NodeForge.consteval import _preprocess_compile_time
+from NodeForge.semantic.residualization import _preprocess_compile_time
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
 from NodeForge.function_instances import normalized_statements

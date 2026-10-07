@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from NodeForge.compile_time import CompileTimeSnapshot, CompileTimeState
+from NodeForge.semantic.compile_time import CompileTimeSnapshot, CompileTimeState
 from NodeForge.errors import CompileError
 
 
@@ -58,7 +58,7 @@ def test_adopted_backing_mapping_keeps_identity_across_replace():
 def test_compile_time_state_module_has_no_backend_dependencies():
     """The compile-time owner remains a pure compiler-state abstraction."""
     root = Path(__file__).resolve().parents[2]
-    source = (root / "compile_time.py").read_text(encoding="utf-8")
+    source = (root / "semantic" / "compile_time.py").read_text(encoding="utf-8")
     forbidden = (
         "import bpy",
         "from .values",
@@ -75,8 +75,10 @@ def test_frontend_compile_time_modules_do_not_import_bpy():
     """Compile-time and semantic state separation does not spread Blender API access."""
     root = Path(__file__).resolve().parents[2]
     for relative in (
-        "compile_time.py",
-        "consteval.py",
+        "semantic/compile_time.py",
+        "semantic/consteval.py",
+        "semantic/residualization.py",
+        "semantic/evaluation_resolution.py",
         "semantic_body.py",
         "semantic_control_flow.py",
         "semantic_analysis.py",
@@ -124,15 +126,15 @@ def test_replace_accepts_state_and_snapshot_without_swapping_mapping():
 
 def test_const_vector_has_one_compile_time_owner_class_identity():
     """consteval re-exports the compile-time owner's exact ConstVector class."""
-    from NodeForge.compile_time import ConstVector as OwnedConstVector
-    from NodeForge.consteval import ConstVector as ReexportedConstVector
+    from NodeForge.semantic.compile_time import ConstVector as OwnedConstVector
+    from NodeForge.semantic.consteval import ConstVector as ReexportedConstVector
 
     assert ReexportedConstVector is OwnedConstVector
 
 
 def test_runtime_if_compile_time_merge_is_conservative_by_value_and_identity():
     """Only stable scalar equality and inherited object identity survive runtime joins."""
-    from NodeForge.compile_time import ConstVector, merge_runtime_if_compile_time
+    from NodeForge.semantic.compile_time import ConstVector, merge_runtime_if_compile_time
 
     shared = ["same"]
     replaced = ["replacement"]
@@ -169,7 +171,7 @@ def test_runtime_if_compile_time_merge_is_conservative_by_value_and_identity():
 
 def test_runtime_if_compile_time_merge_discards_unstable_or_unproven_value_categories():
     """Float/vector equality and one-sided/conflicting facts are not published at joins."""
-    from NodeForge.compile_time import ConstVector, merge_runtime_if_compile_time
+    from NodeForge.semantic.compile_time import ConstVector, merge_runtime_if_compile_time
 
     base = CompileTimeState({"stable": 7, "signed_zero": 0.0})
     true_state = base.fork()

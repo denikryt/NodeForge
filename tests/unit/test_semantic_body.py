@@ -5,7 +5,7 @@ from types import MappingProxyType, SimpleNamespace
 
 import pytest
 
-from NodeForge.compile_time import CompileTimeSnapshot
+from NodeForge.semantic.compile_time import CompileTimeSnapshot
 
 from NodeForge.builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
 from NodeForge.call_resolution import CallableEnvironment
@@ -54,7 +54,7 @@ def _lower(
 
 def _preprocessed_lower(source, *, bindings=None, callables=None):
     """Lower source through the real ordered preprocessing handoff."""
-    from NodeForge.consteval import _preprocess_compile_time
+    from NodeForge.semantic.residualization import _preprocess_compile_time
 
     preprocessed = _preprocess_compile_time(_stmts(source))
     result = lower_basic_body(
@@ -255,7 +255,7 @@ def test_late_unknown_call_error_does_not_mutate_input_semantic_state():
 
 def test_unknown_call_error_does_not_publish_speculative_compile_time_changes():
     """A direct semantic error cannot publish speculative compile-time bindings."""
-    from NodeForge.compile_time import CompileTimeState
+    from NodeForge.semantic.compile_time import CompileTimeState
 
     committed = CompileTimeState({"c": 2})
     with pytest.raises(
@@ -275,7 +275,7 @@ def test_unknown_call_error_does_not_publish_speculative_compile_time_changes():
 
 def test_semantic_body_exception_does_not_mutate_committed_compile_time_owner():
     """Semantic errors after speculative constant updates cannot publish compile-time state."""
-    from NodeForge.compile_time import CompileTimeState
+    from NodeForge.semantic.compile_time import CompileTimeState
 
     committed = CompileTimeState({"c": 2})
     with pytest.raises(CompileError, match="Unknown name: missing"):
@@ -1238,7 +1238,7 @@ def test_compile_time_loop_does_not_leak_temporary_input_origin_to_prior_noninpu
 
 def test_late_compile_time_owned_assignment_uses_runtime_if_joined_fact_without_runtime_range_ir():
     """A retained CT-owned root can finish after runtime-if CT knowledge is soundly recovered."""
-    from NodeForge.consteval import _preprocess_compile_time
+    from NodeForge.semantic.residualization import _preprocess_compile_time
 
     source = (
         'n = 2\n'
@@ -1299,7 +1299,7 @@ def test_late_compile_time_owned_root_family_consumes_after_runtime_if_join(
     branch_assignment, late_assignment, expected
 ):
     """Shared CT-owned roots may finish after structured control flow recovers their inputs."""
-    from NodeForge.consteval import _preprocess_compile_time
+    from NodeForge.semantic.residualization import _preprocess_compile_time
 
     source = (
         'flag = input_bool("Flag")\n'
@@ -1357,7 +1357,7 @@ def test_ordered_preprocessing_handoff_does_not_leak_future_fact_backwards():
 
 def test_ordered_preprocessing_handoff_does_not_publish_future_only_name_earlier():
     """A future erased binding remains unavailable at an earlier residual source position."""
-    from NodeForge.consteval import _preprocess_compile_time
+    from NodeForge.semantic.residualization import _preprocess_compile_time
 
     preprocessed = _preprocess_compile_time(_stmts("y = x + 1.0\nx = 2.0\noutput(y)\n"))
     with pytest.raises(CompileError, match="Unknown name: x"):
@@ -1560,7 +1560,7 @@ def test_compile_time_unrolled_for_keeps_nested_literal_ordinary_if_runtime():
 
 def test_compile_time_for_effect_replay_rejects_fewer_iterations_than_preprocessing():
     """Composite loop replay fails closed when the replay iterable ends too early."""
-    from NodeForge.consteval import CompileTimeForEffect
+    from NodeForge.semantic.residualization import CompileTimeForEffect
 
     effect = CompileTimeForEffect(
         target="item",
@@ -1581,7 +1581,7 @@ def test_compile_time_for_effect_replay_rejects_fewer_iterations_than_preprocess
 
 def test_compile_time_for_effect_replay_rejects_more_iterations_than_preprocessing():
     """Composite loop replay fails closed when the replay iterable yields an extra item."""
-    from NodeForge.consteval import CompileTimeForEffect
+    from NodeForge.semantic.residualization import CompileTimeForEffect
 
     effect = CompileTimeForEffect(
         target="item",

@@ -199,7 +199,7 @@ class IRCallOperandRef:
 
 def _detached_nf_type(value):
     """Infer the canonical NFType of one detached static semantic-state leaf."""
-    from .compile_time import ConstVector
+    from .semantic.compile_time import ConstVector
     if type(value) is bool:
         return NFType.BOOL
     if type(value) is int:

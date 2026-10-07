@@ -42,3 +42,19 @@ def test_catalog_environment_and_local_owners_are_canonical():
 def test_mixed_library_owner_path_is_absent():
     """Negative: the old mixed library owner cannot survive as a forwarding module."""
     _assert_paths_absent({"library.py"})
+
+
+def test_ctfe_residualization_and_evaluation_implementation_have_semantic_owners():
+    """Positive: compile-time implementation lives at canonical semantic paths."""
+    _assert_paths_exist({
+        "semantic/compile_time.py",
+        "semantic/consteval.py",
+        "semantic/residualization.py",
+        "semantic/evaluation_resolution.py",
+        "evaluation_modes.py",
+    })
+
+
+def test_old_flat_ctfe_owner_paths_are_absent():
+    """Negative: moved CTFE implementation cannot survive as flat forwarding modules."""
+    _assert_paths_absent({"compile_time.py", "consteval.py"})

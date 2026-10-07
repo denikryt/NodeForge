@@ -6,7 +6,7 @@ from types import MappingProxyType
 
 import pytest
 
-from NodeForge.compile_time import CompileTimeSnapshot
+from NodeForge.semantic.compile_time import CompileTimeSnapshot
 
 from NodeForge.constants import (
     TYPE_BOOL,
@@ -20,7 +20,7 @@ from NodeForge.constants import (
     TYPE_VECTOR,
 )
 from NodeForge.errors import CompileError
-from NodeForge.consteval import _const_eval
+from NodeForge.semantic.consteval import _const_eval
 from NodeForge.compiler_identities import BindingId
 from NodeForge.call_resolution import CallableEnvironment
 from NodeForge.semantic_values import (

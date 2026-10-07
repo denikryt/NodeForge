@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from NodeForge.compile_time import CompileTimeSnapshot
+from NodeForge.semantic.compile_time import CompileTimeSnapshot
 
 sys.modules.setdefault("bpy", SimpleNamespace())
 

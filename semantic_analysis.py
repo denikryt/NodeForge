@@ -60,8 +60,8 @@ from .constants import (
     _BOOLEAN_OPS,
     _COMPARE_OPS,
 )
-from .consteval import NOT_FOLDABLE, ConstEvalUnavailable, _const_eval, _is_const_vector, try_runtime_fold
-from .compile_time import CompileTimeSnapshot, ConstVector
+from .semantic.consteval import NOT_FOLDABLE, ConstEvalUnavailable, _const_eval, try_runtime_fold
+from .semantic.compile_time import CompileTimeSnapshot, ConstVector, _is_const_vector
 from .errors import CompileError
 from .nf_types import NFType, NUMERIC_NF_TYPES
 from .numeric_semantics import (
@@ -80,7 +80,8 @@ from .callable_contracts import (
     source_argument_type_matches,
 )
 from .semantic_ir import IRFunctionMaterialization, IRFunctionMaterializationMode
-from .evaluation_modes import CompileTimeSelection, EvaluationMode, RuntimeRequired, resolve_argument_evaluation
+from .evaluation_modes import EvaluationMode
+from .semantic.evaluation_resolution import CompileTimeSelection, RuntimeRequired, resolve_argument_evaluation
 from .extension_contracts import (
     ExtensionCallableSpec,
     ExtensionParameterSpec,

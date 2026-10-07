@@ -4,7 +4,7 @@ import ast
 
 import pytest
 
-from NodeForge.compile_time import CompileTimeSnapshot
+from NodeForge.semantic.compile_time import CompileTimeSnapshot
 
 from NodeForge.builtin_call_semantics import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
 from NodeForge.call_resolution import CallableEnvironment

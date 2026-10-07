@@ -4,7 +4,7 @@ import ast
 from dataclasses import dataclass
 
 from .constants import _ALLOWED_CONSTS, TYPE_TOKEN_NAMES
-from .consteval import ConstEvalUnavailable, _const_eval
+from .semantic.consteval import ConstEvalUnavailable, _const_eval
 from .errors import CompileError
 
 
