@@ -10,7 +10,7 @@ from pathlib import Path
 
 from NodeForge import packages
 from NodeForge import environment_resolution
-from NodeForge import source_callables as source_callable_session
+from NodeForge.semantic import source_callable_session
 
 
 def _write(path, text):

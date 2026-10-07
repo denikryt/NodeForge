@@ -3,7 +3,7 @@
 import pytest
 
 from NodeForge.errors import CompileError
-from NodeForge.parsing import FunctionImport, PackageImport, _extract_function_imports, _parse_source
+from NodeForge.semantic.parsing import FunctionImport, PackageImport, _extract_function_imports, _parse_source
 
 
 def test_package_and_catalog_imports_are_split_without_losing_source_order():

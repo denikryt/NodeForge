@@ -340,7 +340,7 @@ def _resolved_from_package_export(source_name: str, export) -> ResolvedCallable:
         return ResolvedCallable(CallableKind.EXTENSION, source_name, target=extension_callable_id)
     if record is None:
         raise ValueError("package export has no semantic target")
-    from .semantic_group import LibraryBinding
+    from .semantic.source_bindings import LibraryBinding
 
     binding = LibraryBinding("functions", export.name, record, None)
     function_id = library_function_id("functions", export.package_id, export.name)

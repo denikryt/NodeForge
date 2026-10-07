@@ -21,53 +21,14 @@ from .compiler_identities import BindingId, GroupCompilationIdentity
 from .constants import TYPE_FLOAT, TYPE_INT, TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
 from .semantic.residualization import _infer_input_types, _preprocess_compile_time
 from .errors import CompileError
-from .function_instances import normalized_statements
 from .nf_types import NFType
 from .extension_contracts import ExtensionCallableId
 from .extension_registry import library_owner_key
-from .parsing import _assigned_names, _binding_names, _collect_inputs, _extract_function_imports, _needs_geometry_io, _parse_source
+from .semantic.parsing import _assigned_names, _binding_names, _collect_inputs, _extract_function_imports, _needs_geometry_io, _parse_source, normalized_statements
 from .runtime_bindings import RuntimeBindingSymbol
+from .semantic.source_bindings import LibraryBinding, PackageNamespaceBinding
 from .semantic_body import BasicBodyCompilation, lower_basic_body
 from .semantic_ir import IRBody, IRIf, IRInputDeclaration, IRPanelDeclaration, IRRepeat
-
-
-@dataclass(frozen=True)
-class LibraryBinding:
-    """Resolve one source-local imported name to an exact catalog record."""
-
-    namespace: str
-    canonical_name: str
-    record: object
-    extension_callable_id: ExtensionCallableId | None = None
-
-    def __post_init__(self) -> None:
-        """Require the binding namespace/name to match its selected record."""
-        if getattr(self.record, "namespace", None) != self.namespace or getattr(self.record, "name", None) != self.canonical_name:
-            raise ValueError("Library binding does not match its resolved record")
-        if self.extension_callable_id is not None and not isinstance(self.extension_callable_id, ExtensionCallableId):
-            raise TypeError("LibraryBinding.extension_callable_id must be ExtensionCallableId or None")
-
-
-@dataclass(frozen=True)
-class PackageNamespaceBinding:
-    """Bind one source-local alias to an exact resolved package namespace."""
-
-    source_name: str
-    namespace: object
-
-    def __post_init__(self) -> None:
-        """Require a source alias and canonical resolved package namespace."""
-        from .resolved_environment import ResolvedPackageNamespace
-
-        if not isinstance(self.source_name, str) or not self.source_name:
-            raise ValueError("Package namespace binding requires a non-empty source name")
-        if not isinstance(self.namespace, ResolvedPackageNamespace):
-            raise TypeError("Package namespace binding requires ResolvedPackageNamespace")
-
-    @property
-    def package_id(self) -> str:
-        """Return canonical package identity independently from source alias spelling."""
-        return self.namespace.package_id
 
 
 @dataclass(frozen=True)
@@ -542,8 +503,6 @@ def analyze_group_source(
 
 
 __all__ = [
-    "LibraryBinding",
-    "PackageNamespaceBinding",
     "SemanticGroupCompilation",
     "analyze_group_source",
 ]

@@ -47,7 +47,7 @@ class _FakeGroupBackend:
 
     def new_source_callable_session(self):
         """Return one root-attempt semantic source-call session."""
-        from NodeForge.source_callables import SourceCallableSession
+        from NodeForge.semantic.source_callable_session import SourceCallableSession
         return SourceCallableSession(resolved_environment=self._environment())
 
     def prepare_source_compilation(

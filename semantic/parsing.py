@@ -3,11 +3,9 @@
 import ast
 from dataclasses import dataclass
 
-from .constants import _ALLOWED_CONSTS, TYPE_TOKEN_NAMES
-from .semantic.consteval import ConstEvalUnavailable, _const_eval
-from .errors import CompileError
-
-
+from ..constants import _ALLOWED_CONSTS, TYPE_TOKEN_NAMES
+from .consteval import ConstEvalUnavailable, _const_eval
+from ..errors import CompileError
 
 
 @dataclass(frozen=True)
@@ -264,7 +262,7 @@ def _binding_names(stmts):
 
 
 def _builtin_names():
-    from .builtins import registry as builtin_registry
+    from ..builtins import registry as builtin_registry
     return set(builtin_registry.BUILTIN_NAMES) | {"output", "store", "panel"}
 
 
@@ -352,6 +350,22 @@ def _needs_geometry_io(stmts):
     return any(_top_level_call_name(stmt) in {"set_position", "store"} for stmt in stmts)
 
 
+def normalized_source(source: str) -> str:
+    """Return deterministic Python-AST text for NodeForge DSL source."""
+
+    try:
+        return ast.dump(ast.parse(source), include_attributes=False)
+    except Exception:
+        return source
+
+
+def normalized_statements(stmts) -> str:
+    """Return deterministic Python-AST text for a preprocessed statement list."""
+
+    module = ast.Module(body=list(stmts), type_ignores=[])
+    return ast.dump(module, include_attributes=False)
+
+
 __all__ = [
     '_parse_source',
     '_extract_function_imports',
@@ -364,4 +378,6 @@ __all__ = [
     '_is_top_level_call',
     '_top_level_call_name',
     '_needs_geometry_io',
+    'normalized_source',
+    'normalized_statements',
 ]

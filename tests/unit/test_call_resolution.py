@@ -16,7 +16,7 @@ from NodeForge.call_resolution import (
     resolve_simple_callable,
 )
 from NodeForge.compiler_identities import library_function_id
-from NodeForge.function_instances import extract_function_call_modifiers
+from NodeForge.semantic.call_modifiers import extract_function_call_modifiers
 from NodeForge.extension_contracts import ExtensionCallableId
 
 
@@ -36,7 +36,7 @@ def _extension_id(name: str, package_id: str = "vendor.pkg") -> ExtensionCallabl
 def _package_binding(alias: str, exports: dict[str, ExtensionCallableId], *, package_id="vendor.pkg"):
     """Return one exact source package binding for pure resolver tests."""
     from NodeForge.resolved_environment import PackageCallableExport, ResolvedPackageNamespace
-    from NodeForge.semantic_group import PackageNamespaceBinding
+    from NodeForge.semantic.source_bindings import PackageNamespaceBinding
 
     namespace = ResolvedPackageNamespace(
         package_id=package_id,

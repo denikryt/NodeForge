@@ -58,3 +58,19 @@ def test_ctfe_residualization_and_evaluation_implementation_have_semantic_owners
 def test_old_flat_ctfe_owner_paths_are_absent():
     """Negative: moved CTFE implementation cannot survive as flat forwarding modules."""
     _assert_paths_absent({"compile_time.py", "consteval.py"})
+
+
+def test_source_callable_analysis_session_bindings_and_parsing_have_semantic_owners():
+    """Positive: source-call responsibilities live at their canonical semantic paths."""
+    _assert_paths_exist({
+        "semantic/source_bindings.py",
+        "semantic/source_callables.py",
+        "semantic/source_callable_session.py",
+        "semantic/call_modifiers.py",
+        "semantic/parsing.py",
+    })
+
+
+def test_old_mixed_source_callable_and_parsing_paths_are_absent():
+    """Negative: split source-call owners cannot survive behind flat forwarding modules."""
+    _assert_paths_absent({"source_callables.py", "parsing.py"})

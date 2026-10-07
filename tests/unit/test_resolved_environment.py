@@ -305,7 +305,7 @@ def _import_compiler_with_fake_bpy(monkeypatch):
 def test_import_validation_binds_exact_snapshot_records_and_preserves_sorting(monkeypatch):
     """Explicit, aliased, and star imports retain selected record object identity."""
     from NodeForge import semantic_group
-    from NodeForge.parsing import FunctionImport
+    from NodeForge.semantic.parsing import FunctionImport
 
     alpha = _Record("examples", "alpha")
     zeta = _Record("examples", "zeta")
@@ -331,7 +331,8 @@ def test_inherited_import_requires_same_record_identity(monkeypatch):
     selected = _Record("examples", "alpha")
     different = _Record("examples", "alpha")
     environment = ResolvedEnvironment(_catalogs(examples={"alpha": selected}))
-    inherited = {"alias": semantic_group.LibraryBinding("examples", "alpha", different)}
+    from NodeForge.semantic.source_bindings import LibraryBinding
+    inherited = {"alias": LibraryBinding("examples", "alpha", different)}
 
     with pytest.raises(CompileError, match="inherited library binding does not match"):
         semantic_group._validate_import_bindings((), (), {}, environment, inherited)
@@ -371,7 +372,7 @@ def test_source_call_migration_removes_v1_extension_execution_and_keeps_v2_bound
 def test_source_callable_session_uses_exact_resolved_record_without_live_discovery(tmp_path):
     """Pure imported source preparation consumes the exact record captured by the environment."""
     from NodeForge.compiler_identities import GroupCompilationIdentity
-    from NodeForge.source_callables import SourceCallableSession
+    from NodeForge.semantic.source_callable_session import SourceCallableSession
 
     source_path = tmp_path / "selected.nf"
     source_path.write_text('x = input_float("X")\noutput("X", x)\n', encoding="utf-8")
@@ -446,7 +447,8 @@ def test_compilation_modules_do_not_call_live_resolution_apis():
             "function_materializer.py",
             "local_functions.py",
             "semantic_group.py",
-            "source_callables.py",
+            "semantic/source_callables.py",
+            "semantic/source_callable_session.py",
         )
     }
     forbidden = (

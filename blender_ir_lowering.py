@@ -72,7 +72,7 @@ from .function_instances import (
     function_materialization_owner_scope,
 )
 from .function_materializer import FunctionMaterializationContext, FunctionMaterializer
-from .source_callables import SourceCallablePreparationKey
+from .semantic.source_callables import SourceCallablePreparationKey
 
 
 def _repeat_item_type_for_nf_type(typ: NFType) -> str:

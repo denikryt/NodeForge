@@ -38,11 +38,10 @@ from .builtin_call_semantics import (
     INPUT_DECLARATION_PLACEMENT_ERROR,
     analyze_builtin_call,
 )
+from .semantic.call_modifiers import extract_function_call_modifiers, unsupported_unique
 from .function_instances import (
-    extract_function_call_modifiers,
     function_group_owner_scope,
     function_materialization_owner_scope,
-    unsupported_unique,
 )
 from .constants import (
     OBJECT_PROPERTY_TYPES,
@@ -103,7 +102,7 @@ from .extension_values import (
     static_nf_type,
     type_spec_accepts_nf,
 )
-from .source_callables import (
+from .semantic.source_callables import (
     analyze_local_captures,
     analyze_local_return_shape,
     local_binding_names,

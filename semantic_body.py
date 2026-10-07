@@ -36,7 +36,7 @@ from .extension_semantics import ExtensionDependencySource, ExtensionSemanticPay
 from .nf_types import NFType
 from .numeric_semantics import normalize_float_constant, normalize_int_constant
 from .group_context import GroupContextAvailabilityCursor, GroupContextSlot
-from .parsing import _literal_string
+from .semantic.parsing import _literal_string
 from .runtime_bindings import RuntimeBindingSymbol, validate_runtime_binding_target
 from .semantic_analysis import analyze_expression, build_semantic_environment
 from .semantic_ir import (

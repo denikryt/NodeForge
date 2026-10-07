@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from NodeForge import source_callables
+from NodeForge.semantic import source_callables
 from NodeForge.call_resolution import CallableEnvironment
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType

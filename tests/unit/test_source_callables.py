@@ -26,13 +26,14 @@ from NodeForge.compiler_identities import (
 from NodeForge.semantic.residualization import _preprocess_compile_time
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
-from NodeForge.function_instances import normalized_statements
+from NodeForge.semantic.parsing import normalized_statements
 from NodeForge.resolved_environment import (
     PackageCallableExport, ResolvedCatalog, ResolvedEnvironment, ResolvedPackageNamespace,
 )
 from NodeForge.semantic_group import analyze_group_source
 from NodeForge.semantic_ir import IRPanelDeclaration
-from NodeForge.source_callables import SourceCallablePreparationKey, SourceCallableSession
+from NodeForge.semantic.source_callables import SourceCallablePreparationKey
+from NodeForge.semantic.source_callable_session import SourceCallableSession
 
 
 @dataclass(frozen=True)
@@ -488,7 +489,7 @@ def test_source_callable_records_keep_only_required_preparation_boundary_state()
     """Keep only state required by semantic preparation and exact backend materialization."""
     from dataclasses import fields
     from NodeForge.semantic_group import SemanticGroupCompilation
-    from NodeForge.source_callables import PreparedSourceCallable
+    from NodeForge.semantic.source_callables import PreparedSourceCallable
 
     assert {field.name for field in fields(SemanticGroupCompilation)} == {
         "source",
@@ -509,7 +510,7 @@ def test_source_callable_records_keep_only_required_preparation_boundary_state()
 def test_local_source_call_ir_owns_monotonic_shared_and_unique_identity():
     """Semantic traversal allocates stable unique ordinals without backend participation."""
     from NodeForge.semantic_ir import IRCall, IRCallableKind, IRFunctionMaterializationMode
-    from NodeForge.source_callables import SourceCallableSession
+    from NodeForge.semantic.source_callable_session import SourceCallableSession
 
     environment = _environment()
     session = SourceCallableSession(resolved_environment=environment)
@@ -555,7 +556,7 @@ def test_local_source_call_ir_owns_monotonic_shared_and_unique_identity():
 def test_pure_source_catalog_namespaces_route_through_source_function_ir(tmp_path, namespace):
     """Functions, Examples, and Local pure-source calls all use permanent source Call IR."""
     from NodeForge.semantic_ir import IRCall, IRCallableKind, IRFunctionMaterializationMode
-    from NodeForge.source_callables import SourceCallableSession
+    from NodeForge.semantic.source_callable_session import SourceCallableSession
 
     source_path = tmp_path / f"{namespace}_demo.nf"
     source_path.write_text('x = input_float("X", default=1.0)\noutput(x)\n', encoding="utf-8")
@@ -594,7 +595,7 @@ def test_pure_source_catalog_namespaces_route_through_source_function_ir(tmp_pat
 def test_source_call_known_but_not_foldable_argument_remains_runtime(tmp_path):
     """Compile-time knowledge never erases a NOT_FOLDABLE runtime source-call operand."""
     from NodeForge.semantic_ir import IRBinary, IRCall, IRCallableKind
-    from NodeForge.source_callables import SourceCallableSession
+    from NodeForge.semantic.source_callable_session import SourceCallableSession
 
     source_path = tmp_path / "demo.nf"
     source_path.write_text('x = input_float("X")\noutput(x)\n', encoding="utf-8")

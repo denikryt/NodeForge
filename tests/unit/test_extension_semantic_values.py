@@ -25,7 +25,7 @@ from NodeForge.extension_values import (
 from NodeForge.nf_types import NFType
 from NodeForge.runtime_bindings import RuntimeBindingSymbol
 from NodeForge.resolved_environment import PackageCallableExport, ResolvedPackageNamespace
-from NodeForge.semantic_group import PackageNamespaceBinding
+from NodeForge.semantic.source_bindings import PackageNamespaceBinding
 from NodeForge.semantic_analysis import SemanticEnvironment, analyze_expression
 from NodeForge.semantic_ir import IRCall, IRCallOperandRef
 from NodeForge.semantic_lowering import lower_analyzed_expression

@@ -15,7 +15,7 @@ from .function_instances import (
 )
 from .function_materializer import LocalFunctionMaterializationSpec
 from .nf_types import serialize_nf_type
-from .source_callables import LocalReturnElement, LocalReturnShape
+from .semantic.source_callables import LocalReturnElement, LocalReturnShape
 
 
 LOCAL_HELPER_KIND_PROP = "nodeforge_generated_kind"

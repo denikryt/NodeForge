@@ -17,12 +17,12 @@ from .group_build_request import BlenderGroupBuildRequest
 from .compiler_identities import FunctionId
 from .semantic_ir import IRFunctionMaterialization
 from .semantic_group import SemanticGroupCompilation
+from .semantic.parsing import normalized_source
 from .function_instances import (
     direct_library_owner_scope,
     function_group_owner_scope,
     function_materialization_owner_scope,
     instance_key_for_materialization,
-    normalized_source,
     stamp_function_metadata,
     stored_fingerprint,
 )

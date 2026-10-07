@@ -9,7 +9,6 @@ realized child fingerprint while normal compilation runs.
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 import uuid
@@ -34,81 +33,14 @@ FUNCTION_COMPILER_VERSION: str | None = None
 SHARED_INSTANCE_KEY = "SHARED"
 
 
-@dataclass(frozen=True)
-class FunctionCallModifiers:
-    """Compiler-reserved metadata extracted from one simple function call."""
-
-    unique: bool = False
-    unique_was_explicit: bool = False
-
-
 def _canonical_json(value) -> str:
     """Serialize *value* deterministically for metadata and hashing."""
-
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _digest_payload(value) -> str:
     """Return a SHA-256 digest for a canonical JSON payload."""
-
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
-
-
-def extract_function_call_modifiers(expr: ast.Call, function_name: str, const_eval_values) -> tuple[ast.Call, FunctionCallModifiers]:
-    """Return a copy of *expr* without compiler-reserved call modifiers.
-
-    Only the exact keyword ``__unique__`` is reserved.  Its value must be a
-    compile-time ``bool`` evaluated from the detached semantic constant snapshot, and
-    the keyword is removed before ordinary argument binding sees the call.
-    """
-
-    unique_seen = False
-    unique_value = False
-    cleaned_keywords = []
-    for kw in expr.keywords:
-        if kw.arg != "__unique__":
-            cleaned_keywords.append(kw)
-            continue
-        if unique_seen:
-            raise CompileError(f"{function_name}() got duplicate __unique__")
-        unique_seen = True
-        if kw.arg is None:
-            raise CompileError(f"{function_name}() does not support **kwargs")
-        try:
-            from .semantic.consteval import ConstEvalUnavailable, _const_eval
-            value = _const_eval(kw.value, const_eval_values)
-        except ConstEvalUnavailable as exc:
-            raise CompileError(f"{function_name}() __unique__ must be a compile-time Bool") from exc
-        if type(value) is not bool:
-            raise CompileError(f"{function_name}() __unique__ must be a compile-time Bool")
-        unique_value = value
-    cleaned = ast.copy_location(
-        ast.Call(func=expr.func, args=list(expr.args), keywords=cleaned_keywords),
-        expr,
-    )
-    return cleaned, FunctionCallModifiers(unique=unique_value, unique_was_explicit=unique_seen)
-
-
-def unsupported_unique(function_name: str) -> CompileError:
-    """Create the standard capability diagnostic for unsupported call kinds."""
-
-    return CompileError(f"{function_name}() does not support __unique__")
-
-
-def normalized_source(source: str) -> str:
-    """Return deterministic Python-AST text for NodeForge DSL source."""
-
-    try:
-        return ast.dump(ast.parse(source), include_attributes=False)
-    except Exception:
-        return source
-
-
-def normalized_statements(stmts) -> str:
-    """Return deterministic Python-AST text for a preprocessed statement list."""
-
-    module = ast.Module(body=list(stmts), type_ignores=[])
-    return ast.dump(module, include_attributes=False)
 
 
 def function_group_owner_scope(kind: str, *parts, instance_key: str | None = None) -> str:
@@ -353,12 +285,7 @@ __all__ = [
     "FUNCTION_INTERFACE_CONTRACT_PROP",
     "FUNCTION_COMPILATION_FINGERPRINT_PROP",
     "FUNCTION_ROOT_OWNER_ID_PROP",
-    "FunctionCallModifiers",
     "FunctionCompilationTrace",
-    "extract_function_call_modifiers",
-    "unsupported_unique",
-    "normalized_source",
-    "normalized_statements",
     "function_group_owner_scope",
     "direct_library_owner_scope",
     "function_materialization_owner_scope",

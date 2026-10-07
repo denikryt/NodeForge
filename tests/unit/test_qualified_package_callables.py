@@ -18,7 +18,7 @@ from NodeForge.resolved_environment import (
 )
 from NodeForge.semantic_group import analyze_group_source
 from NodeForge.semantic_ir import IRCall, IRCallableKind
-from NodeForge.source_callables import SourceCallableSession
+from NodeForge.semantic.source_callable_session import SourceCallableSession
 
 pytestmark = pytest.mark.unit
 

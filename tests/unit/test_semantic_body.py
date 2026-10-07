@@ -463,7 +463,7 @@ def test_library_duplicate_display_labels_bind_positionally_and_reject_ambiguous
 
 def test_generated_local_function_source_prologue_is_basic_body_eligible():
     """Generated helper input prologues enter IRBody rather than forcing legacy fallback."""
-    from NodeForge.source_callables import analyze_local_return_shape, local_function_source
+    from NodeForge.semantic.source_callables import analyze_local_return_shape, local_function_source
 
     fn = ast.parse("def f(x):\n    doubled = x * 2\n    return doubled\n").body[0]
     shape = analyze_local_return_shape(fn)

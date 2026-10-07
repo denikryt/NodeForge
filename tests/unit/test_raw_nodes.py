@@ -14,7 +14,7 @@ from NodeForge.constants import (
     TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING, TYPE_TOKEN_NAMES, TYPE_VECTOR,
 )
 from NodeForge.errors import CompileError
-from NodeForge.parsing import _collect_inputs, _parse_source
+from NodeForge.semantic.parsing import _collect_inputs, _parse_source
 from NodeForge.values import Value
 
 pytestmark = pytest.mark.unit

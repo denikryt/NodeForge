@@ -34,7 +34,7 @@ from .function_instances import (
     stamp_function_metadata,
 )
 from .semantic_group import SemanticGroupCompilation, analyze_group_source
-from .source_callables import SourceCallableSession
+from .semantic.source_callable_session import SourceCallableSession
 from .blender_ir_lowering import BlenderIRLoweringContext, lower_body
 from .function_materializer import FunctionMaterializationContext, FunctionMaterializer
 from .group_context import GroupContextSlot

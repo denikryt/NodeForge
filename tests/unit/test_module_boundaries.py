@@ -313,3 +313,47 @@ def test_ctfe_residualization_boundary_detects_reverse_ownership():
     assert _find_path(
         graph, "NodeForge.semantic.consteval", "NodeForge.semantic.residualization"
     ) == ["NodeForge.semantic.consteval", "NodeForge.semantic.residualization"]
+
+
+def test_pure_source_callable_analysis_does_not_reach_group_orchestration():
+    """Positive: pure source-call analysis is independent from recursive group preparation."""
+    graph = _build_import_graph(module_scope_only=False)
+    path = _find_path(
+        graph,
+        f"{PACKAGE_NAME}.semantic.source_callables",
+        f"{PACKAGE_NAME}.semantic_group",
+    )
+    assert path is None, " -> ".join(path or ())
+
+
+def test_source_callable_boundary_helper_detects_group_orchestration_leak():
+    """Negative: pure callable analysis reaching group orchestration is detectable."""
+    graph = {
+        "NodeForge.semantic.source_callables": {"NodeForge.semantic_group"},
+        "NodeForge.semantic_group": set(),
+    }
+    assert _find_path(
+        graph, "NodeForge.semantic.source_callables", "NodeForge.semantic_group"
+    ) == ["NodeForge.semantic.source_callables", "NodeForge.semantic_group"]
+
+
+def test_function_instance_identity_owner_does_not_reach_ctfe():
+    """Positive: cross-phase function identity/freshness metadata is CTFE-independent."""
+    graph = _build_import_graph(module_scope_only=False)
+    path = _find_path(
+        graph,
+        f"{PACKAGE_NAME}.function_instances",
+        f"{PACKAGE_NAME}.semantic.consteval",
+    )
+    assert path is None, " -> ".join(path or ())
+
+
+def test_function_instance_boundary_helper_detects_ctfe_leak():
+    """Negative: a function-instance metadata dependency on CTFE is detectable."""
+    graph = {
+        "NodeForge.function_instances": {"NodeForge.semantic.consteval"},
+        "NodeForge.semantic.consteval": set(),
+    }
+    assert _find_path(
+        graph, "NodeForge.function_instances", "NodeForge.semantic.consteval"
+    ) == ["NodeForge.function_instances", "NodeForge.semantic.consteval"]

@@ -19,7 +19,7 @@ from NodeForge.extension_values import ExtensionDependencySlot, ExtensionValue
 from NodeForge.nf_types import NFType
 from NodeForge.resolved_environment import PackageCallableExport, ResolvedPackageNamespace
 from NodeForge.runtime_bindings import RuntimeBindingSymbol
-from NodeForge.semantic_group import PackageNamespaceBinding
+from NodeForge.semantic.source_bindings import PackageNamespaceBinding
 from NodeForge.semantic_analysis import build_semantic_environment
 from NodeForge.semantic_body import lower_basic_body
 from NodeForge.semantic_ir import (

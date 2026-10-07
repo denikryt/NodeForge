@@ -13,7 +13,7 @@ from NodeForge.nf_types import NFType
 
 def _source_callables():
     """Return the Blender-independent source-call semantic helper module."""
-    from NodeForge import source_callables
+    from NodeForge.semantic import source_callables
     return source_callables
 
 
@@ -59,7 +59,7 @@ def test_annotations_accept_registry_and_reject_complex(monkeypatch):
 
 
 def test_parser_accepts_flat_unpacking_for_statement_lowering():
-    from NodeForge.parsing import _parse_source
+    from NodeForge.semantic.parsing import _parse_source
 
     statements = _parse_source("a, b = split(value)")
     target = statements[0].targets[0]
@@ -82,7 +82,7 @@ def test_return_shape_metadata_serializes_historical_type_tokens(monkeypatch):
     """Local helper return metadata stays byte-for-byte compatible."""
     module = _source_callables()
     shape = module.analyze_local_return_shape(_function("def f(x):\n    return x\n"))
-    monkeypatch.setitem(sys.modules, "bpy", types.SimpleNamespace(data=types.SimpleNamespace(node_groups={})))
+    monkeypatch.setitem(sys.modules, "bpy", types.SimpleNamespace(data=types.SimpleNamespace(node_groups={}), app=types.SimpleNamespace(driver_namespace={})))
     sys.modules.pop("NodeForge.local_functions", None)
     from NodeForge import local_functions
     assert local_functions._serialize_return_shape(shape, (NFType.FLOAT,)) == '[{"key":"return:0","name":"Value","type":"FLOAT"}]'

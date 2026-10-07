@@ -256,7 +256,7 @@ def test_reload_rejects_wrong_provenance_before_backend_creation(tmp_path, monke
 @pytest.mark.parametrize('owner_present', [True, False])
 def test_library_reload_adapter_uses_backend_session_snapshot(tmp_path, monkeypatch, owner_present):
     from NodeForge.blender import library_groups
-    from NodeForge.source_callables import SourceCallableSession
+    from NodeForge.semantic.source_callable_session import SourceCallableSession
     environment, record = reload_environment(tmp_path, 'functions', owner_present=owner_present)
     session = SourceCallableSession(resolved_environment=environment)
     group = {'nodeforge_library_namespace': 'functions', 'nodeforge_library_name': 'foo',

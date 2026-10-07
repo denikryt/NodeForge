@@ -102,7 +102,7 @@ def test_compile_time_f_string_rejects_non_string_or_formatted_interpolation(sou
 
 def test_literal_string_and_input_discovery_use_compile_time_fstrings():
     from NodeForge.builtin_call_semantics import analyze_builtin_call
-    from NodeForge.parsing import _collect_inputs, _literal_string, _parse_source
+    from NodeForge.semantic.parsing import _collect_inputs, _literal_string, _parse_source
 
     expr = ast.parse('f"{prefix} Name"', mode="eval").body
     assert _literal_string(expr, "name", {"prefix": "Socket"}) == "Socket Name"
@@ -149,7 +149,7 @@ def test_literal_string_and_input_discovery_use_compile_time_fstrings():
 
 def _preprocess_source(source):
     from NodeForge.semantic.residualization import _preprocess_compile_time
-    from NodeForge.parsing import _parse_source
+    from NodeForge.semantic.parsing import _parse_source
 
     preprocessed = _preprocess_compile_time(_parse_source(source))
     return list(preprocessed.statements), preprocessed.final_compile_time.values
@@ -469,7 +469,7 @@ output("x", x)
 def test_infer_input_types_finds_implicit_nested_repeat_count():
     from NodeForge.semantic.residualization import _infer_input_types
     from NodeForge.constants import TYPE_INT
-    from NodeForge.parsing import _parse_source
+    from NodeForge.semantic.parsing import _parse_source
 
     stmts = _parse_source(
         """

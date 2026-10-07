@@ -14,7 +14,7 @@ from NodeForge.resolved_environment import (
     PackageCallableExport, ResolvedCatalog, ResolvedEnvironment, ResolvedPackageNamespace,
 )
 from NodeForge.semantic_group import analyze_group_source
-from NodeForge.source_callables import SourceCallableSession
+from NodeForge.semantic.source_callable_session import SourceCallableSession
 
 pytestmark = pytest.mark.unit
 
