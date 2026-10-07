@@ -8,7 +8,7 @@ from pathlib import Path
 
 from NodeForge import packages
 from NodeForge.semantic.constants import TYPE_STRING
-from NodeForge.interface import _get_group_input_defaults
+from NodeForge.blender.interface import _get_group_input_defaults
 
 
 def _one_node(group, bl_idname):

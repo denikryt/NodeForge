@@ -181,7 +181,7 @@ output("x", x)
 
 def test_repeat_zone_allows_state_named_like_removed_default_geometry():
     """The backend validates Repeat names after removing Blender's default state item."""
-    from NodeForge.blender_ir_lowering import _create_repeat_zone
+    from NodeForge.blender.ir_lowering import _create_repeat_zone
     from NodeForge.nf_types import NFType
 
     group = bpy.data.node_groups.new("NFTest_repeat_range_lower_geometry_name", "GeometryNodeTree")

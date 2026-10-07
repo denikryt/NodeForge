@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .blender_socket_types import validate_runtime_value_socket
+from .blender.socket_types import validate_runtime_value_socket
 from .nf_types import NFType
 
 if TYPE_CHECKING:

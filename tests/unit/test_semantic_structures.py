@@ -195,7 +195,7 @@ def test_semantic_modules_are_blender_independent_and_no_aggregate_nftypes_exist
 
 
 def test_ir_structural_records_do_not_embed_legacy_backend_containers_or_mutable_fields():
-    import NodeForge.values as values
+    import NodeForge.blender.values as values
 
     assert all(
         field.name not in {"tuple_value", "node_result"}

@@ -5,12 +5,12 @@ import ast
 import pytest
 
 from NodeForge.semantic.builtin_calls import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
-from NodeForge.builtins import bundle, raw_nodes
+from NodeForge.blender import bundle, raw_nodes
 from NodeForge.semantic.constants import TYPE_BUNDLE, TYPE_TOKEN_NAMES, TYPE_VECTOR
 from NodeForge.nf_types import NFType
 from NodeForge.errors import CompileError
 from NodeForge.semantic.source_callables import input_call_for_type, resolve_local_parameter_annotation, value_type_for_const
-from NodeForge.nodes import _socket_type_for
+from NodeForge.blender.nodes import _socket_type_for
 from NodeForge.semantic.callable_contracts import source_argument_type_matches
 
 pytestmark = pytest.mark.unit

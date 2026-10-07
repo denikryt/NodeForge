@@ -1,1 +1,1 @@
-"""Physical builtin backend helpers pending Blender-owner cutover."""
+"""Historical physical builtin package pending final lifecycle cleanup."""

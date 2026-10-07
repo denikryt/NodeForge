@@ -430,7 +430,7 @@ def test_body_lowerer_is_ast_free():
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2]
-    source = (root / "blender_ir_lowering.py").read_text(encoding="utf-8")
+    source = (root / "blender/ir_lowering.py").read_text(encoding="utf-8")
     assert "import ast" not in source
     assert "ast.AST" not in source
 

@@ -1,7 +1,7 @@
 """Typed Blender backend value carriers used during IR lowering."""
 
-from .semantic.constants import TYPE_OBJECT
-from .nf_types import NFType
+from ..semantic.constants import TYPE_OBJECT
+from ..nf_types import NFType
 
 
 class Value:

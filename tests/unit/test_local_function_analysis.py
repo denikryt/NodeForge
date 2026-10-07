@@ -77,7 +77,7 @@ def test_local_call_hands_physical_materialization_to_function_materializer():
     """Frontend source-call analysis and physical local-helper realization stay separate."""
     root = Path(__file__).resolve().parents[2]
     semantic_source = (root / "semantic/analysis.py").read_text(encoding="utf-8")
-    lowering_source = (root / "blender_ir_lowering.py").read_text(encoding="utf-8")
+    lowering_source = (root / "blender/ir_lowering.py").read_text(encoding="utf-8")
     physical_source = (root / "local_functions.py").read_text(encoding="utf-8")
 
     assert "session.prepare_local(" in semantic_source

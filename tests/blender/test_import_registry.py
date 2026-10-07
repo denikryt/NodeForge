@@ -14,7 +14,7 @@ def test_import_and_registry_checks():
         'semantic.call_modifiers',
         'semantic.parsing',
         'semantic.callable_contracts',
-        'blender_ir_lowering',
+        'blender.ir_lowering',
         'systems',
     ]:
         __import__('NodeForge.' + modname)

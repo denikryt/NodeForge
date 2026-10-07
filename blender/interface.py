@@ -3,10 +3,10 @@
 INPUT_DEFAULTS_PROP = "gn_script_mvp_input_defaults"
 INPUT_DECLARATIONS_PROP = "gn_script_mvp_input_declarations"
 INPUT_DECLARATIONS_SCHEMA_VERSION = 1
-from .errors import CompileError
-from .blender_socket_types import socket_type_for_nf_type
-from .compiler_identities import InputDeclarationId
-from .nf_types import NFType, serialize_nf_type
+from ..errors import CompileError
+from .socket_types import socket_type_for_nf_type
+from ..compiler_identities import InputDeclarationId
+from ..nf_types import NFType, serialize_nf_type
 from .values import make_value
 
 

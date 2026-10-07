@@ -2,7 +2,7 @@ from helpers import *
 
 import json
 
-from NodeForge.builtins import raw_nodes
+from NodeForge.blender import raw_nodes
 
 
 def _nodes(group, bl_idname):

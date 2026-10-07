@@ -267,7 +267,7 @@ output("Value", b)
 
 def test_runtime_if_uses_structured_body_ir_and_distinct_branch_input_declarations():
     """Runtime-if keeps structured body IR and distinct branch declaration identities."""
-    from NodeForge import interface
+    from NodeForge.blender import interface
 
     group = compile_group(
         '''

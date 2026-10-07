@@ -18,9 +18,9 @@ from ..semantic.constants import (
     TYPE_VECTOR,
 )
 from ..errors import CompileError
-from ..blender_socket_types import runtime_socket_nf_type
-from ..nodes import _new_node
-from ..values import Value, make_value
+from .socket_types import runtime_socket_nf_type
+from .nodes import _new_node
+from .values import Value, make_value
 
 
 RAW_NODE_PROP = "nodeforge_raw_node"

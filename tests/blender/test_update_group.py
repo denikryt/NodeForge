@@ -699,7 +699,7 @@ output("Second", second)
 
 def test_legacy_duplicate_input_live_state_aborts_before_cutover():
     """A group without declaration metadata never guesses among duplicate replacement inputs."""
-    from NodeForge import interface as interface_module
+    from NodeForge.blender import interface as interface_module
 
     source = '''
 first = input_float("Scale", default=0.0)
@@ -733,7 +733,7 @@ output("Second", second)
 
 def test_legacy_unique_input_live_state_migrates_unambiguously():
     """Legacy groups without declaration metadata still migrate one provably unique input."""
-    from NodeForge import interface as interface_module
+    from NodeForge.blender import interface as interface_module
 
     group = compile_group('x = input_float("Scale", default=0.0)\noutput(x)', "NFTest_legacy_unique_input")
     wrapper = bpy.data.node_groups.new("NFTest_legacy_unique_input_wrapper", "GeometryNodeTree")
@@ -753,7 +753,7 @@ def test_legacy_unique_input_live_state_migrates_unambiguously():
 
 def test_input_declaration_metadata_failure_never_publishes_or_cuts_over(monkeypatch):
     """Mandatory declaration metadata failure stays inside the existing group transaction."""
-    from NodeForge import interface
+    from NodeForge.blender import interface
 
     source = 'x = input_float("Scale", default=1.0)\noutput("X", x)'
     group = compile_group(source, "NFTest_input_metadata_failure_existing")
@@ -865,7 +865,7 @@ output("Result", x)
 
 def test_update_group_preserves_branch_input_declaration_identity_overrides_and_link():
     """Branch-local explicit inputs keep durable identities and live wrapper state across update."""
-    from NodeForge import interface
+    from NodeForge.blender import interface
 
     before = '''
 flag = input_bool("Flag", default=True)

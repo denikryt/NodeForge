@@ -22,8 +22,8 @@ from NodeForge.semantic.constants import (
     TYPE_VECTOR,
 )
 from NodeForge.errors import CompileError
-from NodeForge import blender_ir_lowering, geometry as geometry_backend
-from NodeForge.values import Value
+from NodeForge.blender import ir_lowering as blender_ir_lowering, geometry as geometry_backend
+from NodeForge.blender.values import Value
 from NodeForge.semantic.group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
 from NodeForge.compiler_identities import BindingId, CallSiteId, local_function_id
 from NodeForge.semantic.ir import (
@@ -522,7 +522,7 @@ def test_unknown_structural_names_are_direct_semantic_errors(source):
 
 
 def test_ir_operations_store_no_ast_or_backend_objects():
-    from NodeForge.values import Value
+    from NodeForge.blender.values import Value
 
     program = _lower("(a + 1) if flag else v.x", bindings={"a": TYPE_FLOAT, "flag": TYPE_BOOL, "v": TYPE_VECTOR})
     forbidden = (ast.AST, Value)
@@ -684,8 +684,8 @@ def test_obsolete_structural_array_fallback_markers_are_retired():
 
 def test_blender_lowering_context_is_minimal_immutable_and_compiler_independent():
     from dataclasses import FrozenInstanceError, fields
-    from NodeForge import blender_ir_lowering as backend
-    from NodeForge.values import Value
+    from NodeForge.blender import ir_lowering as backend
+    from NodeForge.blender.values import Value
 
     value = Value(object(), TYPE_FLOAT)
     source_bindings = {_test_binding_id("a"): value}
@@ -710,7 +710,7 @@ def test_blender_lowering_context_is_minimal_immutable_and_compiler_independent(
     with pytest.raises(FrozenInstanceError):
         context.group = object()
 
-    source = (Path(__file__).resolve().parents[2] / "blender_ir_lowering.py").read_text(encoding="utf-8")
+    source = (Path(__file__).resolve().parents[2] / "blender/ir_lowering.py").read_text(encoding="utf-8")
     assert "comp." not in source
     assert "from .compiler import" not in source
     assert "import compiler" not in source
@@ -720,8 +720,8 @@ def test_blender_lowering_context_is_minimal_immutable_and_compiler_independent(
 
 
 def test_backend_materialization_state_is_per_lowering_call():
-    from NodeForge import blender_ir_lowering as backend
-    from NodeForge.values import Value
+    from NodeForge.blender import ir_lowering as backend
+    from NodeForge.blender.values import Value
 
     first = Value(object(), TYPE_FLOAT)
     second = Value(object(), TYPE_FLOAT)
@@ -731,12 +731,12 @@ def test_backend_materialization_state_is_per_lowering_call():
 
 
 def test_backend_binding_bridge_and_invariant_drift():
-    from NodeForge.blender_ir_lowering import lower_expression
-    from NodeForge.values import Value
+    from NodeForge.blender.ir_lowering import lower_expression
+    from NodeForge.blender.values import Value
 
     socket = object()
     value = Value(socket, TYPE_FLOAT)
-    from NodeForge import blender_ir_lowering as backend
+    from NodeForge.blender import ir_lowering as backend
 
     context = _backend_context(backend, {_test_binding_id("a"): value}, group=None)
     program = _lower("a", bindings={"a": TYPE_FLOAT})
@@ -751,8 +751,8 @@ def test_backend_binding_bridge_and_invariant_drift():
 
 
 def test_backend_executes_program_order_and_applies_nonzero_base_depth(monkeypatch):
-    from NodeForge import blender_ir_lowering as backend
-    from NodeForge.values import Value
+    from NodeForge.blender import ir_lowering as backend
+    from NodeForge.blender.values import Value
 
     calls = []
     context = _backend_context(backend, _backend_bindings({"a": Value(object(), TYPE_FLOAT)}))
@@ -779,7 +779,7 @@ def test_backend_executes_program_order_and_applies_nonzero_base_depth(monkeypat
 
 
 def test_backend_missing_operand_is_controlled_internal_error():
-    from NodeForge import blender_ir_lowering as backend
+    from NodeForge.blender import ir_lowering as backend
 
     missing = IRValue(99, TYPE_FLOAT)
     result = IRValue(0, TYPE_FLOAT)
@@ -790,8 +790,8 @@ def test_backend_missing_operand_is_controlled_internal_error():
 
 
 def test_backend_unary_identity_and_current_node_policy_without_blender(monkeypatch):
-    from NodeForge import blender_ir_lowering as backend
-    from NodeForge.values import Value
+    from NodeForge.blender import ir_lowering as backend
+    from NodeForge.blender.values import Value
 
     calls = []
     bindings = {
@@ -837,8 +837,8 @@ def test_backend_unary_identity_and_current_node_policy_without_blender(monkeypa
 
 
 def test_backend_comparison_chain_executes_explicit_duplicate_operations(monkeypatch):
-    from NodeForge import blender_ir_lowering as backend
-    from NodeForge.values import Value
+    from NodeForge.blender import ir_lowering as backend
+    from NodeForge.blender.values import Value
 
     calls = []
     context = _backend_context(backend, _backend_bindings({
@@ -882,8 +882,8 @@ def test_backend_comparison_chain_executes_explicit_duplicate_operations(monkeyp
 
 
 def test_backend_result_type_drift_is_controlled_internal_error(monkeypatch):
-    from NodeForge import blender_ir_lowering as backend
-    from NodeForge.values import Value
+    from NodeForge.blender import ir_lowering as backend
+    from NodeForge.blender.values import Value
 
     context = _backend_context(backend, _backend_bindings({"a": Value(object(), TYPE_FLOAT)}))
 
@@ -905,8 +905,8 @@ def test_backend_result_type_drift_is_controlled_internal_error(monkeypatch):
 
 
 def test_backend_vector_conditional_component_and_boolean_primitives_without_blender(monkeypatch):
-    from NodeForge import blender_ir_lowering as backend
-    from NodeForge.values import Value
+    from NodeForge.blender import ir_lowering as backend
+    from NodeForge.blender.values import Value
 
     calls = []
     context = _backend_context(backend, _backend_bindings({
@@ -1096,7 +1096,7 @@ def test_object_properties_are_semantically_typed_and_calls_remain_fallback():
 
 
 def test_ir_records_never_carry_mutable_lists_or_ast_backend_objects_after_completion():
-    from NodeForge.values import Value
+    from NodeForge.blender.values import Value
 
     program = _lower("[v[0], obj.location]", bindings={"v": TYPE_VECTOR, "obj": TYPE_OBJECT})
 
@@ -1136,7 +1136,7 @@ def _raw_call(*, mode, results, outputs=None, output=None, typ=None, inputs=(), 
 
 def test_call_ir_rejects_noncanonical_types_ast_backend_and_mutable_payloads():
     """Call IR admits only NFType values and detached immutable option data."""
-    from NodeForge.values import Value
+    from NodeForge.blender.values import Value
 
     with pytest.raises(TypeError, match="typ must be an NFType"):
         IRValue(0, "FLOAT")

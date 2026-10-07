@@ -4,7 +4,7 @@ import ast
 
 from NodeForge.semantic.builtin_calls import INPUT_DECLARATION_BUILTIN_NAMES
 from NodeForge.semantic.constants import TYPE_STRING, TYPE_TOKEN_NAMES
-from NodeForge.builtins import raw_nodes
+from NodeForge.blender import raw_nodes
 from NodeForge.semantic.source_callables import input_call_for_type, value_type_for_const
 from NodeForge.semantic.callable_contracts import source_argument_type_matches
 

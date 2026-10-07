@@ -5,13 +5,13 @@ from __future__ import annotations
 import inspect
 from collections import OrderedDict
 
-from .blender_socket_types import validate_runtime_value_socket
-from .errors import CompileError
-from .extension_api import ExtensionBackendContext, ExtensionBackendValue
-from .extensions.contracts import ExtensionCallableSpec, TypeSpec
-from .extensions.values import unpack_value
-from .semantic.ir import IRCallOperandRef
-from .nf_types import NFType
+from .socket_types import validate_runtime_value_socket
+from ..errors import CompileError
+from ..extension_api import ExtensionBackendContext, ExtensionBackendValue
+from ..extensions.contracts import ExtensionCallableSpec, TypeSpec
+from ..extensions.values import unpack_value
+from ..semantic.ir import IRCallOperandRef
+from ..nf_types import NFType
 from .values import Value, make_value
 
 def _selected_spec(registry, operation) -> ExtensionCallableSpec:

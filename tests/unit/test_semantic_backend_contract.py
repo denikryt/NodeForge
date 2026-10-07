@@ -9,7 +9,7 @@ import pytest
 
 from NodeForge.semantic.compile_time import CompileTimeSnapshot, CompileTimeState
 
-from NodeForge import blender_ir_lowering
+from NodeForge.blender import ir_lowering as blender_ir_lowering
 from NodeForge.semantic.constants import (
     TYPE_BOOL,
     TYPE_BUNDLE,
@@ -28,7 +28,7 @@ from NodeForge.semantic.builtin_calls import IR_CAPABLE_BUILTIN_NAMES
 from NodeForge.semantic.analysis import RuntimeBindingSymbol, SemanticEnvironment, analyze_expression, build_semantic_constant_snapshot
 from NodeForge.semantic.values import ObjectInfoState, ObjectSemanticId, ObjectSemanticSnapshot
 from NodeForge.semantic.lowering import lower_analyzed_expression
-from NodeForge.values import ObjectValue, Value
+from NodeForge.blender.values import ObjectValue, Value
 
 
 pytestmark = pytest.mark.unit
@@ -263,7 +263,7 @@ def test_migrated_literal_realizations_reach_real_node_helpers():
 
 def test_array_program_result_reconstructs_legacy_python_lists_with_exact_value_identity():
     from NodeForge.compiler_identities import BindingId
-    from NodeForge.values import Value
+    from NodeForge.blender.values import Value
 
     program = _accepted_program("[a, [b]]", {"a": TYPE_FLOAT, "b": TYPE_FLOAT})
     first = Value(_FakeSocket(), TYPE_FLOAT)
@@ -435,7 +435,7 @@ def test_sample_index_materializes_one_typed_node_for_all_supported_types_and_in
 
 def test_sample_index_backend_rejects_invalid_normalized_inputs_before_node_creation():
     """Backend preconditions fail before Sample Index mutates the destination group."""
-    from NodeForge.geometry import _sample_index_geometry
+    from NodeForge.blender.geometry import _sample_index_geometry
 
     cases = (
         (Value(_FakeSocket(), TYPE_GEOMETRY), Value(_FakeSocket(), TYPE_VECTOR), True, "POINT", False, "signed 32-bit range"),

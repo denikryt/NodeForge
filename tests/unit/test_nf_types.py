@@ -10,7 +10,7 @@ from NodeForge.nf_types import NFType, deserialize_nf_type, serialize_nf_type
 from NodeForge.semantic.analysis import ResolvedName, RuntimeBindingSymbol, SemanticConstant
 from NodeForge.semantic.values import RuntimeResultShape
 from NodeForge.semantic.ir import IRValue
-from NodeForge.values import Value
+from NodeForge.blender.values import Value
 
 pytestmark = pytest.mark.unit
 
@@ -96,8 +96,8 @@ def test_input_default_metadata_uses_occurrence_aware_schema_and_reads_legacy(mo
     import types
 
     monkeypatch.setitem(sys.modules, "bpy", types.SimpleNamespace())
-    sys.modules.pop("NodeForge.interface", None)
-    interface = importlib.import_module("NodeForge.interface")
+    sys.modules.pop("NodeForge.blender.interface", None)
+    interface = importlib.import_module("NodeForge.blender.interface")
 
     group = {}
     interface._record_group_input_default(group, "Scale", NFType.FLOAT, 1.25)
@@ -117,7 +117,7 @@ def test_input_default_metadata_uses_occurrence_aware_schema_and_reads_legacy(mo
 
 def test_euler_to_rotation_uses_internal_canonical_rotation_type(monkeypatch):
     """The existing internal Rotation socket value is canonical but not public."""
-    from NodeForge import geometry
+    from NodeForge.blender import geometry
 
     input_socket = object()
     output_socket = object()
@@ -139,8 +139,8 @@ def test_duplicate_input_default_records_use_independent_occurrences(monkeypatch
     import types
 
     monkeypatch.setitem(sys.modules, "bpy", types.SimpleNamespace())
-    sys.modules.pop("NodeForge.interface", None)
-    interface = importlib.import_module("NodeForge.interface")
+    sys.modules.pop("NodeForge.blender.interface", None)
+    interface = importlib.import_module("NodeForge.blender.interface")
 
     class Group(dict):
         """Minimal IDProperty-like group carrying a fake interface tree."""
@@ -169,7 +169,7 @@ def test_update_defaults_and_override_capture_distinguish_duplicate_input_labels
 
     monkeypatch.setitem(sys.modules, "bpy", types.SimpleNamespace())
     update = importlib.import_module("NodeForge.update")
-    interface = importlib.import_module("NodeForge.interface")
+    interface = importlib.import_module("NodeForge.blender.interface")
 
     class Group(dict):
         """Minimal group with persisted input-default metadata."""
@@ -218,7 +218,7 @@ def test_same_label_different_socket_types_have_distinct_default_keys(monkeypatc
     import types
 
     monkeypatch.setitem(sys.modules, "bpy", types.SimpleNamespace())
-    interface = importlib.import_module("NodeForge.interface")
+    interface = importlib.import_module("NodeForge.blender.interface")
 
     class Group(dict):
         """Minimal group with a fake ordered interface."""
@@ -241,7 +241,7 @@ def test_explicit_declaration_defaults_merge_with_implicit_defaults_for_override
     import types
 
     monkeypatch.setitem(sys.modules, "bpy", types.SimpleNamespace())
-    interface = importlib.import_module("NodeForge.interface")
+    interface = importlib.import_module("NodeForge.blender.interface")
     update = importlib.import_module("NodeForge.update")
 
     class Group(dict):

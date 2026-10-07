@@ -158,3 +158,35 @@ def test_old_internal_extension_owner_paths_are_absent():
         "extension_semantics.py",
         "extension_values.py",
     })
+
+
+def test_low_level_blender_runtime_has_canonical_physical_owners():
+    """Positive: physical values, nodes, sockets and lowering live under blender/."""
+    _assert_paths_exist({
+        "blender/values.py",
+        "blender/socket_types.py",
+        "blender/nodes.py",
+        "blender/geometry.py",
+        "blender/interface.py",
+        "blender/bundle.py",
+        "blender/object_info.py",
+        "blender/raw_nodes.py",
+        "blender/extension_backend.py",
+        "blender/ir_lowering.py",
+    })
+
+
+def test_old_low_level_blender_owner_paths_are_absent():
+    """Negative: moved physical helpers cannot survive at historical root/builtins paths."""
+    _assert_paths_absent({
+        "values.py",
+        "blender_socket_types.py",
+        "nodes.py",
+        "geometry.py",
+        "interface.py",
+        "builtins/bundle.py",
+        "builtins/object_info.py",
+        "builtins/raw_nodes.py",
+        "blender_extension_backend.py",
+        "blender_ir_lowering.py",
+    })

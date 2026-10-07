@@ -443,7 +443,7 @@ def test_compilation_modules_do_not_call_live_resolution_apis():
         for name in (
             "compiler.py",
             "semantic/analysis.py",
-            "blender_ir_lowering.py",
+            "blender/ir_lowering.py",
             "function_materializer.py",
             "local_functions.py",
             "semantic/group.py",

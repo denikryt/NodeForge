@@ -1,6 +1,6 @@
 from helpers import *
 
-from NodeForge.builtins import raw_nodes
+from NodeForge.blender import raw_nodes
 
 
 def _socket_names(group, in_out):

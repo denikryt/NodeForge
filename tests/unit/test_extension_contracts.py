@@ -4,7 +4,7 @@ import inspect
 
 import pytest
 
-from NodeForge.blender_socket_types import socket_type_for_nf_type
+from NodeForge.blender.socket_types import socket_type_for_nf_type
 from NodeForge.evaluation_modes import EvaluationMode
 from NodeForge.extensions.contracts import (
     ExtensionCallableId,

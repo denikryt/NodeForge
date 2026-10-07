@@ -275,7 +275,7 @@ def test_evaluation_boundary_helper_detects_semantic_implementation_leak():
 def test_compile_time_carrier_owner_is_reusable_without_ctfe_evaluator_dependency():
     """Positive: physical geometry can consume carriers without importing the evaluator."""
     graph = _build_import_graph(module_scope_only=False)
-    start = f"{PACKAGE_NAME}.geometry"
+    start = f"{PACKAGE_NAME}.blender.geometry"
     assert _find_path(graph, start, f"{PACKAGE_NAME}.semantic.compile_time") is not None
     path = _find_path(graph, start, f"{PACKAGE_NAME}.semantic.consteval")
     assert path is None, " -> ".join(path or ())
@@ -284,12 +284,12 @@ def test_compile_time_carrier_owner_is_reusable_without_ctfe_evaluator_dependenc
 def test_compile_time_carrier_boundary_detects_backend_to_ctfe_leak():
     """Negative: routing physical helpers through the CTFE evaluator is detected."""
     graph = {
-        "NodeForge.geometry": {"NodeForge.semantic.consteval"},
+        "NodeForge.blender.geometry": {"NodeForge.semantic.consteval"},
         "NodeForge.semantic.consteval": {"NodeForge.semantic.compile_time"},
         "NodeForge.semantic.compile_time": set(),
     }
-    assert _find_path(graph, "NodeForge.geometry", "NodeForge.semantic.consteval") == [
-        "NodeForge.geometry", "NodeForge.semantic.consteval"
+    assert _find_path(graph, "NodeForge.blender.geometry", "NodeForge.semantic.consteval") == [
+        "NodeForge.blender.geometry", "NodeForge.semantic.consteval"
     ]
 
 
@@ -373,11 +373,11 @@ def test_compiler_facade_delegates_group_population_to_blender_owner():
 def test_group_assembly_boundary_helper_detects_physical_logic_in_facade():
     """Negative: the dependency helper exposes a facade bypass around the Blender assembly owner."""
     graph = {
-        "NodeForge.compiler": {"NodeForge.blender_ir_lowering"},
-        "NodeForge.blender_ir_lowering": set(),
+        "NodeForge.compiler": {"NodeForge.blender.ir_lowering"},
+        "NodeForge.blender.ir_lowering": set(),
     }
-    assert _find_path(graph, "NodeForge.compiler", "NodeForge.blender_ir_lowering") == [
-        "NodeForge.compiler", "NodeForge.blender_ir_lowering"
+    assert _find_path(graph, "NodeForge.compiler", "NodeForge.blender.ir_lowering") == [
+        "NodeForge.compiler", "NodeForge.blender.ir_lowering"
     ]
 
 

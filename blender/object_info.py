@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from ..semantic.constants import OBJECT_PROPERTY_TYPES
 from ..errors import CompileError
-from ..nodes import _new_node
-from ..values import Value
+from .nodes import _new_node
+from .values import Value
 
 _PROPERTY_OUTPUT_NAMES = {
     "geometry": "Geometry",

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from NodeForge.semantic.builtin_calls import IR_CAPABLE_BUILTIN_NAMES, analyze_builtin_call
-from NodeForge.builtins import raw_nodes
+from NodeForge.blender import raw_nodes
 from NodeForge.semantic.call_resolution import NamedOutputsCallResult, RuntimeCallResult
 from NodeForge.semantic.constants import (
     TYPE_BOOL, TYPE_BUNDLE, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT,
@@ -15,7 +15,7 @@ from NodeForge.semantic.constants import (
 )
 from NodeForge.errors import CompileError
 from NodeForge.semantic.parsing import _collect_inputs, _parse_source
-from NodeForge.values import Value
+from NodeForge.blender.values import Value
 
 pytestmark = pytest.mark.unit
 
@@ -241,7 +241,7 @@ def test_raw_node_semantics_publish_complete_normalized_metadata_record():
 
 def test_raw_backend_helper_requires_complete_normalized_metadata_arguments():
     """Backend raw-node construction cannot recreate omitted source metadata containers."""
-    from NodeForge.builtins.raw_nodes import build_materialized_raw_node
+    from NodeForge.blender.raw_nodes import build_materialized_raw_node
 
     with pytest.raises(TypeError, match="props"):
         build_materialized_raw_node(

@@ -3,7 +3,7 @@
 import bpy
 
 from .errors import CompileError
-from .interface import (
+from .blender.interface import (
     _get_group_input_declarations,
     _get_group_input_defaults,
     _interface_socket_key,

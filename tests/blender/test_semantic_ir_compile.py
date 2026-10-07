@@ -7,14 +7,14 @@ from types import MappingProxyType, SimpleNamespace
 
 from NodeForge.semantic import body as semantic_body
 from NodeForge import compiler as compiler_module
-from NodeForge.blender_ir_lowering import BlenderIRLoweringContext, lower_expression as lower_ir_program
+from NodeForge.blender.ir_lowering import BlenderIRLoweringContext, lower_expression as lower_ir_program
 from NodeForge.semantic.constants import (
     TYPE_BOOL, TYPE_BUNDLE, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_MATERIAL,
     TYPE_OBJECT, TYPE_STRING, TYPE_VECTOR,
 )
 from NodeForge.errors import CompileError
 from NodeForge.compiler_identities import BindingId
-from NodeForge.nodes import _socket_type_for
+from NodeForge.blender.nodes import _socket_type_for
 from NodeForge.semantic.call_resolution import CallableEnvironment
 from NodeForge.semantic.compile_time import CompileTimeSnapshot
 from NodeForge.semantic.analysis import RuntimeBindingSymbol, SemanticEnvironment, analyze_expression, build_semantic_constant_snapshot
@@ -23,7 +23,7 @@ from NodeForge.semantic.ir import (
     IRArray, IRBinary, IRBinding, IRBoolBinary, IRCall, IRCompare, IRConditional, IRLiteral, IRObjectProperty, IRUnary,
     IRVectorComponent, IRVectorLiteral,
 )
-from NodeForge.values import Value, make_value
+from NodeForge.blender.values import Value, make_value
 from NodeForge.blender import group_assembly as group_assembly_module
 
 
@@ -1098,7 +1098,7 @@ output("B", b)
     raw = _nodes(group, "ShaderNodeSeparateXYZ")
     check(len(raw) == 2, f"expected two raw Separate XYZ nodes, got {len(raw)}")
     for node in raw:
-        from NodeForge.builtins import raw_nodes
+        from NodeForge.blender import raw_nodes
         check(raw_nodes.is_raw_node(node), "one-entry outputs= lost raw-node metadata")
     bpy.data.node_groups.remove(group)
 

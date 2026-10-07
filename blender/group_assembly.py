@@ -5,10 +5,10 @@ from contextlib import nullcontext
 from ..semantic.constants import TYPE_GEOMETRY
 from ..errors import CompileError
 from ..compiler_identities import BindingId
-from ..values import Value, make_value
-from ..nodes import _new_node, _socket_type_for
+from .values import Value, make_value
+from .nodes import _new_node, _socket_type_for
 from ..storage import _store_group_source, INPUT_DEFAULTS_PROP
-from ..interface import _create_group_input_socket
+from .interface import _create_group_input_socket
 from ..function_instances import (
     FUNCTION_ROOT_OWNER_ID_PROP,
     function_group_owner_scope as make_function_group_owner_scope,
@@ -16,7 +16,7 @@ from ..function_instances import (
     stamp_function_metadata,
 )
 from ..semantic.group import SemanticGroupCompilation
-from ..blender_ir_lowering import BlenderIRLoweringContext, lower_body
+from .ir_lowering import BlenderIRLoweringContext, lower_body
 from ..function_materializer import FunctionMaterializationContext, FunctionMaterializer
 from ..semantic.group_context import GroupContextSlot
 from ..semantic.callable_contracts import canonicalize_group_input_default

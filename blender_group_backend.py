@@ -274,7 +274,7 @@ def _copy_group_contents(src_group, dst_group, *, copy_role=None):
         _TEST_BACKUP_COPY_FAIL_AFTER_RESET = False
         raise RuntimeError("Injected NodeForge rollback-backup copy failure after reset")
     _copy_interface(src_group, dst_group)
-    from .builtins import raw_nodes as _raw_nodes
+    from .blender import raw_nodes as _raw_nodes
 
     node_map = {}
     for src_node in src_group.nodes:

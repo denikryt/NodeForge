@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from .errors import CompileError
-from .nf_types import NFType
+from ..errors import CompileError
+from ..nf_types import NFType
 
 
 _SOCKET_IDNAME_BY_NF_TYPE = {

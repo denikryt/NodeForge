@@ -7,8 +7,8 @@ from ..semantic.constants import (
     TYPE_OBJECT, TYPE_STRING, TYPE_VECTOR,
 )
 from ..errors import CompileError
-from ..nodes import _new_node
-from ..values import make_value
+from .nodes import _new_node
+from .values import make_value
 
 _BUNDLE_SOCKET_TYPES = {
     TYPE_FLOAT: "FLOAT",

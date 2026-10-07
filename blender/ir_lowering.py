@@ -6,11 +6,11 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
-from .semantic.constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR
-from .nf_types import NFType
-from .errors import CompileError
-from .compiler_identities import BindingId, InputDeclarationId
-from .semantic.group_context import GroupContextSlot
+from ..semantic.constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR
+from ..nf_types import NFType
+from ..errors import CompileError
+from ..compiler_identities import BindingId, InputDeclarationId
+from ..semantic.group_context import GroupContextSlot
 from .nodes import _boolean_math, _combine_xyz_mixed, _compare, _int_value, _integer_math, _math, _new_node, _separate_xyz, _string_value, _switch, _value, _vector_math
 from .geometry import (
     _capture_attribute_geometry,
@@ -31,11 +31,11 @@ from .geometry import (
     _transform_geometry,
 )
 from .nodes import _id as _field_id, _index as _field_index, _normal as _field_normal, _position as _field_position
-from .builtins.bundle import build_bundle, build_bundle_get, build_bundle_set
-from .builtins.object_info import resolve_object_property_explicit
-from .builtins.raw_nodes import build_materialized_raw_node
-from .blender_extension_backend import lower_extension_call
-from .semantic.ir import (
+from .bundle import build_bundle, build_bundle_get, build_bundle_set
+from .object_info import resolve_object_property_explicit
+from .raw_nodes import build_materialized_raw_node
+from .extension_backend import lower_extension_call
+from ..semantic.ir import (
     IRBinary,
     IRCall,
     IRCallableKind,
@@ -66,13 +66,13 @@ from .semantic.ir import (
 )
 from .values import ObjectValue, Value, make_value
 from .interface import _create_group_input_socket, _create_interface_panel, _set_socket_default
-from .function_instances import (
+from ..function_instances import (
     FUNCTION_INSTANCE_KEY_PROP,
     function_group_owner_scope,
     function_materialization_owner_scope,
 )
-from .function_materializer import FunctionMaterializationContext, FunctionMaterializer
-from .semantic.source_callables import SourceCallablePreparationKey
+from ..function_materializer import FunctionMaterializationContext, FunctionMaterializer
+from ..semantic.source_callables import SourceCallablePreparationKey
 
 
 def _repeat_item_type_for_nf_type(typ: NFType) -> str:
@@ -556,7 +556,7 @@ def _source_call_owner_scope(operation):
 
 def _lower_source_call(context, operation, operands, x, y):
     """Materialize one prepared source callable and wire a GeometryNodeGroup by positions."""
-    from .blender.library_groups import (
+    from .library_groups import (
         _input_sockets as _group_node_inputs,
         _output_sockets as _group_node_outputs,
         apply_function_node_display_name,
@@ -586,7 +586,7 @@ def _lower_source_call(context, operation, operands, x, y):
     if function_id.kind == "LOCAL_DEF":
         if operation.materialization is None:
             raise CompileError("Internal error: script-local function call requires materialization policy")
-        from .local_functions import build_prepared_local_materialization_spec
+        from ..local_functions import build_prepared_local_materialization_spec
 
         spec = build_prepared_local_materialization_spec(
             prepared_callable,

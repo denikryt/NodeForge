@@ -21,7 +21,7 @@ from NodeForge.nf_types import NFType
 from NodeForge.semantic.runtime_bindings import RuntimeBindingSymbol
 from NodeForge.semantic.body import lower_basic_body
 from NodeForge.semantic.ir import IRIf, IRRepeat
-from NodeForge.values import ObjectValue, Value
+from NodeForge.blender.values import ObjectValue, Value
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -100,8 +100,8 @@ def test_i1_negative_old_ast_executor_modules_are_physically_absent():
 # I2 — live physical helpers belong to permanent backend owners.
 def test_i2_positive_repeat_and_store_helpers_live_with_permanent_backend_owners():
     """Repeat-zone and Store Named Attribute realization live in their final backend modules."""
-    repeat_source = (ROOT / "blender_ir_lowering.py").read_text(encoding="utf-8")
-    geometry_source = (ROOT / "geometry.py").read_text(encoding="utf-8")
+    repeat_source = (ROOT / "blender/ir_lowering.py").read_text(encoding="utf-8")
+    geometry_source = (ROOT / "blender/geometry.py").read_text(encoding="utf-8")
     domain_source = (ROOT / "semantic/attribute_domains.py").read_text(encoding="utf-8")
     assert "def _create_repeat_zone(" in repeat_source
     assert "def _repeat_item_type_for_nf_type(" in repeat_source
@@ -113,7 +113,7 @@ def test_i2_positive_repeat_and_store_helpers_live_with_permanent_backend_owners
 
 def test_i2_negative_permanent_backend_does_not_import_deleted_mixed_owners():
     """Permanent backend modules do not reach back into the deleted mixed AST/compiler modules."""
-    for relative in ("blender_ir_lowering.py", "geometry.py"):
+    for relative in ("blender/ir_lowering.py", "blender/geometry.py"):
         source = (ROOT / relative).read_text(encoding="utf-8")
         for token in (
             "from .runtime",
@@ -127,8 +127,8 @@ def test_i2_negative_permanent_backend_does_not_import_deleted_mixed_owners():
 
 def test_i2_relocated_backend_helpers_retain_live_dependencies():
     """Relocated backend helpers retain the dependencies their live implementations require."""
-    from NodeForge import blender_ir_lowering
-    from NodeForge.builtins import raw_nodes
+    from NodeForge.blender import ir_lowering as blender_ir_lowering
+    from NodeForge.blender import raw_nodes
 
     assert callable(blender_ir_lowering._new_node)
     assert raw_nodes._normalize_json_value((1.0, 2.0, 3.0)) == [1.0, 2.0, 3.0]
@@ -166,7 +166,7 @@ def test_i4_positive_value_and_object_value_remain_backend_socket_carriers():
 
 def test_i4_negative_legacy_structural_backend_containers_are_absent():
     """Tuple/named-result frontend structure cannot leak back through retired backend containers."""
-    import NodeForge.values as values
+    import NodeForge.blender.values as values
 
     assert not hasattr(values, "TupleValue")
     assert not hasattr(values, "NodeResult")
@@ -229,7 +229,7 @@ def test_i6_negative_repeat_still_rejects_type_changing_carried_state():
 # I7 — legacy package/data recognition remains diagnostic-only and separate from execution.
 def test_i7_positive_persisted_and_unsupported_owner_boundaries_remain_present():
     """Persisted Blender compatibility and mixed source/interface rejection remain explicit."""
-    interface_source = (ROOT / "interface.py").read_text(encoding="utf-8")
+    interface_source = (ROOT / "blender/interface.py").read_text(encoding="utf-8")
     catalog_source = (ROOT / "catalog.py").read_text(encoding="utf-8")
     semantic_source = (ROOT / "semantic/analysis.py").read_text(encoding="utf-8")
     assert "def _legacy_socket_type(" in interface_source
@@ -297,8 +297,8 @@ def test_i10_negative_core_contract_cannot_report_a_pre_cutover_version():
 def test_i11_positive_audited_physical_helpers_require_normalized_source_state_explicitly():
     """Physical helpers expose no duplicate source-language defaults for audited arguments."""
     import inspect
-    from NodeForge import geometry, interface
-    from NodeForge.builtins import raw_nodes
+    from NodeForge.blender import geometry, interface
+    from NodeForge.blender import raw_nodes
 
     required = {
         geometry._store_named_attribute: ("selection", "domain", "data_type_override"),
@@ -322,7 +322,7 @@ def test_i11_positive_audited_physical_helpers_require_normalized_source_state_e
 
 def test_i11_negative_lowering_does_not_reconstruct_audited_source_defaults():
     """Guaranteed normalized options use required access rather than backend fallback defaults."""
-    source = (ROOT / "blender_ir_lowering.py").read_text(encoding="utf-8")
+    source = (ROOT / "blender/ir_lowering.py").read_text(encoding="utf-8")
     forbidden = (
         'options.get("domain"',
         'options.get("data_type"',

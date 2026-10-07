@@ -422,9 +422,9 @@ output(x)
 
 def test_backend_numeric_lowering_selects_typed_node_families(monkeypatch):
     """Blender lowering realizes typed numeric IR without re-deciding semantic result types."""
-    from NodeForge import blender_ir_lowering as backend
+    from NodeForge.blender import ir_lowering as backend
     from NodeForge.semantic.ir import IRValue
-    from NodeForge.values import Value
+    from NodeForge.blender.values import Value
 
     calls = []
 
@@ -483,8 +483,8 @@ def test_backend_numeric_lowering_selects_typed_node_families(monkeypatch):
 
 def test_backend_compare_uses_int_or_float_contract_and_zero_float_epsilon():
     """Compare realization selects INT only for Int/Int and fixes Float equality epsilon to zero."""
-    from NodeForge.nodes import _compare
-    from NodeForge.values import Value
+    from NodeForge.blender.nodes import _compare
+    from NodeForge.blender.values import Value
 
     class Socket:
         def __init__(self, name=""):
@@ -688,7 +688,7 @@ class _FakeGroup:
 
 def _materialize_numeric_source(source):
     """Analyze, lower and realize one literal-only numeric source expression."""
-    from NodeForge.blender_ir_lowering import BlenderIRLoweringContext, lower_expression
+    from NodeForge.blender.ir_lowering import BlenderIRLoweringContext, lower_expression
 
     expr, analysis = _analyze(source)
     program = lower_analyzed_expression(expr, analysis)
@@ -807,7 +807,7 @@ def test_range_loop_items_materialize_as_int_and_feed_int_add():
         assert literal.result.typ is TYPE_INT
         assert binary.op == "ADD" and binary.result.typ is TYPE_INT
 
-    from NodeForge.blender_ir_lowering import BlenderIRLoweringContext, lower_expression
+    from NodeForge.blender.ir_lowering import BlenderIRLoweringContext, lower_expression
     group = _FakeGroup()
     lowered = lower_expression(
         BlenderIRLoweringContext(group, MappingProxyType({})),
@@ -889,7 +889,7 @@ def test_repeat_repeat_exact_type_historical_type_split_and_marker_are_removed()
     root = Path(NodeForge.__file__).resolve().parent
     control_flow_source = (root / "semantic/control_flow.py").read_text()
     ir_source = (root / "semantic/ir.py").read_text()
-    backend_source = (root / "blender_ir_lowering.py").read_text()
+    backend_source = (root / "blender/ir_lowering.py").read_text()
     combined = "\n".join((control_flow_source, ir_source, backend_source))
     assert "repeat_state_output_type" not in combined
     assert "Type-directed numeric semantics now keeps ordinary Int" not in combined
@@ -914,8 +914,8 @@ def test_numeric_semantics_does_not_reintroduce_legacy_numeric_parity_or_residua
 
 def _materialize_bound_numeric_source(source, bindings):
     """Realize one typed expression whose operands come from fake runtime bindings."""
-    from NodeForge.blender_ir_lowering import BlenderIRLoweringContext, lower_expression
-    from NodeForge.values import Value
+    from NodeForge.blender.ir_lowering import BlenderIRLoweringContext, lower_expression
+    from NodeForge.blender.values import Value
 
     expr, analysis = _analyze(source, bindings=bindings)
     program = lower_analyzed_expression(expr, analysis)
