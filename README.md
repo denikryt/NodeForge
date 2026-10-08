@@ -1,150 +1,109 @@
 # NodeForge
 
+> **Disclaimer:** NodeForge is a vibe-coded project.
+
 NodeForge is a Blender add-on for describing Geometry Nodes logic in a Python-like language. The source is compiled into a native Geometry Nodes group, so the result inside Blender is an ordinary node graph with the expected sockets, links and parameters.
 
-The language is intended to make procedural logic easier to express and maintain as the graph grows. Mathematical relationships can be written directly as expressions, while Geometry Nodes operations are available through functions that fit naturally into Python-like code. The source therefore stays close to the logic of the setup and can remain readable even when the generated node graph becomes large.
+## Installation
 
-NodeForge also works well with AI-generated code. An AI model can describe the Geometry Nodes logic in the same high-level language, while NodeForge handles the Blender-specific work needed to build the final node graph. This keeps generated code simpler and gives the AI fewer Blender API details to get wrong.
+1. Download the latest `NodeForge-<version>-blender.zip` from the [**GitHub release**](https://github.com/denikryt/NodeForge/releases) section.
+2. In Blender, open **Edit → Preferences → Add-ons**.
+3. Open the Add-ons menu, choose **Install from Disk...**, and select the downloaded ZIP file.
+4. Enable **NodeForge** in the add-on list.
 
-NodeForge scripts can call reusable functions and can be extended through installable third-party packages. This allows project-specific operations and larger procedural components to become part of the language used by other scripts.
+## Quick start
 
-The syntax follows Python as closely as the Geometry Nodes model allows. NodeForge adds a set of functions and language rules for concepts that are specific to Geometry Nodes, while ordinary expressions and control flow retain familiar Python syntax.
-
-The built-in function library currently covers only part of Geometry Nodes. When a dedicated NodeForge function is not available yet, `node(...)` can create the Blender node directly. It accepts the Blender node type together with its inputs, properties and output declaration, so the same language can still reach nodes that do not yet have a dedicated wrapper.
-
-For example, the Transform Geometry node can be written through the dedicated `transform(...)` function:
+1. Select a mesh object and open the **Geometry Node Editor**.
+2. Click **New** to create a Geometry Nodes modifier and node tree for the object.
+3. Press `N` and open the **NodeForge** tab in the sidebar.
+4. Open a **Text Editor**, click **New**, and enter this script:
 
 ```python
 size = input_float("Size", default=2.0)
-height = input_float("Height", default=1.0)
-
-geo = transform(cube(size), translation=vector(0, 0, height))
+geo = cube(size=size)
 output("Geometry", geo)
 ```
 
-The same Blender node can be created through `node(...)`:
+5. Return to the NodeForge sidebar and select the new text in **Text Script**.
+6. Click **Compile Script**. NodeForge adds the generated group node to the current Geometry Nodes tree.
+7. Connect the generated node's **Geometry** output to the **Group Output** node to display the cube.
+
+To change the generated group, edit the text, select the generated group node, and click **Update Selected NodeGroup**. NodeForge recompiles the script into the same node group and preserves compatible links and input values.
+
+See the [Get Started guide](https://denikryt.github.io/NodeForgeDocs/latest/GET_STARTED/) for the complete beginner workflow.
+
+## The language at a glance
+
+A small script can mix group inputs, ordinary expressions, built-in Geometry Nodes wrappers, local functions, and direct access to Blender nodes:
 
 ```python
-size = input_float("Size", default=2.0)
-height = input_float("Height", default=1.0)
+size = input_float("Size", default=1.0)
+gap = input_float("Gap", default=0.0)
 
-geo = cube(size)
+half_spacing = (size + gap) / 2.0
 
-geo = node(
-    "GeometryNodeTransform",
+def move_x(geometry: Geometry, x_shift: Float):
+    return transform(
+        geometry,
+        translation=vector(x_shift, 0, 0),
+    )
+
+left = move_x(cube(size=size), -half_spacing)
+right = move_x(cube(size=size), half_spacing)
+
+geometry = join([left, right])
+
+geometry = node(
+    "GeometryNodeMergeByDistance",
     inputs={
-        "Geometry": geo,
-        "Translation": vector(0, 0, height),
+        "Geometry": geometry,
+        "Distance": 0.001,
     },
     output="Geometry",
     typ=Geometry,
 )
 
-output("Geometry", geo)
+output("Geometry", geometry)
 ```
 
-The dedicated function is the more convenient form when NodeForge provides one. `node(...)` keeps the rest of Geometry Nodes available while the built-in library continues to grow.
+`input_*` declarations become node-group input sockets and return values that can be used like variables. Operators such as `+`, `/`, and unary `-` are type-checked and materialized as native Geometry Nodes operations. Built-ins such as `cube(...)`, `join(...)`, and `transform(...)` provide compact wrappers around common Geometry Nodes functionality.
 
-Raw `node(...)` socket selectors have three explicit forms:
+A script-local `def` is compiled as a reusable function Node Group. In the example above, both calls to `move_x(...)` use that function group while the two cubes move symmetrically away from the world origin as `Gap` increases.
 
-```python
-# Exact Blender socket.name when it is unique among addressable sockets.
-inputs={"Geometry": geo}
+`node(...)` is the universal low-level form for Blender nodes that do not have a dedicated NodeForge wrapper. Here it creates **Merge by Distance** directly while the rest of the script stays in the higher-level DSL.
 
-# Zero-based ordinal among addressable sockets after props= configure the node.
-inputs={0: left, 1: right}
+The language is intended to make procedural logic easier to express and maintain as the graph grows. Mathematical relationships can be written directly as expressions, while Geometry Nodes operations remain visible through functions that fit naturally into Python-like code. 
 
-# Low-level exact Blender socket.identifier escape hatch.
-inputs={ID("Value_001"): right}
-```
+NodeForge scripts can call reusable functions and can be extended through installable third-party packages. This allows project-specific operations and larger procedural components to become part of the language used by other scripts.
 
-Plain strings match only `socket.name`. Integer selectors address the filtered addressable sequence after unavailable and virtual/Extend sockets are excluded. `ID(...)` is contextual syntax only in a raw socket-selector position; outside those positions, `ID` follows ordinary NodeForge name rules.
+## Additional libraries
 
-The same selector forms work for `output=` and for explicit named outputs, while result aliases remain source names:
+- **NodeForge Math** adds math operations, reusable functions, and examples. Download the package ZIP from the [NodeForge release section](https://github.com/denikryt/NodeForge/releases/latest), or browse its [source repository](https://github.com/denikryt/nodeforge.math).
+- **NodeForge L-System** adds tools for procedural L-system generation. [Download](https://www.patreon.com/nachitima/posts/nodeforge-l-v2-0-169730745)
 
-```python
-parts = node(
-    "ShaderNodeSeparateXYZ",
-    inputs={"Vector": position()},
-    outputs={
-        "left": (0, Float),
-        "middle": (ID("Y"), Float),
-    },
-)
-```
+Install a library ZIP from the **Packages** section of the NodeForge tab in the Geometry Nodes Editor. Enable **Allow executable Python** when the package requires Python support.
 
-Persistent NodeForge-declared raw socket contracts require a non-empty Blender `socket.identifier`. NodeForge stores that identifier plus the Blender socket type in raw metadata schema v2 and resolves it exactly during future cutover/rollback. A socket without that mapping identifier is rejected during preflight before links/defaults are applied. Existing unversioned saved raw-node metadata remains readable through its version-scoped unique-name compatibility path.
-
-### Sampling a field by index
-
-`sample_index()` reads a field from geometry at an integer element index and returns the same NodeForge value type as the sampled field. It supports `Float`, `Int`, `Bool`, and `Vector` values.
-
-```python
-geo = grid(4, 4)
-sampled_position = sample_index(geo, position(), 3)
-sampled_id = sample_index(geo, index(), index(), domain="POINT", clamp=True)
-
-output("Position", sampled_position)
-output("ID", sampled_id)
-```
-
-The first two arguments are runtime Geometry Nodes values. `index` accepts either a compile-time `Int` or a runtime `Int` field. `domain` and `clamp` are compile-time options; `domain` defaults to `"POINT"` and accepts `POINT`, `EDGE`, `FACE`, `CORNER`, `CURVE`, or `INSTANCE`, while `clamp` defaults to `False`.
-
-### Package callables
-
-Import installed package APIs through the package namespace:
+Installed package APIs are imported through the package namespace:
 
 ```python
 from packages import math
-from packages import lsystem as ls
 
-x = sin(input_float("X"))
-y = math.floor(x)
-geo = ls.system(ls.axiom("F"), ls.iterations(2), ls.angle(25), ls.step(1))
+angle = input_float("Angle", default=0.0)
+value = math.sin(angle)
+output("Value", value)
 ```
 
-Importing a package makes its exported callables eligible for unqualified lookup and also creates a qualifier for exact package-member access. An unqualified package call is accepted only when one visible package export is eligible and the name is not already bound as a source value. Use qualification to resolve package-package or package-local name conflicts. Package aliases such as `ls` are source-scope names only; they do not change package identity.
+Reusable Local scripts can be imported with `from local import ...`.
 
-Core callable names stay reserved for bare calls. A package may still export the same member name and expose it through qualification. For example, core `points(...)` remains the bare callable while `lsystem.points(...)` selects the L-System package member.
+## Coverage
 
-Reusable source-backed package functions use the same package namespace as Python extension callables. The former `from functions import ...` source namespace is no longer supported. Local source functions remain explicit with `from local import ...`.
+The syntax follows Python as closely as the Geometry Nodes model allows. The built-in function library covers only part of Geometry Nodes. When a dedicated NodeForge function is not available, `node(...)` can create the Blender node directly.
 
-### Python extension packages
-
-Installable packages can add typed callables through extension API v2. A package declares public callable signatures and frozen semantic record types in declaration-only `interface.py`. Backend-only callables map directly to owner-local physical implementations; semantic-capable callables use `semantic.py` to construct package-defined frontend values or normalize private state before backend realization. All supported extension calls use permanent semantic analysis and ordinary typed Call IR.
-
-Package-defined semantic records can be composed between calls and stored in source variables. Runtime values retained inside semantic state are represented to package semantic code as `RuntimeRef`, persisted through compiler-owned hidden bindings, and reconstructed for physical implementations as `ExtensionBackendValue`. Physical implementations receive `ExtensionBackendContext`, which provides the current Geometry Nodes group and transaction-owned generated Mesh, Curve, and Object creation.
-
-Executable Python extension owners use the v2 `interface.py` protocol. Legacy `system.py` handler maps, `SYSTEM`/`BACKEND_HELPER`, native `compile_call`, and `BACKEND_BUILTINS` execution are unsupported and are not executed. Pure source packages remain supported through the source-callable pipeline. A package owner that combines `source.nf` with `interface.py` is unsupported; source-backed and Extension API v2 execution remain separate owner models with distinct lifecycle and transaction boundaries.
-
-Package authors can use [`dev/EXTENSION_API_V2.md`](dev/EXTENSION_API_V2.md) for declaration syntax, evaluation modes, semantic records, persistence, `RuntimeRef`, execution forms, owner-session lifecycle, backend context, and generated-resource contracts.
-
-### Numeric values
-
-NodeForge keeps integer and floating-point values distinct. An integer literal such as `1` is `Int`; a decimal literal such as `1.0` is `Float`; `True` and `False` are `Bool`, a separate semantic type from numeric `Int` and `Float`. `Int` uses the signed 32-bit domain. Statically known values outside that domain are rejected before they are materialized.
-
-Arithmetic is type-directed. Integer-preserving `+`, `-`, `*`, `//` and `%` operations on two `Int` values return `Int`. `/` and `**` return `Float`, and arithmetic with either operand already `Float` returns `Float`. `//` uses floor division and `%` is its floored-remainder partner, including for negative operands.
-
-```python
-i = index()
-left = i - 1          # Int
-cell = i // 4         # Int
-column = i % 4        # Int
-ratio = i / 4         # Float
-scaled = ratio + 0.5  # Float
-```
-
-Known NodeForge `Float` values use Blender-compatible binary32 representation. Compile-time values such as `0.1`, `pi`, `tau`, `e`, Float defaults and supported compile-time arithmetic therefore use the same canonical Float representation expected by Geometry Nodes. Compile-time evaluation and runtime graph removal remain separate: knowing a numeric value does not by itself remove its Geometry Nodes operation.
-
-Variables carried by `repeat_range()` keep one semantic type for the full Repeat lifetime. Initialize a carried value with `1.0` when the loop state is intended to be `Float`; assigning a `Float` result to an `Int` carried state, or an `Int` result to a `Float` carried state, is a compile error. An `Int` carried state remains `Int` after the Repeat and continues to participate in integer-preserving arithmetic as `Int`.
-
-Named mathematical callables such as `sin()`, `cos()` and `sqrt()` are supplied by the separate `nodeforge.math` package. Core compile-time numeric semantics cover language operators and structural helpers; package-call compile-time evaluation belongs to the package protocol when that capability is added.
+See the [Geometry Nodes coverage](https://denikryt.github.io/NodeForgeDocs/latest/GEOMETRY_NODES_COVERAGE/) page for the current feature matrix and the [Core DSL Built-ins](https://denikryt.github.io/NodeForgeDocs/latest/BUILTINS/) reference for the complete `node(...)` syntax.
 
 ### How the compiler works
 
 Internally, NodeForge parses the source, resolves its types and operations, builds a semantic intermediate representation, and lowers that representation into Blender nodes. The compiler owns the translation from source-level logic to the final `GeometryNodeTree`, keeping the language-facing part of the system separate from Blender graph construction.
-
-Numeric result typing and canonical Int/Float value semantics are owned by the Blender-independent `numeric_semantics` layer. Compile-time numeric evaluation consumes those same language rules, while runtime graph removal remains a separate fail-closed optimization decision. Blender lowering receives already-typed Semantic IR and selects the corresponding Integer Math, Math, Vector Math, or Compare realization without redefining source-level numeric types.
 
 ```text
 NodeForge source
@@ -160,9 +119,7 @@ Blender lowering and materialization
 GeometryNodeTree
 ```
 
-Ordinary statement `if` is Geometry Nodes runtime control flow. Its condition must be a runtime `Bool`, both branches are semantically valid runtime branches and both contribute to the generated graph and interface dependencies. A compile-time-known or literal condition such as `True` or `False` does not remove either branch. Top-level ordinary `if` currently requires an explicit `else` and follows the normal runtime merge rules.
-
-### Learn more in the documentation: 
+### Learn more in the documentation:
 https://denikryt.github.io/NodeForgeDocs/
 
 ### Support the developer:
