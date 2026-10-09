@@ -1,5 +1,7 @@
 # NodeForge
 
+![NodeForge screenshot](media/Screenshot.png)
+
 > **Disclaimer:** NodeForge is a vibe-coded project.
 
 NodeForge is a Blender add-on for describing Geometry Nodes logic in a Python-like language. The source is compiled into a native Geometry Nodes group, so the result inside Blender is an ordinary node graph with the expected sockets, links and parameters.
