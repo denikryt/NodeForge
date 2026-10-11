@@ -420,3 +420,8 @@ lifecycle.
 ## 0.66.2
 
 - Clarified the runtime-folding comment to describe Geometry Nodes computation directly.
+
+
+## 0.66.3
+
+- Removed unused compiler/materializer assignments and the snapshot loader override that duplicated the standard loader implementation.

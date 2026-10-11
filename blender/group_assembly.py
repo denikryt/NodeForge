@@ -80,9 +80,8 @@ def _populate_group(
     except Exception:
         pass
 
-    geometry_iface = None
     if prepared.geometry_mode:
-        geometry_iface = group.interface.new_socket(
+        group.interface.new_socket(
             name="Geometry", in_out="INPUT", socket_type="NodeSocketGeometry"
         )
     group_input = _new_node(group, "NodeGroupInput", -1100, 0)

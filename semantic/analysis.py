@@ -570,7 +570,6 @@ def _analyze_extension_backend_call(
     runtime_nodes: list[ast.expr] = []
     runtime_operands: list[AnalyzedCallOperand] = []
     static_operands: list[AnalyzedStaticCallOperand] = []
-    parameter_by_name = {parameter.name: parameter for parameter in selected_spec.parameters}
     for parameter_index, parameter in enumerate(selected_spec.parameters):
         value = selected_bound.arguments.get(parameter.name, ()) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else selected_bound.arguments.get(parameter.name)
         occurrences = tuple(value) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else (value,)

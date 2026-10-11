@@ -1396,7 +1396,6 @@ def lower_basic_body(
                         )
                     merged.pop(name, None)
                     continue
-                present = true_value if true_value is not None else false_value
                 missing_state = false_state if true_value is not None else true_state
                 if incoming is not None or has_other_owner(missing_state, name):
                     raise CompileError(

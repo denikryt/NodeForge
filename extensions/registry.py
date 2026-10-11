@@ -191,10 +191,6 @@ class _SnapshotLoader(importlib.abc.Loader):
         self.logical_name = logical_name
         self.namespace = namespace
 
-    def create_module(self, spec):
-        """Use Python's default module construction."""
-        return None
-
     def exec_module(self, module) -> None:
         """Execute one captured module or initialize one synthetic namespace package."""
         module.__package__ = module.__name__ if self.namespace else module.__spec__.parent

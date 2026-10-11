@@ -223,7 +223,6 @@ class FunctionMaterializer:
         transaction = context.function_group_transaction if context is not None else None
         trace = context.function_compilation_trace if context is not None else None
         cache = context.function_group_cache if use_reusable_cache else None
-        definition_identity = function_id.stable_key()
         own_inputs = {
             "kind": "library",
             "namespace": namespace,
