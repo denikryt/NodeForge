@@ -13,20 +13,113 @@ import pytest
 
 from NodeForge import packages
 from NodeForge.errors import CompileError
-from NodeForge.systems import registry as systems_registry
 
 
 @pytest.fixture(autouse=True)
 def package_inventory(tmp_path):
     """Use an isolated inventory with packages installed explicitly by the test setup."""
     packages.set_packages_dir_for_tests(tmp_path)
-    project_root = Path(__file__).resolve().parents[3]
-    packages.install_package_directory(project_root / "nodeforge.math", allow_python=True)
-    systems_registry.invalidate_cache()
     yield tmp_path
     packages.set_packages_dir_for_tests(None)
-    systems_registry.invalidate_cache()
 
+
+
+class _FakeGroupBackend:
+    """Exercise library adapters through the prepared-only group-backend contract."""
+
+    def __init__(self, callback):
+        self._callback = callback
+        self._resolved_environment = None
+        self.requests = []
+
+    def _environment(self):
+        """Return one minimal immutable environment for source-only adapter fixtures."""
+        if self._resolved_environment is None:
+            from NodeForge.resolved_environment import ResolvedCatalog, ResolvedEnvironment
+            self._resolved_environment = ResolvedEnvironment(
+                {
+                    "functions": ResolvedCatalog("functions", {}),
+                    "examples": ResolvedCatalog("examples", {}),
+                    "local": ResolvedCatalog("local", {}),
+                }
+            )
+        return self._resolved_environment
+
+    def new_source_callable_session(self):
+        """Return one root-attempt semantic source-call session."""
+        from NodeForge.semantic.source_callable_session import SourceCallableSession
+        return SourceCallableSession(resolved_environment=self._environment())
+
+    def prepare_source_compilation(
+        self, source, *, compilation_identity, source_callable_session=None, **kwargs
+    ):
+        """Prepare source semantics before the fake physical callback is invoked."""
+        from NodeForge.semantic.group import analyze_group_source
+        session = source_callable_session or self.new_source_callable_session()
+        return analyze_group_source(
+            source,
+            compilation_identity=compilation_identity,
+            resolved_environment=self._environment(),
+            helper_namespace=kwargs.get("helper_namespace") or "NodeForge Group",
+            source_callable_session=session,
+        )
+
+    def create_or_update(self, request, *, finalize_before_commit=None):
+        self.requests.append(request)
+        kwargs = {}
+        if request.existing_group is not None:
+            kwargs["existing_group"] = request.existing_group
+        if request.function_group_cache is not None:
+            kwargs["function_group_cache"] = request.function_group_cache
+        if request.function_group_transaction is not None:
+            kwargs["function_group_transaction"] = request.function_group_transaction
+        if request.function_compilation_trace is not None:
+            kwargs["function_compilation_trace"] = request.function_compilation_trace
+        if request.function_compilation_inputs is not None:
+            kwargs["function_compilation_inputs"] = request.function_compilation_inputs
+        if request.function_instance_key is not None:
+            kwargs["function_instance_key"] = request.function_instance_key
+        if request.preserve_if_equivalent:
+            kwargs["preserve_if_equivalent"] = True
+        group = self._callback(request.prepared_compilation.source, request.name, **kwargs)
+        if not hasattr(group, "interface"):
+            group.interface = types.SimpleNamespace(items_tree=[])
+        if finalize_before_commit is not None:
+            finalize_before_commit(group)
+        return group
+
+    def compile_group_callback(self, source, name="NodeForge Group", **kwargs):
+        """Provide the package-facing callback while keeping source out of physical publication."""
+        from NodeForge.blender.group_backend import BlenderGroupBuildRequest
+        from NodeForge.compiler_identities import GroupCompilationIdentity
+        existing_group = kwargs.pop("existing_group", None)
+        preserve = bool(kwargs.pop("preserve_if_equivalent", False))
+        source_callable_session = kwargs.pop("source_callable_session", None)
+        owner = f"FAKE/{name}"
+        prepared = self.prepare_source_compilation(
+            source,
+            compilation_identity=GroupCompilationIdentity(None, owner, owner, owner),
+            helper_namespace=name,
+            source_callable_session=source_callable_session,
+        )
+        request = BlenderGroupBuildRequest(
+            prepared_compilation=prepared,
+            name=name,
+            existing_group=existing_group,
+            helper_namespace=name,
+            function_group_cache=kwargs.pop("function_group_cache", None),
+            function_group_transaction=(
+                kwargs.pop("function_group_transaction", None)
+                or kwargs.pop("local_helper_transaction", None)
+            ),
+            function_compilation_trace=kwargs.pop("function_compilation_trace", None),
+            function_compilation_inputs=kwargs.pop("function_compilation_inputs", None),
+            function_instance_key=kwargs.pop("function_instance_key", None),
+            source_callable_session=source_callable_session,
+            preserve_if_equivalent=preserve,
+        )
+        assert not kwargs
+        return self.create_or_update(request)
 
 def _write_manifest(
     root: Path,
@@ -37,6 +130,7 @@ def _write_manifest(
     version="1.0.0",
     nodeforge_min_version="0.49.47",
     nodeforge_max_version=None,
+    import_name=None,
 ):
     if contents is None:
         contents = {"functions": "functions"}
@@ -44,6 +138,7 @@ def _write_manifest(
     (root / "nodeforge_package.json").write_text(
         json.dumps(
             {
+                **({"import_name": import_name} if import_name is not None else {}),
                 "schema_version": 1,
                 "id": package_id,
                 "name": package_id,
@@ -60,20 +155,97 @@ def _write_manifest(
     )
 
 
-def test_explicitly_installed_packages_use_unified_inventory(package_inventory):
+
+
+def _write_v2_system(system_root: Path, public_name: str) -> None:
+    """Write one minimal backend-only Extension API v2 system owner fixture."""
+    system_root.mkdir(parents=True, exist_ok=True)
+    (system_root / "interface.py").write_text(
+        "from NodeForge import Float, EvaluationMode\n"
+        "from typing import Annotated\n"
+        "EXTENSION_API = 2\n"
+        f"EXTENSIONS = {{{public_name!r}: '.backend:{public_name}'}}\n"
+        f"def {public_name}(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...\n",
+        encoding="utf-8",
+    )
+    (system_root / "backend.py").write_text(
+        f"def {public_name}(context, value):\n    return value\n",
+        encoding="utf-8",
+    )
+
+def test_explicitly_installed_packages_use_unified_inventory(package_inventory, tmp_path):
+    source = tmp_path / "vendor.inventory"
+    (source / "functions").mkdir(parents=True)
+    (source / "examples").mkdir()
+    (source / "functions" / "identity.nf").write_text('value = input_float("Value")\noutput("Value", value)\n', encoding="utf-8")
+    (source / "examples" / "demo.nf").write_text('output("Value", 1)\n', encoding="utf-8")
+    _write_manifest(source, package_id="vendor.inventory", contents={"functions": "functions", "examples": "examples"})
+    packages.install_package_directory(source, allow_python=False)
+
     manifests = {m.package_id: m for m in packages.active_package_manifests()}
-
-    assert set(manifests) == {"nodeforge.math"}
+    assert set(manifests) == {"vendor.inventory"}
     state = packages.load_package_state()
-    assert set(state["packages"]) == {"nodeforge.math"}
-    assert packages.library_roots("functions")[0].package_id == "nodeforge.math"
-    assert {root.package_id for root in packages.library_roots("examples")} == {"nodeforge.math"}
+    assert set(state["packages"]) == {"vendor.inventory"}
+    assert packages.library_roots("functions")[0].package_id == "vendor.inventory"
+    assert {root.package_id for root in packages.library_roots("examples")} == {"vendor.inventory"}
 
 
+def test_manifest_derived_roots_match_live_wrappers_without_loading_state(
+    package_inventory,
+    tmp_path,
+    monkeypatch,
+):
+    """Explicit derivation must preserve live ordering without owning inventory reads."""
+    source = tmp_path / "derived_roots"
+    (source / "functions").mkdir(parents=True)
+    (source / "examples").mkdir()
+    (source / "systems" / "marker").mkdir(parents=True)
+    (source / "functions" / "alpha.nf").write_text("output(value=1)\n", encoding="utf-8")
+    (source / "examples" / "beta.nf").write_text("output(value=2)\n", encoding="utf-8")
+    _write_v2_system(source / "systems" / "marker", "derived_marker")
+    _write_manifest(
+        source,
+        package_id="vendor.derived",
+        contents={"functions": "functions", "examples": "examples", "systems": "systems"},
+        python=True,
+    )
+    packages.install_package_directory(source, allow_python=True)
+
+    manifests = tuple(packages.active_package_manifests())
+    expected_functions = tuple(packages.library_roots("functions"))
+    expected_examples = tuple(packages.library_roots("examples"))
+    expected_systems = tuple(packages.system_package_records())
+    monkeypatch.setattr(
+        packages,
+        "active_package_manifests",
+        lambda *args, **kwargs: pytest.fail("explicit derivation must not load package state"),
+    )
+
+    assert packages.library_roots_from_manifests("functions", manifests) == expected_functions
+    assert packages.library_roots_from_manifests("examples", manifests) == expected_examples
+    assert packages.library_roots_from_manifests("local", manifests) == ()
+    assert packages.system_package_records_from_manifests(manifests) == expected_systems
 
 
+def test_system_resolution_uses_v2_interface_without_v1_handler_dispatch(package_inventory, tmp_path):
+    """System discovery exposes the captured v2 owner and no executable v1 handler API."""
+    source = tmp_path / "resolved_system"
+    system_root = source / "systems" / "marker"
+    _write_manifest(
+        source,
+        package_id="vendor.resolved",
+        contents={"systems": "systems"},
+        python=True,
+    )
+    _write_v2_system(system_root, "resolved_marker")
+    packages.install_package_directory(source, allow_python=True)
 
-
+    records = tuple(packages.system_package_records())
+    assert len(records) == 1
+    assert records[0].interface_path.name == "interface.py"
+    manifest = packages.active_package_manifests()[0]
+    inventory = packages._normalize_package_callable_inventory(manifest, normalize_native_libraries=True)
+    assert inventory.systems == {"resolved_marker": "marker"}
 def test_uninstall_validates_state_pointer_before_deleting_files(package_inventory, tmp_path):
     source_a = tmp_path / "source_a"
     (source_a / "functions").mkdir(parents=True)
@@ -252,11 +424,18 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
         def get(self, name, default=None):
             return super().get(name, default)
 
-    fake_bpy = types.SimpleNamespace(data=types.SimpleNamespace(node_groups=FakeNodeGroups()))
-    monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
-    import NodeForge.library as library
+        def __iter__(self):
+            return iter(self.values())
 
-    library = importlib.reload(library)
+    fake_bpy = types.SimpleNamespace(
+        data=types.SimpleNamespace(node_groups=FakeNodeGroups()),
+        app=types.SimpleNamespace(driver_namespace={}),
+        utils=types.SimpleNamespace(user_resource=lambda *_args, **_kwargs: str(tmp_path / "user_data")),
+    )
+    monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
+    import NodeForge.blender.library_groups as library_groups
+
+    library_groups = importlib.reload(library_groups)
 
     def make_source(root: Path, package_id: str):
         (root / "examples").mkdir(parents=True)
@@ -272,22 +451,40 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
 
     compiled = []
 
-    def compile_group(source, group_name, existing_group=None, backend_builtins=None):
+    def compile_group(source, group_name, existing_group=None, backend_builtins=None, **kwargs):
         group = existing_group or FakeGroup(group_name)
         group["compiled_source"] = source
         fake_bpy.data.node_groups[group_name] = group
-        compiled.append((group_name, existing_group))
+        compiled.append((group_name, existing_group, kwargs))
         return group
 
-    group_a = library.materialize_library_entry_group("examples", "demo", compile_group)
+    backend_a = _FakeGroupBackend(compile_group)
+    group_a = library_groups.materialize_library_entry_group("examples", "demo", backend_a)
+    from NodeForge.compiler_identities import library_function_id
+    from NodeForge.function_instances import (
+        FUNCTION_DEFINITION_OWNER_PROP,
+        FUNCTION_INSTANCE_KEY_PROP,
+        function_group_owner_scope,
+    )
+
+    function_id_a = library_function_id("examples", "vendor.a", "demo")
+    expected_owner_a = function_group_owner_scope("LIBRARY", "examples", "vendor.a", "demo", instance_key=None)
     assert group_a["nodeforge_package_id"] == "vendor.a"
+    assert group_a[FUNCTION_INSTANCE_KEY_PROP] == ""
+    assert group_a[FUNCTION_DEFINITION_OWNER_PROP] == function_id_a.stable_key()
+    assert backend_a.requests[0].prepared_compilation.identity.owner_scope == expected_owner_a
+    assert backend_a.requests[0].prepared_compilation.identity.declaration_owner == function_id_a.stable_key()
+    assert compiled[0][2]["function_instance_key"] == ""
     assert group_a.name in fake_bpy.data.node_groups
+
+    direct_again = library_groups.materialize_library_entry_group("examples", "demo", _FakeGroupBackend(compile_group))
+    assert direct_again is group_a
+    assert compiled[-1][1] is group_a
 
     packages.uninstall_package("vendor.a")
     packages.install_package_directory(source_b, allow_python=False)
-    systems_registry.invalidate_cache()
 
-    group_b = library.materialize_library_entry_group("examples", "demo", compile_group)
+    group_b = library_groups.materialize_library_entry_group("examples", "demo", _FakeGroupBackend(compile_group))
 
     assert group_b is not group_a
     assert group_b.name != group_a.name
@@ -295,6 +492,117 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
     assert group_b["nodeforge_package_version"] == "1.0.0"
     assert group_a["nodeforge_package_id"] == "vendor.a"
 
+
+
+
+def test_library_materialization_contract_discriminator_is_explicit(package_inventory, tmp_path, monkeypatch):
+    """Prepared source-call artifacts select reusable semantics while None selects direct catalog build."""
+    class FakeGroup(dict):
+        def __init__(self, name):
+            super().__init__()
+            self.name = name
+            self.bl_idname = "GeometryNodeTree"
+
+    class FakeNodeGroups(list):
+        def get(self, name, default=None):
+            return next((group for group in self if group.name == name), default)
+
+    fake_groups = FakeNodeGroups()
+    fake_bpy = types.SimpleNamespace(
+        data=types.SimpleNamespace(node_groups=fake_groups),
+        app=types.SimpleNamespace(driver_namespace={}),
+        utils=types.SimpleNamespace(user_resource=lambda *_args, **_kwargs: str(tmp_path / "user_data")),
+    )
+    monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
+    import NodeForge.blender.library_groups as library_groups
+    from NodeForge import catalog
+    library_groups = importlib.reload(library_groups)
+
+    source = tmp_path / "contract_pkg"
+    (source / "functions").mkdir(parents=True)
+    (source / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
+    _write_manifest(source, package_id="vendor.contract", contents={"functions": "functions"})
+    packages.install_package_directory(source, allow_python=False)
+
+    calls = []
+
+    def compile_group(source_text, group_name, existing_group=None, **kwargs):
+        group = existing_group or FakeGroup(f"{group_name}.{len(fake_groups)}")
+        if group not in fake_groups:
+            fake_groups.append(group)
+        calls.append(kwargs)
+        return group
+
+    from NodeForge.compiler_identities import CallSiteId, GroupCompilationIdentity, library_function_id
+    from NodeForge.function_instances import (
+        function_group_owner_scope,
+        function_materialization_owner_scope,
+        instance_key_for,
+    )
+    from NodeForge.semantic.ir import IRFunctionMaterialization, IRFunctionMaterializationMode
+    from NodeForge.blender.function_materializer import FunctionMaterializationContext, FunctionMaterializer
+
+    backend = _FakeGroupBackend(compile_group)
+    function_id = library_function_id("functions", "vendor.contract", "demo")
+    direct_result = library_groups.get_or_create_library_entry_group(
+        "functions", "demo", backend, materialization=None
+    )
+    direct = direct_result.group
+    assert direct_result.instance_key == ""
+    assert direct.get("nodeforge_function_instance_key") == ""
+    assert backend.requests[-1].prepared_compilation.identity.owner_scope == function_group_owner_scope(
+        "LIBRARY", "functions", "vendor.contract", "demo", instance_key=None
+    )
+    assert "function_group_cache" not in calls[-1]
+    assert "function_group_transaction" not in calls[-1]
+    assert "function_compilation_trace" not in calls[-1]
+
+    call_site = CallSiteId("root-owner", function_id, 0)
+    materialization = IRFunctionMaterialization(
+        function_id, IRFunctionMaterializationMode.UNIQUE, call_site
+    )
+    from NodeForge.environment_resolution import resolve_environment
+
+    environment = resolve_environment()
+    record = environment.package_function_record("vendor.contract", "demo")
+    assert record is not None
+    owner_scope = function_materialization_owner_scope(materialization)
+    stable_id = function_id.stable_key()
+    session = backend.new_source_callable_session()
+    prepared_callable = session.prepare_library(
+        function_id=function_id,
+        identity=GroupCompilationIdentity(None, owner_scope, stable_id, stable_id),
+        record=record,
+    )
+    cache = {}
+    context = FunctionMaterializationContext(cache, None, None, session)
+    unique_result = library_groups.materialize_prepared_library_callable(
+        record,
+        FunctionMaterializer(group_backend=backend),
+        prepared_callable,
+        materialization=materialization,
+        materialization_context=context,
+    )
+    unique = unique_result.group
+    unique_key = instance_key_for(call_site)
+    assert unique_result.instance_key == unique_key
+    assert unique is not direct
+    assert unique.get("nodeforge_function_instance_key") == unique_key
+    assert backend.requests[-1].prepared_compilation.identity.owner_scope == function_group_owner_scope(
+        "LIBRARY", "functions", "vendor.contract", "demo", instance_key=unique_key
+    )
+    assert cache[("library", function_id, unique_key)] is unique
+
+    other_id = library_function_id("functions", "vendor.other", "demo")
+    wrong = IRFunctionMaterialization(other_id, IRFunctionMaterializationMode.SHARED)
+    with pytest.raises(CompileError, match="inconsistent materialization identity"):
+        library_groups.materialize_prepared_library_callable(
+            record,
+            FunctionMaterializer(group_backend=backend),
+            prepared_callable,
+            materialization=wrong,
+            materialization_context=context,
+        )
 
 
 def test_zip_rejects_multiple_manifest_candidates(package_inventory, tmp_path):
@@ -338,7 +646,7 @@ def test_package_id_regex_matches_manifest_contract(package_inventory, tmp_path)
     valid = tmp_path / "valid_3d"
     (valid / "functions").mkdir(parents=True)
     (valid / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
-    _write_manifest(valid, package_id="vendor.3d")
+    _write_manifest(valid, package_id="vendor.3d", import_name="pkg3d")
     manifest = packages.install_package_directory(valid, allow_python=False)
     assert manifest.package_id == "vendor.3d"
 
@@ -355,9 +663,72 @@ def test_package_id_allows_underscore_after_dot(package_inventory, tmp_path):
         source = tmp_path / package_id.replace(".", "_")
         (source / "functions").mkdir(parents=True)
         (source / "functions" / f"demo_{index}.nf").write_text("output(value=1)\n", encoding="utf-8")
-        _write_manifest(source, package_id=package_id)
+        _write_manifest(source, package_id=package_id, import_name=f"tools_{index}")
         manifest = packages.install_package_directory(source, allow_python=False)
         assert manifest.package_id == package_id
+
+
+def test_package_import_name_explicit_and_default_are_manifest_owned(package_inventory, tmp_path):
+    """Import spelling is validated manifest metadata and defaults to the final package-id segment."""
+    explicit = tmp_path / "explicit_import"
+    (explicit / "functions").mkdir(parents=True)
+    (explicit / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
+    _write_manifest(explicit, package_id="vendor.explicit", import_name="tools")
+    assert packages.install_package_directory(explicit, allow_python=False).import_name == "tools"
+
+    defaulted = tmp_path / "default_import"
+    (defaulted / "functions").mkdir(parents=True)
+    (defaulted / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
+    _write_manifest(defaulted, package_id="vendor.defaulted")
+    assert packages.install_package_directory(defaulted, allow_python=False).import_name == "defaulted"
+
+
+@pytest.mark.parametrize("import_name", ["class", "_private", "not-valid"])
+def test_package_import_name_rejects_non_public_source_identifiers(package_inventory, tmp_path, import_name):
+    """Keyword/private/non-identifier spellings never enter the package source namespace."""
+    source = tmp_path / import_name.replace("-", "_")
+    (source / "functions").mkdir(parents=True)
+    (source / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
+    _write_manifest(source, package_id=f"vendor.bad{len(import_name)}", import_name=import_name)
+    with pytest.raises(packages.PackageError, match="import_name"):
+        packages.install_package_directory(source, allow_python=False)
+
+
+def test_package_import_names_are_unique_across_active_owners(package_inventory, tmp_path):
+    """Two canonical owners cannot publish the same source package import spelling."""
+    for package_id in ("vendor.first", "vendor.second"):
+        source = tmp_path / package_id.replace(".", "_")
+        (source / "functions").mkdir(parents=True)
+        (source / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
+        _write_manifest(source, package_id=package_id, import_name="shared")
+        if package_id.endswith("first"):
+            packages.install_package_directory(source, allow_python=False)
+        else:
+            with pytest.raises(packages.PackageError, match=r"Package import name 'shared'.*vendor\.first"):
+                packages.install_package_directory(source, allow_python=False)
+
+
+def test_package_replace_rechecks_import_name_collision_before_commit(package_inventory, tmp_path):
+    """Replacing one owner cannot steal another active owner's import spelling."""
+    first = tmp_path / "first"
+    (first / "functions").mkdir(parents=True)
+    (first / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
+    _write_manifest(first, package_id="vendor.first", import_name="shared")
+    packages.install_package_directory(first, allow_python=False)
+
+    second = tmp_path / "second"
+    (second / "functions").mkdir(parents=True)
+    (second / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
+    _write_manifest(second, package_id="vendor.second", import_name="second", version="1.0.0")
+    packages.install_package_directory(second, allow_python=False)
+
+    replacement = tmp_path / "second_v2"
+    (replacement / "functions").mkdir(parents=True)
+    (replacement / "functions" / "demo.nf").write_text("output(value=2)\n", encoding="utf-8")
+    _write_manifest(replacement, package_id="vendor.second", import_name="shared", version="2.0.0")
+    with pytest.raises(packages.PackageError, match=r"Package import name 'shared'.*vendor\.first"):
+        packages.install_package_directory(replacement, allow_python=False, replace=True)
+    assert packages.load_package_state()["packages"]["vendor.second"]["installed_version"] == "1.0.0"
 
 def test_zip_rejects_duplicate_casefold_destinations(package_inventory, tmp_path):
     archive = tmp_path / "demo.zip"
@@ -486,34 +857,25 @@ def test_zip_install_rejects_internal_duplicate_example_public_names(package_inv
 
     assert "vendor.dupeexamples" not in packages.load_package_state()["packages"]
 
-def test_system_entrypoint_declares_names_and_loads_handlers_lazily(package_inventory, tmp_path):
+def test_install_rejects_v1_system_owner_without_executing_module(package_inventory, tmp_path):
     source = tmp_path / "sys_pkg"
-    (source / "systems" / "test").mkdir(parents=True)
+    system_root = source / "systems" / "test"
+    system_root.mkdir(parents=True)
     _write_manifest(source, contents={"systems": "systems"}, python=True)
-    (source / "systems" / "test" / "system.py").write_text(
+    sentinel = tmp_path / "v1_executed"
+    (system_root / "system.py").write_text(
+        f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('executed')\n"
         "CONSTRUCTORS = ['test_marker']\n"
-        "def load_handlers():\n"
-        "    from .runtime import HANDLERS\n"
-        "    return HANDLERS\n",
+        "def load_handlers(): return {}\n",
         encoding="utf-8",
     )
-    (source / "systems" / "test" / "runtime.py").write_text(
-        "LOADED = True\nHANDLERS = {'test_marker': lambda comp, expr, depth=0: ('ok', depth)}\n",
-        encoding="utf-8",
-    )
-    packages.install_package_directory(source, allow_python=True)
 
-    import sys
+    with pytest.raises(packages.PackageError, match="unsupported Extension API v1 system.py"):
+        packages.install_package_directory(source, allow_python=True)
 
-    before = set(sys.modules)
-    assert "test_marker" in systems_registry.constructor_names()
-    assert not any(name.endswith(".runtime") for name in set(sys.modules) - before)
-    owner = systems_registry._constructor_map()["test_marker"]
-    assert systems_registry._load_handlers(owner)["test_marker"](None, None, 3) == ("ok", 3)
-    assert any(name.endswith(".runtime") for name in set(sys.modules) - before)
+    assert not sentinel.exists()
 
-
-def test_install_rejects_system_missing_load_handlers_before_state_commit(package_inventory, tmp_path):
+def test_install_rejects_v1_system_before_state_commit(package_inventory, tmp_path):
     source = tmp_path / "bad_sys_pkg"
     (source / "systems" / "bad").mkdir(parents=True)
     _write_manifest(source, package_id="vendor.bad", contents={"systems": "systems"}, python=True)
@@ -522,93 +884,79 @@ def test_install_rejects_system_missing_load_handlers_before_state_commit(packag
         encoding="utf-8",
     )
 
-    with pytest.raises(packages.PackageError, match="load_handlers"):
+    with pytest.raises(packages.PackageError, match="unsupported Extension API v1 system.py"):
         packages.install_package_directory(source, allow_python=True)
 
     assert "vendor.bad" not in packages.load_package_state()["packages"]
-    assert "bad_call" not in systems_registry.constructor_names()
 
 
-def test_install_rejects_system_constructor_colliding_with_core_builtin(package_inventory, tmp_path):
+def test_install_allows_package_export_colliding_with_core_builtin(package_inventory, tmp_path):
+    """Owner-qualified exports may use a core callable spelling such as cube."""
     source = tmp_path / "core_collision"
     (source / "systems" / "test").mkdir(parents=True)
     _write_manifest(source, package_id="vendor.corecollision", contents={"systems": "systems"}, python=True)
-    (source / "systems" / "test" / "system.py").write_text(
-        "CONSTRUCTORS = ['cube']\n"
-        "def load_handlers():\n"
-        "    return {'cube': lambda comp, expr, depth=0: None}\n",
-        encoding="utf-8",
-    )
+    _write_v2_system(source / "systems" / "test", "cube")
 
-    with pytest.raises(packages.PackageError, match="core callable"):
-        packages.install_package_directory(source, allow_python=True)
+    packages.install_package_directory(source, allow_python=True)
 
-    assert "vendor.corecollision" not in packages.load_package_state()["packages"]
-    assert not systems_registry.has_system_constructor("cube")
+    manifest = next(item for item in packages.active_package_manifests() if item.package_id == "vendor.corecollision")
+    inventory = packages._normalize_package_callable_inventory(manifest, normalize_native_libraries=True)
+    assert inventory.systems == {"cube": "test"}
 
 
-def test_replace_rejects_core_builtin_constructor_collision_and_keeps_old_pointer(package_inventory, tmp_path):
+def test_replace_allows_new_export_colliding_with_core_builtin(package_inventory, tmp_path):
+    """Replacing a package may add a core-spelled export without retaining the old member."""
     original = tmp_path / "original"
     (original / "systems" / "test").mkdir(parents=True)
     _write_manifest(original, package_id="vendor.replace", contents={"systems": "systems"}, python=True)
-    (original / "systems" / "test" / "system.py").write_text(
-        "CONSTRUCTORS = ['replace_marker']\n"
-        "def load_handlers():\n"
-        "    return {'replace_marker': lambda comp, expr, depth=0: None}\n",
-        encoding="utf-8",
-    )
+    _write_v2_system(original / "systems" / "test", "replace_marker")
     packages.install_package_directory(original, allow_python=True)
-    old_pointer = packages.load_package_state()["packages"]["vendor.replace"]["installed_path"]
-    assert systems_registry.has_system_constructor("replace_marker")
 
     replacement = tmp_path / "replacement"
     (replacement / "systems" / "test").mkdir(parents=True)
     _write_manifest(replacement, package_id="vendor.replace", contents={"systems": "systems"}, python=True, version="2.0.0")
-    (replacement / "systems" / "test" / "system.py").write_text(
-        "CONSTRUCTORS = ['cube']\n"
-        "def load_handlers():\n"
-        "    return {'cube': lambda comp, expr, depth=0: None}\n",
-        encoding="utf-8",
-    )
-
-    with pytest.raises(packages.PackageError, match="core callable"):
-        packages.install_package_directory(replacement, allow_python=True, replace=True)
+    _write_v2_system(replacement / "systems" / "test", "cube")
+    packages.install_package_directory(replacement, allow_python=True, replace=True)
 
     state_record = packages.load_package_state()["packages"]["vendor.replace"]
-    assert state_record["installed_path"] == old_pointer
-    assert state_record["installed_version"] == "1.0.0"
-    systems_registry.invalidate_cache()
-    assert systems_registry.has_system_constructor("replace_marker")
-    assert not systems_registry.has_system_constructor("cube")
+    assert state_record["installed_version"] == "2.0.0"
+    manifest = next(item for item in packages.active_package_manifests() if item.package_id == "vendor.replace")
+    inventory = packages._normalize_package_callable_inventory(manifest, normalize_native_libraries=True)
+    assert inventory.systems == {"cube": "test"}
 
 
-def test_install_rejects_function_name_colliding_with_active_constructor(package_inventory, tmp_path):
+def test_cross_package_function_and_extension_names_may_overlap(package_inventory, tmp_path):
+    """Same member spelling in different package owners is legal admission state."""
+    owner = tmp_path / "active_constructor"
+    (owner / "systems" / "test").mkdir(parents=True)
+    _write_manifest(owner, package_id="vendor.constructorowner", contents={"systems": "systems"}, python=True)
+    _write_v2_system(owner / "systems" / "test", "active_marker")
+    packages.install_package_directory(owner, allow_python=True)
+
     source = tmp_path / "function_constructor_collision"
     (source / "functions").mkdir(parents=True)
-    (source / "functions" / "sin.nf").write_text("output(value=1)\n", encoding="utf-8")
+    (source / "functions" / "active_marker.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(source, package_id="vendor.funcconstructor", contents={"functions": "functions"})
+    packages.install_package_directory(source, allow_python=False)
 
-    with pytest.raises(packages.PackageError, match="Public name collision.*sin"):
-        packages.install_package_directory(source, allow_python=False)
-
-    assert "vendor.funcconstructor" not in packages.load_package_state()["packages"]
+    assert {"vendor.constructorowner", "vendor.funcconstructor"} <= set(packages.load_package_state()["packages"])
 
 
-def test_install_rejects_constructor_name_colliding_with_active_function(package_inventory, tmp_path):
+def test_cross_package_extension_and_function_names_may_overlap_reverse_order(package_inventory, tmp_path):
+    """Admission overlap is symmetric with respect to installation order."""
+    owner = tmp_path / "active_function"
+    (owner / "functions").mkdir(parents=True)
+    (owner / "functions" / "active_function.nf").write_text("output(value=1)\n", encoding="utf-8")
+    _write_manifest(owner, package_id="vendor.functionowner", contents={"functions": "functions"})
+    packages.install_package_directory(owner, allow_python=False)
+
     source = tmp_path / "constructor_function_collision"
     (source / "systems" / "test").mkdir(parents=True)
     _write_manifest(source, package_id="vendor.constructorfunc", contents={"systems": "systems"}, python=True)
-    (source / "systems" / "test" / "system.py").write_text(
-        "CONSTRUCTORS = ['smoothstep']\n"
-        "def load_handlers():\n"
-        "    return {'smoothstep': lambda comp, expr, depth=0: None}\n",
-        encoding="utf-8",
-    )
+    _write_v2_system(source / "systems" / "test", "active_function")
+    packages.install_package_directory(source, allow_python=True)
 
-    with pytest.raises(packages.PackageError, match="Public name collision.*smoothstep"):
-        packages.install_package_directory(source, allow_python=True)
-
-    assert "vendor.constructorfunc" not in packages.load_package_state()["packages"]
+    assert {"vendor.functionowner", "vendor.constructorfunc"} <= set(packages.load_package_state()["packages"])
 
 
 def test_install_rejects_same_package_function_and_constructor_name(package_inventory, tmp_path):
@@ -622,12 +970,7 @@ def test_install_rejects_same_package_function_and_constructor_name(package_inve
         contents={"functions": "functions", "systems": "systems"},
         python=True,
     )
-    (source / "systems" / "test" / "system.py").write_text(
-        "CONSTRUCTORS = ['marker']\n"
-        "def load_handlers():\n"
-        "    return {'marker': lambda comp, expr, depth=0: None}\n",
-        encoding="utf-8",
-    )
+    _write_v2_system(source / "systems" / "test", "marker")
 
     with pytest.raises(packages.PackageError, match="function and constructor"):
         packages.install_package_directory(source, allow_python=True)
@@ -635,30 +978,29 @@ def test_install_rejects_same_package_function_and_constructor_name(package_inve
     assert "vendor.samecollision" not in packages.load_package_state()["packages"]
 
 
-def test_replace_rejects_cross_kind_collision_and_keeps_old_pointer(package_inventory, tmp_path):
+def test_replace_allows_cross_owner_member_overlap(package_inventory, tmp_path):
+    """Package replacement is not blocked by another owner's same-named export."""
     original = tmp_path / "original_cross_kind"
     (original / "functions").mkdir(parents=True)
     (original / "functions" / "original.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(original, package_id="vendor.crossreplace", contents={"functions": "functions"})
     packages.install_package_directory(original, allow_python=False)
-    old_pointer = packages.load_package_state()["packages"]["vendor.crossreplace"]["installed_path"]
+
+    owner = tmp_path / "active_cross_constructor"
+    (owner / "systems" / "test").mkdir(parents=True)
+    _write_manifest(owner, package_id="vendor.crossowner", contents={"systems": "systems"}, python=True)
+    _write_v2_system(owner / "systems" / "test", "cross_marker")
+    packages.install_package_directory(owner, allow_python=True)
 
     replacement = tmp_path / "replacement_cross_kind"
     (replacement / "functions").mkdir(parents=True)
-    (replacement / "functions" / "sin.nf").write_text("output(value=2)\n", encoding="utf-8")
-    _write_manifest(
-        replacement,
-        package_id="vendor.crossreplace",
-        contents={"functions": "functions"},
-        version="2.0.0",
-    )
-
-    with pytest.raises(packages.PackageError, match="Public name collision.*sin"):
-        packages.install_package_directory(replacement, allow_python=False, replace=True)
+    (replacement / "functions" / "cross_marker.nf").write_text("output(value=2)\n", encoding="utf-8")
+    _write_manifest(replacement, package_id="vendor.crossreplace", contents={"functions": "functions"}, version="2.0.0")
+    packages.install_package_directory(replacement, allow_python=False, replace=True)
 
     state_record = packages.load_package_state()["packages"]["vendor.crossreplace"]
-    assert state_record["installed_path"] == old_pointer
-    assert state_record["installed_version"] == "1.0.0"
+    assert state_record["installed_version"] == "2.0.0"
+    assert {"vendor.crossowner", "vendor.crossreplace"} <= set(packages.load_package_state()["packages"])
 
 
 def test_malformed_active_system_record_is_invalid_diagnostic_not_global_registry_failure(package_inventory, tmp_path):
@@ -683,12 +1025,10 @@ def test_malformed_active_system_record_is_invalid_diagnostic_not_global_registr
         "origin": "user",
     }
     packages.save_package_state(state)
-    systems_registry.invalidate_cache()
 
-    assert "bad_call" not in systems_registry.constructor_names()
     diagnostics = packages.active_package_manifests(include_invalid=True)
     assert any(
-        getattr(item, "package_id", None) == "vendor.bad" and "load_handlers" in getattr(item, "message", "")
+        getattr(item, "package_id", None) == "vendor.bad" and "unsupported Extension API v1 system.py" in getattr(item, "message", "")
         for item in diagnostics
     )
 
@@ -730,25 +1070,13 @@ def test_invalid_package_diagnostic_exposes_python_consent_fields(package_invent
 
 
 
-def test_uninstall_math_package_removes_math_callables(package_inventory):
-    assert "sin" in systems_registry.constructor_names()
-    assert systems_registry.constructor_owner("sin").package_id == "nodeforge.math"
-
-    packages.uninstall_package("nodeforge.math")
-
-    assert "nodeforge.math" not in packages.load_package_state()["packages"]
-    assert "sin" not in systems_registry.constructor_names()
-    with pytest.raises(CompileError, match="Unsupported system constructor"):
-        systems_registry.get_handler("sin")
 
 
 def test_inventory_does_not_auto_install_packages(tmp_path):
     packages.set_packages_dir_for_tests(tmp_path / "empty")
-    systems_registry.invalidate_cache()
 
     assert packages.active_package_manifests() == []
     assert packages.load_package_state()["packages"] == {}
-    assert systems_registry.constructor_names() == ()
 
 
 def test_uninstall_removes_invalid_record_without_deleting_untrusted_target(package_inventory, tmp_path):
@@ -771,3 +1099,161 @@ def test_uninstall_removes_invalid_record_without_deleting_untrusted_target(pack
 
     assert "vendor.invalid" not in packages.load_package_state()["packages"]
     assert marker.read_text(encoding="utf-8") == "keep"
+
+
+def test_local_catalog_adapter_uses_build_local_transaction_cache(monkeypatch, tmp_path):
+    """Local source materialization reuses the transaction-tracked build cache and fingerprint."""
+    class FakeGroup(dict):
+        def __init__(self, name):
+            super().__init__()
+            self.name = name
+            self.bl_idname = "GeometryNodeTree"
+            self.interface = types.SimpleNamespace(items_tree=[])
+
+    class FakeNodeGroups(list):
+        def get(self, name, default=None):
+            return next((group for group in self if group.name == name), default)
+
+    class Frame:
+        def __init__(self):
+            self.identity_children = []
+
+        def record_dependency_identity(self, owner_scope, fingerprint):
+            self.identity_children.append((owner_scope, fingerprint))
+
+    fake_groups = FakeNodeGroups()
+    fake_bpy = types.SimpleNamespace(
+        data=types.SimpleNamespace(node_groups=fake_groups),
+        app=types.SimpleNamespace(driver_namespace={}),
+    )
+    monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
+    import NodeForge.blender.library_groups as library_groups
+    from NodeForge import catalog, local_sources
+    library_groups = importlib.reload(library_groups)
+
+    from NodeForge.function_instances import (
+        FUNCTION_COMPILATION_FINGERPRINT_PROP,
+        direct_library_owner_scope_for_id,
+    )
+    from NodeForge.blender.function_materializer import FunctionMaterializationContext
+
+    source_path = tmp_path / "demo.nf"
+    source_path.write_text("output(value=1)\n", encoding="utf-8")
+    record = catalog.LibraryEntryRecord(
+        namespace="local",
+        name="demo",
+        kind="source",
+        path=source_path,
+        source_path=source_path,
+        source_origin=local_sources._path_key(source_path),
+    )
+    monkeypatch.setattr(local_sources, "find_local_entry_record", lambda name: record)
+
+    transaction = object()
+    frame = Frame()
+    trace = types.SimpleNamespace(current=frame)
+    callback_calls = []
+
+    def compile_group(source, group_name, **kwargs):
+        callback_calls.append(kwargs)
+        group = FakeGroup(group_name)
+        group[FUNCTION_COMPILATION_FINGERPRINT_PROP] = "local-fingerprint"
+        fake_groups.append(group)
+        return group
+
+    backend = _FakeGroupBackend(compile_group)
+    cache = {}
+    session = backend.new_source_callable_session()
+    context = FunctionMaterializationContext(cache, transaction, trace, session)
+
+    first = library_groups.get_or_create_library_entry_group(
+        "local", "demo", backend, materialization_context=context
+    )
+    second = library_groups.get_or_create_library_entry_group(
+        "local", "demo", backend, materialization_context=context
+    )
+
+    assert first.group is second.group
+    assert first.instance_key == second.instance_key == ""
+    assert len(callback_calls) == 1
+    from NodeForge.compiler_identities import library_function_id_for_record
+    function_id = library_function_id_for_record(record)
+    assert cache[("local-catalog", function_id)] is first.group
+    assert callback_calls[0]["function_group_transaction"] is transaction
+    assert callback_calls[0]["function_compilation_trace"] is trace
+    assert callback_calls[0]["function_compilation_inputs"]["kind"] == "library"
+    assert callback_calls[0]["function_compilation_inputs"]["namespace"] == "local"
+    owner = direct_library_owner_scope_for_id(function_id)
+    assert frame.identity_children == [
+        (owner, "local-fingerprint"),
+        (owner, "local-fingerprint"),
+    ]
+
+
+def test_functions_catalog_keeps_duplicate_member_rows_owner_qualified(monkeypatch, tmp_path):
+    """Functions records retain owner identity instead of collapsing duplicate public names."""
+    from NodeForge import catalog
+
+    def record(package_id: str, name: str) -> catalog.LibraryEntryRecord:
+        path = tmp_path / f"{package_id.replace('.', '_')}_{name}.nf"
+        path.write_text("output(value=1)\n", encoding="utf-8")
+        return catalog.LibraryEntryRecord(
+            namespace="functions", name=name, kind="source", path=path, source_path=path,
+            package_id=package_id, package_name=package_id, package_version="1.0.0",
+        )
+
+    records = (record("vendor.a", "foo"), record("vendor.b", "foo"), record("nodeforge.lsystem", "points"))
+    assert [(item.name, item.package_id) for item in records] == [
+        ("foo", "vendor.a"), ("foo", "vendor.b"), ("points", "nodeforge.lsystem")
+    ]
+    with pytest.raises(CompileError, match="Duplicate functions library entry 'foo'"):
+        catalog.unique_records_from_candidates("functions", records)
+
+def test_package_function_reload_uses_persisted_owner_and_never_substitutes_same_name(monkeypatch, tmp_path):
+    """Reload resolves stored package ownership before member text and fails closed when that owner disappears."""
+    fake_bpy = types.SimpleNamespace(
+        data=types.SimpleNamespace(node_groups=[]),
+        app=types.SimpleNamespace(driver_namespace={}),
+    )
+    monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
+    import NodeForge.blender.library_groups as library_groups
+    from NodeForge import catalog
+    library_groups = importlib.reload(library_groups)
+
+    def record(package_id: str, name: str) -> catalog.LibraryEntryRecord:
+        """Create one reloadable owner-specific source record."""
+        path = tmp_path / f"{package_id.replace('.', '_')}_{name}.nf"
+        path.write_text("output(value=1)\n", encoding="utf-8")
+        return catalog.LibraryEntryRecord(
+            namespace="functions",
+            name=name,
+            kind="source",
+            path=path,
+            source_path=path,
+            package_id=package_id,
+            package_name=package_id,
+            package_version="1.0.0",
+        )
+
+    owner_a = record("vendor.a", "foo")
+    owner_b = record("vendor.b", "foo")
+    environment = types.SimpleNamespace(package_function_record=lambda package_id, name: owner_a if package_id == "vendor.a" else owner_b if package_id == "vendor.b" else None)
+    group = {
+        "nodeforge_library_namespace": "functions",
+        "nodeforge_library_name": "foo",
+        "nodeforge_package_id": "vendor.a",
+    }
+    assert library_groups.resolve_reloadable_library_entry(group, resolved_environment=environment) is owner_a
+
+    environment = types.SimpleNamespace(package_function_record=lambda package_id, name: owner_b if package_id == "vendor.b" else None)
+    with pytest.raises(CompileError, match=r"Current source.*'foo'.*vendor\.a.*unavailable"):
+        library_groups.resolve_reloadable_library_entry(group, resolved_environment=environment)
+
+    core_spelled = record("nodeforge.lsystem", "points")
+    environment = types.SimpleNamespace(package_function_record=lambda package_id, name: core_spelled if package_id == "nodeforge.lsystem" else None)
+    points_group = {
+        "nodeforge_library_namespace": "functions",
+        "nodeforge_library_name": "points",
+        "nodeforge_package_id": "nodeforge.lsystem",
+    }
+    assert library_groups.resolve_reloadable_library_entry(points_group, resolved_environment=environment) is core_spelled

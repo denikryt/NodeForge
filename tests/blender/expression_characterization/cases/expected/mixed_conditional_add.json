@@ -1,0 +1,124 @@
+{
+  "graph": {
+    "interface": [
+      {
+        "in_out": "OUTPUT",
+        "name": "Result",
+        "socket_type": "NodeSocketFloat"
+      },
+      {
+        "default": true,
+        "in_out": "INPUT",
+        "name": "Flag",
+        "socket_type": "NodeSocketBool"
+      },
+      {
+        "default": 1.0,
+        "in_out": "INPUT",
+        "name": "A",
+        "socket_type": "NodeSocketFloat"
+      },
+      {
+        "default": 2.0,
+        "in_out": "INPUT",
+        "name": "B",
+        "socket_type": "NodeSocketFloat"
+      },
+      {
+        "default": 3.0,
+        "in_out": "INPUT",
+        "name": "C",
+        "socket_type": "NodeSocketFloat"
+      }
+    ],
+    "links": [
+      {
+        "from": [
+          "n0",
+          "Socket_0"
+        ],
+        "to": [
+          "n2",
+          "Switch"
+        ]
+      },
+      {
+        "from": [
+          "n0",
+          "Socket_1"
+        ],
+        "to": [
+          "n2",
+          "True"
+        ]
+      },
+      {
+        "from": [
+          "n0",
+          "Socket_2"
+        ],
+        "to": [
+          "n2",
+          "False"
+        ]
+      },
+      {
+        "from": [
+          "n0",
+          "Socket_3"
+        ],
+        "to": [
+          "n3",
+          "Value_001"
+        ]
+      },
+      {
+        "from": [
+          "n2",
+          "Output"
+        ],
+        "to": [
+          "n3",
+          "Value"
+        ]
+      },
+      {
+        "from": [
+          "n3",
+          "Value"
+        ],
+        "to": [
+          "n1",
+          "Socket_4"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "bl_idname": "NodeGroupInput",
+        "id": "n0",
+        "properties": {}
+      },
+      {
+        "bl_idname": "NodeGroupOutput",
+        "id": "n1",
+        "properties": {}
+      },
+      {
+        "bl_idname": "GeometryNodeSwitch",
+        "id": "n2",
+        "properties": {
+          "input_type": "FLOAT"
+        }
+      },
+      {
+        "bl_idname": "ShaderNodeMath",
+        "id": "n3",
+        "properties": {
+          "operation": "ADD"
+        }
+      }
+    ]
+  },
+  "kind": "graph"
+}

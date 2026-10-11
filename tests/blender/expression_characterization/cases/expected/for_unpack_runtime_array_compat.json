@@ -1,0 +1,69 @@
+{
+  "graph": {
+    "interface": [
+      {
+        "in_out": "OUTPUT",
+        "name": "Result",
+        "socket_type": "NodeSocketFloat"
+      },
+      {
+        "default": 1.0,
+        "in_out": "INPUT",
+        "name": "A",
+        "socket_type": "NodeSocketFloat"
+      }
+    ],
+    "links": [
+      {
+        "from": [
+          "n0",
+          "Socket_0"
+        ],
+        "to": [
+          "n2",
+          "Value"
+        ]
+      },
+      {
+        "from": [
+          "n0",
+          "Socket_0"
+        ],
+        "to": [
+          "n2",
+          "Value_001"
+        ]
+      },
+      {
+        "from": [
+          "n2",
+          "Value"
+        ],
+        "to": [
+          "n1",
+          "Socket_1"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "bl_idname": "NodeGroupInput",
+        "id": "n0",
+        "properties": {}
+      },
+      {
+        "bl_idname": "NodeGroupOutput",
+        "id": "n1",
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeMath",
+        "id": "n2",
+        "properties": {
+          "operation": "ADD"
+        }
+      }
+    ]
+  },
+  "kind": "graph"
+}

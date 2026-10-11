@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 dev/*
 !dev/CHANGELOG.md
+!dev/ARCHITECTURE.md
+!dev/ARCHITECTURE_LAYERS.md
 # User-owned local catalog scripts
 local/**/*.nf
 local/**/*.nodeforge

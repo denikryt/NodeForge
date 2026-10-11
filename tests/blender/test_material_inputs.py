@@ -3,8 +3,6 @@
 import bpy
 
 from helpers import check, compile_group, expect_compile_error
-from NodeForge.constants import TYPE_MATERIAL
-from NodeForge.library import _socket_type_to_value_type
 
 
 def _interface_socket(group, name, in_out):
@@ -27,7 +25,7 @@ output("Geometry", geo)
     check(iface.socket_type == "NodeSocketMaterial", "input_material did not create a Material interface socket")
     set_node = next(node for node in group.nodes if node.bl_idname == "GeometryNodeSetMaterial")
     check(set_node.inputs["Material"].is_linked, "runtime Material input was not linked")
-    check(_socket_type_to_value_type(set_node.inputs["Material"]) == TYPE_MATERIAL, "Material socket type mapping failed")
+    check(set_node.inputs["Material"].bl_idname == "NodeSocketMaterial", "Material socket type changed")
 
     named = compile_group('''
 geo = set_material(cube(1.0), "NFTest Named Material")

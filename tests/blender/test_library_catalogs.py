@@ -1,10 +1,16 @@
 from helpers import *
 
+from NodeForge.blender import library_groups
+
+from NodeForge import local_sources
+
 import json
 import tempfile
 from pathlib import Path
 
 from NodeForge import packages
+from NodeForge import environment_resolution
+from NodeForge.semantic import source_callable_session
 
 
 def _write(path, text):
@@ -24,16 +30,164 @@ def _cleanup(path):
         path.rmdir()
 
 
-def test_catalog_discovery_and_example_imports():
-    check(library.has_library_entry('functions', 'layout_circle'), 'layout_circle missing from functions')
-    check(library.has_library_entry('examples', 'mandelbrot'), 'mandelbrot missing from examples')
-    check(bool(library.backend_builtins_for_entry('examples', 'mandelbrot')), 'mandelbrot backend helpers missing')
+def test_resolved_environment_defers_local_failure_without_repeating_discovery(monkeypatch):
+    """An unused failed Local result stays deferred and replays without filesystem reads."""
+    calls = []
 
-    compile_group('from functions import layout_circle\ngeo = points(8)\ngeo = layout_circle(geo, count=8)\noutput("Geometry", geo)', 'NFTest_catalog_function_import')
-    compile_group('from examples import *\ngeo = mandelbrot(resolution=12, max_iter=8)\noutput("Geometry", geo)', 'NFTest_catalog_example_star_import')
+    def malformed_registry():
+        calls.append(True)
+        raise CompileError("Unsupported Local source registry format")
+
+    monkeypatch.setattr(local_sources, "_read_local_source_registry", malformed_registry)
+    environment = environment_resolution.resolve_environment()
+    backend = compiler._new_group_backend(environment)
+    group = prepared_create_or_update(
+        'value = 2.0\noutput("Value", value)\n',
+        "NFTest_deferred_local_failure",
+        backend=backend,
+    )
+
+    check(group is not None, "source without Local imports failed on deferred Local error")
+    check(calls == [True], f"Local registry was read more than once during resolution: {calls}")
+    for lookup in (
+        environment.catalog("local").names,
+        environment.catalog("local").records,
+        lambda: environment.catalog("local").find("missing"),
+    ):
+        try:
+            lookup()
+        except CompileError as exc:
+            check(str(exc) == "Unsupported Local source registry format", "deferred Local diagnostic changed")
+        else:
+            raise AssertionError("failed Local catalog lookup did not replay its error")
+    check(calls == [True], "deferred Local lookup repeated registry discovery")
+
+
+def test_explicit_local_import_replays_deferred_local_failure(monkeypatch):
+    """Local catalog failures remain lazy until source syntax actually needs Local resolution."""
+    calls = []
+
+    def malformed_registry():
+        calls.append(True)
+        raise CompileError("Unsupported Local source registry format")
+
+    monkeypatch.setattr(local_sources, "_read_local_source_registry", malformed_registry)
+    environment = environment_resolution.resolve_environment()
+    backend = compiler._new_group_backend(environment)
+    with pytest.raises(CompileError, match="Unsupported Local source registry format"):
+        prepared_create_or_update(
+            'from local import missing\nvalue = 2.0\noutput("Value", value)\n',
+            "NFTest_deferred_local_failure_used",
+            backend=backend,
+        )
+    check(calls == [True], "explicit Local use repeated registry discovery")
+
+
+def test_root_and_nested_local_source_calls_share_snapshot_without_live_rediscovery(monkeypatch):
+    """Root, parent, and leaf semantic preparations share one frozen environment/session."""
+    local = local_sources.ensure_local_catalog_dir()
+    leaf = local / "resolved_environment_leaf.nf"
+    parent = local / "resolved_environment_parent.nf"
+    seen_environments = []
+    original_init = source_callable_session.SourceCallableSession.__init__
+
+    def recording_init(self, *, resolved_environment):
+        seen_environments.append(resolved_environment)
+        original_init(self, resolved_environment=resolved_environment)
+
+    try:
+        _write(leaf, 'x = input_float("X")\noutput("x", x * 2.0)\n')
+        _write(
+            parent,
+            'from local import resolved_environment_leaf\n'
+            'x = input_float("X")\n'
+            'y = resolved_environment_leaf(x)\n'
+            'output("y", y)\n',
+        )
+        environment = environment_resolution.resolve_environment()
+        monkeypatch.setattr(source_callable_session.SourceCallableSession, "__init__", recording_init)
+        monkeypatch.setattr(
+            packages,
+            "active_package_records",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("nested package rediscovery")),
+        )
+        monkeypatch.setattr(
+            local_sources,
+            "find_local_entry_record",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("nested catalog rediscovery")),
+        )
+
+        backend = compiler._new_group_backend(environment)
+        prepared_create_or_update(
+            "from local import resolved_environment_parent\n"
+            "value = resolved_environment_parent(3.0)\n"
+            'output("Value", value)\n',
+            "NFTest_resolved_environment_nested_identity",
+            backend=backend,
+        )
+
+        check(seen_environments == [environment], f"unexpected source-call sessions: {len(seen_environments)}")
+    finally:
+        leaf.unlink(missing_ok=True)
+        parent.unlink(missing_ok=True)
+
+def test_prepared_root_resolves_once_for_nested_local_dependency(monkeypatch):
+    """Prepared root and nested Local source calls share one resolved environment snapshot."""
+    local = local_sources.ensure_local_catalog_dir()
+    leaf = local / "direct_environment_leaf.nf"
+    parent = local / "direct_environment_parent.nf"
+    real_resolve = compiler.resolve_environment
+    resolve_calls = []
+
+    def counted_resolve():
+        resolve_calls.append(True)
+        return real_resolve()
+
+    try:
+        _write(leaf, 'x = input_float("X")\noutput("x", x + 1.0)\n')
+        _write(
+            parent,
+            'from local import direct_environment_leaf\n'
+            'x = input_float("X")\n'
+            'y = direct_environment_leaf(x)\n'
+            'output("y", y)\n',
+        )
+        monkeypatch.setattr(compiler, "resolve_environment", counted_resolve)
+        group = compiler.create_expression_group(
+            "from local import direct_environment_parent\n"
+            "value = direct_environment_parent(2.0)\n"
+            'output("Value", value)\n',
+            "NFTest_prepared_environment_nested",
+        )
+        check(group is not None, "prepared root failed to materialize nested Local dependency")
+        check(resolve_calls == [True], f"prepared root resolved environment {len(resolve_calls)} times")
+        bpy.data.node_groups.remove(group)
+    finally:
+        leaf.unlink(missing_ok=True)
+        parent.unlink(missing_ok=True)
+
+def test_new_environment_observes_local_changes_without_mutating_old_snapshot():
+    """A later root session sees new Local state while an older selection stays fixed."""
+    local = local_sources.ensure_local_catalog_dir()
+    first_path = local / "environment_generation_first.nf"
+    second_path = local / "environment_generation_second.nf"
+    try:
+        _write(first_path, 'output("Value", 1.0)\n')
+        first = environment_resolution.resolve_environment()
+        _write(second_path, 'output("Value", 2.0)\n')
+        second = environment_resolution.resolve_environment()
+
+        check(first.catalog("local").find("environment_generation_first") is not None, "first snapshot lost its record")
+        check(first.catalog("local").find("environment_generation_second") is None, "old snapshot observed later Local state")
+        check(second.catalog("local").find("environment_generation_second") is not None, "new snapshot missed later Local state")
+    finally:
+        first_path.unlink(missing_ok=True)
+        second_path.unlink(missing_ok=True)
+
+
 
 def test_local_recursive_catalog_duplicate_and_save_contracts():
-    local = library.ensure_local_catalog_dir()
+    local = local_sources.ensure_local_catalog_dir()
     flat = local / 'local_local_probe.nf'
     nested = local / 'math' / 'local_nested_probe.nf'
     ignored_native_folder = local / 'local_native_probe'
@@ -53,13 +207,13 @@ def test_local_recursive_catalog_duplicate_and_save_contracts():
         compile_group('from local import local_local_probe\nx = local_local_probe(3)\noutput("x", x)', 'NFTest_local_flat_import')
         compile_group('from local import local_nested_probe\nx = local_nested_probe(3)\noutput("x", x)', 'NFTest_local_nested_import')
         expect_compile_error('from local import local_native_probe\nx = local_native_probe(3)\noutput("x", x)', 'NFTest_local_native_files_ignored')
-        expect_compile_error('from local.math import local_nested_probe\nx = 1\noutput("x", x)', 'NFTest_local_nested_import_rejected')
+        compile_group('from local.math import local_nested_probe\nx = local_nested_probe(3)\noutput("x", x)', 'NFTest_local_nested_qualified_import')
         expect_compile_error('import local.math\nx = 1\noutput("x", x)', 'NFTest_local_nested_plain_import_rejected')
 
         _write(duplicate_flat, 'x = input_float("X")\noutput("x", x)\n')
         _write(duplicate_nested, 'x = input_float("X")\noutput("x", x)\n')
         try:
-            library.library_entry_names('local')
+            local_sources.find_local_entry_record('local_duplicate_probe')
         except CompileError:
             pass
         else:
@@ -67,25 +221,25 @@ def test_local_recursive_catalog_duplicate_and_save_contracts():
         duplicate_flat.unlink(missing_ok=True)
         _cleanup(duplicate_nested)
 
-        path = library.save_local_source('local_saved_text_probe', 'x = input_float("X")\noutput("x", x)\n')
+        path = local_sources.save_local_source('local_saved_text_probe', 'x = input_float("X")\noutput("x", x)\n')
         check(path == saved and saved.exists(), 'flat local save failed')
         try:
-            library.save_local_source('local_saved_text_probe', 'x = 2\noutput("x", x)\n', overwrite=False)
+            local_sources.save_local_source('local_saved_text_probe', 'x = 2\noutput("x", x)\n', overwrite=False)
         except CompileError:
             pass
         else:
             raise AssertionError('duplicate local save was accepted')
-        library.save_local_source('local_saved_text_probe', 'x = 2\noutput("x", x)\n', overwrite=True)
+        local_sources.save_local_source('local_saved_text_probe', 'x = 2\noutput("x", x)\n', overwrite=True)
         check(saved.read_text(encoding='utf-8').startswith('x = 2'), 'overwrite did not replace exact flat file')
 
-        library.create_local_folder('math')
-        library.save_local_source('local_nested_saved_probe', 'x = input_float("X")\noutput("x", x)\n', folder_path='math')
+        local_sources.create_local_folder('math')
+        local_sources.save_local_source('local_nested_saved_probe', 'x = input_float("X")\noutput("x", x)\n', folder_path='math')
         check(nested_saved.exists(), 'nested local save failed')
         compile_group('from local import local_nested_saved_probe\nx = local_nested_saved_probe(1)\noutput("x", x)', 'NFTest_local_nested_saved_import')
 
         _write(unsupported_source_layout / 'source.nf', 'x = input_float("X")\noutput("x", x)\n')
         try:
-            library.library_entry_names('local')
+            local_sources.find_local_entry_record('local_package_style_probe')
         except CompileError:
             pass
         else:
@@ -93,10 +247,10 @@ def test_local_recursive_catalog_duplicate_and_save_contracts():
         _cleanup(unsupported_source_layout)
 
         _write(cross_folder, 'x = input_float("X")\noutput("x", x)\n')
-        library.save_local_source('local_cross_folder_duplicate', 'x = 2\noutput("x", x)\n')
+        local_sources.save_local_source('local_cross_folder_duplicate', 'x = 2\noutput("x", x)\n')
         check(cross_folder_root.exists(), 'path-addressed save was blocked by same-name managed source elsewhere')
         try:
-            library.find_library_entry_record('local', 'local_cross_folder_duplicate')
+            local_sources.find_local_entry_record('local_cross_folder_duplicate')
         except CompileError:
             pass
         else:
@@ -104,7 +258,7 @@ def test_local_recursive_catalog_duplicate_and_save_contracts():
 
         for bad in ('../escape', '/abs', '_private', 'bad-name'):
             try:
-                library.create_local_folder(bad)
+                local_sources.create_local_folder(bad)
             except CompileError:
                 pass
             else:
@@ -118,14 +272,14 @@ def test_local_recursive_catalog_duplicate_and_save_contracts():
 
 
 def test_new_catalog_materialized_group_ownership_metadata():
-    local = library.ensure_local_catalog_dir()
+    local = local_sources.ensure_local_catalog_dir()
     source = local / 'local_collision_probe.nf'
     user_group = None
     example_collision = None
     try:
         _write(source, 'x = input_float("X", default=1.0)\noutput("x", x)\n')
-        record = library.find_library_entry_record('local', 'local_collision_probe')
-        local_group_name = library._group_name_for_record(record)
+        record = local_sources.find_local_entry_record('local_collision_probe')
+        local_group_name = library_groups._group_name_for_record(record)
         user_group = bpy.data.node_groups.new(local_group_name, 'GeometryNodeTree')
         collision_root = compile_group(
             'from local import local_collision_probe\nx = local_collision_probe(1)\noutput("x", x)',
@@ -146,18 +300,9 @@ def test_new_catalog_materialized_group_ownership_metadata():
         check(backing.get('nodeforge_library_namespace') == 'local', 'local backing namespace metadata missing')
         check(backing.get('nodeforge_library_name') == 'local_collision_probe', 'local backing name metadata missing')
 
-        record = library.find_library_entry_record('examples', 'mandelbrot')
-        example_group_name = library._group_name_for_record(record)
-        existing_example = bpy.data.node_groups.get(example_group_name)
-        if existing_example is not None:
-            bpy.data.node_groups.remove(existing_example, do_unlink=True)
-        example_collision = bpy.data.node_groups.new(example_group_name, 'GeometryNodeTree')
-        example_collision['nodeforge_library_namespace'] = 'local'
-        example_collision['nodeforge_library_name'] = 'mandelbrot'
-        expect_compile_error('from examples import mandelbrot\ngeo = mandelbrot(resolution=12, max_iter=8)\noutput("Geometry", geo)', 'NFTest_example_ownership_collision')
     finally:
         source.unlink(missing_ok=True)
-        for group in (user_group, example_collision):
+        for group in (user_group,):
             if group is not None and bpy.data.node_groups.get(group.name) is group:
                 bpy.data.node_groups.remove(group, do_unlink=True)
 
@@ -174,7 +319,7 @@ def test_local_save_ui_uses_selected_text_source_only():
 
 
 def test_local_materialization_uses_fresh_blender_suffixed_groups_per_compile():
-    local = library.ensure_local_catalog_dir()
+    local = local_sources.ensure_local_catalog_dir()
     leaf = local / 'local_suffix_leaf.nf'
     parent = local / 'local_suffix_parent.nf'
     root_source = (
@@ -237,7 +382,7 @@ def test_local_materialization_uses_fresh_blender_suffixed_groups_per_compile():
 
 
 def test_update_expression_group_keeps_selected_group_identity_with_fresh_local_dependencies():
-    local = library.ensure_local_catalog_dir()
+    local = local_sources.ensure_local_catalog_dir()
     helper = local / 'local_update_identity_probe.nf'
     root_source = (
         'from local import local_update_identity_probe\n'
@@ -269,13 +414,13 @@ def test_update_expression_group_keeps_selected_group_identity_with_fresh_local_
 
 
 def test_local_logical_name_collision_uses_blender_suffix_without_mutating_foreign_group():
-    local = library.ensure_local_catalog_dir()
+    local = local_sources.ensure_local_catalog_dir()
     source = local / 'local_suffix_collision_probe.nf'
     foreign = None
     try:
         _write(source, 'x = input_float("X", default=1.0)\noutput("x", x)\n')
-        record = library.find_library_entry_record('local', 'local_suffix_collision_probe')
-        base_name = library._group_name_for_record(record)
+        record = local_sources.find_local_entry_record('local_suffix_collision_probe')
+        base_name = library_groups._group_name_for_record(record)
         foreign = bpy.data.node_groups.new(base_name, 'GeometryNodeTree')
         root = compile_group(
             'from local import local_suffix_collision_probe\n'
@@ -308,7 +453,7 @@ def _library_backing(group, namespace, name):
 
 def test_reload_local_catalog_group_keeps_root_identity_and_refreshes_dependencies():
     """Reload must rebuild Local dependencies even when the root source is unchanged."""
-    local = library.ensure_local_catalog_dir()
+    local = local_sources.ensure_local_catalog_dir()
     helper = local / "local_reload_helper.nf"
     root = local / "local_reload_root.nf"
     group = None
@@ -339,7 +484,7 @@ def test_reload_local_catalog_group_keeps_root_identity_and_refreshes_dependenci
 
 def test_reload_local_catalog_group_fails_before_mutation_when_source_disappears():
     """A missing current catalog source must leave the materialized group untouched."""
-    local = library.ensure_local_catalog_dir()
+    local = local_sources.ensure_local_catalog_dir()
     source = local / "local_reload_missing.nf"
     group = None
     try:
@@ -366,7 +511,7 @@ def test_reload_local_catalog_group_fails_before_mutation_when_source_disappears
 
 def test_reload_local_catalog_group_rolls_back_invalid_current_source_without_leaks():
     """Compilation failure during reload must preserve the root and clean transaction groups."""
-    local = library.ensure_local_catalog_dir()
+    local = local_sources.ensure_local_catalog_dir()
     source = local / "local_reload_invalid.nf"
     group = None
     try:
@@ -431,9 +576,21 @@ def test_library_reload_allows_same_package_upgrade_and_rejects_package_takeover
             _make_reload_package(v1, package_id="vendor.reload", version="1.0.0", value=1.0)
             packages.install_package_directory(v1, allow_python=False)
             group = compiler.create_library_catalog_group("functions", "reload_value")
+            from NodeForge.compiler_identities import library_function_id
+            from NodeForge.function_instances import (
+                FUNCTION_DEFINITION_OWNER_PROP,
+                FUNCTION_INSTANCE_KEY_PROP,
+            )
+
             pointer = group.as_pointer()
+            direct_function_id = library_function_id("functions", "vendor.reload", "reload_value")
             check(group.get("nodeforge_package_id") == "vendor.reload", "initial package id metadata missing")
             check(group.get("nodeforge_package_version") == "1.0.0", "initial package version metadata missing")
+            check(str(group.get(FUNCTION_INSTANCE_KEY_PROP) or "") == "", "direct catalog materialization was not shared")
+            check(
+                group.get(FUNCTION_DEFINITION_OWNER_PROP) == direct_function_id.stable_key(),
+                "direct catalog materialization definition identity changed",
+            )
 
             v2 = tmp / "v2"
             _make_reload_package(v2, package_id="vendor.reload", version="2.0.0", value=2.0)
@@ -452,7 +609,11 @@ def test_library_reload_allows_same_package_upgrade_and_rejects_package_takeover
             try:
                 compiler.update_library_catalog_group(group, "functions", "reload_value")
             except Exception as exc:
-                check("different package" in str(exc), f"unexpected cross-package reload error: {exc}")
+                message = str(exc)
+                check(
+                    "vendor.reload" in message and "unavailable" in message,
+                    f"unexpected owner-aware reload error: {exc}",
+                )
             else:
                 raise AssertionError("different package took over an existing library group")
             check(group.as_pointer() == pointer, "rejected package takeover replaced the root datablock")
@@ -498,7 +659,7 @@ def test_native_only_library_entry_is_not_reloadable():
             group["nodeforge_library_name"] = "reload_native"
             group["nodeforge_package_id"] = "vendor.native_reload"
             try:
-                library.resolve_reloadable_library_entry(group)
+                library_groups.resolve_reloadable_library_entry(group)
             except CompileError as exc:
                 check("no reloadable .nf source" in str(exc), f"unexpected native-only reload error: {exc}")
             else:

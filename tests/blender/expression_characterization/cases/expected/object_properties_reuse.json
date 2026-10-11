@@ -1,0 +1,107 @@
+{
+  "graph": {
+    "interface": [
+      {
+        "in_out": "OUTPUT",
+        "name": "Geometry",
+        "socket_type": "NodeSocketGeometry"
+      },
+      {
+        "in_out": "OUTPUT",
+        "name": "Location",
+        "socket_type": "NodeSocketVector"
+      },
+      {
+        "in_out": "OUTPUT",
+        "name": "Rotation",
+        "socket_type": "NodeSocketVector"
+      },
+      {
+        "in_out": "OUTPUT",
+        "name": "Scale",
+        "socket_type": "NodeSocketVector"
+      },
+      {
+        "default": null,
+        "in_out": "INPUT",
+        "name": "Source",
+        "socket_type": "NodeSocketObject"
+      }
+    ],
+    "links": [
+      {
+        "from": [
+          "n0",
+          "Socket_0"
+        ],
+        "to": [
+          "n2",
+          "Object"
+        ]
+      },
+      {
+        "from": [
+          "n2",
+          "Geometry"
+        ],
+        "to": [
+          "n1",
+          "Socket_1"
+        ]
+      },
+      {
+        "from": [
+          "n2",
+          "Location"
+        ],
+        "to": [
+          "n1",
+          "Socket_2"
+        ]
+      },
+      {
+        "from": [
+          "n2",
+          "Rotation"
+        ],
+        "to": [
+          "n1",
+          "Socket_3"
+        ]
+      },
+      {
+        "from": [
+          "n2",
+          "Scale"
+        ],
+        "to": [
+          "n1",
+          "Socket_4"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "bl_idname": "NodeGroupInput",
+        "id": "n0",
+        "properties": {}
+      },
+      {
+        "bl_idname": "NodeGroupOutput",
+        "id": "n1",
+        "properties": {}
+      },
+      {
+        "bl_idname": "GeometryNodeObjectInfo",
+        "defaults": {
+          "As Instance": true
+        },
+        "id": "n2",
+        "properties": {
+          "transform_space": "ORIGINAL"
+        }
+      }
+    ]
+  },
+  "kind": "graph"
+}

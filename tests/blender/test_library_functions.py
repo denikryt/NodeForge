@@ -32,9 +32,9 @@ def test_packaged_library_functions_and_helper_scoping():
     flat_probe.write_text("def compile_call(comp, expr, depth=0):\n    raise AssertionError('legacy flat layout loaded')\n", encoding='utf-8')
     flat_source.write_text('value = input_float("Value", default=2.0)\noutput("Value", value)\n', encoding='utf-8')
     try:
-        check(not library.has_module_library_function('flat_legacy_probe'), 'legacy flat function module was discovered')
-        check(not library.has_library_function('flat_legacy_probe'), 'legacy flat function appeared as library function')
-        check(not library.has_library_function('library_flat_probe'), 'legacy flat .nf function appeared without package inventory')
+        check(not has_native_package_function('flat_legacy_probe'), 'legacy flat function module was discovered')
+        check(not has_package_function('flat_legacy_probe'), 'legacy flat function appeared as library function')
+        check(not has_package_function('library_flat_probe'), 'legacy flat .nf function appeared without package inventory')
     finally:
         flat_probe.unlink(missing_ok=True)
         flat_source.unlink(missing_ok=True)
@@ -48,13 +48,13 @@ def test_packaged_library_functions_and_helper_scoping():
         (functions / 'library_vector_probe.nf').write_text('value = input_vector("Value", default=vector(1, 2, 3))\noutput("Value", value)\n', encoding='utf-8')
         packages.install_package_directory(root, allow_python=False)
         try:
-            check(library.has_library_function('library_flat_probe'), 'package flat .nf function was not discovered')
-            names = library.library_function_names()
+            check(has_package_function('library_flat_probe'), 'package flat .nf function was not discovered')
+            names = package_function_names()
             check('library_flat_probe' in names, 'package flat .nf function missing from public function names')
-            compile_group('from functions import library_flat_probe\nx = library_flat_probe(3)\noutput("x", x)', 'NFTest_flat_function_import')
-            compile_group('from functions import *\nx = library_flat_probe(3)\noutput("x", x)', 'NFTest_flat_function_star_import')
-            compile_group('from functions import library_vector_probe\nv = library_vector_probe(vector(1, 2, 3))\noutput("v", v)', 'NFTest_flat_vector_function_import')
-            expect_compile_error('from functions import library_vector_probe\nv = library_vector_probe(3)\noutput("v", v)', 'NFTest_flat_vector_function_scalar_rejected')
+            compile_group('from packages import library_probe\nx = library_flat_probe(3)\noutput("x", x)', 'NFTest_flat_function_import')
+            expect_compile_error('from packages import *\nx = library_flat_probe(3)\noutput("x", x)', 'NFTest_package_star_import_rejected')
+            compile_group('from packages import library_probe\nv = library_vector_probe(vector(1, 2, 3))\noutput("v", v)', 'NFTest_flat_vector_function_import')
+            expect_compile_error('from packages import library_probe\nv = library_vector_probe(3)\noutput("v", v)', 'NFTest_flat_vector_function_scalar_rejected')
         finally:
             packages.uninstall_package('vendor.library_probe')
 
@@ -70,54 +70,91 @@ def test_packaged_library_functions_and_helper_scoping():
             pass
         else:
             raise AssertionError('private package function entry was accepted')
-    for fname in ['copy_by_offsets', 'layout_grid', 'grid_points', 'layout_circle', 'layout_spiral', 'spiral_points', 'layout_random', 'random_points', 'inverse_lerp', 'remap', 'saturate', 'step', 'smoothstep', 'smootherstep', 'pingpong', 'wrap', 'sign', 'rotate2d', 'polar', 'angle_between', 'rotate_around_axis', 'fibonacci', 'sierpinski_carpet']:
-        group = compiler.create_library_function_group(fname)
-        check(getattr(group, 'bl_idname', None) == 'GeometryNodeTree', fname)
-    normal_names = set(bpy.data.node_groups.keys())
-    reused = compiler.create_library_function_group('fibonacci')
-    check(reused.name in bpy.data.node_groups, 'library group reuse did not return a live group')
-    check(set(bpy.data.node_groups.keys()) == normal_names, 'library group reuse created unexpected groups')
-    try:
-        compile_group('geo = grid(4,4)\ngeo = apply_mandelbrot_material(geo, "x")\noutput("Geometry", geo)', 'NFTest_backend_scope_fail')
-    except Exception:
-        pass
-    else:
-        raise AssertionError('package-local backend helper leaked into normal source')
     print('LIBRARY_AND_SCOPE_OK')
 
 
 
-def test_function_star_import_bindings_and_namespace_guards():
-    star = compile_group('''
-from functions import *
-x = fibonacci(8)
-output("x", x)
-''', 'NFTest_function_star_import_fibonacci')
-    check('fibonacci' not in [sock.name for sock in star.interface.items_tree if getattr(sock, 'in_out', None) == 'INPUT'], 'star-imported function leaked as group input')
+def test_same_named_package_functions_materialize_by_canonical_owner():
+    """Qualified source calls keep exact package ownership through Blender materialization."""
+    with tempfile.TemporaryDirectory() as tmp:
+        roots = []
+        for package_id, delta in (("vendor.alpha", 1.0), ("vendor.beta", 2.0)):
+            root = Path(tmp) / package_id
+            functions = root / "functions"
+            functions.mkdir(parents=True)
+            _write_package_manifest(root, package_id)
+            (functions / "shared_probe.nf").write_text(
+                f'value = input_float("Value", default=0.0)\noutput("Value", value + {delta})\n',
+                encoding="utf-8",
+            )
+            packages.install_package_directory(root, allow_python=False)
+            roots.append(package_id)
+        try:
+            group = compile_group(
+                "from packages import alpha, beta\n"
+                "a = alpha.shared_probe(3)\n"
+                "b = beta.shared_probe(4)\n"
+                'output("a", a)\n'
+                'output("b", b)\n',
+                "NFTest_same_named_package_owners",
+            )
+            realized = {
+                (node.node_tree.get("nodeforge_package_id"), node.node_tree.get("nodeforge_library_name"))
+                for node in group.nodes
+                if node.bl_idname == "GeometryNodeGroup" and node.node_tree is not None
+            }
+            check(
+                {("vendor.alpha", "shared_probe"), ("vendor.beta", "shared_probe")} <= realized,
+                f"qualified calls lost canonical package ownership during materialization: {sorted(realized)}",
+            )
 
-    local = compile_group('''
-from functions import *
+            with pytest.raises(CompileError, match=r"Ambiguous callable 'shared_probe'.*alpha\.shared_probe.*beta\.shared_probe"):
+                prepared_create_or_update(
+                    "from packages import alpha, beta\n"
+                    "value = shared_probe(3)\n"
+                    'output("Value", value)\n',
+                    "NFTest_same_named_package_bare_ambiguity",
+                )
+        finally:
+            for package_id in reversed(roots):
+                packages.uninstall_package(package_id)
 
-def fib_value(n):
-    return fibonacci(n)
 
-x = fib_value(8)
-output("x", x)
-''', 'NFTest_function_star_import_local_function')
-    check(getattr(local, 'bl_idname', None) == 'GeometryNodeTree', 'star import did not propagate into local function compilation')
 
-    before_builtins = set(registry.CALLABLE_BUILTIN_NAMES)
-    compile_group('from functions import *\nx = fibonacci(3)\noutput("x", x)', 'NFTest_function_star_no_global_mutation')
-    check(set(registry.CALLABLE_BUILTIN_NAMES) == before_builtins, 'star import mutated callable builtins')
-
-    expect_compile_error('x = fibonacci(8)\noutput("x", x)', 'NFTest_function_star_unimported_still_fails')
-    expect_compile_error('from functions import *\ngeo = grid(4,4)\ngeo = apply_mandelbrot_material(geo, "x")\noutput("Geometry", geo)', 'NFTest_function_star_backend_helper_scope_fail')
-
-    for source, name in (
-        ('from functions import *\nfibonacci = 1\noutput("fibonacci", fibonacci)', 'NFTest_function_star_assignment_conflict'),
-        ('from functions import *\nsmoothstep = 1\noutput("smoothstep", smoothstep)', 'NFTest_function_star_smoothstep_assignment_conflict'),
-        ('from functions import *\ndef fibonacci(n):\n    return n\nx = fibonacci(1)\noutput("x", x)', 'NFTest_function_star_local_function_conflict'),
-        ('from functions import fibonacci\nfrom functions import *\nx = 1\noutput("x", x)', 'NFTest_function_star_explicit_conflict'),
-        ('from functions import *\nfrom functions import fibonacci as fibonacci\nx = 1\noutput("x", x)', 'NFTest_function_star_later_explicit_conflict'),
-    ):
-        expect_compile_error(source, name)
+def test_package_function_can_share_core_callable_name_without_shadowing_core():
+    """A core-spelled package export stays qualified while the bare core builtin remains authoritative."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "vendor.geometry_tools"
+        functions = root / "functions"
+        functions.mkdir(parents=True)
+        _write_package_manifest(root, "vendor.geometry_tools")
+        (functions / "points.nf").write_text(
+            'value = input_float("Value", default=0.0)\noutput("Value", value + 1.0)\n',
+            encoding="utf-8",
+        )
+        packages.install_package_directory(root, allow_python=False)
+        try:
+            group = compile_group(
+                "from packages import geometry_tools\n"
+                "geo = points(3)\n"
+                "value = geometry_tools.points(4)\n"
+                'output("Geometry", geo)\n'
+                'output("Value", value)\n',
+                "NFTest_core_and_package_points",
+            )
+            check(
+                any(node.bl_idname == "GeometryNodeMeshLine" for node in group.nodes),
+                "bare points() stopped lowering through the core builtin",
+            )
+            check(
+                any(
+                    node.bl_idname == "GeometryNodeGroup"
+                    and node.node_tree is not None
+                    and node.node_tree.get("nodeforge_package_id") == "vendor.geometry_tools"
+                    and node.node_tree.get("nodeforge_library_name") == "points"
+                    for node in group.nodes
+                ),
+                "qualified package points() did not materialize its exact owner",
+            )
+        finally:
+            packages.uninstall_package("vendor.geometry_tools")

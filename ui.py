@@ -1,45 +1,42 @@
 """Blender UI, operators, panels, and registration for NodeForge."""
 
 import bpy
-import sys
-import importlib
 import traceback
-import addon_utils
 from pathlib import Path
 from bpy.types import Operator, Panel, PropertyGroup, UIList, AddonPreferences
-from bpy.props import StringProperty, PointerProperty, CollectionProperty, IntProperty, BoolProperty, EnumProperty
+from bpy.props import StringProperty, PointerProperty, CollectionProperty, IntProperty, BoolProperty
 
 from .compiler import (
     create_expression_group,
     update_expression_group,
-    _apply_group_defaults_to_node,
-    _capture_node_external_state,
-    _restore_node_external_state,
+    create_library_catalog_group,
+    create_local_source_group,
+    create_package_function_group,
+    update_library_catalog_group,
+)
+from .blender.update import _apply_group_defaults_to_node
+from .blender.storage import (
     _extract_group_source,
     _get_or_create_scratch_text,
     _replace_text_contents,
-    create_library_catalog_group,
-    create_library_function_group,
-    update_library_catalog_group,
 )
-from .library import (
-    library_entry_records,
-    library_function_records,
+from .local_sources import (
     local_browser_records,
     local_source_roots,
     link_local_source_folder,
     unlink_local_source_folder,
     unlink_local_source_file,
     ensure_local_catalog_dir,
-    apply_function_node_display_name,
     create_local_folder,
+    validate_new_local_name,
     delete_local_folder,
     save_local_source,
     delete_local_source,
-    resolve_reloadable_library_entry,
 )
+from .blender.library_groups import apply_function_node_display_name
+from .environment_resolution import resolve_environment
 from . import packages
-from . import generated_resources
+from .blender import generated_resources
 
 def _source_from_props(props):
     """Return source code from the selected Blender Text datablock only."""
@@ -246,12 +243,23 @@ def _refresh_catalog_items(props, namespace: str):
     old_name = ""
     old_path = ""
     old_kind = ""
+    old_package_id = ""
     if 0 <= old_index < len(items):
         old_name = items[old_index].name
         old_path = getattr(items[old_index], "path", "")
         old_kind = getattr(items[old_index], "kind", "")
+        old_package_id = getattr(items[old_index], "package_id", "")
     items.clear()
-    records = local_browser_records(getattr(props, "local_browser_path", "")) if namespace == "local" else library_entry_records(namespace)
+    if namespace == "local":
+        records = local_browser_records(getattr(props, "local_browser_path", ""))
+    else:
+        environment = resolve_environment()
+        selected = (
+            environment.package_function_records()
+            if namespace == "functions"
+            else environment.catalog(namespace).records()
+        )
+        records = [record.as_dict() for record in selected]
     for record in records:
         item = items.add()
         item.name = record.get("name", "")
@@ -272,15 +280,14 @@ def _refresh_catalog_items(props, namespace: str):
                 if item.name == old_name and item.path == old_path and item.kind == old_kind:
                     setattr(props, index_prop, index)
                     break
+            elif namespace == "functions":
+                if item.name == old_name and getattr(item, "package_id", "") == old_package_id:
+                    setattr(props, index_prop, index)
+                    break
             elif item.name == old_name:
                 setattr(props, index_prop, index)
                 break
     return len(records)
-
-
-def _refresh_function_items(props):
-    """Reload the functions folder into the Scene collection property."""
-    return _refresh_catalog_items(props, "functions")
 
 
 def _selected_catalog_item(props, namespace: str):
@@ -293,10 +300,6 @@ def _selected_catalog_item(props, namespace: str):
         return items[index]
     return None
 
-
-def _selected_function_item(props):
-    """Return the currently selected function-library item, or None."""
-    return _selected_catalog_item(props, "functions")
 
 class GNSCRIPT_MVP_Properties(PropertyGroup):
     """Properties stored on the current Scene for NodeForge UI state."""
@@ -378,8 +381,6 @@ class GNSCRIPT_MVP_OT_update_selected_group(Operator):
             self.report({'ERROR'}, "Select exactly one Geometry Node Group node to update")
             return {'CANCELLED'}
         old_name = node.node_tree.name
-        tree = _active_gn_tree(context)
-        external_state = _capture_node_external_state(tree, node) if tree is not None else {"input_defaults": {}, "incoming": [], "outgoing": []}
         try:
             update_expression_group(node.node_tree, source)
         except Exception as exc:
@@ -388,8 +389,7 @@ class GNSCRIPT_MVP_OT_update_selected_group(Operator):
             return {'CANCELLED'}
         node.node_tree.name = old_name
         node.name = node.name or old_name
-        restored = _restore_node_external_state(tree, node, external_state) if tree is not None else 0
-        self.report({'INFO'}, f"Updated node group: {old_name}; restored {restored} link(s)")
+        self.report({'INFO'}, f"Updated node group: {old_name}")
         return {'FINISHED'}
 
 
@@ -425,25 +425,16 @@ class NODEFORGE_OT_reload_selected_library_group(Operator):
         if node is None:
             self.report({'ERROR'}, "Select exactly one reloadable NodeForge library group")
             return {'CANCELLED'}
-        try:
-            record = resolve_reloadable_library_entry(node.node_tree)
-        except Exception as exc:
-            self.report({'ERROR'}, str(exc))
-            return {'CANCELLED'}
-
         old_name = node.node_tree.name
-        tree = _active_gn_tree(context)
-        external_state = _capture_node_external_state(tree, node) if tree is not None else {"input_defaults": {}, "incoming": [], "outgoing": []}
         try:
-            update_library_catalog_group(node.node_tree, record.namespace, record.name)
+            update_library_catalog_group(node.node_tree)
         except Exception as exc:
             traceback.print_exc()
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
         node.node_tree.name = old_name
         node.name = node.name or old_name
-        restored = _restore_node_external_state(tree, node, external_state) if tree is not None else 0
-        self.report({'INFO'}, f"Reloaded node group: {old_name}; restored {restored} link(s)")
+        self.report({'INFO'}, f"Reloaded node group: {old_name}")
         return {'FINISHED'}
 
 
@@ -631,7 +622,14 @@ class NODEFORGE_OT_create_function_group(Operator):
             return {'CANCELLED'}
 
         try:
-            group = create_library_catalog_group(self.namespace, item.name)
+            if self.namespace == "functions":
+                group = create_package_function_group(item.package_id, item.name)
+            else:
+                group = (
+                    create_local_source_group(item.path)
+                    if self.namespace == "local"
+                    else create_library_catalog_group(self.namespace, item.name)
+                )
         except Exception as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
@@ -859,8 +857,9 @@ class NODEFORGE_OT_create_local_folder(Operator):
         if current is None:
             self.report({'ERROR'}, "External Local folders are read-only")
             return {'CANCELLED'}
-        root = ensure_local_catalog_dir().resolve()
         try:
+            validate_new_local_name(self.folder_name, directory=True)
+            root = ensure_local_catalog_dir().resolve()
             rel_parent = current.relative_to(root)
             folder_path = str(rel_parent / self.folder_name) if rel_parent.parts else self.folder_name
             created = create_local_folder(folder_path)
@@ -897,16 +896,22 @@ class NODEFORGE_OT_save_to_local(Operator):
         return context.window_manager.invoke_props_dialog(self)
 
     def execute(self, context):
-        props = context.scene.gn_script_mvp
+        props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
+        if props is None or props.text_block is None:
+            self.report({'ERROR'}, "Select a Text Block to save")
+            return {'CANCELLED'}
         current = _managed_local_browser_directory(props)
         if current is None:
             self.report({'ERROR'}, "External Local folders are read-only")
             return {'CANCELLED'}
-        source = _source_from_props(props)
         root = ensure_local_catalog_dir().resolve()
         try:
+            source = props.text_block.as_string()
+            if not source.strip():
+                self.report({'ERROR'}, "The selected Text Block is empty")
+                return {'CANCELLED'}
             rel = current.relative_to(root)
-            folder_path = str(rel).replace("\\", "/") if rel.parts else ""
+            folder_path = str(rel) if rel.parts else ""
             path = save_local_source(self.script_name, source, folder_path=folder_path, overwrite=self.overwrite)
             props.local_script_name = self.script_name
             props.local_overwrite = self.overwrite

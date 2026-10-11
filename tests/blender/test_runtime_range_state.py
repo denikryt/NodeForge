@@ -38,6 +38,12 @@ output("Angle", angle)
     check(names == ["geo", "pos", "angle"], f"unexpected repeat item order: {names}")
     check(socket_types == ["GEOMETRY", "VECTOR", "FLOAT"], f"unexpected repeat item types: {socket_types}")
     check("next_pos" not in names and "piece" not in names, "loop temporaries became repeat state items")
+    outputs = {
+        item.name: item.socket_type
+        for item in group.interface.items_tree
+        if getattr(item, "item_type", "") == "SOCKET" and getattr(item, "in_out", "") == "OUTPUT"
+    }
+    check(outputs.get("Angle") == "NodeSocketFloat", f"Float Repeat output type changed: {outputs}")
 
 
 def test_repeat_range_geometry_branch_merge_uses_geometry_switch():
@@ -76,23 +82,6 @@ for i in repeat_range(5):
 output("x", x)
 """,
         "NFTest_repeat_range_scalar_existing",
-    )
-    compile_group(
-        """
-from functions import rotate_around_axis
-v = vector(1,0,0)
-flag = True
-for i in repeat_range(3):
-    if flag:
-        v = rotate_around_axis(v, vector(0,0,1), 0.1)
-        flag = False
-    else:
-        v = v
-        flag = flag
-output("v", v)
-output("flag", flag)
-""",
-        "NFTest_repeat_range_vector_bool_existing",
     )
 
 
@@ -188,27 +177,20 @@ output("x", x)
     )
 
 
-def test_repeat_state_assignment_allows_explicit_item_named_like_removed_default_geometry():
-    import ast
 
-    from NodeForge.compiler import Compiler
-    from NodeForge.nodes import _int_value, _value
-    from NodeForge.runtime import _repeat_state_assignments
 
-    # The public DSL reserves Geometry as a type token. This lower-level probe
-    # isolates the Repeat Zone invariant: a removable default item named
-    # "Geometry" must not be treated as a permanent system socket collision.
+def test_repeat_zone_allows_state_named_like_removed_default_geometry():
+    """The backend validates Repeat names after removing Blender's default state item."""
+    from NodeForge.blender.ir_lowering import _create_repeat_zone
+    from NodeForge.nf_types import NFType
+
     group = bpy.data.node_groups.new("NFTest_repeat_range_lower_geometry_name", "GeometryNodeTree")
     try:
-        group_input = group.nodes.new("NodeGroupInput")
-        comp = Compiler(group, group_input, consts={})
-        comp.vars["Geometry"] = _value(group, 0, 0, 0)
-        iterations = _int_value(group, 3, 0, -80)
-        body = ast.parse("Geometry = 1").body
-
-        _repeat_state_assignments(group, comp, iterations, body, index_name="i")
-
-        repeat_output = _repeat_output(group)
+        _repeat_input, repeat_output = _create_repeat_zone(
+            group,
+            ((NFType.FLOAT, "Geometry"),),
+            "i",
+        )
         names = [item.name for item in repeat_output.repeat_items]
         check(names == ["Geometry"], f"unexpected repeat item names: {names}")
     finally:
@@ -415,4 +397,75 @@ for i in repeat_range(2):
 output("x", x)
 """,
         "NFTest_nested_repeat_state_type_error",
+    )
+
+
+def test_ordinary_repeat_range_uses_permanent_ir_backend():
+    """An ordinary Repeat materializes exactly one permanent Repeat Zone."""
+    group = compile_group(
+        """
+x = 0
+for i in repeat_range(2):
+    x = x + 1
+output("x", x)
+""",
+        "NFTest_repeat_ir_route",
+    )
+    check(len(_nodes(group, "GeometryNodeRepeatInput")) == 1, "IR Repeat did not create one Repeat Input")
+    check(len(_nodes(group, "GeometryNodeRepeatOutput")) == 1, "IR Repeat did not create one Repeat Output")
+    bpy.data.node_groups.remove(group)
+
+
+
+def test_repeat_int_state_keeps_exact_int_type_and_downstream_integer_arithmetic():
+    """Int Repeat state remains Int physically, semantically, and for downstream arithmetic."""
+    group = compile_group(
+        '''
+x = input_int("X", default=1)
+for i in repeat_range(2):
+    x = x + 1
+y = x + 1
+output("y", y)
+''',
+        "NFTest_repeat_int_exact_state",
+    )
+    repeat_output = _repeat_output(group)
+    items = list(repeat_output.repeat_items)
+    check(len(items) == 1 and items[0].name == "x", f"unexpected Int Repeat state items: {[item.name for item in items]}")
+    check(items[0].socket_type == "INT", f"Int Repeat item changed type: {items[0].socket_type}")
+    outputs = [
+        item for item in group.interface.items_tree
+        if getattr(item, "item_type", "") == "SOCKET" and getattr(item, "in_out", "") == "OUTPUT"
+    ]
+    check(len(outputs) == 1 and outputs[0].socket_type == "NodeSocketInt", "post-Repeat Int output did not remain Int")
+    integer_adds = [
+        node
+        for node in _nodes(group, "FunctionNodeIntegerMath")
+        if getattr(node, "operation", None) == "ADD"
+    ]
+    check(len(integer_adds) == 2, f"expected Int ADD inside and after Repeat, found {len(integer_adds)}")
+    bpy.data.node_groups.remove(group)
+
+
+def test_nested_repeat_enclosing_iteration_is_carried_inside_but_not_published_after_exit():
+    """Inner Repeat carries enclosing i internally while outer lexical Iteration survives inner exit."""
+    group = compile_group(
+        '''
+x = 0
+for i in repeat_range(2):
+    for j in repeat_range(2):
+        i = i + 10
+        x = x + i
+    x = x + i
+output("Geometry", point(vector(x, 0, 0)))
+''',
+        "NFTest_nested_repeat_internal_i_restore",
+    )
+    repeat_outputs = _nodes(group, "GeometryNodeRepeatOutput")
+    check(len(repeat_outputs) == 2, f"expected two Repeat Outputs, found {len(repeat_outputs)}")
+    state_sets = [[item.name for item in output.repeat_items] for output in repeat_outputs]
+    check(any("i" in names for names in state_sets), f"enclosing i was not a real inner Repeat state: {state_sets}")
+    check(
+        _evaluated_vertices(group, "NFTest_nested_repeat_internal_i_restore_eval") == [(63.0, 0.0, 0.0)],
+        "inner carried i did not restore the outer lexical Iteration after inner Repeat exit",
     )

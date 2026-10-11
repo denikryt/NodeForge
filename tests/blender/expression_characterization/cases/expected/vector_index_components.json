@@ -1,0 +1,121 @@
+{
+  "graph": {
+    "interface": [
+      {
+        "in_out": "OUTPUT",
+        "name": "X",
+        "socket_type": "NodeSocketFloat"
+      },
+      {
+        "in_out": "OUTPUT",
+        "name": "Y",
+        "socket_type": "NodeSocketFloat"
+      },
+      {
+        "in_out": "OUTPUT",
+        "name": "Z",
+        "socket_type": "NodeSocketFloat"
+      },
+      {
+        "default": [
+          1.0,
+          2.0,
+          3.0
+        ],
+        "in_out": "INPUT",
+        "name": "V",
+        "socket_type": "NodeSocketVector"
+      }
+    ],
+    "links": [
+      {
+        "from": [
+          "n0",
+          "Socket_0"
+        ],
+        "to": [
+          "n2",
+          "Vector"
+        ]
+      },
+      {
+        "from": [
+          "n0",
+          "Socket_0"
+        ],
+        "to": [
+          "n3",
+          "Vector"
+        ]
+      },
+      {
+        "from": [
+          "n0",
+          "Socket_0"
+        ],
+        "to": [
+          "n4",
+          "Vector"
+        ]
+      },
+      {
+        "from": [
+          "n2",
+          "X"
+        ],
+        "to": [
+          "n1",
+          "Socket_1"
+        ]
+      },
+      {
+        "from": [
+          "n3",
+          "Y"
+        ],
+        "to": [
+          "n1",
+          "Socket_2"
+        ]
+      },
+      {
+        "from": [
+          "n4",
+          "Z"
+        ],
+        "to": [
+          "n1",
+          "Socket_3"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "bl_idname": "NodeGroupInput",
+        "id": "n0",
+        "properties": {}
+      },
+      {
+        "bl_idname": "NodeGroupOutput",
+        "id": "n1",
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeSeparateXYZ",
+        "id": "n2",
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeSeparateXYZ",
+        "id": "n3",
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeSeparateXYZ",
+        "id": "n4",
+        "properties": {}
+      }
+    ]
+  },
+  "kind": "graph"
+}

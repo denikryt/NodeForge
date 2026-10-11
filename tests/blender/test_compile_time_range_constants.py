@@ -73,3 +73,28 @@ output("x", x)
     assert not [n for n in group.nodes if n.bl_idname == "GeometryNodeRepeatInput"]
     assert not [n for n in group.nodes if n.bl_idname == "GeometryNodeRepeatOutput"]
     assert not [n for n in group.nodes if n.bl_idname == "ShaderNodeMath"]
+
+
+
+def test_compile_time_range_is_late_consumed_after_runtime_if_join():
+    """Equal runtime-if exits restore CT knowledge for a later compile-time-owned range."""
+    source = """
+n = 2
+flag = input_bool("Flag")
+if flag:
+    n = 2
+else:
+    n = 2
+xs = range(n)
+parts = []
+for i in xs:
+    parts.append(cube(1))
+output("Geometry", join(parts))
+"""
+
+    group = compile_group(source, "NFTest_compile_time_range_late_after_runtime_if")
+
+    assert len([node for node in group.nodes if node.bl_idname == "GeometryNodeSwitch"]) == 1
+    assert len([node for node in group.nodes if node.bl_idname == "GeometryNodeMeshCube"]) == 2
+    assert not [node for node in group.nodes if node.bl_idname in {"GeometryNodeRepeatInput", "GeometryNodeRepeatOutput"}]
+    bpy.data.node_groups.remove(group)

@@ -1,0 +1,102 @@
+{
+  "graph": {
+    "interface": [
+      {
+        "in_out": "OUTPUT",
+        "name": "Geometry",
+        "socket_type": "NodeSocketGeometry"
+      }
+    ],
+    "links": [
+      {
+        "from": [
+          "n2",
+          "Value"
+        ],
+        "to": [
+          "n5",
+          "X"
+        ]
+      },
+      {
+        "from": [
+          "n2",
+          "Value"
+        ],
+        "to": [
+          "n5",
+          "Y"
+        ]
+      },
+      {
+        "from": [
+          "n2",
+          "Value"
+        ],
+        "to": [
+          "n5",
+          "Z"
+        ]
+      },
+      {
+        "from": [
+          "n4",
+          "Mesh"
+        ],
+        "to": [
+          "n1",
+          "Socket_0"
+        ]
+      },
+      {
+        "from": [
+          "n5",
+          "Vector"
+        ],
+        "to": [
+          "n4",
+          "Size"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "bl_idname": "NodeGroupInput",
+        "id": "n0",
+        "properties": {}
+      },
+      {
+        "bl_idname": "NodeGroupOutput",
+        "id": "n1",
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeValue",
+        "id": "n2",
+        "payload": {
+          "value": 1.0
+        },
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeValue",
+        "id": "n3",
+        "payload": {
+          "value": 2.0
+        },
+        "properties": {}
+      },
+      {
+        "bl_idname": "GeometryNodeMeshCube",
+        "id": "n4",
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeCombineXYZ",
+        "id": "n5",
+        "properties": {}
+      }
+    ]
+  },
+  "kind": "graph"
+}

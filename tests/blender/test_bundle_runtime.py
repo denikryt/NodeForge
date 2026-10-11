@@ -2,6 +2,8 @@
 
 from helpers import *
 
+from NodeForge import local_sources
+
 import json
 import math
 import tempfile
@@ -10,7 +12,7 @@ from pathlib import Path
 import bpy
 
 from NodeForge import compiler, packages
-from NodeForge.constants import TYPE_BUNDLE
+from NodeForge.semantic.constants import TYPE_BUNDLE
 
 
 def _one_node(group, bl_idname):
@@ -172,7 +174,7 @@ def test_bundle_packaged_library_function_round_trip():
         try:
             packages.install_package_directory(root, allow_python=False)
             group = compile_group('''
-from functions import bundle_identity
+from packages import bundle as bundle_pkg
 state = bundle(value=2.0)
 result = bundle_identity(state)
 value = bundle_get(result, "value", typ=Float)
@@ -190,7 +192,7 @@ output("Value", value)
 
 
 def test_bundle_local_catalog_round_trip():
-    local = library.ensure_local_catalog_dir()
+    local = local_sources.ensure_local_catalog_dir()
     source = local / "bundle_local_catalog_probe.nf"
     try:
         source.write_text(
@@ -338,7 +340,7 @@ output("State", state)
     group = compile_group(before, "NFTest_bundle_update_rollback")
     original_pointer = group.as_pointer()
     original_signature = _bundle_items(_one_node(group, "NodeCombineBundle"))
-    compiler._TEST_CUTOVER_FAIL_AFTER_RESET = True
+    blender_group_backend._TEST_CUTOVER_FAIL_AFTER_RESET = True
     try:
         try:
             compiler.update_expression_group(group, after)
@@ -347,7 +349,7 @@ output("State", state)
         else:
             raise AssertionError("injected Bundle cutover failure did not raise")
     finally:
-        compiler._TEST_CUTOVER_FAIL_AFTER_RESET = False
+        blender_group_backend._TEST_CUTOVER_FAIL_AFTER_RESET = False
     check(group.as_pointer() == original_pointer, "failed Bundle update replaced group identity")
     restored = _one_node(group, "NodeCombineBundle")
     check(_bundle_items(restored) == original_signature, f"failed Bundle update did not restore signature: {_bundle_items(restored)}")
@@ -366,3 +368,21 @@ def test_bundle_errors_are_controlled():
     )
     for index, (source, _label) in enumerate(cases):
         expect_compile_error(source, f"NFTest_bundle_error_{index}")
+
+
+def test_straight_line_bundle_body_uses_permanent_call_ir():
+    """Straight-line Bundle calls compile through the permanent typed Call IR route."""
+    group = compile_group(
+        '''
+path = input_string("Path", default="value")
+state = bundle(value=2.0)
+value = bundle_get(state, path, typ=Float)
+state = bundle_set(state, "value", value + 1.0)
+output("State", state)
+''',
+        "NFTest_bundle_semantic_body_ir",
+    )
+    check(len([node for node in group.nodes if node.bl_idname == "NodeCombineBundle"]) == 1, "Bundle IRBody combine topology changed")
+    check(len([node for node in group.nodes if node.bl_idname == "NodeGetBundleItem"]) == 1, "Bundle IRBody get topology changed")
+    check(len([node for node in group.nodes if node.bl_idname == "NodeStoreBundleItem"]) == 1, "Bundle IRBody set topology changed")
+    bpy.data.node_groups.remove(group)

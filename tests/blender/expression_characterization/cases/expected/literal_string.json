@@ -1,0 +1,44 @@
+{
+  "graph": {
+    "interface": [
+      {
+        "in_out": "OUTPUT",
+        "name": "Result",
+        "socket_type": "NodeSocketString"
+      }
+    ],
+    "links": [
+      {
+        "from": [
+          "n2",
+          "String"
+        ],
+        "to": [
+          "n1",
+          "Socket_0"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "bl_idname": "NodeGroupInput",
+        "id": "n0",
+        "properties": {}
+      },
+      {
+        "bl_idname": "NodeGroupOutput",
+        "id": "n1",
+        "properties": {}
+      },
+      {
+        "bl_idname": "FunctionNodeInputString",
+        "id": "n2",
+        "payload": {
+          "value": "text"
+        },
+        "properties": {}
+      }
+    ]
+  },
+  "kind": "graph"
+}

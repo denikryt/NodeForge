@@ -1,16 +1,27 @@
-"""Static contracts for the Local managed-tree and imported-folder ownership model."""
+"""Static contracts for Local managed-tree and imported-folder ownership."""
 
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-LIBRARY = (ROOT / "library.py").read_text(encoding="utf-8")
+LOCAL_SOURCES = (ROOT / "local_sources.py").read_text(encoding="utf-8")
+CATALOG = (ROOT / "catalog.py").read_text(encoding="utf-8")
 UI = (ROOT / "ui.py").read_text(encoding="utf-8")
 
 
 def test_imported_local_roots_are_stored_outside_addon_package_atomically():
-    assert 'path="nodeforge", create=True' in LIBRARY
-    assert 'return root / "local_sources.json"' in LIBRARY
-    assert "os.replace(temp_name, path)" in LIBRARY
+    """Positive: registry persistence remains user-owned and atomic."""
+    assert 'path="nodeforge", create=True' in LOCAL_SOURCES
+    assert 'return root / "local_sources.json"' in LOCAL_SOURCES
+    assert "os.replace(temp_name, path)" in LOCAL_SOURCES
+
+
+def test_catalog_does_not_own_local_persistent_path_lookup():
+    """Negative: pure catalog code cannot reach Blender user-resource Local paths."""
+    assert "bpy.utils.user_resource" not in CATALOG
+    assert "_default_local_catalog_dir" not in CATALOG
+    assert "ensure_local_catalog_dir" not in CATALOG
+    assert "from . import local_sources" not in CATALOG
+    assert "from .local_sources" not in CATALOG
 
 
 def test_local_ui_import_is_folder_only():
@@ -34,19 +45,18 @@ def test_local_ui_uses_ownership_explicit_destructive_actions():
 
 
 def test_managed_mutations_are_path_addressed_not_public_name_resolved():
-    start = LIBRARY.index("def delete_local_source")
-    end = LIBRARY.index("# Compatibility wrappers", start)
-    block = LIBRARY[start:end]
-    assert 'find_library_entry_record("local"' not in block
+    start = LOCAL_SOURCES.index("def delete_local_source")
+    block = LOCAL_SOURCES[start:]
+    assert 'find_local_entry_record("local"' not in block
     assert "_managed_local_target" in block
     assert "_resolve_owned_local_path" in block
     assert "os.replace" in block
 
 
 def test_imported_root_registration_rejects_overlap_but_not_duplicate_names():
-    start = LIBRARY.index("def link_local_source_folder")
-    end = LIBRARY.index("def local_source_files", start)
-    block = LIBRARY[start:end]
+    start = LOCAL_SOURCES.index("def link_local_source_folder")
+    end = LOCAL_SOURCES.index("def local_source_files", start)
+    block = LOCAL_SOURCES[start:end]
     assert "_paths_overlap(target, managed)" in block
     assert "_paths_overlap(target, existing)" in block
-    assert "_unique_records" not in block
+    assert "unique_records" not in block

@@ -1,0 +1,114 @@
+{
+  "graph": {
+    "interface": [
+      {
+        "in_out": "OUTPUT",
+        "name": "Result",
+        "socket_type": "NodeSocketVector"
+      },
+      {
+        "default": [
+          1.0,
+          2.0,
+          3.0
+        ],
+        "in_out": "INPUT",
+        "name": "V",
+        "socket_type": "NodeSocketVector"
+      },
+      {
+        "default": 2.0,
+        "in_out": "INPUT",
+        "name": "A",
+        "socket_type": "NodeSocketFloat"
+      }
+    ],
+    "links": [
+      {
+        "from": [
+          "n0",
+          "Socket_0"
+        ],
+        "to": [
+          "n4",
+          "Vector"
+        ]
+      },
+      {
+        "from": [
+          "n0",
+          "Socket_1"
+        ],
+        "to": [
+          "n3",
+          "Value_001"
+        ]
+      },
+      {
+        "from": [
+          "n2",
+          "Value"
+        ],
+        "to": [
+          "n3",
+          "Value"
+        ]
+      },
+      {
+        "from": [
+          "n3",
+          "Value"
+        ],
+        "to": [
+          "n4",
+          "Scale"
+        ]
+      },
+      {
+        "from": [
+          "n4",
+          "Vector"
+        ],
+        "to": [
+          "n1",
+          "Socket_2"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "bl_idname": "NodeGroupInput",
+        "id": "n0",
+        "properties": {}
+      },
+      {
+        "bl_idname": "NodeGroupOutput",
+        "id": "n1",
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeValue",
+        "id": "n2",
+        "payload": {
+          "value": 1.0
+        },
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeMath",
+        "id": "n3",
+        "properties": {
+          "operation": "DIVIDE"
+        }
+      },
+      {
+        "bl_idname": "ShaderNodeVectorMath",
+        "id": "n4",
+        "properties": {
+          "operation": "SCALE"
+        }
+      }
+    ]
+  },
+  "kind": "graph"
+}

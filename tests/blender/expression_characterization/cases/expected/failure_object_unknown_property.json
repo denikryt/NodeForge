@@ -1,0 +1,5 @@
+{
+  "exception": "CompileError",
+  "kind": "compile_error",
+  "message": "Object values support only .geometry, .location, .rotation and .scale"
+}

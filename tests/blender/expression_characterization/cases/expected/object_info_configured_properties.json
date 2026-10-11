@@ -1,0 +1,77 @@
+{
+  "graph": {
+    "interface": [
+      {
+        "in_out": "OUTPUT",
+        "name": "Geometry",
+        "socket_type": "NodeSocketGeometry"
+      },
+      {
+        "in_out": "OUTPUT",
+        "name": "Location",
+        "socket_type": "NodeSocketVector"
+      },
+      {
+        "default": null,
+        "in_out": "INPUT",
+        "name": "Source",
+        "socket_type": "NodeSocketObject"
+      }
+    ],
+    "links": [
+      {
+        "from": [
+          "n0",
+          "Socket_0"
+        ],
+        "to": [
+          "n2",
+          "Object"
+        ]
+      },
+      {
+        "from": [
+          "n2",
+          "Geometry"
+        ],
+        "to": [
+          "n1",
+          "Socket_1"
+        ]
+      },
+      {
+        "from": [
+          "n2",
+          "Location"
+        ],
+        "to": [
+          "n1",
+          "Socket_2"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "bl_idname": "NodeGroupInput",
+        "id": "n0",
+        "properties": {}
+      },
+      {
+        "bl_idname": "NodeGroupOutput",
+        "id": "n1",
+        "properties": {}
+      },
+      {
+        "bl_idname": "GeometryNodeObjectInfo",
+        "defaults": {
+          "As Instance": false
+        },
+        "id": "n2",
+        "properties": {
+          "transform_space": "RELATIVE"
+        }
+      }
+    ]
+  },
+  "kind": "graph"
+}

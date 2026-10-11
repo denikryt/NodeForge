@@ -1,8 +1,6 @@
 """Blender integration coverage for native NodeForge interface panels."""
 
 from helpers import *
-from NodeForge.values import make_value
-from NodeForge.constants import TYPE_FLOAT
 
 
 def _interface_inputs(group):
@@ -53,6 +51,7 @@ output("A", a)
     group = compile_group(source, "NFTest_panel_basic")
     panels = _interface_panels(group)
     check([panel.name for panel in panels] == ["Main"], f"unexpected panels: {[p.name for p in panels]}")
+    check(bool(panels[0].default_closed) is False, "omitted collapsed did not remain False")
     inputs = _interface_inputs(group)
     check(_parent_name(inputs["A"]) == "Main", "A is not parented to Main")
     check(_parent_name(inputs["B"]) == "Main", "B is not parented to Main")
@@ -87,18 +86,38 @@ output("Loose", loose)
     check(_panel_children(group, "First") == ["B", "A"], f"wrong First order: {_panel_children(group, 'First')}")
     check(_panel_children(group, "Second") == ["C"], "Second membership is wrong")
 
+    wrapper = bpy.data.node_groups.new("NFTest_panel_multiple_wrapper", "GeometryNodeTree")
+    group_node = wrapper.nodes.new("GeometryNodeGroup")
+    group_node.node_tree = group
+    physical_order = [socket.name for socket in group_node.inputs]
+    check(
+        physical_order == ["Loose", "B", "A", "C"],
+        f"panelized callable order mismatch: {physical_order}",
+    )
+
 
 def test_interface_panel_accepts_implicit_external_input():
     source = '''
 result = source_value * 2
+loose = input_float("Loose")
 panel([source_value], name="Inputs")
-output("Value", result)
+output("Value", result + loose)
 '''
     group = compile_group(source, "NFTest_panel_implicit")
     inputs = _interface_inputs(group)
     check("source_value" in inputs, "implicit external input was not created")
     check(_parent_name(inputs["source_value"]) == "Inputs", "implicit external input was not grouped")
+    check(_parent_name(inputs["Loose"]) == "", "explicit root input did not remain outside the panel")
     check("panel" not in inputs, "panel helper was incorrectly inferred as an implicit input")
+
+    wrapper = bpy.data.node_groups.new("NFTest_panel_implicit_wrapper", "GeometryNodeTree")
+    group_node = wrapper.nodes.new("GeometryNodeGroup")
+    group_node.node_tree = group
+    physical_order = [socket.name for socket in group_node.inputs]
+    check(
+        physical_order == ["Loose", "source_value"],
+        f"mixed root/panel callable order mismatch: {physical_order}",
+    )
 
 
 def test_interface_panel_rejects_invalid_members_and_arguments():
@@ -234,26 +253,6 @@ def test_interface_panel_duplicate_names_and_reserved_binding():
     _expect_message('panel = 1\noutput("x", 1)', "Cannot assign to panel", "NFTest_panel_reserved_binding")
 
 
-def test_interface_input_resolver_rejects_foreign_owner_even_on_identifier_collision():
-    current = bpy.data.node_groups.new("NFTest_panel_resolver_current", "GeometryNodeTree")
-    current_iface = current.interface.new_socket(name="Current", in_out="INPUT", socket_type="NodeSocketFloat")
-    current_input = current.nodes.new("NodeGroupInput")
-    current_socket = current_input.outputs["Current"]
-    comp = compiler.Compiler(current, current_input)
-    comp._register_interface_input(current_socket, current_iface)
-
-    foreign = bpy.data.node_groups.new("NFTest_panel_resolver_foreign", "GeometryNodeTree")
-    foreign.interface.new_socket(name="Foreign", in_out="INPUT", socket_type="NodeSocketFloat")
-    foreign_input = foreign.nodes.new("NodeGroupInput")
-    foreign_socket = foreign_input.outputs["Foreign"]
-    check(
-        current_socket.identifier == foreign_socket.identifier,
-        "resolver fixture did not produce the intended cross-owner identifier collision",
-    )
-    foreign_value = make_value(foreign_socket, TYPE_FLOAT)
-    check(comp.interface_input_for_value(foreign_value) is None, "foreign owner resolved through identifier collision")
-
-
 def test_copy_interface_preserves_nested_native_panel_hierarchy():
     source = bpy.data.node_groups.new("NFTest_panel_nested_source", "GeometryNodeTree")
     outer = source.interface.new_panel(name="Outer", description="outer description", default_closed=False)
@@ -269,7 +268,7 @@ def test_copy_interface_preserves_nested_native_panel_hierarchy():
     source.interface.new_socket(name="Result", in_out="OUTPUT", socket_type="NodeSocketFloat")
 
     destination = bpy.data.node_groups.new("NFTest_panel_nested_destination", "GeometryNodeTree")
-    compiler._copy_group_contents(source, destination)
+    blender_group_backend._copy_group_contents(source, destination)
 
     panels = {panel.name: panel for panel in _interface_panels(destination)}
     check(set(panels) == {"Outer", "Inner"}, f"nested copy panels missing: {set(panels)}")
@@ -285,3 +284,29 @@ def test_copy_interface_preserves_nested_native_panel_hierarchy():
     check(bool(panels["Inner"].default_closed) is True, "nested default_closed was not copied")
     inputs = _interface_inputs(destination)
     check(int(inputs["Nested"].default_value) == 7, "nested socket default was not copied")
+
+
+def test_interface_panel_accepts_exact_input_alias_and_rejects_switch_or_repeat_outputs():
+    """Frontend provenance follows physical Group Input identity and clears after control-flow materialization."""
+    alias_group = compile_group(
+        'x = input_float("X")\ny = x\npanel([y], name="Alias")\noutput("Y", y)',
+        "NFTest_panel_alias",
+    )
+    inputs = _interface_inputs(alias_group)
+    check(_parent_name(inputs["X"]) == "Alias", "exact input alias did not retain panel eligibility")
+    bpy.data.node_groups.remove(alias_group)
+
+    _expect_message(
+        'x = input_float("X")\nflag = input_bool("Flag")\n'
+        'if flag:\n    y = x\nelse:\n    y = x\n'
+        'panel([y], name="Bad")\noutput("Y", y)',
+        "panel() item y is not a group input",
+        "NFTest_panel_switch_alias",
+    )
+    _expect_message(
+        'x = input_float("X")\n'
+        'for i in repeat_range(1):\n    x = x\n'
+        'panel([x], name="Bad")\noutput("X", x)',
+        "panel() item x is not a group input",
+        "NFTest_panel_repeat_alias",
+    )

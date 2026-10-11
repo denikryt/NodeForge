@@ -1,0 +1,81 @@
+{
+  "graph": {
+    "interface": [
+      {
+        "in_out": "OUTPUT",
+        "name": "Result",
+        "socket_type": "NodeSocketBool"
+      }
+    ],
+    "links": [
+      {
+        "from": [
+          "n2",
+          "Value"
+        ],
+        "to": [
+          "n4",
+          "A"
+        ]
+      },
+      {
+        "from": [
+          "n3",
+          "Value"
+        ],
+        "to": [
+          "n4",
+          "B"
+        ]
+      },
+      {
+        "from": [
+          "n4",
+          "Result"
+        ],
+        "to": [
+          "n1",
+          "Socket_0"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "bl_idname": "NodeGroupInput",
+        "id": "n0",
+        "properties": {}
+      },
+      {
+        "bl_idname": "NodeGroupOutput",
+        "id": "n1",
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeValue",
+        "id": "n2",
+        "payload": {
+          "value": 1.0
+        },
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeValue",
+        "id": "n3",
+        "payload": {
+          "value": 0.0
+        },
+        "properties": {}
+      },
+      {
+        "bl_idname": "FunctionNodeCompare",
+        "id": "n4",
+        "properties": {
+          "data_type": "FLOAT",
+          "mode": "ELEMENT",
+          "operation": "NOT_EQUAL"
+        }
+      }
+    ]
+  },
+  "kind": "graph"
+}

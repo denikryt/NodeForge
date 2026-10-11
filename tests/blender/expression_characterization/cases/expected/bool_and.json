@@ -1,0 +1,75 @@
+{
+  "graph": {
+    "interface": [
+      {
+        "in_out": "OUTPUT",
+        "name": "Result",
+        "socket_type": "NodeSocketBool"
+      },
+      {
+        "default": true,
+        "in_out": "INPUT",
+        "name": "A",
+        "socket_type": "NodeSocketBool"
+      },
+      {
+        "default": false,
+        "in_out": "INPUT",
+        "name": "B",
+        "socket_type": "NodeSocketBool"
+      }
+    ],
+    "links": [
+      {
+        "from": [
+          "n0",
+          "Socket_0"
+        ],
+        "to": [
+          "n2",
+          "Boolean"
+        ]
+      },
+      {
+        "from": [
+          "n0",
+          "Socket_1"
+        ],
+        "to": [
+          "n2",
+          "Boolean_001"
+        ]
+      },
+      {
+        "from": [
+          "n2",
+          "Boolean"
+        ],
+        "to": [
+          "n1",
+          "Socket_2"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "bl_idname": "NodeGroupInput",
+        "id": "n0",
+        "properties": {}
+      },
+      {
+        "bl_idname": "NodeGroupOutput",
+        "id": "n1",
+        "properties": {}
+      },
+      {
+        "bl_idname": "FunctionNodeBooleanMath",
+        "id": "n2",
+        "properties": {
+          "operation": "AND"
+        }
+      }
+    ]
+  },
+  "kind": "graph"
+}

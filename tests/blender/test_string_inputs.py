@@ -7,8 +7,8 @@ import tempfile
 from pathlib import Path
 
 from NodeForge import packages
-from NodeForge.constants import TYPE_STRING
-from NodeForge.interface import _get_group_input_defaults
+from NodeForge.semantic.constants import TYPE_STRING
+from NodeForge.blender.interface import _get_group_input_defaults
 
 
 def _one_node(group, bl_idname):
@@ -52,7 +52,10 @@ output("Literal", literal)
     check(iface.socket_type == "NodeSocketString", "input_string did not create NodeSocketString")
     check(iface.default_value == "Weight_A", f"input_string default mismatch: {iface.default_value!r}")
     defaults = _get_group_input_defaults(group)
-    check(defaults["Attribute"] == {"type": TYPE_STRING, "default": "Weight_A"}, f"stored String default mismatch: {defaults}")
+    default_key = ("Attribute", "NodeSocketString", 0)
+    check(default_key in defaults, f"stored String default key mismatch: {defaults}")
+    check(defaults[default_key]["nf_type"] == "STRING", f"stored String type mismatch: {defaults}")
+    check(defaults[default_key]["default"] == "Weight_A", f"stored String default mismatch: {defaults}")
     check(_interface_socket(group, "Runtime", "OUTPUT").socket_type == "NodeSocketString", "runtime String output type mismatch")
     check(_interface_socket(group, "Literal", "OUTPUT").socket_type == "NodeSocketString", "literal String output type mismatch")
     string_nodes = [node for node in group.nodes if node.bl_idname == "FunctionNodeInputString"]
@@ -171,7 +174,7 @@ def test_packaged_library_function_accepts_runtime_and_constant_string_arguments
         try:
             packages.install_package_directory(root, allow_python=False)
             group = compile_group('''
-from functions import string_identity
+from packages import string as string_pkg
 source = input_string("Source", default="Weight_A")
 runtime = string_identity(source)
 literal = string_identity("Weight_B")
@@ -199,15 +202,11 @@ def test_string_default_update_preserves_override_and_applies_new_default():
     group_node.node_tree = group
     wrapper.links.new(group_node.outputs["Name"], group_output.inputs["Name"])
 
-    state = compiler._capture_node_external_state(wrapper, group_node)
     compiler.update_expression_group(group, after)
-    compiler._restore_node_external_state(wrapper, group_node, state)
     check(group_node.inputs["Name"].default_value == "B", "new String script default did not reach non-overridden instance")
 
     group_node.inputs["Name"].default_value = "User"
-    state = compiler._capture_node_external_state(wrapper, group_node)
     compiler.update_expression_group(group, before)
-    compiler._restore_node_external_state(wrapper, group_node, state)
     check(group_node.inputs["Name"].default_value == "User", "String user override was not preserved across update")
 
 

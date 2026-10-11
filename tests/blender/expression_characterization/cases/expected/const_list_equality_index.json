@@ -1,0 +1,5 @@
+{
+  "exception": "CompileError",
+  "kind": "compile_error",
+  "message": "array/vector indexing currently requires a compile-time integer index"
+}

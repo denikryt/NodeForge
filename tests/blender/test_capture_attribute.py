@@ -23,6 +23,12 @@ output("Vector", captured_vector)
     check(len(nodes) == 4, f"expected 4 Capture Attribute nodes, got {len(nodes)}")
     data_types = [node.capture_items[0].data_type for node in nodes]
     check(data_types == ["FLOAT", "INT", "BOOLEAN", "FLOAT_VECTOR"], f"unexpected capture data types: {data_types}")
+    for node in nodes:
+        selection = node.inputs.get("Selection")
+        check(selection is not None, "Capture Attribute Selection input missing")
+        check(node.domain == "POINT", "omitted capture domain did not remain POINT")
+        check(not selection.is_linked, "omitted Capture Attribute selection unexpectedly linked")
+        check(bool(selection.default_value) is True, "omitted Capture Attribute selection is not explicitly True")
 
 
 def test_capture_attribute_rejects_color_until_nodeforge_has_color_type():
@@ -67,3 +73,17 @@ for i in repeat_range(iterations):
 output("Geometry", result)
 ''', "NFTest_local_geometry_helper_repeat_output_direction")
     check(any(node.bl_idname == "GeometryNodeRepeatOutput" for node in group.nodes), "Repeat Zone output missing")
+
+
+def test_store_named_attribute_omitted_selection_is_explicit_select_all():
+    group = compile_group('''
+geo = grid(2, 2)
+geo = store_named_attribute(geo, "weight", position().x)
+output("Geometry", geo)
+''', "NFTest_store_selection_default")
+    nodes = [node for node in group.nodes if node.bl_idname == "GeometryNodeStoreNamedAttribute"]
+    check(len(nodes) == 1, f"expected one Store Named Attribute node, got {len(nodes)}")
+    selection = nodes[0].inputs.get("Selection")
+    check(selection is not None, "Store Named Attribute Selection input missing")
+    check(not selection.is_linked, "omitted Store selection unexpectedly linked")
+    check(bool(selection.default_value) is True, "omitted Store selection is not explicitly True")
