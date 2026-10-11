@@ -10,6 +10,7 @@ from .compiler import (
     create_expression_group,
     update_expression_group,
     create_library_catalog_group,
+    create_local_source_group,
     create_package_function_group,
     update_library_catalog_group,
 )
@@ -27,6 +28,7 @@ from .local_sources import (
     unlink_local_source_file,
     ensure_local_catalog_dir,
     create_local_folder,
+    validate_new_local_name,
     delete_local_folder,
     save_local_source,
     delete_local_source,
@@ -623,7 +625,11 @@ class NODEFORGE_OT_create_function_group(Operator):
             if self.namespace == "functions":
                 group = create_package_function_group(item.package_id, item.name)
             else:
-                group = create_library_catalog_group(self.namespace, item.name)
+                group = (
+                    create_local_source_group(item.path)
+                    if self.namespace == "local"
+                    else create_library_catalog_group(self.namespace, item.name)
+                )
         except Exception as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
@@ -851,8 +857,9 @@ class NODEFORGE_OT_create_local_folder(Operator):
         if current is None:
             self.report({'ERROR'}, "External Local folders are read-only")
             return {'CANCELLED'}
-        root = ensure_local_catalog_dir().resolve()
         try:
+            validate_new_local_name(self.folder_name, directory=True)
+            root = ensure_local_catalog_dir().resolve()
             rel_parent = current.relative_to(root)
             folder_path = str(rel_parent / self.folder_name) if rel_parent.parts else self.folder_name
             created = create_local_folder(folder_path)
@@ -904,7 +911,7 @@ class NODEFORGE_OT_save_to_local(Operator):
                 self.report({'ERROR'}, "The selected Text Block is empty")
                 return {'CANCELLED'}
             rel = current.relative_to(root)
-            folder_path = str(rel).replace("\\", "/") if rel.parts else ""
+            folder_path = str(rel) if rel.parts else ""
             path = save_local_source(self.script_name, source, folder_path=folder_path, overwrite=self.overwrite)
             props.local_script_name = self.script_name
             props.local_overwrite = self.overwrite

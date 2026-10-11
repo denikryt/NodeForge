@@ -30,6 +30,7 @@ from .call_resolution import (
     non_callable_source_binding_error,
     package_candidates_for_unqualified,
     resolve_package_callable,
+    resolve_local_callable,
     resolve_simple_callable,
 )
 from .builtin_calls import (
@@ -1120,6 +1121,8 @@ def analyze_expression(expr, environment):
         if isinstance(node, ast.Name):
             if node.id in TYPE_TOKEN_NAMES:
                 raise CompileError(f"Type token {node.id} may only be used in node(...) type declarations")
+            if node.id in environment.callable_environment.local_namespaces and node.id not in environment.runtime_bindings and node.id not in environment.const_eval_values:
+                raise CompileError(f"Local directory namespace {node.id!r} cannot be used as a value")
             if node.id in environment.callable_environment.package_namespaces:
                 raise CompileError(f"Package namespace {node.id!r} cannot be used as a value")
             if node.id in environment.runtime_bindings:
@@ -1510,7 +1513,28 @@ def analyze_expression(expr, environment):
 
         if isinstance(node, ast.Call):
             if isinstance(node.func, ast.Attribute):
+                receiver_root = node.func.value
+                while isinstance(receiver_root, ast.Attribute):
+                    receiver_root = receiver_root.value
                 if (
+                    isinstance(node.func.value, ast.Attribute)
+                    and isinstance(receiver_root, ast.Name)
+                    and receiver_root.id in environment.callable_environment.local_namespaces
+                    and receiver_root.id not in environment.runtime_bindings
+                    and receiver_root.id not in environment.const_eval_values
+                ):
+                    raise CompileError("Nested Local namespace calls are unsupported; use a direct nested import or an explicit directory alias")
+                if (
+                    isinstance(node.func.value, ast.Name)
+                    and node.func.value.id in environment.callable_environment.local_namespaces
+                    and node.func.value.id not in environment.runtime_bindings
+                    and node.func.value.id not in environment.const_eval_values
+                ):
+                    alias = node.func.value.id
+                    name = f"{alias}.{node.func.attr}"
+                    resolved = resolve_local_callable(alias, node.func.attr, environment.callable_environment)
+                    cleaned_call, modifiers = extract_function_call_modifiers(node, name, environment.const_eval_values)
+                elif (
                     isinstance(node.func.value, ast.Name)
                     and node.func.value.id in environment.callable_environment.package_namespaces
                 ):
@@ -1793,6 +1817,7 @@ def analyze_expression(expr, environment):
                     local_functions=environment.callable_environment.local_functions,
                     imported_library_functions=environment.callable_environment.imported_functions,
                     package_namespaces=inherited_package_namespaces,
+                    local_namespaces={alias: binding for alias, binding in environment.callable_environment.local_namespaces.items() if alias not in local_names},
                     helper_namespace=environment.helper_namespace,
                     return_shape=return_shape,
                 )
@@ -1889,7 +1914,8 @@ def analyze_expression(expr, environment):
                     if modifiers.unique_was_explicit:
                         raise unsupported_unique(name)
                     materialization = None
-                    owner_scope = function_group_owner_scope("LIBRARY", "local", "", function_id.name)
+                    from ..function_instances import direct_library_owner_scope_for_id
+                    owner_scope = direct_library_owner_scope_for_id(function_id)
                     identity = GroupCompilationIdentity(
                         None, owner_scope, owner_scope, function_id.stable_key()
                     )

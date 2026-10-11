@@ -102,16 +102,19 @@ class FunctionId:
     package_id: str = ""
     name: str = ""
     signature: str = ""
+    source_origin: str = ""
 
     def __post_init__(self):
         """Reject mixed field combinations outside the supported identity forms."""
         if self.kind == _LOCAL_FUNCTION_KIND:
-            if not self.definition_owner or not self.name or self.namespace or self.package_id:
+            if not self.definition_owner or not self.name or self.namespace or self.package_id or self.source_origin:
                 raise ValueError("Invalid local FunctionId")
             return
         if self.kind == _LIBRARY_FUNCTION_KIND:
             if not self.namespace or not self.package_id or not self.name or self.definition_owner or self.signature:
                 raise ValueError("Invalid library FunctionId")
+            if self.source_origin and self.namespace != "local":
+                raise ValueError("Only Local library identity may carry source_origin")
             return
         raise ValueError(f"Unsupported FunctionId kind: {self.kind!r}")
 
@@ -124,12 +127,13 @@ class FunctionId:
                 "name": self.name,
                 "signature": self.signature,
             })
-        return _canonical_json({
-            "kind": self.kind,
-            "namespace": self.namespace,
-            "package_id": self.package_id,
-            "name": self.name,
-        })
+        fields = {
+            "kind": self.kind, "namespace": self.namespace,
+            "package_id": self.package_id, "name": self.name,
+        }
+        if self.source_origin:
+            fields["source_origin"] = self.source_origin
+        return _canonical_json(fields)
 
 
 @dataclass(frozen=True)
@@ -168,6 +172,27 @@ def library_function_id(namespace: str, package_id: str | None, name: str) -> Fu
     )
 
 
+def library_function_id_for_record(record) -> FunctionId:
+    """Construct imported identity with mandatory canonical origin for Local sources."""
+    if record.namespace != "local":
+        return library_function_id(record.namespace, record.package_id, record.name)
+    import os
+    from .catalog import is_public_local_name
+
+    origin = getattr(record, "source_origin", "")
+    if (
+        not origin
+        or record.source_path is None
+        or not record.source_path.is_absolute()
+        or origin != os.path.normcase(os.path.normpath(str(record.source_path)))
+        or not is_public_local_name(record.name)
+    ):
+        raise ValueError("Local FunctionId requires a canonical source record")
+    return FunctionId(kind="LIBRARY", namespace="local",
+                      package_id=normalize_library_package_id(record.package_id),
+                      name=record.name, source_origin=origin)
+
+
 __all__ = [
     "BindingId",
     "CallSiteId",
@@ -177,6 +202,7 @@ __all__ = [
     "InputDeclarationId",
     "InterfaceInputOrigin",
     "library_function_id",
+    "library_function_id_for_record",
     "local_function_id",
     "normalize_library_package_id",
 ]

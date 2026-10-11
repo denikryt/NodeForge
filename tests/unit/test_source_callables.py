@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import os
 
 import pytest
 
@@ -22,6 +23,7 @@ from NodeForge.compiler_identities import (
     GroupCompilationIdentity,
     InputDeclarationId,
     library_function_id,
+    library_function_id_for_record,
 )
 from NodeForge.semantic.residualization import _preprocess_compile_time
 from NodeForge.errors import CompileError
@@ -46,6 +48,7 @@ class _Record:
     package_id: str = "vendor.pkg"
     package_version: str = "1.0.0"
     module_path: Path | None = None
+    source_origin: str = ""
 
 
 def _environment(*, functions=None, examples=None, local=None):
@@ -371,13 +374,15 @@ def test_local_catalog_cache_miss_supplies_real_fingerprint_inputs_and_hit_reuse
             return group
 
     source = 'x = input_float("X")\noutput(x)\n'
-    function_id = library_function_id("local", "", "demo")
-    owner = function_group_owner_scope("LIBRARY", "local", "", "demo")
+    from NodeForge.catalog import _path_key
+    from NodeForge.function_instances import direct_library_owner_scope_for_id
+    record = _Record("local", "demo", Path("demo.nf").resolve(), package_id="", package_version="", source_origin=_path_key("demo.nf"))
+    function_id = library_function_id_for_record(record)
+    owner = direct_library_owner_scope_for_id(function_id)
     prepared = _prepared_group(
         source,
         GroupCompilationIdentity(None, owner, owner, function_id.stable_key()),
     )
-    record = _Record("local", "demo", Path("demo.nf"), package_id="", package_version="")
     spec = LibraryFunctionMaterializationSpec(
         namespace="local",
         name="demo",
@@ -561,7 +566,7 @@ def test_pure_source_catalog_namespaces_route_through_source_function_ir(tmp_pat
     source_path = tmp_path / f"{namespace}_demo.nf"
     source_path.write_text('x = input_float("X", default=1.0)\noutput(x)\n', encoding="utf-8")
     package_id = "" if namespace == "local" else "vendor.pkg"
-    record = _Record(namespace, "demo", source_path, package_id=package_id)
+    record = _Record(namespace, "demo", source_path, package_id=package_id, source_origin=os.path.normcase(str(source_path)) if namespace == "local" else "")
     catalogs = {"functions": {}, "examples": {}, "local": {}}
     catalogs[namespace] = {"demo": record}
     environment = _environment(**catalogs)

@@ -4,6 +4,7 @@ import json
 import sys
 import types
 from pathlib import Path
+import os
 
 import pytest
 
@@ -153,9 +154,13 @@ def reload_environment(tmp_path, namespace, *, owner_present=True):
     path = tmp_path / 'foo.nf'
     path.write_text('output(value=1)\n')
     record = LibraryEntryRecord(namespace, 'foo', 'source', path, source_path=path,
-                                package_id='vendor.old', package_version='1.0.0')
+                                package_id='vendor.old', package_version='1.0.0',
+                                source_origin=os.path.normcase(str(path)) if namespace == 'local' else '')
     catalogs = {n: ResolvedCatalog(n, {'foo': record} if n == namespace and n != 'functions' and owner_present else {})
                 for n in ('functions', 'examples', 'local')}
+    if namespace == 'local':
+        from NodeForge.local_index import LocalSourceIndex
+        catalogs['local'] = ResolvedCatalog('local', {}, local_index=LocalSourceIndex.from_discovery((record,) if owner_present else ()))
     owners = {}
     if namespace == 'functions' and owner_present:
         owners['vendor.old'] = ResolvedPackageNamespace('vendor.old', 'old', 'Old', '1.0.0', {
@@ -171,6 +176,8 @@ def test_reload_record_and_backend_share_one_snapshot(tmp_path, monkeypatch, nam
     environment, record = reload_environment(tmp_path, namespace, owner_present=owner_present)
     group = {'nodeforge_library_namespace': namespace, 'nodeforge_library_name': 'foo',
              'nodeforge_package_id': 'vendor.old'}
+    if namespace == 'local':
+        group['nodeforge_library_source_origin'] = record.source_origin
     resolved = []
     def resolve_once():
         resolved.append(environment)

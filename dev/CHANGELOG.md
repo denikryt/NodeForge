@@ -404,3 +404,19 @@ lifecycle.
 - Removed verified dead internal helpers, obsolete Extension-v1 compatibility state, and unused generated-resource/test-only wrappers left after the module reorganization.
 - Consolidated duplicate semantic reserved-name and keyword-normalization authorities, keeping existing diagnostics and behavior while reducing parallel implementations.
 - Removed redundant package snapshot/reload regression modules and refreshed release-coupled extension compatibility fixtures for the cleanup release.
+
+## 0.66.0
+
+- Added Local directory imports and explicit directory aliases using physical directory names, with localized ambiguity errors and verified qualified-import suggestions.
+- Keyed Local callable identity, source preparation, materialization, freshness and Reload from Source by canonical physical origin; Local browser insertion selects the exact source path.
+- Added strict new-name validation, preserved flat discovery under existing non-importable directories, and included empty directory conflicts in immutable discovery snapshots.
+- Added Local index/frontend/provenance regressions and native Blender integration tests, preserving package/Examples contracts and registry v1.
+
+## 0.66.1
+
+- Fixed Local source calls during Blender lowering by using the canonical source owner already selected during semantic preparation.
+- Updated qualified Local import and reload metadata regressions; verified native Blender compilation and geometry evaluation.
+
+## 0.66.2
+
+- Clarified the runtime-folding comment to describe Geometry Nodes computation directly.

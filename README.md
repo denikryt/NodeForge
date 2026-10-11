@@ -95,7 +95,32 @@ value = math.sin(angle)
 output("Value", value)
 ```
 
-Reusable Local scripts can be imported with `from local import ...`.
+Reusable Local scripts use file stems as callable names. A flat import selects a name that belongs to one physical source file:
+
+```python
+from local import erosion
+output(erosion(...))
+```
+
+Directories provide qualified imports using their exact physical names. For `Local/terrain/noise.nf` and `Local/procedural/noise.nf`, select the source explicitly:
+
+```python
+from local.terrain import noise
+from local.procedural import noise as procedural_noise
+from local import terrain as t
+
+output(noise(...) + procedural_noise(...) + t.noise(...))
+```
+
+Nested directories use paths such as `from local.terrain.filters import blur`. A directory alias supports one callable member, such as `t.noise(...)`; import a nested directory explicitly to call its members. Directory aliases are compile-time bindings.
+
+An external folder added with **Add Folder** uses its physical basename as its namespace. Its browser label is for display. Linked individual files participate in flat imports. The Local browser displays each physical source separately and **Add Library Node Group** uses the selected source path.
+
+When multiple files share a stem, that flat import reports the candidates and qualified imports that uniquely select them. Other unique imports remain available. `from local import *` imports flat functions and requires every flat name to be unambiguous. Directory prefixes require one physical directory at each position, including empty directories. A file and directory at the same imported member position produce an ambiguity error.
+
+**New Folder** and **Save** require an entire public ASCII identifier, such as `terrain_v2`, excluding Python reserved keywords. Enter the exact desired name. Existing folders containing spaces, keywords, or other invalid import components remain browsable; their validly named source files are available through unique flat imports. Files with invalid stems remain on disk and are excluded from callable discovery. Python reports a syntax error for imports containing spaces or reserved keywords.
+
+Local groups retain their canonical source path for **Reload from Source**. Reload uses that exact source. Moving the file changes its identity. For an older group without source-path provenance, select its source in the Local browser and create a new group.
 
 ## Coverage
 
@@ -105,7 +130,7 @@ See the [Geometry Nodes coverage](https://denikryt.github.io/NodeForgeDocs/lates
 
 ### How the compiler works
 
-Internally, NodeForge parses the source, resolves its types and operations, builds a semantic intermediate representation, and lowers that representation into Blender nodes. The compiler owns the translation from source-level logic to the final `GeometryNodeTree`, keeping the language-facing part of the system separate from Blender graph construction.
+Internally, NodeForge parses the source, resolves its types and operations, builds a semantic intermediate representation, and lowers that representation into Blender nodes. Each compilation captures one immutable Local index of canonical source paths and directory positions, including empty directories. Import resolution selects exact physical owners from that snapshot before typed calls reach Blender. The compiler owns the translation from source-level logic to the final `GeometryNodeTree`, keeping the language-facing part of the system separate from Blender graph construction.
 
 ```text
 NodeForge source

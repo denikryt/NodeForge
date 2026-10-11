@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import json
+import keyword
 import os
 import re
 import tempfile
@@ -28,12 +29,12 @@ def _local_sources_registry_path() -> Path:
 
 def _canonical_path(path: Path | str) -> Path:
     """Return a normalized absolute filesystem path without requiring it to exist."""
-    return Path(path).expanduser().resolve(strict=False)
+    return catalog._canonical_path(path)
 
 
 def _path_key(path: Path | str) -> str:
     """Return a platform-normalized key used to compare configured source roots."""
-    return os.path.normcase(str(_canonical_path(path)))
+    return catalog._path_key(path)
 
 
 def _paths_overlap(first: Path | str, second: Path | str) -> bool:
@@ -233,22 +234,24 @@ def _catalog_input_paths() -> tuple[tuple[Path, ...], tuple[Path, ...]]:
     return roots, files
 
 
-def local_candidate_records() -> tuple[catalog.LibraryEntryRecord, ...]:
-    """Return raw Local catalog records from the current filesystem snapshot."""
+def local_source_index():
+    """Build one immutable current Local index for live browser/direct operations."""
+    from .local_index import LocalSourceIndex
+
     roots, files = _catalog_input_paths()
-    return tuple(
-        catalog.candidate_records_from_inputs(
-            "local", package_roots=(), local_roots=roots, local_files=files
-        )
-    )
+    return LocalSourceIndex.from_discovery(*catalog.discover_local_sources(roots, files))
+
+
+def local_candidate_records() -> tuple[catalog.LibraryEntryRecord, ...]:
+    """Return all distinct physical records from one current Local snapshot."""
+    return local_source_index().all_records()
 
 
 
 def find_local_entry_record(name: str) -> catalog.LibraryEntryRecord | None:
     """Return one current Local source record by public name."""
     catalog._validate_public_entry_name(name, "local library entry")
-    entries = catalog.unique_records_from_candidates("local", local_candidate_records())
-    return entries.get(name)
+    return local_source_index().find_flat_function(name)
 
 
 
@@ -364,24 +367,44 @@ def ensure_local_catalog_dir() -> Path:
 
 def sanitize_library_entry_name(raw: str) -> str:
     """Validate a user-facing public script name for the local catalog."""
-    name = (raw or "").strip()
-    return catalog._validate_public_entry_name(name, "Local script")
+    return validate_new_local_name(raw, directory=False)
+
+
+def validate_new_local_name(raw: str, *, directory: bool) -> str:
+    """Validate a new leaf exactly as entered before any filesystem mutation."""
+    name = raw or ""
+    if " " in name:
+        if directory:
+            raise CompileError("Directory names containing spaces are not supported.\nRename the directory using a valid identifier.")
+        raise CompileError("Source filenames containing spaces are not supported.\nRename the source using a valid identifier.")
+    if keyword.iskeyword(name):
+        raise CompileError(f"Name {name!r} is a reserved Python keyword. Use a valid non-keyword identifier.")
+    if not catalog.is_public_local_name(name):
+        raise CompileError("Local name must be an entire valid public ASCII identifier")
+    return name
 
 
 def sanitize_local_folder_path(raw: str) -> tuple[str, ...]:
-    """Validate an optional slash-separated local folder path."""
-    raw = (raw or "").strip().replace("\\", "/")
+    """Preserve physical parent spelling and validate each new path component."""
+    raw = raw or ""
     if not raw:
         return ()
-    p = Path(raw)
-    if p.is_absolute() or re.match(r"^[A-Za-z]:", raw):
+    if Path(raw).is_absolute() or re.match(r"^[A-Za-z]:", raw):
         raise CompileError("Local folder path must be relative")
-    parts = tuple(part for part in raw.split("/") if part)
-    if not parts or any(part in {".", ".."} for part in parts):
+    # Only the platform's separator denotes physical components; no rewriting.
+    parts = tuple(raw.split(os.sep))
+    if any(part in {"", ".", ".."} for part in parts):
         raise CompileError("Local folder path contains an invalid segment")
+    root = _canonical_path(_default_local_catalog_dir())
+    current = root
     for part in parts:
-        if not catalog._is_public_function_name(part):
-            raise CompileError("Local folder path segments must be valid public names")
+        current = current / part
+        resolved = _resolve_owned_local_path(current, root=root)
+        if current.exists() or current.is_symlink():
+            if not resolved.is_dir():
+                raise CompileError(f"Local folder path is not a directory: {current}")
+        else:
+            validate_new_local_name(part, directory=True)
     return parts
 
 
@@ -471,7 +494,7 @@ def save_local_source(name: str, source: str, *, folder_path: str = "", overwrit
         raise CompileError("Local script source is empty")
     folder_parts = sanitize_local_folder_path(folder_path)
     root = _canonical_path(ensure_local_catalog_dir())
-    folder = create_local_folder("/".join(folder_parts)) if folder_parts else root
+    folder = create_local_folder(os.sep.join(folder_parts)) if folder_parts else root
     folder = _resolve_owned_local_path(folder, root=root)
     target_raw = folder / f"{public_name}.nf"
     target = _resolve_owned_local_path(target_raw, root=root)

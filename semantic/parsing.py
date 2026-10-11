@@ -116,12 +116,14 @@ def _parse_source(source: str):
                     "The 'functions' source namespace was removed; import the owning package with "
                     "'from packages import <package>'"
                 )
-            if stmt.module not in {"packages", "examples", "local"}:
+            if stmt.module not in {"packages", "examples", "local"} and not (stmt.module or "").startswith("local."):
                 raise CompileError("Only 'from packages/examples/local import name' imports are supported")
             if not stmt.names:
                 raise CompileError("Import statement must name at least one entry")
             for alias in stmt.names:
                 if alias.name == "*":
+                    if stmt.module.startswith("local."):
+                        raise CompileError("Directory Local star imports are not supported; import members explicitly")
                     if stmt.module == "packages":
                         raise CompileError(
                             "from packages import * is not supported; import package namespaces explicitly"

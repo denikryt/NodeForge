@@ -71,6 +71,17 @@ def direct_library_owner_scope(namespace: str, package_id: str | None, name: str
     )
 
 
+def direct_library_owner_scope_for_id(function_id) -> str:
+    """Use canonical Local origin for physical ownership; preserve other owner keys."""
+    if function_id.kind != "LIBRARY":
+        raise ValueError("Direct library owner requires a library FunctionId")
+    if function_id.namespace == "local":
+        if not function_id.source_origin:
+            raise ValueError("Local owner requires source origin")
+        return function_group_owner_scope("LIBRARY", "local", "", function_id.name, function_id.source_origin)
+    return direct_library_owner_scope(function_id.namespace, function_id.package_id, function_id.name)
+
+
 def instance_key_for(call_site: CallSiteId) -> str:
     """Return the existing deterministic compact key for one canonical call site."""
 
@@ -281,6 +292,7 @@ __all__ = [
     "FunctionCompilationTrace",
     "function_group_owner_scope",
     "direct_library_owner_scope",
+    "direct_library_owner_scope_for_id",
     "function_materialization_owner_scope",
     "instance_key_for",
     "instance_key_for_materialization",

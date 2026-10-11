@@ -18,7 +18,7 @@ from ..compiler_identities import FunctionId
 from ..semantic.ir import IRFunctionMaterialization
 from ..semantic.group import SemanticGroupCompilation
 from ..function_instances import (
-    direct_library_owner_scope,
+    direct_library_owner_scope_for_id,
     function_materialization_owner_scope,
     instance_key_for_materialization,
     stamp_function_metadata,
@@ -209,11 +209,7 @@ class FunctionMaterializer:
         if materialization is not None:
             owner_scope = function_materialization_owner_scope(materialization)
         else:
-            owner_scope = direct_library_owner_scope(
-                namespace,
-                function_id.package_id,
-                function_id.name,
-            )
+            owner_scope = direct_library_owner_scope_for_id(function_id)
         if spec.prepared_compilation.identity.owner_scope != owner_scope:
             raise CompileError("Internal error: prepared library callable owner does not match materialization")
         cache_key = ("library", function_id, instance_key or "SHARED")
@@ -277,7 +273,7 @@ class FunctionMaterializer:
         context: FunctionMaterializationContext | None,
     ):
         """Materialize one build-local Local catalog child with real freshness metadata."""
-        local_owner = direct_library_owner_scope("local", spec.function_id.package_id, spec.name)
+        local_owner = direct_library_owner_scope_for_id(spec.function_id)
         if spec.prepared_compilation.identity.owner_scope != local_owner:
             raise CompileError("Internal error: prepared Local catalog owner does not match physical policy")
         transaction = context.function_group_transaction if context is not None else None
@@ -296,6 +292,7 @@ class FunctionMaterializer:
         own_inputs = {
             "kind": "library",
             "namespace": "local",
+            "source_origin": spec.function_id.source_origin,
             "package_id": spec.function_id.package_id,
             "package_version": getattr(spec.record, "package_version", "") or "",
             "name": spec.name,
@@ -336,11 +333,7 @@ class FunctionMaterializer:
     def update_library_group(self, spec: LibraryFunctionUpdateSpec):
         """Update one provenance-validated catalog root from prepared semantics."""
         stable_function_id = spec.function_id.stable_key()
-        expected_owner_scope = direct_library_owner_scope(
-            spec.namespace,
-            spec.function_id.package_id,
-            spec.function_id.name,
-        )
+        expected_owner_scope = direct_library_owner_scope_for_id(spec.function_id)
         expected_definition_owner = (
             expected_owner_scope if spec.namespace == "local" else stable_function_id
         )
@@ -358,6 +351,7 @@ class FunctionMaterializer:
             function_compilation_inputs={
                 "kind": "library-root",
                 "namespace": spec.namespace,
+                **({"source_origin": spec.function_id.source_origin} if spec.namespace == "local" else {}),
                 "package_id": spec.function_id.package_id,
                 "package_version": getattr(spec.record, "package_version", "") or "",
                 "name": spec.name,

@@ -9,7 +9,7 @@ import bpy
 
 from ..errors import CompileError
 from .group_authority import is_authority_ineligible_group
-from ..compiler_identities import CORE_PACKAGE_ID, FunctionId, GroupCompilationIdentity, library_function_id, normalize_library_package_id
+from ..compiler_identities import CORE_PACKAGE_ID, FunctionId, GroupCompilationIdentity, library_function_id_for_record, normalize_library_package_id
 from ..semantic.ir import IRFunctionMaterialization
 from .function_materializer import (
     FunctionMaterializationContext,
@@ -20,7 +20,7 @@ from .function_materializer import (
 )
 from ..function_instances import (
     FUNCTION_INSTANCE_KEY_PROP,
-    direct_library_owner_scope,
+    direct_library_owner_scope_for_id,
 )
 from ..catalog import LibraryEntryRecord, _validate_resolved_record, load_library_entry_source_for_record
 
@@ -173,19 +173,15 @@ def resolve_reloadable_library_entry(
         if not package_id or package_id == CORE_PACKAGE_ID:
             raise CompileError("Selected package function has no canonical package owner")
     if resolved_environment is None:
-        if namespace == "local":
-            from ..local_sources import find_local_entry_record
-
-            record = find_local_entry_record(name)
-        else:
-            from ..environment_resolution import resolve_environment
-
-            environment = resolve_environment()
-            record = (
-                environment.package_function_record(package_id, name)
-                if namespace == "functions"
-                else environment.catalog(namespace).find(name)
-            )
+        from ..environment_resolution import resolve_environment
+        resolved_environment = resolve_environment()
+    if namespace == "local":
+        origin = str(group.get("nodeforge_library_source_origin") or "")
+        if not origin:
+            raise CompileError("Selected Local group has no canonical source origin; reload requires rebuilding from an explicitly selected source")
+        local_catalog = resolved_environment.catalog("local")
+        local_catalog._raise_if_failed()
+        record = None if local_catalog.local_index is None else local_catalog.local_index.find_origin(origin)
     elif namespace == "functions":
         record = resolved_environment.package_function_record(package_id, name)
     else:
@@ -206,6 +202,12 @@ def validate_reloadable_library_entry_record(group, record: LibraryEntryRecord) 
         raise CompileError(
             f"Selected node group belongs to {stored_namespace}/{stored_name}, not {record.namespace}/{record.name}"
         )
+    if record.namespace == "local":
+        origin = str(group.get("nodeforge_library_source_origin") or "")
+        if not origin:
+            raise CompileError("Selected Local group has no canonical source origin; reload requires rebuilding from an explicitly selected source")
+        if origin != library_function_id_for_record(record).source_origin:
+            raise CompileError("Selected Local group belongs to a different physical source origin")
     if record.source_path is None:
         raise CompileError(f"{record.namespace} library entry {record.name!r} has no reloadable .nf source")
 
@@ -238,7 +240,7 @@ def update_materialized_library_entry_group_for_record(
     """Update an existing root group through one prepared semantic compilation."""
     validate_reloadable_library_entry_record(group, record)
     source = load_library_entry_source_for_record(record)
-    function_id = library_function_id(record.namespace, record.package_id, record.name)
+    function_id = library_function_id_for_record(record)
     identity = _direct_library_compilation_identity(function_id)
     session = source_callable_session or group_backend.new_source_callable_session()
     prepared = group_backend.prepare_source_compilation(
@@ -265,6 +267,8 @@ def _write_package_metadata(group, record: LibraryEntryRecord) -> None:
     """Record package ownership metadata on materialized library groups."""
     group["nodeforge_library_namespace"] = record.namespace
     group["nodeforge_library_name"] = record.name
+    if record.namespace == "local":
+        group["nodeforge_library_source_origin"] = library_function_id_for_record(record).source_origin
     group["nodeforge_function_kind"] = record.kind
     group["nodeforge_package_id"] = record.package_id or CORE_PACKAGE_ID
     if record.package_id:
@@ -278,6 +282,8 @@ def _library_metadata_matches(group, record: LibraryEntryRecord, *, instance_key
         if group.get("nodeforge_library_namespace") != record.namespace:
             return False
         if group.get("nodeforge_library_name") != record.name:
+            return False
+        if record.namespace == "local" and group.get("nodeforge_library_source_origin") != library_function_id_for_record(record).source_origin:
             return False
         stored_package_id = str(group.get("nodeforge_package_id") or CORE_PACKAGE_ID)
         if stored_package_id != normalize_library_package_id(record.package_id):
@@ -314,6 +320,7 @@ def _validate_library_function_id(function_id: FunctionId, record: LibraryEntryR
         or function_id.namespace != record.namespace
         or function_id.package_id != normalize_library_package_id(record.package_id)
         or function_id.name != record.name
+        or function_id != library_function_id_for_record(record)
     ):
         raise CompileError(
             f"Internal error: reusable-call FunctionId does not match {record.namespace} library entry {record.name!r}"
@@ -322,11 +329,7 @@ def _validate_library_function_id(function_id: FunctionId, record: LibraryEntryR
 
 def _direct_library_compilation_identity(function_id: FunctionId) -> GroupCompilationIdentity:
     """Return the established direct-catalog owner before semantic preparation."""
-    owner_scope = direct_library_owner_scope(
-        function_id.namespace,
-        function_id.package_id,
-        function_id.name,
-    )
+    owner_scope = direct_library_owner_scope_for_id(function_id)
     definition_owner = owner_scope if function_id.namespace == "local" else function_id.stable_key()
     return GroupCompilationIdentity(
         root_owner_id=None,
@@ -432,7 +435,7 @@ def get_or_create_library_entry_group_for_record(
 
     if materialization is not None or function_id is not None:
         raise CompileError("Internal error: source-call materialization must provide PreparedSourceCallable")
-    function_id = library_function_id(namespace, record.package_id, name)
+    function_id = library_function_id_for_record(record)
     source = load_library_entry_source_for_record(record)
     identity = _direct_library_compilation_identity(function_id)
     session = group_backend.new_source_callable_session()

@@ -404,7 +404,8 @@ def analyze_local_captures(
         raise CompileError(f"Recursive local function calls are not supported: {cycle}")
 
     package_namespaces = {} if callable_environment is None else callable_environment.package_namespaces
-    analysis = _analyze_local_names(fn, package_namespaces)
+    local_namespaces = {} if callable_environment is None else callable_environment.local_namespaces
+    analysis = _analyze_local_names(fn, {**package_namespaces, **local_namespaces})
     if callable_environment is not None:
         _validate_local_bare_package_calls(
             analysis,
@@ -429,6 +430,8 @@ def analyze_local_captures(
     for name in analysis.free_names:
         if name in _ALLOWED_CONSTS:
             continue
+        if name in local_namespaces:
+            raise CompileError(f"Local directory namespace {name!r} cannot be used as a value")
         if name in package_namespaces:
             raise CompileError(f"Package namespace {name!r} cannot be used as a value")
         reserved = _reserved_capture_label(reserved_name_labels, name)

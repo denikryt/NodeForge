@@ -241,3 +241,10 @@ Package-defined semantic values may persist in source-variable/body state throug
 - `tests/unit/test_module_boundaries.py`: production import-graph reachability, module-scope acyclicity, `semantic/` and `extensions/` isolation from Blender realization, one-way catalog/Local ownership, and relative-import integrity. The tests enforce dependency directions rather than an exhaustive internal module inventory.
 - `tests/unit/test_module_layout_contract.py`: a small filesystem contract for public/cross-phase anchors, the three internal owner packages, and retired mixed ownership namespaces. Internal implementation filenames are intentionally not snapshotted.
 - `tests/unit/test_architecture_layers_doc.py`: developer architecture reference names the same three internal owner packages and Local/catalog/import-graph boundaries enforced by executable architecture tests.
+
+## Local directory namespaces and canonical source ownership
+
+- `tests/unit/test_local_source_index.py`: canonical path deduplication, hardlink distinctions, strict names, empty-directory snapshots, production linked registry collisions, verified diagnostics, immutable views, containment, exact-path browser insertion, addon execute validation, and origin-only reload rejection.
+- `tests/unit/test_local_namespace_resolution.py`: direct/flat/aliased canonical typed calls, nested directory imports, helper alias inheritance and shadowing, namespace value rejection, localized member/file/directory conflicts, flat-only stars, and source snapshots.
+- `tests/blender/test_local_namespace_identity.py`: native group reuse/isolation, source-origin metadata, namespace-free helper interfaces, pointer/link-preserving reload, legacy/missing-origin rejection, and transaction rollback after child publication failure. These tests require Blender's native Python runtime.
+- Existing callable identity, package ambiguity, source freshness, extension API and browser/storage suites continue to cover unchanged non-Local contracts.

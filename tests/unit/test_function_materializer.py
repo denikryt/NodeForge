@@ -15,6 +15,7 @@ from NodeForge.errors import CompileError
 from NodeForge.function_instances import (
     FUNCTION_COMPILATION_FINGERPRINT_PROP,
     direct_library_owner_scope,
+    direct_library_owner_scope_for_id,
     function_group_owner_scope,
     function_materialization_owner_scope,
     instance_key_for,
@@ -175,6 +176,9 @@ def library_request(*, namespace="functions", materialization=None, write_metada
     """Build a controlled editable catalog materialization request."""
     record = library_record(namespace=namespace)
     function_id = library_function_id(namespace, record.package_id, record.name)
+    if namespace == "local":
+        from dataclasses import replace
+        function_id = replace(function_id, source_origin="/canonical/demo.nf")
 
     def find_existing(record_arg, *, instance_key=None, transaction=None):
         find_existing.calls.append((record_arg, instance_key, transaction))
@@ -186,7 +190,7 @@ def library_request(*, namespace="functions", materialization=None, write_metada
         group["package"] = record_arg.package_id
 
     if materialization is None:
-        owner_scope = direct_library_owner_scope(namespace, function_id.package_id, function_id.name)
+        owner_scope = direct_library_owner_scope_for_id(function_id)
     else:
         owner_scope = function_materialization_owner_scope(materialization)
     definition_owner = owner_scope if namespace == "local" else function_id.stable_key()
@@ -493,7 +497,7 @@ def test_local_catalog_uses_build_local_transaction_tracked_cache_and_fingerprin
     second = materializer.materialize_library(spec, context)
 
     cache_key = ("local-catalog", spec.function_id)
-    owner = direct_library_owner_scope("local", spec.function_id.package_id, spec.name)
+    owner = direct_library_owner_scope_for_id(spec.function_id)
     assert first.group is second.group
     assert cache[cache_key] is first.group
     assert len(calls) == 1

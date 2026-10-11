@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import keyword
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -47,6 +49,7 @@ class LibraryEntryRecord:
     package_id: str = ""
     package_name: str = ""
     package_version: str = ""
+    source_origin: str = ""
 
     def as_dict(self) -> dict[str, str]:
         """Return a UI/test-friendly dictionary representation."""
@@ -169,44 +172,20 @@ def candidate_records_from_inputs(
 ) -> list[LibraryEntryRecord]:
     """Return raw catalog records from explicit roots/files supplied by the caller."""
     catalog = _catalog(namespace)
-    roots: list[tuple[Path, str, str, str]] = []
     if namespace == "local":
-        roots.extend((_path_value(root), "", "", "") for root in local_roots)
-    else:
-        if namespace == "examples" and include_builtin_catalog:
-            roots.append((catalog_dir(namespace), "", "", ""))
-        roots.extend(
-            (root.path, root.package_id, root.package_name, root.package_version)
-            for root in package_roots
-        )
+        return list(discover_local_sources(local_roots, local_files)[0])
+    roots: list[tuple[Path, str, str, str]] = []
+    if namespace == "examples" and include_builtin_catalog:
+        roots.append((catalog_dir(namespace), "", "", ""))
+    roots.extend(
+        (root.path, root.package_id, root.package_name, root.package_version)
+        for root in package_roots
+    )
 
     records: list[LibraryEntryRecord] = []
     for root, package_id, package_name, package_version in roots:
         if not root.exists():
             continue
-        if namespace == "local":
-            for path in sorted(root.rglob("*"), key=lambda p: str(p.relative_to(root)).lower()):
-                try:
-                    rel_parts = path.relative_to(root).parts
-                except ValueError:
-                    continue
-                if any(part.startswith("_") or part.startswith(".") for part in rel_parts):
-                    continue
-                if path.is_file() and path.name == _PACKAGE_SOURCE_NAME:
-                    raise CompileError(f"Unsupported local source layout: {path.relative_to(root)}")
-                if path.is_file() and path.suffix in _SOURCE_EXTENSIONS and _is_public_function_name(path.stem):
-                    records.append(
-                        LibraryEntryRecord(
-                            namespace=namespace,
-                            name=path.stem,
-                            kind="script",
-                            path=path,
-                            source_path=path,
-                            folder_path=_relative_folder_for_path(root, path, path.stem),
-                        )
-                    )
-            continue
-
         for path in sorted(root.iterdir(), key=lambda p: p.name.lower()):
             if path.name == "__init__.py" or path.name.startswith("__"):
                 continue
@@ -265,21 +244,89 @@ def candidate_records_from_inputs(
                         )
                     )
 
-    if namespace == "local":
-        for linked in local_files:
-            path = _path_value(linked)
-            if path.suffix in _SOURCE_EXTENSIONS and _is_public_function_name(path.stem):
-                records.append(
-                    LibraryEntryRecord(
-                        namespace="local",
-                        name=path.stem,
-                        kind="script",
-                        path=path,
-                        source_path=path,
-                        folder_path="",
-                    )
-                )
     return records
+
+
+def _canonical_path(path: Path | str) -> Path:
+    """Resolve a physical source path without requiring the target to exist."""
+    return Path(path).expanduser().resolve(strict=False)
+
+
+def _path_key(path: Path | str) -> str:
+    """Return the platform-normalized canonical pathname identity."""
+    return os.path.normcase(str(_canonical_path(path)))
+
+
+def is_public_local_name(name: str) -> bool:
+    """Require an entire public ASCII identifier usable in Python import syntax."""
+    return _is_public_function_name(name) and name.isidentifier() and not keyword.iskeyword(name)
+
+
+def discover_local_sources(local_roots, local_files=()):
+    """Capture Local source records and empty directory positions in one traversal.
+
+    The first root is managed; subsequent roots contribute their physical basename.
+    Directory symlinks are not traversed. File symlinks must stay inside their root.
+    IO failures propagate rather than publishing an incomplete snapshot.
+    """
+    records = []
+    directories = []
+    source_positions = []
+
+    def add_source(path, root, prefix):
+        """Record one eligible source with a canonical owner and optional import path."""
+        if not path.is_file():
+            return
+        if path.name == _PACKAGE_SOURCE_NAME:
+            raise CompileError(f"Unsupported local source layout: {path}")
+        if path.suffix not in _SOURCE_EXTENSIONS or not is_public_local_name(path.stem):
+            return
+        canonical = _canonical_path(path)
+        if root is not None:
+            try:
+                canonical.relative_to(root)
+            except ValueError as exc:
+                raise CompileError(f"Local source resolves outside its registered root: {path}") from exc
+        if not is_public_local_name(canonical.stem):
+            return
+        record = LibraryEntryRecord(
+            namespace="local", name=canonical.stem, kind="script", path=canonical,
+            source_path=canonical, source_origin=_path_key(canonical),
+            folder_path="" if root is None else _relative_folder_for_path(root, path, path.stem),
+        )
+        records.append(record)
+        if prefix is not None and path.stem == record.name:
+            source_positions.append((prefix, record.name, record.source_origin))
+
+    for root_number, root_input in enumerate(local_roots):
+        root = _canonical_path(_path_value(root_input))
+        if not root.exists():
+            continue
+        if not root.is_dir():
+            raise CompileError(f"Local source root is not a directory: {root}")
+        prefix = () if root_number == 0 else (root.name,)
+        if root_number:
+            directories.append((prefix, _path_key(root)))
+        # os.walk onerror is essential: rglob can silently suppress permission errors.
+        def fail(error):
+            """Refuse a partially discovered Local tree."""
+            raise error
+        for current, children, files in os.walk(root, followlinks=False, onerror=fail):
+            children[:] = sorted(name for name in children if not name.startswith(("_", "."))
+                                 and not (Path(current) / name).is_symlink())
+            relative = Path(current).relative_to(root).parts
+            physical_prefix = prefix + relative
+            current_prefix = physical_prefix if all(is_public_local_name(x) for x in physical_prefix) else None
+            if relative:
+                directories.append((physical_prefix, _path_key(current)))
+            for name in sorted(files):
+                if not name.startswith(("_", ".")):
+                    add_source(Path(current) / name, root, current_prefix)
+    for linked in local_files:
+        path = _path_value(linked)
+        if path.is_file():
+            add_source(path, None, None)
+    return tuple(records), tuple(directories), tuple(source_positions)
 
 
 def unique_records_from_candidates(

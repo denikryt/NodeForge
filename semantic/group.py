@@ -21,7 +21,7 @@ from .residualization import _infer_input_types, _preprocess_compile_time
 from ..errors import CompileError
 from ..nf_types import NFType
 from ..extensions.contracts import ExtensionCallableId
-from .source_bindings import LibraryBinding, PackageNamespaceBinding
+from .source_bindings import LibraryBinding, PackageNamespaceBinding, LocalDirectoryNamespaceBinding
 from ..extensions.registry import library_owner_key
 from .parsing import _assigned_names, _binding_names, _collect_inputs, _extract_function_imports, _needs_geometry_io, _parse_source, normalized_statements
 from .runtime_bindings import RuntimeBindingSymbol, allows_existing_top_level_shadow, format_reserved_binding_label
@@ -74,9 +74,12 @@ def _validate_import_bindings(
     resolved_environment,
     inherited_imports=None,
     additional_reserved_names=frozenset(),
+    inherited_local_namespaces=None,
+    directory_bindings=None,
 ):
     """Validate and return source-local namespace-aware catalog bindings."""
     imported: dict[str, LibraryBinding] = {}
+    directories = {}
     local_bindings = _binding_names(body_stmts)
     reserved_names = (
         set(builtin_registry.BUILTIN_NAMES)
@@ -86,22 +89,47 @@ def _validate_import_bindings(
         | set(additional_reserved_names)
     )
 
-    def validate_pair(namespace, canonical_name, exposed_name, *, inherited=False, inherited_record=None):
+    def validate_pair(namespace, canonical_name, exposed_name, *, inherited=False, inherited_record=None, flat_only=False):
         """Validate one imported catalog binding against the frozen environment."""
-        catalog = resolved_environment.catalog(namespace)
-        record = catalog.find(canonical_name)
+        base_namespace = namespace.split(".")[0]
+        catalog = resolved_environment.catalog(base_namespace)
+        catalog._raise_if_failed()
+        index = catalog.local_index
+        if inherited_record is not None and base_namespace == "local" and index is not None:
+            record = index.find_origin(inherited_record.source_origin)
+        elif index is not None:
+            if namespace == "local":
+                record = index.find_flat_function(canonical_name) if flat_only else index.resolve_root_import(canonical_name)
+            else:
+                parent = index.resolve_directory(tuple(namespace.split(".")[1:]))
+                record = index.resolve_member(parent, canonical_name)
+        else:
+            if namespace.startswith("local."):
+                raise CompileError("Local directory imports require a captured Local source index")
+            record = catalog.find(canonical_name)
         if record is None:
             raise CompileError(f"Unknown {namespace} import: {canonical_name}")
         if inherited_record is not None and inherited_record is not record:
             raise CompileError("Internal error: inherited library binding does not match resolved environment")
+        from ..local_index import LocalDirectoryCandidate
+        if isinstance(record, LocalDirectoryCandidate):
+            if exposed_name in imported or exposed_name in directories:
+                raise CompileError(f"Duplicate function import name: {exposed_name}")
+            if exposed_name in _assigned_names(body_stmts) or exposed_name in local_function_defs:
+                raise CompileError(f"Directory import name conflicts with local binding: {exposed_name}")
+            if exposed_name in reserved_names:
+                raise CompileError(f"Directory import name conflicts with reserved name: {exposed_name}")
+            directories[exposed_name] = LocalDirectoryNamespaceBinding(exposed_name, index, record)
+            return
+        namespace = base_namespace
         extension_callable_id = None
         if getattr(record, "interface_path", None) is not None and getattr(record, "source_path", None) is None:
             extension_callable_id = ExtensionCallableId(library_owner_key(record), canonical_name)
             if not resolved_environment.extension_registry.contains(extension_callable_id):
                 raise CompileError("Internal error: selected native library extension is missing from registry")
         binding = LibraryBinding(namespace, canonical_name, record, extension_callable_id)
-        if exposed_name in imported:
-            if inherited and imported[exposed_name] == binding:
+        if exposed_name in imported or exposed_name in directories:
+            if inherited and imported.get(exposed_name) == binding:
                 return
             raise CompileError(f"Duplicate function import name: {exposed_name}")
         if exposed_name in local_bindings or exposed_name in local_function_defs:
@@ -114,7 +142,7 @@ def _validate_import_bindings(
         namespace = import_request.module
         if import_request.is_star:
             for library_name in sorted(resolved_environment.catalog(namespace).names(), key=str.lower):
-                validate_pair(namespace, library_name, library_name)
+                validate_pair(namespace, library_name, library_name, flat_only=True)
         else:
             validate_pair(namespace, import_request.canonical_name, import_request.exposed_name)
     for exposed_name, inherited_binding in dict(inherited_imports or {}).items():
@@ -128,6 +156,16 @@ def _validate_import_bindings(
             )
         else:
             raise CompileError("Internal error: inherited library binding is not owner-resolved")
+    for alias, binding in dict(inherited_local_namespaces or {}).items():
+        if not isinstance(binding, LocalDirectoryNamespaceBinding) or binding.source_name != alias or binding.index_snapshot is not resolved_environment.catalog("local").local_index:
+            raise CompileError("Internal error: inherited Local namespace does not match resolved environment")
+        if alias in imported or alias in reserved_names or alias in _assigned_names(body_stmts) or alias in local_function_defs:
+            raise CompileError(f"Local namespace import name conflicts with source binding: {alias}")
+        if alias in directories and directories[alias] != binding:
+            raise CompileError(f"Duplicate Local namespace import name: {alias}")
+        directories[alias] = binding
+    if directory_bindings is not None:
+        directory_bindings.update(directories)
     return imported
 
 
@@ -373,6 +411,7 @@ def analyze_group_source(
     inherited_local_functions=None,
     inherited_imported_library_functions=None,
     inherited_package_namespaces=None,
+    inherited_local_namespaces=None,
     helper_namespace: str = "NodeForge Group",
     source_callable_session=None,
 ) -> SemanticGroupCompilation:
@@ -400,6 +439,7 @@ def analyze_group_source(
         resolved_environment,
         inherited_package_bindings=inherited_package_namespaces,
     )
+    local_directories = {}
     imported = _validate_import_bindings(
         import_pairs,
         raw_body_stmts,
@@ -407,6 +447,8 @@ def analyze_group_source(
         resolved_environment,
         inherited_imports=inherited_imported_library_functions,
         additional_reserved_names=frozenset(package_bindings),
+        inherited_local_namespaces=inherited_local_namespaces,
+        directory_bindings=local_directories,
     )
     reserved_name_labels = _registered_name_labels(local_function_defs, imported, package_bindings)
     _validate_registered_name_bindings(
@@ -418,7 +460,7 @@ def analyze_group_source(
 
     preprocessed = _preprocess_compile_time(body_stmts)
     stmts = list(preprocessed.statements)
-    callable_names = set(imported) | set(local_function_defs) | set(package_bindings)
+    callable_names = set(imported) | set(local_function_defs) | set(package_bindings) | set(local_directories)
     input_names = sorted(
         set(_collect_inputs(stmts, extra_builtin_names=callable_names, consts=preprocessed.final_compile_time.values))
         - set(preprocessed.final_compile_time.values.keys())
@@ -442,6 +484,7 @@ def analyze_group_source(
         local_functions=local_function_defs,
         imported_functions=imported,
         package_namespaces=package_bindings,
+        local_namespaces=local_directories,
     )
     extension_dependencies: dict[tuple[str, ...], str] = {}
     body_compilation = lower_basic_body(

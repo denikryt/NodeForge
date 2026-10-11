@@ -39,6 +39,7 @@ class SourceCallableSession:
         imported_library_functions,
         package_namespaces,
         helper_namespace: str,
+        local_namespaces=None,
         local_public_names: tuple[str, ...] | None = None,
         local_hidden_names: tuple[str, ...] = (),
         local_output_count: int | None = None,
@@ -64,6 +65,7 @@ class SourceCallableSession:
                 inherited_local_functions=local_functions,
                 inherited_imported_library_functions=imported_library_functions,
                 inherited_package_namespaces=package_namespaces,
+                inherited_local_namespaces=local_namespaces,
                 helper_namespace=helper_namespace,
                 source_callable_session=self,
             )
@@ -134,6 +136,7 @@ class SourceCallableSession:
         imported_library_functions,
         package_namespaces,
         helper_namespace: str,
+        local_namespaces=None,
         return_shape: LocalReturnShape,
     ) -> PreparedSourceCallable:
         """Prepare one local specialization under its final shared/unique physical owner."""
@@ -144,6 +147,7 @@ class SourceCallableSession:
             local_functions=local_functions,
             imported_library_functions=imported_library_functions,
             package_namespaces=package_namespaces,
+            local_namespaces=local_namespaces,
             helper_namespace=helper_namespace,
             local_public_names=tuple(explicit_parameter_names),
             local_hidden_names=tuple(hidden_capture_names),
@@ -158,6 +162,9 @@ class SourceCallableSession:
         record,
     ) -> PreparedSourceCallable:
         """Prepare one pure source-only catalog entry without importing Python modules."""
+        from ..compiler_identities import library_function_id_for_record
+        if function_id != library_function_id_for_record(record):
+            raise CompileError("Source preparation FunctionId does not match selected canonical record")
         source_path = getattr(record, "source_path", None)
         if source_path is None or getattr(record, "module_path", None) is not None:
             raise CompileError("Internal error: prepare_library requires a pure source-only record")

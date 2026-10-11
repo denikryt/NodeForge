@@ -7,7 +7,7 @@ from enum import Enum, auto
 from types import MappingProxyType
 from typing import Mapping, TYPE_CHECKING
 
-from ..compiler_identities import FunctionId, library_function_id
+from ..compiler_identities import FunctionId, library_function_id, library_function_id_for_record
 from ..errors import CompileError
 from .group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
 from ..extensions.contracts import ExtensionCallableId, TypeSpec, validate_extension_argument_positions
@@ -64,6 +64,7 @@ class CallableEnvironment:
     local_functions: Mapping[str, object]
     imported_functions: Mapping[str, object]
     package_namespaces: Mapping[str, object] = field(default_factory=dict)
+    local_namespaces: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Defensively freeze all name collections for one analysis invocation."""
@@ -75,6 +76,12 @@ class CallableEnvironment:
             if not isinstance(alias, str) or not alias or getattr(binding, "source_name", None) != alias:
                 raise TypeError("package_namespaces must map source aliases to package bindings")
         object.__setattr__(self, "package_namespaces", MappingProxyType(package_namespaces))
+        from .source_bindings import LocalDirectoryNamespaceBinding
+        local_namespaces = dict(self.local_namespaces)
+        for alias, binding in local_namespaces.items():
+            if not isinstance(binding, LocalDirectoryNamespaceBinding) or binding.source_name != alias:
+                raise TypeError("local_namespaces must map aliases to Local directory bindings")
+        object.__setattr__(self, "local_namespaces", MappingProxyType(local_namespaces))
 
 
 @dataclass(frozen=True)
@@ -320,7 +327,7 @@ def _resolved_from_library_binding(source_name: str, binding) -> ResolvedCallabl
     if extension_callable_id is not None:
         return ResolvedCallable(CallableKind.EXTENSION, source_name, target=extension_callable_id)
     record = binding.record
-    function_id = library_function_id(binding.namespace, record.package_id, binding.canonical_name)
+    function_id = library_function_id_for_record(record)
     return ResolvedCallable(
         CallableKind.LIBRARY,
         source_name,
@@ -396,6 +403,33 @@ def resolve_package_callable(
     return _resolved_from_package_export(f"{package_alias}.{member}", export)
 
 
+def ambiguous_callable_error(name, labels, suggestions=(), *, package=False):
+    """Format candidate ambiguity at the shared Local/package resolution boundary."""
+    if package:
+        return CompileError(
+            f"Ambiguous callable {name!r}: {', '.join(labels)}. "
+            "Use a qualified package call or an import alias to select one candidate."
+        )
+    message = f"Ambiguous callable {name!r}.\n\nCandidates:\n" + "\n".join(f"  {label}" for label in labels)
+    if suggestions:
+        message += "\n\nUse an explicit import:\n" + "\n".join(f"  {item}" for item in suggestions)
+    return CompileError(message)
+
+
+def resolve_local_callable(alias, member, environment):
+    """Resolve one frontend-only directory alias to an existing library call target."""
+    from .source_bindings import LibraryBinding
+    from ..local_index import LocalDirectoryCandidate
+
+    binding = environment.local_namespaces[alias]
+    record = binding.index_snapshot.resolve_member(binding.directory, member)
+    if record is None:
+        raise CompileError(f"Local directory {binding.directory.physical_directory_origin!r} has no callable member {member!r}")
+    if isinstance(record, LocalDirectoryCandidate):
+        raise CompileError(f"Local directory {member!r} is not callable; import it explicitly with a directory alias")
+    return _resolved_from_library_binding(f"{alias}.{member}", LibraryBinding("local", record.name, record))
+
+
 def resolve_simple_callable(name: str, environment: CallableEnvironment):
     """Resolve one bare callable with core reservation and candidate ambiguity rules."""
     if name in environment.callable_builtins:
@@ -416,10 +450,7 @@ def resolve_simple_callable(name: str, environment: CallableEnvironment):
     if not labels:
         return UNRESOLVED
     if len(labels) > 1:
-        raise CompileError(
-            f"Ambiguous callable {name!r}: {', '.join(labels)}. "
-            "Use a qualified package call or an import alias to select one candidate."
-        )
+        raise ambiguous_callable_error(name, labels, package=True)
     if is_local:
         return ResolvedCallable(CallableKind.LOCAL_FUNCTION, name, target=name)
     if binding is not None:

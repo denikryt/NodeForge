@@ -207,7 +207,7 @@ def test_local_recursive_catalog_duplicate_and_save_contracts():
         compile_group('from local import local_local_probe\nx = local_local_probe(3)\noutput("x", x)', 'NFTest_local_flat_import')
         compile_group('from local import local_nested_probe\nx = local_nested_probe(3)\noutput("x", x)', 'NFTest_local_nested_import')
         expect_compile_error('from local import local_native_probe\nx = local_native_probe(3)\noutput("x", x)', 'NFTest_local_native_files_ignored')
-        expect_compile_error('from local.math import local_nested_probe\nx = 1\noutput("x", x)', 'NFTest_local_nested_import_rejected')
+        compile_group('from local.math import local_nested_probe\nx = local_nested_probe(3)\noutput("x", x)', 'NFTest_local_nested_qualified_import')
         expect_compile_error('import local.math\nx = 1\noutput("x", x)', 'NFTest_local_nested_plain_import_rejected')
 
         _write(duplicate_flat, 'x = input_float("X")\noutput("x", x)\n')

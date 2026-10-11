@@ -68,7 +68,7 @@ from .values import ObjectValue, Value, make_value
 from .interface import _create_group_input_socket, _create_interface_panel, _set_socket_default
 from ..function_instances import (
     FUNCTION_INSTANCE_KEY_PROP,
-    function_group_owner_scope,
+    direct_library_owner_scope_for_id,
     function_materialization_owner_scope,
 )
 from .function_materializer import FunctionMaterializationContext, FunctionMaterializer
@@ -551,7 +551,7 @@ def _source_call_owner_scope(operation):
         return function_materialization_owner_scope(operation.materialization)
     if function_id is None or function_id.namespace != "local":
         raise CompileError("Internal error: source Call IR without materialization must be Local catalog")
-    return function_group_owner_scope("LIBRARY", "local", "", function_id.name)
+    return direct_library_owner_scope_for_id(function_id)
 
 
 def _lower_source_call(context, operation, operands, x, y):

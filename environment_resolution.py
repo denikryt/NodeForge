@@ -84,16 +84,13 @@ def resolve_environment() -> ResolvedEnvironment:
                 deferred_package_discovery_failures[(namespace, root.package_id)] = exc
         raw_candidates[namespace] = tuple(collected)
 
+    local_index = None
     try:
         local_roots, local_files = local_sources._catalog_input_paths()
-        raw_candidates["local"] = tuple(
-            catalog.candidate_records_from_inputs(
-                "local",
-                package_roots=(),
-                local_roots=local_roots,
-                local_files=local_files,
-            )
-        )
+        from .local_index import LocalSourceIndex
+        discovery = catalog.discover_local_sources(local_roots, local_files)
+        local_index = LocalSourceIndex.from_discovery(*discovery)
+        raw_candidates["local"] = discovery[0]
     except (CompileError, OSError) as exc:
         raw_candidates["local"] = ()
         discovery_failures["local"] = exc
@@ -216,6 +213,9 @@ def resolve_environment() -> ResolvedEnvironment:
             catalogs[namespace] = ResolvedCatalog(
                 namespace, {}, _resolved_failure_from_exception(failure)
             )
+            continue
+        if namespace == "local":
+            catalogs[namespace] = ResolvedCatalog(namespace, {}, local_index=local_index)
             continue
         try:
             entries = catalog.unique_records_from_candidates(namespace, tuple(candidates))

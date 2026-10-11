@@ -267,7 +267,7 @@ def try_runtime_fold(expr, env):
     ):
         # Numeric runtime-capable expressions remain fail-closed for graph substitution.
         # Type-directed semantics defines their values here, but runtime folding is a separate
-        # optimization and is intentionally not expanded by this stage.
+        # optimization. These expressions retain their runtime Geometry Nodes computation.
         return NOT_FOLDABLE
     return NOT_FOLDABLE
 

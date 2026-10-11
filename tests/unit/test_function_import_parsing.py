@@ -59,7 +59,7 @@ def test_package_star_import_is_rejected():
         "import functions\nx = 1\noutput(\"x\", x)",
         "from systems import demo_system\nx = 1\noutput(\"x\", x)",
         "from .packages import math\nx = 1\noutput(\"x\", x)",
-        "from local.math import noise\nx = 1\noutput(\"x\", x)",
+        "from packages.math import noise\nx = 1\noutput(\"x\", x)",
         "import local.math\nx = 1\noutput(\"x\", x)",
         "from examples import * as ex\nx = 1\noutput(\"x\", x)",
     ],

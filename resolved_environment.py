@@ -69,12 +69,17 @@ class ResolvedCatalog:
     namespace: str
     entries: Mapping[str, "LibraryEntryRecord"]
     failure: ResolvedCatalogFailure | None = None
+    local_index: object | None = None
 
     def __post_init__(self) -> None:
         """Validate record placement and defensively freeze the entry mapping."""
         if self.namespace not in _CATALOG_NAMES:
             raise CompileError(f"Unknown library catalog: {self.namespace}")
         copied = dict(self.entries)
+        if self.local_index is not None:
+            from .local_index import LocalSourceIndex
+            if self.namespace != "local" or not isinstance(self.local_index, LocalSourceIndex) or self.failure is not None or copied:
+                raise ValueError("Local index belongs only to a successful Local catalog")
         if self.failure is not None and copied:
             raise ValueError("Failed resolved catalog cannot contain partial entries")
         for name, record in copied.items():
@@ -90,16 +95,18 @@ class ResolvedCatalog:
     def names(self) -> frozenset[str]:
         """Return immutable public names or replay the stored discovery failure."""
         self._raise_if_failed()
-        return frozenset(self.entries)
+        return self.local_index.flat_names() if self.local_index is not None else frozenset(self.entries)
 
     def find(self, name: str) -> "LibraryEntryRecord | None":
         """Return one selected record or replay the stored discovery failure."""
         self._raise_if_failed()
-        return self.entries.get(name)
+        return self.local_index.find_flat_function(name) if self.local_index is not None else self.entries.get(name)
 
     def records(self) -> tuple["LibraryEntryRecord", ...]:
         """Return selected records in deterministic public-name order."""
         self._raise_if_failed()
+        if self.local_index is not None:
+            return self.local_index.all_records()
         return tuple(sorted(self.entries.values(), key=lambda record: record.name.lower()))
 
 

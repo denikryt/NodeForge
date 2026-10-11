@@ -113,6 +113,19 @@ def create_library_catalog_group(namespace: str, name: str):
     return materialize_library_entry_group_for_record(record, _new_group_backend(environment))
 
 
+def create_local_source_group(source_origin: str):
+    """Materialize the exact Local source selected by its canonical browser path."""
+    environment = resolve_environment()
+    selected = environment.catalog("local")
+    selected._raise_if_failed()
+    import os
+    origin = os.path.normcase(os.path.normpath(source_origin))
+    record = None if selected.local_index is None else selected.local_index.find_origin(origin)
+    if record is None:
+        raise CompileError(f"Current Local source is unavailable: {source_origin}")
+    return materialize_library_entry_group_for_record(record, _new_group_backend(environment))
+
+
 def create_package_function_group(package_id: str, name: str):
     """Create or update one exact package-owned Functions entry."""
     environment = resolve_environment()

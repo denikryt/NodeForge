@@ -1133,7 +1133,7 @@ def test_local_catalog_adapter_uses_build_local_transaction_cache(monkeypatch, t
 
     from NodeForge.function_instances import (
         FUNCTION_COMPILATION_FINGERPRINT_PROP,
-        direct_library_owner_scope,
+        direct_library_owner_scope_for_id,
     )
     from NodeForge.blender.function_materializer import FunctionMaterializationContext
 
@@ -1145,6 +1145,7 @@ def test_local_catalog_adapter_uses_build_local_transaction_cache(monkeypatch, t
         kind="source",
         path=source_path,
         source_path=source_path,
+        source_origin=local_sources._path_key(source_path),
     )
     monkeypatch.setattr(local_sources, "find_local_entry_record", lambda name: record)
 
@@ -1175,14 +1176,14 @@ def test_local_catalog_adapter_uses_build_local_transaction_cache(monkeypatch, t
     assert first.group is second.group
     assert first.instance_key == second.instance_key == ""
     assert len(callback_calls) == 1
-    from NodeForge.compiler_identities import library_function_id
-    function_id = library_function_id("local", None, "demo")
+    from NodeForge.compiler_identities import library_function_id_for_record
+    function_id = library_function_id_for_record(record)
     assert cache[("local-catalog", function_id)] is first.group
     assert callback_calls[0]["function_group_transaction"] is transaction
     assert callback_calls[0]["function_compilation_trace"] is trace
     assert callback_calls[0]["function_compilation_inputs"]["kind"] == "library"
     assert callback_calls[0]["function_compilation_inputs"]["namespace"] == "local"
-    owner = direct_library_owner_scope("local", function_id.package_id, "demo")
+    owner = direct_library_owner_scope_for_id(function_id)
     assert frame.identity_children == [
         (owner, "local-fingerprint"),
         (owner, "local-fingerprint"),

@@ -45,4 +45,21 @@ class PackageNamespaceBinding:
         return self.namespace.package_id
 
 
-__all__ = ["LibraryBinding", "PackageNamespaceBinding"]
+@dataclass(frozen=True)
+class LocalDirectoryNamespaceBinding:
+    """Bind a source alias to a directory selected from one frozen Local index."""
+
+    source_name: str
+    index_snapshot: object
+    directory: object
+
+    def __post_init__(self):
+        """Reject descriptors from a different or ambiguous snapshot at binding time."""
+        from ..local_index import LocalSourceIndex, LocalDirectoryCandidate
+        if not self.source_name or not isinstance(self.index_snapshot, LocalSourceIndex) or not isinstance(self.directory, LocalDirectoryCandidate):
+            raise ValueError("Invalid Local directory namespace binding")
+        if self.index_snapshot.resolve_directory(self.directory.import_path) != self.directory:
+            raise ValueError("Local namespace directory does not belong to its snapshot")
+
+
+__all__ = ["LibraryBinding", "PackageNamespaceBinding", "LocalDirectoryNamespaceBinding"]
