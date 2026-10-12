@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Mapping
+
 from .errors import CompileError
 from . import packages, catalog, local_sources
 from .resolved_environment import (
+    _freeze_package_selection,
     PackageCallableExport,
     ResolvedCatalog,
     ResolvedCatalogFailure,
@@ -32,8 +36,8 @@ def _resolved_failure_from_exception(exc: Exception) -> ResolvedCatalogFailure:
 
 
 
-def resolve_environment() -> ResolvedEnvironment:
-    """Resolve one coherent owner-qualified external callable environment snapshot."""
+def _resolve_environment_parts(*, capture_local: bool):
+    """Resolve shared package/extension selections with optional eager Local capture."""
     from .extensions.registry import (
         ExtensionOwnerSession,
         ExtensionRegistry,
@@ -84,16 +88,7 @@ def resolve_environment() -> ResolvedEnvironment:
                 deferred_package_discovery_failures[(namespace, root.package_id)] = exc
         raw_candidates[namespace] = tuple(collected)
 
-    local_index = None
-    try:
-        local_roots, local_files = local_sources._catalog_input_paths()
-        from .local_index import LocalSourceIndex
-        discovery = catalog.discover_local_sources(local_roots, local_files)
-        local_index = LocalSourceIndex.from_discovery(*discovery)
-        raw_candidates["local"] = discovery[0]
-    except (CompileError, OSError) as exc:
-        raw_candidates["local"] = ()
-        discovery_failures["local"] = exc
+    local_catalog = _capture_local_catalog() if capture_local else None
 
     system_sessions: dict[tuple[str, ...], ExtensionOwnerSession] = {}
     system_snapshot_failures: dict[str, Exception] = {}
@@ -194,29 +189,26 @@ def resolve_environment() -> ResolvedEnvironment:
         registry_sessions.extend(package_sessions)
 
     catalogs: dict[str, ResolvedCatalog] = {"functions": ResolvedCatalog("functions", {})}
-    for namespace in ("examples", "local"):
-        failure = discovery_failures.get(namespace)
-        candidates = []
-        if failure is None and namespace == "examples":
-            for package_id in sorted(admitted_packages):
-                deferred = deferred_package_discovery_failures.get((namespace, package_id))
-                if deferred is not None:
-                    failure = deferred
-                    break
-        if failure is None:
-            for record in raw_candidates.get(namespace, ()):
-                package_id = str(getattr(record, "package_id", ""))
-                if package_id and package_id not in admitted_packages:
-                    continue
-                candidates.append(record)
-        if failure is not None:
-            catalogs[namespace] = ResolvedCatalog(
-                namespace, {}, _resolved_failure_from_exception(failure)
-            )
-            continue
-        if namespace == "local":
-            catalogs[namespace] = ResolvedCatalog(namespace, {}, local_index=local_index)
-            continue
+    namespace = "examples"
+    failure = discovery_failures.get(namespace)
+    candidates = []
+    if failure is None:
+        for package_id in sorted(admitted_packages):
+            deferred = deferred_package_discovery_failures.get((namespace, package_id))
+            if deferred is not None:
+                failure = deferred
+                break
+    if failure is None:
+        for record in raw_candidates.get(namespace, ()):
+            package_id = str(getattr(record, "package_id", ""))
+            if package_id and package_id not in admitted_packages:
+                continue
+            candidates.append(record)
+    if failure is not None:
+        catalogs[namespace] = ResolvedCatalog(
+            namespace, {}, _resolved_failure_from_exception(failure)
+        )
+    else:
         try:
             entries = catalog.unique_records_from_candidates(namespace, tuple(candidates))
             selected_sessions = []
@@ -245,10 +237,110 @@ def resolve_environment() -> ResolvedEnvironment:
             registry_sessions.extend(selected_sessions)
 
     registry = ExtensionRegistry(tuple(registry_sessions))
-    return ResolvedEnvironment(
-        catalogs=catalogs,
+    return _ResolvedNonLocalParts(
+        functions_catalog=catalogs["functions"],
+        examples_catalog=catalogs["examples"],
         package_namespaces=package_namespaces,
         extension_registry=registry,
+    ), local_catalog
+
+
+def _capture_local_catalog() -> ResolvedCatalog:
+    """Capture a complete immutable Local inventory or a replayable failure."""
+    from .local_index import LocalSourceIndex
+
+    try:
+        roots, files = local_sources._catalog_input_paths()
+        discovery = catalog.discover_local_sources(roots, files)
+        index = LocalSourceIndex.from_discovery(*discovery)
+        return ResolvedCatalog("local", {}, local_index=index)
+    except (CompileError, OSError) as exc:
+        return ResolvedCatalog("local", {}, _resolved_failure_from_exception(exc))
+
+
+@dataclass(frozen=True)
+class _ResolvedNonLocalParts:
+    """Immutable package/extension selection shared by eager and compiler paths."""
+
+    functions_catalog: ResolvedCatalog
+    examples_catalog: ResolvedCatalog
+    package_namespaces: Mapping[str, ResolvedPackageNamespace]
+    extension_registry: object
+
+    def __post_init__(self) -> None:
+        """Validate catalogs and freeze package ownership at the resolution boundary."""
+        if self.functions_catalog.namespace != "functions" or self.examples_catalog.namespace != "examples":
+            raise ValueError("Non-Local catalog selection requires functions and examples")
+        namespaces, import_index, registry = _freeze_package_selection(
+            self.package_namespaces, self.extension_registry
+        )
+        object.__setattr__(self, "package_namespaces", namespaces)
+        object.__setattr__(self, "_package_import_index", import_index)
+        object.__setattr__(self, "extension_registry", registry)
+
+    def package_by_import_name(self, import_name: str) -> ResolvedPackageNamespace | None:
+        """Return the selected owner namespace without consulting package state."""
+        package_id = self._package_import_index.get(import_name)
+        return None if package_id is None else self.package_namespaces[package_id]
+
+
+class _LocalCatalogSlot:
+    """Capture Local once on semantic demand, including empty and failed results."""
+
+    def __init__(self) -> None:
+        """Start an unrequested slot owned by one root compilation attempt."""
+        self._captured: ResolvedCatalog | None = None
+
+    def get(self) -> ResolvedCatalog:
+        """Publish one immutable capture result and reuse its exact object."""
+        if self._captured is None:
+            self._captured = _capture_local_catalog()
+        return self._captured
+
+
+@dataclass(frozen=True)
+class _CompilationEnvironment:
+    """Root-scoped non-Local selection with one semantic-demand Local slot."""
+
+    _parts: _ResolvedNonLocalParts
+    _local_slot: _LocalCatalogSlot
+
+    @property
+    def extension_registry(self):
+        """Expose the registry selected before root semantic preparation."""
+        return self._parts.extension_registry
+
+    def catalog(self, namespace: str) -> ResolvedCatalog:
+        """Select a catalog, capturing Local only when that namespace is requested."""
+        if namespace == "local":
+            return self._local_slot.get()
+        if namespace == "functions":
+            return self._parts.functions_catalog
+        if namespace == "examples":
+            return self._parts.examples_catalog
+        raise CompileError(f"Unknown library catalog: {namespace}")
+
+    def package_by_import_name(self, import_name: str) -> ResolvedPackageNamespace | None:
+        """Delegate canonical package lookup to the captured non-Local selection."""
+        return self._parts.package_by_import_name(import_name)
+
+
+def _make_compilation_environment() -> _CompilationEnvironment:
+    """Create fresh package selections and an unrequested Local slot for a root."""
+    parts, _local = _resolve_environment_parts(capture_local=False)
+    return _CompilationEnvironment(parts, _LocalCatalogSlot())
+
+
+def resolve_environment() -> ResolvedEnvironment:
+    """Resolve a complete eager package/extension/Local environment snapshot."""
+    parts, local_catalog = _resolve_environment_parts(capture_local=True)
+    assert local_catalog is not None
+    return ResolvedEnvironment(
+        catalogs={"functions": parts.functions_catalog,
+                  "examples": parts.examples_catalog,
+                  "local": local_catalog},
+        package_namespaces=parts.package_namespaces,
+        extension_registry=parts.extension_registry,
     )
 
 

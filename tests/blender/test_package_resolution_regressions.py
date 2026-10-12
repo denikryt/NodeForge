@@ -247,3 +247,54 @@ def test_save_to_local_scene_and_operator_rna_have_no_source_selector():
     finally:
         if not was_registered:
             NodeForge.unregister()
+
+
+@pytest.mark.parametrize('selected_local', [False, True])
+def test_package_source_transitivity_and_native_owner_do_not_rescan_local(tmp_path, monkeypatch, selected_local):
+    """Native package/source materialization keeps Local demand in selected frontend preparation."""
+    from NodeForge import environment_resolution as resolution
+    from NodeForge.blender.group_backend import BlenderGroupBackend
+    root = tmp_path / 'demand-package'
+    _package(root, 'vendor.demand', 'functions', python=True)
+    (root / 'functions/plain.nf').write_text('x=input_float("X")\noutput("Value", x)\n')
+    (root / 'functions/selected.nf').write_text(
+        'from local import noise\nx=input_float("X")\noutput("Value", noise(x))\n')
+    owner = root / 'functions/native'
+    owner.mkdir()
+    (owner / 'interface.py').write_text(
+        'from typing import Annotated\nfrom NodeForge import Float, EvaluationMode\n'
+        'EXTENSION_API=2\nEXTENSIONS={"native": ".backend:build"}\n'
+        'def native(x: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...\n')
+    (owner / 'backend.py').write_text('def build(context, x):\n    return x\n')
+    packages.install_package_directory(root, allow_python=True)
+    local = tmp_path / 'Local'
+    local.mkdir()
+    (local / 'noise.nf').write_text('x=input_float("X")\noutput("Value", x+1.0)\n')
+    registry = tmp_path / 'registry.json'
+    monkeypatch.setattr(local_sources, '_default_local_catalog_dir', lambda: local)
+    monkeypatch.setattr(local_sources, '_local_sources_registry_path', lambda: registry)
+    if not selected_local:
+        registry.write_text('{"version":999,"roots":[]}')
+    count = []
+    original_capture = resolution._capture_local_catalog
+    def capture():
+        """Count frontend demand in the real native package build."""
+        count.append(True)
+        return original_capture()
+    monkeypatch.setattr(resolution, '_capture_local_catalog', capture)
+    original_publish = BlenderGroupBackend.create_or_update
+    def publish(self, request, **kwargs):
+        """Require materialization to consume the previously prepared session."""
+        def forbidden():
+            """Refuse a backend-initiated Local inventory scan."""
+            pytest.fail('Local capture during package materialization')
+        with monkeypatch.context() as guarded:
+            guarded.setattr(resolution, '_capture_local_catalog', forbidden)
+            return original_publish(self, request, **kwargs)
+    monkeypatch.setattr(BlenderGroupBackend, 'create_or_update', publish)
+    callee = 'selected' if selected_local else 'plain'
+    text = f'from packages import demand\noutput("Value", demand.native(demand.{callee}(1.0)))'
+    group = compile_group(text, 'NFTest_package_local_demand')
+    assert group is not None and len(count) == int(selected_local)
+    compiler.update_expression_group(group, text)
+    assert len(count) == 2 * int(selected_local)

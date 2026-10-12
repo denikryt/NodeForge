@@ -12,25 +12,11 @@ from .blender.group_assembly import _populate_group
 from .blender.group_backend import BlenderGroupBackend
 from .blender.group_build_request import BlenderGroupBuildRequest
 from .resolved_environment import ResolvedEnvironment
-from .environment_resolution import resolve_environment
-
-
-class _ResolvedEnvironmentSlot:
-    """Resolve at most one immutable environment for a compiler-owned backend."""
-
-    def __init__(self, resolved_environment: ResolvedEnvironment | None = None):
-        """Optionally seed the slot for direct catalog operations."""
-        self._environment = resolved_environment
-
-    def get(self) -> ResolvedEnvironment:
-        """Return the seeded snapshot or resolve and retain one complete result."""
-        if self._environment is None:
-            self._environment = resolve_environment()
-        return self._environment
+from .environment_resolution import resolve_environment, _make_compilation_environment
 
 
 class _ResolvedEnvironmentBoundBackend(BlenderGroupBackend):
-    """Bind one immutable environment to semantic preparation and physical publication."""
+    """Bind root-session environment selection to preparation and publication."""
 
     def __init__(self, *, populate_candidate, prepare_compilation, resolved_environment_for_session):
         """Bind population, preparation, and one compiler-session environment provider."""
@@ -43,20 +29,25 @@ class _ResolvedEnvironmentBoundBackend(BlenderGroupBackend):
 
     def compile_group_callback(self, source: str, name: str = "NodeForge Group", **kwargs):
         """Ensure public package builds share one source-call session across both phases."""
-        kwargs.setdefault("source_callable_session", self.new_source_callable_session())
+        if kwargs.get("source_callable_session") is None:
+            kwargs["source_callable_session"] = self.new_source_callable_session()
         return super().compile_group_callback(source, name=name, **kwargs)
 
 
 def _new_group_backend(resolved_environment: ResolvedEnvironment | None = None):
-    """Return a prepared-only physical backend bound to one environment snapshot."""
-    slot = _ResolvedEnvironmentSlot(resolved_environment)
+    """Build a root environment per session, or reuse a supplied eager snapshot."""
+    def environment_for_session():
+        """Reuse a supplied eager value or resolve a fresh compiler root view."""
+        return resolved_environment if resolved_environment is not None else _make_compilation_environment()
 
     def prepare(source, *, compilation_identity, source_callable_session=None, **kwargs):
-        session = source_callable_session or SourceCallableSession(resolved_environment=slot.get())
+        session = source_callable_session or SourceCallableSession(resolved_environment=environment_for_session())
+        if resolved_environment is not None and session.resolved_environment is not resolved_environment:
+            raise CompileError("Source callable session does not match supplied resolved environment")
         return analyze_group_source(
             source,
             compilation_identity=compilation_identity,
-            resolved_environment=slot.get(),
+            resolved_environment=session.resolved_environment,
             inherited_local_functions=kwargs.get("inherited_local_functions"),
             inherited_imported_library_functions=kwargs.get("inherited_imported_library_functions"),
             helper_namespace=kwargs.get("helper_namespace") or "NodeForge Group",
@@ -66,7 +57,7 @@ def _new_group_backend(resolved_environment: ResolvedEnvironment | None = None):
     return _ResolvedEnvironmentBoundBackend(
         populate_candidate=_populate_group,
         prepare_compilation=prepare,
-        resolved_environment_for_session=slot.get,
+        resolved_environment_for_session=environment_for_session,
     )
 
 

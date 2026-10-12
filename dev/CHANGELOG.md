@@ -425,3 +425,8 @@ lifecycle.
 ## 0.66.3
 
 - Removed unused compiler/materializer assignments and the snapshot loader override that duplicated the standard loader implementation.
+
+## 0.66.4
+
+- Reduced Local discovery work by filtering filenames before file checks and sorting only source candidates.
+- Capture Local sources on the first semantic Local import in each compilation, including selected package dependencies; keep explicit catalog operations eager.

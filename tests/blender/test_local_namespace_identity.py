@@ -130,3 +130,56 @@ def test_invalid_selection_and_backend_failure_leave_no_published_groups(local_t
     with pytest.raises(CompileError, match='injected Local publication failure'):
         compile_group('from local.terrain import noise\noutput(noise(1.0))', 'NFTest_local_origin_rollback')
     assert {group.as_pointer() for group in bpy.data.node_groups} == before
+
+
+def test_root_create_update_and_callbacks_capture_only_before_materialization(local_tree, monkeypatch):
+    """Native create/update and callback paths use zero or one frontend-owned capture."""
+    from NodeForge import environment_resolution as resolution
+    from NodeForge.blender.group_backend import BlenderGroupBackend
+    captures = []
+    original_capture = resolution._capture_local_catalog
+    def capture():
+        """Record actual capture results for native compilation attempts."""
+        selected = original_capture()
+        captures.append(selected)
+        return selected
+    monkeypatch.setattr(resolution, '_capture_local_catalog', capture)
+    original_publish = BlenderGroupBackend.create_or_update
+    def publish(self, request, **kwargs):
+        """Fail if physical lowering initiates any Local inventory capture."""
+        def forbidden():
+            """Reject discovery after semantic preparation has finished."""
+            pytest.fail('Local capture during native materialization')
+        with monkeypatch.context() as guarded:
+            guarded.setattr(resolution, '_capture_local_catalog', forbidden)
+            return original_publish(self, request, **kwargs)
+    monkeypatch.setattr(BlenderGroupBackend, 'create_or_update', publish)
+    root = compiler.create_expression_group('output("Value", 1.0)', 'NFTest_local_free_demand')
+    pointer = root.as_pointer()
+    compiler.update_expression_group(root, 'output("Value", 2.0)')
+    assert root.as_pointer() == pointer and captures == []
+    write(local_tree, 'terrain/noise.nf')
+    text = 'from local import terrain as t\ndef helper(x: Float):\n    return t.noise(x)\noutput("Value", helper(1.0))'
+    compiler.update_expression_group(root, text)
+    assert len(captures) == 1 and root.as_pointer() == pointer
+    compiler.update_expression_group(root, text)
+    assert len(captures) == 2 and captures[0] is not captures[1]
+    backend = compiler._new_group_backend()
+    backend.compile_group_callback('output("Value", 3.0)', name='NFTest_local_free_callback')
+    assert len(captures) == 2
+    backend.compile_group_callback(text, name='NFTest_local_demand_callback')
+    assert len(captures) == 3
+
+
+def test_native_local_free_root_ignores_bad_registry_but_import_fails(local_tree, tmp_path, monkeypatch):
+    """Broken Local state does not affect independent native roots or their updates."""
+    registry = tmp_path / 'bad-registry.json'
+    registry.write_text('{"version":999,"roots":[]}')
+    monkeypatch.setattr(local_sources, '_local_sources_registry_path', lambda: registry)
+    root = compiler.create_expression_group('output("Value", 1.0)', 'NFTest_bad_local_free')
+    pointer = root.as_pointer()
+    compiler.update_expression_group(root, 'output("Value", 2.0)')
+    before = (pointer, len(root.nodes), len(root.links), metadata_values(root))
+    with pytest.raises(CompileError, match='Unsupported Local source registry format'):
+        compiler.update_expression_group(root, 'from local import *\noutput("Value", 3.0)')
+    assert (root.as_pointer(), len(root.nodes), len(root.links), metadata_values(root)) == before

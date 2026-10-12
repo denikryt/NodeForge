@@ -357,3 +357,131 @@ def test_local_browser_and_selected_source_ui_keep_duplicate_paths(storage, monk
     with pytest.raises(CompileError, match='unavailable'):
         namespace['create_local_source_group'](str(managed / 'missing.nf'))
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize('name', [
+    'noise.nf', 'noise.nodeforge', 'match.nf', 'case.nodeforge', 'x.y.nf',
+    '.nf', '..nf', 'noise.NF', 'noise.nf.', 'noise', 'class.nf', '_noise.nf',
+    'éclair.nf', 'noise\n.nf', 'noise..nodeforge', '.hidden.nf', 'source.nf',
+])
+def test_string_candidate_filter_matches_path_eligibility(name):
+    """The allocation-free filter preserves exact suffix/stem public-name rules."""
+    path = Path(name)
+    expected = path.stem if path.suffix in catalog._SOURCE_EXTENSIONS and catalog.is_public_local_name(path.stem) else None
+    assert catalog._eligible_local_stem(name) == expected
+
+
+def test_raw_discovery_order_pruning_and_linked_positions(tmp_path, monkeypatch):
+    """Raw tuples retain per-root sorted walker order and linked-file registration order."""
+    managed = tmp_path / 'Local'
+    names = ('z.nodeforge', 'A.nf', 'a.nf', 'terrain/noise.nodeforge', 'terrain/noise.nf',
+             'class/valid.nf', 'My Geometry/flat.nf')
+    paths = {name: write(managed, name) for name in reversed(names)}
+    for name in ('_cache/hidden.nf', '.git/hidden.nf', 'hidden.txt', 'class.nf', '.nf', '_secret.nf'):
+        write(managed, name)
+    (managed / 'empty').mkdir()
+    external = tmp_path / 'Terrain'
+    external_path = write(external, 'B.nf')
+    linked_a = write(tmp_path, 'linked/a.nf')
+    linked_z = write(tmp_path, 'linked/z.nf')
+    original_walk = os.walk
+    visited = []
+    def reversed_files(*args, **kwargs):
+        """Change scan order to prove candidates are deterministically ordered."""
+        for current, children, files in original_walk(*args, **kwargs):
+            visited.append(Path(current).name)
+            yield current, children, list(reversed(files))
+    monkeypatch.setattr(os, 'walk', reversed_files)
+    expected_names = ('A.nf', 'a.nf', 'z.nodeforge', 'My Geometry/flat.nf',
+                      'class/valid.nf', 'terrain/noise.nf', 'terrain/noise.nodeforge')
+    for _ in range(2):
+        records, directories, positions = catalog.discover_local_sources((managed, external), (linked_z, linked_a))
+        expected = [paths[name] for name in expected_names] + [external_path, linked_z, linked_a]
+        assert tuple((r.name, r.source_origin, r.folder_path) for r in records) == tuple(
+            (p.stem, origin(p), str(p.parent.relative_to(managed)) if p in paths.values() and p.parent != managed else '')
+            for p in expected)
+        assert directories == tuple((prefix, origin(path)) for prefix, path in (
+            (('My Geometry',), managed / 'My Geometry'), (('class',), managed / 'class'),
+            (('empty',), managed / 'empty'), (('terrain',), managed / 'terrain'),
+            (('Terrain',), external)))
+        assert positions == tuple((prefix, path.stem, origin(path)) for prefix, path in (
+            ((), paths['A.nf']), ((), paths['a.nf']), ((), paths['z.nodeforge']),
+            (('terrain',), paths['terrain/noise.nf']), (('terrain',), paths['terrain/noise.nodeforge']),
+            (('Terrain',), external_path)))
+    assert '_cache' not in visited and '.git' not in visited
+
+
+def test_rejected_filenames_are_never_sorted_or_materialized(tmp_path, monkeypatch):
+    """Large unrelated filename lists cause neither source Path allocation nor status probes."""
+    accepted = write(tmp_path, 'ok.nf')
+    filenames = [f'unrelated_{i}.txt' for i in range(30000)] + ['noise.NF', 'class.nf', '.nf', '_hidden.nf', 'ok.nf']
+    def walk(root, **kwargs):
+        """Provide a populated directory at the production controlled-walker boundary."""
+        yield str(root), [], filenames
+    real_path, real_sorted = catalog.Path, sorted
+    allocated, sorted_values = [], []
+    def path(value):
+        """Track catalog-owned Path allocation independently of os.walk internals."""
+        allocated.append(str(value))
+        return real_path(value)
+    def candidate_sort(values, *args, **kwargs):
+        """Reject any rejected filename entering an ordering operation."""
+        values = list(values)
+        sorted_values.extend(values)
+        return real_sorted(values, *args, **kwargs)
+    def file_probe(self):
+        """Enforce that only accepted source candidates receive is_file checks."""
+        assert self == accepted
+        return True
+    monkeypatch.setattr(os, 'walk', walk)
+    monkeypatch.setattr(catalog, 'Path', path)
+    monkeypatch.setattr(catalog, 'sorted', candidate_sort, raising=False)
+    monkeypatch.setattr(Path, 'is_file', file_probe)
+    records, _, _ = catalog.discover_local_sources((tmp_path,))
+    assert len(records) == 1 and records[0].path == accepted
+    assert sorted_values == ['ok.nf']
+    assert not any('unrelated_' in value for value in allocated)
+
+
+@pytest.mark.parametrize('linked', [False, True])
+def test_reserved_layout_only_errors_for_existing_file(tmp_path, linked):
+    """source.nf keeps its status-before-error behavior for traversed and linked entries."""
+    reserved = tmp_path / 'source.nf'
+    reserved.symlink_to(tmp_path / 'missing.nf')
+    roots, files = ((tmp_path,), ()) if not linked else ((), (reserved,))
+    assert catalog.discover_local_sources(roots, files)[0] == ()
+    reserved.unlink()
+    reserved.write_text('output(1.0)')
+    with pytest.raises(CompileError) as error:
+        catalog.discover_local_sources(roots, files)
+    assert str(error.value) == f'Unsupported local source layout: {reserved}'
+
+
+def test_file_status_error_never_publishes_partial_records(tmp_path, monkeypatch):
+    """A late accepted-file status failure refuses an already partially visited tree."""
+    write(tmp_path, 'a.nf')
+    bad = write(tmp_path, 'z.nf')
+    original = Path.is_file
+    def probe(self):
+        """Inject failure after the first candidate was accepted."""
+        if self == bad:
+            raise PermissionError(13, 'status denied', str(self))
+        return original(self)
+    monkeypatch.setattr(Path, 'is_file', probe)
+    with pytest.raises(PermissionError, match='status denied'):
+        catalog.discover_local_sources((tmp_path,))
+
+
+def test_file_root_and_canonical_target_stem_validation(tmp_path):
+    """Only eligible canonical target names survive; invalid roots fail explicitly."""
+    root = tmp_path / 'Local'
+    root.mkdir()
+    invalid = write(root, 'class.nf')
+    (root / 'valid.nf').symlink_to(invalid)
+    valid = write(root, 'valid_target.nf')
+    (root / 'alias.nf').symlink_to(valid)
+    captured = index(root)
+    assert captured.flat_names() == {'valid_target'}
+    assert captured.find_flat_function('valid_target').source_origin == origin(valid)
+    with pytest.raises(CompileError, match='not a directory'):
+        catalog.discover_local_sources((valid,))

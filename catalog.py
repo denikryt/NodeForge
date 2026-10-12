@@ -262,6 +262,14 @@ def is_public_local_name(name: str) -> bool:
     return _is_public_function_name(name) and name.isidentifier() and not keyword.iskeyword(name)
 
 
+def _eligible_local_stem(name: str) -> str | None:
+    """Filter ordinary Local filenames without allocating or probing a path."""
+    stem, separator, suffix = name.rpartition(".")
+    if not separator or "." + suffix not in _SOURCE_EXTENSIONS:
+        return None
+    return stem if is_public_local_name(stem) else None
+
+
 def discover_local_sources(local_roots, local_files=()):
     """Capture Local source records and empty directory positions in one traversal.
 
@@ -319,9 +327,15 @@ def discover_local_sources(local_roots, local_files=()):
             current_prefix = physical_prefix if all(is_public_local_name(x) for x in physical_prefix) else None
             if relative:
                 directories.append((physical_prefix, _path_key(current)))
-            for name in sorted(files):
-                if not name.startswith(("_", ".")):
-                    add_source(Path(current) / name, root, current_prefix)
+            # Preserve walker order while sorting only potential sources. source.nf
+            # retains its is_file-before-layout-error check, including broken links.
+            candidates = (
+                name for name in files
+                if not name.startswith(("_", "."))
+                and (name == _PACKAGE_SOURCE_NAME or _eligible_local_stem(name) is not None)
+            )
+            for name in sorted(candidates):
+                add_source(Path(current) / name, root, current_prefix)
     for linked in local_files:
         path = _path_value(linked)
         if path.is_file():
