@@ -425,3 +425,7 @@ lifecycle.
 ## 0.66.3
 
 - Removed unused compiler/materializer assignments and the snapshot loader override that duplicated the standard loader implementation.
+
+## 0.66.4
+
+- Streamlined the README Local-library guidance and compiler overview, with the full Local import forms linked from the documentation.
