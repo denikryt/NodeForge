@@ -13,7 +13,7 @@ class SourceCallableSession:
     """Own one root-attempt source snapshot and owner-specific preparation cache."""
 
     def __init__(self, *, resolved_environment) -> None:
-        """Start a root-scoped source/preparation session with no persistent cache."""
+        """Share one eager environment or compiler demand view through recursive preparation."""
         self.resolved_environment = resolved_environment
         self.source_snapshots: dict[FunctionId, str] = {}
         self.prepared: dict[SourceCallablePreparationKey, PreparedSourceCallable] = {}

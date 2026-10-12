@@ -173,6 +173,34 @@ class ResolvedPackageNamespace:
         return self.exports.get(name)
 
 
+def _freeze_package_selection(package_namespaces, extension_registry):
+    """Validate and freeze canonical package lookup and its extension registry."""
+    from .extensions.registry import ExtensionRegistry
+
+    namespaces = dict(package_namespaces)
+    import_index: dict[str, str] = {}
+    for package_id, namespace in namespaces.items():
+        if not isinstance(namespace, ResolvedPackageNamespace) or namespace.package_id != package_id:
+            raise ValueError("Resolved package namespace key does not match canonical package id")
+        previous = import_index.get(namespace.import_name)
+        if previous is not None and previous != package_id:
+            raise ValueError("Resolved environment package import names must be unique")
+        import_index[namespace.import_name] = package_id
+
+    registry = extension_registry
+    if registry is None:
+        registry = ExtensionRegistry.empty()
+    if not isinstance(registry, ExtensionRegistry):
+        raise TypeError("extension_registry must be an ExtensionRegistry")
+    for namespace in namespaces.values():
+        for export in namespace.exports.values():
+            callable_id = export.extension_callable_id
+            if callable_id is not None and not registry.contains(callable_id):
+                raise ValueError("Resolved package extension callable is missing from extension registry")
+
+    return MappingProxyType(namespaces), MappingProxyType(import_index), registry
+
+
 @dataclass(frozen=True)
 class ResolvedEnvironment:
     """Immutable external callable selection shared by one root compilation."""
@@ -183,8 +211,6 @@ class ResolvedEnvironment:
 
     def __post_init__(self) -> None:
         """Validate and freeze catalogs, owner-qualified packages, and extension registry."""
-        from .extensions.registry import ExtensionRegistry
-
         catalogs = dict(self.catalogs)
         if frozenset(catalogs) != _CATALOG_NAMES:
             raise ValueError("Resolved environment requires functions, examples, and local catalogs")
@@ -192,30 +218,13 @@ class ResolvedEnvironment:
             if catalog.namespace != namespace:
                 raise ValueError("Resolved environment catalog key does not match catalog namespace")
 
-        namespaces = dict(self.package_namespaces)
-        import_index: dict[str, str] = {}
-        for package_id, namespace in namespaces.items():
-            if not isinstance(namespace, ResolvedPackageNamespace) or namespace.package_id != package_id:
-                raise ValueError("Resolved package namespace key does not match canonical package id")
-            previous = import_index.get(namespace.import_name)
-            if previous is not None and previous != package_id:
-                raise ValueError("Resolved environment package import names must be unique")
-            import_index[namespace.import_name] = package_id
-
-        registry = self.extension_registry
-        if registry is None:
-            registry = ExtensionRegistry.empty()
-        if not isinstance(registry, ExtensionRegistry):
-            raise TypeError("extension_registry must be an ExtensionRegistry")
-        for namespace in namespaces.values():
-            for export in namespace.exports.values():
-                callable_id = export.extension_callable_id
-                if callable_id is not None and not registry.contains(callable_id):
-                    raise ValueError("Resolved package extension callable is missing from extension registry")
+        namespaces, import_index, registry = _freeze_package_selection(
+            self.package_namespaces, self.extension_registry
+        )
 
         object.__setattr__(self, "catalogs", MappingProxyType(catalogs))
-        object.__setattr__(self, "package_namespaces", MappingProxyType(namespaces))
-        object.__setattr__(self, "_package_import_index", MappingProxyType(import_index))
+        object.__setattr__(self, "package_namespaces", namespaces)
+        object.__setattr__(self, "_package_import_index", import_index)
         object.__setattr__(self, "extension_registry", registry)
 
     def catalog(self, namespace: str) -> ResolvedCatalog:
