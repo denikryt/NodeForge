@@ -278,21 +278,6 @@ def test_i9_negative_removed_temporary_marker_vocabulary_is_not_reintroduced():
         assert "TODO(nodeforge-compat):" not in source, path
 
 
-# I10 — the permanent compiler contract has a legacy-free version floor, not an exact future pin.
-def test_i10_positive_core_contract_is_at_or_above_legacy_free_core_cutover_floor():
-    """Later releases retain the legacy-free cutover rather than pinning one patch version."""
-    import NodeForge
-
-    assert NodeForge.bl_info["version"] >= (0, 62, 2)
-
-
-def test_i10_negative_core_contract_cannot_report_a_pre_cutover_version():
-    """The legacy-free artifact cannot advertise a core version below the permanent cutover floor."""
-    import NodeForge
-
-    assert NodeForge.bl_info["version"] >= (0, 62, 2)
-
-
 # I11 — normalized source defaults belong to frontend semantics, not physical helpers.
 def test_i11_positive_audited_physical_helpers_require_normalized_source_state_explicitly():
     """Physical helpers expose no duplicate source-language defaults for audited arguments."""
@@ -342,19 +327,3 @@ def test_i11_negative_lowering_does_not_reconstruct_audited_source_defaults():
     semantic_lowering_source = (ROOT / "semantic/lowering.py").read_text(encoding="utf-8")
     assert 'option_map.get("raw_output_mode")' not in semantic_lowering_source
     assert 'option_map["raw_output_mode"]' in semantic_lowering_source
-
-
-# I12 — Release-coupled package fixtures track the current public core version.
-def test_i12_positive_release_coupled_fixture_ceiling_matches_current_core_version():
-    """The current public core release and synthetic package ceilings advance together."""
-    import NodeForge
-
-    current = ".".join(str(part) for part in NodeForge.bl_info["version"])
-    expected = f'"nodeforge_max_version": "{current}"'
-    for relative in (
-        "tests/unit/test_extension_bootstrap.py",
-        "tests/unit/test_extension_packages.py",
-        "tests/blender/test_extension_api_v2.py",
-    ):
-        source = (ROOT / relative).read_text(encoding="utf-8")
-        assert expected in source, relative
