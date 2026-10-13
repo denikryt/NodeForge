@@ -434,3 +434,8 @@ lifecycle.
 
 - Added `__unique__=True` for imported Local scripts, creating a private group for each marked call while retaining shared default calls.
 - Preserve unique Local group identity and editable state across unchanged updates, root rename, save/reopen, and Reload from Source; added Blender characterization coverage.
+
+## 0.67.1
+
+- Removed release-number assertions and exact current-version ceilings from synthetic package fixtures while retaining focused minimum/maximum compatibility enforcement coverage.
+- Repaired unresolved merge markers in Extension API v2 Blender fixtures and made routine release bumps independent from those fixtures.

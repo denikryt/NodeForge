@@ -233,7 +233,8 @@ Package-defined semantic values may persist in source-variable/body state throug
 ## Repository hygiene and release closure
 
 - `tests/unit/test_repository_hygiene.py`: Python filenames/content use semantic terminology instead of refactor chronology, and production Python contains no temporary compatibility/migration TODO markers.
-- `tests/unit/test_legacy_compiler_removal.py`: release-coupled synthetic package ceilings derive from the current core version while legacy execution APIs remain physically absent.
+- `tests/unit/test_package_inventory.py`: package admission rejects manifests whose minimum version is newer than the running core or whose maximum version is older than it. General package fixtures use an open maximum so routine core releases do not require fixture updates.
+- `tests/unit/test_legacy_compiler_removal.py`: legacy execution APIs remain physically absent and permanent compiler boundaries stay free of retired compatibility paths.
 - Final release validation additionally requires the complete unit/Blender regression matrix plus downstream package and extracted-artifact checks described by the release process.
 
 ## Module organization contract
