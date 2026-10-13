@@ -29,6 +29,7 @@ from .call_resolution import (
     UNRESOLVED,
     non_callable_source_binding_error,
     package_candidates_for_unqualified,
+    local_directory_candidates_for_unqualified,
     resolve_package_callable,
     resolve_local_callable,
     resolve_simple_callable,
@@ -1612,7 +1613,9 @@ def analyze_expression(expr, environment):
                 package_candidates = package_candidates_for_unqualified(
                     name, environment.callable_environment
                 )
-                if package_candidates and has_source_value_binding(
+                if (package_candidates or local_directory_candidates_for_unqualified(
+                    name, environment.callable_environment
+                )) and has_source_value_binding(
                     name,
                     runtime_bindings=environment.runtime_bindings,
                     compile_time_values=environment.const_eval_values,

@@ -158,11 +158,19 @@ class LocalSourceIndex:
             parent = selected.import_path
         return selected
 
-    def resolve_member(self, parent, name):
-        """Select one member of a previously uniquely selected directory."""
+    def resolve_member(self, parent, name, *, source_extensions=None):
+        """Select a member, optionally filtering source records before collision checks."""
         if self.resolve_directory(parent.import_path) != parent:
             raise CompileError('Local directory does not belong to this snapshot')
-        return self._select(name, self.path_members.get(parent.import_path, {}).get(name, LocalMember()))
+        member = self.path_members.get(parent.import_path, {}).get(name, LocalMember())
+        if source_extensions is not None:
+            # Bare directory exports are .nf-only; qualified lookup keeps both suffixes.
+            member = LocalMember(
+                tuple(origin for origin in member.source_origins
+                      if self.by_origin[origin].source_path.suffix in source_extensions),
+                member.directory_candidates,
+            )
+        return self._select(name, member)
 
     def qualified_imports(self, origin):
         """Offer only directory-qualified imports proven to select this exact file."""

@@ -439,3 +439,8 @@ lifecycle.
 
 - Removed release-number assertions and exact current-version ceilings from synthetic package fixtures while retaining focused minimum/maximum compatibility enforcement coverage.
 - Repaired unresolved merge markers in Extension API v2 Blender fixtures and made routine release bumps independent from those fixtures.
+
+## 0.68.0
+
+- Added bare calls for immediate public `.nf` functions from Local directory imports without an alias, with call-time ambiguity diagnostics and lazy source preparation.
+- Preserve namespace-only alias imports, qualified `.nodeforge` access, canonical source identity, and existing shared/private group behavior.

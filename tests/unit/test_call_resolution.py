@@ -6,6 +6,7 @@ import ast
 from types import SimpleNamespace
 
 import pytest
+from NodeForge.errors import CompileError
 
 from NodeForge.semantic.compile_time import CompileTimeSnapshot
 
@@ -188,7 +189,8 @@ def test_top_level_only_and_non_simple_call_diagnostics_are_preserved():
     with pytest.raises(Exception, match="Only simple or package-qualified function calls are supported"):
         _analyze_unresolved("factory()()")
 
-def test_local_or_explicit_import_collision_with_package_is_ambiguous():
+def test_local_or_explicit_import_collision_with_package_is_ambiguous(tmp_path, monkeypatch):
+    """Namespace candidates report ambiguity before constructing package targets."""
     package = _package_binding("pkg", {"foo": _extension_id("foo")})
     record = SimpleNamespace(package_id="vendor.local", namespace="functions", name="foo")
     binding = SimpleNamespace(namespace="functions", canonical_name="foo", record=record)
@@ -197,6 +199,24 @@ def test_local_or_explicit_import_collision_with_package_is_ambiguous():
         resolve_simple_callable("foo", CallableEnvironment(frozenset(), {"foo": object()}, {}, {"pkg": package}))
     with pytest.raises(Exception, match="Ambiguous callable 'foo'"):
         resolve_simple_callable("foo", CallableEnvironment(frozenset(), {}, {"foo": binding}, {"pkg": package}))
+
+    from NodeForge import catalog
+    from NodeForge.local_index import LocalSourceIndex
+    from NodeForge.semantic import call_resolution
+    from NodeForge.semantic.source_bindings import LocalDirectoryNamespaceBinding
+    (tmp_path / 'terrain').mkdir()
+    (tmp_path / 'terrain/foo.nf').write_text('output(1.0)')
+    index = LocalSourceIndex.from_discovery(*catalog.discover_local_sources((tmp_path,)))
+    namespace = LocalDirectoryNamespaceBinding('terrain', index, index.resolve_directory(('terrain',)), True)
+    environment = CallableEnvironment(frozenset(), {}, {}, {'pkg': package}, {'terrain': namespace})
+
+    def premature(*args):
+        """Reject construction of an unresolved losing package candidate."""
+        raise AssertionError('package target constructed before ambiguity resolution')
+
+    monkeypatch.setattr(call_resolution, '_resolved_from_package_export', premature)
+    with pytest.raises(CompileError, match=r"Ambiguous callable 'foo'"):
+        resolve_simple_callable('foo', environment)
 
 
 def test_different_source_aliases_preserve_canonical_package_target():

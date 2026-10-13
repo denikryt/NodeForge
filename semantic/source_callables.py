@@ -10,6 +10,7 @@ from .call_resolution import (
     CallableEnvironment,
     non_callable_source_binding_error,
     package_candidates_for_unqualified,
+    local_directory_candidates_for_unqualified,
 )
 from .callable_contracts import (
     SourceCallableContract,
@@ -335,7 +336,7 @@ def has_source_value_binding(
     return name in compile_time_values
 
 
-def _validate_local_bare_package_calls(
+def _validate_local_bare_namespace_calls(
     analysis: _LocalNameAnalysis,
     *,
     callable_environment: CallableEnvironment,
@@ -346,11 +347,12 @@ def _validate_local_bare_package_calls(
     builder_binding_names=frozenset(),
     extension_binding_names=frozenset(),
 ) -> None:
-    """Reject outer source values that invalidate the function's bare package calls."""
+    """Reject outer source values that invalidate the function's bare namespace calls."""
     for name in analysis.callee_names:
         if name in analysis.local_bindings:
             continue
-        if not package_candidates_for_unqualified(name, callable_environment):
+        if not (package_candidates_for_unqualified(name, callable_environment)
+                or local_directory_candidates_for_unqualified(name, callable_environment)):
             continue
         if has_source_value_binding(
             name,
@@ -407,7 +409,7 @@ def analyze_local_captures(
     local_namespaces = {} if callable_environment is None else callable_environment.local_namespaces
     analysis = _analyze_local_names(fn, {**package_namespaces, **local_namespaces})
     if callable_environment is not None:
-        _validate_local_bare_package_calls(
+        _validate_local_bare_namespace_calls(
             analysis,
             callable_environment=callable_environment,
             runtime_bindings=runtime_bindings,

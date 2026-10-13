@@ -150,9 +150,11 @@ def test_local_free_frontend_ignores_local_failures(inputs, counters, monkeypatc
     'from local import noise\noutput(noise(1.0))',
     'from local.terrain import noise\noutput(noise(1.0))',
     'from local import terrain as t\noutput(t.noise(1.0))',
+    'from local import terrain\noutput(noise(1.0))',
     'from local import *\noutput("Value", 1.0)',
     'from local import noise as a\nfrom local.terrain import noise as b\noutput(a(1.0) + b(2.0))',
     'from local import terrain as t\ndef helper(x: Float):\n    return t.noise(x)\noutput(helper(1.0))',
+    'from local import terrain\ndef helper(x: Float):\n    return noise(x)\noutput(helper(1.0))',
 ])
 def test_semantic_imports_capture_once_and_preserve_origin(inputs, counters, text):
     """Direct/qualified/star/inherited selections share one exact captured inventory."""

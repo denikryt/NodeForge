@@ -73,6 +73,14 @@ def test_same_position_extensions_have_no_broken_suggestions(tmp_path):
     a = write(tmp_path, 'terrain/noise.nf')
     b = write(tmp_path, 'terrain/noise.nodeforge')
     captured = index(tmp_path)
+    directory = captured.resolve_directory(('terrain',))
+    assert captured.resolve_member(directory, 'noise', source_extensions=('.nf',)).source_origin == origin(a)
+    write(tmp_path, 'terrain/only.nodeforge')
+    with_only = index(tmp_path)
+    assert with_only.resolve_member(directory, 'only', source_extensions=('.nf',)) is None
+    assert with_only.resolve_member(directory, 'only').source_path.suffix == '.nodeforge'
+    with pytest.raises(CompileError, match='Ambiguous'):
+        captured.resolve_member(directory, 'noise')
     with pytest.raises(CompileError) as error:
         captured.find_flat_function('noise')
     assert origin(a) in str(error.value) and origin(b) in str(error.value)

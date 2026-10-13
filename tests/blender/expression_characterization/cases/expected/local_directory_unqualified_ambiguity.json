@@ -1,0 +1,5 @@
+{
+  "exception": "CompileError",
+  "kind": "compile_error",
+  "message": "Ambiguous callable 'noise'.\n\nCandidates:\n  procedural.noise\n  terrain.noise\n\nUse a qualified call: procedural.noise(...), terrain.noise(...)."
+}

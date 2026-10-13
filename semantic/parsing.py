@@ -16,6 +16,7 @@ class FunctionImport:
     canonical_name: str | None
     exposed_name: str | None
     is_star: bool = False
+    has_explicit_alias: bool = False
 
 
 @dataclass(frozen=True)
@@ -153,7 +154,10 @@ def _extract_function_imports(stmts):
                 if alias.name == "*":
                     imports.append(FunctionImport(stmt.module, None, None, is_star=True))
                 else:
-                    imports.append(FunctionImport(stmt.module, alias.name, alias.asname or alias.name))
+                    imports.append(FunctionImport(
+                        stmt.module, alias.name, alias.asname or alias.name,
+                        has_explicit_alias=alias.asname is not None,
+                    ))
         else:
             body.append(stmt)
     return body, imports, package_imports
