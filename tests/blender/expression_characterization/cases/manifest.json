@@ -572,5 +572,15 @@
       "imported_local",
       "unique"
     ]
+  },
+  {
+    "id": "local_directory_unqualified_ambiguity",
+    "description": "Bare directory calls reject different .nf origins and offer qualified calls",
+    "outcome": "compile_error",
+    "tags": [
+      "imported_local",
+      "directory",
+      "ambiguity"
+    ]
   }
 ]

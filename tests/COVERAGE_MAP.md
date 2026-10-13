@@ -245,6 +245,9 @@ Package-defined semantic values may persist in source-variable/body state throug
 
 ## Local directory namespaces and canonical source ownership
 
+- Unaliased directory imports expose direct public `.nf` candidates at call time. Index and frontend scenarios cover pre-selection extension filtering, explicit self-alias, canonical dedup, verified qualifications, value-binding/capture guards and lazy source preparation. Default qualified/explicit imports retain `.nodeforge` access.
+- Existing `imported_local_unique_sharing` characterization checks bare/qualified identity and private/shared topology in a mixed-extension directory inventory; `local_directory_unqualified_ambiguity` fixes the cross-directory `.nf` error outcome and cleanup contract.
+
 - `tests/unit/test_local_source_index.py`: canonical path deduplication, hardlink distinctions, strict names, empty-directory snapshots, production linked registry collisions, verified diagnostics, immutable views, containment, exact-path browser insertion, addon execute validation, and origin-only reload rejection.
 - `tests/unit/test_local_namespace_resolution.py`: direct/flat/aliased canonical typed calls, nested directory imports, helper alias inheritance and shadowing, namespace value rejection, localized member/file/directory conflicts, flat-only stars, and source snapshots.
 - `tests/blender/test_local_namespace_identity.py`: native group reuse/isolation, source-origin metadata, namespace-free helper interfaces, pointer/link-preserving reload, legacy/missing-origin rejection, and transaction rollback after child publication failure. These tests require Blender's native Python runtime.

@@ -379,10 +379,64 @@ def qualified_package_spellings(name: str, environment: CallableEnvironment) -> 
     return tuple(f"{alias}.{name}" for alias, _ in package_candidates_for_unqualified(name, environment))
 
 
+def _local_candidate_spelling(alias, binding, environment):
+    """Offer a qualification only when ordinary lookup selects the same source."""
+    namespace = environment.local_namespaces[alias]
+    try:
+        selected = namespace.index_snapshot.resolve_member(namespace.directory, binding.canonical_name)
+    except CompileError:
+        return None
+    return f"{alias}.{binding.canonical_name}" if selected is binding.record else None
+
+
+def local_directory_candidates_for_unqualified(name, environment):
+    """Select canonical .nf candidates from opted-in frozen directory namespaces."""
+    from ..local_index import LocalDirectoryCandidate
+    from .source_bindings import LibraryBinding
+
+    if name in environment.callable_builtins or name in {"output", "store", "panel"}:
+        return ()
+    candidates = {}
+    for alias, namespace in sorted(environment.local_namespaces.items()):
+        if not namespace.expose_unqualified:
+            continue
+        record = namespace.index_snapshot.resolve_member(
+            namespace.directory, name, source_extensions=(".nf",),
+        )
+        if record is None or isinstance(record, LocalDirectoryCandidate):
+            continue
+        binding = LibraryBinding("local", record.name, record)
+        identity = library_function_id_for_record(record)
+        previous = candidates.get(identity)
+        # A second alias may provide a valid qualification for the same canonical file.
+        if previous is None or (
+            _local_candidate_spelling(previous[0], previous[1], environment) is None
+            and _local_candidate_spelling(alias, binding, environment) is not None
+        ):
+            candidates[identity] = (alias, binding)
+    return tuple(candidates.values())
+
+
+def _qualified_local_spellings(name, environment):
+    """Return verified Local qualifications for a value-bound or ambiguous name."""
+    return tuple(spelling for alias, binding in local_directory_candidates_for_unqualified(name, environment)
+                 if (spelling := _local_candidate_spelling(alias, binding, environment)) is not None)
+
+
 
 def non_callable_source_binding_error(name: str, environment: CallableEnvironment) -> CompileError:
-    """Return the shared diagnostic for a value-bound bare package call name."""
+    """Report a source value that owns an otherwise namespace-callable bare name."""
     spellings = qualified_package_spellings(name, environment)
+    local_candidates = local_directory_candidates_for_unqualified(name, environment)
+    if local_candidates:
+        alternatives = spellings + _qualified_local_spellings(name, environment)
+        message = f"Cannot call {name!r}: the name is bound to a source value."
+        if alternatives:
+            message += " Use a qualified call: " + ", ".join(f"{item}(...)" for item in alternatives) + "."
+        else:
+            message += " Local sources: " + ", ".join(binding.record.source_origin for _, binding in local_candidates)
+            message += ". Resolve the physical member collision before using a qualified call."
+        return CompileError(message)
     message = f"Cannot call {name!r}: the name is bound to a source value."
     if len(spellings) == 1:
         message += f" Use {spellings[0]}(...) to call the package function."
@@ -440,21 +494,38 @@ def resolve_simple_callable(name: str, environment: CallableEnvironment):
     is_local = name in environment.local_functions
     binding = environment.imported_functions.get(name)
     package_candidates = package_candidates_for_unqualified(name, environment)
+    local_candidates = local_directory_candidates_for_unqualified(name, environment)
+    if binding is not None and binding.namespace == "local":
+        identity = library_function_id_for_record(binding.record)
+        local_candidates = tuple((alias, candidate) for alias, candidate in local_candidates
+                                 if library_function_id_for_record(candidate.record) != identity)
     labels = []
     if is_local:
         labels.append(f"local function {name}")
     if binding is not None:
         labels.append(f"imported {name}")
     labels.extend(f"{alias}.{name}" for alias, _ in package_candidates)
+    labels.extend(_local_candidate_spelling(alias, candidate, environment)
+                  or f"{candidate.record.source_origin} (qualified member is ambiguous; resolve the physical collision)"
+                  for alias, candidate in local_candidates)
 
     if not labels:
         return UNRESOLVED
     if len(labels) > 1:
+        if local_candidates:
+            error = ambiguous_callable_error(name, labels)
+            alternatives = qualified_package_spellings(name, environment) + _qualified_local_spellings(name, environment)
+            if alternatives:
+                return_message = str(error) + "\n\nUse a qualified call: " + ", ".join(f"{item}(...)" for item in alternatives) + "."
+                raise CompileError(return_message)
+            raise error
         raise ambiguous_callable_error(name, labels, package=True)
     if is_local:
         return ResolvedCallable(CallableKind.LOCAL_FUNCTION, name, target=name)
     if binding is not None:
         return _resolved_from_library_binding(name, binding)
+    if local_candidates:
+        return _resolved_from_library_binding(name, local_candidates[0][1])
     _, export = package_candidates[0]
     return _resolved_from_package_export(name, export)
 
@@ -475,6 +546,7 @@ __all__ = [
     "UNRESOLVED",
     "non_callable_source_binding_error",
     "package_candidates_for_unqualified",
+    "local_directory_candidates_for_unqualified",
     "qualified_package_spellings",
     "resolve_package_callable",
     "resolve_simple_callable",

@@ -1,0 +1,2 @@
+x=input_float("X")
+output("Value", x+999.0)

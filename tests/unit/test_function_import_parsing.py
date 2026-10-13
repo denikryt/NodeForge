@@ -12,14 +12,18 @@ def test_package_and_catalog_imports_are_split_without_losing_source_order():
         'from packages import math, lsystem as ls\n'
         'from examples import mandelbrot as fractal\n'
         'from local import my_script\n'
+        'from local import terrain, terrain as t, terrain as terrain\n'
         'x = 1\noutput("x", x)'
     )
     body, imports, package_imports = _extract_function_imports(stmts)
 
     assert len(body) == 2
     assert imports == [
-        FunctionImport("examples", "mandelbrot", "fractal"),
+        FunctionImport("examples", "mandelbrot", "fractal", has_explicit_alias=True),
         FunctionImport("local", "my_script", "my_script"),
+        FunctionImport("local", "terrain", "terrain"),
+        FunctionImport("local", "terrain", "t", has_explicit_alias=True),
+        FunctionImport("local", "terrain", "terrain", has_explicit_alias=True),
     ]
     assert package_imports == [
         PackageImport("math", "math"),

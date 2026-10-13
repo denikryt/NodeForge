@@ -215,3 +215,117 @@ def test_non_ascii_existing_directory_reports_invalid_segment(tmp_path):
     assert calls(group.body)[0].target.function_id.source_origin == catalog._path_key(path)
     with pytest.raises(CompileError, match='Invalid Local directory name'):
         compile_source('from local.éclair import noise\noutput(noise(1.0))', env)
+
+
+def test_directory_bare_scope_identity_and_lazy_preparation(tmp_path):
+    """Bare/qualified/explicit spellings share identity while excluded sources stay lazy."""
+    path = source(tmp_path, 'terrain/noise.nf')
+    source(tmp_path, 'procedural/noise.nodeforge')
+    source(tmp_path, 'terrain/_hidden.nf')
+    source(tmp_path, 'terrain/filters/blur.nf')
+    source(tmp_path, 'unrelated/other.nf')
+    bad = source(tmp_path, 'terrain/unused.nf')
+    bad.write_text('invalid syntax ???')
+    env = environment(tmp_path)
+    group, session = compile_source('''from local import terrain, procedural
+from local.terrain import noise
+a = noise(1.0)
+b = terrain.noise(2.0)
+c = noise(3.0, __unique__=True)
+output(a+b+c)
+''', env)
+    resolved = calls(group.body)
+    assert len(resolved) == 3
+    assert {call.target.function_id.source_origin for call in resolved} == {catalog._path_key(path)}
+    assert len(session.source_snapshots) == 1
+    assert {key.function_id for key in session.prepared} == set(session.source_snapshots)
+    assert resolved[0].materialization is resolved[1].materialization is None
+    assert resolved[2].materialization is not None
+    for name in ('_hidden', 'blur', 'other'):
+        with pytest.raises(CompileError, match='Unsupported function'):
+            compile_source(f'from local import terrain\noutput({name}(1.0))', env)
+    nested, _ = compile_source('from local.terrain import filters\noutput(blur(1.0))', env)
+    assert calls(nested.body)[0].target.function_id.source_origin == catalog._path_key(tmp_path / 'terrain/filters/blur.nf')
+    for alias in ('t', 'terrain'):
+        prefix = f'from local import terrain as {alias}\n'
+        assert calls(compile_source(prefix + f'output({alias}.noise(1.0))', env)[0].body)
+        with pytest.raises(CompileError, match='Unsupported function'):
+            compile_source(prefix + 'output(noise(1.0))', env)
+    with pytest.raises(CompileError, match='[Ss]yntax'):
+        compile_source('from local import terrain\noutput(unused())', env)
+    from NodeForge.semantic.source_bindings import LocalDirectoryNamespaceBinding
+    index = env.catalog('local').local_index
+    with pytest.raises(TypeError, match='capability must be Bool'):
+        LocalDirectoryNamespaceBinding('terrain', index, index.resolve_directory(('terrain',)), 1)
+
+
+def test_directory_extension_filter_precedes_ambiguity_and_keeps_qualified_lookup(tmp_path):
+    """Only .nf auto-exports while explicit/qualified calls retain both extensions."""
+    nf = source(tmp_path, 'terrain/noise.nf')
+    long = source(tmp_path, 'procedural/noise.nodeforge')
+    source(tmp_path, 'terrain/unique.nf')
+    env = environment(tmp_path)
+    group, _ = compile_source('''from local import terrain, procedural
+from local.procedural import noise as explicit
+output(noise(1.0) + procedural.noise(1.0) + explicit(1.0))
+''', env)
+    assert [call.target.function_id.source_origin for call in calls(group.body)] == [
+        catalog._path_key(nf), catalog._path_key(long), catalog._path_key(long),
+    ]
+    with pytest.raises(CompileError, match='Unsupported function'):
+        compile_source('from local import procedural\noutput(noise(1.0))', env)
+    source(tmp_path, 'terrain/noise.nodeforge')
+    env = environment(tmp_path)
+    assert calls(compile_source('from local import terrain\noutput(noise(1.0))', env)[0].body)[0].target.function_id.source_origin == catalog._path_key(nf)
+    for text in ('from local import terrain\noutput(terrain.noise(1.0))',
+                 'from local.terrain import noise\noutput(noise(1.0))'):
+        with pytest.raises(CompileError, match='Ambiguous'):
+            compile_source(text, env)
+    source(tmp_path, 'procedural/noise.nf')
+    # Keep procedural qualification valid so only the terrain source lacks an alternative.
+    long.unlink()
+    env = environment(tmp_path)
+    assert calls(compile_source('from local import terrain, procedural\noutput(unique(1.0))', env)[0].body)
+    with pytest.raises(CompileError) as error:
+        compile_source('from local import terrain, procedural\noutput(noise(1.0))', env)
+    message = str(error.value)
+    assert 'Ambiguous callable' in message and catalog._path_key(nf) in message
+    assert 'Use a qualified call: procedural.noise(...)' in message
+    assert 'terrain.noise(...)' not in message
+
+
+def test_directory_bare_bindings_and_helper_inheritance(tmp_path):
+    """Namespace capability reaches helpers without bypassing lexical value ownership."""
+    path = source(tmp_path, 'terrain/noise.nf')
+    source(tmp_path, 'terrain/points.nf')
+    source(tmp_path, 'procedural/noise.nf')
+    env = environment(tmp_path)
+    group, session = compile_source('''from local import terrain
+offset = input_float("Offset")
+def helper(x: Float):
+    return noise(x + offset)
+output(helper(2.0))
+''', env)
+    helper = next(item for key, item in session.prepared.items() if key.function_id.kind == 'LOCAL_DEF')
+    assert [p.source_name for p in helper.contract.parameters] == ['x', 'offset']
+    assert calls(helper.group.body)[0].target.function_id.source_origin == catalog._path_key(path)
+    assert compile_source('from local import terrain\noutput(points(2))', env)[0].interface.outputs
+    assert calls(compile_source('from local import terrain\noutput(terrain.points(1.0))', env)[0].body)
+    bad_sources = (
+        'noise=2.0\noutput(noise(1.0))',
+        'noise=[1.0, 2.0]\noutput(noise(1.0))',
+        'noise=input_float("Noise")\ndef helper(x: Float):\n    return noise(x)\noutput(helper(1.0))',
+        'def helper(noise: Float):\n    return noise(1.0)\noutput(helper(1.0))',
+    )
+    for text in bad_sources:
+        with pytest.raises(CompileError, match="Cannot call 'noise'.*source value.*terrain.noise"):
+            compile_source('from local import terrain\n'+text, env)
+    assert calls(compile_source('from local import terrain\nnoise=2.0\noutput(terrain.noise(noise))', env)[0].body)
+    implicit, _ = compile_source('from local import terrain\noutput(noise + terrain.noise(1.0))', env)
+    assert [item.source_name for item in implicit.interface.inputs] == ['noise']
+    with pytest.raises(CompileError, match='Unsupported function'):
+        compile_source('from local import terrain\ndef helper(terrain: Float):\n    return noise(1.0)\noutput(helper(1.0))', env)
+    with pytest.raises(CompileError, match='Ambiguous callable'):
+        compile_source('from local import terrain\ndef noise(x: Float):\n    return x\noutput(noise(1.0))', env)
+    with pytest.raises(CompileError, match='Ambiguous callable'):
+        compile_source('from local import terrain\nfrom local.procedural import noise\noutput(noise(1.0))', env)

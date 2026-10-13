@@ -89,7 +89,7 @@ def _validate_import_bindings(
         | set(additional_reserved_names)
     )
 
-    def validate_pair(namespace, canonical_name, exposed_name, *, inherited=False, inherited_record=None, flat_only=False):
+    def validate_pair(namespace, canonical_name, exposed_name, *, inherited=False, inherited_record=None, flat_only=False, has_explicit_alias=False):
         """Validate one imported catalog binding against the frozen environment."""
         base_namespace = namespace.split(".")[0]
         catalog = resolved_environment.catalog(base_namespace)
@@ -119,7 +119,9 @@ def _validate_import_bindings(
                 raise CompileError(f"Directory import name conflicts with local binding: {exposed_name}")
             if exposed_name in reserved_names:
                 raise CompileError(f"Directory import name conflicts with reserved name: {exposed_name}")
-            directories[exposed_name] = LocalDirectoryNamespaceBinding(exposed_name, index, record)
+            directories[exposed_name] = LocalDirectoryNamespaceBinding(
+                exposed_name, index, record, expose_unqualified=not has_explicit_alias,
+            )
             return
         namespace = base_namespace
         extension_callable_id = None
@@ -144,7 +146,8 @@ def _validate_import_bindings(
             for library_name in sorted(resolved_environment.catalog(namespace).names(), key=str.lower):
                 validate_pair(namespace, library_name, library_name, flat_only=True)
         else:
-            validate_pair(namespace, import_request.canonical_name, import_request.exposed_name)
+            validate_pair(namespace, import_request.canonical_name, import_request.exposed_name,
+                          has_explicit_alias=import_request.has_explicit_alias)
     for exposed_name, inherited_binding in dict(inherited_imports or {}).items():
         if isinstance(inherited_binding, LibraryBinding):
             validate_pair(
