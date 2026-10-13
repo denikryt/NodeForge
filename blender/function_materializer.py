@@ -15,10 +15,11 @@ from typing import Callable, Mapping, MutableMapping
 from ..errors import CompileError
 from .group_build_request import BlenderGroupBuildRequest
 from ..compiler_identities import FunctionId
-from ..semantic.ir import IRFunctionMaterialization
+from ..semantic.ir import IRFunctionMaterialization, IRFunctionMaterializationMode
 from ..semantic.group import SemanticGroupCompilation
 from ..function_instances import (
     direct_library_owner_scope_for_id,
+    FUNCTION_INSTANCE_KEY_PROP,
     function_materialization_owner_scope,
     instance_key_for_materialization,
     stamp_function_metadata,
@@ -188,9 +189,13 @@ class FunctionMaterializer:
         namespace = spec.namespace
         materialization = spec.materialization
 
-        if namespace == "local":
-            if materialization is not None:
-                raise CompileError("Internal error: Local catalog materialization cannot use reusable-call IR yet")
+        if (
+            namespace == "local"
+            and materialization is not None
+            and materialization.mode is not IRFunctionMaterializationMode.UNIQUE
+        ):
+            raise CompileError("Internal error: Local reusable materialization must be unique")
+        if namespace == "local" and materialization is None:
             group = self._materialize_local_catalog(spec, context)
             return MaterializedFunctionGroup(group, "", None)
 
@@ -231,6 +236,8 @@ class FunctionMaterializer:
             "name": spec.name,
             "source": normalized_source(spec.prepared_compilation.source),
         }
+        if namespace == "local":
+            own_inputs["source_origin"] = function_id.source_origin
         existing = spec.find_existing(spec.record, instance_key=instance_key, transaction=transaction)
         def finalize_before_commit(group):
             spec.write_package_metadata(group, spec.record)
@@ -332,9 +339,15 @@ class FunctionMaterializer:
     def update_library_group(self, spec: LibraryFunctionUpdateSpec):
         """Update one provenance-validated catalog root from prepared semantics."""
         stable_function_id = spec.function_id.stable_key()
-        expected_owner_scope = direct_library_owner_scope_for_id(spec.function_id)
+        # Selected Local reloads retain the caller's occurrence identity. Its
+        # fingerprint inputs match call materialization for unchanged updates.
+        instance_key = (
+            str(spec.group.get(FUNCTION_INSTANCE_KEY_PROP) or "")
+            if spec.namespace == "local" else None
+        )
+        expected_owner_scope = direct_library_owner_scope_for_id(spec.function_id, instance_key=instance_key)
         expected_definition_owner = (
-            expected_owner_scope if spec.namespace == "local" else stable_function_id
+            direct_library_owner_scope_for_id(spec.function_id) if spec.namespace == "local" else stable_function_id
         )
         identity = spec.prepared_compilation.identity
         if identity.owner_scope != expected_owner_scope:
@@ -348,7 +361,7 @@ class FunctionMaterializer:
             name=spec.group_name,
             existing_group=spec.group,
             function_compilation_inputs={
-                "kind": "library-root",
+                "kind": "library" if instance_key else "library-root",
                 "namespace": spec.namespace,
                 **({"source_origin": spec.function_id.source_origin} if spec.namespace == "local" else {}),
                 "package_id": spec.function_id.package_id,
@@ -357,6 +370,7 @@ class FunctionMaterializer:
                 "source": normalized_source(spec.prepared_compilation.source),
             },
             source_callable_session=spec.source_callable_session,
+            function_instance_key=instance_key,
             preserve_if_equivalent=True,
         )
 

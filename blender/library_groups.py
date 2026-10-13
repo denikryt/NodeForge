@@ -241,7 +241,11 @@ def update_materialized_library_entry_group_for_record(
     validate_reloadable_library_entry_record(group, record)
     source = load_library_entry_source_for_record(record)
     function_id = library_function_id_for_record(record)
-    identity = _direct_library_compilation_identity(function_id)
+    instance_key = (
+        str(group.get(FUNCTION_INSTANCE_KEY_PROP) or "")
+        if record.namespace == "local" else None
+    )
+    identity = _direct_library_compilation_identity(function_id, instance_key=instance_key)
     session = source_callable_session or group_backend.new_source_callable_session()
     prepared = group_backend.prepare_source_compilation(
         source,
@@ -327,10 +331,12 @@ def _validate_library_function_id(function_id: FunctionId, record: LibraryEntryR
         )
 
 
-def _direct_library_compilation_identity(function_id: FunctionId) -> GroupCompilationIdentity:
-    """Return the established direct-catalog owner before semantic preparation."""
-    owner_scope = direct_library_owner_scope_for_id(function_id)
-    definition_owner = owner_scope if function_id.namespace == "local" else function_id.stable_key()
+def _direct_library_compilation_identity(
+    function_id: FunctionId, *, instance_key: str | None = None,
+) -> GroupCompilationIdentity:
+    """Prepare a catalog definition, retaining a selected Local occurrence on reload."""
+    owner_scope = direct_library_owner_scope_for_id(function_id, instance_key=instance_key)
+    definition_owner = direct_library_owner_scope_for_id(function_id) if function_id.namespace == "local" else function_id.stable_key()
     return GroupCompilationIdentity(
         root_owner_id=None,
         owner_scope=owner_scope,
@@ -351,12 +357,11 @@ def materialize_prepared_library_callable(
     _validate_resolved_record(record)
     function_id = prepared_callable.contract.function_id
     _validate_library_function_id(function_id, record)
-    if record.namespace == "local":
-        if materialization is not None:
-            raise CompileError("Internal error: Local catalog source call cannot carry reusable materialization")
-    else:
-        if materialization is None or materialization.callee != function_id:
+    if materialization is not None:
+        if materialization.callee != function_id:
             raise CompileError("Internal error: reusable source call has inconsistent materialization identity")
+    elif record.namespace != "local":
+        raise CompileError("Internal error: reusable source call has inconsistent materialization identity")
     spec = LibraryFunctionMaterializationSpec(
         namespace=record.namespace,
         name=record.name,

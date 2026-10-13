@@ -71,14 +71,17 @@ def direct_library_owner_scope(namespace: str, package_id: str | None, name: str
     )
 
 
-def direct_library_owner_scope_for_id(function_id) -> str:
-    """Use canonical Local origin for physical ownership; preserve other owner keys."""
+def direct_library_owner_scope_for_id(function_id, *, instance_key: str | None = None) -> str:
+    """Use canonical Local origin and occurrence ownership; retain other catalog keys."""
     if function_id.kind != "LIBRARY":
         raise ValueError("Direct library owner requires a library FunctionId")
     if function_id.namespace == "local":
         if not function_id.source_origin:
             raise ValueError("Local owner requires source origin")
-        return function_group_owner_scope("LIBRARY", "local", "", function_id.name, function_id.source_origin)
+        return function_group_owner_scope(
+            "LIBRARY", "local", "", function_id.name, function_id.source_origin,
+            instance_key=instance_key,
+        )
     return direct_library_owner_scope(function_id.namespace, function_id.package_id, function_id.name)
 
 
@@ -121,6 +124,8 @@ def function_materialization_owner_scope(
             instance_key=instance_key,
         )
     if callee.kind == "LIBRARY":
+        if callee.namespace == "local":
+            return direct_library_owner_scope_for_id(callee, instance_key=instance_key or None)
         return function_group_owner_scope(
             "LIBRARY",
             callee.namespace,

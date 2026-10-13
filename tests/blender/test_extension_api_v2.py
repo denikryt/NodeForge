@@ -34,7 +34,7 @@ def _write_extension_package(
                 "author": "Tests",
                 "description": "Physical extension fixture",
                 "nodeforge_min_version": "0.59.0",
-                "nodeforge_max_version": "0.66.4",
+                "nodeforge_max_version": "0.67.0",
                 "contents": {"systems": "systems"},
                 "permissions": {"python": True},
             }
@@ -96,7 +96,11 @@ def _write_rotation_extension_package(root: Path) -> None:
                 "author": "Tests",
                 "description": "Rotation physical-type fixture",
                 "nodeforge_min_version": "0.59.0",
+<<<<<<< HEAD
                 "nodeforge_max_version": "0.66.4",
+=======
+                "nodeforge_max_version": "0.67.0",
+>>>>>>> 4b4695b (feat: support __unique__ for imported Local scripts)
                 "contents": {"systems": "systems"},
                 "permissions": {"python": True},
             }
@@ -150,7 +154,11 @@ def _write_nested_import_extension_package(root: Path) -> None:
                 "author": "Tests",
                 "description": "Nested owner-local import fixture",
                 "nodeforge_min_version": "0.59.0",
+<<<<<<< HEAD
                 "nodeforge_max_version": "0.66.4",
+=======
+                "nodeforge_max_version": "0.67.0",
+>>>>>>> 4b4695b (feat: support __unique__ for imported Local scripts)
                 "contents": {"systems": "systems"},
                 "permissions": {"python": True},
             }
@@ -208,7 +216,11 @@ def _write_semantic_extension_package(root: Path) -> None:
                 "author": "Tests",
                 "description": "Package semantic-state Blender fixture",
                 "nodeforge_min_version": "0.60.0",
+<<<<<<< HEAD
                 "nodeforge_max_version": "0.66.4",
+=======
+                "nodeforge_max_version": "0.67.0",
+>>>>>>> 4b4695b (feat: support __unique__ for imported Local scripts)
                 "contents": {"systems": "systems"},
                 "permissions": {"python": True},
             }

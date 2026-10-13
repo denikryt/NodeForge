@@ -554,5 +554,23 @@
       "compatibility",
       "structural_arrays"
     ]
+  },
+  {
+    "id": "imported_local_unique_sharing",
+    "outcome": "graph",
+    "description": "Imported Local aliases: private True, shared default/False and shallow nested sharing",
+    "tags": [
+      "imported_local",
+      "unique"
+    ]
+  },
+  {
+    "id": "imported_local_unique_invalid_modifier",
+    "outcome": "compile_error",
+    "description": "Imported Local unique modifier rejects an Int before graph publication",
+    "tags": [
+      "imported_local",
+      "unique"
+    ]
   }
 ]

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import difflib
 import json
 import re
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 PACKAGE_PARENT = ROOT.parent
@@ -18,7 +20,8 @@ for _path in (ROOT, PACKAGE_PARENT):
 
 import bpy
 
-from NodeForge import compiler, packages
+from NodeForge import compiler, local_sources, packages
+from NodeForge.function_instances import FUNCTION_INSTANCE_KEY_PROP
 from NodeForge.errors import CompileError
 
 HERE = Path(__file__).resolve().parent
@@ -162,8 +165,10 @@ def _node_snapshot(node, node_id):
         row["defaults"] = defaults
     return row
 
-def group_snapshot(group):
+def group_snapshot(group, *, include_dependencies=False, _groups=None):
     """Return deterministic JSON-native observable state for one node group."""
+    if _groups is None:
+        _groups = {group.as_pointer(): "g0"}
     nodes = list(group.nodes)
     node_ids = {node.as_pointer(): f"n{index}" for index, node in enumerate(nodes)}
     snapshot = {
@@ -174,6 +179,23 @@ def group_snapshot(group):
         ],
         "links": [],
     }
+    if include_dependencies:
+        for node, row in zip(nodes, snapshot["nodes"]):
+            child = getattr(node, "node_tree", None)
+            if child is None:
+                continue
+            pointer = child.as_pointer()
+            first_reference = pointer not in _groups
+            if first_reference:
+                _groups[pointer] = f"g{len(_groups)}"
+            reference = {"id": _groups[pointer]}
+            if first_reference:
+                reference["graph"] = group_snapshot(
+                    child, include_dependencies=True, _groups=_groups,
+                )
+            # Record occurrence sharing without process-specific pointers or keys.
+            reference["unique"] = bool(child.get(FUNCTION_INSTANCE_KEY_PROP, ""))
+            row["group"] = reference
     for link in group.links:
         snapshot["links"].append({
             "from": [
@@ -391,6 +413,18 @@ def _remove_fresh_groups(before):
         raise AssertionError("characterization case cleanup did not restore node-group set")
 
 
+@contextmanager
+def _case_local_sources(case_id):
+    """Resolve Local imports from committed case fixtures with a private registry."""
+    with TemporaryDirectory(prefix="nodeforge-characterization-local-") as temp:
+        fixture = CASES_DIR / "local" / case_id
+        root = fixture if fixture.is_dir() else Path(temp) / "Local"
+        with patch.object(local_sources, "_default_local_catalog_dir", lambda: root), patch.object(
+            local_sources, "_local_sources_registry_path", lambda: Path(temp) / "registry.json",
+        ):
+            yield fixture.is_dir()
+
+
 def run_case(case):
     """Compile one case and return its normalized graph or controlled failure result."""
     if isinstance(case, str):
@@ -405,7 +439,8 @@ def run_case(case):
     actual_outcome = None
     try:
         try:
-            group = compiler.create_expression_group(source, f"NFChar_{case_id}")
+            with _case_local_sources(case_id) as has_local:
+                group = compiler.create_expression_group(source, f"NFChar_{case_id}")
         except CompileError as exc:
             actual_outcome = "compile_error"
             result = {
@@ -417,7 +452,7 @@ def run_case(case):
             actual_outcome = "graph"
             result = {
                 "kind": "graph",
-                "graph": group_snapshot(group),
+                "graph": group_snapshot(group, include_dependencies=has_local),
             }
         _assert_json_native(result)
         if actual_outcome != expected_outcome:

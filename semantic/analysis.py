@@ -1910,13 +1910,20 @@ def analyze_expression(expr, environment):
                     )
                 function_id = resolved.library_function_id
                 if binding.namespace == "local":
-                    if modifiers.unique_was_explicit:
-                        raise unsupported_unique(name)
-                    materialization = None
                     from ..function_instances import direct_library_owner_scope_for_id
-                    owner_scope = direct_library_owner_scope_for_id(function_id)
+                    # Keep the definition owner canonical so unmarked nested
+                    # helpers can remain shared across unique occurrences.
+                    definition_owner = direct_library_owner_scope_for_id(function_id)
+                    materialization = None
+                    owner_scope = definition_owner
+                    if modifiers.unique:
+                        call_site = environment.source_call_site_allocator(function_id)
+                        materialization = IRFunctionMaterialization(
+                            function_id, IRFunctionMaterializationMode.UNIQUE, call_site
+                        )
+                        owner_scope = function_materialization_owner_scope(materialization)
                     identity = GroupCompilationIdentity(
-                        None, owner_scope, owner_scope, function_id.stable_key()
+                        None, owner_scope, definition_owner, function_id.stable_key()
                     )
                 else:
                     if modifiers.unique:

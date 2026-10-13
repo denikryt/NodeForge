@@ -430,3 +430,7 @@ lifecycle.
 
 - Reduced Local discovery work by filtering filenames before file checks and sorting only source candidates.
 - Capture Local sources on the first semantic Local import in each compilation, including selected package dependencies; keep explicit catalog operations eager.
+## 0.67.0
+
+- Added `__unique__=True` for imported Local scripts, creating a private group for each marked call while retaining shared default calls.
+- Preserve unique Local group identity and editable state across unchanged updates, root rename, save/reopen, and Reload from Source; added Blender characterization coverage.
