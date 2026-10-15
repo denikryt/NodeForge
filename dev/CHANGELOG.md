@@ -532,3 +532,7 @@ lifecycle.
 - Require integration tests to pass before publishing the saved release ZIP and deploying the saved Pages artifact.
 - Bundle the latest published Math and L-System package ZIPs at release build time, using each package's minimum NodeForge version for compatibility checks.
 - Centralize bundled-library IDs and Release repositories in one registry shared by the Extension workflow and tests.
+- Added opt-in Text Editor completion for Core names, installed package namespaces, Local imports/directories, and local `def` functions.
+- Added cursor-positioned signature and keyword-argument hints, keyboard selection, and explicit catalog refresh; reuses compiler-selected catalog identities without building nodes.
+- Added focused pure-Python and Blender 5.2 UI/insertion regression checks.
+- Refined Text Editor popup: one vertical row per parameter, bounded layout, active argument, and typed results including multiple outputs; source output types reuse semantic callable preparation on demand.

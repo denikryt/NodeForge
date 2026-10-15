@@ -41,6 +41,39 @@ To change the generated group, edit the text, select the generated group node, a
 
 See the [Get Started guide](https://denikryt.github.io/NodeForgeDocs/latest/GET_STARTED/) for the complete beginner workflow.
 
+## Text Editor completion (prototype)
+
+Enable **NodeForge** in the Blender Text Editor header to show completion and
+signature hints while editing. The toggle applies to Text Editors in the current
+Blender window manager. No external editor or language server is required.
+
+- Type `from packages import math`, then `math.` to list installed package
+  functions. Namespace aliases such as `from packages import math as m` work.
+- Type `from local import ...` or `from local.some_folder import ...` to browse
+  available Local names. Imported Local functions and directory aliases such as
+  `from local import shapes as s` support `s.` completion.
+- Type a function call such as `math.layout_grid(` or `my_shape(` to see its
+  declared parameters. Parameters appear once each on separate rows; long
+  signatures scroll to keep the active parameter visible. The popup shows
+  the return type, or separate named and typed outputs for multi-output calls.
+  After a comma, type a parameter prefix to complete `parameter_name=`.
+  Top-level `def` signatures in the current Text datablock are also available
+  before the file is saved.
+- Use **Up/Down** to navigate suggestions, **Tab** to insert the selected name,
+  and **Esc** to dismiss the current popup. The **Refresh** icon beside the
+  toggle reloads the installed package and Local inventories.
+
+The prototype derives package members and Local selection from the compiler's
+resolved environment, and extension signatures from Extension API declarations.
+For `.nf` sources, signature display currently recognizes explicit `input_*()`
+assignments with literal names; computed labels and inferred inputs may not be
+shown. Source-backed return types are inferred lazily by the existing semantic
+frontend for the selected function and cached; if analysis fails, source output
+labels remain available with unknown types. Extension result tuples are listed
+in order. Core DSL name completion covers all registered built-ins, while
+parameter hints and return types cover a small subset. The helper never builds
+Geometry Nodes. It does not provide diagnostics or type-aware overload ranking.
+
 ## The language at a glance
 
 A small script can mix group inputs, ordinary expressions, built-in Geometry Nodes wrappers, local functions, and direct access to Blender nodes:

@@ -1322,6 +1322,8 @@ def register():
     # collections on the next event-loop tick instead of touching bpy.data here.
     if not bpy.app.timers.is_registered(_refresh_startup_browser_items):
         bpy.app.timers.register(_refresh_startup_browser_items, first_interval=0.0)
+    from .editor import blender_ui
+    blender_ui.register()
 
 def unregister():
     """Unregister NodeForge UI and operators without mutating generated node-group data."""
@@ -1338,6 +1340,8 @@ def unregister():
         pass
     if hasattr(bpy.types.Scene, "gn_script_mvp"):
         del bpy.types.Scene.gn_script_mvp
+    from .editor import blender_ui
+    blender_ui.unregister()
     for cls in reversed(classes):
         try:
             bpy.utils.unregister_class(cls)
