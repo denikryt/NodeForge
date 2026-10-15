@@ -298,17 +298,47 @@ class _LocalCatalogSlot:
         return self._captured
 
 
+class _LocalRuntimeRegistrySlot:
+    """Accumulate only explicitly selected trusted Local owners for one root attempt."""
+
+    def __init__(self, base_registry):
+        """Start with the immutable admitted package registry and no Local execution."""
+        self.registry = base_registry
+        self._sessions = {}
+        self._base = base_registry
+
+    def admit(self, record):
+        """Capture one selected owner without changing any prior frozen registry."""
+        from .local_runtime import capture_local_runtime_session, local_runtime_owner_key
+        from .extensions.contracts import ExtensionCallableId
+
+        owner = local_runtime_owner_key(record)
+        if owner not in self._sessions:
+            callable_id, session = capture_local_runtime_session(record)
+            candidate = self._base.with_owner_sessions((*self._sessions.values(), session))
+            if not candidate.contains(callable_id):
+                raise CompileError("Internal error: Local runtime callable is missing from overlay")
+            self._sessions[owner] = session
+            self.registry = candidate
+        return ExtensionCallableId(owner, record.name)
+
+
 @dataclass(frozen=True)
 class _CompilationEnvironment:
     """Root-scoped non-Local selection with one semantic-demand Local slot."""
 
     _parts: _ResolvedNonLocalParts
     _local_slot: _LocalCatalogSlot
+    _runtime_slot: _LocalRuntimeRegistrySlot
 
     @property
     def extension_registry(self):
-        """Expose the registry selected before root semantic preparation."""
-        return self._parts.extension_registry
+        """Expose a sealed current registry including only selected Local runtime owners."""
+        return self._runtime_slot.registry
+
+    def admit_local_runtime(self, record):
+        """Prepare one explicitly selected owner before semantic call lowering."""
+        return self._runtime_slot.admit(record)
 
     def catalog(self, namespace: str) -> ResolvedCatalog:
         """Select a catalog, capturing Local only when that namespace is requested."""
@@ -328,7 +358,7 @@ class _CompilationEnvironment:
 def _make_compilation_environment() -> _CompilationEnvironment:
     """Create fresh package selections and an unrequested Local slot for a root."""
     parts, _local = _resolve_environment_parts(capture_local=False)
-    return _CompilationEnvironment(parts, _LocalCatalogSlot())
+    return _CompilationEnvironment(parts, _LocalCatalogSlot(), _LocalRuntimeRegistrySlot(parts.extension_registry))
 
 
 def resolve_environment() -> ResolvedEnvironment:

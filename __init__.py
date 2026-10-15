@@ -10,6 +10,7 @@ bl_info = {
     "category": "Node",
 }
 
+from .mesh_compute import mesh_compute
 from .evaluation_modes import EvaluationMode
 from .extension_semantic_api import RuntimeRef
 from .extension_annotations import (
@@ -37,7 +38,7 @@ def unregister():
 
 
 __all__ = [
-    "bl_info", "register", "unregister", "EvaluationMode", "RuntimeRef",
+    "bl_info", "register", "unregister", "mesh_compute", "EvaluationMode", "RuntimeRef",
     "Float", "Int", "Bool", "Vector", "Geometry", "Material",
     "Object", "String", "Bundle", "Rotation",
 ]

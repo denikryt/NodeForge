@@ -327,6 +327,8 @@ def _resolved_from_library_binding(source_name: str, binding) -> ResolvedCallabl
     if extension_callable_id is not None:
         return ResolvedCallable(CallableKind.EXTENSION, source_name, target=extension_callable_id)
     record = binding.record
+    if getattr(record, "kind", None) == "runtime":
+        raise CompileError("Local Python Mesh Compute requires an explicit from local... import in the root script")
     function_id = library_function_id_for_record(record)
     return ResolvedCallable(
         CallableKind.LIBRARY,

@@ -24,6 +24,8 @@ class BlenderGroupBuildRequest:
     function_instance_key: str | None = None
     source_callable_session: object | None = None
     preserve_if_equivalent: bool = False
+    mesh_compute_modifier_target: object | None = None
+    mesh_compute_replaced_group: object | None = None
 
     def __post_init__(self) -> None:
         """Freeze detached mapping data and validate the prepared artifact boundary."""
@@ -43,6 +45,9 @@ class BlenderGroupBuildRequest:
             raise TypeError("function_instance_key must be a string or None")
         if not isinstance(self.preserve_if_equivalent, bool):
             raise TypeError("preserve_if_equivalent must be bool")
+        if (self.mesh_compute_replaced_group is not None and
+                (self.existing_group is not None or self.mesh_compute_modifier_target is None)):
+            raise ValueError("Fresh Mesh Compute replacement requires an exclusive modifier target")
 
 
 __all__ = ["BlenderGroupBuildRequest"]

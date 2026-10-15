@@ -53,35 +53,49 @@ def _paths_overlap(first: Path | str, second: Path | str) -> bool:
         return False
 
 
-def _read_local_source_registry() -> list[dict[str, str]]:
-    """Load linked Local source roots from the user-owned registry."""
+def _read_local_source_payload() -> dict[str, object]:
+    """Read and validate the version-one registry and optional Python trust grants."""
     path = _local_sources_registry_path()
     if not path.exists():
-        return []
+        return {"version": _LOCAL_SOURCES_REGISTRY_VERSION, "roots": []}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError) as exc:
         raise CompileError(f"Could not read Local source registry: {exc}") from exc
     if not isinstance(payload, dict) or payload.get("version") != _LOCAL_SOURCES_REGISTRY_VERSION:
         raise CompileError("Unsupported Local source registry format")
+    if not isinstance(payload.get("managed_allow_python", False), bool):
+        raise CompileError("Invalid managed Local Python permission")
     roots = payload.get("roots", [])
     if not isinstance(roots, list):
         raise CompileError("Invalid Local source registry roots")
-    result = []
+    result: list[dict[str, object]] = []
     for item in roots:
         if not isinstance(item, dict) or not isinstance(item.get("path"), str):
             raise CompileError("Invalid Local source registry entry")
         kind = str(item.get("kind") or "folder")
-        if kind not in {"folder", "file"}:
-            raise CompileError("Invalid Local source registry entry kind")
-        result.append({"path": item["path"], "label": str(item.get("label") or ""), "kind": kind})
-    return result
+        if kind not in {"folder", "file"} or not isinstance(item.get("allow_python", False), bool):
+            raise CompileError("Invalid Local source registry entry kind or permission")
+        entry: dict[str, object] = {"path": item["path"], "label": str(item.get("label") or ""), "kind": kind}
+        if "allow_python" in item:
+            entry["allow_python"] = item["allow_python"]
+        result.append(entry)
+    return {"version": _LOCAL_SOURCES_REGISTRY_VERSION, "roots": result,
+            **({"managed_allow_python": payload["managed_allow_python"]} if "managed_allow_python" in payload else {})}
+
+
+def _read_local_source_registry() -> list[dict[str, str]]:
+    """Load linked Local roots while preserving optional permission fields."""
+    return _read_local_source_payload()["roots"]
 
 
 def _write_local_source_registry(roots: list[dict[str, str]]) -> None:
-    """Atomically persist linked Local source roots outside the installed add-on."""
+    """Atomically persist linked roots without discarding managed Python permission."""
     path = _local_sources_registry_path()
+    previous = _read_local_source_payload()
     payload = {"version": _LOCAL_SOURCES_REGISTRY_VERSION, "roots": roots}
+    if "managed_allow_python" in previous:
+        payload["managed_allow_python"] = previous["managed_allow_python"]
     fd, temp_name = tempfile.mkstemp(prefix="local_sources.", suffix=".tmp", dir=str(path.parent))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -216,6 +230,77 @@ def unlink_local_source_folder(path: str | Path) -> Path:
 def unlink_local_source_file(path: str | Path) -> Path:
     """Remove one legacy linked-file registration without touching the external file."""
     return _unlink_local_source_registration(path, kind="file")
+
+
+def local_python_permission(path: Path | str) -> bool:
+    """Resolve an exact selected .py source to its registered, explicitly trusted root."""
+    source = _canonical_path(path)
+    if source.suffix != ".py" or not source.is_file():
+        return False
+    managed = _canonical_path(_default_local_catalog_dir())
+    payload = _read_local_source_payload()
+    try:
+        source.relative_to(managed)
+    except ValueError:
+        pass
+    else:
+        return bool(payload.get("managed_allow_python", False))
+    for item in payload["roots"]:
+        root = _canonical_path(item["path"])
+        if item["kind"] == "file":
+            selected = source == root
+        else:
+            try:
+                source.relative_to(root)
+                selected = True
+            except ValueError:
+                selected = False
+        if selected:
+            return bool(item.get("allow_python", False))
+    return False
+
+
+def local_python_root_permission(path: Path | str) -> bool:
+    """Report the persisted executable-Python permission for a registered Local owner.
+
+    The caller must pass the exact managed root, linked folder or linked file;
+    arbitrary paths beneath a registered directory cannot change its grant.
+    """
+    target = _canonical_path(path)
+    managed = _canonical_path(_default_local_catalog_dir())
+    payload = _read_local_source_payload()
+    if target == managed:
+        return bool(payload.get("managed_allow_python", False))
+    matches = [item for item in payload["roots"] if _canonical_path(item["path"]) == target]
+    if len(matches) != 1:
+        raise CompileError(f"Local Python permission requires a registered root or linked file: {target}")
+    return bool(matches[0].get("allow_python", False))
+
+
+def set_local_python_permission(path: Path | str, *, allowed: bool) -> None:
+    """Store an explicit grant on a canonical registered folder/file or managed root."""
+    if not isinstance(allowed, bool):
+        raise CompileError("Allow executable Python must be a boolean")
+    target = _canonical_path(path)
+    managed = _canonical_path(_default_local_catalog_dir())
+    payload = _read_local_source_payload()
+    if target == managed:
+        payload["managed_allow_python"] = allowed
+    else:
+        matches = [item for item in payload["roots"] if _canonical_path(item["path"]) == target]
+        if len(matches) != 1:
+            raise CompileError(f"Local Python permission requires a registered root or linked file: {target}")
+        matches[0]["allow_python"] = allowed
+    path = _local_sources_registry_path()
+    fd, temporary = tempfile.mkstemp(prefix="local_sources.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+        os.replace(temporary, path)
+    except Exception:
+        Path(temporary).unlink(missing_ok=True)
+        raise
 
 
 def _default_local_catalog_dir() -> Path:

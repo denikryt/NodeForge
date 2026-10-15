@@ -265,7 +265,7 @@ def is_public_local_name(name: str) -> bool:
 def _eligible_local_stem(name: str) -> str | None:
     """Filter ordinary Local filenames without allocating or probing a path."""
     stem, separator, suffix = name.rpartition(".")
-    if not separator or "." + suffix not in _SOURCE_EXTENSIONS:
+    if not separator or "." + suffix not in (*_SOURCE_EXTENSIONS, ".py"):
         return None
     return stem if is_public_local_name(stem) else None
 
@@ -287,7 +287,7 @@ def discover_local_sources(local_roots, local_files=()):
             return
         if path.name == _PACKAGE_SOURCE_NAME:
             raise CompileError(f"Unsupported local source layout: {path}")
-        if path.suffix not in _SOURCE_EXTENSIONS or not is_public_local_name(path.stem):
+        if path.suffix not in (*_SOURCE_EXTENSIONS, ".py") or not is_public_local_name(path.stem):
             return
         canonical = _canonical_path(path)
         if root is not None:
@@ -297,8 +297,20 @@ def discover_local_sources(local_roots, local_files=()):
                 raise CompileError(f"Local source resolves outside its registered root: {path}") from exc
         if not is_public_local_name(canonical.stem):
             return
+        if path.suffix == ".py":
+            # Discovery may parse a file but must never import or execute it.
+            from .mesh_compute import has_mesh_compute_declaration
+            try:
+                if canonical.stat().st_size > 1_048_576:
+                    raise CompileError(f"Local Python source exceeds 1 MiB: {canonical}")
+                source = canonical.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                raise CompileError(f"Could not inspect Local Python file {canonical}: {exc}") from exc
+            if not has_mesh_compute_declaration(source, filename=str(canonical)):
+                return
         record = LibraryEntryRecord(
-            namespace="local", name=canonical.stem, kind="script", path=canonical,
+            namespace="local", name=canonical.stem,
+            kind="runtime" if canonical.suffix == ".py" else "script", path=canonical,
             source_path=canonical, source_origin=_path_key(canonical),
             folder_path="" if root is None else _relative_folder_for_path(root, path, path.stem),
         )

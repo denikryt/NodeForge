@@ -76,6 +76,7 @@ def _validate_import_bindings(
     additional_reserved_names=frozenset(),
     inherited_local_namespaces=None,
     directory_bindings=None,
+    allow_local_runtime=True,
 ):
     """Validate and return source-local namespace-aware catalog bindings."""
     imported: dict[str, LibraryBinding] = {}
@@ -125,7 +126,13 @@ def _validate_import_bindings(
             return
         namespace = base_namespace
         extension_callable_id = None
-        if getattr(record, "interface_path", None) is not None and getattr(record, "source_path", None) is None:
+        if getattr(record, "kind", None) == "runtime":
+            if flat_only or inherited or not allow_local_runtime:
+                raise CompileError("Local Python Mesh Compute requires an explicit import in the root script")
+            if not hasattr(resolved_environment, "admit_local_runtime"):
+                raise CompileError("Local Python Mesh Compute requires a root-scoped compilation environment")
+            extension_callable_id = resolved_environment.admit_local_runtime(record)
+        elif getattr(record, "interface_path", None) is not None and getattr(record, "source_path", None) is None:
             extension_callable_id = ExtensionCallableId(library_owner_key(record), canonical_name)
             if not resolved_environment.extension_registry.contains(extension_callable_id):
                 raise CompileError("Internal error: selected native library extension is missing from registry")
@@ -144,6 +151,11 @@ def _validate_import_bindings(
         namespace = import_request.module
         if import_request.is_star:
             for library_name in sorted(resolved_environment.catalog(namespace).names(), key=str.lower):
+                if namespace == "local":
+                    flat = resolved_environment.catalog("local").local_index.flat_candidates.get(library_name, ())
+                    # Local runtime sources need a particular explicit import.
+                    if flat and all(resolved_environment.catalog("local").local_index.by_origin[origin].kind == "runtime" for origin in flat):
+                        continue
                 validate_pair(namespace, library_name, library_name, flat_only=True)
         else:
             validate_pair(namespace, import_request.canonical_name, import_request.exposed_name,
@@ -452,6 +464,7 @@ def analyze_group_source(
         additional_reserved_names=frozenset(package_bindings),
         inherited_local_namespaces=inherited_local_namespaces,
         directory_bindings=local_directories,
+        allow_local_runtime=not bool(getattr(source_callable_session, "_active_stack", ())),
     )
     reserved_name_labels = _registered_name_labels(local_function_defs, imported, package_bindings)
     _validate_registered_name_bindings(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+import warnings
 from dataclasses import dataclass, field
 import bpy
 
@@ -13,6 +14,16 @@ from .group_authority import is_authority_ineligible_group
 GROUP_MANIFEST_PROP = "nodeforge_generated_resources_v1"
 ID_METADATA_PROP = "nodeforge_generated_id_v1"
 SCHEMA_VERSION = 1
+
+# Same-process provenance. Copied datablocks inherit ID properties; only IDs
+# that this process actually created and committed can be automatically
+# retired. After reopening a .blend, ambiguous preexisting IDs are preserved.
+_SESSION_COMMITTED_IDS: dict[int, tuple[object, GeneratedResourceRef]] = {}
+
+
+def _physical_identity(id_obj) -> int:
+    """Use Blender's stable datablock pointer, not its mutable display name."""
+    return id_obj.as_pointer()
 
 
 def _json_load(value):
@@ -41,6 +52,8 @@ def _id_collection(kind: str):
         return bpy.data.meshes
     if kind == "OBJECT":
         return bpy.data.objects
+    if kind == "NODE_GROUP":
+        return bpy.data.node_groups
     return None
 
 
@@ -55,6 +68,8 @@ def _kind_for_id(id_obj) -> str | None:
             return "MESH"
         if ident == "Object":
             return "OBJECT"
+        if ident == "GeometryNodeTree":
+            return "NODE_GROUP"
     try:
         if bpy.data.curves.get(id_obj.name) is id_obj:
             return "CURVE"
@@ -63,6 +78,11 @@ def _kind_for_id(id_obj) -> str | None:
     try:
         if bpy.data.meshes.get(id_obj.name) is id_obj:
             return "MESH"
+    except Exception:
+        pass
+    try:
+        if bpy.data.node_groups.get(id_obj.name) is id_obj:
+            return "NODE_GROUP"
     except Exception:
         pass
     try:
@@ -101,7 +121,7 @@ class GeneratedResourceRef:
         owner = data.get("owner_group_uuid")
         generation = data.get("generation_uuid")
         role = data.get("role", "")
-        if kind not in {"CURVE", "MESH", "OBJECT"} or not isinstance(name, str) or not isinstance(owner, str) or not isinstance(generation, str):
+        if kind not in {"CURVE", "MESH", "OBJECT", "NODE_GROUP"} or not isinstance(name, str) or not isinstance(owner, str) or not isinstance(generation, str):
             return None
         return cls(kind=kind, name=name, owner_group_uuid=owner, generation_uuid=generation, role=str(role))
 
@@ -118,8 +138,8 @@ class GeneratedResourceTransaction:
 
     def add(self, id_obj, kind: str, role: str) -> GeneratedResourceRef:
         """Own one exact new ID before publishing generated-resource metadata."""
-        if kind not in {"CURVE", "MESH", "OBJECT"}:
-            raise ValueError("generated resource kind must be CURVE, MESH, or OBJECT")
+        if kind not in {"CURVE", "MESH", "OBJECT", "NODE_GROUP"}:
+            raise ValueError("generated resource kind must be CURVE, MESH, OBJECT, or NODE_GROUP")
         if id_obj is None:
             raise ValueError("generated resource identity cannot be None")
         if any(existing is id_obj for existing, _kind in self._owned_ids):
@@ -167,8 +187,13 @@ class GeneratedResourceTransaction:
             ) from failures[0][2]
 
     def mark_committed(self):
-        """Mark the transaction authoritative after the enclosing build reaches PONR."""
+        """Record exact committed IDs for safe same-session retirement."""
         self.committed = True
+        for id_obj, kind in self._owned_ids:
+            for ref in self.resources:
+                if ref.kind == kind and _metadata_matches_ref(read_id_metadata(id_obj), ref):
+                    _SESSION_COMMITTED_IDS[_physical_identity(id_obj)] = (id_obj, ref)
+                    break
 
 
 def _remove_owned_id_exact(id_obj, kind: str) -> None:
@@ -290,107 +315,147 @@ def _metadata_matches_ref(meta: GeneratedResourceRef | None, ref: GeneratedResou
     )
 
 
-def _verified_id_for_ref(ref: GeneratedResourceRef):
-    id_obj = _lookup_ref(ref)
-    if _metadata_matches_ref(read_id_metadata(id_obj), ref):
-        return id_obj
+def _authoritative_object_refs(group) -> set:
+    """Collect actual ObjectInfo pointers; generated labels alone are not proof."""
+    result = set()
+    for node in getattr(group, "nodes", ()):
+        if getattr(node, "bl_idname", None) != "GeometryNodeObjectInfo":
+            continue
+        for sock in getattr(node, "inputs", ()):
+            if getattr(sock, "name", None) == "Object" and getattr(sock, "default_value", None) is not None:
+                result.add(sock.default_value)
+    return result
 
-    collection = _id_collection(ref.kind)
-    if collection is None:
-        return None
-    matches = []
-    for candidate in list(collection):
-        if _metadata_matches_ref(read_id_metadata(candidate), ref):
-            matches.append(candidate)
-    if len(matches) == 1:
-        return matches[0]
-    return None
+
+def capture_owned_resource_ids(group, manifest):
+    """Capture exact physically linked IDs before an authoritative group is changed.
+
+    Manifest names locate candidates but never confer deletion rights: the
+    original Object must be directly referenced by the authoritative group,
+    and its Mesh/Curve must be reachable through that exact Object.data.
+    """
+    refs = manifest_resources(manifest)
+    referenced_objects = _authoritative_object_refs(group)
+    referenced_groups = {
+        node.node_tree for node in getattr(group, "nodes", ())
+        if getattr(node, "bl_idname", None) == "GeometryNodeGroup"
+        and getattr(node, "node_tree", None) is not None
+    }
+    verified = []
+    for ref in refs:
+        collection = _id_collection(ref.kind)
+        if collection is None:
+            continue
+        candidates = (obj for obj in collection if _metadata_matches_ref(read_id_metadata(obj), ref))
+        for obj in candidates:
+            evidence_record = _SESSION_COMMITTED_IDS.get(_physical_identity(obj))
+            if (evidence_record is None or evidence_record[0] is not obj
+                    or not _metadata_matches_ref(evidence_record[1], ref)):
+                # A reused Blender pointer must not impersonate the exact ID
+                # created by this session; copied metadata is insufficient.
+                # After restart—or if a user substitutes a copied datablock—
+                # the object graph does not prove this ID's creation origin.
+                continue
+            if ref.kind == "OBJECT":
+                evidence = obj in referenced_objects
+            elif ref.kind == "NODE_GROUP":
+                evidence = obj in referenced_groups
+            else:
+                evidence = any(getattr(owner, "data", None) is obj for owner in referenced_objects)
+            if evidence:
+                verified.append((ref, obj))
+                break
+    return tuple(verified)
+
+
+def _has_external_object_ref(obj, *, retired_owner_group=None) -> bool:
+    """Do not delete a proxy used by a different user-authored node group."""
+    for group in bpy.data.node_groups:
+        if group is retired_owner_group:
+            continue
+        if obj in _authoritative_object_refs(group):
+            return True
+    return False
+
+
+def _other_object_users(data_block) -> bool:
+    """Any Object not physically captured as a retired proxy blocks data removal."""
+    for obj in bpy.data.objects:
+        try:
+            if obj.data is data_block:
+                return True
+        except ReferenceError:
+            continue
+    return False
+
+
+def _delete_captured_ref(ref, id_obj, *, owner_group=None) -> bool:
+    """Retire a captured physical ID only if no external references remain."""
+    if not _metadata_matches_ref(read_id_metadata(id_obj), ref):
+        return False
+    evidence = _SESSION_COMMITTED_IDS.get(_physical_identity(id_obj))
+    if (evidence is None or evidence[0] is not id_obj
+            or not _metadata_matches_ref(evidence[1], ref)):
+        # Even a supplied captured_ids pair cannot authorize deletion if the
+        # original physical ID has been replaced since capture (Undo/Redo).
+        return False
+    coll = _id_collection(ref.kind)
+    if coll is None:
+        return False
+    try:
+        if not any(item is id_obj for item in coll):
+            return False
+        if ref.kind == "OBJECT":
+            if _has_external_object_ref(id_obj, retired_owner_group=owner_group):
+                return False
+            physical_id = _physical_identity(id_obj)
+            coll.remove(id_obj, do_unlink=True)
+            _SESSION_COMMITTED_IDS.pop(physical_id, None)
+            return True
+        if ref.kind in {"MESH", "CURVE"}:
+            if _other_object_users(id_obj):
+                return False
+        if ref.kind == "NODE_GROUP":
+            if any(getattr(mod, "node_group", None) is id_obj
+                   for obj in bpy.data.objects for mod in obj.modifiers):
+                return False
+            if any(node.node_tree is id_obj for group in bpy.data.node_groups
+                   for node in group.nodes if getattr(node, "bl_idname", None) == "GeometryNodeGroup"):
+                return False
+        physical_id = _physical_identity(id_obj)
+        coll.remove(id_obj, do_unlink=True)
+        _SESSION_COMMITTED_IDS.pop(physical_id, None)
+        return True
+    except ReferenceError:
+        return False
 
 
 def delete_generated_ref(ref: GeneratedResourceRef) -> bool:
-    id_obj = _verified_id_for_ref(ref)
-    if id_obj is None:
-        return False
-    return delete_generated_id_object(id_obj, expected_owner_group_uuid=ref.owner_group_uuid)
-
-
-def _data_block_object_users(data_block) -> list:
-    """Return live Blender Objects that currently use *data_block* as their data-block."""
-    users = []
-    try:
-        objects = list(bpy.data.objects)
-    except Exception:
-        return users
-    for obj in objects:
-        try:
-            if getattr(obj, "data", None) is data_block:
-                users.append(obj)
-        except ReferenceError:
-            continue
-        except Exception:
-            continue
-    return users
-
-
-def _has_matching_generated_object_metadata(obj, owner_group_uuid: str) -> bool:
-    meta = read_id_metadata(obj)
-    return meta is not None and meta.kind == "OBJECT" and meta.owner_group_uuid == owner_group_uuid
-
-
-def _data_block_has_non_owned_object_users(data_block, owner_group_uuid: str) -> bool:
-    for obj in _data_block_object_users(data_block):
-        if not _has_matching_generated_object_metadata(obj, owner_group_uuid):
-            return True
+    """Reject metadata-only deletion: caller has no authoritative ID pointer."""
     return False
 
 
 def delete_generated_id_object(id_obj, *, expected_owner_group_uuid: str | None = None) -> bool:
-    meta = read_id_metadata(id_obj)
-    if meta is None:
-        return False
-    if expected_owner_group_uuid is not None and meta.owner_group_uuid != expected_owner_group_uuid:
-        return False
-    kind = _kind_for_id(id_obj) or meta.kind
-    try:
-        if kind == "OBJECT":
-            bpy.data.objects.remove(id_obj, do_unlink=True)
-            return True
-        if kind == "CURVE":
-            # A generated Curve may be shared by user-created Objects.  Deterministic
-            # names and the Curve's own metadata are not enough to prove that all
-            # current users are NodeForge-owned; fail closed rather than unlinking
-            # user Objects from their data-block.  Cleanup paths delete generated
-            # Objects first, then re-enter this branch for the Curve.
-            if _data_block_has_non_owned_object_users(id_obj, meta.owner_group_uuid):
-                return False
-            bpy.data.curves.remove(id_obj, do_unlink=True)
-            return True
-        if kind == "MESH":
-            if _data_block_has_non_owned_object_users(id_obj, meta.owner_group_uuid):
-                return False
-            bpy.data.meshes.remove(id_obj, do_unlink=True)
-            return True
-    except ReferenceError:
-        return False
-    except Exception:
-        return False
+    """Reject metadata-only deletion, even when the object retains a valid UUID."""
     return False
 
 
-def cleanup_previous_after_commit(old_manifest, new_manifest) -> None:
-    """Delete old verified resources that are absent from the committed new manifest."""
-    old_refs = manifest_resources(old_manifest)
+def cleanup_previous_after_commit(old_manifest, new_manifest, *, captured_ids=()) -> None:
+    """Retire only old exact IDs captured from the authoritative group before cutover."""
     new_keys = {(r.kind, r.name, r.owner_group_uuid, r.generation_uuid) for r in manifest_resources(new_manifest)}
-    # Delete objects before data-blocks so object users release Curve/Mesh data first.
-    old_refs.sort(key=_resource_delete_order)
-    for ref in old_refs:
-        key = (ref.kind, ref.name, ref.owner_group_uuid, ref.generation_uuid)
-        if key not in new_keys:
-            delete_generated_ref(ref)
+    eligible = [(ref, id_obj) for ref, id_obj in captured_ids
+                if (ref.kind, ref.name, ref.owner_group_uuid, ref.generation_uuid) not in new_keys]
+    # Object references to a data block must be removed first; a copied
+    # user Object with identical metadata must never count as a retired owner.
+    eligible.sort(key=lambda pair: _resource_delete_order(pair[0]))
+    for ref, id_obj in eligible:
+        if not _delete_captured_ref(ref, id_obj):
+            warnings.warn(f"NodeForge preserved ambiguous generated {ref.kind} {ref.name!r}", RuntimeWarning, stacklevel=2)
 
 
 def _resource_delete_order(ref: GeneratedResourceRef) -> int:
-    return 0 if ref.kind == "OBJECT" else 1
+    """Unlink generated Object first; then Mesh/Curve; then private NodeTree."""
+    return {"OBJECT": 0, "MESH": 1, "CURVE": 1, "NODE_GROUP": 2}.get(ref.kind, 3)
 
 
 def live_manifest_resource_keys() -> set[tuple[str, str, str, str]]:
@@ -437,27 +502,33 @@ def cleanup_restart_orphans_deferred():
     return None
 
 def cleanup_restart_orphans() -> None:
-    """Remove NodeForge-owned generated IDs not referenced by live group metadata."""
+    """Preserve ambiguous post-restart IDs; duplicate metadata cannot prove origin.
+
+    Manifests remain useful for diagnostics, but an ID that has no live
+    authoritative root pointer cannot be distinguished from a user duplicate
+    after .blend reopening. The older metadata-only sweep was destructive.
+    """
+    # Lifecycle registration calls this after loading/initializing a file.
+    # Clear any stale Python-side physical pointers from the previous file.
+    _SESSION_COMMITTED_IDS.clear()
     live = live_manifest_resource_keys()
-    refs = []
-    for obj in list(bpy.data.objects):
-        ref = read_id_metadata(obj)
-        if ref is not None:
-            refs.append((obj, ref))
-    for curve in list(bpy.data.curves):
-        ref = read_id_metadata(curve)
-        if ref is not None:
-            refs.append((curve, ref))
-    for mesh in list(bpy.data.meshes):
-        ref = read_id_metadata(mesh)
-        if ref is not None:
-            refs.append((mesh, ref))
-    # Objects first.
-    refs.sort(key=lambda pair: _resource_delete_order(pair[1]))
-    for id_obj, ref in refs:
-        key = (ref.kind, ref.name, ref.owner_group_uuid, ref.generation_uuid)
-        if key not in live:
-            delete_generated_id_object(id_obj, expected_owner_group_uuid=ref.owner_group_uuid)
+    suspects = []
+    for kind in ("OBJECT", "CURVE", "MESH", "NODE_GROUP"):
+        for obj in list(_id_collection(kind)):
+            meta = read_id_metadata(obj)
+            if meta is None or meta.kind != kind:
+                continue
+            key = (meta.kind, meta.name, meta.owner_group_uuid, meta.generation_uuid)
+            if key not in live:
+                suspects.append((kind, obj.name))
+    if suspects:
+        warnings.warn(
+            f"NodeForge retained {len(suspects)} unverified generated ID(s) after restart; "
+            "manual inspection is required before deletion",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
 
 
 
@@ -470,5 +541,5 @@ __all__ = [
     "GeneratedResourceRef", "GeneratedResourceTransaction",
     "read_group_manifest", "write_group_manifest", "write_empty_manifest", "clear_group_manifest",
     "manifest_resources", "cleanup_previous_after_commit", "cleanup_restart_orphans",
-    "delete_generated_ref",
+    "delete_generated_ref", "capture_owned_resource_ids",
 ]

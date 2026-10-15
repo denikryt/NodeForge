@@ -396,6 +396,8 @@ def test_group_backend_public_callback_uses_semantic_preparation_before_publicat
         "function_instance_key",
         "source_callable_session",
         "preserve_if_equivalent",
+        "mesh_compute_modifier_target",
+        "mesh_compute_replaced_group",
     }
     source = Path(compiler.__file__).read_text(encoding="utf-8")
     assert "def prepare(source, *, compilation_identity" in source

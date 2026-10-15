@@ -444,3 +444,9 @@ lifecycle.
 
 - Added bare calls for immediate public `.nf` functions from Local directory imports without an alias, with call-time ambiguity diagnostics and lazy source preparation.
 - Preserve namespace-only alias imports, qualified `.nodeforge` access, canonical source identity, and existing shared/private group behavior.
+
+## 0.68.1
+
+- Avoid full Mesh Compute prefix evaluation and mesh fingerprinting on Blender dependency-graph events proven unrelated to any active stage.
+- Preserve full evaluation for relevant or ambiguous edits, animated frames, render preparation, external GN dependencies, and revoked Local Python permissions.
+- Add native Blender regression coverage and repeatable live-scheduler benchmarks for foreign events, source changes, multi-owner independence, and fail-closed permission handling.

@@ -545,6 +545,21 @@ class BlenderGroupBuildTransaction:
         self._cache_owners = []
         self._closed = False
         self.retirement_failures = []
+        # Exact modifier/runtime side effects must share the group PONR.
+        self._external_rollback = []
+        self._binding_commit = []
+
+    def register_external_cutover(self, *, rollback, commit):
+        """Journal a prepared runtime installation in the existing group transaction.
+
+        `commit` must only change prevalidated process-local references and cannot
+        perform Blender operations. `rollback` restores the modifier and live
+        resources before candidate node groups are destroyed.
+        """
+        if self._closed:
+            raise RuntimeError("Cannot register runtime cutover after group commit")
+        self._external_rollback.append(rollback)
+        self._binding_commit.append(commit)
 
     @staticmethod
     def _group_key(group):
@@ -586,6 +601,7 @@ class BlenderGroupBuildTransaction:
         new_manifest,
         *,
         original_name=None,
+        captured_resources=(),
     ):
         """Journal one mutation of an existing authoritative group."""
         if self._closed:
@@ -604,6 +620,7 @@ class BlenderGroupBuildTransaction:
             "resource_transaction": resource_transaction,
             "old_manifest": old_manifest,
             "new_manifest": new_manifest,
+            "captured_resources": captured_resources,
             "original_name": getattr(group, "name", None) if original_name is None else original_name,
         }
         identity_record["mutations"].append(event)
@@ -620,6 +637,7 @@ class BlenderGroupBuildTransaction:
         return {
             "created": len(self.created_groups),
             "mutations": len(self._mutation_journal),
+            "external": len(self._external_rollback),
             "cache_snapshots": cache_snapshots,
         }
 
@@ -672,6 +690,14 @@ class BlenderGroupBuildTransaction:
         if self._closed:
             return
         failures = []
+        external_cursor = int(savepoint["external"])
+        for action in reversed(self._external_rollback[external_cursor:]):
+            try:
+                action()
+            except Exception as exc:
+                failures.append(exc)
+        del self._external_rollback[external_cursor:]
+        del self._binding_commit[external_cursor:]
         cursor = int(savepoint["mutations"])
         for event in reversed(self._mutation_journal[cursor:]):
             self._restore_mutation(event, failures)
@@ -699,6 +725,13 @@ class BlenderGroupBuildTransaction:
         if self._closed:
             return
         failures = []
+        for action in reversed(self._external_rollback):
+            try:
+                action()
+            except Exception as exc:
+                failures.append(exc)
+        self._external_rollback.clear()
+        self._binding_commit.clear()
         for event in reversed(self._mutation_journal):
             self._restore_mutation(event, failures)
         for group, tx in reversed(self.created_groups):
@@ -737,21 +770,35 @@ class BlenderGroupBuildTransaction:
         for tx in resource_transactions:
             tx.mark_committed()
         publish_provisional([group for group, _tx in self.created_groups])
+        # Prepared callbacks change only in-memory bindings. They cannot fail or
+        # access bpy; old resources are retired only after the new binding is live.
+        for action in self._binding_commit:
+            action()
         self._closed = True
+        self._external_rollback.clear()
+        self._binding_commit.clear()
 
         failures = []
         for event in self._mutation_journal:
             old_manifest = event.get("old_manifest")
             new_manifest = event.get("new_manifest")
             if old_manifest is not None:
+                # Remove the transaction-private rollback group before
+                # retirement so its old ObjectInfo pointers are not counted as
+                # live external users of the exact old generated objects.
+                _remove_node_group_if_live(event.get("backup"), failures=failures)
                 try:
+                    captured = event.get("captured_resources", ())
+                    kwargs = {"captured_ids": captured} if captured else {}
                     generated_resources.cleanup_previous_after_commit(
                         old_manifest,
                         new_manifest or generated_resources.build_manifest(old_manifest["owner_group_uuid"], []),
+                        **kwargs,
                     )
                 except Exception as exc:
                     failures.append(exc)
-            _remove_node_group_if_live(event.get("backup"), failures=failures)
+            else:
+                _remove_node_group_if_live(event.get("backup"), failures=failures)
         self.retirement_failures.extend(failures)
         for exc in failures:
             warnings.warn(f"NodeForge committed with cleanup warning: {exc}", RuntimeWarning, stacklevel=2)
@@ -832,10 +879,31 @@ class BlenderGroupBackend:
         if not isinstance(request, BlenderGroupBuildRequest):
             raise TypeError("request must be BlenderGroupBuildRequest")
         identity = request.prepared_compilation.identity
+        runtime_owners = [owner for owner, _fingerprint in request.prepared_compilation.extension_dependencies
+                          if owner and owner[0] == "local-runtime"]
+        if runtime_owners and request.mesh_compute_modifier_target is None:
+            raise CompileError(
+                "Mesh Compute requires Compile to Modifier; nested GeometryNodeGroup publication is unsupported"
+            )
+        if request.mesh_compute_modifier_target is not None and not runtime_owners:
+            raise CompileError("Compile to Modifier requires one imported Local Mesh Compute stage")
         outermost = request.function_group_transaction is None
         build_tx = request.function_group_transaction or BlenderGroupBuildTransaction()
         if identity.root_owner_id is not None:
-            _validate_root_owner_id_uniqueness(identity.root_owner_id, request.existing_group, build_tx)
+            # Fresh Mesh Compute Reload is the sole case with one still-live
+            # authoritative root bearing this owner ID. Its exact replacement
+            # is validated against the target modifier before this build.
+            replaced = request.mesh_compute_replaced_group
+            if replaced is not None:
+                if request.existing_group is not None or request.mesh_compute_modifier_target is None:
+                    raise CompileError("Mesh Compute fresh replacement requires a root modifier target")
+                owner = request.mesh_compute_modifier_target
+                if (not owner.modifiers or owner.modifiers[0].type != "NODES" or
+                        owner.modifiers[0].node_group is not replaced or
+                        getattr(replaced, "get", lambda key: None)(FUNCTION_ROOT_OWNER_ID_PROP) != identity.root_owner_id):
+                    raise CompileError("Mesh Compute replacement no longer owns the original root")
+            _validate_root_owner_id_uniqueness(identity.root_owner_id,
+                                               request.existing_group or replaced, build_tx)
         active_cache = request.function_group_cache
         if active_cache is None:
             active_cache = {}
@@ -939,6 +1007,7 @@ class BlenderGroupBackend:
         existing_group = request.existing_group
         name = request.name
         old_manifest = generated_resources.read_group_manifest(existing_group)
+        captured_resources = generated_resources.capture_owned_resource_ids(existing_group, old_manifest)
         owner_uuid = old_manifest["owner_group_uuid"] if old_manifest is not None else uuid.uuid4().hex
         tx = generated_resources.GeneratedResourceTransaction(owner_group_uuid=owner_uuid)
         tx_registered = False
@@ -1018,6 +1087,7 @@ class BlenderGroupBackend:
                 old_manifest,
                 new_manifest,
                 original_name=original_name,
+                captured_resources=captured_resources,
             )
             tx_registered = True
             backup = None

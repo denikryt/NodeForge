@@ -8,6 +8,8 @@ from bpy.props import StringProperty, PointerProperty, CollectionProperty, IntPr
 
 from .compiler import (
     create_expression_group,
+    create_mesh_compute_modifier,
+    update_mesh_compute_modifier,
     update_expression_group,
     create_library_catalog_group,
     create_local_source_group,
@@ -22,6 +24,8 @@ from .blender.storage import (
 )
 from .local_sources import (
     local_browser_records,
+    local_python_root_permission,
+    set_local_python_permission,
     local_source_roots,
     link_local_source_folder,
     unlink_local_source_folder,
@@ -150,7 +154,7 @@ class NODEFORGE_UL_function_library(UIList):
         if kind == "linked_script":
             row.label(text=item.name, icon='LINKED')
             return
-        row.label(text=item.name, icon='NODETREE')
+        row.label(text=item.name, icon='CONSOLE' if kind == 'runtime' or item.path.endswith('.py') else 'NODETREE')
         if getattr(item, "package_id", ""):
             row.label(text=item.package_id)
 
@@ -357,6 +361,112 @@ class GNSCRIPT_MVP_OT_compile_expression(Operator):
             tree.nodes.active = node
             node.select = True
         self.report({'INFO'}, f"Created node group: {group.name}")
+        return {'FINISHED'}
+
+
+class NODEFORGE_OT_compile_mesh_compute_modifier(Operator):
+    """Compile a trusted Local Mesh Compute script onto the active Mesh modifier."""
+
+    bl_idname = "nodeforge.compile_mesh_compute_modifier"
+    bl_label = "Compile to Modifier"
+    bl_description = "Compile Mesh Compute onto a private first Geometry Nodes modifier"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        """Require an active mesh and a script without altering any other modifier."""
+        owner = getattr(context, "active_object", None)
+        props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
+        return bool(owner is not None and owner.type == 'MESH' and props is not None
+                    and props.text_block is not None and len(owner.modifiers) == 0)
+
+    def execute(self, context):
+        """Install a prepared runtime group transactionally; execute its first output."""
+        from .blender.mesh_compute_runtime import evaluate_modifier_binding
+
+        props = getattr(context.scene, "gn_script_mvp", None)
+        owner = getattr(context, "active_object", None)
+        if props is None or owner is None:
+            self.report({'ERROR'}, "Select a Mesh Object and a NodeForge Text Block")
+            return {'CANCELLED'}
+        source = _source_from_props(props)
+        try:
+            group = create_mesh_compute_modifier(source, owner)
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        try:
+            evaluate_modifier_binding(owner)
+        except Exception as exc:
+            self.report({'WARNING'}, f"Compiled {group.name}; runtime error: {exc}")
+            return {'FINISHED'}
+        self.report({'INFO'}, f"Mesh Compute modifier ready: {group.name}")
+        return {'FINISHED'}
+
+
+class NODEFORGE_OT_reload_mesh_compute_modifier(Operator):
+    """Recompile the current runtime root with atomic socket/FCurve cutover."""
+
+    bl_idname = "nodeforge.reload_mesh_compute_modifier"
+    bl_label = "Reload Compute"
+    bl_description = "Reload Local Mesh Compute code while preserving modifier inputs and animation"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        """Offer Reload only when the exact active Object has a runtime binding."""
+        from .blender.mesh_compute_runtime import get_modifier_binding, saved_runtime_status
+
+        owner = getattr(context, "active_object", None)
+        props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
+        if owner is None or owner.type != 'MESH' or props is None or props.text_block is None:
+            return False
+        if saved_runtime_status(owner) == 'MISSING_RUNTIME':
+            return True
+        try:
+            return get_modifier_binding(owner) is not None
+        except (ValueError, ReferenceError):
+            return False
+
+    def execute(self, context):
+        """Attempt one committed runtime generation without accepting partial Reload."""
+        from .blender.mesh_compute_runtime import evaluate_modifier_binding
+
+        owner = context.active_object
+        try:
+            group = update_mesh_compute_modifier(_source_from_props(context.scene.gn_script_mvp), owner)
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        try:
+            evaluate_modifier_binding(owner)
+        except Exception as exc:
+            self.report({'WARNING'}, f"Reloaded {group.name}; runtime error: {exc}")
+            return {'FINISHED'}
+        self.report({'INFO'}, f"Reloaded Mesh Compute: {group.name}")
+        return {'FINISHED'}
+
+
+class NODEFORGE_OT_set_local_python_permission(Operator):
+    """Persist a grant for one registered Local root or individually linked file."""
+
+    bl_idname = "nodeforge.set_local_python_permission"
+    bl_label = "Local Executable Python Permission"
+    bl_description = "Allow or deny executable Python within the selected Local source root"
+    bl_options = {'REGISTER'}
+
+    path: StringProperty(name="Registered Local root", default="", options={'HIDDEN'})
+    allowed: BoolProperty(name="Allow executable Python", default=False, options={'HIDDEN'})
+
+    def execute(self, context):
+        """Delegate ownership validation and durable trust persistence to Local sources."""
+        try:
+            set_local_python_permission(self.path, allowed=self.allowed)
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, "Executable Local Python enabled" if self.allowed
+                    else "Executable Local Python disabled")
         return {'FINISHED'}
 
 
@@ -966,7 +1076,9 @@ def _draw_library_catalog_panel(layout, context, namespace: str, collection_name
     )
     item = _selected_catalog_item(props, namespace)
     row = layout.row(align=True)
-    row.enabled = item is not None and _active_gn_tree(context) is not None
+    row.enabled = (item is not None and _active_gn_tree(context) is not None
+                   and not (namespace == "local" and
+                            (item.kind == "runtime" or item.path.endswith(".py"))))
     op = row.operator(NODEFORGE_OT_create_function_group.bl_idname, text="Add Node Group", icon='NODETREE')
     op.namespace = namespace
     if namespace == "local":
@@ -999,6 +1111,32 @@ class GNSCRIPT_MVP_PT_panel(Panel):
         op = layout.operator(GNSCRIPT_MVP_OT_compile_expression.bl_idname, text="Compile Script")
         op.expression = ""
         op.insert_node = True
+        owner = getattr(context, "active_object", None)
+        row = layout.row()
+        row.enabled = bool(owner is not None and owner.type == 'MESH'
+                           and props.text_block is not None and len(owner.modifiers) == 0)
+        row.operator(NODEFORGE_OT_compile_mesh_compute_modifier.bl_idname,
+                     text="Compile to Modifier", icon='MOD_NODES')
+        if owner is not None and getattr(owner, "type", None) == "MESH" and owner.modifiers:
+            from .blender.mesh_compute_runtime import get_modifier_binding
+            try:
+                stage = get_modifier_binding(owner)
+            except ValueError:
+                stage = None
+            if stage is None:
+                from .blender.mesh_compute_runtime import saved_runtime_status
+                saved = saved_runtime_status(owner)
+                if saved:
+                    layout.label(text=f"Mesh Compute: {saved}", icon='ERROR')
+                    layout.label(text='Python callback requires trusted Reload', icon='INFO')
+                    layout.operator(NODEFORGE_OT_reload_mesh_compute_modifier.bl_idname,
+                                    text='Reload Compute', icon='FILE_REFRESH')
+            if stage is not None:
+                layout.label(text=f"Mesh Compute: {stage.status}", icon='CHECKMARK' if stage.status == 'READY' else 'ERROR')
+                layout.operator(NODEFORGE_OT_reload_mesh_compute_modifier.bl_idname,
+                                text="Reload Compute", icon='FILE_REFRESH')
+                if stage.last_error:
+                    layout.label(text=stage.last_error[:100], icon='ERROR')
         row = layout.row()
         selected_group = _selected_group_node(context)
         row.enabled = selected_group is not None
@@ -1060,6 +1198,20 @@ class NODEFORGE_PT_library_local(Panel):
         row.operator(NODEFORGE_OT_save_to_local.bl_idname, text="Save", icon='FILE_TICK')
         row.operator(NODEFORGE_OT_import_local.bl_idname, text="Add Folder...", icon='NEWFOLDER')
         _draw_library_catalog_panel(layout, context, "local", "local_items", "local_index", rows=7)
+        selected = _selected_catalog_item(props, "local")
+        root = Path(selected.root_path) if selected is not None and selected.root_path else ensure_local_catalog_dir()
+        try:
+            allowed = local_python_root_permission(root)
+        except Exception:
+            allowed = None
+        if allowed is not None:
+            row = layout.row(align=True)
+            row.label(text=f"Executable Python: {'Allowed' if allowed else 'Blocked'}", icon='CONSOLE')
+            op = row.operator(NODEFORGE_OT_set_local_python_permission.bl_idname,
+                              text="Revoke" if allowed else "Allow", icon='CHECKMARK' if allowed else 'UNLOCKED')
+            op.path = str(root)
+            op.allowed = not allowed
+
 
 
 class NODEFORGE_PT_library_functions(Panel):
@@ -1150,6 +1302,9 @@ classes = (
     NODEFORGE_UL_function_library,
     NODEFORGE_UL_packages,
     GNSCRIPT_MVP_OT_compile_expression,
+    NODEFORGE_OT_compile_mesh_compute_modifier,
+    NODEFORGE_OT_reload_mesh_compute_modifier,
+    NODEFORGE_OT_set_local_python_permission,
     GNSCRIPT_MVP_OT_update_selected_group,
     NODEFORGE_OT_reload_selected_library_group,
     GNSCRIPT_MVP_OT_load_selected_group_source,
@@ -1177,6 +1332,8 @@ classes = (
 def register():
     """Function `register` used by the NodeForge addon."""
     generated_resources.cleanup_restart_orphans_deferred()
+    from .blender.mesh_compute_runtime import register_runtime_load_handler
+    register_runtime_load_handler()
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.Scene.gn_script_mvp = PointerProperty(type=GNSCRIPT_MVP_Properties)
@@ -1184,6 +1341,11 @@ def register():
 
 def unregister():
     """Unregister NodeForge UI and operators without mutating generated node-group data."""
+    from .blender.mesh_compute_runtime import (
+        shutdown_runtime_bindings, unregister_runtime_load_handler,
+    )
+    shutdown_runtime_bindings()
+    unregister_runtime_load_handler()
     try:
         bpy.types.NODE_MT_add.remove(menu_func)
     except Exception:

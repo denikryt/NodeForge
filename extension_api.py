@@ -87,6 +87,40 @@ class ExtensionBackendContext:
         self._generated_resource_transaction.add(id_obj, kind, role)
         return id_obj
 
+    def mesh_compute(self, geometry, *, kernel, parameters, reads=(), writes=(), source_origin=None):
+        """Stage a Local Mesh Compute boundary in this build's resource transaction.
+
+        The stage is *not* active here. Its owning root-modifier cutover must
+        validate and bind it before publication commit; no global runtime or
+        handler can observe a candidate built by an unsuccessful compilation.
+        """
+        from .blender.mesh_compute_runtime import prefix_from_geometry_socket
+        from .blender.mesh_compute_transports.direct_mesh_update import build_boundary
+
+        if not isinstance(geometry, ExtensionBackendValue) or geometry.typ is not NFType.GEOMETRY:
+            raise TypeError("Mesh Compute requires an ExtensionBackendValue Geometry input")
+        validate_runtime_value_socket(geometry.socket, geometry.typ, self._group, context="mesh_compute geometry", require_output=True)
+        if not callable(kernel) or getattr(kernel, "__nodeforge_mesh_compute__", None) != (tuple(reads), tuple(writes)):
+            raise ValueError("Mesh Compute kernel is not a verified @mesh_compute callable")
+        if not isinstance(parameters, dict) or any(not isinstance(name, str) or not name.isidentifier() for name in parameters):
+            raise ValueError("Mesh Compute scalar arguments must be named")
+        if any(not isinstance(names, tuple) or len(set(names)) != len(names) or any(not isinstance(x, str) or not x for x in names) for names in (reads, writes)):
+            raise ValueError("Mesh Compute reads and writes must be tuples of distinct POINT FLOAT names")
+        tx = self._generated_resource_transaction
+        if getattr(tx, "mesh_compute_stage", None) is not None:
+            raise ValueError("One Mesh Compute stage per root modifier is supported")
+        prefix, scalar_keys = prefix_from_geometry_socket(self._group, geometry.socket, parameters, tx)
+        proxy_mesh = self.new_generated_mesh(role="mesh-compute-result", name_hint="MeshCompute")
+        proxy = self.new_generated_object(proxy_mesh, role="mesh-compute-result", name_hint="MeshCompute")
+        output = build_boundary(self._group, proxy, self._location)
+        from .blender.mesh_compute_runtime import PreparedMeshComputeStage
+        stage = PreparedMeshComputeStage(prefix=prefix, result_proxy=proxy, scalar_keys=scalar_keys,
+                                         reads=tuple(reads), writes=tuple(writes), kernel=kernel,
+                                         source_origin=source_origin)
+        tx.mesh_compute_stage = stage
+        self._group["nodeforge_mesh_compute_stage_v1"] = tx.generation_uuid
+        return self.value(output, NFType.GEOMETRY)
+
     def new_generated_mesh(self, *, role: str, name_hint: str = "") -> "bpy.types.Mesh":
         """Create one transaction-owned generated Mesh and publish its metadata."""
         name = self._generated_name(role, name_hint, "Mesh")
