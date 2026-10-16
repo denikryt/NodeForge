@@ -130,7 +130,10 @@ def _validate_import_bindings(
             if flat_only or inherited or not allow_local_runtime:
                 raise CompileError("Local Python Mesh Compute requires an explicit import in the root script")
             if not hasattr(resolved_environment, "admit_local_runtime"):
-                raise CompileError("Local Python Mesh Compute requires a root-scoped compilation environment")
+                raise CompileError(
+                    "Local Python Mesh Compute must be compiled from a root .nf script "
+                    "with Compile to Modifier; it cannot be added as a library node group"
+                )
             extension_callable_id = resolved_environment.admit_local_runtime(record)
         elif getattr(record, "interface_path", None) is not None and getattr(record, "source_path", None) is None:
             extension_callable_id = ExtensionCallableId(library_owner_key(record), canonical_name)

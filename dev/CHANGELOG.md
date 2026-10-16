@@ -450,3 +450,12 @@ lifecycle.
 - Avoid full Mesh Compute prefix evaluation and mesh fingerprinting on Blender dependency-graph events proven unrelated to any active stage.
 - Preserve full evaluation for relevant or ambiguous edits, animated frames, render preparation, external GN dependencies, and revoked Local Python permissions.
 - Add native Blender regression coverage and repeatable live-scheduler benchmarks for foreign events, source changes, multi-owner independence, and fail-closed permission handling.
+- Fixed Geometry Nodes sidebar redraw after refreshing Examples by using a Blender 5.2-compatible icon for Compile to Modifier.
+- Added a Blender regression test to validate UI icon identifiers against the running Blender version.
+- Speed up Local library browsing by inspecting only direct children of the open folder instead of rebuilding the full Local source index.
+- Refresh Examples without scanning unrelated Local roots; preserve full Local discovery for compilation and source resolution.
+- Add Blender and Python regressions for catalog isolation, source identity, static Python discovery, and symlink containment.
+- Explain that scripts importing Local Python Mesh Compute must use Compile to Modifier instead of Add Node Group.
+- Add a Blender regression for the rejected library path and supported modifier path.
+- Added Compile to Modifier directly from the selected Local `.nf` script. It uses the existing Mesh Compute root compilation and permission checks without requiring a separate Blender Text datablock.
+- Preserved Add Node Group for regular Local DSL node groups and added Blender tests for both compilation paths.

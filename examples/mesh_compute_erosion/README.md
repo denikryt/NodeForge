@@ -15,13 +15,16 @@ in the companion NodeForge script `erosion_numpy.nf`.
 2. Copy `erosion.py` to the **registered Local directory** as `erosion.py`. Grant
    **Allow executable Python** to that Local source. The callback executes with
    normal Python privileges.
-3. To test without extra libraries, open `erosion_numpy_smoke.nf` in Blender's
-   Text Editor, select a mesh object with no existing modifiers, and use
-   **Compile to Modifier**. It generates a simple square terrain in GN and
-   computes erosion using the Local Python stage.
+3. To test without extra libraries, select `erosion_numpy_smoke.nf` in the
+   **NodeForge → Library → Local** browser, select a Mesh object without
+   existing modifiers, and click **Compile to Modifier** beneath the Local list.
+   It generates a square terrain in GN and attaches the executable Python
+   stage to the modifier. Alternatively, open the `.nf` in Blender's Text
+   Editor and use the main **Compile to Modifier** action. **Add Node Group**
+   is for ordinary library groups and does not run Mesh Compute scripts.
 4. To use the **full supplied terrain generator**, install the independent
-   **NodeForge Math** package with import name `math` first. Then use
-   `erosion_numpy.nf` with Compile to Modifier. Set Resolution, Steps and the
+   **NodeForge Math** package with import name `math` first. Then select
+   `erosion_numpy.nf` and use **Compile to Modifier**. Set Resolution, Steps and the
    existing terrain/erosion parameters through the Geometry Nodes modifier.
    The material `Erosion Terrain` can be assigned in Blender as in the source.
 5. Edit `erosion.py` and use **Reload Compute** to load new Python code. Saving

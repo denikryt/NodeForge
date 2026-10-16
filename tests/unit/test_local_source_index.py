@@ -493,3 +493,54 @@ def test_file_root_and_canonical_target_stem_validation(tmp_path):
     assert captured.find_flat_function('valid_target').source_origin == origin(valid)
     with pytest.raises(CompileError, match='not a directory'):
         catalog.discover_local_sources((valid,))
+
+
+def test_local_browser_scans_only_visible_folder_without_weakening_full_discovery(storage, monkeypatch):
+    """UI browsing must not parse remote subtrees; semantic discovery remains complete."""
+    managed, _registry = storage
+    visible = write(managed, 'visible.nf')
+    hidden = write(managed, 'deep/hidden.nf')
+    # Unsupported package-style Local layout is an error for semantic discovery,
+    # but it must not prevent browsing the containing folder's siblings.
+    write(managed, 'deep/source.nf')
+    rows = local_sources.local_browser_records('')
+    assert {row['name'] for row in rows} == {'visible', 'deep'}
+    assert next(row for row in rows if row['name'] == 'visible')['path'] == str(visible.resolve())
+    with pytest.raises(CompileError, match='Unsupported local source layout'):
+        local_sources.local_candidate_records()
+    with pytest.raises(CompileError, match='Unsupported local source layout'):
+        local_sources.local_browser_records(str(managed / 'deep'))
+    assert hidden.exists()
+
+
+def test_local_browser_preserves_python_static_filter_and_folder_path(storage):
+    """Browsing inspects only direct Python declarations and retains their source provenance."""
+    managed, _registry = storage
+    sub = managed / 'terrain'
+    source = write(managed, 'terrain/rocks.nf')
+    runtime = write(managed, 'terrain/erosion.py',
+                    'from NodeForge import mesh_compute\n'
+                    '@mesh_compute(reads=(), writes=())\n'
+                    'def erosion(mesh):\n    return mesh\n')
+    write(managed, 'terrain/helpers.py', 'def helpers():\n    return 42\n')
+    rows = local_sources.local_browser_records(str(sub))
+    by_name = {row['name']: row for row in rows}
+    assert set(by_name) == {'rocks', 'erosion'}
+    assert by_name['rocks']['path'] == str(source.resolve())
+    assert by_name['rocks']['folder_path'] == 'terrain'
+    assert by_name['erosion']['path'] == str(runtime.resolve())
+    assert by_name['erosion']['kind'] == 'runtime'
+    assert by_name['erosion']['folder_path'] == 'terrain'
+
+
+def test_local_browser_rejects_symlink_escaping_registered_source(storage, tmp_path):
+    """A browser-only scan must retain the full catalog's root containment rule."""
+    managed, _registry = storage
+    outside = write(tmp_path, 'outside.nf')
+    target = managed / 'escaped.nf'
+    try:
+        target.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip('File symlinks unavailable')
+    with pytest.raises(CompileError, match='outside its registered root'):
+        local_sources.local_browser_records('')

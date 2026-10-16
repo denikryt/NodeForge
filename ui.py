@@ -38,7 +38,7 @@ from .local_sources import (
     delete_local_source,
 )
 from .blender.library_groups import apply_function_node_display_name
-from .environment_resolution import resolve_environment
+from .environment_resolution import resolve_environment, _make_compilation_environment
 from . import packages
 from .blender import generated_resources
 
@@ -257,7 +257,10 @@ def _refresh_catalog_items(props, namespace: str):
     if namespace == "local":
         records = local_browser_records(getattr(props, "local_browser_path", ""))
     else:
-        environment = resolve_environment()
+        # The Examples UI does not resolve Local sources. Avoid eagerly walking
+        # every Local root (including Python AST parsing) for an unrelated catalog.
+        environment = (_make_compilation_environment() if namespace == "examples"
+                       else resolve_environment())
         selected = (
             environment.package_function_records()
             if namespace == "functions"
@@ -381,27 +384,60 @@ class NODEFORGE_OT_compile_mesh_compute_modifier(Operator):
                     and props.text_block is not None and len(owner.modifiers) == 0)
 
     def execute(self, context):
-        """Install a prepared runtime group transactionally; execute its first output."""
-        from .blender.mesh_compute_runtime import evaluate_modifier_binding
+        """Compile the selected Text datablock as a Mesh Compute root."""
+        return _compile_mesh_compute_source(self, context, _source_from_props(context.scene.gn_script_mvp))
 
-        props = getattr(context.scene, "gn_script_mvp", None)
-        owner = getattr(context, "active_object", None)
-        if props is None or owner is None:
-            self.report({'ERROR'}, "Select a Mesh Object and a NodeForge Text Block")
-            return {'CANCELLED'}
-        source = _source_from_props(props)
-        try:
-            group = create_mesh_compute_modifier(source, owner)
-        except Exception as exc:
-            self.report({'ERROR'}, str(exc))
-            return {'CANCELLED'}
-        try:
-            evaluate_modifier_binding(owner)
-        except Exception as exc:
-            self.report({'WARNING'}, f"Compiled {group.name}; runtime error: {exc}")
-            return {'FINISHED'}
-        self.report({'INFO'}, f"Mesh Compute modifier ready: {group.name}")
+
+def _compile_mesh_compute_source(operator, context, source: str):
+    """Install and evaluate one explicit Mesh Compute root through the existing transaction."""
+    from .blender.mesh_compute_runtime import evaluate_modifier_binding
+
+    try:
+        group = create_mesh_compute_modifier(source, context.active_object)
+    except Exception as exc:
+        operator.report({'ERROR'}, str(exc))
+        return {'CANCELLED'}
+    try:
+        evaluate_modifier_binding(context.active_object)
+    except Exception as exc:
+        operator.report({'WARNING'}, f"Compiled {group.name}; runtime error: {exc}")
         return {'FINISHED'}
+    operator.report({'INFO'}, f"Mesh Compute modifier ready: {group.name}")
+    return {'FINISHED'}
+
+
+class NODEFORGE_OT_compile_local_mesh_compute_modifier(Operator):
+    """Compile the selected Local .nf script as a root Mesh Compute modifier."""
+
+    bl_idname = "nodeforge.compile_local_mesh_compute_modifier"
+    bl_label = "Compile to Modifier"
+    bl_description = "Compile the selected Local .nf script as Mesh Compute on the active Mesh object"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        """Offer the action only for a Local script and an empty Mesh modifier stack."""
+        owner = getattr(context, "active_object", None)
+        props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
+        item = _selected_catalog_item(props, "local")
+        return bool(owner is not None and owner.type == 'MESH' and not owner.modifiers
+                    and item is not None and item.kind in {'script', 'linked_script'}
+                    and item.path.lower().endswith('.nf'))
+
+    def execute(self, context):
+        """Read the selected Local file at invocation time, preserving its Local imports."""
+        props = getattr(context.scene, "gn_script_mvp", None)
+        item = _selected_catalog_item(props, "local")
+        if (item is None or item.kind not in {'script', 'linked_script'}
+                or not item.path.lower().endswith('.nf')):
+            self.report({'ERROR'}, "Select a Local .nf script to compile")
+            return {'CANCELLED'}
+        try:
+            source = Path(item.path).read_text(encoding='utf-8')
+        except (OSError, UnicodeError) as exc:
+            self.report({'ERROR'}, f"Cannot read Local script: {exc}")
+            return {'CANCELLED'}
+        return _compile_mesh_compute_source(self, context, source)
 
 
 class NODEFORGE_OT_reload_mesh_compute_modifier(Operator):
@@ -1082,6 +1118,16 @@ def _draw_library_catalog_panel(layout, context, namespace: str, collection_name
     op = row.operator(NODEFORGE_OT_create_function_group.bl_idname, text="Add Node Group", icon='NODETREE')
     op.namespace = namespace
     if namespace == "local":
+        # The Local list is not a Blender Text datablock. Provide an explicit
+        # root-scoped action without parsing/scanning Local on every UI redraw.
+        if (item is not None and item.kind in {'script', 'linked_script'}
+                and item.path.lower().endswith('.nf')):
+            row = layout.row(align=True)
+            row.enabled = bool(getattr(context, 'active_object', None) is not None
+                               and context.active_object.type == 'MESH'
+                               and not context.active_object.modifiers)
+            row.operator(NODEFORGE_OT_compile_local_mesh_compute_modifier.bl_idname,
+                         text="Compile to Modifier", icon='GEOMETRY_NODES')
         _draw_local_selected_action(layout, item)
     if _active_gn_tree(context) is None:
         layout.label(text="Open a Geometry Nodes editor to add", icon='INFO')
@@ -1116,7 +1162,7 @@ class GNSCRIPT_MVP_PT_panel(Panel):
         row.enabled = bool(owner is not None and owner.type == 'MESH'
                            and props.text_block is not None and len(owner.modifiers) == 0)
         row.operator(NODEFORGE_OT_compile_mesh_compute_modifier.bl_idname,
-                     text="Compile to Modifier", icon='MOD_NODES')
+                     text="Compile to Modifier", icon='GEOMETRY_NODES')
         if owner is not None and getattr(owner, "type", None) == "MESH" and owner.modifiers:
             from .blender.mesh_compute_runtime import get_modifier_binding
             try:
@@ -1303,6 +1349,7 @@ classes = (
     NODEFORGE_UL_packages,
     GNSCRIPT_MVP_OT_compile_expression,
     NODEFORGE_OT_compile_mesh_compute_modifier,
+    NODEFORGE_OT_compile_local_mesh_compute_modifier,
     NODEFORGE_OT_reload_mesh_compute_modifier,
     NODEFORGE_OT_set_local_python_permission,
     GNSCRIPT_MVP_OT_update_selected_group,

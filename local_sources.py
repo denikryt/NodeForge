@@ -376,12 +376,31 @@ def local_browser_records(current_path: str = "") -> list[dict[str, object]]:
             source_root, managed, source_label = allowed
             directory = location
 
+    # The browser shows direct children only. Full Local discovery also traverses
+    # unrelated linked trees and parses every Python utility in them; reserve that
+    # complete snapshot for semantic imports and compilation, not a UI refresh.
+    children = sorted(directory.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+    candidates = []
+    for path in children:
+        if path.name.startswith(("_", ".")) or path.is_dir():
+            continue
+        if catalog._eligible_local_stem(path.name) is None:
+            continue
+        if path.is_file():
+            canonical = _canonical_path(path)
+            try:
+                canonical.relative_to(source_root)
+            except ValueError as exc:
+                raise CompileError(f"Local source resolves outside its registered root: {path}") from exc
+            candidates.append(path)
+    if location is None:
+        candidates.extend(Path(record["path"]) for record in linked_files)
     script_by_path = {
         _path_key(record.path): record
-        for record in local_candidate_records()
+        for record in catalog.discover_local_sources((), candidates)[0]
     }
     rows: list[dict[str, object]] = []
-    for path in sorted(directory.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+    for path in children:
         if path.name.startswith("_") or path.name.startswith("."):
             continue
         if path.is_dir():
@@ -404,6 +423,7 @@ def local_browser_records(current_path: str = "") -> list[dict[str, object]]:
             continue
         rows.append({
             **record.as_dict(),
+            "folder_path": catalog._relative_folder_for_path(source_root, path, record.name),
             "root_path": str(source_root),
             "source_label": source_label,
             "managed": managed,
