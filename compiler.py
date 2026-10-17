@@ -114,12 +114,12 @@ def create_examples_source_group(source_origin: str, package_id: str = ""):
     record = None if selected.examples_index is None else selected.examples_index.find_origin(origin)
     if (record is None or record.package_id != package_id or record.source_path is None
             or record.kind == "runtime"):
-        raise CompileError(f"Current Examples .nf library source is unavailable: {source_origin}")
+        raise CompileError(f"Current Examples source is unavailable: {source_origin}")
     return materialize_library_entry_group_for_record(record, _new_group_backend(environment))
 
 
 def create_examples_mesh_compute_modifier(source_origin: str, package_id: str, owner):
-    """Compile a specifically selected Examples .nf root using its one captured environment."""
+    """Compile an exact Examples .nf source as a root Mesh Compute modifier."""
     environment = _make_compilation_environment()
     selected = environment.catalog("examples")
     selected._raise_if_failed()

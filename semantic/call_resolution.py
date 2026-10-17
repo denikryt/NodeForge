@@ -501,6 +501,7 @@ def resolve_simple_callable(name: str, environment: CallableEnvironment):
         # Runtime owners are extension targets, not .nf library FunctionIds.
         # Deduplicate against directory candidates by their exact source owner.
         def owner_identity(record):
+            """Identify the selected runtime or DSL owner for candidate deduplication."""
             if getattr(record, "kind", None) == "runtime":
                 return ("runtime", record.namespace, record.package_id, record.source_origin)
             return library_function_id_for_record(record)

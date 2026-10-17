@@ -471,3 +471,4 @@ lifecycle.
 - Added an independent, default-disabled bundled Examples Python permission; package examples retain their existing installed-package Python authorization.
 - Extended the existing Mesh Compute runtime to enforce Examples owner permissions on compilation, evaluation and Reload, while preserving Local and native library behavior.
 - Updated the bundled erosion NumPy example to import its companion callback from Examples instead of requiring a Local copy.
+- Combined nested Examples source imports with Python Mesh Compute discovery while preserving exact source selection and the legacy top-level catalog.

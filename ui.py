@@ -158,7 +158,10 @@ class NODEFORGE_UL_function_library(UIList):
         if kind == "linked_script":
             row.label(text=item.name, icon='LINKED')
             return
-        row.label(text=getattr(item, 'source_label', '') or item.name, icon='CONSOLE' if kind == 'runtime' or item.path.endswith('.py') else 'NODETREE')
+        row.label(
+            text=getattr(item, "source_label", "") or item.name,
+            icon='CONSOLE' if kind == 'runtime' or item.path.endswith('.py') else 'NODETREE',
+        )
         if getattr(item, "package_id", ""):
             row.label(text=item.package_id)
 

@@ -66,6 +66,23 @@ def test_ast_only_discovery_and_explicit_bundled_grant(example_root):
     assert not marker.exists()
 
 
+def test_nested_examples_dsl_and_python_share_one_directory_snapshot(example_root):
+    """Keep nested DSL calls and explicit Python runtimes selectable in one catalog."""
+    runtime = write_python(example_root)
+    script = example_root / 'terrain' / 'offset.nf'
+    script.write_text('x = input_float("X")\noutput(x + 1.0)\n', encoding='utf-8')
+
+    view = environment_resolution._make_compilation_environment()
+    examples = view.catalog('examples')
+    assert examples.names() == frozenset()
+    assert examples.select_import('examples.terrain', 'erosion').source_path == runtime.resolve()
+    assert examples.select_import('examples.terrain', 'offset').source_path == script.resolve()
+    _prepare('from examples import terrain\noutput(offset(1.0))\n', view)
+
+    local_sources.set_examples_python_permission(example_root, allowed=True)
+    _prepare(root_code(), environment_resolution._make_compilation_environment())
+
+
 def test_permission_is_separate_default_denied_and_requires_exact_root(example_root, tmp_path):
     """Persisted bundled opt-in does not inherit Local permissions or accept child roots."""
     root = example_root

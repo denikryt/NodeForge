@@ -184,7 +184,7 @@ def _walk_public_source_tree(root: Path, prefix=(), *, walker=os.walk):
 
 
 def _example_source_positions(root, *, package_id, package_name, package_version):
-    """Capture all ordinary nested Examples source leaves and physical directories."""
+    """Capture nested Examples scripts, declared Python runtimes, and directories."""
     records, directories, positions = [], [], []
     if not root.exists():
         return records, directories, positions
