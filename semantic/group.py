@@ -95,9 +95,11 @@ def _validate_import_bindings(
         base_namespace = namespace.split(".")[0]
         catalog = resolved_environment.catalog(base_namespace)
         catalog._raise_if_failed()
-        index = catalog.local_index
-        if inherited_record is not None and base_namespace == "local" and index is not None:
+        index = catalog.local_index if base_namespace == "local" else catalog.examples_index
+        if inherited_record is not None and index is not None:
             record = index.find_origin(inherited_record.source_origin)
+        elif base_namespace == "examples" and index is not None:
+            record = catalog.select_import(namespace, canonical_name, flat_only=flat_only)
         elif index is not None:
             if namespace == "local":
                 record = index.find_flat_function(canonical_name) if flat_only else index.resolve_root_import(canonical_name)
@@ -105,8 +107,8 @@ def _validate_import_bindings(
                 parent = index.resolve_directory(tuple(namespace.split(".")[1:]))
                 record = index.resolve_member(parent, canonical_name)
         else:
-            if namespace.startswith("local."):
-                raise CompileError("Local directory imports require a captured Local source index")
+            if namespace.startswith(("local.", "examples.")):
+                raise CompileError(f"{base_namespace.title()} directory imports require a captured {base_namespace.title()} source index")
             record = catalog.find(canonical_name)
         if record is None:
             raise CompileError(f"Unknown {namespace} import: {canonical_name}")
@@ -122,16 +124,17 @@ def _validate_import_bindings(
                 raise CompileError(f"Directory import name conflicts with reserved name: {exposed_name}")
             directories[exposed_name] = LocalDirectoryNamespaceBinding(
                 exposed_name, index, record, expose_unqualified=not has_explicit_alias,
+                namespace=base_namespace,
             )
             return
         namespace = base_namespace
         extension_callable_id = None
         if getattr(record, "kind", None) == "runtime":
             if flat_only or inherited or not allow_local_runtime:
-                raise CompileError("Local Python Mesh Compute requires an explicit import in the root script")
+                raise CompileError("Python Mesh Compute requires an explicit import in the root .nf script")
             if not hasattr(resolved_environment, "admit_local_runtime"):
                 raise CompileError(
-                    "Local Python Mesh Compute must be compiled from a root .nf script "
+                    "Python Mesh Compute must be compiled from a root .nf script "
                     "with Compile to Modifier; it cannot be added as a library node group"
                 )
             extension_callable_id = resolved_environment.admit_local_runtime(record)
@@ -175,8 +178,12 @@ def _validate_import_bindings(
         else:
             raise CompileError("Internal error: inherited library binding is not owner-resolved")
     for alias, binding in dict(inherited_local_namespaces or {}).items():
-        if not isinstance(binding, LocalDirectoryNamespaceBinding) or binding.source_name != alias or binding.index_snapshot is not resolved_environment.catalog("local").local_index:
-            raise CompileError("Internal error: inherited Local namespace does not match resolved environment")
+        if not isinstance(binding, LocalDirectoryNamespaceBinding) or binding.source_name != alias:
+            raise CompileError("Internal error: invalid inherited source namespace")
+        catalog = resolved_environment.catalog(binding.namespace)
+        index = catalog.local_index if binding.namespace == "local" else catalog.examples_index
+        if binding.index_snapshot is not index:
+            raise CompileError(f"Internal error: inherited {binding.namespace.title()} namespace does not match resolved environment")
         if alias in imported or alias in reserved_names or alias in _assigned_names(body_stmts) or alias in local_function_defs:
             raise CompileError(f"Local namespace import name conflicts with source binding: {alias}")
         if alias in directories and directories[alias] != binding:

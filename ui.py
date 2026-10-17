@@ -12,6 +12,8 @@ from .compiler import (
     update_mesh_compute_modifier,
     update_expression_group,
     create_library_catalog_group,
+    create_examples_source_group,
+    create_examples_mesh_compute_modifier,
     create_local_source_group,
     create_package_function_group,
     update_library_catalog_group,
@@ -26,6 +28,8 @@ from .local_sources import (
     local_browser_records,
     local_python_root_permission,
     set_local_python_permission,
+    examples_python_root_permission,
+    set_examples_python_permission,
     local_source_roots,
     link_local_source_folder,
     unlink_local_source_folder,
@@ -154,7 +158,7 @@ class NODEFORGE_UL_function_library(UIList):
         if kind == "linked_script":
             row.label(text=item.name, icon='LINKED')
             return
-        row.label(text=item.name, icon='CONSOLE' if kind == 'runtime' or item.path.endswith('.py') else 'NODETREE')
+        row.label(text=getattr(item, 'source_label', '') or item.name, icon='CONSOLE' if kind == 'runtime' or item.path.endswith('.py') else 'NODETREE')
         if getattr(item, "package_id", ""):
             row.label(text=item.package_id)
 
@@ -267,6 +271,8 @@ def _refresh_catalog_items(props, namespace: str):
             else environment.catalog(namespace).records()
         )
         records = [record.as_dict() for record in selected]
+    from collections import Counter
+    duplicate_names = Counter(record.get("name", "") for record in records) if namespace == "examples" else {}
     for record in records:
         item = items.add()
         item.name = record.get("name", "")
@@ -278,7 +284,10 @@ def _refresh_catalog_items(props, namespace: str):
             item.package_name = record.get("package_name", "")
         if hasattr(item, "root_path"):
             item.root_path = str(record.get("root_path", ""))
-            item.source_label = str(record.get("source_label", ""))
+            label = str(record.get("source_label", ""))
+            if namespace == "examples" and duplicate_names[record.get("name", "")] > 1:
+                label = "/".join(part for part in (record.get("folder_path", ""), record.get("name", "")) if part)
+            item.source_label = label
             item.managed = bool(record.get("managed", False))
     setattr(props, index_prop, 0)
     if old_name:
@@ -291,7 +300,8 @@ def _refresh_catalog_items(props, namespace: str):
                 if item.name == old_name and getattr(item, "package_id", "") == old_package_id:
                     setattr(props, index_prop, index)
                     break
-            elif item.name == old_name:
+            elif (item.name == old_name and item.path == old_path
+                  and getattr(item, "package_id", "") == old_package_id):
                 setattr(props, index_prop, index)
                 break
     return len(records)
@@ -388,12 +398,14 @@ class NODEFORGE_OT_compile_mesh_compute_modifier(Operator):
         return _compile_mesh_compute_source(self, context, _source_from_props(context.scene.gn_script_mvp))
 
 
-def _compile_mesh_compute_source(operator, context, source: str):
+def _compile_mesh_compute_source(operator, context, source: str = "", *, examples_selection=None):
     """Install and evaluate one explicit Mesh Compute root through the existing transaction."""
     from .blender.mesh_compute_runtime import evaluate_modifier_binding
 
     try:
-        group = create_mesh_compute_modifier(source, context.active_object)
+        group = (create_examples_mesh_compute_modifier(*examples_selection, context.active_object)
+                 if examples_selection is not None else
+                 create_mesh_compute_modifier(source, context.active_object))
     except Exception as exc:
         operator.report({'ERROR'}, str(exc))
         return {'CANCELLED'}
@@ -438,6 +450,32 @@ class NODEFORGE_OT_compile_local_mesh_compute_modifier(Operator):
             self.report({'ERROR'}, f"Cannot read Local script: {exc}")
             return {'CANCELLED'}
         return _compile_mesh_compute_source(self, context, source)
+
+
+class NODEFORGE_OT_compile_examples_mesh_compute_modifier(Operator):
+    """Compile the selected Examples .nf script as a root-scoped Mesh Compute modifier."""
+
+    bl_idname = "nodeforge.compile_examples_mesh_compute_modifier"
+    bl_label = "Compile to Modifier"
+    bl_description = "Compile selected Examples .nf as a Mesh Compute modifier on an empty Mesh"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        owner = getattr(context, 'active_object', None)
+        props = getattr(getattr(context, 'scene', None), 'gn_script_mvp', None)
+        item = _selected_catalog_item(props, 'examples')
+        return bool(owner is not None and owner.type == 'MESH' and not owner.modifiers
+                    and item is not None and item.kind == 'script' and item.path.endswith('.nf'))
+
+    def execute(self, context):
+        props = getattr(context.scene, 'gn_script_mvp', None)
+        item = _selected_catalog_item(props, 'examples')
+        if item is None or item.kind != 'script' or not item.path.endswith('.nf'):
+            self.report({'ERROR'}, 'Select an Examples .nf root script')
+            return {'CANCELLED'}
+        return _compile_mesh_compute_source(self, context,
+                                            examples_selection=(item.path, item.package_id))
 
 
 class NODEFORGE_OT_reload_mesh_compute_modifier(Operator):
@@ -503,6 +541,28 @@ class NODEFORGE_OT_set_local_python_permission(Operator):
             return {'CANCELLED'}
         self.report({'INFO'}, "Executable Local Python enabled" if self.allowed
                     else "Executable Local Python disabled")
+        return {'FINISHED'}
+
+
+class NODEFORGE_OT_set_examples_python_permission(Operator):
+    """Grant or revoke executable Python only for the bundled Examples root."""
+
+    bl_idname = "nodeforge.set_examples_python_permission"
+    bl_label = "Examples Executable Python Permission"
+    bl_description = "Allow or deny Python callbacks shipped with NodeForge Examples"
+    bl_options = {'REGISTER'}
+
+    allowed: BoolProperty(name="Allow bundled Examples Python", default=False, options={'HIDDEN'})
+
+    def execute(self, context):
+        from .catalog import catalog_dir
+        try:
+            set_examples_python_permission(catalog_dir('examples'), allowed=self.allowed)
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, "Bundled Examples Python enabled" if self.allowed
+                    else "Bundled Examples Python disabled")
         return {'FINISHED'}
 
 
@@ -758,6 +818,9 @@ class NODEFORGE_OT_create_function_group(Operator):
         if item is None:
             self.report({'ERROR'}, f"Select a {self.namespace} entry from the list")
             return {'CANCELLED'}
+        if self.namespace == "examples" and getattr(item, "kind", "") == "runtime":
+            self.report({'ERROR'}, "Executable Examples Python can only run inside a root modifier")
+            return {'CANCELLED'}
         if self.namespace == "local" and getattr(item, "kind", "") not in {"script", "linked_script"}:
             self.report({'ERROR'}, "Select a Local script, not a folder")
             return {'CANCELLED'}
@@ -774,7 +837,9 @@ class NODEFORGE_OT_create_function_group(Operator):
                 group = (
                     create_local_source_group(item.path)
                     if self.namespace == "local"
-                    else create_library_catalog_group(self.namespace, item.name)
+                    else (create_examples_source_group(item.path, item.package_id)
+                          if self.namespace == "examples"
+                          else create_library_catalog_group(self.namespace, item.name))
                 )
         except Exception as exc:
             self.report({'ERROR'}, str(exc))
@@ -1113,7 +1178,7 @@ def _draw_library_catalog_panel(layout, context, namespace: str, collection_name
     item = _selected_catalog_item(props, namespace)
     row = layout.row(align=True)
     row.enabled = (item is not None and _active_gn_tree(context) is not None
-                   and not (namespace == "local" and
+                   and not (namespace in {"local", "examples"} and
                             (item.kind == "runtime" or item.path.endswith(".py"))))
     op = row.operator(NODEFORGE_OT_create_function_group.bl_idname, text="Add Node Group", icon='NODETREE')
     op.namespace = namespace
@@ -1129,6 +1194,12 @@ def _draw_library_catalog_panel(layout, context, namespace: str, collection_name
             row.operator(NODEFORGE_OT_compile_local_mesh_compute_modifier.bl_idname,
                          text="Compile to Modifier", icon='GEOMETRY_NODES')
         _draw_local_selected_action(layout, item)
+    elif namespace == "examples" and item is not None and item.kind == 'script' and item.path.endswith('.nf'):
+        row = layout.row(align=True)
+        owner = getattr(context, 'active_object', None)
+        row.enabled = bool(owner is not None and owner.type == 'MESH' and not owner.modifiers)
+        row.operator(NODEFORGE_OT_compile_examples_mesh_compute_modifier.bl_idname,
+                     text="Compile to Modifier", icon='GEOMETRY_NODES')
     if _active_gn_tree(context) is None:
         layout.label(text="Open a Geometry Nodes editor to add", icon='INFO')
 
@@ -1293,6 +1364,17 @@ class NODEFORGE_PT_library_examples(Panel):
         return GNSCRIPT_MVP_PT_panel.poll(context)
 
     def draw(self, context):
+        from .catalog import catalog_dir
+        root = catalog_dir('examples')
+        try:
+            allowed = examples_python_root_permission(root)
+        except Exception as exc:
+            self.layout.label(text=f"Examples permission unavailable: {exc}", icon='ERROR')
+        else:
+            op = self.layout.operator(NODEFORGE_OT_set_examples_python_permission.bl_idname,
+                                      text="Executable Python: Allowed" if allowed else "Executable Python: Denied",
+                                      icon='UNLOCKED' if allowed else 'LOCKED')
+            op.allowed = not allowed
         _draw_library_catalog_panel(self.layout, context, "examples", "example_items", "example_index", rows=3)
 
 
@@ -1350,8 +1432,10 @@ classes = (
     GNSCRIPT_MVP_OT_compile_expression,
     NODEFORGE_OT_compile_mesh_compute_modifier,
     NODEFORGE_OT_compile_local_mesh_compute_modifier,
+    NODEFORGE_OT_compile_examples_mesh_compute_modifier,
     NODEFORGE_OT_reload_mesh_compute_modifier,
     NODEFORGE_OT_set_local_python_permission,
+    NODEFORGE_OT_set_examples_python_permission,
     GNSCRIPT_MVP_OT_update_selected_group,
     NODEFORGE_OT_reload_selected_library_group,
     GNSCRIPT_MVP_OT_load_selected_group_source,

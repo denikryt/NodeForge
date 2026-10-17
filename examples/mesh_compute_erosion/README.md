@@ -10,30 +10,18 @@ in the companion NodeForge script `erosion_numpy.nf`.
 
 ## Use in Blender 5.2
 
-1. Install/enable NodeForge with Local Mesh Compute support and install NumPy in
-   Blender's Python if not already available.
-2. Copy `erosion.py` to the **registered Local directory** as `erosion.py`. Grant
-   **Allow executable Python** to that Local source. The callback executes with
-   normal Python privileges.
-3. To test without extra libraries, select `erosion_numpy_smoke.nf` in the
-   **NodeForge → Library → Local** browser, select a Mesh object without
-   existing modifiers, and click **Compile to Modifier** beneath the Local list.
-   It generates a square terrain in GN and attaches the executable Python
-   stage to the modifier. Alternatively, open the `.nf` in Blender's Text
-   Editor and use the main **Compile to Modifier** action. **Add Node Group**
-   is for ordinary library groups and does not run Mesh Compute scripts.
-4. To use the **full supplied terrain generator**, install the independent
-   **NodeForge Math** package with import name `math` first. Then select
-   `erosion_numpy.nf` and use **Compile to Modifier**. Set Resolution, Steps and the
-   existing terrain/erosion parameters through the Geometry Nodes modifier.
-   The material `Erosion Terrain` can be assigned in Blender as in the source.
-5. Edit `erosion.py` and use **Reload Compute** to load new Python code. Saving
-   and reopening a .blend invalidates the executable binding; Reload Compute
-   is required to restore it. **Undo / Redo** also invalidates live Python
-   bindings because Blender restores the node groups and modifiers as new
-   datablocks. Use Reload Compute after Undo / Redo to recalculate the result.
-   For interactive rendering, enable **Render Properties → Lock Interface**;
-   headless Blender renders are supported without the interactive render window.
+1. Enable NodeForge and install NumPy in Blender's Python if needed. For the full terrain generator, also install the **NodeForge Math** package (import name `math`).
+2. Select a Mesh object with no existing modifiers.
+3. In **NodeForge → Library → Examples**, refresh and select `mesh_compute_erosion/erosion_numpy.nf`.
+4. Enable **Executable Python: Allowed** in the Examples panel. This permission applies only to bundled Examples and is disabled by default. The `erosion.py` callback executes with normal Python privileges.
+5. Click **Compile to Modifier**. Set Resolution, Steps and the other parameters on the generated modifier. The material `Erosion Terrain` can be assigned as in the original example. **Add Node Group** is for ordinary library-safe source functions.
+6. Edit `erosion.py` and use **Reload Compute** to capture the changed Python callback. Saving/reopening a `.blend`, Undo and Redo invalidate executable bindings; use Reload Compute to restore them. Revoking the Examples Python permission disables evaluation and invalidates the result. For interactive rendering, enable **Render Properties → Lock Interface**.
+
+The companion script imports the callback directly:
+
+```python
+from examples.mesh_compute_erosion import erosion
+```
 
 The callback's `reads` are `height` and `initial_height` (POINT FLOAT); `writes`
 are `height`, `water`, `sediment`. The optional `positions` output is omitted:

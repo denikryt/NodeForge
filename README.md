@@ -103,16 +103,6 @@ from local import erosion
 
 See [Local imports](https://denikryt.github.io/NodeForgeDocs/latest/SYNTAX/#local) for the supported import forms.
 
-### Local Mesh Compute
-
-A Local `.nf` script that imports a Python function decorated with `@mesh_compute` must be compiled as a Geometry Nodes **modifier**, not inserted as a library node group.
-
-1. Save the `.nf` entry script and the imported `.py` functions in Local, then grant **Executable Python: Allowed** for their Local root.
-2. Select a Mesh object with an empty modifier stack.
-3. In **NodeForge → Library → Local**, select the `.nf` entry script and click **Compile to Modifier**. NodeForge creates the modifier and evaluates its first result.
-
-**Add Node Group** is for regular reusable `.nf` functions. **Compile to Modifier** is also available for a `.nf` script selected in the main **Text Script** field.
-
 ## Coverage
 
 The syntax follows Python as closely as the Geometry Nodes model allows. The built-in function library covers only part of Geometry Nodes. When a dedicated NodeForge function is not available, `node(...)` can create the Blender node directly.

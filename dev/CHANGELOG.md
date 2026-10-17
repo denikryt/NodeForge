@@ -459,3 +459,15 @@ lifecycle.
 - Add a Blender regression for the rejected library path and supported modifier path.
 - Added Compile to Modifier directly from the selected Local `.nf` script. It uses the existing Mesh Compute root compilation and permission checks without requiring a separate Blender Text datablock.
 - Preserved Add Node Group for regular Local DSL node groups and added Blender tests for both compilation paths.
+
+## 0.69.0
+
+- Added qualified imports for nested bundled and package Examples `.nf` and `.nodeforge` sources, including directory aliases, unqualified `.nf` calls from unaliased directory imports and exact source selection in the Examples UI.
+- Preserved top-level Examples callable and wildcard ownership while isolating nested source identities, duplicate-name diagnostics and Reload provenance.
+
+## 0.70.0
+
+- Added explicit `@mesh_compute` Python imports from bundled and installed package Examples and a root-only Compile to Modifier action for selected Examples `.nf` scripts.
+- Added an independent, default-disabled bundled Examples Python permission; package examples retain their existing installed-package Python authorization.
+- Extended the existing Mesh Compute runtime to enforce Examples owner permissions on compilation, evaluation and Reload, while preserving Local and native library behavior.
+- Updated the bundled erosion NumPy example to import its companion callback from Examples instead of requiring a Local copy.

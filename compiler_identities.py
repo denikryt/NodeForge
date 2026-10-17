@@ -113,8 +113,8 @@ class FunctionId:
         if self.kind == _LIBRARY_FUNCTION_KIND:
             if not self.namespace or not self.package_id or not self.name or self.definition_owner or self.signature:
                 raise ValueError("Invalid library FunctionId")
-            if self.source_origin and self.namespace != "local":
-                raise ValueError("Only Local library identity may carry source_origin")
+            if self.source_origin and self.namespace not in {"local", "examples"}:
+                raise ValueError("Only Local and nested Examples identities may carry source_origin")
             return
         raise ValueError(f"Unsupported FunctionId kind: {self.kind!r}")
 
@@ -174,6 +174,18 @@ def library_function_id(namespace: str, package_id: str | None, name: str) -> Fu
 
 def library_function_id_for_record(record) -> FunctionId:
     """Construct imported identity with mandatory canonical origin for Local sources."""
+    if record.namespace == "examples" and getattr(record, "folder_path", ""):
+        from .catalog import is_public_local_name
+        from pathlib import PurePosixPath
+        directory = PurePosixPath(record.folder_path)
+        if (not all(is_public_local_name(part) for part in directory.parts)
+                or record.source_path is None or record.source_path.suffix not in {".nf", ".nodeforge"}
+                or not is_public_local_name(record.name)):
+            raise ValueError("Nested Examples FunctionId requires a public relative source path")
+        logical_path = str(directory / (record.name + record.source_path.suffix))
+        return FunctionId(kind="LIBRARY", namespace="examples",
+                          package_id=normalize_library_package_id(record.package_id),
+                          name=record.name, source_origin=logical_path)
     if record.namespace != "local":
         return library_function_id(record.namespace, record.package_id, record.name)
     import os

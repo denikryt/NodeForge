@@ -31,6 +31,8 @@ class PreparedMeshComputeStage:
     writes: tuple[str, ...]
     kernel: Callable
     source_origin: str | None = None
+    source_namespace: str = "local"
+    source_package_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -436,7 +438,7 @@ def _can_skip_foreign_depsgraph_updates(scene) -> bool:
     full validation. This is an optimization, never a cache authority.
     """
     import bpy
-    from ..local_sources import local_python_permission
+    from ..local_runtime import runtime_python_permission
 
     if scene is None or bpy.context.scene is not scene:
         return False
@@ -453,7 +455,9 @@ def _can_skip_foreign_depsgraph_updates(scene) -> bool:
         # reach evaluate_modifier_binding's fail-closed output invalidation.
         if (binding.trust_revoked or binding.status != 'READY' or
                 (binding.prepared.source_origin is not None and
-                 not local_python_permission(binding.prepared.source_origin))):
+                 not runtime_python_permission(binding.prepared.source_namespace,
+                                               binding.prepared.source_origin,
+                                               binding.prepared.source_package_id))):
             return False
         owner = binding.owner
         if not any(item.as_pointer() == owner.as_pointer() for item in scene.objects):
@@ -879,10 +883,12 @@ def evaluate_modifier_binding(owner, modifier=None, *, source_scene=None, skip_u
         if binding.trust_revoked:
             raise PermissionError("Mesh Compute requires Reload after a Local Python permission revocation")
         if binding.prepared.source_origin is not None:
-            from ..local_sources import local_python_permission
-            if not local_python_permission(binding.prepared.source_origin):
+            from ..local_runtime import runtime_python_permission
+            if not runtime_python_permission(binding.prepared.source_namespace,
+                                             binding.prepared.source_origin,
+                                             binding.prepared.source_package_id):
                 binding.trust_revoked = True
-                raise PermissionError("Mesh Compute Local executable Python permission was revoked")
+                raise PermissionError("Mesh Compute executable Python permission was revoked")
         if any(other.as_pointer() != owner.as_pointer() and any(
                 mod.type == "NODES" and mod.node_group is not None and
                 mod.node_group.as_pointer() == binding.group.as_pointer()

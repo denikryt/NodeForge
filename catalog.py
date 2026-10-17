@@ -162,6 +162,100 @@ def _path_value(item: Path | str | dict[str, object]) -> Path:
     return Path(item)
 
 
+def _walk_public_source_tree(root: Path, prefix=(), *, walker=os.walk):
+    """Yield deterministic directories and candidate file positions without following directory links.
+
+    The caller owns namespace-specific acceptance of files. Filesystem traversal
+    errors propagate, and non-public parents never become importable positions.
+    """
+    def fail(error):
+        """Reject partially traversed source trees."""
+        raise error
+    for current, children, files in walker(root, followlinks=False, onerror=fail):
+        children[:] = sorted(name for name in children if not name.startswith(("_", "."))
+                             and not (Path(current) / name).is_symlink())
+        relative = Path(current).relative_to(root).parts
+        physical_prefix = prefix + relative
+        import_prefix = physical_prefix if all(is_public_local_name(x) for x in physical_prefix) else None
+        yield (Path(current), physical_prefix, import_prefix, (
+            name for name in files
+            if not name.startswith(("_", ".")) and (name == _PACKAGE_SOURCE_NAME or _eligible_local_stem(name) is not None)
+        ))
+
+
+def _example_source_positions(root, *, package_id, package_name, package_version):
+    """Capture all ordinary nested Examples source leaves and physical directories."""
+    records, directories, positions = [], [], []
+    if not root.exists():
+        return records, directories, positions
+    if not root.is_dir():
+        raise CompileError(f"Examples catalog root is not a directory: {root}")
+    canonical_root = _canonical_path(root)
+    for current, physical_prefix, import_prefix, files in _walk_public_source_tree(root):
+        if physical_prefix:
+            directories.append((physical_prefix, _path_key(current)))
+        if import_prefix is None:
+            continue
+        for name in sorted(files):
+            path = current / name
+            if not is_public_local_name(path.stem):
+                continue
+            if path.suffix == ".py":
+                # Check canonical ownership before inspecting any source bytes.
+                if not _canonical_path(path).is_relative_to(canonical_root):
+                    raise CompileError(f"Examples source resolves outside its catalog root: {path}")
+                from .mesh_compute import has_mesh_compute_declaration
+                if path.stat().st_size > 1_048_576:
+                    continue
+                try:
+                    source = path.read_text(encoding="utf-8")
+                except UnicodeError:
+                    continue
+                if not has_mesh_compute_declaration(source, filename=str(path)):
+                    continue
+                kind = "runtime"
+            elif path.suffix in _SOURCE_EXTENSIONS:
+                kind = "script"
+            else:
+                continue
+            # source.nf always names its containing legacy directory owner.
+            if name == _PACKAGE_SOURCE_NAME and physical_prefix:
+                continue
+            if path.is_symlink() and not _canonical_path(path).is_relative_to(canonical_root):
+                raise CompileError(f"Examples source resolves outside its catalog root: {path}")
+            if not path.is_file():
+                continue
+            canonical = _canonical_path(path)
+            if not canonical.is_relative_to(canonical_root):
+                raise CompileError(f"Examples source resolves outside its catalog root: {path}")
+            if not physical_prefix and kind != "runtime":
+                # Existing top-level .nf owners stay in the frozen legacy projection.
+                continue
+            record = LibraryEntryRecord(
+                namespace="examples", name=path.stem, kind=kind, path=canonical,
+                source_path=canonical, folder_path="/".join(physical_prefix),
+                source_origin=_path_key(canonical), package_id=package_id,
+                package_name=package_name, package_version=package_version,
+            )
+            records.append(record)
+            positions.append((physical_prefix, record.name, record.source_origin))
+    return records, directories, positions
+
+
+class ExamplesCandidateRecords(list):
+    """One Examples scan retaining discovered directory positions beside legacy records.
+
+    The list interface preserves the established raw candidate API. Positions
+    belong to the same inventory and are consumed when a catalog is frozen.
+    """
+
+    def __init__(self, records, directories, source_positions):
+        """Keep one selected inventory and its physical directory descriptors."""
+        super().__init__(records)
+        self.directories = tuple(directories)
+        self.source_positions = tuple(source_positions)
+
+
 def candidate_records_from_inputs(
     namespace: str,
     *,
@@ -183,10 +277,16 @@ def candidate_records_from_inputs(
     )
 
     records: list[LibraryEntryRecord] = []
+    directories, positions = [], []
     for root, package_id, package_name, package_version in roots:
         if not root.exists():
             continue
+        root_origin = _canonical_path(root)
         for path in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+            if namespace == "examples" and path.is_symlink() and path.is_dir():
+                continue
+            if namespace == "examples" and path.is_file() and not _canonical_path(path).is_relative_to(root_origin):
+                raise CompileError(f"Examples source resolves outside its catalog root: {path}")
             if path.name == "__init__.py" or path.name.startswith("__"):
                 continue
             if path.is_file():
@@ -196,8 +296,9 @@ def candidate_records_from_inputs(
                             namespace=namespace,
                             name=path.stem,
                             kind="script",
-                            path=path,
-                            source_path=path,
+                            path=_canonical_path(path),
+                            source_path=_canonical_path(path),
+                            source_origin=_path_key(path) if namespace == "examples" else "",
                             package_id=package_id,
                             package_name=package_name,
                             package_version=package_version,
@@ -209,6 +310,10 @@ def candidate_records_from_inputs(
                 legacy_module_path = _immediate_module_path(
                     root, path.name, catalog.native_module_file if catalog.allow_native else None
                 )
+                if namespace == "examples":
+                    for candidate in (source_path, interface_path, legacy_module_path):
+                        if candidate is not None and not _canonical_path(candidate).is_relative_to(root_origin):
+                            raise CompileError(f"Examples owner resolves outside its catalog root: {candidate}")
                 if interface_path is not None:
                     # A single owner containing both source.nf and interface.py is intentionally unsupported.
                     # Keep it explicitly classified so resolution can produce the dedicated mixed-owner diagnostic
@@ -219,8 +324,9 @@ def candidate_records_from_inputs(
                             namespace=namespace,
                             name=path.name,
                             kind=kind,
-                            path=source_path or interface_path,
-                            source_path=source_path,
+                            path=_canonical_path(source_path or interface_path) if namespace == "examples" else source_path or interface_path,
+                            source_path=_canonical_path(source_path) if source_path is not None and namespace == "examples" else source_path,
+                            source_origin=_path_key(source_path or interface_path) if namespace == "examples" else "",
                             module_path=None,
                             interface_path=interface_path,
                             package_id=package_id,
@@ -234,9 +340,10 @@ def candidate_records_from_inputs(
                             namespace=namespace,
                             name=path.name,
                             kind=_record_kind_for_paths(source_path, legacy_module_path),
-                            path=source_path or legacy_module_path or path,
-                            source_path=source_path,
-                            module_path=legacy_module_path,
+                            path=_canonical_path(source_path or legacy_module_path or path) if namespace == "examples" else source_path or legacy_module_path or path,
+                            source_path=_canonical_path(source_path) if source_path is not None and namespace == "examples" else source_path,
+                            source_origin=_path_key(source_path or legacy_module_path or path) if namespace == "examples" else "",
+                            module_path=_canonical_path(legacy_module_path) if namespace == "examples" and legacy_module_path is not None else legacy_module_path,
                             interface_path=None,
                             package_id=package_id,
                             package_name=package_name,
@@ -244,7 +351,20 @@ def candidate_records_from_inputs(
                         )
                     )
 
-    return records
+        if namespace == "examples":
+            nested, discovered_dirs, discovered_positions = _example_source_positions(
+                root, package_id=package_id, package_name=package_name,
+                package_version=package_version,
+            )
+            records.extend(nested)
+            directories.extend(discovered_dirs)
+            positions.extend(discovered_positions)
+            # Legacy directory owners must also be reachable at their physical position.
+            for record in records:
+                if record.namespace == "examples" and record.folder_path == "" and record.path.is_relative_to(_canonical_path(root)):
+                    if record.source_origin:
+                        positions.append(((), record.name, record.source_origin))
+    return ExamplesCandidateRecords(records, directories, positions) if namespace == "examples" else records
 
 
 def _canonical_path(path: Path | str) -> Path:
@@ -327,17 +447,8 @@ def discover_local_sources(local_roots, local_files=()):
         prefix = () if root_number == 0 else (root.name,)
         if root_number:
             directories.append((prefix, _path_key(root)))
-        # os.walk onerror is essential: rglob can silently suppress permission errors.
-        def fail(error):
-            """Refuse a partially discovered Local tree."""
-            raise error
-        for current, children, files in os.walk(root, followlinks=False, onerror=fail):
-            children[:] = sorted(name for name in children if not name.startswith(("_", "."))
-                                 and not (Path(current) / name).is_symlink())
-            relative = Path(current).relative_to(root).parts
-            physical_prefix = prefix + relative
-            current_prefix = physical_prefix if all(is_public_local_name(x) for x in physical_prefix) else None
-            if relative:
+        for current, physical_prefix, current_prefix, files in _walk_public_source_tree(root, prefix, walker=os.walk):
+            if current != root:
                 directories.append((physical_prefix, _path_key(current)))
             # Preserve walker order while sorting only potential sources. source.nf
             # retains its is_file-before-layout-error check, including broken links.

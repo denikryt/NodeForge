@@ -1,6 +1,6 @@
 # Adjustable base shape; erosion equations from v2.
-# Place erosion.py in your registered Local directory and allow executable Python.
-from local import erosion
+# Enable bundled Examples executable Python in the Examples panel before compiling.
+from examples.mesh_compute_erosion import erosion
 from packages import math
 source_geo = input_geometry("Geometry")
 requested_n = input_int("Resolution", default=96)

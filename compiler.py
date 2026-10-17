@@ -104,6 +104,38 @@ def create_library_catalog_group(namespace: str, name: str):
     return materialize_library_entry_group_for_record(record, _new_group_backend(environment))
 
 
+def create_examples_source_group(source_origin: str, package_id: str = ""):
+    """Materialize exactly the Examples leaf/owner selected by its UI source path."""
+    environment = resolve_environment()
+    selected = environment.catalog("examples")
+    selected._raise_if_failed()
+    from .catalog import _path_key
+    origin = _path_key(source_origin)
+    record = None if selected.examples_index is None else selected.examples_index.find_origin(origin)
+    if (record is None or record.package_id != package_id or record.source_path is None
+            or record.kind == "runtime"):
+        raise CompileError(f"Current Examples .nf library source is unavailable: {source_origin}")
+    return materialize_library_entry_group_for_record(record, _new_group_backend(environment))
+
+
+def create_examples_mesh_compute_modifier(source_origin: str, package_id: str, owner):
+    """Compile a specifically selected Examples .nf root using its one captured environment."""
+    environment = _make_compilation_environment()
+    selected = environment.catalog("examples")
+    selected._raise_if_failed()
+    from .catalog import _path_key, load_library_entry_source_for_record
+    origin = _path_key(source_origin)
+    record = None if selected.examples_index is None else selected.examples_index.find_origin(origin)
+    if (record is None or record.package_id != package_id or record.kind != "script"
+            or record.source_path is None or record.source_path.suffix != ".nf"):
+        raise CompileError(f"Current Examples .nf root is unavailable: {source_origin}")
+    # The selected record's physical source path must still agree with the frozen origin.
+    if _path_key(record.source_path) != record.source_origin:
+        raise CompileError("Selected Examples root changed identity during compilation")
+    source = load_library_entry_source_for_record(record)
+    return create_mesh_compute_modifier(source, owner, resolved_environment=environment)
+
+
 def create_local_source_group(source_origin: str):
     """Materialize the exact Local source selected by its canonical browser path."""
     environment = resolve_environment()
@@ -151,7 +183,8 @@ def update_expression_group(group, source: str):
     ))
 
 
-def create_mesh_compute_modifier(source: str, owner, name: str = "NodeForge Mesh Compute"):
+def create_mesh_compute_modifier(source: str, owner, name: str = "NodeForge Mesh Compute", *,
+                                 resolved_environment=None):
     """Compile one trusted Local runtime root onto a private first GN modifier.
 
     All fallible Blender installation and callback preparation occurs before
@@ -167,10 +200,10 @@ def create_mesh_compute_modifier(source: str, owner, name: str = "NodeForge Mesh
         raise CompileError("Mesh Compute requires a selected Mesh Object")
     if len(owner.modifiers):
         raise CompileError("Mesh Compute requires a Mesh Object without previous modifiers")
-    backend = _new_group_backend()
+    backend = _new_group_backend(resolved_environment)
     prepared, session = _prepare_root_build(backend, source, name=name)
-    if not any(key and key[0] == "local-runtime" for key, _ in prepared.extension_dependencies):
-        raise CompileError("Compile to Modifier requires one imported Local Mesh Compute function")
+    if not any(key and key[0] in {"local-runtime", "examples-runtime"} for key, _ in prepared.extension_dependencies):
+        raise CompileError("Compile to Modifier requires an imported Mesh Compute function")
     build_tx = BlenderGroupBuildTransaction()
 
     def finalize(group):
@@ -286,8 +319,8 @@ def update_mesh_compute_modifier(source: str, owner):
             source, compilation_identity=identity, helper_namespace=old_group.name,
             source_callable_session=session,
         )
-        if not any(key and key[0] == "local-runtime" for key, _ in prepared.extension_dependencies):
-            raise CompileError("Reload Compute requires an imported Local Mesh Compute function")
+        if not any(key and key[0] in {"local-runtime", "examples-runtime"} for key, _ in prepared.extension_dependencies):
+            raise CompileError("Reload Compute requires an imported Mesh Compute function")
 
         def finalize(new_group):
             """Migrate and validate all fallible inputs before runtime commit."""

@@ -165,7 +165,7 @@ def test_decorator_and_companion_nf_have_valid_static_contract():
     assert spec.reads==('height','initial_height')
     assert spec.writes==('height','water','sediment')
     nf=(EXAMPLE.parent/'erosion_numpy.nf').read_text()
-    assert 'from local import erosion' in nf
+    assert 'from examples.mesh_compute_erosion import erosion' in nf
     assert 'geo = erosion(' in nf
     assert 'repeat_range(' not in nf
     assert 'height_change' in nf

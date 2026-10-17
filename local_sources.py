@@ -66,6 +66,8 @@ def _read_local_source_payload() -> dict[str, object]:
         raise CompileError("Unsupported Local source registry format")
     if not isinstance(payload.get("managed_allow_python", False), bool):
         raise CompileError("Invalid managed Local Python permission")
+    if not isinstance(payload.get("allow_examples_python", False), bool):
+        raise CompileError("Invalid bundled Examples Python permission")
     roots = payload.get("roots", [])
     if not isinstance(roots, list):
         raise CompileError("Invalid Local source registry roots")
@@ -81,7 +83,8 @@ def _read_local_source_payload() -> dict[str, object]:
             entry["allow_python"] = item["allow_python"]
         result.append(entry)
     return {"version": _LOCAL_SOURCES_REGISTRY_VERSION, "roots": result,
-            **({"managed_allow_python": payload["managed_allow_python"]} if "managed_allow_python" in payload else {})}
+            **({"managed_allow_python": payload["managed_allow_python"]} if "managed_allow_python" in payload else {}),
+            **({"allow_examples_python": payload["allow_examples_python"]} if "allow_examples_python" in payload else {})}
 
 
 def _read_local_source_registry() -> list[dict[str, str]]:
@@ -94,8 +97,9 @@ def _write_local_source_registry(roots: list[dict[str, str]]) -> None:
     path = _local_sources_registry_path()
     previous = _read_local_source_payload()
     payload = {"version": _LOCAL_SOURCES_REGISTRY_VERSION, "roots": roots}
-    if "managed_allow_python" in previous:
-        payload["managed_allow_python"] = previous["managed_allow_python"]
+    for permission in ("managed_allow_python", "allow_examples_python"):
+        if permission in previous:
+            payload[permission] = previous[permission]
     fd, temp_name = tempfile.mkstemp(prefix="local_sources.", suffix=".tmp", dir=str(path.parent))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -291,6 +295,11 @@ def set_local_python_permission(path: Path | str, *, allowed: bool) -> None:
         if len(matches) != 1:
             raise CompileError(f"Local Python permission requires a registered root or linked file: {target}")
         matches[0]["allow_python"] = allowed
+    _persist_permission_payload(payload)
+
+
+def _persist_permission_payload(payload: dict[str, object]) -> None:
+    """Atomically write the validated registry including independent permission grants."""
     path = _local_sources_registry_path()
     fd, temporary = tempfile.mkstemp(prefix="local_sources.", suffix=".tmp", dir=str(path.parent))
     try:
@@ -301,6 +310,37 @@ def set_local_python_permission(path: Path | str, *, allowed: bool) -> None:
     except Exception:
         Path(temporary).unlink(missing_ok=True)
         raise
+
+
+def _bundled_examples_root() -> Path:
+    """Resolve the exact trusted installation-owned Examples directory."""
+    return _canonical_path(catalog.catalog_dir("examples"))
+
+
+def examples_python_root_permission(root: Path | str) -> bool:
+    """Read the separate bundled Examples grant only for its exact owning root."""
+    if _canonical_path(root) != _bundled_examples_root():
+        raise CompileError("Examples Python permission requires the bundled Examples root")
+    return bool(_read_local_source_payload().get("allow_examples_python", False))
+
+
+def examples_python_permission(path: Path | str) -> bool:
+    """Deny any Python file not canonically inside the installed bundled Examples root."""
+    source = _canonical_path(path)
+    if source.suffix != ".py" or not source.is_file():
+        return False
+    if source == _bundled_examples_root() or not source.is_relative_to(_bundled_examples_root()):
+        return False
+    return examples_python_root_permission(_bundled_examples_root())
+
+
+def set_examples_python_permission(root: Path | str, *, allowed: bool) -> None:
+    """Persist an explicit, independent opt-in for the one bundled Examples root."""
+    if not isinstance(allowed, bool) or _canonical_path(root) != _bundled_examples_root():
+        raise CompileError("Examples Python permission requires its exact root and a boolean grant")
+    payload = _read_local_source_payload()
+    payload["allow_examples_python"] = allowed
+    _persist_permission_payload(payload)
 
 
 def _default_local_catalog_dir() -> Path:

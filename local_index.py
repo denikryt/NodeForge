@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 import os
 from types import MappingProxyType
-from typing import Mapping
+from typing import Mapping, ClassVar
 
 from .catalog import LibraryEntryRecord, is_public_local_name
 from .errors import CompileError
@@ -38,8 +38,10 @@ class LocalMember:
 
 
 @dataclass(frozen=True)
-class LocalSourceIndex:
-    """Own canonical source records and immutable flat/qualified snapshot views."""
+class DirectorySourceIndex:
+    """Own immutable, qualified source positions for one selected import namespace."""
+
+    namespace: ClassVar[str] = "local"
 
     by_origin: Mapping[str, LibraryEntryRecord]
     flat_candidates: Mapping[str, tuple[str, ...]]
@@ -53,12 +55,12 @@ class LocalSourceIndex:
         for origin, record in origins.items():
             if (
                 not isinstance(record, LibraryEntryRecord)
-                or record.namespace != 'local'
+                or record.namespace != self.namespace
                 or record.source_origin != origin
-                or record.source_path is None
-                or record.path != record.source_path
-                or not record.source_path.is_absolute()
-                or origin != os.path.normcase(os.path.normpath(str(record.source_path)))
+                or record.path is None
+                or not record.path.is_absolute()
+                or origin != os.path.normcase(os.path.normpath(str(record.path)))
+                or (self.namespace == 'local' and (record.source_path is None or record.path != record.source_path))
                 or not is_public_local_name(record.name)
             ):
                 raise ValueError('Invalid canonical Local source record')
@@ -86,7 +88,10 @@ class LocalSourceIndex:
     @classmethod
     def from_discovery(cls, records, directories=(), source_positions=()):
         """Build views without performing filesystem reads or resolving collisions."""
+        records = tuple(records)
         origins = {record.source_origin: record for record in records}
+        if cls.namespace != 'local' and len(origins) != len(records):
+            raise ValueError('Multiple catalog owners have the same canonical origin')
         flat = {}
         positions = {}
         for origin, record in origins.items():
@@ -132,7 +137,7 @@ class LocalSourceIndex:
         if len(files) + len(dirs) > 1:
             kind = 'file-versus-directory' if files and dirs else 'directory'
             paths = sorted((*files, *(d.physical_directory_origin for d in dirs)))
-            raise CompileError(f"Ambiguous Local {kind} import {name!r}: " + ', '.join(paths))
+            raise CompileError(f"Ambiguous {self.namespace.title()} {kind} import {name!r}: " + ', '.join(paths))
         return self.by_origin[files[0]] if files else (dirs[0] if dirs else None)
 
     def find_flat_function(self, name):
@@ -150,11 +155,11 @@ class LocalSourceIndex:
         selected = None
         for name in path:
             if not is_public_local_name(name):
-                raise CompileError(f"Invalid Local directory name {name!r}; rename the physical directory using a valid public ASCII non-keyword identifier")
+                raise CompileError(f"Invalid {self.namespace.title()} directory name {name!r}; rename the physical directory using a valid public ASCII non-keyword identifier")
             member = self.path_members.get(parent, {}).get(name, LocalMember())
             selected = self._select(name, LocalMember(directory_candidates=member.directory_candidates))
             if selected is None:
-                raise CompileError(f"Unknown Local directory prefix: local.{'.'.join(parent + (name,))}")
+                raise CompileError(f"Unknown {self.namespace.title()} directory prefix: {self.namespace}.{'.'.join(parent + (name,))}")
             parent = selected.import_path
         return selected
 
@@ -184,6 +189,20 @@ class LocalSourceIndex:
                 self.resolve_directory(path)
             except CompileError:
                 continue
-            module = 'local.' + '.'.join(path)
+            module = self.namespace + '.' + '.'.join(path)
             results.append((f'{module}.{record.name}', f'from {module} import {record.name}'))
         return tuple(sorted(results))
+
+
+@dataclass(frozen=True)
+class LocalSourceIndex(DirectorySourceIndex):
+    """Maintain the existing Local-specific immutable directory selection API."""
+
+    namespace: ClassVar[str] = "local"
+
+
+@dataclass(frozen=True)
+class ExamplesSourceIndex(DirectorySourceIndex):
+    """Select qualified Examples records using the same immutable Local mechanisms."""
+
+    namespace: ClassVar[str] = "examples"

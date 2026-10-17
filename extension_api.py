@@ -87,7 +87,8 @@ class ExtensionBackendContext:
         self._generated_resource_transaction.add(id_obj, kind, role)
         return id_obj
 
-    def mesh_compute(self, geometry, *, kernel, parameters, reads=(), writes=(), source_origin=None):
+    def mesh_compute(self, geometry, *, kernel, parameters, reads=(), writes=(),
+                     source_origin=None, source_namespace="local", source_package_id=""):
         """Stage a Local Mesh Compute boundary in this build's resource transaction.
 
         The stage is *not* active here. Its owning root-modifier cutover must
@@ -114,9 +115,12 @@ class ExtensionBackendContext:
         proxy = self.new_generated_object(proxy_mesh, role="mesh-compute-result", name_hint="MeshCompute")
         output = build_boundary(self._group, proxy, self._location)
         from .blender.mesh_compute_runtime import PreparedMeshComputeStage
+        if source_namespace not in {"local", "examples"} or not isinstance(source_package_id, str):
+            raise ValueError("Mesh Compute requires an exact selected Local/Examples owner")
         stage = PreparedMeshComputeStage(prefix=prefix, result_proxy=proxy, scalar_keys=scalar_keys,
                                          reads=tuple(reads), writes=tuple(writes), kernel=kernel,
-                                         source_origin=source_origin)
+                                         source_origin=source_origin, source_namespace=source_namespace,
+                                         source_package_id=source_package_id)
         tx.mesh_compute_stage = stage
         self._group["nodeforge_mesh_compute_stage_v1"] = tx.generation_uuid
         return self.value(output, NFType.GEOMETRY)
