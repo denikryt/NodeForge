@@ -60,30 +60,34 @@ def _resolve_environment_parts(*, capture_local: bool):
     raw_system_records = tuple(packages.system_package_records_from_manifests(manifests))
 
     raw_candidates: dict[str, tuple[object, ...]] = {}
+    examples_directories, examples_positions = [], []
     discovery_failures: dict[str, Exception] = {}
     deferred_package_discovery_failures: dict[tuple[str, str], Exception] = {}
     for namespace in ("functions", "examples"):
         collected: list[object] = []
         if namespace == "examples":
             try:
-                collected.extend(
-                    catalog.candidate_records_from_inputs(
-                        namespace,
-                        package_roots=(),
-                        include_builtin_catalog=True,
-                    )
+                inventory = catalog.candidate_records_from_inputs(
+                    namespace, package_roots=(), include_builtin_catalog=True,
                 )
+                collected.extend(inventory)
+                examples_directories.extend(("", path, origin) for path, origin in getattr(inventory, "directories", ()))
+                examples_positions.extend(("", path, name, origin) for path, name, origin in getattr(inventory, "source_positions", ()))
             except (CompileError, OSError) as exc:
                 discovery_failures[namespace] = exc
         for root in packages.library_roots_from_manifests(namespace, manifests):
             try:
-                collected.extend(
-                    catalog.candidate_records_from_inputs(
-                        namespace,
-                        package_roots=(root,),
-                        include_builtin_catalog=False,
+                if namespace == "examples":
+                    inventory = catalog.candidate_records_from_inputs(
+                        namespace, package_roots=(root,), include_builtin_catalog=False,
                     )
-                )
+                    collected.extend(inventory)
+                    examples_directories.extend((root.package_id, path, origin) for path, origin in getattr(inventory, "directories", ()))
+                    examples_positions.extend((root.package_id, path, name, origin) for path, name, origin in getattr(inventory, "source_positions", ()))
+                else:
+                    collected.extend(catalog.candidate_records_from_inputs(
+                        namespace, package_roots=(root,), include_builtin_catalog=False,
+                    ))
             except (CompileError, OSError) as exc:
                 deferred_package_discovery_failures[(namespace, root.package_id)] = exc
         raw_candidates[namespace] = tuple(collected)
@@ -210,7 +214,13 @@ def _resolve_environment_parts(*, capture_local: bool):
         )
     else:
         try:
-            entries = catalog.unique_records_from_candidates(namespace, tuple(candidates))
+            from .local_index import ExamplesSourceIndex
+            legacy_records = tuple(record for record in candidates if not record.folder_path)
+            entries = catalog.unique_records_from_candidates(namespace, legacy_records)
+            admitted = {"", *admitted_packages}
+            discovered_dirs = tuple((path, origin) for pkg, path, origin in examples_directories if pkg in admitted)
+            discovered_positions = tuple((path, name, origin) for pkg, path, name, origin in examples_positions if pkg in admitted)
+            index = ExamplesSourceIndex.from_discovery(tuple(candidates), discovered_dirs, discovered_positions)
             selected_sessions = []
             for record in entries.values():
                 if getattr(record, "interface_path", None) is None or getattr(record, "source_path", None) is not None:
@@ -233,7 +243,7 @@ def _resolve_environment_parts(*, capture_local: bool):
                 namespace, {}, _resolved_failure_from_exception(exc)
             )
         else:
-            catalogs[namespace] = ResolvedCatalog(namespace, entries)
+            catalogs[namespace] = ResolvedCatalog(namespace, entries, examples_index=index)
             registry_sessions.extend(selected_sessions)
 
     registry = ExtensionRegistry(tuple(registry_sessions))

@@ -405,7 +405,7 @@ def local_directory_candidates_for_unqualified(name, environment):
         )
         if record is None or isinstance(record, LocalDirectoryCandidate):
             continue
-        binding = LibraryBinding("local", record.name, record)
+        binding = LibraryBinding(namespace.namespace, record.name, record)
         identity = library_function_id_for_record(record)
         previous = candidates.get(identity)
         # A second alias may provide a valid qualification for the same canonical file.
@@ -478,10 +478,10 @@ def resolve_local_callable(alias, member, environment):
     binding = environment.local_namespaces[alias]
     record = binding.index_snapshot.resolve_member(binding.directory, member)
     if record is None:
-        raise CompileError(f"Local directory {binding.directory.physical_directory_origin!r} has no callable member {member!r}")
+        raise CompileError(f"{binding.namespace.title()} directory {binding.directory.physical_directory_origin!r} has no callable member {member!r}")
     if isinstance(record, LocalDirectoryCandidate):
         raise CompileError(f"Local directory {member!r} is not callable; import it explicitly with a directory alias")
-    return _resolved_from_library_binding(f"{alias}.{member}", LibraryBinding("local", record.name, record))
+    return _resolved_from_library_binding(f"{alias}.{member}", LibraryBinding(binding.namespace, record.name, record))
 
 
 def resolve_simple_callable(name: str, environment: CallableEnvironment):
@@ -495,7 +495,7 @@ def resolve_simple_callable(name: str, environment: CallableEnvironment):
     binding = environment.imported_functions.get(name)
     package_candidates = package_candidates_for_unqualified(name, environment)
     local_candidates = local_directory_candidates_for_unqualified(name, environment)
-    if binding is not None and binding.namespace == "local":
+    if binding is not None and binding.namespace in {"local", "examples"}:
         identity = library_function_id_for_record(binding.record)
         local_candidates = tuple((alias, candidate) for alias, candidate in local_candidates
                                  if library_function_id_for_record(candidate.record) != identity)

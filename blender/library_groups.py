@@ -111,6 +111,11 @@ def _group_name_for_record(record: "LibraryEntryRecord") -> str:
     """Return the package-aware GeometryNodeTree base name for a catalog record."""
     if record.namespace == "local":
         return _group_name("local", record.name)
+    if record.namespace == "examples" and record.folder_path:
+        path_name = record.folder_path.replace("/", ".") + "." + record.name
+        if not record.package_id:
+            return _group_name("examples", path_name)
+        return f"NodeForge.package.{_safe_package_component(record.package_id)}.examples.{path_name}"
     if not record.package_id:
         return _group_name(record.namespace, record.name)
     package_part = _safe_package_component(record.package_id)
@@ -184,6 +189,14 @@ def resolve_reloadable_library_entry(
         record = None if local_catalog.local_index is None else local_catalog.local_index.find_origin(origin)
     elif namespace == "functions":
         record = resolved_environment.package_function_record(package_id, name)
+    elif namespace == "examples":
+        selected = resolved_environment.catalog("examples")
+        selected._raise_if_failed()
+        origin = str(group.get("nodeforge_library_physical_origin") or "")
+        if origin:
+            record = None if selected.examples_index is None else selected.examples_index.find_origin(origin)
+        else:
+            record = selected.find(name)  # Pre-#44 legacy group; no nested owner had existed.
     else:
         record = resolved_environment.catalog(namespace).find(name)
     if record is None:
@@ -208,6 +221,16 @@ def validate_reloadable_library_entry_record(group, record: LibraryEntryRecord) 
             raise CompileError("Selected Local group has no canonical source origin; reload requires rebuilding from an explicitly selected source")
         if origin != library_function_id_for_record(record).source_origin:
             raise CompileError("Selected Local group belongs to a different physical source origin")
+    if record.namespace == "examples":
+        stored_origin = str(group.get("nodeforge_library_physical_origin") or "")
+        stored_relative = str(group.get("nodeforge_library_import_path") or "")
+        expected_relative = "/".join(part for part in (record.folder_path, record.name) if part)
+        if stored_origin and stored_origin != record.source_origin:
+            raise CompileError("Selected Examples group belongs to another physical source")
+        if stored_relative and stored_relative != expected_relative:
+            raise CompileError("Selected Examples group belongs to another import path")
+        if record.folder_path and (not stored_origin or not stored_relative):
+            raise CompileError("Nested Examples group is missing exact source provenance")
     if record.source_path is None:
         raise CompileError(f"{record.namespace} library entry {record.name!r} has no reloadable .nf source")
 
@@ -273,6 +296,11 @@ def _write_package_metadata(group, record: LibraryEntryRecord) -> None:
     group["nodeforge_library_name"] = record.name
     if record.namespace == "local":
         group["nodeforge_library_source_origin"] = library_function_id_for_record(record).source_origin
+    elif record.namespace == "examples":
+        group["nodeforge_library_physical_origin"] = record.source_origin
+        group["nodeforge_library_import_path"] = "/".join(
+            part for part in (record.folder_path, record.name) if part
+        )
     group["nodeforge_function_kind"] = record.kind
     group["nodeforge_package_id"] = record.package_id or CORE_PACKAGE_ID
     if record.package_id:
@@ -288,6 +316,12 @@ def _library_metadata_matches(group, record: LibraryEntryRecord, *, instance_key
         if group.get("nodeforge_library_name") != record.name:
             return False
         if record.namespace == "local" and group.get("nodeforge_library_source_origin") != library_function_id_for_record(record).source_origin:
+            return False
+        if record.namespace == "examples" and (
+            group.get("nodeforge_library_physical_origin") != record.source_origin
+            or group.get("nodeforge_library_import_path") != "/".join(
+                part for part in (record.folder_path, record.name) if part)
+        ):
             return False
         stored_package_id = str(group.get("nodeforge_package_id") or CORE_PACKAGE_ID)
         if stored_package_id != normalize_library_package_id(record.package_id):

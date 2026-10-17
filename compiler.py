@@ -104,6 +104,19 @@ def create_library_catalog_group(namespace: str, name: str):
     return materialize_library_entry_group_for_record(record, _new_group_backend(environment))
 
 
+def create_examples_source_group(source_origin: str, package_id: str = ""):
+    """Materialize exactly the Examples leaf/owner selected by its UI source path."""
+    environment = resolve_environment()
+    selected = environment.catalog("examples")
+    selected._raise_if_failed()
+    from .catalog import _path_key
+    origin = _path_key(source_origin)
+    record = None if selected.examples_index is None else selected.examples_index.find_origin(origin)
+    if record is None or record.package_id != package_id or record.source_path is None:
+        raise CompileError(f"Current Examples source is unavailable: {source_origin}")
+    return materialize_library_entry_group_for_record(record, _new_group_backend(environment))
+
+
 def create_local_source_group(source_origin: str):
     """Materialize the exact Local source selected by its canonical browser path."""
     environment = resolve_environment()

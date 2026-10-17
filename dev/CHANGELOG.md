@@ -444,3 +444,8 @@ lifecycle.
 
 - Added bare calls for immediate public `.nf` functions from Local directory imports without an alias, with call-time ambiguity diagnostics and lazy source preparation.
 - Preserve namespace-only alias imports, qualified `.nodeforge` access, canonical source identity, and existing shared/private group behavior.
+
+## 0.69.0
+
+- Added qualified imports for nested bundled and package Examples `.nf` and `.nodeforge` sources, including directory aliases, unqualified `.nf` calls from unaliased directory imports and exact source selection in the Examples UI.
+- Preserved top-level Examples callable and wildcard ownership while isolating nested source identities, duplicate-name diagnostics and Reload provenance.

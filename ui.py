@@ -10,6 +10,7 @@ from .compiler import (
     create_expression_group,
     update_expression_group,
     create_library_catalog_group,
+    create_examples_source_group,
     create_local_source_group,
     create_package_function_group,
     update_library_catalog_group,
@@ -150,7 +151,7 @@ class NODEFORGE_UL_function_library(UIList):
         if kind == "linked_script":
             row.label(text=item.name, icon='LINKED')
             return
-        row.label(text=item.name, icon='NODETREE')
+        row.label(text=getattr(item, "source_label", "") or item.name, icon='NODETREE')
         if getattr(item, "package_id", ""):
             row.label(text=item.package_id)
 
@@ -260,6 +261,8 @@ def _refresh_catalog_items(props, namespace: str):
             else environment.catalog(namespace).records()
         )
         records = [record.as_dict() for record in selected]
+    from collections import Counter
+    duplicate_names = Counter(record.get("name", "") for record in records) if namespace == "examples" else {}
     for record in records:
         item = items.add()
         item.name = record.get("name", "")
@@ -271,7 +274,10 @@ def _refresh_catalog_items(props, namespace: str):
             item.package_name = record.get("package_name", "")
         if hasattr(item, "root_path"):
             item.root_path = str(record.get("root_path", ""))
-            item.source_label = str(record.get("source_label", ""))
+            label = str(record.get("source_label", ""))
+            if namespace == "examples" and duplicate_names[record.get("name", "")] > 1:
+                label = "/".join(part for part in (record.get("folder_path", ""), record.get("name", "")) if part)
+            item.source_label = label
             item.managed = bool(record.get("managed", False))
     setattr(props, index_prop, 0)
     if old_name:
@@ -284,7 +290,8 @@ def _refresh_catalog_items(props, namespace: str):
                 if item.name == old_name and getattr(item, "package_id", "") == old_package_id:
                     setattr(props, index_prop, index)
                     break
-            elif item.name == old_name:
+            elif (item.name == old_name and item.path == old_path
+                  and getattr(item, "package_id", "") == old_package_id):
                 setattr(props, index_prop, index)
                 break
     return len(records)
@@ -628,7 +635,9 @@ class NODEFORGE_OT_create_function_group(Operator):
                 group = (
                     create_local_source_group(item.path)
                     if self.namespace == "local"
-                    else create_library_catalog_group(self.namespace, item.name)
+                    else (create_examples_source_group(item.path, item.package_id)
+                          if self.namespace == "examples"
+                          else create_library_catalog_group(self.namespace, item.name))
                 )
         except Exception as exc:
             self.report({'ERROR'}, str(exc))
