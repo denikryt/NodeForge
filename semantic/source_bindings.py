@@ -53,14 +53,18 @@ class LocalDirectoryNamespaceBinding:
     index_snapshot: object
     directory: object
     expose_unqualified: bool = False
+    namespace: str = "local"
 
     def __post_init__(self):
         """Reject descriptors from a different or ambiguous snapshot at binding time."""
-        from ..local_index import LocalSourceIndex, LocalDirectoryCandidate
+        from ..local_index import DirectorySourceIndex, LocalDirectoryCandidate
         if type(self.expose_unqualified) is not bool:
-            raise TypeError("Local namespace bare-call capability must be Bool")
-        if not self.source_name or not isinstance(self.index_snapshot, LocalSourceIndex) or not isinstance(self.directory, LocalDirectoryCandidate):
-            raise ValueError("Invalid Local directory namespace binding")
+            raise TypeError("Directory namespace bare-call capability must be Bool")
+        if (not self.source_name or not isinstance(self.index_snapshot, DirectorySourceIndex)
+                or self.namespace not in {"local", "examples"}
+                or self.index_snapshot.namespace != self.namespace
+                or not isinstance(self.directory, LocalDirectoryCandidate)):
+            raise ValueError("Invalid directory namespace binding")
         if self.index_snapshot.resolve_directory(self.directory.import_path) != self.directory:
             raise ValueError("Local namespace directory does not belong to its snapshot")
 

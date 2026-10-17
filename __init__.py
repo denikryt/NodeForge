@@ -3,13 +3,14 @@
 bl_info = {
     "name": "NodeForge",
     "author": "nachitima",
-    "version": (0, 68, 0),
+    "version": (0, 70, 0),
     "blender": (5, 2, 0),
     "location": "Geometry Nodes Editor > Sidebar > NodeForge; Add Menu > Script > Compile Group",
     "description": "Compile a Python-like DSL into Geometry Nodes node groups. Catalog library: reusable functions, bundled examples, and user-owned local DSL scripts.",
     "category": "Node",
 }
 
+from .mesh_compute import mesh_compute
 from .evaluation_modes import EvaluationMode
 from .extension_semantic_api import RuntimeRef
 from .extension_annotations import (
@@ -37,7 +38,7 @@ def unregister():
 
 
 __all__ = [
-    "bl_info", "register", "unregister", "EvaluationMode", "RuntimeRef",
+    "bl_info", "register", "unregister", "mesh_compute", "EvaluationMode", "RuntimeRef",
     "Float", "Int", "Bool", "Vector", "Geometry", "Material",
     "Object", "String", "Bundle", "Rotation",
 ]

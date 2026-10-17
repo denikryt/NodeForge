@@ -70,6 +70,7 @@ class ResolvedCatalog:
     entries: Mapping[str, "LibraryEntryRecord"]
     failure: ResolvedCatalogFailure | None = None
     local_index: object | None = None
+    examples_index: object | None = None
 
     def __post_init__(self) -> None:
         """Validate record placement and defensively freeze the entry mapping."""
@@ -80,6 +81,12 @@ class ResolvedCatalog:
             from .local_index import LocalSourceIndex
             if self.namespace != "local" or not isinstance(self.local_index, LocalSourceIndex) or self.failure is not None or copied:
                 raise ValueError("Local index belongs only to a successful Local catalog")
+        if self.examples_index is not None:
+            from .local_index import ExamplesSourceIndex
+            if self.namespace != "examples" or not isinstance(self.examples_index, ExamplesSourceIndex) or self.failure is not None:
+                raise ValueError("Examples index requires a successful Examples catalog")
+            if any(self.examples_index.find_origin(record.source_origin) is not record for record in copied.values()):
+                raise ValueError("Examples legacy owners must share the selected directory snapshot")
         if self.failure is not None and copied:
             raise ValueError("Failed resolved catalog cannot contain partial entries")
         for name, record in copied.items():
@@ -102,11 +109,27 @@ class ResolvedCatalog:
         self._raise_if_failed()
         return self.local_index.find_flat_function(name) if self.local_index is not None else self.entries.get(name)
 
+    def select_import(self, module: str, name: str, *, flat_only: bool = False):
+        """Resolve explicit Examples members without modifying legacy star exports."""
+        self._raise_if_failed()
+        if self.namespace != "examples" or self.examples_index is None:
+            raise ValueError("Selected Examples directory index is unavailable")
+        if flat_only:
+            return self.entries.get(name)
+        if module == "examples":
+            if name in self.entries:
+                return self.entries[name]
+            return self.examples_index.resolve_root_import(name)
+        parent = self.examples_index.resolve_directory(tuple(module.split(".")[1:]))
+        return self.examples_index.resolve_member(parent, name)
+
     def records(self) -> tuple["LibraryEntryRecord", ...]:
         """Return selected records in deterministic public-name order."""
         self._raise_if_failed()
         if self.local_index is not None:
             return self.local_index.all_records()
+        if self.examples_index is not None:
+            return self.examples_index.all_records()
         return tuple(sorted(self.entries.values(), key=lambda record: record.name.lower()))
 
 

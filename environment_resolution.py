@@ -60,30 +60,34 @@ def _resolve_environment_parts(*, capture_local: bool):
     raw_system_records = tuple(packages.system_package_records_from_manifests(manifests))
 
     raw_candidates: dict[str, tuple[object, ...]] = {}
+    examples_directories, examples_positions = [], []
     discovery_failures: dict[str, Exception] = {}
     deferred_package_discovery_failures: dict[tuple[str, str], Exception] = {}
     for namespace in ("functions", "examples"):
         collected: list[object] = []
         if namespace == "examples":
             try:
-                collected.extend(
-                    catalog.candidate_records_from_inputs(
-                        namespace,
-                        package_roots=(),
-                        include_builtin_catalog=True,
-                    )
+                inventory = catalog.candidate_records_from_inputs(
+                    namespace, package_roots=(), include_builtin_catalog=True,
                 )
+                collected.extend(inventory)
+                examples_directories.extend(("", path, origin) for path, origin in getattr(inventory, "directories", ()))
+                examples_positions.extend(("", path, name, origin) for path, name, origin in getattr(inventory, "source_positions", ()))
             except (CompileError, OSError) as exc:
                 discovery_failures[namespace] = exc
         for root in packages.library_roots_from_manifests(namespace, manifests):
             try:
-                collected.extend(
-                    catalog.candidate_records_from_inputs(
-                        namespace,
-                        package_roots=(root,),
-                        include_builtin_catalog=False,
+                if namespace == "examples":
+                    inventory = catalog.candidate_records_from_inputs(
+                        namespace, package_roots=(root,), include_builtin_catalog=False,
                     )
-                )
+                    collected.extend(inventory)
+                    examples_directories.extend((root.package_id, path, origin) for path, origin in getattr(inventory, "directories", ()))
+                    examples_positions.extend((root.package_id, path, name, origin) for path, name, origin in getattr(inventory, "source_positions", ()))
+                else:
+                    collected.extend(catalog.candidate_records_from_inputs(
+                        namespace, package_roots=(root,), include_builtin_catalog=False,
+                    ))
             except (CompileError, OSError) as exc:
                 deferred_package_discovery_failures[(namespace, root.package_id)] = exc
         raw_candidates[namespace] = tuple(collected)
@@ -210,7 +214,14 @@ def _resolve_environment_parts(*, capture_local: bool):
         )
     else:
         try:
-            entries = catalog.unique_records_from_candidates(namespace, tuple(candidates))
+            from .local_index import ExamplesSourceIndex
+            legacy_records = tuple(record for record in candidates
+                                   if not record.folder_path and record.kind != "runtime")
+            entries = catalog.unique_records_from_candidates(namespace, legacy_records)
+            admitted = {"", *admitted_packages}
+            discovered_dirs = tuple((path, origin) for pkg, path, origin in examples_directories if pkg in admitted)
+            discovered_positions = tuple((path, name, origin) for pkg, path, name, origin in examples_positions if pkg in admitted)
+            index = ExamplesSourceIndex.from_discovery(tuple(candidates), discovered_dirs, discovered_positions)
             selected_sessions = []
             for record in entries.values():
                 if getattr(record, "interface_path", None) is None or getattr(record, "source_path", None) is not None:
@@ -233,7 +244,7 @@ def _resolve_environment_parts(*, capture_local: bool):
                 namespace, {}, _resolved_failure_from_exception(exc)
             )
         else:
-            catalogs[namespace] = ResolvedCatalog(namespace, entries)
+            catalogs[namespace] = ResolvedCatalog(namespace, entries, examples_index=index)
             registry_sessions.extend(selected_sessions)
 
     registry = ExtensionRegistry(tuple(registry_sessions))
@@ -298,17 +309,47 @@ class _LocalCatalogSlot:
         return self._captured
 
 
+class _LocalRuntimeRegistrySlot:
+    """Accumulate explicitly selected trusted Local/Examples Python owners for one root attempt."""
+
+    def __init__(self, base_registry):
+        """Start with the immutable admitted package registry and no Local execution."""
+        self.registry = base_registry
+        self._sessions = {}
+        self._base = base_registry
+
+    def admit(self, record):
+        """Capture one selected owner without changing any prior frozen registry."""
+        from .local_runtime import capture_local_runtime_session, local_runtime_owner_key
+        from .extensions.contracts import ExtensionCallableId
+
+        owner = local_runtime_owner_key(record)
+        if owner not in self._sessions:
+            callable_id, session = capture_local_runtime_session(record)
+            candidate = self._base.with_owner_sessions((*self._sessions.values(), session))
+            if not candidate.contains(callable_id):
+                raise CompileError("Internal error: Local runtime callable is missing from overlay")
+            self._sessions[owner] = session
+            self.registry = candidate
+        return ExtensionCallableId(owner, record.name)
+
+
 @dataclass(frozen=True)
 class _CompilationEnvironment:
     """Root-scoped non-Local selection with one semantic-demand Local slot."""
 
     _parts: _ResolvedNonLocalParts
     _local_slot: _LocalCatalogSlot
+    _runtime_slot: _LocalRuntimeRegistrySlot
 
     @property
     def extension_registry(self):
-        """Expose the registry selected before root semantic preparation."""
-        return self._parts.extension_registry
+        """Expose a sealed current registry including only selected Local runtime owners."""
+        return self._runtime_slot.registry
+
+    def admit_local_runtime(self, record):
+        """Prepare one explicitly selected owner before semantic call lowering."""
+        return self._runtime_slot.admit(record)
 
     def catalog(self, namespace: str) -> ResolvedCatalog:
         """Select a catalog, capturing Local only when that namespace is requested."""
@@ -328,7 +369,7 @@ class _CompilationEnvironment:
 def _make_compilation_environment() -> _CompilationEnvironment:
     """Create fresh package selections and an unrequested Local slot for a root."""
     parts, _local = _resolve_environment_parts(capture_local=False)
-    return _CompilationEnvironment(parts, _LocalCatalogSlot())
+    return _CompilationEnvironment(parts, _LocalCatalogSlot(), _LocalRuntimeRegistrySlot(parts.extension_registry))
 
 
 def resolve_environment() -> ResolvedEnvironment:

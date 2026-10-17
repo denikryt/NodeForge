@@ -265,3 +265,10 @@ Package-defined semantic values may persist in source-variable/body state throug
 - `tests/blender/expression_characterization/`: imported Local cases use committed source fixtures, recursive canonical graph baselines with stable group references, and a controlled invalid-modifier outcome. Existing recorder, manifest validation, cleanup checks and JSON diff verification apply. Case-local dependencies live in `cases/local/<case_id>/`; snapshots retain nested node graphs and alias sharing without absolute paths or instance keys. Record explicitly with `harness.py --tag imported_local`; ordinary pytest compares committed baselines without recording.
 - `tests/blender/test_local_unique_imports.py`: two integration scenarios cover editable-state lifecycle through save/reopen/update/reload and atomic rollback after a late child-publication failure, using native datablock identities and evaluated geometry.
 - `tests/blender/test_unique_function_groups.py`, `tests/unit/test_function_instances.py`, and `tests/unit/test_function_materializer.py`: existing reusable-call keys, serialization, cache and transaction contracts.
+
+## Examples directory imports and Mesh Compute
+
+- `tests/unit/test_examples_directory_index.py`: nested Examples `.nf` and `.nodeforge` selection, legacy top-level ownership, directory aliases, bare `.nf` calls, ambiguity diagnostics, and exact source identities.
+- `tests/unit/test_examples_mesh_compute.py`: declared Python discovery, separate bundled/package permissions, source freshness, and coexistence of nested DSL scripts and Python runtime files in one Examples index.
+- `tests/blender/test_examples_directory_imports.py`: native group materialization for nested Examples and exact UI source selection.
+- `tests/blender/test_examples_mesh_compute.py`: selected Examples `.nf` modifier compilation, permission revocation, stale-source rejection, and exclusion of Python callbacks from ordinary node-group publication.

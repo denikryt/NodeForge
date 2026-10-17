@@ -8,8 +8,12 @@ from bpy.props import StringProperty, PointerProperty, CollectionProperty, IntPr
 
 from .compiler import (
     create_expression_group,
+    create_mesh_compute_modifier,
+    update_mesh_compute_modifier,
     update_expression_group,
     create_library_catalog_group,
+    create_examples_source_group,
+    create_examples_mesh_compute_modifier,
     create_local_source_group,
     create_package_function_group,
     update_library_catalog_group,
@@ -22,6 +26,10 @@ from .blender.storage import (
 )
 from .local_sources import (
     local_browser_records,
+    local_python_root_permission,
+    set_local_python_permission,
+    examples_python_root_permission,
+    set_examples_python_permission,
     local_source_roots,
     link_local_source_folder,
     unlink_local_source_folder,
@@ -34,7 +42,7 @@ from .local_sources import (
     delete_local_source,
 )
 from .blender.library_groups import apply_function_node_display_name
-from .environment_resolution import resolve_environment
+from .environment_resolution import resolve_environment, _make_compilation_environment
 from . import packages
 from .blender import generated_resources
 
@@ -150,7 +158,10 @@ class NODEFORGE_UL_function_library(UIList):
         if kind == "linked_script":
             row.label(text=item.name, icon='LINKED')
             return
-        row.label(text=item.name, icon='NODETREE')
+        row.label(
+            text=getattr(item, "source_label", "") or item.name,
+            icon='CONSOLE' if kind == 'runtime' or item.path.endswith('.py') else 'NODETREE',
+        )
         if getattr(item, "package_id", ""):
             row.label(text=item.package_id)
 
@@ -253,13 +264,18 @@ def _refresh_catalog_items(props, namespace: str):
     if namespace == "local":
         records = local_browser_records(getattr(props, "local_browser_path", ""))
     else:
-        environment = resolve_environment()
+        # The Examples UI does not resolve Local sources. Avoid eagerly walking
+        # every Local root (including Python AST parsing) for an unrelated catalog.
+        environment = (_make_compilation_environment() if namespace == "examples"
+                       else resolve_environment())
         selected = (
             environment.package_function_records()
             if namespace == "functions"
             else environment.catalog(namespace).records()
         )
         records = [record.as_dict() for record in selected]
+    from collections import Counter
+    duplicate_names = Counter(record.get("name", "") for record in records) if namespace == "examples" else {}
     for record in records:
         item = items.add()
         item.name = record.get("name", "")
@@ -271,7 +287,10 @@ def _refresh_catalog_items(props, namespace: str):
             item.package_name = record.get("package_name", "")
         if hasattr(item, "root_path"):
             item.root_path = str(record.get("root_path", ""))
-            item.source_label = str(record.get("source_label", ""))
+            label = str(record.get("source_label", ""))
+            if namespace == "examples" and duplicate_names[record.get("name", "")] > 1:
+                label = "/".join(part for part in (record.get("folder_path", ""), record.get("name", "")) if part)
+            item.source_label = label
             item.managed = bool(record.get("managed", False))
     setattr(props, index_prop, 0)
     if old_name:
@@ -284,7 +303,8 @@ def _refresh_catalog_items(props, namespace: str):
                 if item.name == old_name and getattr(item, "package_id", "") == old_package_id:
                     setattr(props, index_prop, index)
                     break
-            elif item.name == old_name:
+            elif (item.name == old_name and item.path == old_path
+                  and getattr(item, "package_id", "") == old_package_id):
                 setattr(props, index_prop, index)
                 break
     return len(records)
@@ -357,6 +377,195 @@ class GNSCRIPT_MVP_OT_compile_expression(Operator):
             tree.nodes.active = node
             node.select = True
         self.report({'INFO'}, f"Created node group: {group.name}")
+        return {'FINISHED'}
+
+
+class NODEFORGE_OT_compile_mesh_compute_modifier(Operator):
+    """Compile a trusted Local Mesh Compute script onto the active Mesh modifier."""
+
+    bl_idname = "nodeforge.compile_mesh_compute_modifier"
+    bl_label = "Compile to Modifier"
+    bl_description = "Compile Mesh Compute onto a private first Geometry Nodes modifier"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        """Require an active mesh and a script without altering any other modifier."""
+        owner = getattr(context, "active_object", None)
+        props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
+        return bool(owner is not None and owner.type == 'MESH' and props is not None
+                    and props.text_block is not None and len(owner.modifiers) == 0)
+
+    def execute(self, context):
+        """Compile the selected Text datablock as a Mesh Compute root."""
+        return _compile_mesh_compute_source(self, context, _source_from_props(context.scene.gn_script_mvp))
+
+
+def _compile_mesh_compute_source(operator, context, source: str = "", *, examples_selection=None):
+    """Install and evaluate one explicit Mesh Compute root through the existing transaction."""
+    from .blender.mesh_compute_runtime import evaluate_modifier_binding
+
+    try:
+        group = (create_examples_mesh_compute_modifier(*examples_selection, context.active_object)
+                 if examples_selection is not None else
+                 create_mesh_compute_modifier(source, context.active_object))
+    except Exception as exc:
+        operator.report({'ERROR'}, str(exc))
+        return {'CANCELLED'}
+    try:
+        evaluate_modifier_binding(context.active_object)
+    except Exception as exc:
+        operator.report({'WARNING'}, f"Compiled {group.name}; runtime error: {exc}")
+        return {'FINISHED'}
+    operator.report({'INFO'}, f"Mesh Compute modifier ready: {group.name}")
+    return {'FINISHED'}
+
+
+class NODEFORGE_OT_compile_local_mesh_compute_modifier(Operator):
+    """Compile the selected Local .nf script as a root Mesh Compute modifier."""
+
+    bl_idname = "nodeforge.compile_local_mesh_compute_modifier"
+    bl_label = "Compile to Modifier"
+    bl_description = "Compile the selected Local .nf script as Mesh Compute on the active Mesh object"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        """Offer the action only for a Local script and an empty Mesh modifier stack."""
+        owner = getattr(context, "active_object", None)
+        props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
+        item = _selected_catalog_item(props, "local")
+        return bool(owner is not None and owner.type == 'MESH' and not owner.modifiers
+                    and item is not None and item.kind in {'script', 'linked_script'}
+                    and item.path.lower().endswith('.nf'))
+
+    def execute(self, context):
+        """Read the selected Local file at invocation time, preserving its Local imports."""
+        props = getattr(context.scene, "gn_script_mvp", None)
+        item = _selected_catalog_item(props, "local")
+        if (item is None or item.kind not in {'script', 'linked_script'}
+                or not item.path.lower().endswith('.nf')):
+            self.report({'ERROR'}, "Select a Local .nf script to compile")
+            return {'CANCELLED'}
+        try:
+            source = Path(item.path).read_text(encoding='utf-8')
+        except (OSError, UnicodeError) as exc:
+            self.report({'ERROR'}, f"Cannot read Local script: {exc}")
+            return {'CANCELLED'}
+        return _compile_mesh_compute_source(self, context, source)
+
+
+class NODEFORGE_OT_compile_examples_mesh_compute_modifier(Operator):
+    """Compile the selected Examples .nf script as a root-scoped Mesh Compute modifier."""
+
+    bl_idname = "nodeforge.compile_examples_mesh_compute_modifier"
+    bl_label = "Compile to Modifier"
+    bl_description = "Compile selected Examples .nf as a Mesh Compute modifier on an empty Mesh"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        owner = getattr(context, 'active_object', None)
+        props = getattr(getattr(context, 'scene', None), 'gn_script_mvp', None)
+        item = _selected_catalog_item(props, 'examples')
+        return bool(owner is not None and owner.type == 'MESH' and not owner.modifiers
+                    and item is not None and item.kind == 'script' and item.path.endswith('.nf'))
+
+    def execute(self, context):
+        props = getattr(context.scene, 'gn_script_mvp', None)
+        item = _selected_catalog_item(props, 'examples')
+        if item is None or item.kind != 'script' or not item.path.endswith('.nf'):
+            self.report({'ERROR'}, 'Select an Examples .nf root script')
+            return {'CANCELLED'}
+        return _compile_mesh_compute_source(self, context,
+                                            examples_selection=(item.path, item.package_id))
+
+
+class NODEFORGE_OT_reload_mesh_compute_modifier(Operator):
+    """Recompile the current runtime root with atomic socket/FCurve cutover."""
+
+    bl_idname = "nodeforge.reload_mesh_compute_modifier"
+    bl_label = "Reload Compute"
+    bl_description = "Reload Local Mesh Compute code while preserving modifier inputs and animation"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        """Offer Reload only when the exact active Object has a runtime binding."""
+        from .blender.mesh_compute_runtime import get_modifier_binding, saved_runtime_status
+
+        owner = getattr(context, "active_object", None)
+        props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
+        if owner is None or owner.type != 'MESH' or props is None or props.text_block is None:
+            return False
+        if saved_runtime_status(owner) == 'MISSING_RUNTIME':
+            return True
+        try:
+            return get_modifier_binding(owner) is not None
+        except (ValueError, ReferenceError):
+            return False
+
+    def execute(self, context):
+        """Attempt one committed runtime generation without accepting partial Reload."""
+        from .blender.mesh_compute_runtime import evaluate_modifier_binding
+
+        owner = context.active_object
+        try:
+            group = update_mesh_compute_modifier(_source_from_props(context.scene.gn_script_mvp), owner)
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        try:
+            evaluate_modifier_binding(owner)
+        except Exception as exc:
+            self.report({'WARNING'}, f"Reloaded {group.name}; runtime error: {exc}")
+            return {'FINISHED'}
+        self.report({'INFO'}, f"Reloaded Mesh Compute: {group.name}")
+        return {'FINISHED'}
+
+
+class NODEFORGE_OT_set_local_python_permission(Operator):
+    """Persist a grant for one registered Local root or individually linked file."""
+
+    bl_idname = "nodeforge.set_local_python_permission"
+    bl_label = "Local Executable Python Permission"
+    bl_description = "Allow or deny executable Python within the selected Local source root"
+    bl_options = {'REGISTER'}
+
+    path: StringProperty(name="Registered Local root", default="", options={'HIDDEN'})
+    allowed: BoolProperty(name="Allow executable Python", default=False, options={'HIDDEN'})
+
+    def execute(self, context):
+        """Delegate ownership validation and durable trust persistence to Local sources."""
+        try:
+            set_local_python_permission(self.path, allowed=self.allowed)
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, "Executable Local Python enabled" if self.allowed
+                    else "Executable Local Python disabled")
+        return {'FINISHED'}
+
+
+class NODEFORGE_OT_set_examples_python_permission(Operator):
+    """Grant or revoke executable Python only for the bundled Examples root."""
+
+    bl_idname = "nodeforge.set_examples_python_permission"
+    bl_label = "Examples Executable Python Permission"
+    bl_description = "Allow or deny Python callbacks shipped with NodeForge Examples"
+    bl_options = {'REGISTER'}
+
+    allowed: BoolProperty(name="Allow bundled Examples Python", default=False, options={'HIDDEN'})
+
+    def execute(self, context):
+        from .catalog import catalog_dir
+        try:
+            set_examples_python_permission(catalog_dir('examples'), allowed=self.allowed)
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, "Bundled Examples Python enabled" if self.allowed
+                    else "Bundled Examples Python disabled")
         return {'FINISHED'}
 
 
@@ -612,6 +821,9 @@ class NODEFORGE_OT_create_function_group(Operator):
         if item is None:
             self.report({'ERROR'}, f"Select a {self.namespace} entry from the list")
             return {'CANCELLED'}
+        if self.namespace == "examples" and getattr(item, "kind", "") == "runtime":
+            self.report({'ERROR'}, "Executable Examples Python can only run inside a root modifier")
+            return {'CANCELLED'}
         if self.namespace == "local" and getattr(item, "kind", "") not in {"script", "linked_script"}:
             self.report({'ERROR'}, "Select a Local script, not a folder")
             return {'CANCELLED'}
@@ -628,7 +840,9 @@ class NODEFORGE_OT_create_function_group(Operator):
                 group = (
                     create_local_source_group(item.path)
                     if self.namespace == "local"
-                    else create_library_catalog_group(self.namespace, item.name)
+                    else (create_examples_source_group(item.path, item.package_id)
+                          if self.namespace == "examples"
+                          else create_library_catalog_group(self.namespace, item.name))
                 )
         except Exception as exc:
             self.report({'ERROR'}, str(exc))
@@ -966,11 +1180,29 @@ def _draw_library_catalog_panel(layout, context, namespace: str, collection_name
     )
     item = _selected_catalog_item(props, namespace)
     row = layout.row(align=True)
-    row.enabled = item is not None and _active_gn_tree(context) is not None
+    row.enabled = (item is not None and _active_gn_tree(context) is not None
+                   and not (namespace in {"local", "examples"} and
+                            (item.kind == "runtime" or item.path.endswith(".py"))))
     op = row.operator(NODEFORGE_OT_create_function_group.bl_idname, text="Add Node Group", icon='NODETREE')
     op.namespace = namespace
     if namespace == "local":
+        # The Local list is not a Blender Text datablock. Provide an explicit
+        # root-scoped action without parsing/scanning Local on every UI redraw.
+        if (item is not None and item.kind in {'script', 'linked_script'}
+                and item.path.lower().endswith('.nf')):
+            row = layout.row(align=True)
+            row.enabled = bool(getattr(context, 'active_object', None) is not None
+                               and context.active_object.type == 'MESH'
+                               and not context.active_object.modifiers)
+            row.operator(NODEFORGE_OT_compile_local_mesh_compute_modifier.bl_idname,
+                         text="Compile to Modifier", icon='GEOMETRY_NODES')
         _draw_local_selected_action(layout, item)
+    elif namespace == "examples" and item is not None and item.kind == 'script' and item.path.endswith('.nf'):
+        row = layout.row(align=True)
+        owner = getattr(context, 'active_object', None)
+        row.enabled = bool(owner is not None and owner.type == 'MESH' and not owner.modifiers)
+        row.operator(NODEFORGE_OT_compile_examples_mesh_compute_modifier.bl_idname,
+                     text="Compile to Modifier", icon='GEOMETRY_NODES')
     if _active_gn_tree(context) is None:
         layout.label(text="Open a Geometry Nodes editor to add", icon='INFO')
 
@@ -999,6 +1231,32 @@ class GNSCRIPT_MVP_PT_panel(Panel):
         op = layout.operator(GNSCRIPT_MVP_OT_compile_expression.bl_idname, text="Compile Script")
         op.expression = ""
         op.insert_node = True
+        owner = getattr(context, "active_object", None)
+        row = layout.row()
+        row.enabled = bool(owner is not None and owner.type == 'MESH'
+                           and props.text_block is not None and len(owner.modifiers) == 0)
+        row.operator(NODEFORGE_OT_compile_mesh_compute_modifier.bl_idname,
+                     text="Compile to Modifier", icon='GEOMETRY_NODES')
+        if owner is not None and getattr(owner, "type", None) == "MESH" and owner.modifiers:
+            from .blender.mesh_compute_runtime import get_modifier_binding
+            try:
+                stage = get_modifier_binding(owner)
+            except ValueError:
+                stage = None
+            if stage is None:
+                from .blender.mesh_compute_runtime import saved_runtime_status
+                saved = saved_runtime_status(owner)
+                if saved:
+                    layout.label(text=f"Mesh Compute: {saved}", icon='ERROR')
+                    layout.label(text='Python callback requires trusted Reload', icon='INFO')
+                    layout.operator(NODEFORGE_OT_reload_mesh_compute_modifier.bl_idname,
+                                    text='Reload Compute', icon='FILE_REFRESH')
+            if stage is not None:
+                layout.label(text=f"Mesh Compute: {stage.status}", icon='CHECKMARK' if stage.status == 'READY' else 'ERROR')
+                layout.operator(NODEFORGE_OT_reload_mesh_compute_modifier.bl_idname,
+                                text="Reload Compute", icon='FILE_REFRESH')
+                if stage.last_error:
+                    layout.label(text=stage.last_error[:100], icon='ERROR')
         row = layout.row()
         selected_group = _selected_group_node(context)
         row.enabled = selected_group is not None
@@ -1060,6 +1318,20 @@ class NODEFORGE_PT_library_local(Panel):
         row.operator(NODEFORGE_OT_save_to_local.bl_idname, text="Save", icon='FILE_TICK')
         row.operator(NODEFORGE_OT_import_local.bl_idname, text="Add Folder...", icon='NEWFOLDER')
         _draw_library_catalog_panel(layout, context, "local", "local_items", "local_index", rows=7)
+        selected = _selected_catalog_item(props, "local")
+        root = Path(selected.root_path) if selected is not None and selected.root_path else ensure_local_catalog_dir()
+        try:
+            allowed = local_python_root_permission(root)
+        except Exception:
+            allowed = None
+        if allowed is not None:
+            row = layout.row(align=True)
+            row.label(text=f"Executable Python: {'Allowed' if allowed else 'Blocked'}", icon='CONSOLE')
+            op = row.operator(NODEFORGE_OT_set_local_python_permission.bl_idname,
+                              text="Revoke" if allowed else "Allow", icon='CHECKMARK' if allowed else 'UNLOCKED')
+            op.path = str(root)
+            op.allowed = not allowed
+
 
 
 class NODEFORGE_PT_library_functions(Panel):
@@ -1095,6 +1367,17 @@ class NODEFORGE_PT_library_examples(Panel):
         return GNSCRIPT_MVP_PT_panel.poll(context)
 
     def draw(self, context):
+        from .catalog import catalog_dir
+        root = catalog_dir('examples')
+        try:
+            allowed = examples_python_root_permission(root)
+        except Exception as exc:
+            self.layout.label(text=f"Examples permission unavailable: {exc}", icon='ERROR')
+        else:
+            op = self.layout.operator(NODEFORGE_OT_set_examples_python_permission.bl_idname,
+                                      text="Executable Python: Allowed" if allowed else "Executable Python: Denied",
+                                      icon='UNLOCKED' if allowed else 'LOCKED')
+            op.allowed = not allowed
         _draw_library_catalog_panel(self.layout, context, "examples", "example_items", "example_index", rows=3)
 
 
@@ -1150,6 +1433,12 @@ classes = (
     NODEFORGE_UL_function_library,
     NODEFORGE_UL_packages,
     GNSCRIPT_MVP_OT_compile_expression,
+    NODEFORGE_OT_compile_mesh_compute_modifier,
+    NODEFORGE_OT_compile_local_mesh_compute_modifier,
+    NODEFORGE_OT_compile_examples_mesh_compute_modifier,
+    NODEFORGE_OT_reload_mesh_compute_modifier,
+    NODEFORGE_OT_set_local_python_permission,
+    NODEFORGE_OT_set_examples_python_permission,
     GNSCRIPT_MVP_OT_update_selected_group,
     NODEFORGE_OT_reload_selected_library_group,
     GNSCRIPT_MVP_OT_load_selected_group_source,
@@ -1177,6 +1466,8 @@ classes = (
 def register():
     """Function `register` used by the NodeForge addon."""
     generated_resources.cleanup_restart_orphans_deferred()
+    from .blender.mesh_compute_runtime import register_runtime_load_handler
+    register_runtime_load_handler()
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.Scene.gn_script_mvp = PointerProperty(type=GNSCRIPT_MVP_Properties)
@@ -1184,6 +1475,11 @@ def register():
 
 def unregister():
     """Unregister NodeForge UI and operators without mutating generated node-group data."""
+    from .blender.mesh_compute_runtime import (
+        shutdown_runtime_bindings, unregister_runtime_load_handler,
+    )
+    shutdown_runtime_bindings()
+    unregister_runtime_load_handler()
     try:
         bpy.types.NODE_MT_add.remove(menu_func)
     except Exception:

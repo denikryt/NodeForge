@@ -444,3 +444,31 @@ lifecycle.
 
 - Added bare calls for immediate public `.nf` functions from Local directory imports without an alias, with call-time ambiguity diagnostics and lazy source preparation.
 - Preserve namespace-only alias imports, qualified `.nodeforge` access, canonical source identity, and existing shared/private group behavior.
+
+## 0.68.1
+
+- Avoid full Mesh Compute prefix evaluation and mesh fingerprinting on Blender dependency-graph events proven unrelated to any active stage.
+- Preserve full evaluation for relevant or ambiguous edits, animated frames, render preparation, external GN dependencies, and revoked Local Python permissions.
+- Add native Blender regression coverage and repeatable live-scheduler benchmarks for foreign events, source changes, multi-owner independence, and fail-closed permission handling.
+- Fixed Geometry Nodes sidebar redraw after refreshing Examples by using a Blender 5.2-compatible icon for Compile to Modifier.
+- Added a Blender regression test to validate UI icon identifiers against the running Blender version.
+- Speed up Local library browsing by inspecting only direct children of the open folder instead of rebuilding the full Local source index.
+- Refresh Examples without scanning unrelated Local roots; preserve full Local discovery for compilation and source resolution.
+- Add Blender and Python regressions for catalog isolation, source identity, static Python discovery, and symlink containment.
+- Explain that scripts importing Local Python Mesh Compute must use Compile to Modifier instead of Add Node Group.
+- Add a Blender regression for the rejected library path and supported modifier path.
+- Added Compile to Modifier directly from the selected Local `.nf` script. It uses the existing Mesh Compute root compilation and permission checks without requiring a separate Blender Text datablock.
+- Preserved Add Node Group for regular Local DSL node groups and added Blender tests for both compilation paths.
+
+## 0.69.0
+
+- Added qualified imports for nested bundled and package Examples `.nf` and `.nodeforge` sources, including directory aliases, unqualified `.nf` calls from unaliased directory imports and exact source selection in the Examples UI.
+- Preserved top-level Examples callable and wildcard ownership while isolating nested source identities, duplicate-name diagnostics and Reload provenance.
+
+## 0.70.0
+
+- Added explicit `@mesh_compute` Python imports from bundled and installed package Examples and a root-only Compile to Modifier action for selected Examples `.nf` scripts.
+- Added an independent, default-disabled bundled Examples Python permission; package examples retain their existing installed-package Python authorization.
+- Extended the existing Mesh Compute runtime to enforce Examples owner permissions on compilation, evaluation and Reload, while preserving Local and native library behavior.
+- Updated the bundled erosion NumPy example to import its companion callback from Examples instead of requiring a Local copy.
+- Combined nested Examples source imports with Python Mesh Compute discovery while preserving exact source selection and the legacy top-level catalog.

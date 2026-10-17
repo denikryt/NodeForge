@@ -182,6 +182,27 @@ def capture_owner_code_snapshot(owner_key: tuple[str, ...], root: Path) -> Owner
     return OwnerCodeSnapshot(owner_key, modules, frozenset(namespace_packages), fingerprint)
 
 
+def capture_owner_code_snapshot_from_sources(
+    owner_key: tuple[str, ...], sources: Mapping[str, bytes]
+) -> OwnerCodeSnapshot:
+    """Capture synthetic and physical modules as one immutable owner generation.
+
+    Used for Local runtime functions with no on-disk interface.py/backend.py.
+    Only the declared source bytes are included; no filesystem imports occur here.
+    """
+    names = dict(sources)
+    if set(names) != {"interface.py", "backend.py", "kernel.py"}:
+        raise CompileError("Local runtime owner requires interface.py, backend.py and kernel.py")
+    if not all(isinstance(value, bytes) for value in names.values()):
+        raise TypeError("Local runtime captured modules must contain source bytes")
+    modules = {
+        path[:-3]: _CapturedModule(path, contents, False)
+        for path, contents in names.items()
+    }
+    owner_key = tuple(owner_key)
+    return OwnerCodeSnapshot(owner_key, modules, frozenset(), _snapshot_fingerprint(owner_key, names))
+
+
 class _SnapshotLoader(importlib.abc.Loader):
     """Execute captured source bytes for one owner/session logical module."""
 
@@ -668,6 +689,10 @@ class ExtensionRegistry:
         self._sessions = MappingProxyType(owner_sessions)
         self._families = MappingProxyType(families)
 
+    def with_owner_sessions(self, sessions: Iterable[ExtensionOwnerSession]) -> "ExtensionRegistry":
+        """Derive a sealed registry overlay without mutating admitted package sessions."""
+        return ExtensionRegistry((*self._sessions.values(), *tuple(sessions)))
+
     @classmethod
     def empty(cls) -> "ExtensionRegistry":
         """Return an empty immutable registry for environments without v2 owners."""
@@ -752,6 +777,7 @@ __all__ = [
     "ExtensionRegistry",
     "OwnerCodeSnapshot",
     "capture_owner_code_snapshot",
+    "capture_owner_code_snapshot_from_sources",
     "library_owner_key",
     "synthetic_owner_module_base",
     "system_owner_key",
