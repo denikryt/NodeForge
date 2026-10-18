@@ -42,7 +42,6 @@ def test_ui_icons_exist_in_running_blender():
     declared = set(_declared_ui_icons())
     assert declared  # A vacuous pass would not protect the UI.
     assert declared <= available, f"Unsupported Blender UI icons: {sorted(declared - available)}"
-    assert "GEOMETRY_NODES" in declared
 
 
 def test_ui_icon_validation_rejects_obsolete_modifier_icon():

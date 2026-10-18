@@ -387,6 +387,6 @@ def test_regular_group_compile_rejects_unbound_local_python_before_blender_mutat
               'geo = zlift(geo, amount=2.0)\n'
               'output("Geometry", geo)\n')
     existing = {group.as_pointer() for group in bpy.data.node_groups}
-    with pytest.raises(CompileError, match="Compile to Modifier"):
+    with pytest.raises(CompileError, match="requires a root modifier"):
         create_expression_group(source)
     assert {group.as_pointer() for group in bpy.data.node_groups} == existing

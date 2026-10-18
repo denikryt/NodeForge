@@ -472,3 +472,8 @@ lifecycle.
 - Extended the existing Mesh Compute runtime to enforce Examples owner permissions on compilation, evaluation and Reload, while preserving Local and native library behavior.
 - Updated the bundled erosion NumPy example to import its companion callback from Examples instead of requiring a Local copy.
 - Combined nested Examples source imports with Python Mesh Compute discovery while preserving exact source selection and the legacy top-level catalog.
+
+## 0.70.1
+
+- Route **Compile Script** and Local/Examples **Add Node Group** to the existing Mesh Compute modifier when the root script uses a Python callback; keep ordinary group insertion unchanged.
+- Remove the separate **Compile to Modifier** UI actions; keep explicit **Reload Compute** and existing private root-modifier requirements.

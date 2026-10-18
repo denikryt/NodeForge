@@ -135,7 +135,7 @@ def _validate_import_bindings(
             if not hasattr(resolved_environment, "admit_local_runtime"):
                 raise CompileError(
                     "Python Mesh Compute must be compiled from a root .nf script "
-                    "with Compile to Modifier; it cannot be added as a library node group"
+                    "with Compile Script or Local/Examples Add Node Group; it cannot be added as a library node group"
                 )
             extension_callable_id = resolved_environment.admit_local_runtime(record)
         elif getattr(record, "interface_path", None) is not None and getattr(record, "source_path", None) is None:

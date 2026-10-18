@@ -14,7 +14,7 @@ in the companion NodeForge script `erosion_numpy.nf`.
 2. Select a Mesh object with no existing modifiers.
 3. In **NodeForge → Library → Examples**, refresh and select `mesh_compute_erosion/erosion_numpy.nf`.
 4. Enable **Executable Python: Allowed** in the Examples panel. This permission applies only to bundled Examples and is disabled by default. The `erosion.py` callback executes with normal Python privileges.
-5. Click **Compile to Modifier**. Set Resolution, Steps and the other parameters on the generated modifier. The material `Erosion Terrain` can be assigned as in the original example. **Add Node Group** is for ordinary library-safe source functions.
+5. Click **Add Node Group**. Set Resolution, Steps and the other parameters on the generated modifier. The material `Erosion Terrain` can be assigned as in the original example. Ordinary scripts selected from the same list still create reusable node groups.
 6. Edit `erosion.py` and use **Reload Compute** to capture the changed Python callback. Saving/reopening a `.blend`, Undo and Redo invalidate executable bindings; use Reload Compute to restore them. Revoking the Examples Python permission disables evaluation and invalidates the result. For interactive rendering, enable **Render Properties → Lock Interface**.
 
 The companion script imports the callback directly:
