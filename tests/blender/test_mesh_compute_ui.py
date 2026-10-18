@@ -438,3 +438,159 @@ def test_local_ordinary_root_without_editor_does_not_publish(
         )
     assert {group.as_pointer() for group in bpy.data.node_groups} == before
     assert not mesh_object.modifiers
+
+
+def _add_empty_gn_modifier(obj):
+    """Model the unedited Geometry Nodes modifier made by Blender's New button."""
+    group = bpy.data.node_groups.new('Unedited Geometry Nodes', 'GeometryNodeTree')
+    group.interface.new_socket(name='Geometry', in_out='INPUT', socket_type='NodeSocketGeometry')
+    group.interface.new_socket(name='Geometry', in_out='OUTPUT', socket_type='NodeSocketGeometry')
+    source = group.nodes.new('NodeGroupInput')
+    target = group.nodes.new('NodeGroupOutput')
+    group.links.new(source.outputs['Geometry'], target.inputs['Geometry'])
+    modifier = obj.modifiers.new('GeometryNodes', 'NODES')
+    modifier.node_group = group
+    return modifier, group
+
+
+def test_local_add_node_group_reuses_empty_gn_modifier(
+        registered_ui, configured_local, mesh_object):
+    """Selected Local runtime script reuses Blender's default empty modifier."""
+    script = configured_local / 'terrain.nf'
+    script.write_text(SOURCE, encoding='utf-8')
+    props = bpy.context.scene.gn_script_mvp
+    _select(mesh_object)
+    _select_local_script(props, configured_local, script)
+    modifier, original_group = _add_empty_gn_modifier(mesh_object)
+    pointer = modifier.as_pointer()
+    try:
+        assert bpy.ops.nodeforge.create_function_group(namespace='local') == {'FINISHED'}
+        assert len(mesh_object.modifiers) == 1
+        assert mesh_object.modifiers[0].as_pointer() == pointer
+        assert modifier.node_group is not original_group
+        assert runtime.get_modifier_binding(mesh_object, modifier).status == 'READY'
+        assert _evaluated_positions(mesh_object)[0] == (2., 3., 4.)
+        assert original_group in bpy.data.node_groups[:]
+    finally:
+        if original_group in bpy.data.node_groups[:]:
+            bpy.data.node_groups.remove(original_group, do_unlink=True)
+
+
+def test_local_empty_modifier_binding_failure_restores_original(
+        registered_ui, configured_local, mesh_object, monkeypatch):
+    """A failing runtime binding restores exactly the user's placeholder group."""
+    from NodeForge import compiler
+
+    script = configured_local / 'failed.nf'
+    script.write_text(SOURCE, encoding='utf-8')
+    _select(mesh_object)
+    _select_local_script(bpy.context.scene.gn_script_mvp, configured_local, script)
+    modifier, original_group = _add_empty_gn_modifier(mesh_object)
+    groups_before = {g.as_pointer() for g in bpy.data.node_groups}
+    scenes_before = {scene.as_pointer() for scene in bpy.data.scenes}
+    pointer = modifier.as_pointer()
+
+    def fail(*args, **kwargs):
+        """Exercise the transactional candidate-to-live boundary."""
+        raise ValueError('simulated binding failure')
+
+    monkeypatch.setattr(runtime, 'prepare_modifier_binding', fail)
+    try:
+        with pytest.raises(RuntimeError, match='simulated binding failure'):
+            bpy.ops.nodeforge.create_function_group(namespace='local')
+        assert len(mesh_object.modifiers) == 1
+        assert modifier.as_pointer() == pointer
+        assert modifier.node_group is original_group
+        assert {g.as_pointer() for g in bpy.data.node_groups} == groups_before
+        assert {scene.as_pointer() for scene in bpy.data.scenes} == scenes_before
+    finally:
+        mesh_object.modifiers.remove(modifier)
+        bpy.data.node_groups.remove(original_group, do_unlink=True)
+
+
+def test_local_existing_nonempty_gn_modifier_is_rejected(
+        registered_ui, configured_local, mesh_object):
+    """A user-edited GN graph cannot be replaced by Mesh Compute."""
+    from NodeForge.compiler import create_selected_library_group_auto
+    from NodeForge.errors import CompileError
+
+    script = configured_local / 'guard.nf'
+    script.write_text(SOURCE, encoding='utf-8')
+    modifier, original_group = _add_empty_gn_modifier(mesh_object)
+    original_group.nodes.new('GeometryNodeSetPosition')
+    groups_before = {g.as_pointer() for g in bpy.data.node_groups}
+    try:
+        with pytest.raises(CompileError, match='one empty Geometry Nodes modifier'):
+            create_selected_library_group_auto('local', str(script), mesh_object)
+        assert modifier.node_group is original_group
+        assert {g.as_pointer() for g in bpy.data.node_groups} == groups_before
+    finally:
+        mesh_object.modifiers.remove(modifier)
+        bpy.data.node_groups.remove(original_group, do_unlink=True)
+
+
+def test_local_existing_modifier_without_group_is_reused(
+        registered_ui, configured_local, mesh_object):
+    """An unassigned single GN modifier can also own the runtime root."""
+    script = configured_local / 'unassigned.nf'
+    script.write_text(SOURCE, encoding='utf-8')
+    modifier = mesh_object.modifiers.new('Empty Geometry Nodes', 'NODES')
+    pointer = modifier.as_pointer()
+    _select(mesh_object)
+    _select_local_script(bpy.context.scene.gn_script_mvp, configured_local, script)
+    assert bpy.ops.nodeforge.create_function_group(namespace='local') == {'FINISHED'}
+    assert len(mesh_object.modifiers) == 1
+    assert modifier.as_pointer() == pointer
+    assert runtime.get_modifier_binding(mesh_object, modifier).status == 'READY'
+
+
+def test_local_source_names_show_files_not_parent_folder(registered_ui, configured_local):
+    """Browser rows display physical .nf/.py filenames rather than source labels."""
+    nested = configured_local / 'terrain_erosion'
+    nested.mkdir()
+    (nested / 'erode.nf').write_text('output("Value", 1.0)\n', encoding='utf-8')
+    (nested / 'shift.py').write_text((configured_local / 'shift.py').read_text(encoding='utf-8'), encoding='utf-8')
+    props = bpy.context.scene.gn_script_mvp
+    props.local_browser_path = str(nested)
+    ui._refresh_catalog_items(props, 'local')
+    filenames = {item.name: item.source_label for item in props.local_items}
+    assert filenames['erode'] == ''
+    assert filenames['shift'] == ''
+
+
+def test_local_script_add_action_enabled_without_node_tree(
+        registered_ui, configured_local, mesh_object, monkeypatch):
+    """Local .nf stays actionable without a GN editor; Python rows stay disabled."""
+    from types import SimpleNamespace
+
+    script = configured_local / 'terrain.nf'
+    script.write_text(SOURCE, encoding='utf-8')
+    props = bpy.context.scene.gn_script_mvp
+    _select(mesh_object)
+    _select_local_script(props, configured_local, script)
+    monkeypatch.setattr(ui, '_active_gn_tree', lambda _: None)
+    actions = []
+
+    class Layout:
+        """Capture enabled state of the action row in a real panel draw."""
+        enabled = True
+
+        def row(self, **kwargs):
+            return Layout()
+
+        def operator(self, name, **kwargs):
+            actions.append((name, self.enabled))
+            return SimpleNamespace(namespace=None, path=None)
+
+        def template_list(self, *args, **kwargs):
+            pass
+
+        def label(self, **kwargs):
+            pass
+
+    ui._draw_library_catalog_panel(Layout(), bpy.context, 'local', 'local_items', 'local_index', rows=7)
+    assert ('nodeforge.create_function_group', True) in actions
+    _select_local_script(props, configured_local, configured_local / 'shift.py')
+    actions.clear()
+    ui._draw_library_catalog_panel(Layout(), bpy.context, 'local', 'local_items', 'local_index', rows=7)
+    assert ('nodeforge.create_function_group', False) in actions

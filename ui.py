@@ -284,7 +284,8 @@ def _refresh_catalog_items(props, namespace: str):
             item.package_name = record.get("package_name", "")
         if hasattr(item, "root_path"):
             item.root_path = str(record.get("root_path", ""))
-            label = str(record.get("source_label", ""))
+            # File rows show their own names; qualify duplicate Examples only.
+            label = ""
             if namespace == "examples" and duplicate_names[record.get("name", "")] > 1:
                 label = "/".join(part for part in (record.get("folder_path", ""), record.get("name", "")) if part)
             item.source_label = label
@@ -1096,15 +1097,19 @@ def _draw_library_catalog_panel(layout, context, namespace: str, collection_name
     )
     item = _selected_catalog_item(props, namespace)
     row = layout.row(align=True)
-    row.enabled = (item is not None and _active_gn_tree(context) is not None
+    editor_ready = _active_gn_tree(context) is not None
+    selected_script = (item is not None and namespace in {"local", "examples"}
+                       and item.kind in {"script", "linked_script"}
+                       and item.path.endswith(".nf"))
+    row.enabled = (item is not None and (editor_ready or selected_script)
                    and not (namespace in {"local", "examples"} and
                             (item.kind == "runtime" or item.path.endswith(".py"))))
     op = row.operator(NODEFORGE_OT_create_function_group.bl_idname, text="Add Node Group", icon='NODETREE')
     op.namespace = namespace
     if namespace == "local":
         _draw_local_selected_action(layout, item)
-    if _active_gn_tree(context) is None:
-        layout.label(text="Open a Geometry Nodes editor to add", icon='INFO')
+    if not editor_ready:
+        layout.label(text="Ordinary groups require an open Geometry Nodes editor", icon='INFO')
 
 
 class GNSCRIPT_MVP_PT_panel(Panel):

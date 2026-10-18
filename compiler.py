@@ -242,13 +242,47 @@ def update_expression_group(group, source: str):
     ))
 
 
+def _blank_mesh_compute_modifier(owner):
+    """Return an unused GN modifier only when its graph is Blender's default passthrough.
+
+    Never edit the existing node group. Replacing its modifier reference is
+    reversible, and other users of the original group remain unaffected.
+    """
+    if not owner.modifiers:
+        return None
+    if len(owner.modifiers) != 1:
+        raise CompileError("Mesh Compute requires a Mesh Object without previous modifiers or with one empty Geometry Nodes modifier")
+    modifier = owner.modifiers[0]
+    if modifier.type != 'NODES':
+        raise CompileError("Mesh Compute requires a Mesh Object without previous modifiers or with one empty Geometry Nodes modifier")
+    group = modifier.node_group
+    if group is None:
+        return modifier
+    nodes = tuple(group.nodes)
+    sockets = tuple(group.interface.items_tree)
+    if (group.bl_idname != 'GeometryNodeTree' or group.keys() or
+            len(nodes) != 2 or
+            {node.bl_idname for node in nodes} != {'NodeGroupInput', 'NodeGroupOutput'} or
+            len(sockets) != 2 or
+            {(item.item_type, item.in_out, item.name, item.socket_type) for item in sockets} != {
+                ('SOCKET', 'INPUT', 'Geometry', 'NodeSocketGeometry'),
+                ('SOCKET', 'OUTPUT', 'Geometry', 'NodeSocketGeometry'),
+            } or len(group.links) != 1):
+        raise CompileError("Mesh Compute requires a Mesh Object without previous modifiers or with one empty Geometry Nodes modifier")
+    link = group.links[0]
+    if (link.from_node.bl_idname != 'NodeGroupInput' or
+            link.to_node.bl_idname != 'NodeGroupOutput' or
+            link.from_socket.name != 'Geometry' or link.to_socket.name != 'Geometry'):
+        raise CompileError("Mesh Compute requires a Mesh Object without previous modifiers or with one empty Geometry Nodes modifier")
+    return modifier
+
+
 def create_mesh_compute_modifier(source: str, owner, name: str = "NodeForge Mesh Compute", *,
                                  resolved_environment=None):
     """Compile a trusted root onto a private modifier with transactional rollback."""
     if owner is None or getattr(owner, "type", None) != "MESH":
         raise CompileError("Mesh Compute requires a selected Mesh Object")
-    if len(owner.modifiers):
-        raise CompileError("Mesh Compute requires a Mesh Object without previous modifiers")
+    _blank_mesh_compute_modifier(owner)
     backend = _new_group_backend(resolved_environment)
     prepared, session = _prepare_root_build(backend, source, name=name)
     if not _requires_mesh_compute(prepared):
@@ -264,8 +298,7 @@ def _install_prepared_mesh_compute_modifier(backend, prepared, session, owner, *
     )
     if owner is None or getattr(owner, "type", None) != "MESH":
         raise CompileError("Mesh Compute requires a selected Mesh Object")
-    if len(owner.modifiers):
-        raise CompileError("Mesh Compute requires a Mesh Object without previous modifiers")
+    target_modifier = _blank_mesh_compute_modifier(owner)
     if not _requires_mesh_compute(prepared):
         raise CompileError("Mesh Compute modifier requires an imported runtime function")
     build_tx = BlenderGroupBuildTransaction()
@@ -274,25 +307,40 @@ def _install_prepared_mesh_compute_modifier(backend, prepared, session, owner, *
         """Complete the modifier/runtime candidate and register exact rollback."""
         candidates = [resource_tx for candidate, resource_tx in build_tx.created_groups
                       if candidate is group and resource_tx.mesh_compute_stage is not None]
-        if len(candidates) != 1 or owner.type != "MESH" or len(owner.modifiers):
+        if len(candidates) != 1 or owner.type != "MESH":
             raise CompileError("Mesh Compute target or generated stage changed before finalization")
+        # Revalidate after compilation: a user may have edited the target meanwhile.
+        current = _blank_mesh_compute_modifier(owner)
+        if (target_modifier is None and current is not None or
+                target_modifier is not None and (current is None or
+                current.as_pointer() != target_modifier.as_pointer())):
+            raise CompileError("Mesh Compute target modifier changed before finalization")
         stage = candidates[0].mesh_compute_stage
-        modifier = owner.modifiers.new(name, "NODES")
+        created = current is None
+        modifier = owner.modifiers.new(name, "NODES") if created else current
+        previous_group = None if created else modifier.node_group
         binding = None
+
+        def restore_modifier():
+            """Undo only the modifier reference installed by this compilation."""
+            if any(item.as_pointer() == modifier.as_pointer() for item in owner.modifiers):
+                if created:
+                    owner.modifiers.remove(modifier)
+                else:
+                    modifier.node_group = previous_group
+
         try:
             modifier.node_group = group
             binding = prepare_modifier_binding(owner, modifier, group, stage)
         except BaseException:
             if binding is not None:
                 release_modifier_binding(binding)
-            if any(current.as_pointer() == modifier.as_pointer() for current in owner.modifiers):
-                owner.modifiers.remove(modifier)
+            restore_modifier()
             raise
 
         def revert():
-            """Restore the exact precompile modifier state before group deletion."""
-            if any(current.as_pointer() == modifier.as_pointer() for current in owner.modifiers):
-                owner.modifiers.remove(modifier)
+            """Restore the original modifier on a failed transaction."""
+            restore_modifier()
             release_modifier_binding(binding)
 
         build_tx.register_external_cutover(rollback=revert, commit=lambda: commit_modifier_binding(binding))
