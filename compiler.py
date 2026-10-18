@@ -86,6 +86,65 @@ def create_expression_group(source: str, name: str = "NodeForge Group"):
     ))
 
 
+def _requires_mesh_compute(prepared) -> bool:
+    """Classify used runtime dependencies after semantic resolution, not import text."""
+    return any(owner and owner[0] in {"local-runtime", "examples-runtime"}
+               for owner, _ in prepared.extension_dependencies)
+
+
+def compile_script_auto(source: str, owner=None, name: str = "NodeForge Group"):
+    """Compile ordinary source as a group, or a used Mesh Compute root as a modifier.
+
+    Return (group, installed_modifier). No target is needed to prepare or
+    classify ordinary scripts; runtime-only target validation happens later.
+    """
+    backend = _new_group_backend()
+    prepared, session = _prepare_root_build(backend, source, name=name)
+    if _requires_mesh_compute(prepared):
+        group = _install_prepared_mesh_compute_modifier(backend, prepared, session, owner, name=name)
+        return group, True
+    group = backend.create_or_update(BlenderGroupBuildRequest(
+        prepared_compilation=prepared, name=name, source_callable_session=session,
+        helper_namespace=name,
+    ))
+    return group, False
+
+
+def create_selected_library_group_auto(namespace: str, source_origin: str, owner=None,
+                                       package_id: str = "", *, editor_available: bool = True):
+    """Compile the exact selected Local/Examples root without guessing its owner.
+
+    Ordinary catalog entries keep their existing reusable materialization path;
+    an explicitly used Python callback installs the root modifier instead.
+    """
+    if namespace not in {"local", "examples"}:
+        raise CompileError("Automatic library routing supports Local and Examples only")
+    from .catalog import _path_key, load_library_entry_source_for_record
+    environment = _make_compilation_environment()
+    catalog = environment.catalog(namespace)
+    catalog._raise_if_failed()
+    origin = _path_key(source_origin)
+    index = catalog.local_index if namespace == "local" else catalog.examples_index
+    record = None if index is None else index.find_origin(origin)
+    if record is None or (namespace == "examples" and record.package_id != package_id):
+        raise CompileError(f"Current {namespace} source is unavailable: {source_origin}")
+    if (record.source_path is not None and record.source_path.suffix == ".nf"
+            and record.kind == "script"):
+        if _path_key(record.source_path) != record.source_origin:
+            raise CompileError(f"Selected {namespace} root changed identity during compilation")
+        source = load_library_entry_source_for_record(record)
+        backend = _new_group_backend(environment)
+        prepared, session = _prepare_root_build(backend, source, name=record.name)
+        if _requires_mesh_compute(prepared):
+            group = _install_prepared_mesh_compute_modifier(
+                backend, prepared, session, owner, name=record.name,
+            )
+            return group, True
+    if not editor_available:
+        raise CompileError("Open a Geometry Nodes editor to add a library node group")
+    return materialize_library_entry_group_for_record(record, _new_group_backend(environment)), False
+
+
 def create_library_catalog_group(namespace: str, name: str):
     """Create a name-unique catalog group; Functions callers should pass owner identity."""
     environment = resolve_environment()
@@ -185,25 +244,30 @@ def update_expression_group(group, source: str):
 
 def create_mesh_compute_modifier(source: str, owner, name: str = "NodeForge Mesh Compute", *,
                                  resolved_environment=None):
-    """Compile one trusted Local runtime root onto a private first GN modifier.
-
-    All fallible Blender installation and callback preparation occurs before
-    `BlenderGroupBuildTransaction.commit()`. A failed attempt removes the
-    provisional group, modifier and private prefix scene as one unit.
-    """
-    from .blender.group_backend import BlenderGroupBuildTransaction
-    from .blender.mesh_compute_runtime import (
-        prepare_modifier_binding, release_modifier_binding, commit_modifier_binding,
-    )
-
+    """Compile a trusted root onto a private modifier with transactional rollback."""
     if owner is None or getattr(owner, "type", None) != "MESH":
         raise CompileError("Mesh Compute requires a selected Mesh Object")
     if len(owner.modifiers):
         raise CompileError("Mesh Compute requires a Mesh Object without previous modifiers")
     backend = _new_group_backend(resolved_environment)
     prepared, session = _prepare_root_build(backend, source, name=name)
-    if not any(key and key[0] in {"local-runtime", "examples-runtime"} for key, _ in prepared.extension_dependencies):
-        raise CompileError("Compile to Modifier requires an imported Mesh Compute function")
+    if not _requires_mesh_compute(prepared):
+        raise CompileError("Mesh Compute modifier requires an imported Mesh Compute function")
+    return _install_prepared_mesh_compute_modifier(backend, prepared, session, owner, name=name)
+
+
+def _install_prepared_mesh_compute_modifier(backend, prepared, session, owner, *, name: str):
+    """Install an already-prepared runtime root using the existing atomic cutover."""
+    from .blender.group_backend import BlenderGroupBuildTransaction
+    from .blender.mesh_compute_runtime import (
+        prepare_modifier_binding, release_modifier_binding, commit_modifier_binding,
+    )
+    if owner is None or getattr(owner, "type", None) != "MESH":
+        raise CompileError("Mesh Compute requires a selected Mesh Object")
+    if len(owner.modifiers):
+        raise CompileError("Mesh Compute requires a Mesh Object without previous modifiers")
+    if not _requires_mesh_compute(prepared):
+        raise CompileError("Mesh Compute modifier requires an imported runtime function")
     build_tx = BlenderGroupBuildTransaction()
 
     def finalize(group):
@@ -253,6 +317,8 @@ def create_mesh_compute_modifier(source: str, owner, name: str = "NodeForge Mesh
 __all__ = [
     "CompileError",
     "create_expression_group",
+    "compile_script_auto",
+    "create_selected_library_group_auto",
     "create_mesh_compute_modifier",
     "update_mesh_compute_modifier",
     "update_expression_group",

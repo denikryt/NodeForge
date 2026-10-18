@@ -883,10 +883,10 @@ class BlenderGroupBackend:
                           if owner and owner[0] in {"local-runtime", "examples-runtime"}]
         if runtime_owners and request.mesh_compute_modifier_target is None:
             raise CompileError(
-                "Mesh Compute requires Compile to Modifier; nested GeometryNodeGroup publication is unsupported"
+                "Mesh Compute requires a root modifier; nested GeometryNodeGroup publication is unsupported"
             )
         if request.mesh_compute_modifier_target is not None and not runtime_owners:
-            raise CompileError("Compile to Modifier requires one imported Mesh Compute stage")
+            raise CompileError("Mesh Compute modifier requires one imported Mesh Compute stage")
         outermost = request.function_group_transaction is None
         build_tx = request.function_group_transaction or BlenderGroupBuildTransaction()
         if identity.root_owner_id is not None:

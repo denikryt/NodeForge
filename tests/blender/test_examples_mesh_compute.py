@@ -71,17 +71,16 @@ def test_selected_examples_compiles_modifier_and_revocation_fails_closed(
     bundled, nf = selected_examples
     _select_mesh(mesh_object)
     _select_source(nf)
-    assert ui.NODEFORGE_OT_compile_examples_mesh_compute_modifier.poll(bpy.context)
     # Examples selection is independent of the main Blender Text Script.
     original_groups = {group.as_pointer() for group in bpy.data.node_groups}
     assert not local_sources.examples_python_root_permission(bundled)
     with pytest.raises(RuntimeError, match='not authorized'):
-        bpy.ops.nodeforge.compile_examples_mesh_compute_modifier()
+        bpy.ops.nodeforge.create_function_group(namespace="examples")
     assert not mesh_object.modifiers
     assert {group.as_pointer() for group in bpy.data.node_groups} == original_groups
 
     assert bpy.ops.nodeforge.set_examples_python_permission(allowed=True) == {'FINISHED'}
-    assert bpy.ops.nodeforge.compile_examples_mesh_compute_modifier() == {'FINISHED'}
+    assert bpy.ops.nodeforge.create_function_group(namespace="examples") == {'FINISHED'}
     assert len(mesh_object.modifiers) == 1
     binding = runtime.get_modifier_binding(mesh_object)
     assert binding.prepared.source_namespace == 'examples'
@@ -101,13 +100,12 @@ def test_examples_modifier_poll_and_stale_source_failure(
     _select_mesh(mesh_object)
     _select_source(nf)
     user_modifier = mesh_object.modifiers.new('User', 'BEVEL')
-    assert not ui.NODEFORGE_OT_compile_examples_mesh_compute_modifier.poll(bpy.context)
     mesh_object.modifiers.remove(user_modifier)
     local_sources.set_examples_python_permission(bundled, allowed=True)
     nf.unlink()
     before = {group.as_pointer() for group in bpy.data.node_groups}
     with pytest.raises(RuntimeError, match='unavailable'):
-        bpy.ops.nodeforge.compile_examples_mesh_compute_modifier()
+        bpy.ops.nodeforge.create_function_group(namespace="examples")
     assert not mesh_object.modifiers
     assert {group.as_pointer() for group in bpy.data.node_groups} == before
 
