@@ -477,3 +477,9 @@ lifecycle.
 
 - Route **Compile Script** and Local/Examples **Add Node Group** to the existing Mesh Compute modifier when the root script uses a Python callback; keep ordinary group insertion unchanged.
 - Remove the separate **Compile to Modifier** UI actions; keep explicit **Reload Compute** and existing private root-modifier requirements.
+
+## 0.70.2
+
+- Allow Local and Examples **Add Node Group** for `.nf` scripts without a pre-existing Geometry Nodes editor tree; ordinary scripts still require an editor.
+- Reuse a single unmodified, default passthrough Geometry Nodes modifier for Mesh Compute; preserve its original group on failure and reject nonempty or additional modifiers.
+- Show source filenames in Local and Examples lists; qualify duplicate Examples names by their directories.

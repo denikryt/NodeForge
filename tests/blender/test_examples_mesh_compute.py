@@ -118,3 +118,66 @@ def test_examples_python_cannot_be_published_as_regular_library_group(selected_e
     local_sources.set_examples_python_permission(bundled, allowed=True)
     with pytest.raises(CompileError, match='unavailable'):
         create_examples_source_group(str(nf.with_name('shift.py')))
+
+
+def test_examples_add_node_group_reuses_blender_empty_modifier(
+        selected_examples, registered_ui, mesh_object):
+    """Examples runtime scripts use the same already-present blank GN modifier."""
+    from NodeForge.tests.blender.test_mesh_compute_ui import _add_empty_gn_modifier
+
+    bundled, nf = selected_examples
+    _select_mesh(mesh_object)
+    _select_source(nf)
+    local_sources.set_examples_python_permission(bundled, allowed=True)
+    modifier, original_group = _add_empty_gn_modifier(mesh_object)
+    pointer = modifier.as_pointer()
+    try:
+        assert bpy.ops.nodeforge.create_function_group(namespace='examples') == {'FINISHED'}
+        assert len(mesh_object.modifiers) == 1
+        assert modifier.as_pointer() == pointer
+        assert runtime.get_modifier_binding(mesh_object, modifier).status == 'READY'
+        assert _evaluated_positions(mesh_object)[0] == (2., 3., 4.)
+    finally:
+        if original_group in bpy.data.node_groups[:]:
+            bpy.data.node_groups.remove(original_group, do_unlink=True)
+
+
+def test_examples_unqualified_source_label_is_filename(selected_examples, registered_ui):
+    """An Examples file is not displayed under its parent directory name."""
+    _, nf = selected_examples
+    props = _select_source(nf)
+    item = props.example_items[props.example_index]
+    assert item.name == 'root'
+    assert item.source_label == ''
+
+
+def test_examples_script_add_action_enabled_without_node_tree(
+        selected_examples, registered_ui, mesh_object, monkeypatch):
+    """Examples .nf remains selectable when Blender has not opened a GN tree."""
+    from types import SimpleNamespace
+
+    _, nf = selected_examples
+    _select_mesh(mesh_object)
+    _select_source(nf)
+    monkeypatch.setattr(ui, '_active_gn_tree', lambda _: None)
+    actions = []
+
+    class Layout:
+        """Capture enabled state of the Examples Add Node Group button."""
+        enabled = True
+
+        def row(self, **kwargs):
+            return Layout()
+
+        def operator(self, name, **kwargs):
+            actions.append((name, self.enabled))
+            return SimpleNamespace(namespace=None, path=None)
+
+        def template_list(self, *args, **kwargs):
+            pass
+
+        def label(self, **kwargs):
+            pass
+
+    ui._draw_library_catalog_panel(Layout(), bpy.context, 'examples', 'example_items', 'example_index', rows=7)
+    assert ('nodeforge.create_function_group', True) in actions
