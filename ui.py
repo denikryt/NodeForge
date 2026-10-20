@@ -1284,6 +1284,24 @@ classes = (
 _PACKAGE_BOOTSTRAP_ERRORS: tuple[str, ...] = ()
 
 
+def _refresh_startup_browser_items():
+    """Fill Scene-owned browser lists after Blender releases registration restrictions."""
+    for scene in bpy.data.scenes:
+        props = getattr(scene, "gn_script_mvp", None)
+        if props is None:
+            continue
+        for namespace in ("packages", "functions", "examples"):
+            try:
+                if namespace == "packages":
+                    _refresh_package_items(props)
+                else:
+                    _refresh_catalog_items(props, namespace)
+            except Exception as exc:
+                # One broken catalog cannot prevent other lists from loading.
+                print(f"NodeForge {namespace} catalog initialization: {exc}")
+    return None  # One-shot timer; every activation schedules a fresh refresh.
+
+
 def register():
     """Register UI and install included ordinary Packages on activation."""
     generated_resources.cleanup_restart_orphans_deferred()
@@ -1300,12 +1318,15 @@ def register():
         _PACKAGE_BOOTSTRAP_ERRORS = (str(exc),)
     for message in _PACKAGE_BOOTSTRAP_ERRORS:
         print(f"NodeForge package initialization: {message}")
-    props = getattr(getattr(bpy.context, "scene", None), "gn_script_mvp", None)
-    if props is not None and not _PACKAGE_BOOTSTRAP_ERRORS:
-        _refresh_package_items(props)
+    # Blender restricts bpy.data while add-ons register. Populate the Scene
+    # collections on the next event-loop tick instead of touching bpy.data here.
+    if not bpy.app.timers.is_registered(_refresh_startup_browser_items):
+        bpy.app.timers.register(_refresh_startup_browser_items, first_interval=0.0)
 
 def unregister():
     """Unregister NodeForge UI and operators without mutating generated node-group data."""
+    if bpy.app.timers.is_registered(_refresh_startup_browser_items):
+        bpy.app.timers.unregister(_refresh_startup_browser_items)
     from .blender.mesh_compute_runtime import (
         shutdown_runtime_bindings, unregister_runtime_load_handler,
     )

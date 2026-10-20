@@ -16,6 +16,8 @@ NodeForge automatically installs the included **NodeForge Math** and **NodeForge
 
 For users of the legacy ZIP add-on, disable the old NodeForge add-on before enabling the new Extension to avoid duplicate registrations. User Packages and Local files remain in their existing Blender user-data directories.
 
+For release maintainers: `.github/workflows/release-extension.yml` runs on version tags. For a manual run, supply an existing `vX.Y.Z` tag in the `release_tag` input; the workflow checks out that tag and tests the built ZIP in Blender 5.2 before publication.
+
 ## Quick start
 
 1. Select a mesh object and open the **Geometry Node Editor**.

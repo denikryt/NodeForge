@@ -4,6 +4,11 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag to build (vX.Y.Z)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -19,9 +24,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
       - name: Verify NodeForge version
         env:
-          TAG_NAME: ${{ github.ref_name }}
+          TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
         run: |
           python3 - <<'PY'
           import ast, os, pathlib, tomllib
@@ -98,11 +105,23 @@ jobs:
           PY
           "$BLENDER" -b --command extension server-generate --repo-dir public
           test -s public/index.json
+      - name: Install and test built Extension in Blender 5.2
+        run: |
+          set -euo pipefail
+          python3 -m pip install --target "$PWD/.ci-pytest" pytest
+          export PYTHONPATH="$PWD/.ci-pytest"
+          export BLENDER_USER_CONFIG="$RUNNER_TEMP/nodeforge-ci/config"
+          export BLENDER_USER_SCRIPTS="$RUNNER_TEMP/nodeforge-ci/scripts"
+          export BLENDER_USER_DATAFILES="$RUNNER_TEMP/nodeforge-ci/datafiles"
+          ARCHIVE=$(find "$PWD/public" -maxdepth 1 -name '*.zip' -type f -print -quit)
+          test -n "$ARCHIVE"
+          "$PWD/blender-dist/blender" -b --factory-startup --python-use-system-env --python-exit-code 1 \
+            --python tests/blender/verify_extension_release.py -- "$ARCHIVE"
       - name: Publish GitHub release asset
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ github.ref_name }}
+          TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
         run: |
           gh release create "$TAG_NAME" public/*.zip --generate-notes --verify-tag || \
             gh release upload "$TAG_NAME" public/*.zip --clobber

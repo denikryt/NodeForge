@@ -497,3 +497,8 @@ lifecycle.
 
 - Accept optional `repository_url` metadata in package manifests; retain the URL without adding UI or automatic package downloads.
 - Keep the existing NodeForge Extension `website` link in `blender_manifest.toml`.
+
+## 0.72.1
+
+- Populate Packages, Functions and Examples browser lists after the extension's bundled-package bootstrap, including activation without an active scene context.
+- Require Blender 5.2 installation, compiled-library examples and package upgrade checks against the built Extension ZIP before publishing a release.

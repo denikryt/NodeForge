@@ -53,3 +53,78 @@ def test_extension_packages_do_not_require_user_consent():
     assert {r.manifest.package_id for r in records} >= {"nodeforge.math", "nodeforge.lsystem"}
     assert all("allow_python" not in r.state_record for r in records)
     assert all(packages.package_compatibility_warning(r.manifest) for r in records)
+
+
+def test_browser_lists_populate_after_extension_activation():
+    """Startup refresh exposes newly installed library content without manual Refresh."""
+    extension = _installed_extension()
+    ui = importlib.import_module(extension.__name__ + ".ui")
+    assert bpy.app.timers.is_registered(ui._refresh_startup_browser_items)
+    # A background Blender pytest run has no GUI event loop to tick timers.
+    assert ui._refresh_startup_browser_items() is None
+    props = bpy.context.scene.gn_script_mvp
+    assert {item.package_id for item in props.package_items} >= {
+        "nodeforge.math", "nodeforge.lsystem"
+    }
+    assert any(item.name == "noise_terrain" for item in props.example_items)
+    assert any(item.name == "koch_curve" for item in props.example_items)
+    assert len(props.function_items) > 0
+
+
+def test_startup_catalog_error_does_not_block_other_lists(monkeypatch, capsys):
+    """A failed Functions catalog cannot prevent Examples and Packages refreshing."""
+    extension = _installed_extension()
+    ui = importlib.import_module(extension.__name__ + ".ui")
+    original = ui._refresh_catalog_items
+    props = bpy.context.scene.gn_script_mvp
+    props.example_items.clear()
+
+    def fail_functions(scene_props, namespace):
+        """Inject a failure in one independent startup catalog."""
+        if namespace == "functions":
+            raise RuntimeError("simulated Functions failure")
+        return original(scene_props, namespace)
+
+    monkeypatch.setattr(ui, "_refresh_catalog_items", fail_functions)
+    assert ui._refresh_startup_browser_items() is None
+    assert "simulated Functions failure" in capsys.readouterr().out
+    assert any(item.name == "noise_terrain" for item in props.example_items)
+    assert len(props.package_items) >= 2
+
+
+def test_z_reenable_upgrades_an_older_included_package(tmp_path):
+    """Re-enabling the built Extension upgrades an older ordinary installed package."""
+    import json
+    import zipfile
+
+    extension = _installed_extension()
+    packages = importlib.import_module(extension.__name__ + ".packages")
+    math_zip = next((Path(extension.__file__).parent / "package_install").glob("nodeforge.math-*.zip"))
+    old_zip = tmp_path / "math-older.zip"
+    with zipfile.ZipFile(math_zip) as source, zipfile.ZipFile(old_zip, "w") as old:
+        for entry in source.infolist():
+            payload = source.read(entry.filename)
+            if entry.filename.endswith("nodeforge_package.json"):
+                manifest = json.loads(payload)
+                assert manifest["id"] == "nodeforge.math"
+                manifest["version"] = "2.1"
+                payload = json.dumps(manifest).encode("utf-8")
+            old.writestr(entry, payload)
+
+    packages.install_package_zip(old_zip, replace=True)
+    current = {r.manifest.package_id: r.manifest.version for r in packages.active_package_records()}
+    assert current["nodeforge.math"] == "2.1"
+    assert current["nodeforge.lsystem"] == "4.0"
+
+    bpy.ops.preferences.addon_disable(module=extension.__name__)
+    assert extension.__name__ not in bpy.context.preferences.addons
+    bpy.ops.preferences.addon_enable(module=extension.__name__)
+    assert extension.__name__ in bpy.context.preferences.addons
+    packages = importlib.import_module(extension.__name__ + ".packages")
+    updated = {r.manifest.package_id: r.manifest.version for r in packages.active_package_records()}
+    assert updated["nodeforge.math"] == "2.2"
+    assert updated["nodeforge.lsystem"] == "4.0"
+    ui = importlib.import_module(extension.__name__ + ".ui")
+    assert ui._refresh_startup_browser_items() is None
+    props = bpy.context.scene.gn_script_mvp
+    assert {row.package_id for row in props.package_items} >= set(updated)
