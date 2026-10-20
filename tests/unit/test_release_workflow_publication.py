@@ -41,7 +41,7 @@ def test_manual_dispatch_runs_verification_without_publication():
     content = WORKFLOW.read_text(encoding="utf-8")
     assert "workflow_dispatch:" in content
     assert "inputs.release_tag" in content
-    assert _step(_job("build"), "name: Install and test built Extension in Blender 5.2")
+    assert _step(_job("test-extension"), "name: Install and test built Extension in Blender 5.2")
     for name in ("publish-release", "deploy-pages"):
         assert f"if: {TAG_PUSH_ONLY}" in _job(name)
     assert "gh release create" not in _job("build")
@@ -54,20 +54,32 @@ def test_publishing_jobs_depend_on_one_verified_build():
     release = _job("publish-release")
     pages = _job("deploy-pages")
 
-    assert "needs: build" in release
+    assert "needs: [build, test-extension]" in release
+    assert "needs: build" in _job("test-extension")
     assert "needs: [build, publish-release]" in pages
     assert "contents: write" in release
     assert "pages: write" in pages and "id-token: write" in pages
     assert "name: github-pages" in pages
 
-    upload = _step(build, "name: Preserve verified release files")
+    upload = _step(build, "name: Preserve built release files")
     download = _step(release, "name: Retrieve verified release files")
     assert "uses: actions/upload-artifact@v4" in upload
     assert "uses: actions/download-artifact@v4" in download
     for step in (upload, download):
         assert "name: nodeforge-release-public" in step
         assert "path: public/" in step
-    assert build.index("name: Install and test built Extension in Blender 5.2") < build.index("name: Preserve verified release files")
+    test = _job("test-extension")
+    retrieve = _step(test, "name: Retrieve built release files")
+    assert "uses: actions/download-artifact@v4" in retrieve
+    assert "name: nodeforge-release-public" in retrieve
+    assert "path: public/" in retrieve
+    assert "verify_extension_release.py" in test
+    assert "verify_extension_release.py" not in build
+    assert "extension build" not in test
+    assert "upload-artifact" not in test
+    assert "upload-pages-artifact" not in test
+    assert "inputs.release_tag || github.ref" in test
+    assert test.index("name: Retrieve built release files") < test.index("name: Install and test built Extension")
     assert "gh release create" in _step(release, "name: Publish GitHub release asset")
     assert "blender-dist" not in release
     assert "blender-dist" not in pages
@@ -77,7 +89,7 @@ def test_pages_retry_reuses_existing_pages_artifact():
     """Deploy retries never re-upload an artifact or retry immutable release creation."""
     build = _job("build")
     pages = _job("deploy-pages")
-    prepared = _step(build, "name: Preserve verified Pages artifact")
+    prepared = _step(build, "name: Preserve built Pages artifact")
     assert f"if: {TAG_PUSH_ONLY}" in prepared
     assert "uses: actions/upload-pages-artifact@v3" in prepared
     assert "path: public/" in prepared
@@ -161,3 +173,20 @@ def test_release_targets_repository_without_checkout(tmp_path):
     env["GH_REPO"] = "denikryt/NodeForge"
     configured = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True)
     assert configured.returncode == 0
+
+
+@pytest.mark.parametrize("name", ["build", "test-extension"])
+def test_blender_cache_has_pinned_key_and_download_fallback(name):
+    """Both fresh runners use the same exact Blender cache and a miss fallback."""
+    job = _job(name)
+    cache = _step(job, "name: Cache Blender 5.2")
+    install = _step(job, "name: Install Blender 5.2")
+    assert "uses: actions/cache@v4" in cache
+    assert "path: blender-dist" in cache
+    assert "key: blender-${{ runner.os }}-${{ runner.arch }}-5.2.0-linux-x64-v1" in cache
+    assert "restore-keys:" not in cache
+    assert "if: steps.blender-cache.outputs.cache-hit != 'true'" in install
+    assert "set -euo pipefail" in install
+    assert "Blender5.2/blender-5.2.0-linux-x64.tar.xz" in install
+    assert "tar -xJf blender.tar.xz -C blender-dist --strip-components=1" in install
+    assert job.index("name: Cache Blender 5.2") < job.index("name: Install Blender 5.2")

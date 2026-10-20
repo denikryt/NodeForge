@@ -525,3 +525,8 @@ lifecycle.
 ## 0.72.6
 
 - Simplified package-state directory synchronization to handle post-publication fsync errors only in `save_package_state()`, while keeping descriptor cleanup unconditional.
+
+## 0.72.7
+
+- Separate Extension build and Blender integration tests into independently retryable jobs, with Blender 5.2 cached for both jobs.
+- Require integration tests to pass before publishing the saved release ZIP and deploying the saved Pages artifact.

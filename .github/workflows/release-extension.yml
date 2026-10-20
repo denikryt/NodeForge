@@ -78,8 +78,16 @@ jobs:
                   seen[manifest['id']] = archive.name
           assert set(seen) == set(expected), seen
           PY
+      - name: Cache Blender 5.2
+        id: blender-cache
+        uses: actions/cache@v4
+        with:
+          path: blender-dist
+          key: blender-${{ runner.os }}-${{ runner.arch }}-5.2.0-linux-x64-v1
       - name: Install Blender 5.2
+        if: steps.blender-cache.outputs.cache-hit != 'true'
         run: |
+          set -euo pipefail
           curl --fail --location --retry 3 https://download.blender.org/release/Blender5.2/blender-5.2.0-linux-x64.tar.xz -o blender.tar.xz
           mkdir -p blender-dist
           tar -xJf blender.tar.xz -C blender-dist --strip-components=1
@@ -103,6 +111,49 @@ jobs:
           PY
           "$BLENDER" -b --command extension server-generate --repo-dir public
           test -s public/index.json
+      # Preserve the exact built ZIP and index.json for downstream jobs.
+      - name: Preserve built release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodeforge-release-public
+          path: public/
+          if-no-files-found: error
+          retention-days: 30
+      # Create this once in build, not in deploy-pages: retrying a failed Pages
+      # deployment must reuse the same artifact, never re-upload it.
+      - name: Preserve built Pages artifact
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public/
+          retention-days: 30
+
+  test-extension:
+    name: Test built Extension in Blender 5.2
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+      - name: Retrieve built release files
+        uses: actions/download-artifact@v4
+        with:
+          name: nodeforge-release-public
+          path: public/
+      - name: Cache Blender 5.2
+        id: blender-cache
+        uses: actions/cache@v4
+        with:
+          path: blender-dist
+          key: blender-${{ runner.os }}-${{ runner.arch }}-5.2.0-linux-x64-v1
+      - name: Install Blender 5.2
+        if: steps.blender-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 https://download.blender.org/release/Blender5.2/blender-5.2.0-linux-x64.tar.xz -o blender.tar.xz
+          mkdir -p blender-dist
+          tar -xJf blender.tar.xz -C blender-dist --strip-components=1
       - name: Install and test built Extension in Blender 5.2
         run: |
           set -euo pipefail
@@ -115,26 +166,10 @@ jobs:
           test -n "$ARCHIVE"
           "$PWD/blender-dist/blender" -b --factory-startup --python-use-system-env --python-exit-code 1 \
             --python tests/blender/verify_extension_release.py -- "$ARCHIVE"
-      # Preserve the exact ZIP and index.json validated above for downstream jobs.
-      - name: Preserve verified release files
-        uses: actions/upload-artifact@v4
-        with:
-          name: nodeforge-release-public
-          path: public/
-          if-no-files-found: error
-          retention-days: 30
-      # Create this once in build, not in deploy-pages: retrying a failed Pages
-      # deployment must reuse the same artifact, never re-upload it.
-      - name: Preserve verified Pages artifact
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: public/
-          retention-days: 30
 
   publish-release:
     name: Publish immutable GitHub Release
-    needs: build
+    needs: [build, test-extension]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:

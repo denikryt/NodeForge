@@ -16,7 +16,9 @@ NodeForge automatically installs the included **NodeForge Math** and **NodeForge
 
 For users of the legacy ZIP add-on, disable the old NodeForge add-on before enabling the new Extension to avoid duplicate registrations. User Packages and Local files remain in their existing Blender user-data directories.
 
-For release maintainers: `.github/workflows/release-extension.yml` builds and tests one Extension ZIP, then publishes the immutable GitHub Release and deploys its repository index to GitHub Pages in separate jobs. If the Pages deployment fails after the release is published, **rerun only the failed `deploy-pages` job** in GitHub Actions; it reuses the verified Pages artifact from `build` without recreating the release. An existing release cannot be overwritten. Manual `workflow_dispatch` with an existing `vX.Y.Z` tag runs verification only, without publishing GitHub Releases or GitHub Pages.
+For release maintainers: `.github/workflows/release-extension.yml` runs `build`, `test-extension`, `publish-release` and `deploy-pages` in sequence. `build` saves the Extension ZIP and repository index; `test-extension` downloads and tests that ZIP. Both jobs cache Blender 5.2, downloading it when the cache is unavailable. Release publication requires successful integration tests. If testing fails, rerun `test-extension` with its dependent jobs to reuse the saved build. If Pages deployment fails after release publication, rerun only `deploy-pages` to reuse the saved Pages artifact. Artifacts are retained for 30 days, subject to repository retention limits. An existing release cannot be overwritten. Manual `workflow_dispatch` with an existing `vX.Y.Z` tag runs build and verification only.
+
+Set the public library ZIP URLs under **Settings → Secrets and variables → Actions → Variables** as `NODEFORGE_MATH_RELEASE_URL` and `NODEFORGE_LSYSTEM_RELEASE_URL`. Each URL must point to the exact approved ZIP matching the pinned SHA-256 checksum in the workflow. Configure GitHub Pages to use **GitHub Actions** as its build and deployment source.
 
 ## Quick start
 
