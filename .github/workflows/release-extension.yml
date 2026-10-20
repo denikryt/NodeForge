@@ -117,16 +117,19 @@ jobs:
           test -n "$ARCHIVE"
           "$PWD/blender-dist/blender" -b --factory-startup --python-use-system-env --python-exit-code 1 \
             --python tests/blender/verify_extension_release.py -- "$ARCHIVE"
+      # Manual dispatch is verification-only: a published release must never be replaced.
       - name: Publish GitHub release asset
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+          TAG_NAME: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG_NAME" public/*.zip --generate-notes --verify-tag || \
-            gh release upload "$TAG_NAME" public/*.zip --clobber
+          set -euo pipefail
+          gh release create "$TAG_NAME" public/*.zip --generate-notes --verify-tag
       - uses: actions/upload-pages-artifact@v3
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         with:
           path: public
       - id: deployment
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: actions/deploy-pages@v4

@@ -502,3 +502,8 @@ lifecycle.
 
 - Populate Packages, Functions and Examples browser lists after the extension's bundled-package bootstrap, including activation without an active scene context.
 - Require Blender 5.2 installation, compiled-library examples and package upgrade checks against the built Extension ZIP before publishing a release.
+
+## 0.72.2
+
+- Publish GitHub Release and GitHub Pages artifacts only on tag-triggered runs; never overwrite an existing release ZIP.
+- Make manual release workflow dispatch verification-only: rebuild and test the Extension without changing published artifacts.
