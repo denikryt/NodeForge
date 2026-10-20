@@ -512,3 +512,7 @@ lifecycle.
 
 - Separate Blender Extension release build, immutable GitHub Release publication and GitHub Pages deployment into recoverable GitHub Actions jobs.
 - Preserve the verified release and Pages artifacts during build so a failed Pages deployment can be retried independently without recreating or overwriting the GitHub Release.
+
+## 0.72.4
+
+- Set the GitHub CLI target repository explicitly in the standalone release-publishing job, allowing immutable release publication on a runner without a Git checkout.

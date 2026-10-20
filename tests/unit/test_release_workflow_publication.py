@@ -128,3 +128,36 @@ def test_release_failure_stops_without_attempting_upload(tmp_path):
     successful = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True)
     assert successful.returncode == 0
     assert len(log_path.read_text().splitlines()) == 2
+
+
+def test_release_targets_repository_without_checkout(tmp_path):
+    """GH_REPO identifies the publication target on a fresh runner without .git."""
+    job = _job("publish-release")
+    section = _step(job, "name: Publish GitHub release asset")
+    assert "actions/checkout" not in job
+    assert "GH_REPO: ${{ github.repository }}" in section
+    script = "\n".join(
+        line[10:] for line in section.split("        run: |\n", 1)[1].splitlines()
+        if line.strip()
+    )
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(
+        '#!/bin/sh\n'
+        'test "${GH_REPO-}" = "denikryt/NodeForge" || exit 42\n'
+        'test "$1" = "release" && test "$2" = "create"\n'
+    )
+    gh.chmod(0o755)
+    public = tmp_path / "public"
+    public.mkdir()
+    (public / "nodeforge-test.zip").write_bytes(b"archive")
+    env = dict(os.environ, PATH=f'{bin_dir}:{os.environ.get("PATH", "")}', TAG_NAME="v0.0.0")
+    env.pop("GH_REPO", None)
+    missing = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True)
+    assert missing.returncode == 42
+
+    env["GH_REPO"] = "denikryt/NodeForge"
+    configured = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True)
+    assert configured.returncode == 0
