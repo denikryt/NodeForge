@@ -173,6 +173,40 @@ def _write_v2_system(system_root: Path, public_name: str) -> None:
         encoding="utf-8",
     )
 
+@pytest.mark.parametrize("repository_url", [None, "https://github.com/denikryt/nodeforge.math"])
+def test_optional_repository_url_is_preserved_on_install_and_reload(package_inventory, tmp_path, repository_url):
+    """Repository metadata is optional and does not affect ordinary package activation."""
+    source = tmp_path / "vendor.metadata"
+    (source / "functions").mkdir(parents=True)
+    _write_manifest(source, package_id="vendor.metadata")
+    manifest_path = source / "nodeforge_package.json"
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if repository_url is not None:
+        raw["repository_url"] = repository_url
+        manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    assert packages.validate_package_root(source).repository_url == repository_url
+    packages.install_package_directory(source)
+    installed = next(m for m in packages.active_package_manifests() if m.package_id == "vendor.metadata")
+    assert installed.repository_url == repository_url
+    assert "repository_url" not in packages.load_package_state()["packages"]["vendor.metadata"]
+
+
+@pytest.mark.parametrize("repository_url", ["", "../repo", "file:///tmp/repo", "javascript:alert(1)", "https://", 123, ["https://github.com"]])
+def test_invalid_repository_url_is_rejected_before_install(package_inventory, tmp_path, repository_url):
+    """An invalid optional link cannot enter a validated package manifest."""
+    source = tmp_path / "vendor.invalid_url"
+    (source / "functions").mkdir(parents=True)
+    _write_manifest(source, package_id="vendor.invalid_url")
+    manifest_path = source / "nodeforge_package.json"
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    raw["repository_url"] = repository_url
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(packages.PackageError, match="repository_url"):
+        packages.install_package_directory(source)
+    assert packages.load_package_state()["packages"] == {}
+
+
 def test_explicitly_installed_packages_use_unified_inventory(package_inventory, tmp_path):
     source = tmp_path / "vendor.inventory"
     (source / "functions").mkdir(parents=True)

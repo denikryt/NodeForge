@@ -492,3 +492,8 @@ lifecycle.
 - Treat an exceeded package `nodeforge_max_version` as a visible warning, while keeping `nodeforge_min_version` strict.
 - Reject damaged top-level package inventories without overwriting state, and fix install publication/copy-failure cleanup.
 - Support captured Extension API imports under Blender's `bl_ext.*` add-on module namespace without global aliases.
+
+## 0.72.0
+
+- Accept optional `repository_url` metadata in package manifests; retain the URL without adding UI or automatic package downloads.
+- Keep the existing NodeForge Extension `website` link in `blender_manifest.toml`.

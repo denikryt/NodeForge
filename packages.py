@@ -21,6 +21,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
+from urllib.parse import urlsplit
 
 from .errors import CompileError
 
@@ -107,6 +108,23 @@ class PackageError(CompileError):
     """Raised when package metadata, state, or files are invalid."""
 
 
+def _optional_repository_url(raw: dict[str, Any]) -> str | None:
+    """Validate optional package repository metadata without accessing the URL."""
+    value = raw.get("repository_url")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value or any(ch.isspace() for ch in value):
+        raise PackageError("Package manifest repository_url must be an HTTP(S) URL")
+    try:
+        parsed = urlsplit(value)
+        valid = parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+    except ValueError:
+        valid = False
+    if not valid:
+        raise PackageError("Package manifest repository_url must be an HTTP(S) URL")
+    return value
+
+
 @dataclass(frozen=True)
 class PackageManifest:
     """Validated package manifest and owning package root."""
@@ -120,6 +138,7 @@ class PackageManifest:
     root: Path
     contents: dict[str, str]
     nodeforge_max_version: str | None = None
+    repository_url: str | None = None
     origin: str = "user"
 
     def root_for(self, namespace: str) -> Path | None:
@@ -337,6 +356,7 @@ def validate_package_root(root: Path, *, origin: str = "user") -> PackageManifes
         root=root,
         contents=contents,
         nodeforge_max_version=raw.get("nodeforge_max_version"),
+        repository_url=_optional_repository_url(raw),
         origin=origin,
     )
 

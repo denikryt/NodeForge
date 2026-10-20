@@ -87,6 +87,8 @@ NodeForge scripts can call reusable functions and can be extended through instal
 
 You can install or update any library separately through **NodeForge → Packages → Install ZIP**. A package installed at a newer version than the one included in a future NodeForge release is not overwritten by that older included version. Automatic independent GitHub update checks for individual packages are not currently implemented.
 
+Package manifests (`nodeforge_package.json`) may include an optional `repository_url` with an HTTP(S) project repository link. NodeForge retains this metadata without displaying it or using it to download updates.
+
 If a library declares `nodeforge_max_version` below the installed NodeForge version, Packages displays a compatibility warning but still permits installation and use. A library requiring a **higher minimum** NodeForge version is rejected. Actual incompatible package code may still fail at compile time or runtime.
 
 Installed package APIs are imported through the package namespace:
