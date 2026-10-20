@@ -241,7 +241,6 @@ Package-defined semantic values may persist in source-variable/body state throug
 
 - `tests/unit/test_module_boundaries.py`: production import-graph reachability, module-scope acyclicity, `semantic/` and `extensions/` isolation from Blender realization, one-way catalog/Local ownership, and relative-import integrity. The tests enforce dependency directions rather than an exhaustive internal module inventory.
 - `tests/unit/test_module_layout_contract.py`: a small filesystem contract for public/cross-phase anchors, the three internal owner packages, and retired mixed ownership namespaces. Internal implementation filenames are intentionally not snapshotted.
-- `tests/unit/test_architecture_layers_doc.py`: developer architecture reference names the same three internal owner packages and Local/catalog/import-graph boundaries enforced by executable architecture tests.
 
 ## Local directory namespaces and canonical source ownership
 

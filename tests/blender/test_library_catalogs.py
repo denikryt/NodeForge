@@ -136,7 +136,7 @@ def test_prepared_root_resolves_once_for_nested_local_dependency(monkeypatch):
     local = local_sources.ensure_local_catalog_dir()
     leaf = local / "direct_environment_leaf.nf"
     parent = local / "direct_environment_parent.nf"
-    real_resolve = compiler.resolve_environment
+    real_resolve = compiler._make_compilation_environment
     resolve_calls = []
 
     def counted_resolve():
@@ -152,7 +152,7 @@ def test_prepared_root_resolves_once_for_nested_local_dependency(monkeypatch):
             'y = direct_environment_leaf(x)\n'
             'output("y", y)\n',
         )
-        monkeypatch.setattr(compiler, "resolve_environment", counted_resolve)
+        monkeypatch.setattr(compiler, "_make_compilation_environment", counted_resolve)
         group = compiler.create_expression_group(
             "from local import direct_environment_parent\n"
             "value = direct_environment_parent(2.0)\n"
