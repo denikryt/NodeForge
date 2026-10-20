@@ -516,3 +516,8 @@ lifecycle.
 ## 0.72.4
 
 - Set the GitHub CLI target repository explicitly in the standalone release-publishing job, allowing immutable release publication on a runner without a Git checkout.
+
+## 0.72.5
+
+- Simplified Local registry reading to return validated source roots directly while continuing to ignore obsolete permission metadata.
+- Reject duplicate bundled Package IDs directly during prevalidation, preserving inventory and temporary directory cleanup without exception-message matching.

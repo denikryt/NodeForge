@@ -53,11 +53,11 @@ def _paths_overlap(first: Path | str, second: Path | str) -> bool:
         return False
 
 
-def _read_local_source_payload() -> dict[str, object]:
+def _read_local_source_registry() -> list[dict[str, str]]:
     """Read registered Local roots and ignore obsolete permission metadata."""
     path = _local_sources_registry_path()
     if not path.exists():
-        return {"version": _LOCAL_SOURCES_REGISTRY_VERSION, "roots": []}
+        return []
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError) as exc:
@@ -67,21 +67,16 @@ def _read_local_source_payload() -> dict[str, object]:
     roots = payload.get("roots", [])
     if not isinstance(roots, list):
         raise CompileError("Invalid Local source registry roots")
-    result: list[dict[str, object]] = []
+    result: list[dict[str, str]] = []
     for item in roots:
         if not isinstance(item, dict) or not isinstance(item.get("path"), str):
             raise CompileError("Invalid Local source registry entry")
         kind = str(item.get("kind") or "folder")
         if kind not in {"folder", "file"}:
             raise CompileError("Invalid Local source registry entry kind")
-        entry: dict[str, object] = {"path": item["path"], "label": str(item.get("label") or ""), "kind": kind}
+        entry = {"path": item["path"], "label": str(item.get("label") or ""), "kind": kind}
         result.append(entry)
-    return {"version": _LOCAL_SOURCES_REGISTRY_VERSION, "roots": result}
-
-
-def _read_local_source_registry() -> list[dict[str, str]]:
-    """Load registered Local roots."""
-    return _read_local_source_payload()["roots"]
+    return result
 
 
 def _write_local_source_registry(roots: list[dict[str, str]]) -> None:
@@ -232,7 +227,7 @@ def is_registered_local_python_source(path: Path | str) -> bool:
     managed = _canonical_path(_default_local_catalog_dir())
     if source.is_relative_to(managed):
         return True
-    for item in _read_local_source_payload()["roots"]:
+    for item in _read_local_source_registry():
         root = _canonical_path(item["path"])
         if item["kind"] == "file" and source == root:
             return True

@@ -1,6 +1,7 @@
 """Trusted Local runtime bridging into the existing immutable Extension API registry."""
 
 import dataclasses
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -196,3 +197,34 @@ def test_individually_linked_file_requires_registration(library, tmp_path):
     assert runtime_source_active('local', linked)
     local_sources.unlink_local_source_file(linked)
     assert not runtime_source_active('local', linked)
+
+
+def test_local_registry_ignores_legacy_python_permissions(library, tmp_path):
+    """Legacy consent fields never affect registered Local source membership."""
+    linked = _write(tmp_path)
+    registry = local_sources._local_sources_registry_path()
+    registry.write_text(json.dumps({
+        "version": 1,
+        "managed_allow_python": False,
+        "roots": [{"path": str(linked), "label": "Legacy", "kind": "file",
+                   "allow_python": False}],
+    }), encoding="utf-8")
+    assert local_sources._read_local_source_registry() == [
+        {"path": str(linked), "label": "Legacy", "kind": "file"},
+    ]
+    assert local_sources.is_registered_local_python_source(linked)
+    assert registry.read_text(encoding="utf-8").find("allow_python") != -1
+
+
+def test_local_registry_rejects_corrupt_records(library):
+    """Streamlined registry reads still fail closed on malformed roots."""
+    registry = local_sources._local_sources_registry_path()
+    for payload, message in (
+        ({"version": 999, "roots": []}, "Unsupported Local source registry format"),
+        ({"version": 1, "roots": "bad"}, "Invalid Local source registry roots"),
+        ({"version": 1, "roots": [{"path": "/tmp", "kind": "invalid"}]},
+         "Invalid Local source registry entry kind"),
+    ):
+        registry.write_text(json.dumps(payload), encoding="utf-8")
+        with pytest.raises(CompileError, match=message):
+            local_sources._read_local_source_registry()

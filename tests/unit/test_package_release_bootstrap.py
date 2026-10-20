@@ -118,6 +118,9 @@ def test_duplicate_ids_do_not_change_state(tmp_path):
     root = release(tmp_path, a, b)
     assert 'Duplicate included package ID' in packages.install_included_packages(root)[0]
     assert packages.load_package_state()['packages'] == {}
+    # A return inside try must still execute the staging cleanup in finally.
+    assert not list((packages.packages_dir() / '.staging').glob('*'))
+    assert not list(packages.installed_dir().glob('**/install_*'))
 
 
 def test_invalid_max_is_advisory_but_min_is_strict(tmp_path):

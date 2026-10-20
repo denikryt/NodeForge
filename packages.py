@@ -640,13 +640,11 @@ def install_included_packages(extension_root: Path) -> tuple[str, ...]:
             root = _extract_zip_to_staging(archive, staging)
             manifest = validate_package_root(root)
             if manifest.package_id in seen:
-                raise PackageError(f"Duplicate included package ID: {manifest.package_id}")
+                # Ambiguous release contents must not partially change inventory.
+                return (f"Duplicate included package ID: {manifest.package_id}",)
             seen.add(manifest.package_id)
             candidates.append((archive, manifest.package_id, manifest.version))
         except Exception as exc:
-            if "Duplicate included package ID" in str(exc):
-                # Ambiguous release contents must not partially change inventory.
-                return (str(exc),)
             errors.append(f"{archive.name}: {exc}")
         finally:
             shutil.rmtree(staging, ignore_errors=True)
