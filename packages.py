@@ -284,7 +284,7 @@ def save_package_state(state: dict[str, Any]) -> None:
 
 
 def _fsync_directory(path: Path) -> None:
-    """Best-effort directory fsync for crash-durable state replacement."""
+    """Attempt directory fsync; the state writer handles durability errors."""
     if not hasattr(os, "O_DIRECTORY"):
         return
     try:
@@ -292,10 +292,7 @@ def _fsync_directory(path: Path) -> None:
     except OSError:
         return
     try:
-        try:
-            os.fsync(fd)
-        except OSError:
-            pass
+        os.fsync(fd)
     finally:
         os.close(fd)
 

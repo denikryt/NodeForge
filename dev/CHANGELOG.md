@@ -521,3 +521,7 @@ lifecycle.
 
 - Simplified Local registry reading to return validated source roots directly while continuing to ignore obsolete permission metadata.
 - Reject duplicate bundled Package IDs directly during prevalidation, preserving inventory and temporary directory cleanup without exception-message matching.
+
+## 0.72.6
+
+- Simplified package-state directory synchronization to handle post-publication fsync errors only in `save_package_state()`, while keeping descriptor cleanup unconditional.

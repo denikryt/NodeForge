@@ -180,3 +180,40 @@ def test_legacy_fields_ignored_and_dropped_on_write(tmp_path):
     packages.save_package_state(packages.load_package_state())
     assert 'allow_python' not in packages.state_path().read_text()
     assert 'seed_sources' not in packages.state_path().read_text()
+
+
+@pytest.mark.skipif(not hasattr(packages.os, "O_DIRECTORY"), reason="No O_DIRECTORY support")
+@pytest.mark.parametrize("fails", [False, True])
+def test_directory_fsync_always_closes_descriptor_and_reports_sync_error(tmp_path, monkeypatch, fails):
+    """Directory sync reports actual fsync failures to the state writer and closes its fd."""
+    seen = []
+    fake_fd = 123456
+
+    def open_dir(path, flags):
+        """Represent successful directory opening without using a real descriptor."""
+        assert Path(path) == tmp_path
+        assert flags & packages.os.O_DIRECTORY
+        seen.append("open")
+        return fake_fd
+
+    def sync_dir(fd):
+        """Record the sync call and optionally inject a durability error."""
+        assert fd == fake_fd
+        seen.append("fsync")
+        if fails:
+            raise OSError("injected directory fsync failure")
+
+    def close_dir(fd):
+        """Record that the directory descriptor is released in both paths."""
+        assert fd == fake_fd
+        seen.append("close")
+
+    monkeypatch.setattr(packages.os, "open", open_dir)
+    monkeypatch.setattr(packages.os, "fsync", sync_dir)
+    monkeypatch.setattr(packages.os, "close", close_dir)
+    if fails:
+        with pytest.raises(OSError, match="injected directory fsync failure"):
+            packages._fsync_directory(tmp_path)
+    else:
+        packages._fsync_directory(tmp_path)
+    assert seen == ["open", "fsync", "close"]
