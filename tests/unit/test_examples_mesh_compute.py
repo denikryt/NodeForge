@@ -43,26 +43,18 @@ def root_code(namespace='examples.terrain'):
     return f'from {namespace} import erosion\ngeo = input_geometry("Geometry")\noutput(erosion(geo))\n'
 
 
-def test_ast_only_discovery_and_explicit_bundled_grant(example_root):
-    """Scan is inert; one granted runtime creates an exact v2 registry overlay."""
+def test_ast_only_discovery_executes_no_unselected_python(example_root):
+    """Selected Examples Python sources need no grant and are not executed during discovery."""
     marker = example_root / 'executed'
     source = write_python(example_root, marker=marker)
     ordinary = example_root / 'terrain' / 'other.py'
     ordinary.write_text(f'open({str(marker)!r}, "w").write("BAD")\n', encoding='utf8')
-    (example_root / 'terrain' / '__init__.py').write_text('', encoding='utf8')
     env = environment_resolution._make_compilation_environment()
     records = env.catalog('examples').records()
-    assert [(r.name, r.kind) for r in records] == [('erosion', 'runtime')]
-    assert not marker.exists()
-    with pytest.raises(CompileError, match='not authorized'):
-        _prepare(root_code(), env)
-    assert not marker.exists()
-    local_sources.set_examples_python_permission(example_root, allowed=True)
-    selected = environment_resolution._make_compilation_environment()
-    group = _prepare(root_code(), selected)
+    assert [(entry.name, entry.kind) for entry in records] == [('erosion', 'runtime')]
+    group = _prepare(root_code(), env)
     target = ExtensionCallableId(('examples-runtime', 'core', catalog._path_key(source)), 'erosion')
-    assert selected.extension_registry.contains(target)
-    assert group.extension_dependencies == ((target.owner, selected.extension_registry.owner_fingerprint(target.owner)),)
+    assert env.extension_registry.contains(target)
     assert not marker.exists()
 
 
@@ -79,39 +71,23 @@ def test_nested_examples_dsl_and_python_share_one_directory_snapshot(example_roo
     assert examples.select_import('examples.terrain', 'offset').source_path == script.resolve()
     _prepare('from examples import terrain\noutput(offset(1.0))\n', view)
 
-    local_sources.set_examples_python_permission(example_root, allowed=True)
     _prepare(root_code(), environment_resolution._make_compilation_environment())
 
 
-def test_permission_is_separate_default_denied_and_requires_exact_root(example_root, tmp_path):
-    """Persisted bundled opt-in does not inherit Local permissions or accept child roots."""
-    root = example_root
-    path = write_python(root)
-    assert not local_sources.examples_python_permission(path)
-    assert not local_sources.examples_python_root_permission(root)
-    with pytest.raises(CompileError, match='exact root|bundled Examples root'):
-        local_sources.set_examples_python_permission(root / 'terrain', allowed=True)
-    with pytest.raises(CompileError, match='exact root|bundled Examples root'):
-        local_sources.examples_python_root_permission(tmp_path)
-    with pytest.raises(CompileError, match='boolean'):
-        local_sources.set_examples_python_permission(root, allowed='yes')
-    local_sources.set_examples_python_permission(root, allowed=True)
-    assert local_sources.examples_python_permission(path)
-    payload = json.loads((tmp_path / 'trust.json').read_text())
-    assert payload['allow_examples_python'] is True
-    assert payload.get('managed_allow_python', False) is False
-    local_sources.set_examples_python_permission(root, allowed=False)
-    assert not local_sources.examples_python_permission(path)
-    payload['allow_examples_python'] = 'true'
-    (tmp_path / 'trust.json').write_text(json.dumps(payload))
-    with pytest.raises(CompileError, match='Invalid bundled Examples'):
-        local_sources.examples_python_root_permission(root)
+def test_examples_owner_requires_real_core_root(example_root, tmp_path):
+    """A runtime source outside the active Examples root is never authorized."""
+    from NodeForge.local_runtime import runtime_source_active
+    path = write_python(example_root)
+    foreign = write_python(tmp_path / 'outside')
+    assert runtime_source_active('examples', path)
+    assert not runtime_source_active('examples', foreign)
+    assert not runtime_source_active('examples', path, 'vendor.other')
 
 
 def test_directory_alias_is_not_executable_and_nonroot_import_fails(example_root):
     """Only explicit from examples.<dir> import foo at root is executable."""
     write_python(example_root)
-    local_sources.set_examples_python_permission(example_root, allowed=True)
+
     with pytest.raises(CompileError, match='explicit from examples'):
         _prepare('from examples import terrain as t\ngeo = input_geometry("Geometry")\n'
                  'output(t.erosion(geo))\n', environment_resolution._make_compilation_environment())
@@ -138,10 +114,10 @@ def test_python_symlinks_and_non_declarations_do_not_enter_catalog(example_root,
     assert names == {'erosion'}
 
 
-def test_grant_revocation_and_source_edit_use_fresh_root_snapshots(example_root):
-    """Permission is verified per attempt and code fingerprint changes on edit."""
+def test_source_edit_and_removal_use_fresh_root_snapshots(example_root):
+    """A source edit changes its fingerprint and deletion invalidates owner membership."""
+    from NodeForge.local_runtime import runtime_source_active
     file = write_python(example_root)
-    local_sources.set_examples_python_permission(example_root, allowed=True)
     first = environment_resolution._make_compilation_environment()
     _prepare(root_code(), first)
     owner = ('examples-runtime', 'core', catalog._path_key(file))
@@ -150,9 +126,8 @@ def test_grant_revocation_and_source_edit_use_fresh_root_snapshots(example_root)
     second = environment_resolution._make_compilation_environment()
     _prepare(root_code(), second)
     assert second.extension_registry.owner_fingerprint(owner) != fingerprint
-    local_sources.set_examples_python_permission(example_root, allowed=False)
-    with pytest.raises(CompileError, match='not authorized'):
-        _prepare(root_code(), environment_resolution._make_compilation_environment())
+    file.unlink()
+    assert not runtime_source_active('examples', file)
 
 
 def test_top_level_python_is_explicit_only_not_legacy_wildcard(example_root):
@@ -163,24 +138,22 @@ def test_top_level_python_is_explicit_only_not_legacy_wildcard(example_root):
     selected = view.catalog('examples')
     assert selected.names() == frozenset({'noise'})
     assert {record.kind for record in selected.records()} == {'runtime', 'script'}
-    local_sources.set_examples_python_permission(example_root, allowed=True)
+
     _prepare(root_code('examples'), environment_resolution._make_compilation_environment())
     with pytest.raises(CompileError, match='Unknown|not importable|not defined|Unsupported'):
         _prepare('from examples import *\ngeo = input_geometry("Geometry")\noutput(erosion(geo))\n',
                  environment_resolution._make_compilation_environment())
 
 
-def test_permission_is_rechecked_for_compiled_examples_owner(example_root):
-    """The same permission entry used on capture is consulted for live stages."""
-    from NodeForge.local_runtime import runtime_python_permission
+def test_examples_owner_rechecked_for_live_stages(example_root):
+    """Source availability is checked without any stored permission flags."""
+    from NodeForge.local_runtime import runtime_source_active
     source = write_python(example_root)
-    assert not runtime_python_permission('examples', source)
-    local_sources.set_examples_python_permission(example_root, allowed=True)
-    assert runtime_python_permission('examples', source)
-    assert not runtime_python_permission('local', source)
-    assert not runtime_python_permission('examples', source, 'vendor.other')
-    local_sources.set_examples_python_permission(example_root, allowed=False)
-    assert not runtime_python_permission('examples', source)
+    assert runtime_source_active('examples', source)
+    assert not runtime_source_active('local', source)
+    assert not runtime_source_active('examples', source, 'vendor.other')
+    source.unlink()
+    assert not runtime_source_active('examples', source)
 
 
 @pytest.fixture
@@ -200,22 +173,17 @@ def install_example_python(tmp_path, *, allow):
         'contents': {'examples': 'examples'}, 'permissions': {'python': True},
         'nodeforge_min_version': '0.68.0', 'nodeforge_max_version': None,
     }), encoding='utf8')
-    return packages.install_package_directory(root, allow_python=allow)
+    return packages.install_package_directory(root)
 
 
-def test_package_runtime_requires_real_installed_python_grant(tmp_path, isolated_package_root, example_root):
-    """Package runtime does not borrow consent from separately granted bundled Examples."""
-    local_sources.set_examples_python_permission(example_root, allowed=True)
-    with pytest.raises(CompileError, match='Python|permission|consent'):
-        install_example_python(tmp_path, allow=False)
-    installed = install_example_python(tmp_path, allow=True)
+def test_package_runtime_requires_active_install_owner(tmp_path, isolated_package_root, example_root):
+    """Package Examples remain callable while installed, not after package removal."""
+    from NodeForge.local_runtime import runtime_source_active
+    installed = install_example_python(tmp_path, allow=False)
     view = environment_resolution._make_compilation_environment()
     record = next(r for r in view.catalog('examples').records()
                   if r.name == 'erosion' and r.package_id == installed.package_id)
     assert local_runtime_owner_key(record)[1] == 'vendor.erosion'
-    _prepare(root_code(), view)
-    state = packages.load_package_state()
-    state['packages']['vendor.erosion']['allow_python'] = False
-    packages.save_package_state(state)
-    with pytest.raises(CompileError, match='Unknown|not authorized'):
-        _prepare(root_code(), environment_resolution._make_compilation_environment())
+    assert runtime_source_active('examples', record.source_path, installed.package_id)
+    packages.uninstall_package(installed.package_id)
+    assert not runtime_source_active('examples', record.source_path, installed.package_id)

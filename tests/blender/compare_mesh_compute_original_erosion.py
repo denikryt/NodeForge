@@ -154,7 +154,7 @@ def run(args):
     with tempfile.TemporaryDirectory(prefix='nodeforge-gn-erosion-parity-') as tmp:
         root = Path(tmp)
         packages.set_packages_dir_for_tests(root / 'packages')
-        installed = packages.install_package_zip(args.math_package, allow_python=True)
+        installed = packages.install_package_zip(args.math_package)
         assert installed.package_id == 'nodeforge.math'
         local = root / 'Local'
         local.mkdir()
@@ -164,7 +164,7 @@ def run(args):
         local_sources._default_local_catalog_dir = lambda: local
         local_sources._local_sources_registry_path = lambda: root / 'local_sources.json'
         try:
-            local_sources.set_local_python_permission(local, allowed=True)
+
             bpy.data.materials.new('Erosion Terrain')
             source_gn = edited_source(args.reference_nf.read_text(), args.side, args.steps, args.preset)
             source_numpy = edited_source((EXAMPLES / 'erosion_numpy.nf').read_text(), args.side, args.steps, args.preset)

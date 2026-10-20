@@ -193,7 +193,7 @@ def test_installed_library_object_input_and_output_keep_object_behavior():
             'source = input_object("Source")\noutput("Value", source)\n',
             encoding="utf-8",
         )
-        packages.install_package_directory(root, allow_python=False)
+        packages.install_package_directory(root)
         try:
             group = compile_group(
                 '''

@@ -1,0 +1,113 @@
+name: Build Blender Extension
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify NodeForge version
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import ast, os, pathlib, tomllib
+          manifest = tomllib.loads(pathlib.Path('blender_manifest.toml').read_text())
+          data = ast.parse(pathlib.Path('__init__.py').read_text())
+          version = next(node.value for node in data.body if isinstance(node, ast.Assign)
+                         and any(isinstance(t, ast.Name) and t.id == 'NODEFORGE_VERSION' for t in node.targets))
+          declared = '.'.join(map(str, ast.literal_eval(version)))
+          assert manifest['version'] == declared, 'bl_info / manifest mismatch'
+          assert os.environ['TAG_NAME'] == 'v' + declared, 'tag / manifest mismatch'
+          PY
+      - name: Download pinned library releases
+        env:
+          MATH_URL: ${{ vars.NODEFORGE_MATH_RELEASE_URL }}
+          LSYSTEM_URL: ${{ vars.NODEFORGE_LSYSTEM_RELEASE_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$MATH_URL" && test -n "$LSYSTEM_URL" || {
+            echo 'Publish the approved library ZIPs and set their version-specific release URLs first.' >&2
+            exit 1
+          }
+          mkdir -p staging/package_install
+          curl --fail --location --retry 3 "$MATH_URL" -o staging/package_install/nodeforge.math-v2.2_nf-v0.70.2.zip
+          curl --fail --location --retry 3 "$LSYSTEM_URL" -o staging/package_install/nodeforge.lsystem-v4.0_nf-v0.70.2.zip
+          (cd staging/package_install && sha256sum --check -) <<'SHA256'
+          c0985b6c5b5499b517d5f2cc175c031efd3b88c312d0729b601b039ee2adb80e  nodeforge.math-v2.2_nf-v0.70.2.zip
+          9dcde6ef68352c4ea91fe8f732f0e9fa8a9745f78a7d321c0e3aecfdf6c09e31  nodeforge.lsystem-v4.0_nf-v0.70.2.zip
+          SHA256
+      - name: Stage extension contents
+        run: |
+          set -euo pipefail
+          cp ./*.py blender_manifest.toml LICENCE README.md staging/
+          cp -R blender semantic extensions examples staging/
+          # Only these code directories are part of the extension (no tests or .git).
+          test -d staging/blender && test -d staging/extensions && test -d staging/semantic
+          find staging -name __pycache__ -type d -prune -exec rm -rf {} +
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, zipfile
+          expected = {'nodeforge.math': '2.2', 'nodeforge.lsystem': '4.0'}
+          seen = {}
+          for archive in sorted(Path('staging/package_install').glob('*.zip')):
+              with zipfile.ZipFile(archive) as z:
+                  manifest_names = [p for p in z.namelist() if p.endswith('/nodeforge_package.json') or p == 'nodeforge_package.json']
+                  assert len(manifest_names) == 1, archive
+                  manifest = json.loads(z.read(manifest_names[0]))
+                  assert (manifest['id'], manifest['version']) == (manifest['id'], expected[manifest['id']])
+                  assert manifest['id'] not in seen
+                  seen[manifest['id']] = archive.name
+          assert set(seen) == set(expected), seen
+          PY
+      - name: Install Blender 5.2
+        run: |
+          curl --fail --location --retry 3 https://download.blender.org/release/Blender5.2/blender-5.2.0-linux-x64.tar.xz -o blender.tar.xz
+          mkdir -p blender-dist
+          tar -xJf blender.tar.xz -C blender-dist --strip-components=1
+      - name: Validate and build
+        run: |
+          set -euo pipefail
+          BLENDER="$PWD/blender-dist/blender"
+          "$BLENDER" -b --command extension validate staging
+          mkdir -p public
+          "$BLENDER" -b --command extension build --source-dir staging --output-dir public
+          python3 - <<'PY'
+          import pathlib, zipfile
+          archives = list(pathlib.Path('public').glob('*.zip'))
+          assert len(archives) == 1, archives
+          with zipfile.ZipFile(archives[0]) as z:
+              files = set(z.namelist())
+              assert 'blender_manifest.toml' in files
+              assert 'package_install/nodeforge.math-v2.2_nf-v0.70.2.zip' in files
+              assert 'package_install/nodeforge.lsystem-v4.0_nf-v0.70.2.zip' in files
+              assert not any(n.startswith(('.git/', 'tests/', 'dev/')) for n in files)
+          PY
+          "$BLENDER" -b --command extension server-generate --repo-dir public
+          test -s public/index.json
+      - name: Publish GitHub release asset
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG_NAME" public/*.zip --generate-notes --verify-tag || \
+            gh release upload "$TAG_NAME" public/*.zip --clobber
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - id: deployment
+        uses: actions/deploy-pages@v4

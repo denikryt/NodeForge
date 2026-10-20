@@ -483,3 +483,12 @@ lifecycle.
 - Allow Local and Examples **Add Node Group** for `.nf` scripts without a pre-existing Geometry Nodes editor tree; ordinary scripts still require an editor.
 - Reuse a single unmodified, default passthrough Geometry Nodes modifier for Mesh Compute; preserve its original group on failure and reject nonempty or additional modifiers.
 - Show source filenames in Local and Examples lists; qualify duplicate Examples names by their directories.
+
+## 0.71.0
+
+- Distribute NodeForge as a self-hosted Blender Extension with a versioned repository index and packaged Math/L-System ZIPs.
+- Install or upgrade included libraries through the existing Packages inventory on activation, without downgrading independently updated versions.
+- Remove `Allow executable Python` grants from Packages, Local, Examples and Mesh Compute; retain source ownership checks.
+- Treat an exceeded package `nodeforge_max_version` as a visible warning, while keeping `nodeforge_min_version` strict.
+- Reject damaged top-level package inventories without overwriting state, and fix install publication/copy-failure cleanup.
+- Support captured Extension API imports under Blender's `bl_ext.*` add-on module namespace without global aliases.

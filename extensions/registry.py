@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import builtins
 import importlib
 import importlib.abc
 import importlib.util
@@ -203,6 +204,22 @@ def capture_owner_code_snapshot_from_sources(
     return OwnerCodeSnapshot(owner_key, modules, frozenset(), _snapshot_fingerprint(owner_key, names))
 
 
+def _snapshot_import(name, globals=None, locals=None, fromlist=(), level=0):
+    """Resolve historical NodeForge absolute imports within captured owner code only.
+
+    Extension snapshots execute under private synthetic module names. Blender's
+    extension namespace is not a top-level ``NodeForge`` package, so owner code
+    imports must resolve against this loader's actual NodeForge implementation.
+    This neither aliases sys.modules nor changes Python's global import path.
+    """
+    if level == 0 and (name == "NodeForge" or name.startswith("NodeForge.")):
+        addon = __package__.rsplit(".", 1)[0]
+        mapped = addon + name[len("NodeForge"):]
+        module = builtins.__import__(mapped, globals, locals, fromlist or ("__name__",), 0)
+        return module if fromlist else importlib.import_module(addon)
+    return builtins.__import__(name, globals, locals, fromlist, level)
+
+
 class _SnapshotLoader(importlib.abc.Loader):
     """Execute captured source bytes for one owner/session logical module."""
 
@@ -226,6 +243,9 @@ class _SnapshotLoader(importlib.abc.Loader):
             module.__package__ = module.__name__
         try:
             code = compile(captured.source, module.__file__, "exec")
+            environment = dict(vars(builtins))
+            environment["__import__"] = _snapshot_import
+            module.__dict__["__builtins__"] = environment
             exec(code, module.__dict__)
         except CompileError:
             raise

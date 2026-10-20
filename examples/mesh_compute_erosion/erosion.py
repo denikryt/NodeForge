@@ -7,7 +7,7 @@ The input is a square GN mesh grid in its original per-vertex index order.
 """
 
 import numpy as np
-from NodeForge import mesh_compute
+from NodeForge import mesh_compute  # Resolved within the owner snapshot by NodeForge
 
 
 @mesh_compute(reads=("height", "initial_height"), writes=("height", "water", "sediment"))

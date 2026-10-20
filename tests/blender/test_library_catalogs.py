@@ -574,7 +574,7 @@ def test_library_reload_allows_same_package_upgrade_and_rejects_package_takeover
         try:
             v1 = tmp / "v1"
             _make_reload_package(v1, package_id="vendor.reload", version="1.0.0", value=1.0)
-            packages.install_package_directory(v1, allow_python=False)
+            packages.install_package_directory(v1)
             group = compiler.create_library_catalog_group("functions", "reload_value")
             from NodeForge.compiler_identities import library_function_id
             from NodeForge.function_instances import (
@@ -594,7 +594,7 @@ def test_library_reload_allows_same_package_upgrade_and_rejects_package_takeover
 
             v2 = tmp / "v2"
             _make_reload_package(v2, package_id="vendor.reload", version="2.0.0", value=2.0)
-            packages.install_package_directory(v2, allow_python=False, replace=True)
+            packages.install_package_directory(v2, replace=True)
             compiler.update_library_catalog_group(group, "functions", "reload_value")
             check(group.as_pointer() == pointer, "same-package reload replaced the root datablock")
             check(group.get("nodeforge_package_id") == "vendor.reload", "same-package reload changed package identity")
@@ -604,7 +604,7 @@ def test_library_reload_allows_same_package_upgrade_and_rejects_package_takeover
             packages.uninstall_package("vendor.reload")
             other = tmp / "other"
             _make_reload_package(other, package_id="vendor.other", version="1.0.0", value=3.0)
-            packages.install_package_directory(other, allow_python=False)
+            packages.install_package_directory(other)
             before_source = group.get("nodeforge_library_source")
             try:
                 compiler.update_library_catalog_group(group, "functions", "reload_value")
@@ -653,7 +653,7 @@ def test_native_only_library_entry_is_not_reloadable():
                 }),
                 encoding="utf-8",
             )
-            packages.install_package_directory(source, allow_python=True)
+            packages.install_package_directory(source)
             group = bpy.data.node_groups.new("NFTest_native_only_reload", "GeometryNodeTree")
             group["nodeforge_library_namespace"] = "functions"
             group["nodeforge_library_name"] = "reload_native"

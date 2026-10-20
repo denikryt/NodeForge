@@ -104,7 +104,7 @@ def test_invalid_system_suppresses_deferred_broken_library_owner(tmp_path):
     _write_manifest(source, "vendor.atomic")
     _write_system(source)
     _write_library(source)
-    packages.install_package_directory(source, allow_python=True)
+    packages.install_package_directory(source)
 
     installed = _installed_root("vendor.atomic")
     (installed / "systems" / "demo" / "interface.py").write_text(
@@ -128,7 +128,7 @@ def test_library_snapshot_failure_suppresses_owner_qualified_package_namespace(t
     _write_manifest(source, "vendor.replay")
     _write_system(source)
     _write_library(source)
-    packages.install_package_directory(source, allow_python=True)
+    packages.install_package_directory(source)
 
     installed = _installed_root("vendor.replay")
     library_owner = installed / "functions" / "lib_value"

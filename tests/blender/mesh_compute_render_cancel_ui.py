@@ -106,7 +106,7 @@ def _start_render():
         root.mkdir()
         local_sources._default_local_catalog_dir = lambda: root
         local_sources._local_sources_registry_path = lambda: base / 'registry.json'
-        local_sources.set_local_python_permission(root, allowed=True)
+
         (root / 'shift.py').write_text(
             'from NodeForge import mesh_compute\n'
             '@mesh_compute(writes=("height",))\n'

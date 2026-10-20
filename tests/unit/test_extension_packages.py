@@ -88,7 +88,7 @@ def foo(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...
     )
     (owner / "operations.py").write_text("def build(context, value): return value\n", encoding="utf-8")
 
-    packages.install_package_directory(source, allow_python=True)
+    packages.install_package_directory(source)
 
     try:
         assert getattr(builtins, marker) == 1
@@ -123,12 +123,12 @@ def test_cross_package_function_and_v2_system_member_names_are_legal(tmp_path):
     first = tmp_path / "first"
     _manifest(first, "vendor.system", systems=True)
     _system(first, "taken")
-    packages.install_package_directory(first, allow_python=True)
+    packages.install_package_directory(first)
 
     second = tmp_path / "second"
     _manifest(second, "vendor.function", functions=True)
     (second / "functions").mkdir(parents=True, exist_ok=True)
     (second / "functions" / "taken.nf").write_text("output(1.0)\n", encoding="utf-8")
-    packages.install_package_directory(second, allow_python=True)
+    packages.install_package_directory(second)
 
     assert {"vendor.system", "vendor.function"} <= set(packages.load_package_state()["packages"])

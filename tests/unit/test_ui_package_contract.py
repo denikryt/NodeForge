@@ -20,20 +20,18 @@ def test_package_item_exposes_short_name_and_diagnostic_fields():
         "origin: StringProperty",
         "status: StringProperty",
         "path: StringProperty",
-        "python_required: BoolProperty",
-        "python_allowed: BoolProperty",
+        "compatibility_warning: StringProperty",
         "invalid_reason: StringProperty",
     ):
         assert field in source
 
 
-def test_package_refresh_populates_invalid_reason_and_python_flags():
+def test_package_refresh_populates_invalid_reason_and_advisory_warning():
     source = _ui_source()
-
-    assert "item.python_required = record.python_required" in source
-    assert "item.python_allowed = record.python_allowed" in source
-    assert "item.invalid_reason = record.message" in source
-    assert "item.status = \"python blocked\"" in source
+    assert 'item.invalid_reason = record.message' in source
+    assert 'item.compatibility_warning = packages.package_compatibility_warning(manifest)' in source
+    assert 'item.status = "installed"' in source
+    assert 'Allow executable Python' not in source
 
 
 

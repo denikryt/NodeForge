@@ -110,7 +110,7 @@ def run(side: int, repeats: int, warmups: int) -> dict:
         local_sources._default_local_catalog_dir = lambda: local
         local_sources._local_sources_registry_path = lambda: root / 'registry.json'
         try:
-            local_sources.set_local_python_permission(local, allowed=True)
+
             bpy.ops.mesh.primitive_grid_add(x_subdivisions=side - 1, y_subdivisions=side - 1)
             owner = bpy.context.object
             if len(owner.data.vertices) != side * side:

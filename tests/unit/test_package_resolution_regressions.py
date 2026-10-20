@@ -67,7 +67,7 @@ def test_broken_callable_inventory_keeps_manifest_import_reservation(tmp_path, r
         'def system_value(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...\n'
     )
     (owner / 'backend.py').write_text('def build(context, value):\n    return value\n')
-    installed = packages.install_package_directory(root, allow_python=True)
+    installed = packages.install_package_directory(root)
     # Invalid declarations leave the manifest structurally active.
     (installed.root / 'systems' / 'demo' / 'interface.py').write_text(
         'EXTENSION_API = 2\nEXTENSIONS = {}\n'
@@ -77,12 +77,12 @@ def test_broken_callable_inventory_keeps_manifest_import_reservation(tmp_path, r
     assert environment.package_by_id('vendor.old') is None
     candidate = write_package(tmp_path / 'new', 'vendor.old' if replacement else 'vendor.new')
     if replacement:
-        packages.install_package_directory(candidate, allow_python=False, replace=True)
+        packages.install_package_directory(candidate, replace=True)
         assert resolve_environment().package_by_import_name('shared').package_id == 'vendor.old'
     else:
         before = packages.load_package_state()
         with pytest.raises(packages.PackageError, match='already owned by vendor.old'):
-            packages.install_package_directory(candidate, allow_python=False)
+            packages.install_package_directory(candidate)
         assert packages.load_package_state() == before
         assert resolve_environment().package_by_id('vendor.new') is None
 
@@ -112,7 +112,7 @@ def compile_example(environment):
 def test_python_example_import_uses_captured_registry_and_is_not_package_export(tmp_path):
     root = write_package(tmp_path / 'source', 'vendor.examples', examples=True)
     write_example(root)
-    installed = packages.install_package_directory(root, allow_python=True)
+    installed = packages.install_package_directory(root)
     environment = resolve_environment()
     record = environment.catalog('examples').find('review_example')
     callable_id = ExtensionCallableId(library_owner_key(record), record.name)
@@ -129,7 +129,7 @@ def test_python_example_import_uses_captured_registry_and_is_not_package_export(
 def test_invalid_python_example_is_deferred_catalog_failure(tmp_path, corruption):
     root = write_package(tmp_path / 'source', 'vendor.examples', examples=True)
     write_example(root)
-    installed = packages.install_package_directory(root, allow_python=True)
+    installed = packages.install_package_directory(root)
     owner = installed.root / 'examples' / 'review_example'
     if corruption == 'syntax':
         (owner / 'interface.py').write_text('not valid python!\n')
@@ -221,7 +221,7 @@ def test_example_catalog_failure_does_not_publish_partial_sessions(tmp_path):
     root = write_package(tmp_path / 'source', 'vendor.examples', examples=True)
     write_example(root, 'a_good')
     write_example(root, 'z_bad')
-    installed = packages.install_package_directory(root, allow_python=True)
+    installed = packages.install_package_directory(root)
     path = installed.root / 'examples' / 'z_bad' / 'interface.py'
     path.write_text(path.read_text().replace('z_bad', 'wrong_name'))
     environment = resolve_environment()
@@ -236,7 +236,7 @@ def test_example_catalog_failure_does_not_publish_partial_sessions(tmp_path):
 def test_examples_are_not_exposed_as_package_members(tmp_path):
     root = write_package(tmp_path / 'source', 'vendor.examples', examples=True)
     write_example(root)
-    packages.install_package_directory(root, allow_python=True)
+    packages.install_package_directory(root)
     environment = resolve_environment()
     with pytest.raises(CompileError, match="has no callable member 'review_example'"):
         analyze_group_source(
@@ -294,7 +294,7 @@ def test_native_function_publishes_exact_callable_id(tmp_path):
     manifest = json.loads(path.read_text())
     manifest['contents'] = {'functions': 'functions'}
     path.write_text(json.dumps(manifest))
-    packages.install_package_directory(root, allow_python=True)
+    packages.install_package_directory(root)
     environment = resolve_environment()
     export = environment.package_by_id('vendor.native').find('native_value')
     callable_id = ExtensionCallableId(library_owner_key(export.record), 'native_value')

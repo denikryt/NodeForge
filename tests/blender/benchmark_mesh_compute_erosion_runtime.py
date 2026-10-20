@@ -39,7 +39,7 @@ def run(side,steps):
         local_sources._default_local_catalog_dir=lambda: root
         local_sources._local_sources_registry_path=lambda: Path(tmp)/'registry.json'
         try:
-            local_sources.set_local_python_permission(root,allowed=True)
+
             mesh=bpy.data.meshes.new('BenchmarkInput')
             mesh.from_pydata([(0,0,0),(1,0,0),(0,1,0)],[],[(0,1,2)])
             owner=bpy.data.objects.new('BenchmarkObject',mesh)

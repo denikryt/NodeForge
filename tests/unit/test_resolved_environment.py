@@ -176,7 +176,6 @@ def test_resolve_environment_reads_manifest_snapshot_once_and_builds_owner_names
         description="",
         root=Path("/package"),
         contents={},
-        permissions={},
     )
     calls = {"snapshot": 0}
 
@@ -217,8 +216,7 @@ def test_existing_environment_is_stable_and_later_resolution_observes_new_owner_
             description="",
             root=Path("/package"),
             contents={},
-            permissions={},
-        ),)
+            ),)
 
     from NodeForge import catalog, local_sources
 

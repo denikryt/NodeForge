@@ -115,29 +115,19 @@ def test_frame_handler_ignores_private_source_scene(configured_local, mesh_objec
     assert _evaluated_positions(mesh_object)[0] == (2., 3., 4.)
 
 
-def test_revoked_python_grant_invalidates_cached_stage_without_reexecution(configured_local, mesh_object):
-    """Permission revocation fails closed even if the numerical fingerprint hits."""
-    from NodeForge import local_sources
-
+def test_removed_python_source_invalidates_cached_stage_without_reexecution(configured_local, mesh_object):
+    """A removed owner invalidates runtime even when numerical inputs are unchanged."""
     create_mesh_compute_modifier(SOURCE, mesh_object)
     binding = runtime.get_modifier_binding(mesh_object)
     invoked = _kernel_counter(binding)
     bpy.context.view_layer.update()
     assert len(invoked) == 1 and binding.status == 'READY'
-    assert binding.prepared.source_origin is not None
-    local_sources.set_local_python_permission(configured_local, allowed=False)
+    (configured_local / 'shift.py').unlink()
     mesh_object.update_tag(refresh={'OBJECT'})
     bpy.context.view_layer.update()
     assert len(invoked) == 1
-    assert binding.status == 'MISSING_RUNTIME'
-    invalid = binding.prepared.result_proxy.data
-    assert len(invalid.vertices) == 0
-    local_sources.set_local_python_permission(configured_local, allowed=True)
-    mesh_object.update_tag(refresh={'OBJECT'})
-    bpy.context.view_layer.update()
-    assert binding.status == 'MISSING_RUNTIME'
-    assert binding.prepared.result_proxy.data is invalid
-    assert len(invoked) == 1  # re-grant requires a trusted rebind, not an old callback
+    assert binding.status == 'ERROR'
+    assert len(binding.prepared.result_proxy.data.vertices) == 0
 
 
 def test_uv_only_change_republishes_without_invoking_kernel(configured_local, mesh_object):

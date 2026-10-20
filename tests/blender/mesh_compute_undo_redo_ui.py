@@ -56,7 +56,7 @@ def _run_history_check() -> dict:
     local_root.mkdir()
     local_sources._default_local_catalog_dir = lambda: local_root
     local_sources._local_sources_registry_path = lambda: base / 'registry.json'
-    local_sources.set_local_python_permission(local_root, allowed=True)
+
     (local_root / 'shift.py').write_text(
         'from NodeForge import mesh_compute\n'
         '@mesh_compute(writes=("height",))\n'

@@ -219,7 +219,7 @@ def install_examples_package(tmp_path, package_id, entries, *, python=False):
         'contents': {'examples': 'examples'}, 'permissions': {'python': python},
         'nodeforge_min_version': '0.68.0', 'nodeforge_max_version': None,
     }), encoding='utf8')
-    return packages.install_package_directory(root, allow_python=python)
+    return packages.install_package_directory(root)
 
 
 def test_real_installed_package_nested_examples_imports_and_collisions(tmp_path, isolated_packages):

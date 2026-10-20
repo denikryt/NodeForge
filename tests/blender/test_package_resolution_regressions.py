@@ -37,7 +37,7 @@ def test_python_example_import_materializes_through_registry(tmp_path):
         'def review_example(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...\n'
     )
     (owner / 'backend.py').write_text('def build(context, value):\n    return value\n')
-    packages.install_package_directory(root, allow_python=True)
+    packages.install_package_directory(root)
     group = compile_group(
         'from examples import review_example\nx = input_float("X")\noutput("Value", review_example(x))\n',
         'NFTest_review_python_example',
@@ -54,7 +54,7 @@ def test_functions_reload_uses_one_environment_without_live_rediscovery(tmp_path
     _package(root, 'vendor.review', 'functions')
     source = root / 'functions' / 'foo.nf'
     source.write_text('x = input_float("X")\noutput("Value", x + 1)\n')
-    installed = packages.install_package_directory(root, allow_python=False)
+    installed = packages.install_package_directory(root)
     group = compiler.create_package_function_group('vendor.review', 'foo')
     (installed.root / 'functions' / 'foo.nf').write_text(
         'x = input_float("X")\noutput("Value", x + 2)\n'
@@ -89,7 +89,7 @@ def test_native_function_materializes_source_calls(tmp_path, style):
         'def native_value(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...\n'
     )
     (owner / 'backend.py').write_text('def build(context, value):\n    return value\n')
-    packages.install_package_directory(root, allow_python=True)
+    packages.install_package_directory(root)
     source = 'from packages import review\nx=input_float("X")\n'
     if style == 'local':
         source += 'def helper(x):\n    return review.native_value(x)\noutput(helper(x))\n'
@@ -107,13 +107,13 @@ def test_ui_reload_uses_one_snapshot_and_preserves_owner(tmp_path, monkeypatch, 
     root = tmp_path / 'ui-package'
     _package(root, 'vendor.review', namespace)
     (root / namespace / 'foo.nf').write_text('x=input_float("X")\noutput("Value", x+1)\n')
-    installed = packages.install_package_directory(root, allow_python=False)
+    installed = packages.install_package_directory(root)
     if namespace == 'functions':
         group = compiler.create_package_function_group('vendor.review', 'foo')
         other = tmp_path / 'other-package'
         _package(other, 'vendor.other', namespace)
         (other / namespace / 'foo.nf').write_text('output("Value", 99)\n')
-        packages.install_package_directory(other, allow_python=False)
+        packages.install_package_directory(other)
     else:
         group = compiler.create_library_catalog_group(namespace, 'foo')
     group.name = 'NFTest_custom_name'
@@ -266,7 +266,7 @@ def test_package_source_transitivity_and_native_owner_do_not_rescan_local(tmp_pa
         'EXTENSION_API=2\nEXTENSIONS={"native": ".backend:build"}\n'
         'def native(x: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...\n')
     (owner / 'backend.py').write_text('def build(context, x):\n    return x\n')
-    packages.install_package_directory(root, allow_python=True)
+    packages.install_package_directory(root)
     local = tmp_path / 'Local'
     local.mkdir()
     (local / 'noise.nf').write_text('x=input_float("X")\noutput("Value", x+1.0)\n')

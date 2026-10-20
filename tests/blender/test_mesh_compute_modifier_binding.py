@@ -21,7 +21,7 @@ def configured_local(tmp_path, monkeypatch):
     managed.mkdir()
     monkeypatch.setattr(local_sources, "_default_local_catalog_dir", lambda: managed)
     monkeypatch.setattr(local_sources, "_local_sources_registry_path", lambda: tmp_path / "registry.json")
-    local_sources.set_local_python_permission(managed, allowed=True)
+
     (managed / "shift.py").write_text(
         'from NodeForge import mesh_compute\n'
         '@mesh_compute(writes=("height",))\n'

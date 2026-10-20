@@ -8,10 +8,13 @@ NodeForge is a Blender add-on for describing Geometry Nodes logic in a Python-li
 
 ## Installation
 
-1. Download the latest `NodeForge-<version>-blender.zip` from the [**GitHub release**](https://github.com/denikryt/NodeForge/releases) section.
-2. In Blender, open **Edit → Preferences → Add-ons**.
-3. Open the Add-ons menu, choose **Install from Disk...**, and select the downloaded ZIP file.
-4. Enable **NodeForge** in the add-on list.
+1. In Blender 5.2 or newer, open **Edit → Preferences → Get Extensions**.
+2. Add the NodeForge remote extension repository under **Repositories → Add Remote Repository**, using the URL published for the release. The intended GitHub Pages URL is `https://denikryt.github.io/NodeForge/index.json` **once deployed**.
+3. Install and enable **NodeForge** from **Get Extensions**. Blender manages later add-on updates through the same repository.
+
+NodeForge automatically installs the included **NodeForge Math** and **NodeForge L-System** libraries into its existing user **Packages** directory when first enabled. On a later NodeForge update, it only replaces an included package if the shipped version is newer than the installed version; it never downgrades a separately updated package. No separate package installation or Python permission step is needed. Installation works offline once the extension ZIP is downloaded.
+
+For users of the legacy ZIP add-on, disable the old NodeForge add-on before enabling the new Extension to avoid duplicate registrations. User Packages and Local files remain in their existing Blender user-data directories.
 
 ## Quick start
 
@@ -80,10 +83,11 @@ NodeForge scripts can call reusable functions and can be extended through instal
 
 ## Additional libraries
 
-- **NodeForge Math** adds math operations, reusable functions, and examples. Download the package ZIP from the [NodeForge release section](https://github.com/denikryt/NodeForge/releases/latest), or browse its [source repository](https://github.com/denikryt/nodeforge.math).
-- **NodeForge L-System** adds tools for procedural L-system generation. [Download](https://www.patreon.com/nachitima/posts/nodeforge-l-v2-0-169730745)
+**NodeForge Math** and **NodeForge L-System** are installed automatically from the selected versions included in the NodeForge Extension release. These remain ordinary, independently versioned NodeForge Packages, not Blender Extensions.
 
-Install a library ZIP from the **Packages** section of the NodeForge tab in the Geometry Nodes Editor. Enable **Allow executable Python** when the package requires Python support.
+You can install or update any library separately through **NodeForge → Packages → Install ZIP**. A package installed at a newer version than the one included in a future NodeForge release is not overwritten by that older included version. Automatic independent GitHub update checks for individual packages are not currently implemented.
+
+If a library declares `nodeforge_max_version` below the installed NodeForge version, Packages displays a compatibility warning but still permits installation and use. A library requiring a **higher minimum** NodeForge version is rejected. Actual incompatible package code may still fail at compile time or runtime.
 
 Installed package APIs are imported through the package namespace:
 
