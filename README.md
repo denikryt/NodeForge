@@ -8,17 +8,15 @@ NodeForge is a Blender add-on for describing Geometry Nodes logic in a Python-li
 
 ## Installation
 
-1. In Blender 5.2 or newer, open **Edit → Preferences → Get Extensions**.
-2. Add the NodeForge remote extension repository under **Repositories → Add Remote Repository**, using the URL published for the release. The intended GitHub Pages URL is `https://denikryt.github.io/NodeForge/index.json` **once deployed**.
-3. Install and enable **NodeForge** from **Get Extensions**. Blender manages later add-on updates through the same repository.
+NodeForge currently targets Blender 5.2.
 
-NodeForge automatically installs the included **NodeForge Math** and **NodeForge L-System** libraries into its existing user **Packages** directory when first enabled. On a later NodeForge update, it only replaces an included package if the shipped version is newer than the installed version; it never downgrades a separately updated package. No separate package installation or Python permission step is needed. Installation works offline once the extension ZIP is downloaded.
+1. Download the latest NodeForge Extension ZIP from [GitHub Releases](https://github.com/denikryt/NodeForge/releases/latest).
+2. In Blender, open **Edit → Preferences → Get Extensions** and choose **Install from Disk...**.
+3. Select the ZIP and enable **NodeForge**.
 
-For users of the legacy ZIP add-on, disable the old NodeForge add-on before enabling the new Extension to avoid duplicate registrations. User Packages and Local files remain in their existing Blender user-data directories.
+Once the [NodeForge extension repository](https://denikryt.github.io/NodeForge/index.json) is available, you can add it under **Repositories → Add Remote Repository** in **Get Extensions** to install NodeForge and receive updates through Blender.
 
-For release maintainers: `.github/workflows/release-extension.yml` runs `build`, `test-extension`, `publish-release` and `deploy-pages` in sequence. `build` saves the Extension ZIP and repository index; `test-extension` downloads and tests that ZIP. Both jobs cache Blender 5.2, downloading it when the cache is unavailable. Release publication requires successful integration tests. If testing fails, rerun `test-extension` with its dependent jobs to reuse the saved build. If Pages deployment fails after release publication, rerun only `deploy-pages` to reuse the saved Pages artifact. Artifacts are retained for 30 days, subject to repository retention limits. An existing release cannot be overwritten. Manual `workflow_dispatch` with an existing `vX.Y.Z` tag runs build and verification only.
-
-Set the public library ZIP URLs under **Settings → Secrets and variables → Actions → Variables** as `NODEFORGE_MATH_RELEASE_URL` and `NODEFORGE_LSYSTEM_RELEASE_URL`. Each URL must point to the exact approved ZIP matching the pinned SHA-256 checksum in the workflow. Configure GitHub Pages to use **GitHub Actions** as its build and deployment source.
+If you used the earlier ZIP add-on, disable it before enabling the Extension. Your Packages and Local files remain in Blender's user-data directories.
 
 ## Quick start
 
@@ -87,13 +85,9 @@ NodeForge scripts can call reusable functions and can be extended through instal
 
 ## Additional libraries
 
-**NodeForge Math** and **NodeForge L-System** are installed automatically from the selected versions included in the NodeForge Extension release. These remain ordinary, independently versioned NodeForge Packages, not Blender Extensions.
+The Extension includes **NodeForge Math** for math operations and **NodeForge L-System** for procedural L-system generation. Both libraries are installed automatically when you enable NodeForge.
 
-You can install or update any library separately through **NodeForge → Packages → Install ZIP**. A package installed at a newer version than the one included in a future NodeForge release is not overwritten by that older included version. Automatic independent GitHub update checks for individual packages are not currently implemented.
-
-Package manifests (`nodeforge_package.json`) may include an optional `repository_url` with an HTTP(S) project repository link. NodeForge retains this metadata without displaying it or using it to download updates.
-
-If a library declares `nodeforge_max_version` below the installed NodeForge version, Packages displays a compatibility warning but still permits installation and use. A library requiring a **higher minimum** NodeForge version is rejected. Actual incompatible package code may still fail at compile time or runtime.
+Install or update other libraries from **NodeForge → Packages → Install ZIP**.
 
 Installed package APIs are imported through the package namespace:
 
