@@ -11,9 +11,7 @@ on:
         type: string
 
 permissions:
-  contents: write
-  pages: write
-  id-token: write
+  contents: read
 
 concurrency:
   group: pages
@@ -117,19 +115,57 @@ jobs:
           test -n "$ARCHIVE"
           "$PWD/blender-dist/blender" -b --factory-startup --python-use-system-env --python-exit-code 1 \
             --python tests/blender/verify_extension_release.py -- "$ARCHIVE"
-      # Manual dispatch is verification-only: a published release must never be replaced.
-      - name: Publish GitHub release asset
+      # Preserve the exact ZIP and index.json validated above for downstream jobs.
+      - name: Preserve verified release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodeforge-release-public
+          path: public/
+          if-no-files-found: error
+          retention-days: 30
+      # Create this once in build, not in deploy-pages: retrying a failed Pages
+      # deployment must reuse the same artifact, never re-upload it.
+      - name: Preserve verified Pages artifact
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public/
+          retention-days: 30
+
+  publish-release:
+    name: Publish immutable GitHub Release
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Retrieve verified release files
+        uses: actions/download-artifact@v4
+        with:
+          name: nodeforge-release-public
+          path: public/
+      - name: Publish GitHub release asset
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           gh release create "$TAG_NAME" public/*.zip --generate-notes --verify-tag
-      - uses: actions/upload-pages-artifact@v3
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-        with:
-          path: public
+
+  deploy-pages:
+    name: Deploy Blender Extensions repository
+    needs: [build, publish-release]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # deploy-pages consumes the already uploaded Pages artifact from build.
+      # Rerun only this failed job after a Pages outage; never rerun release creation.
       - id: deployment
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: actions/deploy-pages@v4

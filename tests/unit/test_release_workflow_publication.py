@@ -1,4 +1,4 @@
-"""Release workflow invariants: published extension artifacts are immutable."""
+"""Release workflow invariants: immutable artifacts and independently retryable Pages."""
 
 from __future__ import annotations
 
@@ -15,67 +15,116 @@ WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/release-exte
 TAG_PUSH_ONLY = "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
 
 
-def _step(name_or_action: str) -> str:
-    """Extract one workflow step without depending on a YAML parser in test runners."""
-    content = WORKFLOW.read_text(encoding="utf-8")
-    marker = f"      - {name_or_action}"
-    assert content.count(marker) == 1
-    start = content.index(marker)
-    following = re.search(r"(?m)^      - (?:name:|uses:|id:)", content[start + len(marker):])
-    end = start + len(marker) + following.start() if following else len(content)
+def _job(name: str) -> str:
+    """Extract one job by its top-level YAML indentation, with no YAML dependency."""
+    content = WORKFLOW.read_text(encoding="utf-8").split("\njobs:\n", 1)[1]
+    start_marker = f"  {name}:\n"
+    assert content.count(start_marker) == 1
+    start = content.index(start_marker)
+    next_job = re.search(r"(?m)^  [a-z][\w-]*:\s*$", content[start + len(start_marker):])
+    end = start + len(start_marker) + next_job.start() if next_job else len(content)
     return content[start:end]
 
 
-def test_manual_dispatch_runs_release_verification_but_not_publication():
-    """Manual retries execute built-ZIP checks without changing releases or Pages."""
+def _step(job: str, name_or_action: str) -> str:
+    """Extract a single workflow step within the specified job."""
+    marker = f"      - {name_or_action}"
+    assert job.count(marker) == 1
+    start = job.index(marker)
+    following = re.search(r"(?m)^      - (?:name:|uses:|id:)", job[start + len(marker):])
+    end = start + len(marker) + following.start() if following else len(job)
+    return job[start:end]
+
+
+def test_manual_dispatch_runs_verification_without_publication():
+    """Manual runs verify the built ZIP but skip both publishing jobs."""
     content = WORKFLOW.read_text(encoding="utf-8")
-    assert 'workflow_dispatch:' in content
-    assert 'inputs.release_tag' in content
-    assert _step('name: Install and test built Extension in Blender 5.2')
-    for name in (
-        'name: Publish GitHub release asset',
-        'uses: actions/upload-pages-artifact@v3',
-        'id: deployment',
-    ):
-        assert f'if: {TAG_PUSH_ONLY}' in _step(name)
+    assert "workflow_dispatch:" in content
+    assert "inputs.release_tag" in content
+    assert _step(_job("build"), "name: Install and test built Extension in Blender 5.2")
+    for name in ("publish-release", "deploy-pages"):
+        assert f"if: {TAG_PUSH_ONLY}" in _job(name)
+    assert "gh release create" not in _job("build")
+    assert "actions/deploy-pages" not in _job("build")
+
+
+def test_publishing_jobs_depend_on_one_verified_build():
+    """The release and Pages deployment reuse the validated build, not rebuilt ZIPs."""
+    build = _job("build")
+    release = _job("publish-release")
+    pages = _job("deploy-pages")
+
+    assert "needs: build" in release
+    assert "needs: [build, publish-release]" in pages
+    assert "contents: write" in release
+    assert "pages: write" in pages and "id-token: write" in pages
+    assert "name: github-pages" in pages
+
+    upload = _step(build, "name: Preserve verified release files")
+    download = _step(release, "name: Retrieve verified release files")
+    assert "uses: actions/upload-artifact@v4" in upload
+    assert "uses: actions/download-artifact@v4" in download
+    for step in (upload, download):
+        assert "name: nodeforge-release-public" in step
+        assert "path: public/" in step
+    assert build.index("name: Install and test built Extension in Blender 5.2") < build.index("name: Preserve verified release files")
+    assert "gh release create" in _step(release, "name: Publish GitHub release asset")
+    assert "blender-dist" not in release
+    assert "blender-dist" not in pages
+
+
+def test_pages_retry_reuses_existing_pages_artifact():
+    """Deploy retries never re-upload an artifact or retry immutable release creation."""
+    build = _job("build")
+    pages = _job("deploy-pages")
+    prepared = _step(build, "name: Preserve verified Pages artifact")
+    assert f"if: {TAG_PUSH_ONLY}" in prepared
+    assert "uses: actions/upload-pages-artifact@v3" in prepared
+    assert "path: public/" in prepared
+    assert "retention-days: 30" in prepared
+    assert "id: deployment" in pages and "uses: actions/deploy-pages@v4" in pages
+    assert "upload-pages-artifact" not in pages
+    assert "upload-artifact" not in pages
+    assert "gh release" not in pages
+    assert "server-generate" not in pages
 
 
 def test_release_cannot_overwrite_existing_asset():
     """Release publishing uses create-only semantics with no clobber fallback."""
-    step = _step('name: Publish GitHub release asset')
-    script = step.split('        run: |\n', 1)[1]
-    assert 'set -euo pipefail' in script
+    step = _step(_job("publish-release"), "name: Publish GitHub release asset")
+    script = step.split("        run: |\n", 1)[1]
+    assert "set -euo pipefail" in script
     assert 'gh release create "$TAG_NAME" public/*.zip --generate-notes --verify-tag' in script
-    assert 'gh release upload' not in script
-    assert '--clobber' not in script
-    assert '||' not in script
+    assert "gh release upload" not in script
+    assert "--clobber" not in script
+    assert "||" not in script
 
 
 def test_release_failure_stops_without_attempting_upload(tmp_path):
     """An existing release rejection leaves existing assets untouched."""
-    section = _step('name: Publish GitHub release asset')
-    raw_script = section.split('        run: |\n', 1)[1]
-    script = '\n'.join(line[10:] for line in raw_script.splitlines() if line.strip())
+    section = _step(_job("publish-release"), "name: Publish GitHub release asset")
+    raw_script = section.split("        run: |\n", 1)[1]
+    script = "\n".join(line[10:] for line in raw_script.splitlines() if line.strip())
 
-    bin_dir = tmp_path / 'bin'
+    bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    gh = bin_dir / 'gh'
+    gh = bin_dir / "gh"
     gh.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$GH_CALL_LOG"\nexit "$MOCK_GH_EXIT"\n')
     gh.chmod(0o755)
-    public_dir = tmp_path / 'public'
+    public_dir = tmp_path / "public"
     public_dir.mkdir()
-    (public_dir / 'nodeforge-test.zip').write_bytes(b'archive')
+    (public_dir / "nodeforge-test.zip").write_bytes(b"archive")
 
-    log_path = tmp_path / 'calls.txt'
+    log_path = tmp_path / "calls.txt"
     env = dict(os.environ, PATH=f'{bin_dir}:{os.environ.get("PATH", "")}',
-               GH_CALL_LOG=str(log_path), TAG_NAME='v0.0.0', MOCK_GH_EXIT='23')
-    failed = subprocess.run(['bash', '-c', script], cwd=tmp_path, env=env, capture_output=True)
+               GH_CALL_LOG=str(log_path), TAG_NAME="v0.0.0", MOCK_GH_EXIT="23")
+    failed = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True)
     assert failed.returncode == 23
     assert log_path.read_text().splitlines() == [
-        'release create v0.0.0 public/nodeforge-test.zip --generate-notes --verify-tag'
+        "release create v0.0.0 public/nodeforge-test.zip --generate-notes --verify-tag"
     ]
 
-    env['MOCK_GH_EXIT'] = '0'
-    successful = subprocess.run(['bash', '-c', script], cwd=tmp_path, env=env, capture_output=True)
+    env["MOCK_GH_EXIT"] = "0"
+    successful = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True)
     assert successful.returncode == 0
     assert len(log_path.read_text().splitlines()) == 2

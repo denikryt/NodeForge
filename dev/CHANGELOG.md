@@ -507,3 +507,8 @@ lifecycle.
 
 - Publish GitHub Release and GitHub Pages artifacts only on tag-triggered runs; never overwrite an existing release ZIP.
 - Make manual release workflow dispatch verification-only: rebuild and test the Extension without changing published artifacts.
+
+## 0.72.3
+
+- Separate Blender Extension release build, immutable GitHub Release publication and GitHub Pages deployment into recoverable GitHub Actions jobs.
+- Preserve the verified release and Pages artifacts during build so a failed Pages deployment can be retried independently without recreating or overwriting the GitHub Release.

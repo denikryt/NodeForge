@@ -16,7 +16,7 @@ NodeForge automatically installs the included **NodeForge Math** and **NodeForge
 
 For users of the legacy ZIP add-on, disable the old NodeForge add-on before enabling the new Extension to avoid duplicate registrations. User Packages and Local files remain in their existing Blender user-data directories.
 
-For release maintainers: `.github/workflows/release-extension.yml` publishes a version only on its first tag-triggered run; publication fails if the GitHub Release already exists. A manual `workflow_dispatch` with an existing `vX.Y.Z` tag rebuilds and tests the Extension in Blender 5.2 without updating GitHub Releases or GitHub Pages.
+For release maintainers: `.github/workflows/release-extension.yml` builds and tests one Extension ZIP, then publishes the immutable GitHub Release and deploys its repository index to GitHub Pages in separate jobs. If the Pages deployment fails after the release is published, **rerun only the failed `deploy-pages` job** in GitHub Actions; it reuses the verified Pages artifact from `build` without recreating the release. An existing release cannot be overwritten. Manual `workflow_dispatch` with an existing `vX.Y.Z` tag runs verification only, without publishing GitHub Releases or GitHub Pages.
 
 ## Quick start
 
