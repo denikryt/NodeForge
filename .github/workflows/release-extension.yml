@@ -65,9 +65,9 @@ jobs:
         run: |
           set -euo pipefail
           cp ./*.py blender_manifest.toml LICENCE README.md staging/
-          cp -R blender semantic extensions examples staging/
+          cp -R blender semantic extensions examples editor staging/
           # Only these code directories are part of the extension (no tests or .git).
-          test -d staging/blender && test -d staging/extensions && test -d staging/semantic
+          test -d staging/blender && test -d staging/extensions && test -d staging/semantic && test -d staging/editor
           find staging -name __pycache__ -type d -prune -exec rm -rf {} +
           python3 - <<'PY'
           from pathlib import Path
