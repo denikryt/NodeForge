@@ -536,3 +536,4 @@ lifecycle.
 - Added cursor-positioned signature and keyword-argument hints, keyboard selection, and explicit catalog refresh; reuses compiler-selected catalog identities without building nodes.
 - Added focused pure-Python and Blender 5.2 UI/insertion regression checks.
 - Refined Text Editor popup: one vertical row per parameter, bounded layout, active argument, and typed results including multiple outputs; source output types reuse semantic callable preparation on demand.
+- Include Text Editor modules in the Extension release ZIP and adapt package-backed completion tests to the current package installer.

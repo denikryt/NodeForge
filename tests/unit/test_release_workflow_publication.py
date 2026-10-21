@@ -74,6 +74,13 @@ def test_library_release_assets_are_downloaded_from_latest_releases():
     assert "len(staged_archives) == len(BUNDLED_PACKAGES)" in build
 
 
+def test_extension_staging_includes_text_editor_modules():
+    """The release ZIP includes the editor code registered by the add-on UI."""
+    stage = _step(_job("build"), "name: Stage extension contents")
+    assert "cp -R blender semantic extensions examples editor staging/" in stage
+    assert "test -d staging/editor" in stage
+
+
 def test_publishing_jobs_depend_on_one_verified_build():
     """The release and Pages deployment reuse the validated build, not rebuilt ZIPs."""
     build = _job("build")

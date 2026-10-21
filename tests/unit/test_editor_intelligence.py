@@ -87,7 +87,7 @@ def test_package_source_and_extensions(editor_index):
     archive = os.environ.get('NODEFORGE_MATH_TEST_ZIP')
     if archive is None:
         pytest.skip('math archive not supplied')
-    packages.install_package_zip(Path(archive), allow_python=True)
+    packages.install_package_zip(Path(archive))
     index = SymbolIndex(resolve_environment())
     names = index.symbols('from packages import math')['math']
     assert 'layout_grid' in names
@@ -187,7 +187,7 @@ def test_selected_math_source_return_type(editor_index):
     if not archive:
         pytest.skip('math archive not supplied')
     index, _ = editor_index
-    packages.install_package_zip(Path(archive), allow_python=True)
+    packages.install_package_zip(Path(archive))
     index = SymbolIndex(resolve_environment())
     hint = help_at_caret('from packages import math\nx = math.circle_points(|', index)
     assert [(item.name, item.typ) for item in hint.signatures[0].outputs] == [
