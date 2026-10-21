@@ -16,6 +16,8 @@ NodeForge currently targets Blender 5.2.
 
 Once the [NodeForge extension repository](https://denikryt.github.io/NodeForge/index.json) is available, you can add it under **Repositories → Add Remote Repository** in **Get Extensions** to install NodeForge and receive updates through Blender.
 
+The release ZIP includes the latest published NodeForge Math and L-System packages available when that ZIP is built. You can update either package separately through **NodeForge → Packages → Install ZIP**.
+
 If you used the earlier ZIP add-on, disable it before enabling the Extension. Your Packages and Local files remain in Blender's user-data directories.
 
 ## Quick start
@@ -86,6 +88,8 @@ NodeForge scripts can call reusable functions and can be extended through instal
 ## Additional libraries
 
 The Extension includes **NodeForge Math** for math operations and **NodeForge L-System** for procedural L-system generation. Both libraries are installed automatically when you enable NodeForge.
+
+The bundled-library registry is [`bundled_packages.py`](bundled_packages.py). It maps each package ID to its GitHub repository. To include another library in future Extension ZIPs, add an entry and publish a Release ZIP named `<package-id>-v<package-version>_nf-v<minimum-NodeForge-version>.zip` in that repository. The package manifest supplies the version and minimum compatible NodeForge version.
 
 Install or update other libraries from **NodeForge → Packages → Install ZIP**.
 

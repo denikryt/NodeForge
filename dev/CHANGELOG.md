@@ -530,3 +530,5 @@ lifecycle.
 
 - Separate Extension build and Blender integration tests into independently retryable jobs, with Blender 5.2 cached for both jobs.
 - Require integration tests to pass before publishing the saved release ZIP and deploying the saved Pages artifact.
+- Bundle the latest published Math and L-System package ZIPs at release build time, using each package's minimum NodeForge version for compatibility checks.
+- Centralize bundled-library IDs and Release repositories in one registry shared by the Extension workflow and tests.

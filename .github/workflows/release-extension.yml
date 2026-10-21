@@ -44,23 +44,23 @@ jobs:
           if tag_name.startswith('v'):
               assert tag_name == 'v' + declared, 'tag / manifest mismatch'
           PY
-      - name: Download pinned library releases
+      - name: Download latest library releases
         env:
-          MATH_URL: ${{ vars.NODEFORGE_MATH_RELEASE_URL }}
-          LSYSTEM_URL: ${{ vars.NODEFORGE_LSYSTEM_RELEASE_URL }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test -n "$MATH_URL" && test -n "$LSYSTEM_URL" || {
-            echo 'Publish the approved library ZIPs and set their version-specific release URLs first.' >&2
-            exit 1
-          }
           mkdir -p staging/package_install
-          curl --fail --location --retry 3 "$MATH_URL" -o staging/package_install/nodeforge.math-v2.2_nf-v0.70.2.zip
-          curl --fail --location --retry 3 "$LSYSTEM_URL" -o staging/package_install/nodeforge.lsystem-v4.0_nf-v0.70.2.zip
-          (cd staging/package_install && sha256sum --check -) <<'SHA256'
-          c0985b6c5b5499b517d5f2cc175c031efd3b88c312d0729b601b039ee2adb80e  nodeforge.math-v2.2_nf-v0.70.2.zip
-          9dcde6ef68352c4ea91fe8f732f0e9fa8a9745f78a7d321c0e3aecfdf6c09e31  nodeforge.lsystem-v4.0_nf-v0.70.2.zip
-          SHA256
+          python3 - <<'PY'
+          import subprocess
+          from bundled_packages import BUNDLED_PACKAGES
+
+          for package_id, repository in BUNDLED_PACKAGES.items():
+              subprocess.run([
+                  'gh', 'release', 'download', '--repo', repository,
+                  '--pattern', f'{package_id}-v*_nf-v*.zip',
+                  '--dir', 'staging/package_install',
+              ], check=True)
+          PY
       - name: Stage extension contents
         run: |
           set -euo pipefail
@@ -71,17 +71,25 @@ jobs:
           find staging -name __pycache__ -type d -prune -exec rm -rf {} +
           python3 - <<'PY'
           from pathlib import Path
-          import json, zipfile
-          expected = {'nodeforge.math': '2.2', 'nodeforge.lsystem': '4.0'}
+          import json, tomllib, zipfile
+          from bundled_packages import BUNDLED_PACKAGES
+          expected = set(BUNDLED_PACKAGES)
+          nodeforge_version = tuple(int(part) for part in tomllib.loads(
+              Path('blender_manifest.toml').read_text())['version'].split('.'))
           seen = {}
-          for archive in sorted(Path('staging/package_install').glob('*.zip')):
+          archives = sorted(Path('staging/package_install').glob('*.zip'))
+          assert len(archives) == len(expected), archives
+          for archive in archives:
               with zipfile.ZipFile(archive) as z:
                   manifest_names = [p for p in z.namelist() if p.endswith('/nodeforge_package.json') or p == 'nodeforge_package.json']
                   assert len(manifest_names) == 1, archive
                   manifest = json.loads(z.read(manifest_names[0]))
-                  assert (manifest['id'], manifest['version']) == (manifest['id'], expected[manifest['id']])
-                  assert manifest['id'] not in seen
-                  seen[manifest['id']] = archive.name
+                  package_id = manifest['id']
+                  minimum = manifest['nodeforge_min_version']
+                  assert package_id in expected and package_id not in seen, package_id
+                  assert archive.name == f"{package_id}-v{manifest['version']}_nf-v{minimum}.zip", archive
+                  assert tuple(int(part) for part in minimum.split('.')) <= nodeforge_version, archive
+                  seen[package_id] = archive.name
           assert set(seen) == set(expected), seen
           PY
       - name: Cache Blender 5.2
@@ -105,14 +113,28 @@ jobs:
           mkdir -p public
           "$BLENDER" -b --command extension build --source-dir staging --output-dir public
           python3 - <<'PY'
-          import pathlib, zipfile
+          import io
+          import pathlib
+          import zipfile
+          from bundled_packages import BUNDLED_PACKAGES
           archives = list(pathlib.Path('public').glob('*.zip'))
           assert len(archives) == 1, archives
           with zipfile.ZipFile(archives[0]) as z:
               files = set(z.namelist())
               assert 'blender_manifest.toml' in files
-              assert 'package_install/nodeforge.math-v2.2_nf-v0.70.2.zip' in files
-              assert 'package_install/nodeforge.lsystem-v4.0_nf-v0.70.2.zip' in files
+              bundled_archives = {
+                  name for name in files
+                  if name.startswith('package_install/') and name.endswith('.zip')
+              }
+              staged_archives = {
+                  'package_install/' + archive.name
+                  for archive in pathlib.Path('staging/package_install').glob('*.zip')
+              }
+              assert len(staged_archives) == len(BUNDLED_PACKAGES), staged_archives
+              assert bundled_archives == staged_archives, bundled_archives
+              for archive_name in bundled_archives:
+                  with zipfile.ZipFile(io.BytesIO(z.read(archive_name))) as bundled:
+                      assert 'nodeforge_package.json' in bundled.namelist(), archive_name
               assert not any(n.startswith(('.git/', 'tests/', 'dev/')) for n in files)
           PY
           "$BLENDER" -b --command extension server-generate --repo-dir public

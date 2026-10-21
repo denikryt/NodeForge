@@ -58,6 +58,22 @@ def test_pull_requests_build_and_test_without_publication():
         assert f"if: {TAG_PUSH_ONLY}" in _job(name)
 
 
+def test_library_release_assets_are_downloaded_from_latest_releases():
+    """The build uses the bundled-package registry for release assets and validation."""
+    download = _step(_job("build"), "name: Download latest library releases")
+    assert "from bundled_packages import BUNDLED_PACKAGES" in download
+    assert "for package_id, repository in BUNDLED_PACKAGES.items():" in download
+    assert "'--repo', repository" in download
+    assert "f'{package_id}-v*_nf-v*.zip'" in download
+    stage = _step(_job("build"), "name: Stage extension contents")
+    assert "expected = set(BUNDLED_PACKAGES)" in stage
+    assert "manifest['nodeforge_min_version']" in stage
+    assert "minimum.split('.')" in stage
+    assert "assert set(seen) == set(expected)" in stage
+    build = _step(_job("build"), "name: Validate and build")
+    assert "len(staged_archives) == len(BUNDLED_PACKAGES)" in build
+
+
 def test_publishing_jobs_depend_on_one_verified_build():
     """The release and Pages deployment reuse the validated build, not rebuilt ZIPs."""
     build = _job("build")
