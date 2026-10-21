@@ -8,10 +8,17 @@ NodeForge is a Blender add-on for describing Geometry Nodes logic in a Python-li
 
 ## Installation
 
-1. Download the latest `NodeForge-<version>-blender.zip` from the [**GitHub release**](https://github.com/denikryt/NodeForge/releases) section.
-2. In Blender, open **Edit → Preferences → Add-ons**.
-3. Open the Add-ons menu, choose **Install from Disk...**, and select the downloaded ZIP file.
-4. Enable **NodeForge** in the add-on list.
+NodeForge currently targets Blender 5.2.
+
+1. Download the latest NodeForge Extension ZIP from [GitHub Releases](https://github.com/denikryt/NodeForge/releases/latest).
+2. In Blender, open **Edit → Preferences → Get Extensions** and choose **Install from Disk...**.
+3. Select the ZIP and enable **NodeForge**.
+
+Once the [NodeForge extension repository](https://denikryt.github.io/NodeForge/index.json) is available, you can add it under **Repositories → Add Remote Repository** in **Get Extensions** to install NodeForge and receive updates through Blender.
+
+The release ZIP includes the latest published NodeForge Math and L-System packages available when that ZIP is built. You can update either package separately through **NodeForge → Packages → Install ZIP**.
+
+If you used the earlier ZIP add-on, disable it before enabling the Extension. Your Packages and Local files remain in Blender's user-data directories.
 
 ## Quick start
 
@@ -80,10 +87,11 @@ NodeForge scripts can call reusable functions and can be extended through instal
 
 ## Additional libraries
 
-- **NodeForge Math** adds math operations, reusable functions, and examples. Download the package ZIP from the [NodeForge release section](https://github.com/denikryt/NodeForge/releases/latest), or browse its [source repository](https://github.com/denikryt/nodeforge.math).
-- **NodeForge L-System** adds tools for procedural L-system generation. [Download](https://www.patreon.com/nachitima/posts/nodeforge-l-v2-0-169730745)
+The Extension includes **NodeForge Math** for math operations and **NodeForge L-System** for procedural L-system generation. Both libraries are installed automatically when you enable NodeForge.
 
-Install a library ZIP from the **Packages** section of the NodeForge tab in the Geometry Nodes Editor. Enable **Allow executable Python** when the package requires Python support.
+The bundled-library registry is [`bundled_packages.py`](bundled_packages.py). It maps each package ID to its GitHub repository. To include another library in future Extension ZIPs, add an entry and publish a Release ZIP named `<package-id>-v<package-version>_nf-v<minimum-NodeForge-version>.zip` in that repository. The package manifest supplies the version and minimum compatible NodeForge version.
+
+Install or update other libraries from **NodeForge → Packages → Install ZIP**.
 
 Installed package APIs are imported through the package namespace:
 

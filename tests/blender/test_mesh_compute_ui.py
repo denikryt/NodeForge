@@ -49,38 +49,31 @@ def test_unified_compile_operator_evaluates_real_gn(registered_ui, configured_lo
         bpy.data.texts.remove(text)
 
 
-def test_unified_compile_operator_denies_untrusted_source(registered_ui, configured_local, mesh_object):
-    """No group, scene or modifier can be published when Local Python is denied."""
-    text = bpy.data.texts.new("MeshComputeUI_blocked.nf")
+def test_unified_compile_rejects_removed_local_source(registered_ui, configured_local, mesh_object):
+    """An unavailable Local source fails before publishing a modifier or GN group."""
+    text = bpy.data.texts.new('MeshComputeUI_unlinked.nf')
     try:
         text.from_string(SOURCE)
         bpy.context.scene.gn_script_mvp.text_block = text
         _select(mesh_object)
-        local_sources.set_local_python_permission(configured_local, allowed=False)
+        (configured_local / 'shift.py').unlink()
         before_groups = {x.as_pointer() for x in bpy.data.node_groups}
-        before_scenes = {x.as_pointer() for x in bpy.data.scenes}
-        with pytest.raises(RuntimeError, match='not allowed'):
+        with pytest.raises(RuntimeError):
             bpy.ops.gn_script_mvp.compile_expression()
         assert not mesh_object.modifiers
         assert {x.as_pointer() for x in bpy.data.node_groups} == before_groups
-        assert {x.as_pointer() for x in bpy.data.scenes} == before_scenes
     finally:
         bpy.data.texts.remove(text)
 
 
-def test_local_permission_operator_grants_only_registered_root(registered_ui, configured_local, tmp_path):
-    """UI toggles the durable Local grant and rejects an unregistered directory."""
+def test_local_python_source_uses_registered_owner_not_permission(registered_ui, configured_local, tmp_path):
+    """The managed owner is usable and the obsolete grant operator is absent."""
     source = configured_local / 'shift.py'
-    assert local_sources.local_python_permission(source)
-    assert bpy.ops.nodeforge.set_local_python_permission(path=str(configured_local), allowed=False) == {'FINISHED'}
-    assert not local_sources.local_python_permission(source)
-    assert bpy.ops.nodeforge.set_local_python_permission(path=str(configured_local), allowed=True) == {'FINISHED'}
-    assert local_sources.local_python_permission(source)
-    foreign = tmp_path / 'unregistered'
-    foreign.mkdir()
-    with pytest.raises(RuntimeError, match='registered root'):
-        bpy.ops.nodeforge.set_local_python_permission(path=str(foreign), allowed=True)
-    assert local_sources.local_python_permission(source)
+    assert local_sources.is_registered_local_python_source(source)
+    foreign = tmp_path / 'unregistered.py'
+    foreign.write_text(source.read_text())
+    assert not local_sources.is_registered_local_python_source(foreign)
+    assert not hasattr(ui, 'NODEFORGE_OT_set_local_python_permission')
 
 
 def test_unified_compile_rejects_occupied_modifier_only_for_runtime(
@@ -217,22 +210,19 @@ def test_local_mesh_compute_compiles_selected_nf_without_text_block(
         props.text_block = old_text
 
 
-def test_local_mesh_compute_rejects_revoked_python_permission(
-        registered_ui, configured_local, mesh_object):
-    """Local browser action must preserve the existing trust gate and rollback."""
-    script = configured_local / 'mesh_compute_denied.nf'
-    script.write_text(SOURCE, encoding='utf-8')
+def test_local_mesh_compute_rejects_missing_selected_source(registered_ui, configured_local, mesh_object):
+    """A missing Local runtime cannot publish a modifier even with no consent gate."""
+    script = configured_local / 'mesh_compute_missing.nf'
+    script.write_text(SOURCE)
     props = bpy.context.scene.gn_script_mvp
     _select(mesh_object)
     _select_local_script(props, configured_local, script)
-    local_sources.set_local_python_permission(configured_local, allowed=False)
-    before_groups = {group.as_pointer() for group in bpy.data.node_groups}
-    before_scenes = {scene.as_pointer() for scene in bpy.data.scenes}
-    with pytest.raises(RuntimeError, match='not allowed'):
-        bpy.ops.nodeforge.create_function_group(namespace="local")
+    (configured_local / 'shift.py').unlink()
+    before = {group.as_pointer() for group in bpy.data.node_groups}
+    with pytest.raises(RuntimeError):
+        bpy.ops.nodeforge.create_function_group(namespace='local')
     assert not mesh_object.modifiers
-    assert {group.as_pointer() for group in bpy.data.node_groups} == before_groups
-    assert {scene.as_pointer() for scene in bpy.data.scenes} == before_scenes
+    assert {group.as_pointer() for group in bpy.data.node_groups} == before
 
 
 def test_local_action_rejects_python_row_and_occupied_modifier(

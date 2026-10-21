@@ -65,32 +65,25 @@ def _select_source(nf):
     return props
 
 
-def test_selected_examples_compiles_modifier_and_revocation_fails_closed(
+def test_selected_examples_compiles_modifier_and_removed_owner_fails_closed(
         selected_examples, registered_ui, mesh_object):
-    """Only consented Python executes, and revocation invalidates active evaluation."""
+    """Examples compile without grants and invalidate when the source disappears."""
+    from NodeForge.local_runtime import runtime_source_active
     bundled, nf = selected_examples
     _select_mesh(mesh_object)
     _select_source(nf)
-    # Examples selection is independent of the main Blender Text Script.
-    original_groups = {group.as_pointer() for group in bpy.data.node_groups}
-    assert not local_sources.examples_python_root_permission(bundled)
-    with pytest.raises(RuntimeError, match='not authorized'):
-        bpy.ops.nodeforge.create_function_group(namespace="examples")
-    assert not mesh_object.modifiers
-    assert {group.as_pointer() for group in bpy.data.node_groups} == original_groups
-
-    assert bpy.ops.nodeforge.set_examples_python_permission(allowed=True) == {'FINISHED'}
-    assert bpy.ops.nodeforge.create_function_group(namespace="examples") == {'FINISHED'}
+    assert bpy.ops.nodeforge.create_function_group(namespace='examples') == {'FINISHED'}
     assert len(mesh_object.modifiers) == 1
     binding = runtime.get_modifier_binding(mesh_object)
-    assert binding.prepared.source_namespace == 'examples'
-    assert binding.prepared.source_package_id == ''
     assert binding.status == 'READY'
     assert _evaluated_positions(mesh_object)[0] == (2., 3., 4.)
-    assert bpy.ops.nodeforge.set_examples_python_permission(allowed=False) == {'FINISHED'}
-    with pytest.raises(PermissionError, match='revoked'):
+    source = nf.with_name('shift.py')
+    assert runtime_source_active('examples', source)
+    source.unlink()
+    assert not runtime_source_active('examples', source)
+    with pytest.raises(ValueError, match='owner'):
         runtime.evaluate_modifier_binding(mesh_object)
-    assert binding.trust_revoked
+    assert binding.status == 'ERROR'
 
 
 def test_examples_modifier_poll_and_stale_source_failure(
@@ -101,7 +94,7 @@ def test_examples_modifier_poll_and_stale_source_failure(
     _select_source(nf)
     user_modifier = mesh_object.modifiers.new('User', 'BEVEL')
     mesh_object.modifiers.remove(user_modifier)
-    local_sources.set_examples_python_permission(bundled, allowed=True)
+
     nf.unlink()
     before = {group.as_pointer() for group in bpy.data.node_groups}
     with pytest.raises(RuntimeError, match='unavailable'):
@@ -115,7 +108,7 @@ def test_examples_python_cannot_be_published_as_regular_library_group(selected_e
     from NodeForge.compiler import create_examples_source_group
     from NodeForge.errors import CompileError
     bundled, nf = selected_examples
-    local_sources.set_examples_python_permission(bundled, allowed=True)
+
     with pytest.raises(CompileError, match='unavailable'):
         create_examples_source_group(str(nf.with_name('shift.py')))
 
@@ -128,7 +121,7 @@ def test_examples_add_node_group_reuses_blender_empty_modifier(
     bundled, nf = selected_examples
     _select_mesh(mesh_object)
     _select_source(nf)
-    local_sources.set_examples_python_permission(bundled, allowed=True)
+
     modifier, original_group = _add_empty_gn_modifier(mesh_object)
     pointer = modifier.as_pointer()
     try:

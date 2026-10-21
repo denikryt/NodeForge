@@ -68,59 +68,39 @@ def test_python_symlink_escape_is_rejected(local_storage, tmp_path):
         catalog.discover_local_sources((managed,))
 
 
-def test_permission_is_default_deny_managed_and_external(local_storage, tmp_path):
-    """Grants apply to one registered canonical root, not other linked roots."""
+def test_local_source_membership_follows_registered_roots(local_storage, tmp_path):
+    """A managed Python source is active, an external source needs a registered owner."""
+    managed, _registry = local_storage
+    inside = _python(managed / 'erosion.py')
+    external = _python(tmp_path / 'outside' / 'erosion.py')
+    assert local_sources.is_registered_local_python_source(inside)
+    assert not local_sources.is_registered_local_python_source(external)
+    local_sources.link_local_source_folder(str(external.parent))
+    assert local_sources.is_registered_local_python_source(external)
+    local_sources.unlink_local_source_folder(external.parent)
+    assert not local_sources.is_registered_local_python_source(external)
+
+
+def test_registry_writes_drop_obsolete_permission_fields(local_storage, tmp_path):
+    """Legacy grants are ignored and never reintroduced on ordinary root mutations."""
+    _managed, registry = local_storage
+    root = tmp_path / 'linked'
+    root.mkdir()
+    registry.write_text(json.dumps({'version': 1, 'roots': [], 'managed_allow_python': False,
+                                   'allow_examples_python': True}))
+    local_sources.link_local_source_folder(str(root))
+    data = json.loads(registry.read_text())
+    assert data['roots'][0]['path'] == str(root)
+    assert 'managed_allow_python' not in data
+    assert 'allow_examples_python' not in data
+
+
+def test_invalid_registry_rejected_without_permission_gate(local_storage, tmp_path):
+    """Owner paths still require valid registry shape; obsolete grants are ignored."""
     managed, registry = local_storage
-    local = _python(managed / 'erosion.py')
-    external = tmp_path / 'External'
-    linked = _python(external / 'erosion.py')
-    another = tmp_path / 'Another'
-    unlinked = _python(another / 'erosion.py')
-    local_sources.link_local_source_folder(str(external))
-    assert not local_sources.local_python_permission(local)
-    assert not local_sources.local_python_permission(linked)
-    assert not local_sources.local_python_permission(unlinked)
-    local_sources.set_local_python_permission(managed, allowed=True)
-    assert local_sources.local_python_permission(local)
-    assert not local_sources.local_python_permission(linked)
-    local_sources.set_local_python_permission(external, allowed=True)
-    assert local_sources.local_python_permission(linked)
-    assert not local_sources.local_python_permission(unlinked)
-    payload = json.loads(registry.read_text())
-    assert payload['managed_allow_python'] is True
-    assert payload['roots'][0]['allow_python'] is True
-    local_sources.set_local_python_permission(external, allowed=False)
-    assert not local_sources.local_python_permission(linked)
-    assert local_sources.local_python_permission(local)
-
-
-def test_permission_survives_link_registry_mutation(local_storage, tmp_path):
-    """Link, relabel and unlink paths do not silently lose other execution grants."""
-    managed, registry = local_storage
-    local_sources.set_local_python_permission(managed, allowed=True)
-    root_a = tmp_path / 'A'
-    root_b = tmp_path / 'B'
-    root_a.mkdir()
-    root_b.mkdir()
-    local_sources.link_local_source_folder(str(root_a))
-    local_sources.set_local_python_permission(root_a, allowed=True)
-    local_sources.link_local_source_folder(str(root_b))
-    local_sources.unlink_local_source_folder(root_b)
-    payload = json.loads(registry.read_text())
-    assert payload['managed_allow_python'] is True
-    assert payload['roots'][0]['allow_python'] is True
-    assert len(payload['roots']) == 1
-
-
-def test_permission_rejects_unregistered_root_and_malformed_payload(local_storage, tmp_path):
-    """Unapproved roots and invalid configuration never acquire implicit trust."""
-    managed, registry = local_storage
-    other = tmp_path / 'unregistered'
-    other.mkdir()
-    with pytest.raises(CompileError, match='registered'):
-        local_sources.set_local_python_permission(other, allowed=True)
-    with pytest.raises(CompileError, match='boolean'):
-        local_sources.set_local_python_permission(managed, allowed=1)
-    registry.write_text(json.dumps({'version': 1, 'roots': [], 'managed_allow_python': 'true'}))
-    with pytest.raises(CompileError, match='permission'):
-        local_sources.local_python_permission(_python(managed / 'erosion.py'))
+    path = _python(managed / 'erosion.py')
+    registry.write_text(json.dumps({'version': 1, 'roots': [], 'managed_allow_python': 'old'}))
+    assert local_sources.is_registered_local_python_source(path)
+    registry.write_text(json.dumps({'version': 1, 'roots': 'wrong'}))
+    with pytest.raises(CompileError, match='roots'):
+        local_sources.local_source_roots()

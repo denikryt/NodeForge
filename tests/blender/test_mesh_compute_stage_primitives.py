@@ -381,7 +381,7 @@ def test_regular_group_compile_rejects_unbound_local_python_before_blender_mutat
     )
     monkeypatch.setattr(local_sources, "_default_local_catalog_dir", lambda: root)
     monkeypatch.setattr(local_sources, "_local_sources_registry_path", lambda: tmp_path / "local_sources.json")
-    local_sources.set_local_python_permission(root, allowed=True)
+
     source = ('from local import zlift\n'
               'geo = input_geometry("Geometry")\n'
               'geo = zlift(geo, amount=2.0)\n'

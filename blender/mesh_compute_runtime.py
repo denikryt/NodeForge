@@ -234,7 +234,6 @@ class RuntimeModifierBinding:
     numerical_result: MeshComputeResult | None = None
     last_published: object | None = None
     publication_key: str | None = None
-    trust_revoked: bool = False
 
 
 _ACTIVE_BINDINGS: dict[int, RuntimeModifierBinding] = {}
@@ -438,7 +437,7 @@ def _can_skip_foreign_depsgraph_updates(scene) -> bool:
     full validation. This is an optimization, never a cache authority.
     """
     import bpy
-    from ..local_runtime import runtime_python_permission
+    from ..local_runtime import runtime_source_active
 
     if scene is None or bpy.context.scene is not scene:
         return False
@@ -451,13 +450,12 @@ def _can_skip_foreign_depsgraph_updates(scene) -> bool:
 
     relevant = set()
     for binding in tuple(_ACTIVE_BINDINGS.values()):
-        # Trust is stored outside Blender's depsgraph. Revocation must always
-        # reach evaluate_modifier_binding's fail-closed output invalidation.
-        if (binding.trust_revoked or binding.status != 'READY' or
+        # Source-owner removal is invisible to the depsgraph and must invalidate outputs.
+        if (binding.status != 'READY' or
                 (binding.prepared.source_origin is not None and
-                 not runtime_python_permission(binding.prepared.source_namespace,
-                                               binding.prepared.source_origin,
-                                               binding.prepared.source_package_id))):
+                 not runtime_source_active(binding.prepared.source_namespace,
+                                           binding.prepared.source_origin,
+                                           binding.prepared.source_package_id))):
             return False
         owner = binding.owner
         if not any(item.as_pointer() == owner.as_pointer() for item in scene.objects):
@@ -532,7 +530,7 @@ def _handle_scene_update(scene) -> None:
     _SCHEDULER_RUNNING = True
     try:
         for binding in tuple(_ACTIVE_BINDINGS.values()):
-            if binding.trust_revoked or _modifier_identity(binding.modifier) in _GUARDED_MODIFIERS:
+            if _modifier_identity(binding.modifier) in _GUARDED_MODIFIERS:
                 continue
             try:
                 if not any(obj.as_pointer() == binding.owner.as_pointer() for obj in scene.objects):
@@ -880,15 +878,12 @@ def evaluate_modifier_binding(owner, modifier=None, *, source_scene=None, skip_u
     new_mesh = None
     previous_published = binding.last_published
     try:
-        if binding.trust_revoked:
-            raise PermissionError("Mesh Compute requires Reload after a Local Python permission revocation")
         if binding.prepared.source_origin is not None:
-            from ..local_runtime import runtime_python_permission
-            if not runtime_python_permission(binding.prepared.source_namespace,
-                                             binding.prepared.source_origin,
-                                             binding.prepared.source_package_id):
-                binding.trust_revoked = True
-                raise PermissionError("Mesh Compute executable Python permission was revoked")
+            from ..local_runtime import runtime_source_active
+            if not runtime_source_active(binding.prepared.source_namespace,
+                                         binding.prepared.source_origin,
+                                         binding.prepared.source_package_id):
+                raise ValueError("Mesh Compute source owner is no longer active")
         if any(other.as_pointer() != owner.as_pointer() and any(
                 mod.type == "NODES" and mod.node_group is not None and
                 mod.node_group.as_pointer() == binding.group.as_pointer()
@@ -956,7 +951,7 @@ def evaluate_modifier_binding(owner, modifier=None, *, source_scene=None, skip_u
                               RuntimeWarning, stacklevel=2)
         return new_mesh
     except BaseException as exc:
-        binding.status = "MISSING_RUNTIME" if isinstance(exc, PermissionError) else "ERROR"
+        binding.status = "ERROR"
         binding.last_error = str(exc)
         binding.publication_key = None
         # Fail closed even if a candidate Mesh was already installed. The

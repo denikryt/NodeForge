@@ -23,10 +23,6 @@ from .blender.storage import (
 )
 from .local_sources import (
     local_browser_records,
-    local_python_root_permission,
-    set_local_python_permission,
-    examples_python_root_permission,
-    set_examples_python_permission,
     local_source_roots,
     link_local_source_folder,
     unlink_local_source_folder,
@@ -94,7 +90,7 @@ class NODEFORGE_OT_reload_addon(Operator):
 
 class NODEFORGE_AddonPreferences(AddonPreferences):
     """Preferences shown under Edit > Preferences > Add-ons > NodeForge."""
-    bl_idname = __package__.split(".")[0] if __package__ else "NodeForge"
+    bl_idname = __package__ or "NodeForge"
 
     def draw(self, context):
         layout = self.layout
@@ -127,9 +123,8 @@ class NODEFORGE_PackageItem(PropertyGroup):
     origin: StringProperty(name="Origin", default="")
     status: StringProperty(name="Status", default="active")
     path: StringProperty(name="Path", default="")
-    python_required: BoolProperty(name="Python Required", default=False)
-    python_allowed: BoolProperty(name="Python Allowed", default=False)
     invalid_reason: StringProperty(name="Invalid Reason", default="")
+    compatibility_warning: StringProperty(name="Compatibility Warning", default="")
 
 
 class NODEFORGE_UL_function_library(UIList):
@@ -174,7 +169,7 @@ class NODEFORGE_UL_packages(UIList):
         label = item.id or item.package_id or item.name
         if item.version:
             label = f"{label} {item.version}"
-        icon_name = 'ERROR' if item.invalid_reason else 'PACKAGE'
+        icon_name = 'ERROR' if item.invalid_reason else 'INFO' if item.compatibility_warning else 'PACKAGE'
         row.label(text=label, icon=icon_name)
         if item.origin:
             row.label(text=item.origin)
@@ -197,10 +192,9 @@ def _refresh_package_items(props):
             item.name = record.name or record.package_id
             item.version = record.version
             item.origin = record.origin
-            item.status = "python blocked" if record.python_required and not record.python_allowed else "invalid"
+            item.status = "invalid"
             item.path = record.path
-            item.python_required = record.python_required
-            item.python_allowed = record.python_allowed
+            item.compatibility_warning = ""
             item.invalid_reason = record.message
             continue
         manifest = record.manifest
@@ -211,9 +205,8 @@ def _refresh_package_items(props):
         item.origin = str(record.state_record.get("origin") or manifest.origin)
         item.status = "installed"
         item.path = str(manifest.root)
-        item.python_required = record.python_required
-        item.python_allowed = bool(record.state_record.get("allow_python", False))
         item.invalid_reason = ""
+        item.compatibility_warning = packages.package_compatibility_warning(manifest)
     props.package_index = 0
     if old_id:
         for index, item in enumerate(props.package_items):
@@ -335,7 +328,6 @@ class GNSCRIPT_MVP_Properties(PropertyGroup):
     package_items: CollectionProperty(type=NODEFORGE_PackageItem)
     package_index: IntProperty(name="Package", default=0)
     package_archive_path: StringProperty(name="Package Archive", default="", subtype="FILE_PATH")
-    package_allow_python: BoolProperty(name="Allow executable Python", default=False)
     local_browser_path: StringProperty(name="Local Browser Path", default="", options={'HIDDEN'})
     local_script_name: StringProperty(name="Script Name", default="")
     local_overwrite: BoolProperty(name="Overwrite", default=False)
@@ -433,51 +425,6 @@ class NODEFORGE_OT_reload_mesh_compute_modifier(Operator):
             self.report({'WARNING'}, f"Reloaded {group.name}; runtime error: {exc}")
             return {'FINISHED'}
         self.report({'INFO'}, f"Reloaded Mesh Compute: {group.name}")
-        return {'FINISHED'}
-
-
-class NODEFORGE_OT_set_local_python_permission(Operator):
-    """Persist a grant for one registered Local root or individually linked file."""
-
-    bl_idname = "nodeforge.set_local_python_permission"
-    bl_label = "Local Executable Python Permission"
-    bl_description = "Allow or deny executable Python within the selected Local source root"
-    bl_options = {'REGISTER'}
-
-    path: StringProperty(name="Registered Local root", default="", options={'HIDDEN'})
-    allowed: BoolProperty(name="Allow executable Python", default=False, options={'HIDDEN'})
-
-    def execute(self, context):
-        """Delegate ownership validation and durable trust persistence to Local sources."""
-        try:
-            set_local_python_permission(self.path, allowed=self.allowed)
-        except Exception as exc:
-            self.report({'ERROR'}, str(exc))
-            return {'CANCELLED'}
-        self.report({'INFO'}, "Executable Local Python enabled" if self.allowed
-                    else "Executable Local Python disabled")
-        return {'FINISHED'}
-
-
-class NODEFORGE_OT_set_examples_python_permission(Operator):
-    """Grant or revoke executable Python only for the bundled Examples root."""
-
-    bl_idname = "nodeforge.set_examples_python_permission"
-    bl_label = "Examples Executable Python Permission"
-    bl_description = "Allow or deny Python callbacks shipped with NodeForge Examples"
-    bl_options = {'REGISTER'}
-
-    allowed: BoolProperty(name="Allow bundled Examples Python", default=False, options={'HIDDEN'})
-
-    def execute(self, context):
-        from .catalog import catalog_dir
-        try:
-            set_examples_python_permission(catalog_dir('examples'), allowed=self.allowed)
-        except Exception as exc:
-            self.report({'ERROR'}, str(exc))
-            return {'CANCELLED'}
-        self.report({'INFO'}, "Bundled Examples Python enabled" if self.allowed
-                    else "Bundled Examples Python disabled")
         return {'FINISHED'}
 
 
@@ -651,7 +598,6 @@ class NODEFORGE_OT_import_package(Operator):
     bl_options = {'REGISTER'}
 
     filepath: StringProperty(name="Package Archive", subtype="FILE_PATH", default="")
-    allow_python: BoolProperty(name="Allow executable Python", default=False)
     replace: BoolProperty(name="Replace existing package", default=False)
 
     def invoke(self, context, event):
@@ -659,7 +605,6 @@ class NODEFORGE_OT_import_package(Operator):
         props = getattr(context.scene, "gn_script_mvp", None)
         if props is not None:
             self.filepath = props.package_archive_path
-            self.allow_python = props.package_allow_python
         context.window_manager.fileselect_add(self)
         return {'RUNNING_MODAL'}
 
@@ -667,10 +612,9 @@ class NODEFORGE_OT_import_package(Operator):
         """Install the selected package archive and refresh package/catalog UI."""
         props = getattr(context.scene, "gn_script_mvp", None)
         try:
-            manifest = packages.install_package_zip(self.filepath, allow_python=self.allow_python, replace=self.replace)
+            manifest = packages.install_package_zip(self.filepath, replace=self.replace)
             if props is not None:
                 props.package_archive_path = self.filepath
-                props.package_allow_python = self.allow_python
                 _refresh_package_items(props)
                 _refresh_catalog_items(props, "functions")
                 _refresh_catalog_items(props, "examples")
@@ -1218,19 +1162,6 @@ class NODEFORGE_PT_library_local(Panel):
         row.operator(NODEFORGE_OT_save_to_local.bl_idname, text="Save", icon='FILE_TICK')
         row.operator(NODEFORGE_OT_import_local.bl_idname, text="Add Folder...", icon='NEWFOLDER')
         _draw_library_catalog_panel(layout, context, "local", "local_items", "local_index", rows=7)
-        selected = _selected_catalog_item(props, "local")
-        root = Path(selected.root_path) if selected is not None and selected.root_path else ensure_local_catalog_dir()
-        try:
-            allowed = local_python_root_permission(root)
-        except Exception:
-            allowed = None
-        if allowed is not None:
-            row = layout.row(align=True)
-            row.label(text=f"Executable Python: {'Allowed' if allowed else 'Blocked'}", icon='CONSOLE')
-            op = row.operator(NODEFORGE_OT_set_local_python_permission.bl_idname,
-                              text="Revoke" if allowed else "Allow", icon='CHECKMARK' if allowed else 'UNLOCKED')
-            op.path = str(root)
-            op.allowed = not allowed
 
 
 
@@ -1267,17 +1198,6 @@ class NODEFORGE_PT_library_examples(Panel):
         return GNSCRIPT_MVP_PT_panel.poll(context)
 
     def draw(self, context):
-        from .catalog import catalog_dir
-        root = catalog_dir('examples')
-        try:
-            allowed = examples_python_root_permission(root)
-        except Exception as exc:
-            self.layout.label(text=f"Examples permission unavailable: {exc}", icon='ERROR')
-        else:
-            op = self.layout.operator(NODEFORGE_OT_set_examples_python_permission.bl_idname,
-                                      text="Executable Python: Allowed" if allowed else "Executable Python: Denied",
-                                      icon='UNLOCKED' if allowed else 'LOCKED')
-            op.allowed = not allowed
         _draw_library_catalog_panel(self.layout, context, "examples", "example_items", "example_index", rows=3)
 
 
@@ -1303,12 +1223,15 @@ class NODEFORGE_PT_library_packages(Panel):
         if props is None:
             layout.label(text="NodeForge properties unavailable", icon='ERROR')
             return
-        layout.prop(props, "package_allow_python", text="Allow executable Python")
         row = layout.row(align=True)
         row.operator(NODEFORGE_OT_refresh_packages.bl_idname, text="Refresh", icon='FILE_REFRESH')
         row.operator(NODEFORGE_OT_import_package.bl_idname, text="Import", icon='IMPORT')
         layout.template_list(NODEFORGE_UL_packages.__name__, "", props, "package_items", props, "package_index", rows=3)
+        if _PACKAGE_BOOTSTRAP_ERRORS:
+            layout.label(text="Package initialization failed; see console", icon='ERROR')
         selected = _selected_package_item(props)
+        if selected is not None and selected.compatibility_warning:
+            layout.label(text=selected.compatibility_warning, icon='INFO')
         row = layout.row(align=True)
         op = row.operator(NODEFORGE_OT_uninstall_package.bl_idname, text="Uninstall", icon='TRASH')
         op.package_id = selected.package_id if selected is not None else ""
@@ -1334,8 +1257,6 @@ classes = (
     NODEFORGE_UL_packages,
     GNSCRIPT_MVP_OT_compile_expression,
     NODEFORGE_OT_reload_mesh_compute_modifier,
-    NODEFORGE_OT_set_local_python_permission,
-    NODEFORGE_OT_set_examples_python_permission,
     GNSCRIPT_MVP_OT_update_selected_group,
     NODEFORGE_OT_reload_selected_library_group,
     GNSCRIPT_MVP_OT_load_selected_group_source,
@@ -1360,8 +1281,29 @@ classes = (
     NODEFORGE_PT_library_examples,
 )
 
+_PACKAGE_BOOTSTRAP_ERRORS: tuple[str, ...] = ()
+
+
+def _refresh_startup_browser_items():
+    """Fill Scene-owned browser lists after Blender releases registration restrictions."""
+    for scene in bpy.data.scenes:
+        props = getattr(scene, "gn_script_mvp", None)
+        if props is None:
+            continue
+        for namespace in ("packages", "functions", "examples"):
+            try:
+                if namespace == "packages":
+                    _refresh_package_items(props)
+                else:
+                    _refresh_catalog_items(props, namespace)
+            except Exception as exc:
+                # One broken catalog cannot prevent other lists from loading.
+                print(f"NodeForge {namespace} catalog initialization: {exc}")
+    return None  # One-shot timer; every activation schedules a fresh refresh.
+
+
 def register():
-    """Function `register` used by the NodeForge addon."""
+    """Register UI and install included ordinary Packages on activation."""
     generated_resources.cleanup_restart_orphans_deferred()
     from .blender.mesh_compute_runtime import register_runtime_load_handler
     register_runtime_load_handler()
@@ -1369,9 +1311,22 @@ def register():
         bpy.utils.register_class(cls)
     bpy.types.Scene.gn_script_mvp = PointerProperty(type=GNSCRIPT_MVP_Properties)
     bpy.types.NODE_MT_add.append(menu_func)
+    global _PACKAGE_BOOTSTRAP_ERRORS
+    try:
+        _PACKAGE_BOOTSTRAP_ERRORS = packages.install_included_packages(Path(__file__).resolve().parent)
+    except Exception as exc:
+        _PACKAGE_BOOTSTRAP_ERRORS = (str(exc),)
+    for message in _PACKAGE_BOOTSTRAP_ERRORS:
+        print(f"NodeForge package initialization: {message}")
+    # Blender restricts bpy.data while add-ons register. Populate the Scene
+    # collections on the next event-loop tick instead of touching bpy.data here.
+    if not bpy.app.timers.is_registered(_refresh_startup_browser_items):
+        bpy.app.timers.register(_refresh_startup_browser_items, first_interval=0.0)
 
 def unregister():
     """Unregister NodeForge UI and operators without mutating generated node-group data."""
+    if bpy.app.timers.is_registered(_refresh_startup_browser_items):
+        bpy.app.timers.unregister(_refresh_startup_browser_items)
     from .blender.mesh_compute_runtime import (
         shutdown_runtime_bindings, unregister_runtime_load_handler,
     )

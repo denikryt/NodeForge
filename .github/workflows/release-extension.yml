@@ -1,0 +1,235 @@
+name: Build Blender Extension
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag to build (vX.Y.Z)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+      - name: Verify NodeForge version
+        env:
+          TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import ast, os, pathlib, tomllib
+          manifest = tomllib.loads(pathlib.Path('blender_manifest.toml').read_text())
+          data = ast.parse(pathlib.Path('__init__.py').read_text())
+          version = next(node.value for node in data.body if isinstance(node, ast.Assign)
+                         and any(isinstance(t, ast.Name) and t.id == 'NODEFORGE_VERSION' for t in node.targets))
+          declared = '.'.join(map(str, ast.literal_eval(version)))
+          assert manifest['version'] == declared, 'bl_info / manifest mismatch'
+          # Pull-request merge refs are not release tags. Tag and manual release
+          # verification still require the selected tag to match the package version.
+          tag_name = os.environ['TAG_NAME']
+          if tag_name.startswith('v'):
+              assert tag_name == 'v' + declared, 'tag / manifest mismatch'
+          PY
+      - name: Download latest library releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p staging/package_install
+          python3 - <<'PY'
+          import subprocess
+          from bundled_packages import BUNDLED_PACKAGES
+
+          for package_id, repository in BUNDLED_PACKAGES.items():
+              subprocess.run([
+                  'gh', 'release', 'download', '--repo', repository,
+                  '--pattern', f'{package_id}-v*_nf-v*.zip',
+                  '--dir', 'staging/package_install',
+              ], check=True)
+          PY
+      - name: Stage extension contents
+        run: |
+          set -euo pipefail
+          cp ./*.py blender_manifest.toml LICENCE README.md staging/
+          cp -R blender semantic extensions examples staging/
+          # Only these code directories are part of the extension (no tests or .git).
+          test -d staging/blender && test -d staging/extensions && test -d staging/semantic
+          find staging -name __pycache__ -type d -prune -exec rm -rf {} +
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, tomllib, zipfile
+          from bundled_packages import BUNDLED_PACKAGES
+          expected = set(BUNDLED_PACKAGES)
+          nodeforge_version = tuple(int(part) for part in tomllib.loads(
+              Path('blender_manifest.toml').read_text())['version'].split('.'))
+          seen = {}
+          archives = sorted(Path('staging/package_install').glob('*.zip'))
+          assert len(archives) == len(expected), archives
+          for archive in archives:
+              with zipfile.ZipFile(archive) as z:
+                  manifest_names = [p for p in z.namelist() if p.endswith('/nodeforge_package.json') or p == 'nodeforge_package.json']
+                  assert len(manifest_names) == 1, archive
+                  manifest = json.loads(z.read(manifest_names[0]))
+                  package_id = manifest['id']
+                  minimum = manifest['nodeforge_min_version']
+                  assert package_id in expected and package_id not in seen, package_id
+                  assert archive.name == f"{package_id}-v{manifest['version']}_nf-v{minimum}.zip", archive
+                  assert tuple(int(part) for part in minimum.split('.')) <= nodeforge_version, archive
+                  seen[package_id] = archive.name
+          assert set(seen) == set(expected), seen
+          PY
+      - name: Cache Blender 5.2
+        id: blender-cache
+        uses: actions/cache@v4
+        with:
+          path: blender-dist
+          key: blender-${{ runner.os }}-${{ runner.arch }}-5.2.0-linux-x64-v1
+      - name: Install Blender 5.2
+        if: steps.blender-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 https://download.blender.org/release/Blender5.2/blender-5.2.0-linux-x64.tar.xz -o blender.tar.xz
+          mkdir -p blender-dist
+          tar -xJf blender.tar.xz -C blender-dist --strip-components=1
+      - name: Validate and build
+        run: |
+          set -euo pipefail
+          BLENDER="$PWD/blender-dist/blender"
+          "$BLENDER" -b --command extension validate staging
+          mkdir -p public
+          "$BLENDER" -b --command extension build --source-dir staging --output-dir public
+          python3 - <<'PY'
+          import io
+          import pathlib
+          import zipfile
+          from bundled_packages import BUNDLED_PACKAGES
+          archives = list(pathlib.Path('public').glob('*.zip'))
+          assert len(archives) == 1, archives
+          with zipfile.ZipFile(archives[0]) as z:
+              files = set(z.namelist())
+              assert 'blender_manifest.toml' in files
+              bundled_archives = {
+                  name for name in files
+                  if name.startswith('package_install/') and name.endswith('.zip')
+              }
+              staged_archives = {
+                  'package_install/' + archive.name
+                  for archive in pathlib.Path('staging/package_install').glob('*.zip')
+              }
+              assert len(staged_archives) == len(BUNDLED_PACKAGES), staged_archives
+              assert bundled_archives == staged_archives, bundled_archives
+              for archive_name in bundled_archives:
+                  with zipfile.ZipFile(io.BytesIO(z.read(archive_name))) as bundled:
+                      assert 'nodeforge_package.json' in bundled.namelist(), archive_name
+              assert not any(n.startswith(('.git/', 'tests/', 'dev/')) for n in files)
+          PY
+          "$BLENDER" -b --command extension server-generate --repo-dir public
+          test -s public/index.json
+      # Preserve the exact built ZIP and index.json for downstream jobs.
+      - name: Preserve built release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodeforge-release-public
+          path: public/
+          if-no-files-found: error
+          retention-days: 30
+      # Create this once in build, not in deploy-pages: retrying a failed Pages
+      # deployment must reuse the same artifact, never re-upload it.
+      - name: Preserve built Pages artifact
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public/
+          retention-days: 30
+
+  test-extension:
+    name: Test built Extension in Blender 5.2
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+      - name: Retrieve built release files
+        uses: actions/download-artifact@v4
+        with:
+          name: nodeforge-release-public
+          path: public/
+      - name: Cache Blender 5.2
+        id: blender-cache
+        uses: actions/cache@v4
+        with:
+          path: blender-dist
+          key: blender-${{ runner.os }}-${{ runner.arch }}-5.2.0-linux-x64-v1
+      - name: Install Blender 5.2
+        if: steps.blender-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 https://download.blender.org/release/Blender5.2/blender-5.2.0-linux-x64.tar.xz -o blender.tar.xz
+          mkdir -p blender-dist
+          tar -xJf blender.tar.xz -C blender-dist --strip-components=1
+      - name: Install and test built Extension in Blender 5.2
+        run: |
+          set -euo pipefail
+          python3 -m pip install --target "$PWD/.ci-pytest" pytest
+          export PYTHONPATH="$PWD/.ci-pytest"
+          export BLENDER_USER_CONFIG="$RUNNER_TEMP/nodeforge-ci/config"
+          export BLENDER_USER_SCRIPTS="$RUNNER_TEMP/nodeforge-ci/scripts"
+          export BLENDER_USER_DATAFILES="$RUNNER_TEMP/nodeforge-ci/datafiles"
+          ARCHIVE=$(find "$PWD/public" -maxdepth 1 -name '*.zip' -type f -print -quit)
+          test -n "$ARCHIVE"
+          "$PWD/blender-dist/blender" -b --factory-startup --python-use-system-env --python-exit-code 1 \
+            --python tests/blender/verify_extension_release.py -- "$ARCHIVE"
+
+  publish-release:
+    name: Publish immutable GitHub Release
+    needs: [build, test-extension]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Retrieve verified release files
+        uses: actions/download-artifact@v4
+        with:
+          name: nodeforge-release-public
+          path: public/
+      - name: Publish GitHub release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG_NAME" public/*.zip --generate-notes --verify-tag
+
+  deploy-pages:
+    name: Deploy Blender Extensions repository
+    needs: [build, publish-release]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # deploy-pages consumes the already uploaded Pages artifact from build.
+      # Rerun only this failed job after a Pages outage; never rerun release creation.
+      - id: deployment
+        uses: actions/deploy-pages@v4

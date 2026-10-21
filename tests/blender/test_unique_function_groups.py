@@ -240,7 +240,7 @@ def test_imported_unique_function_preserves_shared_and_occurrence_identity():
             'value = input_float("Value")\noutput("Value", value + 1.0)\n',
             encoding="utf-8",
         )
-        packages.install_package_directory(root, allow_python=False)
+        packages.install_package_directory(root)
         try:
             source = """from packages import unique_identity
 shared = import_unique_probe(1.0)
@@ -316,7 +316,7 @@ output("Out", left + right)
         v2 = tmp / "v2"
         _write_imported_dependency_package(v1, version="1.0.0", offset=1.0)
         _write_imported_dependency_package(v2, version="2.0.0", offset=2.0)
-        packages.install_package_directory(v1, allow_python=False)
+        packages.install_package_directory(v1)
         try:
             root = compile_group(source, "NFTest_imported_dependency_two_parents")
             left = _local_helpers("imported_parent_left")[0]
@@ -330,7 +330,7 @@ output("Out", left + right)
             left["manual_probe"] = "must-reset"
             right["manual_probe"] = "must-reset"
 
-            packages.install_package_directory(v2, allow_python=False, replace=True)
+            packages.install_package_directory(v2, replace=True)
             compiler.update_expression_group(root, source)
 
             left_after = _local_helpers("imported_parent_left")[0]

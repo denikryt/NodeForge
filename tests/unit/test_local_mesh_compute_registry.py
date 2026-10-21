@@ -1,6 +1,7 @@
 """Trusted Local runtime bridging into the existing immutable Extension API registry."""
 
 import dataclasses
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -65,7 +66,7 @@ def test_explicit_import_creates_canonical_extension_ir_without_user_execution(l
     """Selected source creates one immutable owner overlay before semantic lowering."""
     marker = library / 'executed'
     source_file = _write(library, marker=marker)
-    local_sources.set_local_python_permission(library, allowed=True)
+
     view = environment_resolution._make_compilation_environment()
     source = ('from local import erosion as erosion_alias\n'
               'geo = input_geometry("Geometry")\n'
@@ -85,7 +86,7 @@ def test_explicit_import_creates_canonical_extension_ir_without_user_execution(l
 def test_captured_backend_invokes_exact_source_only_during_trusted_phase(library):
     """Owner implementation is lazily loaded and forwards to the shared backend method."""
     file = _write(library)
-    local_sources.set_local_python_permission(library, allowed=True)
+
     view = environment_resolution._make_compilation_environment()
     group = _prepare('from local import erosion\nsource_geo = input_geometry("Geometry")\ngeo = erosion(source_geo)\noutput("Geometry", geo)', view)
     target = ExtensionCallableId(('local-runtime', catalog._path_key(file)), 'erosion')
@@ -105,21 +106,21 @@ def test_captured_backend_invokes_exact_source_only_during_trusted_phase(library
     assert seen[0][1]['kernel'].__name__ == 'erosion'
 
 
-def test_untrusted_import_fails_at_selection_without_running_source(library):
-    """A default-denied root never invokes user code via extension normalization."""
+def test_managed_runtime_available_without_grant_or_execution(library):
+    """A managed root exposes callbacks without executing their bodies at selection."""
     marker = library / 'executed'
     _write(library, marker=marker)
     view = environment_resolution._make_compilation_environment()
-    with pytest.raises(CompileError, match='Allow executable Python'):
-        _prepare('from local import erosion\nsource_geo = input_geometry("Geometry")\ngeo = erosion(source_geo)\noutput("Geometry", geo)', view)
+    _prepare('from local import erosion\ngeo = input_geometry("Geometry")\n'
+             'output(erosion(geo))', view)
+    assert view.extension_registry._families
     assert not marker.exists()
-    assert not view.extension_registry._families
 
 
 def test_star_import_excludes_python_and_inherited_explicit_import_is_rejected(library):
     """Legacy wildcard Local calls keep `.nf` behavior without leaking Python exports."""
     _write(library)
-    local_sources.set_local_python_permission(library, allowed=True)
+
     view = environment_resolution._make_compilation_environment()
     _prepare('from local import *\noutput(1.0)', view)
     assert not view.extension_registry._families
@@ -134,7 +135,7 @@ def test_selected_owner_snapshots_do_not_import_other_python_sources(library):
     _write(library)
     marker = library / 'other-executed'
     _write(library, name='other', marker=marker)
-    local_sources.set_local_python_permission(library, allowed=True)
+
     env = environment_resolution._make_compilation_environment()
     _prepare('from local import erosion\nsource_geo = input_geometry("Geometry")\noutput(erosion(source_geo))', env)
     assert len(env.extension_registry._sessions) == 1
@@ -145,7 +146,7 @@ def test_selected_owner_snapshots_do_not_import_other_python_sources(library):
 def test_recompile_captures_modified_source_without_reusing_implementation(library):
     """Separate root attempts preserve canonical owner ID but vary source fingerprint."""
     file = _write(library)
-    local_sources.set_local_python_permission(library, allowed=True)
+
     before = environment_resolution._make_compilation_environment()
     _prepare('from local import erosion\nsource_geo = input_geometry("Geometry")\noutput(erosion(source_geo))', before)
     owner = ('local-runtime', catalog._path_key(file))
@@ -162,7 +163,7 @@ def test_qualified_local_python_import_uses_same_canonical_identity(library):
     directory = library / 'terrain'
     directory.mkdir()
     file = _write(directory)
-    local_sources.set_local_python_permission(library, allowed=True)
+
     view = environment_resolution._make_compilation_environment()
     group = _prepare('from local.terrain import erosion as terrain_erosion\n'
                      'geo = input_geometry("Geometry")\n'
@@ -177,29 +178,53 @@ def test_member_call_through_directory_alias_rejects_runtime_without_source_lowe
     directory = library / 'terrain'
     directory.mkdir()
     _write(directory)
-    local_sources.set_local_python_permission(library, allowed=True)
+
     with pytest.raises(CompileError, match='explicit from local'):
         _prepare('from local import terrain as t\ngeo = input_geometry("Geometry")\n'
                  'output(t.erosion(geo))', environment_resolution._make_compilation_environment())
 
 
-def test_individual_linked_python_file_requires_its_own_grant(library, tmp_path):
-    """Legacy individually linked files remain independent of folder permissions."""
+def test_individually_linked_file_requires_registration(library, tmp_path):
+    """External files are callable only while their exact registration exists."""
     linked = _write(tmp_path)
-    # Legacy file registrations are supported as a persisted v1 registry record.
     local_sources._write_local_source_registry([
         {'path': str(linked), 'label': 'External', 'kind': 'file'},
     ])
     view = environment_resolution._make_compilation_environment()
-    with pytest.raises(CompileError, match='Allow executable Python'):
-        _prepare('from local import erosion\ngeo = input_geometry("Geometry")\n'
-                 'output(erosion(geo))', view)
-    local_sources.set_local_python_permission(linked, allowed=True)
-    trusted = environment_resolution._make_compilation_environment()
-    group = _prepare('from local import erosion\ngeo = input_geometry("Geometry")\n'
-                     'output(erosion(geo))', trusted)
-    assert group.extension_dependencies[0][0] == ('local-runtime', catalog._path_key(linked))
-    local_sources.set_local_python_permission(linked, allowed=False)
-    with pytest.raises(CompileError, match='Allow executable Python'):
-        _prepare('from local import erosion\ngeo = input_geometry("Geometry")\n'
-                 'output(erosion(geo))', environment_resolution._make_compilation_environment())
+    _prepare('from local import erosion\ngeo = input_geometry("Geometry")\n'
+             'output(erosion(geo))', view)
+    from NodeForge.local_runtime import runtime_source_active
+    assert runtime_source_active('local', linked)
+    local_sources.unlink_local_source_file(linked)
+    assert not runtime_source_active('local', linked)
+
+
+def test_local_registry_ignores_legacy_python_permissions(library, tmp_path):
+    """Legacy consent fields never affect registered Local source membership."""
+    linked = _write(tmp_path)
+    registry = local_sources._local_sources_registry_path()
+    registry.write_text(json.dumps({
+        "version": 1,
+        "managed_allow_python": False,
+        "roots": [{"path": str(linked), "label": "Legacy", "kind": "file",
+                   "allow_python": False}],
+    }), encoding="utf-8")
+    assert local_sources._read_local_source_registry() == [
+        {"path": str(linked), "label": "Legacy", "kind": "file"},
+    ]
+    assert local_sources.is_registered_local_python_source(linked)
+    assert registry.read_text(encoding="utf-8").find("allow_python") != -1
+
+
+def test_local_registry_rejects_corrupt_records(library):
+    """Streamlined registry reads still fail closed on malformed roots."""
+    registry = local_sources._local_sources_registry_path()
+    for payload, message in (
+        ({"version": 999, "roots": []}, "Unsupported Local source registry format"),
+        ({"version": 1, "roots": "bad"}, "Invalid Local source registry roots"),
+        ({"version": 1, "roots": [{"path": "/tmp", "kind": "invalid"}]},
+         "Invalid Local source registry entry kind"),
+    ):
+        registry.write_text(json.dumps(payload), encoding="utf-8")
+        with pytest.raises(CompileError, match=message):
+            local_sources._read_local_source_registry()

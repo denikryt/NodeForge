@@ -46,7 +46,7 @@ def test_packaged_library_functions_and_helper_scoping():
         _write_package_manifest(root, 'vendor.library_probe')
         (functions / 'library_flat_probe.nf').write_text('value = input_float("Value", default=2.0)\noutput("Value", value)\n', encoding='utf-8')
         (functions / 'library_vector_probe.nf').write_text('value = input_vector("Value", default=vector(1, 2, 3))\noutput("Value", value)\n', encoding='utf-8')
-        packages.install_package_directory(root, allow_python=False)
+        packages.install_package_directory(root)
         try:
             check(has_package_function('library_flat_probe'), 'package flat .nf function was not discovered')
             names = package_function_names()
@@ -65,7 +65,7 @@ def test_packaged_library_functions_and_helper_scoping():
         _write_package_manifest(root, 'vendor.private_probe')
         (functions / '_library_private_probe.nf').write_text('value = input_float("Value", default=2.0)\noutput("Value", value)\n', encoding='utf-8')
         try:
-            packages.install_package_directory(root, allow_python=False)
+            packages.install_package_directory(root)
         except packages.PackageError:
             pass
         else:
@@ -87,7 +87,7 @@ def test_same_named_package_functions_materialize_by_canonical_owner():
                 f'value = input_float("Value", default=0.0)\noutput("Value", value + {delta})\n',
                 encoding="utf-8",
             )
-            packages.install_package_directory(root, allow_python=False)
+            packages.install_package_directory(root)
             roots.append(package_id)
         try:
             group = compile_group(
@@ -132,7 +132,7 @@ def test_package_function_can_share_core_callable_name_without_shadowing_core():
             'value = input_float("Value", default=0.0)\noutput("Value", value + 1.0)\n',
             encoding="utf-8",
         )
-        packages.install_package_directory(root, allow_python=False)
+        packages.install_package_directory(root)
         try:
             group = compile_group(
                 "from packages import geometry_tools\n"

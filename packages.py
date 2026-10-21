@@ -21,6 +21,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
+from urllib.parse import urlsplit
 
 from .errors import CompileError
 
@@ -34,13 +35,9 @@ _TEST_PACKAGES_DIR: Path | None = None
 
 
 def _current_nodeforge_version() -> tuple[int, ...]:
-    """Return the running add-on version used for package compatibility checks."""
-    try:
-        from . import bl_info
-
-        raw = bl_info.get("version", ())
-    except Exception:
-        raw = ()
+    """Return the runtime version without relying on Blender's stripped bl_info."""
+    from . import NODEFORGE_VERSION
+    raw = NODEFORGE_VERSION
     if not isinstance(raw, (tuple, list)) or not raw:
         raise PackageError("NodeForge runtime version is unavailable")
     try:
@@ -79,10 +76,19 @@ def _validate_nodeforge_version_bounds(raw: dict[str, Any]) -> None:
         raise PackageError(
             f"Package requires NodeForge {raw.get('nodeforge_min_version')} or newer; current version is {'.'.join(str(p) for p in current)}"
         )
-    if max_version is not None and _compare_versions(current, max_version) > 0:
-        raise PackageError(
-            f"Package supports NodeForge up to {raw.get('nodeforge_max_version')}; current version is {'.'.join(str(p) for p in current)}"
-        )
+
+
+def package_compatibility_warning(manifest: "PackageManifest") -> str:
+    """Return an advisory for a package targeting an older NodeForge maximum."""
+    maximum = manifest.nodeforge_max_version
+    if maximum is None:
+        return ""
+    parsed = _parse_dotted_numeric_version(maximum, "nodeforge_max_version")
+    current = _current_nodeforge_version()
+    if _compare_versions(current, parsed) <= 0:
+        return ""
+    return (f"Package supports NodeForge up to {maximum}; current version is "
+            f"{'.'.join(map(str, current))}. Compatibility is not guaranteed.")
 
 
 def _validate_raw_posix_relative_path(value: Any, field: str) -> str:
@@ -102,6 +108,23 @@ class PackageError(CompileError):
     """Raised when package metadata, state, or files are invalid."""
 
 
+def _optional_repository_url(raw: dict[str, Any]) -> str | None:
+    """Validate optional package repository metadata without accessing the URL."""
+    value = raw.get("repository_url")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value or any(ch.isspace() for ch in value):
+        raise PackageError("Package manifest repository_url must be an HTTP(S) URL")
+    try:
+        parsed = urlsplit(value)
+        valid = parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+    except ValueError:
+        valid = False
+    if not valid:
+        raise PackageError("Package manifest repository_url must be an HTTP(S) URL")
+    return value
+
+
 @dataclass(frozen=True)
 class PackageManifest:
     """Validated package manifest and owning package root."""
@@ -114,7 +137,8 @@ class PackageManifest:
     description: str
     root: Path
     contents: dict[str, str]
-    permissions: dict[str, bool]
+    nodeforge_max_version: str | None = None
+    repository_url: str | None = None
     origin: str = "user"
 
     def root_for(self, namespace: str) -> Path | None:
@@ -151,7 +175,6 @@ class SystemPackageRecord:
     root: Path
     interface_path: Path
     origin: str
-    permissions: dict[str, bool]
 
 
 @dataclass(frozen=True)
@@ -164,8 +187,6 @@ class PackageDiagnostic:
     name: str = ""
     version: str = ""
     origin: str = ""
-    python_required: bool = False
-    python_allowed: bool = False
 
 
 @dataclass(frozen=True)
@@ -174,7 +195,6 @@ class ActivePackage:
 
     manifest: PackageManifest
     state_record: dict[str, Any]
-    python_required: bool
 
 
 def set_packages_dir_for_tests(path: Path | None) -> None:
@@ -228,7 +248,7 @@ def load_package_state() -> dict[str, Any]:
     if data.get("schema_version") != STATE_SCHEMA_VERSION:
         raise PackageError("Unsupported package state schema_version")
     if not isinstance(data.get("packages"), dict):
-        data["packages"] = {}
+        raise PackageError("Package state packages must be an object")
     data.pop("seed_sources", None)
     return data
 
@@ -237,7 +257,12 @@ def save_package_state(state: dict[str, Any]) -> None:
     """Durably save package state using a same-directory temp file and replace."""
     root = packages_dir()
     root.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(state, indent=2, sort_keys=True) + "\n"
+    cleaned = {**state, "packages": {
+        key: ({k: v for k, v in record.items() if k != "allow_python"}
+              if isinstance(record, dict) else record)
+        for key, record in state["packages"].items()
+    }}
+    payload = json.dumps(cleaned, indent=2, sort_keys=True) + "\n"
     fd, tmp_name = tempfile.mkstemp(prefix="state.", suffix=".tmp", dir=root)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -245,7 +270,11 @@ def save_package_state(state: dict[str, Any]) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp_name, state_path())
-        _fsync_directory(root)
+        try:
+            _fsync_directory(root)
+        except OSError:
+            # State is already published: a durability failure cannot trigger rollback.
+            pass
     finally:
         try:
             if os.path.exists(tmp_name):
@@ -255,7 +284,7 @@ def save_package_state(state: dict[str, Any]) -> None:
 
 
 def _fsync_directory(path: Path) -> None:
-    """Best-effort directory fsync for crash-durable state replacement."""
+    """Attempt directory fsync; the state writer handles durability errors."""
     if not hasattr(os, "O_DIRECTORY"):
         return
     try:
@@ -313,13 +342,6 @@ def validate_package_root(root: Path, *, origin: str = "user") -> PackageManifes
             contents[key] = rel
     if not contents:
         raise PackageError("Package manifest must declare at least one supported content root")
-    permissions_raw = raw.get("permissions") or {}
-    if not isinstance(permissions_raw, dict):
-        raise PackageError("Package permissions must be an object")
-    permissions = {"python": bool(permissions_raw.get("python", False))}
-    python_required = package_requires_python(root, contents)
-    if python_required and not permissions["python"]:
-        raise PackageError("Package contains Python or systems but permissions.python is false")
     _validate_root_contents(root, contents)
     return PackageManifest(
         package_id=package_id,
@@ -330,7 +352,8 @@ def validate_package_root(root: Path, *, origin: str = "user") -> PackageManifes
         description=description,
         root=root,
         contents=contents,
-        permissions=permissions,
+        nodeforge_max_version=raw.get("nodeforge_max_version"),
+        repository_url=_optional_repository_url(raw),
         origin=origin,
     )
 
@@ -412,20 +435,6 @@ def _validate_public_name(name: str, context: str) -> None:
         raise PackageError(f"{context} {name!r} must be a valid public identifier")
 
 
-def package_requires_python(root: Path, contents: dict[str, str]) -> bool:
-    """Return whether current declared roots contain Python or systems."""
-    if "systems" in contents:
-        return True
-    for rel in contents.values():
-        content_root = (root / rel).resolve()
-        if not _is_relative_to(content_root, root.resolve()) or not content_root.exists():
-            continue
-        for path in content_root.rglob("*"):
-            if path.is_file() and path.suffix == ".py":
-                return True
-    return False
-
-
 def validate_package_system_declarations(manifest: PackageManifest) -> None:
     """Validate that every structurally accepted system uses Extension API v2.
 
@@ -473,10 +482,7 @@ def _structural_active_package_from_state(package_id: str, record: Any) -> Activ
         raise PackageError("Manifest id does not match package state key")
     if manifest.version != record.get("installed_version"):
         raise PackageError("Manifest version does not match package state version")
-    python_required = package_requires_python(manifest.root, manifest.contents)
-    if python_required and not bool(record.get("allow_python", False)):
-        raise PackageError("Package requires Python but Python consent is not recorded")
-    return ActivePackage(manifest, record, python_required)
+    return ActivePackage(manifest, record)
 
 
 def active_package_manifest_snapshot() -> tuple[PackageManifest, ...]:
@@ -505,10 +511,8 @@ def _package_diagnostic_from_state(package_id: str, record: Any, message: str) -
     """Build UI-facing diagnostics from an invalid state record without activating it."""
     path = str(record.get("installed_path", "")) if isinstance(record, dict) else ""
     origin = str(record.get("origin", "")) if isinstance(record, dict) else ""
-    python_allowed = bool(record.get("allow_python", False)) if isinstance(record, dict) else False
     name = package_id
     version = str(record.get("installed_version", "")) if isinstance(record, dict) else ""
-    python_required = False
     if isinstance(record, dict):
         try:
             rel = _validate_state_installed_path(package_id, record.get("installed_path"))
@@ -516,18 +520,11 @@ def _package_diagnostic_from_state(package_id: str, record: Any, message: str) -
             manifest = validate_package_root(root, origin=origin or "user")
             name = manifest.name
             version = manifest.version
-            python_required = package_requires_python(manifest.root, manifest.contents)
         except Exception:
             pass
     return PackageDiagnostic(
-        package_id=package_id,
-        message=message,
-        path=path,
-        name=name,
-        version=version,
-        origin=origin,
-        python_required=python_required,
-        python_allowed=python_allowed,
+        package_id=package_id, message=message, path=path,
+        name=name, version=version, origin=origin,
     )
 
 
@@ -606,7 +603,6 @@ def system_package_records_from_manifests(
                     root=child.resolve(),
                     interface_path=interface_path.resolve(),
                     origin=item.origin,
-                    permissions=item.permissions,
                 )
             )
     return tuple(records)
@@ -617,14 +613,64 @@ def system_package_records() -> list[SystemPackageRecord]:
     return list(system_package_records_from_manifests(active_package_manifests()))
 
 
-def install_package_directory(source_dir: Path, *, allow_python: bool, replace: bool = False, origin: str = "user") -> PackageManifest:
+def install_included_packages(extension_root: Path) -> tuple[str, ...]:
+    """Install newer versioned ZIPs shipped with this extension as regular Packages.
+
+    All candidate IDs are validated before mutation, and the installed state
+    remains the sole version authority. An invalid top-level state aborts the batch.
+    """
+    archive_dir = Path(extension_root) / "package_install"
+    if not archive_dir.is_dir():
+        return ()
+    archives = sorted(archive_dir.glob("*.zip"))
+    if not archives:
+        return ()
+    # Fail closed before even extracting one archive into the user inventory.
+    state = load_package_state()
+    candidates = []
+    errors = []
+    seen = set()
+    for archive in archives:
+        staging = packages_dir() / ".staging" / uuid.uuid4().hex
+        staging.mkdir(parents=True, exist_ok=False)
+        try:
+            root = _extract_zip_to_staging(archive, staging)
+            manifest = validate_package_root(root)
+            if manifest.package_id in seen:
+                # Ambiguous release contents must not partially change inventory.
+                return (f"Duplicate included package ID: {manifest.package_id}",)
+            seen.add(manifest.package_id)
+            candidates.append((archive, manifest.package_id, manifest.version))
+        except Exception as exc:
+            errors.append(f"{archive.name}: {exc}")
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+    for archive, package_id, version in candidates:
+        installed = state["packages"].get(package_id)
+        origin = "user"
+        if installed is not None:
+            try:
+                active = _active_package_from_state(package_id, installed)
+                if _compare_versions(
+                    _parse_dotted_numeric_version(active.manifest.version, "version"),
+                    _parse_dotted_numeric_version(version, "version"),
+                ) >= 0:
+                    continue
+                origin = str(active.state_record.get("origin") or "user")
+            except Exception as exc:
+                errors.append(f"{package_id}: installed package is invalid: {exc}")
+                continue
+        try:
+            install_package_zip(archive, replace=installed is not None, origin=origin)
+        except Exception as exc:
+            errors.append(f"{archive.name}: {exc}")
+    return tuple(errors)
+
+
+def install_package_directory(source_dir: Path, *, replace: bool = False, origin: str = "user") -> PackageManifest:
     """Install a package after validating the exact copied bytes that may be published."""
     source_dir = Path(source_dir).resolve()
     manifest = validate_package_root(source_dir, origin=origin)
-    current_python_required = package_requires_python(manifest.root, manifest.contents)
-    if current_python_required and not allow_python:
-        raise PackageError("Package requires executable Python; explicit consent is required")
-
     state = load_package_state()
     if manifest.package_id in state.get("packages", {}) and not replace:
         raise PackageError(f"Package {manifest.package_id!r} is already installed")
@@ -636,7 +682,7 @@ def install_package_directory(source_dir: Path, *, allow_python: bool, replace: 
         # Copy first. V2 declaration Python is normalized only from these exact
         # candidate bytes, never once from source and again from the installed copy.
         record = _install_validated_directory(
-            source_dir, manifest, allow_python=allow_python, origin=origin
+            source_dir, manifest, origin=origin
         )
         installed_root = (packages_dir() / record["installed_path"]).resolve()
         installed_manifest = validate_package_root(installed_root, origin=origin)
@@ -668,7 +714,7 @@ def install_package_directory(source_dir: Path, *, allow_python: bool, replace: 
     return validate_package_root((packages_dir() / record["installed_path"]).resolve(), origin=origin)
 
 
-def _install_validated_directory(source_dir: Path, manifest: PackageManifest, *, allow_python: bool, origin: str) -> dict[str, Any]:
+def _install_validated_directory(source_dir: Path, manifest: PackageManifest, *, origin: str) -> dict[str, Any]:
     """Copy one structurally validated package without executing declaration Python."""
     token = f"install_{uuid.uuid4().hex[:12]}"
     target_parent = installed_dir() / manifest.package_id
@@ -676,28 +722,29 @@ def _install_validated_directory(source_dir: Path, manifest: PackageManifest, *,
     target = target_parent / token
     if target.exists():
         raise PackageError("Install target collision")
-    shutil.copytree(source_dir, target, symlinks=False, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"))
-    installed_manifest = validate_package_root(target, origin=origin)
-    if installed_manifest.package_id != manifest.package_id or installed_manifest.version != manifest.version:
-        raise PackageError("Copied package manifest identity changed during installation")
-    if package_requires_python(installed_manifest.root, installed_manifest.contents) and not allow_python:
-        raise PackageError("Package requires executable Python; explicit consent is required")
+    try:
+        shutil.copytree(source_dir, target, symlinks=False, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"))
+        installed_manifest = validate_package_root(target, origin=origin)
+        if installed_manifest.package_id != manifest.package_id or installed_manifest.version != manifest.version:
+            raise PackageError("Copied package manifest identity changed during installation")
+    except Exception:
+        shutil.rmtree(target, ignore_errors=True)
+        raise
     rel = Path("installed") / manifest.package_id / token
     return {
         "installed_path": rel.as_posix(),
         "installed_version": installed_manifest.version,
-        "allow_python": bool(allow_python),
         "origin": origin,
     }
 
-def install_package_zip(zip_path: Path, *, allow_python: bool, replace: bool = False, origin: str = "user") -> PackageManifest:
+def install_package_zip(zip_path: Path, *, replace: bool = False, origin: str = "user") -> PackageManifest:
     """Install a package from a hostile zip archive after safe extraction."""
     zip_path = Path(zip_path)
     staging = packages_dir() / ".staging" / uuid.uuid4().hex
     staging.mkdir(parents=True, exist_ok=False)
     try:
         root = _extract_zip_to_staging(zip_path, staging)
-        return install_package_directory(root, allow_python=allow_python, replace=replace, origin=origin)
+        return install_package_directory(root, replace=replace, origin=origin)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
@@ -995,7 +1042,6 @@ __all__ = [
     "load_package_state",
     "save_package_state",
     "validate_package_root",
-    "package_requires_python",
     "validate_package_system_declarations",
     "active_package_records",
     "active_package_manifests",

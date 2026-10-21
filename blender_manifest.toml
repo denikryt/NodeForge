@@ -1,0 +1,22 @@
+schema_version = "1.0.0"
+id = "nodeforge"
+version = "0.72.7"
+name = "NodeForge"
+tagline = "Compile a procedural DSL into Blender Geometry Nodes"
+maintainer = "nachitima"
+type = "add-on"
+website = "https://github.com/denikryt/NodeForge"
+tags = ["Node"]
+blender_version_min = "5.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
+
+[permissions]
+files = "Install NodeForge libraries in Blender's user data directory"
+
+[build]
+paths_exclude_pattern = [
+    ".git/", ".github/", ".pytest_cache/", ".venv/", "__pycache__/",
+    "tests/", "dev/", "plans/", "local/", "media/", "*.pyc",
+    "*.pyo", "*.blend[1-9]", "AGENTS.md", "*.patch", "/*.zip",
+    "*.log", "*.tmp", "*.tar", "*.xz",
+]

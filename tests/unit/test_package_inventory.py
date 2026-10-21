@@ -173,6 +173,40 @@ def _write_v2_system(system_root: Path, public_name: str) -> None:
         encoding="utf-8",
     )
 
+@pytest.mark.parametrize("repository_url", [None, "https://github.com/denikryt/nodeforge.math"])
+def test_optional_repository_url_is_preserved_on_install_and_reload(package_inventory, tmp_path, repository_url):
+    """Repository metadata is optional and does not affect ordinary package activation."""
+    source = tmp_path / "vendor.metadata"
+    (source / "functions").mkdir(parents=True)
+    _write_manifest(source, package_id="vendor.metadata")
+    manifest_path = source / "nodeforge_package.json"
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if repository_url is not None:
+        raw["repository_url"] = repository_url
+        manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    assert packages.validate_package_root(source).repository_url == repository_url
+    packages.install_package_directory(source)
+    installed = next(m for m in packages.active_package_manifests() if m.package_id == "vendor.metadata")
+    assert installed.repository_url == repository_url
+    assert "repository_url" not in packages.load_package_state()["packages"]["vendor.metadata"]
+
+
+@pytest.mark.parametrize("repository_url", ["", "../repo", "file:///tmp/repo", "javascript:alert(1)", "https://", 123, ["https://github.com"]])
+def test_invalid_repository_url_is_rejected_before_install(package_inventory, tmp_path, repository_url):
+    """An invalid optional link cannot enter a validated package manifest."""
+    source = tmp_path / "vendor.invalid_url"
+    (source / "functions").mkdir(parents=True)
+    _write_manifest(source, package_id="vendor.invalid_url")
+    manifest_path = source / "nodeforge_package.json"
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    raw["repository_url"] = repository_url
+    manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(packages.PackageError, match="repository_url"):
+        packages.install_package_directory(source)
+    assert packages.load_package_state()["packages"] == {}
+
+
 def test_explicitly_installed_packages_use_unified_inventory(package_inventory, tmp_path):
     source = tmp_path / "vendor.inventory"
     (source / "functions").mkdir(parents=True)
@@ -180,7 +214,7 @@ def test_explicitly_installed_packages_use_unified_inventory(package_inventory, 
     (source / "functions" / "identity.nf").write_text('value = input_float("Value")\noutput("Value", value)\n', encoding="utf-8")
     (source / "examples" / "demo.nf").write_text('output("Value", 1)\n', encoding="utf-8")
     _write_manifest(source, package_id="vendor.inventory", contents={"functions": "functions", "examples": "examples"})
-    packages.install_package_directory(source, allow_python=False)
+    packages.install_package_directory(source)
 
     manifests = {m.package_id: m for m in packages.active_package_manifests()}
     assert set(manifests) == {"vendor.inventory"}
@@ -209,7 +243,7 @@ def test_manifest_derived_roots_match_live_wrappers_without_loading_state(
         contents={"functions": "functions", "examples": "examples", "systems": "systems"},
         python=True,
     )
-    packages.install_package_directory(source, allow_python=True)
+    packages.install_package_directory(source)
 
     manifests = tuple(packages.active_package_manifests())
     expected_functions = tuple(packages.library_roots("functions"))
@@ -238,7 +272,7 @@ def test_system_resolution_uses_v2_interface_without_v1_handler_dispatch(package
         python=True,
     )
     _write_v2_system(system_root, "resolved_marker")
-    packages.install_package_directory(source, allow_python=True)
+    packages.install_package_directory(source)
 
     records = tuple(packages.system_package_records())
     assert len(records) == 1
@@ -251,13 +285,13 @@ def test_uninstall_validates_state_pointer_before_deleting_files(package_invento
     (source_a / "functions").mkdir(parents=True)
     (source_a / "functions" / "a.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(source_a, package_id="vendor.a")
-    packages.install_package_directory(source_a, allow_python=False)
+    packages.install_package_directory(source_a)
 
     source_b = tmp_path / "source_b"
     (source_b / "functions").mkdir(parents=True)
     (source_b / "functions" / "b.nf").write_text("output(value=2)\n", encoding="utf-8")
     _write_manifest(source_b, package_id="vendor.b")
-    packages.install_package_directory(source_b, allow_python=False)
+    packages.install_package_directory(source_b)
 
     state = packages.load_package_state()
     b_path = state["packages"]["vendor.b"]["installed_path"]
@@ -278,13 +312,13 @@ def test_replace_skips_cleanup_when_old_pointer_is_invalid(package_inventory, tm
     (source_old / "functions").mkdir(parents=True)
     (source_old / "functions" / "old.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(source_old, package_id="vendor.replace")
-    packages.install_package_directory(source_old, allow_python=False)
+    packages.install_package_directory(source_old)
 
     source_b = tmp_path / "source_b"
     (source_b / "functions").mkdir(parents=True)
     (source_b / "functions" / "b.nf").write_text("output(value=2)\n", encoding="utf-8")
     _write_manifest(source_b, package_id="vendor.b")
-    packages.install_package_directory(source_b, allow_python=False)
+    packages.install_package_directory(source_b)
 
     state = packages.load_package_state()
     b_path = state["packages"]["vendor.b"]["installed_path"]
@@ -297,7 +331,7 @@ def test_replace_skips_cleanup_when_old_pointer_is_invalid(package_inventory, tm
     (replacement / "functions" / "new.nf").write_text("output(value=3)\n", encoding="utf-8")
     _write_manifest(replacement, package_id="vendor.replace", version="2.0.0")
 
-    packages.install_package_directory(replacement, allow_python=False, replace=True)
+    packages.install_package_directory(replacement, replace=True)
 
     after = packages.load_package_state()
     assert after["packages"]["vendor.replace"]["installed_version"] == "2.0.0"
@@ -320,11 +354,11 @@ def test_install_rechecks_duplicate_package_id_at_final_commit(package_inventory
     real_install = packages._install_validated_directory
     concurrent_record = {}
 
-    def install_and_interleave(source_dir, manifest, *, allow_python, origin):
-        record = real_install(source_dir, manifest, allow_python=allow_python, origin=origin)
+    def install_and_interleave(source_dir, manifest, *, origin):
+        record = real_install(source_dir, manifest, origin=origin)
         if manifest.package_id == "vendor.race" and not concurrent_record:
             other_manifest = packages.validate_package_root(concurrent, origin="user")
-            other_record = real_install(concurrent, other_manifest, allow_python=False, origin="user")
+            other_record = real_install(concurrent, other_manifest, origin="user")
             state = packages.load_package_state()
             state.setdefault("packages", {})["vendor.race"] = other_record
             packages.save_package_state(state)
@@ -334,7 +368,7 @@ def test_install_rechecks_duplicate_package_id_at_final_commit(package_inventory
     monkeypatch.setattr(packages, "_install_validated_directory", install_and_interleave)
 
     with pytest.raises(packages.PackageError, match="already installed"):
-        packages.install_package_directory(candidate, allow_python=False)
+        packages.install_package_directory(candidate)
 
     state_record = packages.load_package_state()["packages"]["vendor.race"]
     assert state_record["installed_path"] == concurrent_record["installed_path"]
@@ -364,7 +398,7 @@ def test_current_python_requirement_is_recomputed_on_load(package_inventory, tmp
     (source / "functions").mkdir(parents=True)
     (source / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(source)
-    manifest = packages.install_package_directory(source, allow_python=False)
+    manifest = packages.install_package_directory(source)
     active_root = next(m.root for m in packages.active_package_manifests() if m.package_id == manifest.package_id)
     (active_root / "functions" / "demo" ).mkdir()
     (active_root / "functions" / "demo" / "function.py").write_text("X = 1\n", encoding="utf-8")
@@ -381,12 +415,12 @@ def test_manifest_version_bounds_are_enforced_before_commit(package_inventory, t
     _write_manifest(source, package_id="vendor.future", nodeforge_min_version="999.0.0")
 
     with pytest.raises(packages.PackageError, match="requires NodeForge"):
-        packages.install_package_directory(source, allow_python=False)
+        packages.install_package_directory(source)
 
     assert "vendor.future" not in packages.load_package_state()["packages"]
 
 
-def test_manifest_expired_max_version_is_rejected_for_zip_install(package_inventory, tmp_path):
+def test_expired_max_version_is_advisory_for_zip_install(package_inventory, tmp_path):
     source = tmp_path / "expired" / "vendor.expired"
     (source / "functions").mkdir(parents=True)
     (source / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
@@ -397,10 +431,10 @@ def test_manifest_expired_max_version_is_rejected_for_zip_install(package_invent
             if path.is_file():
                 zf.write(path, path.relative_to(source.parent).as_posix())
 
-    with pytest.raises(packages.PackageError, match="supports NodeForge"):
-        packages.install_package_zip(archive, allow_python=False)
-
-    assert "vendor.expired" not in packages.load_package_state()["packages"]
+    manifest = packages.install_package_zip(archive)
+    assert manifest.package_id == 'vendor.expired'
+    assert 'Compatibility is not guaranteed' in packages.package_compatibility_warning(manifest)
+    assert 'vendor.expired' in packages.load_package_state()['packages']
 
 
 def test_malformed_manifest_versions_are_rejected(package_inventory, tmp_path):
@@ -410,7 +444,7 @@ def test_malformed_manifest_versions_are_rejected(package_inventory, tmp_path):
     _write_manifest(source, package_id="vendor.badversion", version="1.beta.0")
 
     with pytest.raises(packages.PackageError, match="version"):
-        packages.install_package_directory(source, allow_python=False)
+        packages.install_package_directory(source)
 
 
 def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(package_inventory, tmp_path, monkeypatch):
@@ -447,7 +481,7 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
     make_source(source_a, "vendor.a")
     make_source(source_b, "vendor.b")
 
-    packages.install_package_directory(source_a, allow_python=False)
+    packages.install_package_directory(source_a)
 
     compiled = []
 
@@ -482,7 +516,7 @@ def test_nonmath_package_materialization_does_not_reuse_uninstalled_group(packag
     assert compiled[-1][1] is group_a
 
     packages.uninstall_package("vendor.a")
-    packages.install_package_directory(source_b, allow_python=False)
+    packages.install_package_directory(source_b)
 
     group_b = library_groups.materialize_library_entry_group("examples", "demo", _FakeGroupBackend(compile_group))
 
@@ -522,7 +556,7 @@ def test_library_materialization_contract_discriminator_is_explicit(package_inve
     (source / "functions").mkdir(parents=True)
     (source / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(source, package_id="vendor.contract", contents={"functions": "functions"})
-    packages.install_package_directory(source, allow_python=False)
+    packages.install_package_directory(source)
 
     calls = []
 
@@ -627,7 +661,7 @@ def test_zip_rejects_multiple_manifest_candidates(package_inventory, tmp_path):
         zf.writestr("vendor.other/functions/other.nf", "output(value=2)\n")
 
     with pytest.raises(packages.PackageError, match="exactly one"):
-        packages.install_package_zip(archive, allow_python=False)
+        packages.install_package_zip(archive)
 
     assert "vendor.root" not in packages.load_package_state()["packages"]
 
@@ -639,7 +673,7 @@ def test_zip_rejects_deep_manifest_candidate(package_inventory, tmp_path):
         zf.writestr("a/b/functions/demo.nf", "output(value=1)\n")
 
     with pytest.raises(packages.PackageError, match="root or one top-level directory"):
-        packages.install_package_zip(archive, allow_python=False)
+        packages.install_package_zip(archive)
 
 
 def test_package_id_regex_matches_manifest_contract(package_inventory, tmp_path):
@@ -647,7 +681,7 @@ def test_package_id_regex_matches_manifest_contract(package_inventory, tmp_path)
     (valid / "functions").mkdir(parents=True)
     (valid / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(valid, package_id="vendor.3d", import_name="pkg3d")
-    manifest = packages.install_package_directory(valid, allow_python=False)
+    manifest = packages.install_package_directory(valid)
     assert manifest.package_id == "vendor.3d"
 
     invalid = tmp_path / "invalid_underscore"
@@ -655,7 +689,7 @@ def test_package_id_regex_matches_manifest_contract(package_inventory, tmp_path)
     (invalid / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(invalid, package_id="ven_dor.foo")
     with pytest.raises(packages.PackageError, match="Package id"):
-        packages.install_package_directory(invalid, allow_python=False)
+        packages.install_package_directory(invalid)
 
 
 def test_package_id_allows_underscore_after_dot(package_inventory, tmp_path):
@@ -664,7 +698,7 @@ def test_package_id_allows_underscore_after_dot(package_inventory, tmp_path):
         (source / "functions").mkdir(parents=True)
         (source / "functions" / f"demo_{index}.nf").write_text("output(value=1)\n", encoding="utf-8")
         _write_manifest(source, package_id=package_id, import_name=f"tools_{index}")
-        manifest = packages.install_package_directory(source, allow_python=False)
+        manifest = packages.install_package_directory(source)
         assert manifest.package_id == package_id
 
 
@@ -674,13 +708,13 @@ def test_package_import_name_explicit_and_default_are_manifest_owned(package_inv
     (explicit / "functions").mkdir(parents=True)
     (explicit / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(explicit, package_id="vendor.explicit", import_name="tools")
-    assert packages.install_package_directory(explicit, allow_python=False).import_name == "tools"
+    assert packages.install_package_directory(explicit).import_name == "tools"
 
     defaulted = tmp_path / "default_import"
     (defaulted / "functions").mkdir(parents=True)
     (defaulted / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(defaulted, package_id="vendor.defaulted")
-    assert packages.install_package_directory(defaulted, allow_python=False).import_name == "defaulted"
+    assert packages.install_package_directory(defaulted).import_name == "defaulted"
 
 
 @pytest.mark.parametrize("import_name", ["class", "_private", "not-valid"])
@@ -691,7 +725,7 @@ def test_package_import_name_rejects_non_public_source_identifiers(package_inven
     (source / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(source, package_id=f"vendor.bad{len(import_name)}", import_name=import_name)
     with pytest.raises(packages.PackageError, match="import_name"):
-        packages.install_package_directory(source, allow_python=False)
+        packages.install_package_directory(source)
 
 
 def test_package_import_names_are_unique_across_active_owners(package_inventory, tmp_path):
@@ -702,10 +736,10 @@ def test_package_import_names_are_unique_across_active_owners(package_inventory,
         (source / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
         _write_manifest(source, package_id=package_id, import_name="shared")
         if package_id.endswith("first"):
-            packages.install_package_directory(source, allow_python=False)
+            packages.install_package_directory(source)
         else:
             with pytest.raises(packages.PackageError, match=r"Package import name 'shared'.*vendor\.first"):
-                packages.install_package_directory(source, allow_python=False)
+                packages.install_package_directory(source)
 
 
 def test_package_replace_rechecks_import_name_collision_before_commit(package_inventory, tmp_path):
@@ -714,20 +748,20 @@ def test_package_replace_rechecks_import_name_collision_before_commit(package_in
     (first / "functions").mkdir(parents=True)
     (first / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(first, package_id="vendor.first", import_name="shared")
-    packages.install_package_directory(first, allow_python=False)
+    packages.install_package_directory(first)
 
     second = tmp_path / "second"
     (second / "functions").mkdir(parents=True)
     (second / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(second, package_id="vendor.second", import_name="second", version="1.0.0")
-    packages.install_package_directory(second, allow_python=False)
+    packages.install_package_directory(second)
 
     replacement = tmp_path / "second_v2"
     (replacement / "functions").mkdir(parents=True)
     (replacement / "functions" / "demo.nf").write_text("output(value=2)\n", encoding="utf-8")
     _write_manifest(replacement, package_id="vendor.second", import_name="shared", version="2.0.0")
     with pytest.raises(packages.PackageError, match=r"Package import name 'shared'.*vendor\.first"):
-        packages.install_package_directory(replacement, allow_python=False, replace=True)
+        packages.install_package_directory(replacement, replace=True)
     assert packages.load_package_state()["packages"]["vendor.second"]["installed_version"] == "1.0.0"
 
 def test_zip_rejects_duplicate_casefold_destinations(package_inventory, tmp_path):
@@ -738,7 +772,7 @@ def test_zip_rejects_duplicate_casefold_destinations(package_inventory, tmp_path
         zf.writestr("vendor.demo/functions/foo.nf", "output(value=1)\n")
 
     with pytest.raises(packages.PackageError, match="Duplicate zip destination"):
-        packages.install_package_zip(archive, allow_python=False)
+        packages.install_package_zip(archive)
 
 
 
@@ -756,7 +790,7 @@ def test_zip_rejects_unsafe_directory_entries(package_inventory, tmp_path):
             zf.writestr("vendor.safe/functions/demo.nf", "output(value=1)\n")
 
         with pytest.raises(packages.PackageError, match="Unsafe zip member path"):
-            packages.install_package_zip(archive, allow_python=False)
+            packages.install_package_zip(archive)
 
 
 def test_zip_rejects_symlink_and_special_directory_entries(package_inventory, tmp_path):
@@ -770,7 +804,7 @@ def test_zip_rejects_symlink_and_special_directory_entries(package_inventory, tm
             zf.writestr("vendor.safe/functions/demo.nf", "output(value=1)\n")
 
         with pytest.raises(packages.PackageError, match="Unsupported special file"):
-            packages.install_package_zip(archive, allow_python=False)
+            packages.install_package_zip(archive)
 
 
 
@@ -802,7 +836,7 @@ def test_zip_rejects_dot_and_empty_segments_in_member_paths(package_inventory, t
             zf.writestr(function_name, "output(value=1)\n")
 
         with pytest.raises(packages.PackageError, match="Unsafe zip member path"):
-            packages.install_package_zip(archive, allow_python=False)
+            packages.install_package_zip(archive)
 
         assert package_id not in packages.load_package_state()["packages"]
 
@@ -822,7 +856,7 @@ def test_manifest_rejects_dot_and_empty_segments_in_content_roots(package_invent
         _write_manifest(source, package_id=f"vendor.badpath{index}", contents=contents, python="systems" in contents)
 
         with pytest.raises(packages.PackageError, match=expected_field):
-            packages.install_package_directory(source, allow_python=True)
+            packages.install_package_directory(source)
 
         assert f"vendor.badpath{index}" not in packages.load_package_state()["packages"]
 
@@ -835,7 +869,7 @@ def test_directory_install_rejects_internal_duplicate_function_public_names(pack
     _write_manifest(source, package_id="vendor.dupefunc")
 
     with pytest.raises(packages.PackageError, match="Duplicate functions library entry"):
-        packages.install_package_directory(source, allow_python=False)
+        packages.install_package_directory(source)
 
     assert "vendor.dupefunc" not in packages.load_package_state()["packages"]
 
@@ -853,7 +887,7 @@ def test_zip_install_rejects_internal_duplicate_example_public_names(package_inv
                 zf.write(path, path.relative_to(source.parent).as_posix())
 
     with pytest.raises(packages.PackageError, match="Duplicate examples library entry"):
-        packages.install_package_zip(archive, allow_python=False)
+        packages.install_package_zip(archive)
 
     assert "vendor.dupeexamples" not in packages.load_package_state()["packages"]
 
@@ -871,7 +905,7 @@ def test_install_rejects_v1_system_owner_without_executing_module(package_invent
     )
 
     with pytest.raises(packages.PackageError, match="unsupported Extension API v1 system.py"):
-        packages.install_package_directory(source, allow_python=True)
+        packages.install_package_directory(source)
 
     assert not sentinel.exists()
 
@@ -885,7 +919,7 @@ def test_install_rejects_v1_system_before_state_commit(package_inventory, tmp_pa
     )
 
     with pytest.raises(packages.PackageError, match="unsupported Extension API v1 system.py"):
-        packages.install_package_directory(source, allow_python=True)
+        packages.install_package_directory(source)
 
     assert "vendor.bad" not in packages.load_package_state()["packages"]
 
@@ -897,7 +931,7 @@ def test_install_allows_package_export_colliding_with_core_builtin(package_inven
     _write_manifest(source, package_id="vendor.corecollision", contents={"systems": "systems"}, python=True)
     _write_v2_system(source / "systems" / "test", "cube")
 
-    packages.install_package_directory(source, allow_python=True)
+    packages.install_package_directory(source)
 
     manifest = next(item for item in packages.active_package_manifests() if item.package_id == "vendor.corecollision")
     inventory = packages._normalize_package_callable_inventory(manifest, normalize_native_libraries=True)
@@ -910,13 +944,13 @@ def test_replace_allows_new_export_colliding_with_core_builtin(package_inventory
     (original / "systems" / "test").mkdir(parents=True)
     _write_manifest(original, package_id="vendor.replace", contents={"systems": "systems"}, python=True)
     _write_v2_system(original / "systems" / "test", "replace_marker")
-    packages.install_package_directory(original, allow_python=True)
+    packages.install_package_directory(original)
 
     replacement = tmp_path / "replacement"
     (replacement / "systems" / "test").mkdir(parents=True)
     _write_manifest(replacement, package_id="vendor.replace", contents={"systems": "systems"}, python=True, version="2.0.0")
     _write_v2_system(replacement / "systems" / "test", "cube")
-    packages.install_package_directory(replacement, allow_python=True, replace=True)
+    packages.install_package_directory(replacement, replace=True)
 
     state_record = packages.load_package_state()["packages"]["vendor.replace"]
     assert state_record["installed_version"] == "2.0.0"
@@ -931,13 +965,13 @@ def test_cross_package_function_and_extension_names_may_overlap(package_inventor
     (owner / "systems" / "test").mkdir(parents=True)
     _write_manifest(owner, package_id="vendor.constructorowner", contents={"systems": "systems"}, python=True)
     _write_v2_system(owner / "systems" / "test", "active_marker")
-    packages.install_package_directory(owner, allow_python=True)
+    packages.install_package_directory(owner)
 
     source = tmp_path / "function_constructor_collision"
     (source / "functions").mkdir(parents=True)
     (source / "functions" / "active_marker.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(source, package_id="vendor.funcconstructor", contents={"functions": "functions"})
-    packages.install_package_directory(source, allow_python=False)
+    packages.install_package_directory(source)
 
     assert {"vendor.constructorowner", "vendor.funcconstructor"} <= set(packages.load_package_state()["packages"])
 
@@ -948,13 +982,13 @@ def test_cross_package_extension_and_function_names_may_overlap_reverse_order(pa
     (owner / "functions").mkdir(parents=True)
     (owner / "functions" / "active_function.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(owner, package_id="vendor.functionowner", contents={"functions": "functions"})
-    packages.install_package_directory(owner, allow_python=False)
+    packages.install_package_directory(owner)
 
     source = tmp_path / "constructor_function_collision"
     (source / "systems" / "test").mkdir(parents=True)
     _write_manifest(source, package_id="vendor.constructorfunc", contents={"systems": "systems"}, python=True)
     _write_v2_system(source / "systems" / "test", "active_function")
-    packages.install_package_directory(source, allow_python=True)
+    packages.install_package_directory(source)
 
     assert {"vendor.functionowner", "vendor.constructorfunc"} <= set(packages.load_package_state()["packages"])
 
@@ -973,7 +1007,7 @@ def test_install_rejects_same_package_function_and_constructor_name(package_inve
     _write_v2_system(source / "systems" / "test", "marker")
 
     with pytest.raises(packages.PackageError, match="function and constructor"):
-        packages.install_package_directory(source, allow_python=True)
+        packages.install_package_directory(source)
 
     assert "vendor.samecollision" not in packages.load_package_state()["packages"]
 
@@ -984,19 +1018,19 @@ def test_replace_allows_cross_owner_member_overlap(package_inventory, tmp_path):
     (original / "functions").mkdir(parents=True)
     (original / "functions" / "original.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(original, package_id="vendor.crossreplace", contents={"functions": "functions"})
-    packages.install_package_directory(original, allow_python=False)
+    packages.install_package_directory(original)
 
     owner = tmp_path / "active_cross_constructor"
     (owner / "systems" / "test").mkdir(parents=True)
     _write_manifest(owner, package_id="vendor.crossowner", contents={"systems": "systems"}, python=True)
     _write_v2_system(owner / "systems" / "test", "cross_marker")
-    packages.install_package_directory(owner, allow_python=True)
+    packages.install_package_directory(owner)
 
     replacement = tmp_path / "replacement_cross_kind"
     (replacement / "functions").mkdir(parents=True)
     (replacement / "functions" / "cross_marker.nf").write_text("output(value=2)\n", encoding="utf-8")
     _write_manifest(replacement, package_id="vendor.crossreplace", contents={"functions": "functions"}, version="2.0.0")
-    packages.install_package_directory(replacement, allow_python=False, replace=True)
+    packages.install_package_directory(replacement, replace=True)
 
     state_record = packages.load_package_state()["packages"]["vendor.crossreplace"]
     assert state_record["installed_version"] == "2.0.0"
@@ -1039,37 +1073,26 @@ def test_state_uses_origin_not_provenance(package_inventory, tmp_path):
     (source / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(source, package_id="vendor.origin")
 
-    packages.install_package_directory(source, allow_python=False, origin="user")
+    packages.install_package_directory(source, origin="user")
     record = packages.load_package_state()["packages"]["vendor.origin"]
 
     assert record["origin"] == "user"
     assert "provenance" not in record
 
 
-def test_invalid_package_diagnostic_exposes_python_consent_fields(package_inventory, tmp_path):
+def test_python_package_remains_active_with_legacy_false_grant(package_inventory, tmp_path):
+    """Ignored permission metadata cannot turn an installed package into a diagnostic."""
     source = tmp_path / "source"
     (source / "functions" / "demo").mkdir(parents=True)
-    (source / "functions" / "demo" / "source.nf").write_text("output(value=1)\n", encoding="utf-8")
-    (source / "functions" / "demo" / "function.py").write_text("X = 1\n", encoding="utf-8")
+    (source / "functions" / "demo" / "source.nf").write_text("output(value=1)\n")
+    (source / "functions" / "demo" / "function.py").write_text("X = 1\n")
     _write_manifest(source, package_id="vendor.pyblocked", contents={"functions": "functions"}, python=True)
-    manifest = packages.install_package_directory(source, allow_python=True)
+    manifest = packages.install_package_directory(source)
     state = packages.load_package_state()
     state["packages"][manifest.package_id]["allow_python"] = False
-    packages.save_package_state(state)
-
-    active_ids = {m.package_id for m in packages.active_package_manifests()}
-    diagnostics = packages.active_package_records(include_invalid=True)
-    diag = next(item for item in diagnostics if isinstance(item, packages.PackageDiagnostic) and item.package_id == "vendor.pyblocked")
-
-    assert "vendor.pyblocked" not in active_ids
-    assert diag.python_required is True
-    assert diag.python_allowed is False
-    assert "Python" in diag.message
-    assert diag.name == "vendor.pyblocked"
-    assert diag.version == "1.0.0"
-
-
-
+    packages.state_path().write_text(json.dumps(state))
+    assert "vendor.pyblocked" in {m.package_id for m in packages.active_package_manifests()}
+    assert all(not isinstance(item, packages.PackageDiagnostic) for item in packages.active_package_records(include_invalid=True))
 
 
 def test_inventory_does_not_auto_install_packages(tmp_path):
@@ -1084,7 +1107,7 @@ def test_uninstall_removes_invalid_record_without_deleting_untrusted_target(pack
     (source / "functions").mkdir(parents=True)
     (source / "functions" / "demo.nf").write_text("output(value=1)\n", encoding="utf-8")
     _write_manifest(source, package_id="vendor.invalid")
-    packages.install_package_directory(source, allow_python=False)
+    packages.install_package_directory(source)
 
     other = tmp_path / "must_survive"
     other.mkdir()

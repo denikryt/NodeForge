@@ -85,7 +85,7 @@ def install(tmp_path, functions, *, extension=False):
         'contents': contents, 'permissions': {'python': extension},
         'nodeforge_min_version': '0.66.0', 'nodeforge_max_version': None,
     }))
-    return packages.install_package_directory(root, allow_python=extension)
+    return packages.install_package_directory(root)
 
 
 def prepare(text, view, session=None):

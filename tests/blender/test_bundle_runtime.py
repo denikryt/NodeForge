@@ -172,7 +172,7 @@ def test_bundle_packaged_library_function_round_trip():
         )
         packages.set_packages_dir_for_tests(tmp / "inventory")
         try:
-            packages.install_package_directory(root, allow_python=False)
+            packages.install_package_directory(root)
             group = compile_group('''
 from packages import bundle as bundle_pkg
 state = bundle(value=2.0)

@@ -57,7 +57,7 @@ with tempfile.TemporaryDirectory(prefix="mesh_compute_bench23_") as directory:
     (local / "passthrough.py").write_text('''import numpy as np\nfrom NodeForge import mesh_compute\n@mesh_compute(writes=("height",))\ndef passthrough(mesh):\n    coords=np.frombuffer(mesh.positions,dtype=np.float32).reshape((-1,3)).copy()\n    return {"positions":coords,"point_attributes":{"height":coords[:,2].copy()}}\n''')
     local_sources._default_local_catalog_dir = lambda: local
     local_sources._local_sources_registry_path = lambda: root / "registry.json"
-    local_sources.set_local_python_permission(local, allowed=True)
+
     source = 'from local import passthrough\ngeo = input_geometry("Geometry")\ngeo = passthrough(geo)\noutput("Geometry", geo)\n'
     owners = []
     for side in SIZES:

@@ -92,19 +92,19 @@ def test_scalar_and_geometry_updates_never_skip(configured_local, mesh_object, m
     assert _evaluated_positions(mesh_object)[0] == (9., 7., 8.)
 
 
-def test_foreign_event_does_not_hide_permission_revocation(configured_local, mesh_object, monkeypatch):
-    """Trust revocation is outside depsgraph, so a foreign event must invalidate output."""
+def test_foreign_event_does_not_hide_source_owner_removal(configured_local, mesh_object, monkeypatch):
+    """Owner availability is outside depsgraph; a foreign event must invalidate output."""
     binding = _init(mesh_object)
     foreign, data = _foreign_object()
     try:
         bpy.context.view_layer.update()
         decisions = _measured_gate(monkeypatch)
         old = binding.last_published
-        local_sources.set_local_python_permission(configured_local, allowed=False)
+        (configured_local / 'shift.py').unlink()
         foreign.update_tag(refresh={'OBJECT'})
         bpy.context.view_layer.update()
         assert decisions and False in decisions
-        assert binding.status == 'MISSING_RUNTIME'
+        assert binding.status == 'ERROR'
         assert binding.last_published is not old
         assert len(binding.prepared.result_proxy.data.vertices) == 0
     finally:

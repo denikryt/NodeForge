@@ -483,3 +483,52 @@ lifecycle.
 - Allow Local and Examples **Add Node Group** for `.nf` scripts without a pre-existing Geometry Nodes editor tree; ordinary scripts still require an editor.
 - Reuse a single unmodified, default passthrough Geometry Nodes modifier for Mesh Compute; preserve its original group on failure and reject nonempty or additional modifiers.
 - Show source filenames in Local and Examples lists; qualify duplicate Examples names by their directories.
+
+## 0.71.0
+
+- Distribute NodeForge as a self-hosted Blender Extension with a versioned repository index and packaged Math/L-System ZIPs.
+- Install or upgrade included libraries through the existing Packages inventory on activation, without downgrading independently updated versions.
+- Remove `Allow executable Python` grants from Packages, Local, Examples and Mesh Compute; retain source ownership checks.
+- Treat an exceeded package `nodeforge_max_version` as a visible warning, while keeping `nodeforge_min_version` strict.
+- Reject damaged top-level package inventories without overwriting state, and fix install publication/copy-failure cleanup.
+- Support captured Extension API imports under Blender's `bl_ext.*` add-on module namespace without global aliases.
+
+## 0.72.0
+
+- Accept optional `repository_url` metadata in package manifests; retain the URL without adding UI or automatic package downloads.
+- Keep the existing NodeForge Extension `website` link in `blender_manifest.toml`.
+
+## 0.72.1
+
+- Populate Packages, Functions and Examples browser lists after the extension's bundled-package bootstrap, including activation without an active scene context.
+- Require Blender 5.2 installation, compiled-library examples and package upgrade checks against the built Extension ZIP before publishing a release.
+
+## 0.72.2
+
+- Publish GitHub Release and GitHub Pages artifacts only on tag-triggered runs; never overwrite an existing release ZIP.
+- Make manual release workflow dispatch verification-only: rebuild and test the Extension without changing published artifacts.
+
+## 0.72.3
+
+- Separate Blender Extension release build, immutable GitHub Release publication and GitHub Pages deployment into recoverable GitHub Actions jobs.
+- Preserve the verified release and Pages artifacts during build so a failed Pages deployment can be retried independently without recreating or overwriting the GitHub Release.
+
+## 0.72.4
+
+- Set the GitHub CLI target repository explicitly in the standalone release-publishing job, allowing immutable release publication on a runner without a Git checkout.
+
+## 0.72.5
+
+- Simplified Local registry reading to return validated source roots directly while continuing to ignore obsolete permission metadata.
+- Reject duplicate bundled Package IDs directly during prevalidation, preserving inventory and temporary directory cleanup without exception-message matching.
+
+## 0.72.6
+
+- Simplified package-state directory synchronization to handle post-publication fsync errors only in `save_package_state()`, while keeping descriptor cleanup unconditional.
+
+## 0.72.7
+
+- Separate Extension build and Blender integration tests into independently retryable jobs, with Blender 5.2 cached for both jobs.
+- Require integration tests to pass before publishing the saved release ZIP and deploying the saved Pages artifact.
+- Bundle the latest published Math and L-System package ZIPs at release build time, using each package's minimum NodeForge version for compatibility checks.
+- Centralize bundled-library IDs and Release repositories in one registry shared by the Extension workflow and tests.

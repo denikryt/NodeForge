@@ -59,8 +59,8 @@ def test_qualified_duplicate_members_materialize_exact_package_owners():
                 "vendor.b",
                 {"foo": 'value = input_float("Value")\noutput("Value", value + 2.0)\n'},
             )
-            packages.install_package_directory(first, allow_python=False)
-            packages.install_package_directory(second, allow_python=False)
+            packages.install_package_directory(first)
+            packages.install_package_directory(second)
 
             group = compile_group(
                 "from packages import a, b\n"
@@ -97,7 +97,7 @@ def test_core_points_and_owner_qualified_package_points_materialize_independentl
                 "nodeforge.lsystem",
                 {"points": 'value = input_float("Value")\noutput("Value", value + 1.0)\n'},
             )
-            packages.install_package_directory(root, allow_python=False)
+            packages.install_package_directory(root)
             group = compile_group(
                 "from packages import lsystem\n"
                 "count = input_int('Count', default=2)\n"
@@ -133,7 +133,7 @@ def test_qualified_package_call_in_local_helper_preserves_only_real_runtime_capt
                 "nodeforge.math",
                 {"sin": 'value = input_float("Value")\noutput("Value", value)\n'},
             )
-            packages.install_package_directory(root, allow_python=False)
+            packages.install_package_directory(root)
             group = compile_group(
                 "from packages import math as m\n"
                 "offset = input_float('Offset')\n"
@@ -179,7 +179,7 @@ def test_source_value_collision_rejects_bare_call_but_qualified_call_materialize
                 "nodeforge.math",
                 {"sin": 'value = input_float("Value")\noutput("Value", value)\n'},
             )
-            packages.install_package_directory(root, allow_python=False)
+            packages.install_package_directory(root)
             expect_compile_error(
                 "from packages import math\n"
                 "sin = input_float('Sin')\n"

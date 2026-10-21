@@ -335,7 +335,7 @@ def test_v2_system_dispatch_is_lazy_and_uses_public_backend_context():
     with tempfile.TemporaryDirectory() as tmp:
         source = Path(tmp) / "package"
         _write_extension_package(source)
-        packages.install_package_directory(source, allow_python=True)
+        packages.install_package_directory(source)
         assert not hasattr(builtins, "_nodeforge_extension_v2_blender_impl_hits")
 
         group = compile_group(
@@ -360,7 +360,7 @@ def test_nested_owner_local_imports_work_through_install_and_physical_dispatch()
     with tempfile.TemporaryDirectory() as tmp:
         source = Path(tmp) / "package"
         _write_nested_import_extension_package(source)
-        packages.install_package_directory(source, allow_python=True)
+        packages.install_package_directory(source)
         group = compile_group(
             'from packages import nested\n'
             'value = input_float("Value", default=3.0)\n'
@@ -380,7 +380,7 @@ def test_rotation_extension_result_can_cross_another_extension_and_group_output(
     with tempfile.TemporaryDirectory() as tmp:
         source = Path(tmp) / "package"
         _write_rotation_extension_package(source)
-        packages.install_package_directory(source, allow_python=True)
+        packages.install_package_directory(source)
         group = compile_group(
             'from packages import rotation as rotpkg\n'
             'value = input_vector("Euler")\n'
@@ -404,7 +404,7 @@ def test_direct_wrapper_cannot_return_an_input_socket_as_runtime_result():
     with tempfile.TemporaryDirectory() as tmp:
         source = Path(tmp) / "package"
         _write_extension_package(source, bad_result=True)
-        packages.install_package_directory(source, allow_python=True)
+        packages.install_package_directory(source)
         before = set(bpy.data.node_groups)
         with pytest.raises(CompileError, match="output sockets"):
             compile_group(
@@ -422,7 +422,7 @@ def test_invalid_extension_result_rolls_back_generated_resources():
     with tempfile.TemporaryDirectory() as tmp:
         source = Path(tmp) / "package"
         _write_extension_package(source, bad_result=True, create_resource=True)
-        packages.install_package_directory(source, allow_python=True)
+        packages.install_package_directory(source)
         before_meshes = {mesh.as_pointer() for mesh in bpy.data.meshes}
         before_groups = {group.as_pointer() for group in bpy.data.node_groups}
 
@@ -446,7 +446,7 @@ def test_semantic_state_reconstructs_exact_records_and_runtime_leaf():
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "package"
             _write_semantic_extension_package(source)
-            packages.install_package_directory(source, allow_python=True)
+            packages.install_package_directory(source)
             group = compile_group(
                 'from packages import semantic\n'
                 'value = input_int("Value", default=3)\n'
@@ -472,7 +472,7 @@ def test_semantic_backend_result_failure_rolls_back_generated_resources():
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "package"
             _write_semantic_extension_package(source)
-            packages.install_package_directory(source, allow_python=True)
+            packages.install_package_directory(source)
             before_meshes = {mesh.as_pointer() for mesh in bpy.data.meshes}
             before_groups = {group.as_pointer() for group in bpy.data.node_groups}
             before_objects = {obj.as_pointer() for obj in bpy.data.objects}
@@ -504,7 +504,7 @@ def test_persistent_semantic_assignment_reconstructs_runtime_leaf_later():
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "package"
             _write_semantic_extension_package(source)
-            packages.install_package_directory(source, allow_python=True)
+            packages.install_package_directory(source)
             group = compile_group(
                 'from packages import semantic\n'
                 'value = input_int("Value", default=3)\n'
@@ -530,7 +530,7 @@ def test_discarded_runtime_extension_argument_creates_no_backend_or_resource():
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "package"
             _write_semantic_extension_package(source)
-            packages.install_package_directory(source, allow_python=True)
+            packages.install_package_directory(source)
             before_meshes = {mesh.as_pointer() for mesh in bpy.data.meshes}
             group = compile_group(
                 'from packages import semantic\n'
@@ -553,7 +553,7 @@ def test_persistent_semantic_backend_failure_still_rolls_back_resources():
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "package"
             _write_semantic_extension_package(source)
-            packages.install_package_directory(source, allow_python=True)
+            packages.install_package_directory(source)
             before_meshes = {mesh.as_pointer() for mesh in bpy.data.meshes}
             before_groups = {group.as_pointer() for group in bpy.data.node_groups}
             before_objects = {obj.as_pointer() for obj in bpy.data.objects}
@@ -580,7 +580,7 @@ def test_nodeforge_math_v2_reference_package():
     package_path = os.environ.get("NODEFORGE_MATH_PACKAGE")
     if not package_path:
         pytest.skip("NODEFORGE_MATH_PACKAGE is required for the reference-package integration test")
-    packages.install_package_directory(Path(package_path), allow_python=True)
+    packages.install_package_directory(Path(package_path))
 
     sine_group = compile_group(
         'from packages import math\n'

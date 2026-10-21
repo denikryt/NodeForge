@@ -42,7 +42,7 @@ def test_directory_zip_replace_uninstall_and_reinstall_lifecycle():
         try:
             source_v1 = tmp / "source_v1"
             _make_package(source_v1, version="1.0.0", value=1.0)
-            installed = packages.install_package_directory(source_v1, allow_python=False)
+            installed = packages.install_package_directory(source_v1)
             assert installed.package_id == "vendor.lifecycle"
             assert has_package_function("vendor_value")
             compile_group(
@@ -57,7 +57,7 @@ def test_directory_zip_replace_uninstall_and_reinstall_lifecycle():
                 for path in source_v2.rglob("*"):
                     if path.is_file():
                         zf.write(path, Path("vendor.lifecycle") / path.relative_to(source_v2))
-            replaced = packages.install_package_zip(archive, allow_python=False, replace=True)
+            replaced = packages.install_package_zip(archive, replace=True)
             assert replaced.version == "2.0.0"
             assert packages.load_package_state()["packages"]["vendor.lifecycle"]["installed_version"] == "2.0.0"
 
@@ -68,7 +68,7 @@ def test_directory_zip_replace_uninstall_and_reinstall_lifecycle():
                 "NFTest_vendor_lifecycle_uninstalled",
             )
 
-            packages.install_package_directory(source_v1, allow_python=False)
+            packages.install_package_directory(source_v1)
             assert has_package_function("vendor_value")
         finally:
             packages.set_packages_dir_for_tests(None)
@@ -83,7 +83,7 @@ def test_invalid_package_record_can_be_removed_without_deleting_other_files():
         try:
             source = tmp / "source"
             _make_package(source)
-            packages.install_package_directory(source, allow_python=False)
+            packages.install_package_directory(source)
 
             protected = tmp / "protected"
             protected.mkdir()

@@ -172,7 +172,7 @@ def test_packaged_library_function_accepts_runtime_and_constant_string_arguments
         )
         packages.set_packages_dir_for_tests(tmp / "inventory")
         try:
-            packages.install_package_directory(root, allow_python=False)
+            packages.install_package_directory(root)
             group = compile_group('''
 from packages import string as string_pkg
 source = input_string("Source", default="Weight_A")
