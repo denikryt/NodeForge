@@ -8,15 +8,15 @@ NodeForge is a Blender add-on for describing Geometry Nodes logic in a Python-li
 
 ## Installation
 
-NodeForge currently targets Blender 5.2.
+NodeForge requires Blender 5.2 or newer.
 
-1. Download the latest NodeForge Extension ZIP from [GitHub Releases](https://github.com/denikryt/NodeForge/releases/latest).
-2. In Blender, open **Edit → Preferences → Get Extensions** and choose **Install from Disk...**.
-3. Select the ZIP and enable **NodeForge**.
+1. In Blender, open **Edit → Preferences → Get Extensions**.
+2. Under **Repositories**, choose **Add Remote Repository** and enter `https://denikryt.github.io/NodeForge/index.json`.
+3. Find **NodeForge**, click **Install**, and enable the add-on.
 
-Once the [NodeForge extension repository](https://denikryt.github.io/NodeForge/index.json) is available, you can add it under **Repositories → Add Remote Repository** in **Get Extensions** to install NodeForge and receive updates through Blender.
+Installing through this repository lets you receive NodeForge updates in Blender.
 
-The release ZIP includes the latest published NodeForge Math and L-System packages available when that ZIP is built. You can update either package separately through **NodeForge → Packages → Install ZIP**.
+To install directly from a ZIP instead, download the latest archive from [GitHub Releases](https://github.com/denikryt/NodeForge/releases/latest), then use **Get Extensions → Install from Disk...** and enable **NodeForge**. Installations from disk are updated by installing a newer ZIP manually.
 
 If you used the earlier ZIP add-on, disable it before enabling the Extension. Your Packages and Local files remain in Blender's user-data directories.
 
@@ -88,8 +88,6 @@ NodeForge scripts can call reusable functions and can be extended through instal
 ## Additional libraries
 
 The Extension includes **NodeForge Math** for math operations and **NodeForge L-System** for procedural L-system generation. Both libraries are installed automatically when you enable NodeForge.
-
-The bundled-library registry is [`bundled_packages.py`](bundled_packages.py). It maps each package ID to its GitHub repository. To include another library in future Extension ZIPs, add an entry and publish a Release ZIP named `<package-id>-v<package-version>_nf-v<minimum-NodeForge-version>.zip` in that repository. The package manifest supplies the version and minimum compatible NodeForge version.
 
 Install or update other libraries from **NodeForge → Packages → Install ZIP**.
 
