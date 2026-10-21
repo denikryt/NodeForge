@@ -48,6 +48,16 @@ def test_manual_dispatch_runs_verification_without_publication():
     assert "actions/deploy-pages" not in _job("build")
 
 
+def test_pull_requests_build_and_test_without_publication():
+    """Pull requests targeting main validate the merged Extension without publishing it."""
+    content = WORKFLOW.read_text(encoding="utf-8")
+    assert "pull_request:\n    branches: [main]" in content
+    assert _step(_job("test-extension"), "name: Install and test built Extension in Blender 5.2")
+    assert "if tag_name.startswith('v'):" in _step(_job("build"), "name: Verify NodeForge version")
+    for name in ("publish-release", "deploy-pages"):
+        assert f"if: {TAG_PUSH_ONLY}" in _job(name)
+
+
 def test_publishing_jobs_depend_on_one_verified_build():
     """The release and Pages deployment reuse the validated build, not rebuilt ZIPs."""
     build = _job("build")

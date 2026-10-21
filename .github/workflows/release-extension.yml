@@ -3,6 +3,8 @@ name: Build Blender Extension
 on:
   push:
     tags: ["v*"]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       release_tag:
@@ -36,7 +38,11 @@ jobs:
                          and any(isinstance(t, ast.Name) and t.id == 'NODEFORGE_VERSION' for t in node.targets))
           declared = '.'.join(map(str, ast.literal_eval(version)))
           assert manifest['version'] == declared, 'bl_info / manifest mismatch'
-          assert os.environ['TAG_NAME'] == 'v' + declared, 'tag / manifest mismatch'
+          # Pull-request merge refs are not release tags. Tag and manual release
+          # verification still require the selected tag to match the package version.
+          tag_name = os.environ['TAG_NAME']
+          if tag_name.startswith('v'):
+              assert tag_name == 'v' + declared, 'tag / manifest mismatch'
           PY
       - name: Download pinned library releases
         env:
