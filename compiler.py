@@ -113,7 +113,7 @@ def compose_source_initial(source: str, target, *, resolved_environment=None,
         source_callable_session=session, source_module=snapshot,
         direct_composition=True,
     )
-    return compose_prepared_initial(prepared, target, backend, session)
+    return compose_prepared_initial(prepared, target, backend, session, source_module=snapshot)
 
 
 def _requires_mesh_compute(prepared) -> bool:

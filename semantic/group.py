@@ -528,7 +528,7 @@ def resolve_module_callable_environment(source_module, resolved_environment, sou
         package_namespaces=package_bindings,
         local_namespaces=namespaces,
         local_definition_refs=resolved.definition_refs,
-    ), resolved.preprocessed.initial_compile_time.values
+    ), resolved.preprocessed.final_compile_time.values
 
 
 def analyze_group_source(

@@ -603,3 +603,9 @@ lifecycle.
 - Added an internal unified initial-composition route that lowers a single source-module snapshot directly into an existing base GeometryNodeTree, without creating an intermediary root or changing user-owned interfaces.
 - Executable top-level statements can call forward-declared typed functions and create ordinary level-zero nodes beside nested reusable function group nodes.
 - Rejected legacy root input/output declarations and implicit parameter creation during direct composition; deferred public exposure until attempt-local rollback and runtime safety checks.
+
+## 0.84.0
+
+- Place every zero-incoming source definition as an ordinary Group Node in the existing base tree when effective module composition is empty.
+- Materialize transitive nested definitions through shared backend ownership; unconnected required entry inputs are retained, while executable sources suppress automatic entries.
+- Reuse the final compile-time constant snapshot for independently prepared definition-only functions.
