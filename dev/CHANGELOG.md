@@ -597,3 +597,9 @@ lifecycle.
 
 - Preserve the full source owner and unique instance key through selected library Reload of Local, Examples, and package Functions groups, including in-place publication and unchanged-source updates.
 - Validate prepared owner scope, definition identity, instance key and physical datablock pointer before transaction commit, preventing unique instances from being inadvertently reclassified as shared.
+
+## 0.83.0
+
+- Added an internal unified initial-composition route that lowers a single source-module snapshot directly into an existing base GeometryNodeTree, without creating an intermediary root or changing user-owned interfaces.
+- Executable top-level statements can call forward-declared typed functions and create ordinary level-zero nodes beside nested reusable function group nodes.
+- Rejected legacy root input/output declarations and implicit parameter creation during direct composition; deferred public exposure until attempt-local rollback and runtime safety checks.

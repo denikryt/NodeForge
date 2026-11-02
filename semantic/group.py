@@ -543,6 +543,7 @@ def analyze_group_source(
     helper_namespace: str = "NodeForge Group",
     source_callable_session=None,
     source_module: SourceModuleSnapshot | None = None,
+    direct_composition: bool = False,
 ) -> SemanticGroupCompilation:
     """Compile one source snapshot to typed group IR before any Blender mutation."""
     if not isinstance(compilation_identity, GroupCompilationIdentity):
@@ -611,17 +612,29 @@ def analyze_group_source(
         top_level_function_names=local_function_defs,
     )
     _validate_interface_directive_placement(raw_body_stmts)
+    if direct_composition:
+        # The existing user-owned base tree has no implicit root interface.
+        # A source function has its own independent signature/return interface.
+        obsolete = set(INPUT_DECLARATION_BUILTIN_NAMES) | {"output", "panel"}
+        for statement in source_module.statements:
+            for node in ast.walk(statement):
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                        and node.func.id in obsolete):
+                    raise CompileError(
+                        f"Root interface declaration {node.func.id}() is unsupported "
+                        f"in direct composition at line {node.lineno}"
+                    )
 
     source_call_graph = resolve_source_call_graph(resolved_source_module)
     preprocessed = resolved_source_module.preprocessed
     stmts = list(preprocessed.statements)
     callable_names = set(imported) | set(local_function_defs) | set(package_bindings) | set(local_directories)
-    input_names = sorted(
+    input_names = ([] if direct_composition else sorted(
         set(_collect_inputs(stmts, extra_builtin_names=callable_names, consts=preprocessed.final_compile_time.values))
         - set(preprocessed.final_compile_time.values.keys())
-    )
+    ))
     input_types = _infer_input_types(stmts)
-    geometry_mode = _needs_geometry_io(stmts)
+    geometry_mode = False if direct_composition else _needs_geometry_io(stmts)
 
     initial_runtime_bindings: dict[str, RuntimeBindingSymbol] = {}
     initial_origins = {}
@@ -661,12 +674,13 @@ def analyze_group_source(
         extension_registry=resolved_environment.extension_registry,
         extension_dependency_sink=extension_dependencies,
     )
-    interface = _build_interface_contract(
-        geometry_mode=geometry_mode,
-        implicit_inputs=tuple(implicit_inputs),
-        body_compilation=body_compilation,
-    )
-    if not geometry_mode and not interface.outputs:
+    interface = (GroupInterfaceContract((), ()) if direct_composition else
+                 _build_interface_contract(
+                     geometry_mode=geometry_mode,
+                     implicit_inputs=tuple(implicit_inputs),
+                     body_compilation=body_compilation,
+                 ))
+    if not direct_composition and not geometry_mode and not interface.outputs:
         raise CompileError("Script produced no output. Use out = ..., output(...), set_position(...), or store(...)")
     return SemanticGroupCompilation(
         source=source,

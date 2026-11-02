@@ -86,6 +86,36 @@ def create_expression_group(source: str, name: str = "NodeForge Group"):
     ))
 
 
+def compose_source_initial(source: str, target, *, resolved_environment=None,
+                           module_context: str | None = None):
+    """Compile one `.nf` revision directly into an existing base node tree.
+
+    This internal entry does not create a root datablock or change its sockets.
+    It must not be exposed through UI until the initial-attempt journal and
+    physical extension preflight are installed.
+    """
+    from .compiler_identities import GroupCompilationIdentity, ModuleId
+    from .function_instances import function_group_owner_scope
+    from .semantic.source_modules import parse_source_module
+    from .blender.direct_composition import compose_prepared_initial
+
+    if getattr(target, "bl_idname", None) != "GeometryNodeTree":
+        raise CompileError("Direct composition requires an existing base GeometryNodeTree")
+    backend = _new_group_backend(resolved_environment)
+    session = backend.new_source_callable_session()
+    module_id = ModuleId("ROOT_TEXT", module_context or f"base-tree:{target.name}")
+    snapshot = parse_source_module(source, module_id)
+    owner_scope = function_group_owner_scope("COMPOSITION", module_id.stable_key())
+    identity = GroupCompilationIdentity(None, owner_scope, owner_scope, owner_scope)
+    prepared = analyze_group_source(
+        source, compilation_identity=identity,
+        resolved_environment=session.resolved_environment,
+        source_callable_session=session, source_module=snapshot,
+        direct_composition=True,
+    )
+    return compose_prepared_initial(prepared, target, backend, session)
+
+
 def _requires_mesh_compute(prepared) -> bool:
     """Classify used runtime dependencies after semantic resolution, not import text."""
     return any(owner and owner[0] in {"local-runtime", "examples-runtime"}
