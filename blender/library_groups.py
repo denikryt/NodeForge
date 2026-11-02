@@ -267,10 +267,7 @@ def update_materialized_library_entry_group_for_record(
     )
     source = load_library_entry_source_for_record(record)
     function_id = library_function_id_for_record(record)
-    instance_key = (
-        str(group.get(FUNCTION_INSTANCE_KEY_PROP) or "")
-        if record.namespace == "local" else None
-    )
+    instance_key = str(group.get(FUNCTION_INSTANCE_KEY_PROP) or "")
     identity = _direct_library_compilation_identity(function_id, instance_key=instance_key)
     session = source_callable_session or group_backend.new_source_callable_session()
     prepared = group_backend.prepare_source_compilation(
@@ -289,6 +286,7 @@ def update_materialized_library_entry_group_for_record(
         group=group,
         group_name=getattr(group, "name", _group_name_for_record(record)),
         write_package_metadata=_write_package_metadata,
+        instance_key=instance_key,
     )
     return FunctionMaterializer(group_backend=group_backend).update_library_group(spec)
 

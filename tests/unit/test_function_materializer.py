@@ -686,3 +686,50 @@ def test_missing_child_fingerprint_preserves_unproven_trace_semantics():
         )
         assert result.group is group
         assert frame.freshness_unproven is True
+
+
+@pytest.mark.parametrize('namespace', ['functions', 'examples', 'local'])
+def test_selected_unique_owner_scope_retains_instance_key(namespace):
+    """Prepared selected Reload owner must match reusable physical unique owner."""
+    from dataclasses import replace
+
+    function_id = library_function_id(namespace, 'vendor.pkg', 'demo')
+    if namespace == 'local':
+        function_id = replace(function_id, source_origin='/canonical/demo.nf')
+    shared = direct_library_owner_scope_for_id(function_id)
+    first = direct_library_owner_scope_for_id(function_id, instance_key='a' * 32)
+    second = direct_library_owner_scope_for_id(function_id, instance_key='b' * 32)
+    assert len({shared, first, second}) == 3
+    mat = IRFunctionMaterialization(
+        function_id, IRFunctionMaterializationMode.UNIQUE,
+        CallSiteId('parent-owner', function_id, 2),
+    )
+    assert direct_library_owner_scope_for_id(
+        function_id, instance_key=instance_key_for(mat.call_site)
+    ) == function_materialization_owner_scope(mat)
+
+
+def test_selected_unique_reload_rejects_owner_mismatch_before_backend_mutation():
+    """Invalid selected instance metadata cannot be silently reassigned to SHARED."""
+    from NodeForge.function_instances import FUNCTION_INSTANCE_KEY_PROP
+
+    record = library_record()
+    function_id = library_function_id('functions', record.package_id, record.name)
+    group = FakeGroup('Selected unique')
+    group[FUNCTION_INSTANCE_KEY_PROP] = 'b' * 32
+    spec = LibraryFunctionUpdateSpec(
+        namespace='functions', name='demo', record=record,
+        prepared_compilation=_prepared(
+            'output(value=1)\n',
+            owner_scope=direct_library_owner_scope_for_id(function_id, instance_key='a' * 32),
+            definition_owner=function_id.stable_key(),
+            declaration_owner=function_id.stable_key(),
+        ),
+        function_id=function_id, source_callable_session=None, group=group,
+        group_name=group.name, write_package_metadata=lambda group, record: None,
+        instance_key='a' * 32,
+    )
+    materializer = make_materializer(lambda *args, **kwargs: pytest.fail('backend touched'))
+    with pytest.raises(CompileError, match='instance identity changed'):
+        materializer.update_library_group(spec)
+    assert materializer._group_backend.calls == []

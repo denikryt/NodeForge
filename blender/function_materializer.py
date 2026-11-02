@@ -108,6 +108,7 @@ class LibraryFunctionUpdateSpec:
     group: object
     group_name: str
     write_package_metadata: Callable[[object, object], None]
+    instance_key: str = ""
 
     def __post_init__(self):
         """Require one prepared source authority."""
@@ -410,12 +411,11 @@ class FunctionMaterializer:
     def update_library_group(self, spec: LibraryFunctionUpdateSpec):
         """Update one provenance-validated catalog root from prepared semantics."""
         stable_function_id = spec.function_id.stable_key()
-        # Selected Local reloads retain the caller's occurrence identity. Its
-        # fingerprint inputs match call materialization for unchanged updates.
-        instance_key = (
-            str(spec.group.get(FUNCTION_INSTANCE_KEY_PROP) or "")
-            if spec.namespace == "local" else None
-        )
+        # The selected physical instance is authoritative; never regenerate or
+        # silently reinterpret a unique occurrence as the shared instance.
+        instance_key = str(spec.instance_key or "")
+        if str(spec.group.get(FUNCTION_INSTANCE_KEY_PROP) or "") != instance_key:
+            raise CompileError("Selected library group instance identity changed before Reload")
         expected_owner_scope = direct_library_owner_scope_for_id(spec.function_id, instance_key=instance_key)
         expected_definition_owner = (
             direct_library_owner_scope_for_id(spec.function_id) if spec.namespace == "local" else stable_function_id
@@ -445,9 +445,21 @@ class FunctionMaterializer:
             preserve_if_equivalent=True,
         )
 
+        original_pointer = (spec.group.as_pointer() if hasattr(spec.group, "as_pointer") else id(spec.group))
+
         def finalize_before_commit(group):
             spec.write_package_metadata(group, spec.record)
+            stamp_function_metadata(
+                group, instance_key=instance_key,
+                definition_owner=stable_function_id,
+                fingerprint=stored_fingerprint(group),
+            )
             group["nodeforge_library_source"] = spec.prepared_compilation.source
+            if (group is not spec.group or (group.as_pointer() if hasattr(group, "as_pointer") else id(group)) != original_pointer
+                    or str(group.get(FUNCTION_INSTANCE_KEY_PROP) or "") != instance_key
+                    or group.get("nodeforge_function_definition_owner") != stable_function_id
+                    or spec.prepared_compilation.identity.owner_scope != expected_owner_scope):
+                raise CompileError("Selected library Reload changed canonical owner identity before commit")
 
         return self._group_backend.create_or_update(
             request,

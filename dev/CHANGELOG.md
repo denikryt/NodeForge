@@ -592,3 +592,8 @@ lifecycle.
 - Added an explicit backend action to detach a user-selected Blender single-user function-group copy from NodeForge canonical source ownership.
 - Detachment strips only lookup identity properties for module, library and local-helper owners; graph content, other provenance and resource-safety metadata are preserved across `.blend` reopen.
 - Require a second eligible group retaining the same complete owner identity so detachment cannot inadvertently act on a lone canonical group.
+
+## 0.82.1
+
+- Preserve the full source owner and unique instance key through selected library Reload of Local, Examples, and package Functions groups, including in-place publication and unchanged-source updates.
+- Validate prepared owner scope, definition identity, instance key and physical datablock pointer before transaction commit, preventing unique instances from being inadvertently reclassified as shared.

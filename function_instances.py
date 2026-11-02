@@ -82,7 +82,10 @@ def direct_library_owner_scope_for_id(function_id, *, instance_key: str | None =
             "LIBRARY", "local", "", function_id.name, function_id.source_origin,
             instance_key=instance_key,
         )
-    return direct_library_owner_scope(function_id.namespace, function_id.package_id, function_id.name)
+    return function_group_owner_scope(
+        "LIBRARY", function_id.namespace, function_id.package_id, function_id.name,
+        instance_key=instance_key,
+    )
 
 
 def instance_key_for(call_site: CallSiteId) -> str:
