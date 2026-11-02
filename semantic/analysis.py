@@ -76,7 +76,8 @@ from .runtime_bindings import RuntimeBindingSymbol
 from .group_context import GroupContextSlot
 from .callable_contracts import (
     bind_imported_source_arguments,
-    bind_local_source_arguments,
+    bind_unified_source_arguments,
+    SourceCallableParameter,
     canonicalize_group_input_default,
     source_argument_type_matches,
 )
@@ -1727,48 +1728,51 @@ def analyze_expression(expr, environment):
                 fn = environment.callable_environment.local_functions[name]
                 if not isinstance(fn, ast.FunctionDef):
                     raise CompileError(f"Internal error: local function {name!r} is not an AST definition")
-                if fn.args.posonlyargs or fn.args.vararg or fn.args.kwarg or fn.args.kwonlyargs or fn.args.defaults or fn.args.kw_defaults:
-                    raise CompileError("Local functions currently support only plain positional parameters without defaults")
-                for arg in fn.args.args:
-                    if arg.arg == "__unique__":
-                        raise CompileError("Local function parameter __unique__ is reserved by the compiler")
-                params = [arg.arg for arg in fn.args.args]
-                from .function_signatures import resolve_parameter_annotation
-                declared = {arg.arg: resolve_parameter_annotation(arg.annotation)[0] for arg in fn.args.args}
+                from .function_signatures import compile_function_signature, resolve_parameter_annotation
+                if fn.args.posonlyargs or fn.args.vararg or fn.args.kwarg or fn.args.kwonlyargs or fn.args.kw_defaults:
+                    raise CompileError(f"{name}() accepts only ordinary named parameters")
+                params = tuple(argument.arg for argument in fn.args.args)
+                offset = len(params) - len(fn.args.defaults)
+                declared = {argument.arg: resolve_parameter_annotation(argument.annotation)[0] for argument in fn.args.args}
+                templates = tuple(
+                    SourceCallableParameter(
+                        input_index=index, source_name=param, display_name=param,
+                        keyword_key=param, typ=declared[param] or NFType.FLOAT,
+                        public=True, has_default=index >= offset,
+                    )
+                    for index, param in enumerate(params)
+                )
+                bound_pairs = bind_unified_source_arguments(
+                    templates, tuple(cleaned_call.args),
+                    tuple((keyword.arg, keyword.value) for keyword in cleaned_call.keywords), name,
+                )
                 bound_nodes: dict[str, ast.expr] = {}
                 bound_types: dict[str, NFType] = {}
-                bound_arguments = bind_local_source_arguments(
-                    tuple(params),
-                    tuple(cleaned_call.args),
-                    tuple((keyword.arg, keyword.value) for keyword in cleaned_call.keywords),
-                    name,
-                )
-                for param_name, child in bound_arguments:
+                for parameter, child in bound_pairs:
                     child_fact = analyze(child)
                     if child_fact.semantic_payload is not None:
-                        raise CompileError(
-                            f"{name}() source function arguments cannot be package semantic values"
-                        )
+                        raise CompileError(f"{name}() arguments cannot be package semantic values")
                     if isinstance(child_fact.result_shape, ArrayResultShape):
-                        raise CompileError(
-                            "Local function constant arguments must be numbers, booleans, strings or vectors"
-                        )
-                    actual_type = _require_runtime_type(child_fact, "script-local function argument")
-                    expected = declared[param_name]
+                        raise CompileError(f"{name}() arguments must have supported runtime types")
+                    actual_type = _require_runtime_type(child_fact, "source function argument")
+                    expected = declared[parameter.source_name]
                     if expected is not None and not source_argument_type_matches(expected, actual_type):
                         raise CompileError(
-                            f"{name}() parameter {param_name!r} expects {expected}, got {actual_type}"
+                            f"{name}() parameter {parameter.source_name!r} expects {expected}, got {actual_type}"
                         )
-                    bound_nodes[param_name] = child
-                    bound_types[param_name] = expected or actual_type
+                    bound_nodes[parameter.source_name] = child
+                    bound_types[parameter.source_name] = expected or actual_type
 
-                # A function has only declared parameters. Module compile-time
-                # values remain lexical constants, never hidden input sockets.
-                signature_names = tuple(params)
-                signature = serialize_local_signature(signature_names, bound_types)
                 definition_owner = environment.source_definition_owner or environment.source_owner_scope
                 if not definition_owner:
-                    raise CompileError("Internal error: local source call has no definition owner")
+                    raise CompileError("Internal error: source call has no definition owner")
+                # Resolve optional unbound parameter types from their declarations/defaults.
+                preliminary_signature = compile_function_signature(
+                    fn, owner_scope=definition_owner, declaration_owner=definition_owner,
+                    inferred_types=bound_types, compile_time_values=environment.const_eval_values,
+                )
+                signature_types = {item.target_name: item.typ for item in preliminary_signature.declarations}
+                signature = serialize_local_signature(params, signature_types)
                 function_id = local_function_id(definition_owner, name, signature)
                 if modifiers.unique:
                     call_site = environment.source_call_site_allocator(function_id)
@@ -1800,6 +1804,8 @@ def analyze_expression(expr, environment):
                 runtime_operands = []
                 static_operands = []
                 for param in params:
+                    if param not in bound_nodes:
+                        continue
                     parameter = contract_by_name.get(param)
                     if parameter is None:
                         raise CompileError(f"Internal error: local semantic contract lost parameter {param!r}")

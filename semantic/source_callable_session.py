@@ -109,6 +109,8 @@ class SourceCallableSession:
                         keyword_key=name if public else None,
                         typ=item.typ,
                         public=public,
+                        has_default=item.has_default,
+                        interface_origin=item.interface_origin,
                     )
                 )
             parameters = tuple(parameters_list)
@@ -213,6 +215,8 @@ class SourceCallableSession:
                 keyword_key=argument.arg,
                 typ=contract.typ,
                 public=True,
+                has_default=contract.has_default,
+                interface_origin=contract.interface_origin,
             ))
         prepared = PreparedSourceCallable(
             SourceCallableContract(function_id, tuple(parameters), group.interface.outputs),

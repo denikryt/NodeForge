@@ -554,3 +554,8 @@ lifecycle.
 
 - Compiled local FunctionDef bodies directly from AST into typed IR and nested group interface declarations, with mandatory terminal return, deterministic multi-output names, checked return annotations and no implicit function geometry interface.
 - Reused the existing semantic lowering engine with typed initial parameter bindings rather than generating and reparsing input/output DSL.
+
+## 0.76.0
+
+- Added one logical source parameter binder for local and imported module calls, with exact parameter-keywords, declared requiredness, optional omitted inputs and physical-panel index independence.
+- Source-local calls now use declared optional defaults and typed signature specialization with AST-based function interfaces.
