@@ -186,6 +186,7 @@ class SemanticEnvironment:
     source_call_site_allocator: object | None = None
     helper_namespace: str = "Group"
     extension_registry: object | None = None
+    runtime_role: object = None
 
 
 @dataclass(frozen=True)
@@ -979,6 +980,7 @@ def build_semantic_environment(
     source_call_site_allocator=None,
     helper_namespace="Group",
     extension_registry=None,
+    runtime_role=None,
 ):
     """Build one immutable expression environment from detached compiler-owned snapshots."""
     structural_bindings = {} if structural_bindings is None else dict(structural_bindings)
@@ -1022,7 +1024,10 @@ def build_semantic_environment(
             elif binding_id in object_ids:
                 raise CompileError("Internal error: non-Object binding has ObjectSemanticId")
     semantic_constants, const_eval_values = build_semantic_constant_snapshot(compile_time)
+    from .runtime_capabilities import RuntimeRole
+    role = RuntimeRole.ROOT if runtime_role is None else RuntimeRole(runtime_role)
     return SemanticEnvironment(
+        runtime_role=role,
         runtime_bindings=MappingProxyType(runtime_bindings),
         constants=semantic_constants,
         const_eval_values=const_eval_values,
@@ -1962,6 +1967,13 @@ def analyze_expression(expr, environment):
                     ),
                 )
             if resolved.kind is CallableKind.EXTENSION:
+                from .runtime_capabilities import RuntimeRole
+                if (environment.runtime_role is RuntimeRole.NESTED
+                        and resolved.target.owner[0] in {"local-runtime", "examples-runtime"}):
+                    raise CompileError(
+                        f"{name}() is a root-only Mesh Compute callback "
+                        "and cannot run inside a nested function group"
+                    )
                 extension_fact = _analyze_extension_call(
                     node,
                     cleaned_call,

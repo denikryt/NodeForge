@@ -83,6 +83,7 @@ class SourceCallableSession:
         self._active_stack.append(function_id)
         try:
             from .group import analyze_group_source
+            from .runtime_capabilities import RuntimeRole
 
             group = analyze_group_source(
                 source,
@@ -94,6 +95,7 @@ class SourceCallableSession:
                 inherited_local_namespaces=local_namespaces,
                 helper_namespace=helper_namespace,
                 source_callable_session=self,
+                runtime_role=RuntimeRole.NESTED,
             )
         finally:
             popped = self._active_stack.pop()

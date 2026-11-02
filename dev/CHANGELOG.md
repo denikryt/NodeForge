@@ -615,3 +615,9 @@ lifecycle.
 - Made one initial direct-composition attempt failure-atomic: newly inserted base-tree nodes are removed before rolling back nested group updates and generated resources through the existing transaction.
 - Preserved exact preexisting level-zero nodes, links and interface during late failures in mixed source and definition-only entry placement.
 - Kept cleanup ephemeral to one attempt without introducing managed level-zero node ownership, reconciliation or repeated-compilation semantics.
+
+## 0.86.0
+
+- Introduced explicit ROOT and NESTED semantic runtime roles: all source function bodies are NESTED regardless of call-stack depth; used root-only Mesh Compute callbacks are rejected there while unused imports remain lazy.
+- Added preflight of effective level-zero IR that rejects all physical Extension API v2 calls before their potentially destructive backend runs against an existing user graph.
+- Retained nested physical extensions inside transaction-owned Function Node Groups; direct Mesh Compute installation without a root modifier contract is rejected.

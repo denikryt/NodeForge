@@ -43,6 +43,7 @@ def compile_function_definition(
     the signature contract. A terminal return publishes only declared outputs.
     """
     from .group import SemanticGroupCompilation
+    from .runtime_capabilities import RuntimeRole
 
     if not isinstance(compilation_identity, GroupCompilationIdentity):
         raise TypeError("Function compilation requires GroupCompilationIdentity")
@@ -118,6 +119,7 @@ def compile_function_definition(
         extension_dependency_sink=dependencies,
         terminal_return_shape=shape,
         geometry_mode=False,
+        runtime_role=RuntimeRole.NESTED,
     )
     outputs = tuple(
         GroupOutputContract(index, name, typ)

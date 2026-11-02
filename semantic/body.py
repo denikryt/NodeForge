@@ -505,6 +505,7 @@ def lower_basic_body(
     extension_registry=None,
     extension_dependency_sink=None,
     terminal_return_shape=None,
+    runtime_role=None,
 ):
     """Lower one whole eligible source body to compiler-owned structured Semantic IR."""
     validate_input_declaration_placement(stmts)
@@ -1169,6 +1170,7 @@ def lower_basic_body(
             source_call_site_allocator=identities.allocate_call_site_id,
             helper_namespace=helper_namespace,
             extension_registry=extension_registry,
+            runtime_role=runtime_role,
         )
         analysis = analyze_expression(expr, environment)
         if analysis.object_semantics is None:

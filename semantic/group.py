@@ -544,10 +544,13 @@ def analyze_group_source(
     source_callable_session=None,
     source_module: SourceModuleSnapshot | None = None,
     direct_composition: bool = False,
+    runtime_role=None,
 ) -> SemanticGroupCompilation:
     """Compile one source snapshot to typed group IR before any Blender mutation."""
     if not isinstance(compilation_identity, GroupCompilationIdentity):
         raise TypeError("compilation_identity must be GroupCompilationIdentity")
+    from .runtime_capabilities import RuntimeRole
+    role = RuntimeRole.ROOT if runtime_role is None else RuntimeRole(runtime_role)
     if source_module is None:
         source_module = parse_source_module(
             source, ModuleId("ROOT_TEXT", compilation_identity.definition_owner)
@@ -594,7 +597,7 @@ def analyze_group_source(
         additional_reserved_names=frozenset(package_bindings),
         inherited_local_namespaces=inherited_local_namespaces,
         directory_bindings=local_directories,
-        allow_local_runtime=not bool(getattr(source_callable_session, "_active_stack", ())),
+        allow_local_runtime=True,
         source_callable_session=source_callable_session,
     )
     reserved_name_labels = _registered_name_labels(local_function_defs, imported, package_bindings)
@@ -673,6 +676,7 @@ def analyze_group_source(
         helper_namespace=helper_namespace,
         extension_registry=resolved_environment.extension_registry,
         extension_dependency_sink=extension_dependencies,
+        runtime_role=role,
     )
     interface = (GroupInterfaceContract((), ()) if direct_composition else
                  _build_interface_contract(

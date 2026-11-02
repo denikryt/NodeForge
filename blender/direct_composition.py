@@ -23,6 +23,12 @@ def compose_prepared_initial(prepared, target, backend, session, *, source_modul
         raise CompileError('Direct composition requires an existing base GeometryNodeTree')
     if prepared.geometry_mode or prepared.interface.inputs or prepared.interface.outputs:
         raise CompileError('Direct composition may not declare a base tree interface')
+    from ..semantic.runtime_capabilities import preflight_direct_base_operations
+    preflight_direct_base_operations(prepared.body)
+    if any(owner and owner[0] in {'local-runtime', 'examples-runtime'}
+           for owner, _fingerprint in prepared.extension_dependencies):
+        raise CompileError('Mesh Compute requires a supported root modifier contract; '
+                           'direct base-tree installation is unavailable')
 
     # Journal only the nodes introduced in this initial attempt. These are the
     # only level-zero objects eligible for failure cleanup; existing user nodes
