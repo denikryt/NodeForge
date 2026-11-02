@@ -1793,6 +1793,9 @@ def lower_basic_body(
                                 display_name=input_semantics.display_name,
                                 typ=input_semantics.typ,
                                 default=input_semantics.default,
+                                has_default=input_semantics.typ in {
+                                    NFType.FLOAT, NFType.INT, NFType.BOOL, NFType.VECTOR, NFType.STRING,
+                                },
                             )
                         )
                         continue

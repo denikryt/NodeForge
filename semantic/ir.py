@@ -698,6 +698,7 @@ class IRInputDeclaration:
     display_name: str
     typ: NFType
     default: object | None = None
+    has_default: bool = False
 
     def __post_init__(self) -> None:
         """Keep input identity separate from display-only interface metadata."""
@@ -711,6 +712,16 @@ class IRInputDeclaration:
             raise ValueError("display_name must be a non-empty string")
         if not isinstance(self.typ, NFType):
             raise TypeError("typ must be an NFType")
+        if not isinstance(self.has_default, bool):
+            raise TypeError("IRInputDeclaration.has_default must be bool")
+        if not self.has_default and self.default is not None:
+            raise ValueError("Required input declaration must not have an explicit default")
+        if self.has_default and self.typ not in {
+            NFType.FLOAT, NFType.INT, NFType.BOOL, NFType.VECTOR, NFType.STRING,
+        }:
+            raise ValueError("This input type does not support a declared default")
+        if self.has_default and self.default is None:
+            raise ValueError("An optional input needs a declared default value")
         if not _is_ir_option_value(self.default):
             raise TypeError("input default must be detached immutable IR data")
 

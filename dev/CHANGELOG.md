@@ -545,3 +545,7 @@ lifecycle.
 ## 0.73.2
 
 - Resolve source-module declarations and forward function identities before runtime lowering; preserve compile-time residualization as the authority for effective executable statements.
+
+## 0.74.0
+
+- Added direct AST compilation of typed function parameters with labels, compile-time defaults, requiredness, stable socket identities and prefix panel projection. Typed Semantic IR now distinguishes absent defaults from native socket fallback values.

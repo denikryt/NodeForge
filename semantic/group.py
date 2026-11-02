@@ -392,7 +392,7 @@ def _build_interface_contract(
     panels: list[IRPanelDeclaration] = []
     for statement in _walk_body_statements(body_compilation.body):
         if isinstance(statement, IRInputDeclaration):
-            has_default = statement.typ in {NFType.FLOAT, NFType.INT, NFType.BOOL, NFType.VECTOR, NFType.STRING}
+            has_default = statement.has_default
             default = canonicalize_group_input_default(statement.typ, statement.default) if has_default else None
             base_inputs.append(
                 GroupInputContract(
