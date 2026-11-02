@@ -17,6 +17,7 @@ class SourceCallableSession:
         self.resolved_environment = resolved_environment
         self.source_snapshots: dict[FunctionId, str] = {}
         self.module_snapshots = {}
+        self.module_environments = {}
         self.prepared: dict[SourceCallablePreparationKey, PreparedSourceCallable] = {}
         self._active_stack: list[FunctionId] = []
 
@@ -31,6 +32,18 @@ class SourceCallableSession:
             snapshot = parse_source_module(record.source_path.read_text(encoding="utf-8"), module_id)
             self.module_snapshots[module_id] = snapshot
         return snapshot
+
+    def callable_environment_for_module(self, snapshot):
+        """Resolve an imported module's own names once, without executing its body."""
+        from .group import resolve_module_callable_environment
+        stored = self.module_snapshots.setdefault(snapshot.module_id, snapshot)
+        if stored is not snapshot:
+            raise CompileError("Conflicting source revisions for one imported module")
+        result = self.module_environments.get(snapshot.module_id)
+        if result is None:
+            result = resolve_module_callable_environment(snapshot, self.resolved_environment, self)
+            self.module_environments[snapshot.module_id] = result
+        return result
 
     def _source_snapshot(self, function_id: FunctionId, source_supplier) -> str:
         """Capture one coherent definition source snapshot for this root attempt."""
@@ -179,6 +192,8 @@ class SourceCallableSession:
         callable_environment,
         compile_time_values,
         helper_namespace: str,
+        source_record=None,
+        source_module=None,
     ) -> PreparedSourceCallable:
         """Compile one FunctionDef AST directly under its physical shared/unique owner."""
         import ast
@@ -193,6 +208,10 @@ class SourceCallableSession:
             chain = " -> ".join(item.name for item in self._active_stack + [function_id])
             raise CompileError(f"Recursive source function calls are not supported: {chain}")
         source = ast.unparse(fn)
+        if source_module is not None:
+            stored = self.module_snapshots.setdefault(source_module.module_id, source_module)
+            if stored is not source_module:
+                raise CompileError("Source module revision changed during one compilation attempt")
         existing_source = self.source_snapshots.setdefault(function_id, source)
         if existing_source != source:
             raise CompileError("Source function changed during a single preparation attempt")
@@ -234,6 +253,7 @@ class SourceCallableSession:
         prepared = PreparedSourceCallable(
             SourceCallableContract(function_id, tuple(parameters), group.interface.outputs),
             group,
+            source_record,
         )
         self.prepared[key] = prepared
         return prepared

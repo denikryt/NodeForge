@@ -15,6 +15,7 @@ from typing import TypeAlias
 CORE_PACKAGE_ID = "__nodeforge_core__"
 _LOCAL_FUNCTION_KIND = "LOCAL_DEF"
 _LIBRARY_FUNCTION_KIND = "LIBRARY"
+_MODULE_DEFINITION_KIND = "MODULE_DEF"
 
 
 def _canonical_json(value) -> str:
@@ -150,18 +151,24 @@ class FunctionId:
     name: str = ""
     signature: str = ""
     source_origin: str = ""
+    module: ModuleId | None = None
 
     def __post_init__(self):
         """Reject mixed field combinations outside the supported identity forms."""
         if self.kind == _LOCAL_FUNCTION_KIND:
-            if not self.definition_owner or not self.name or self.namespace or self.package_id or self.source_origin:
+            if not self.definition_owner or not self.name or self.namespace or self.package_id or self.source_origin or self.module is not None:
                 raise ValueError("Invalid local FunctionId")
             return
         if self.kind == _LIBRARY_FUNCTION_KIND:
-            if not self.namespace or not self.package_id or not self.name or self.definition_owner or self.signature:
+            if not self.namespace or not self.package_id or not self.name or self.definition_owner or self.signature or self.module is not None:
                 raise ValueError("Invalid library FunctionId")
             if self.source_origin and self.namespace not in {"local", "examples"}:
                 raise ValueError("Only Local and nested Examples identities may carry source_origin")
+            return
+        if self.kind == _MODULE_DEFINITION_KIND:
+            if (not isinstance(self.module, ModuleId) or not self.name.isidentifier()
+                    or self.definition_owner or self.namespace or self.package_id or self.source_origin):
+                raise ValueError("Invalid module-definition FunctionId")
             return
         raise ValueError(f"Unsupported FunctionId kind: {self.kind!r}")
 
@@ -173,6 +180,11 @@ class FunctionId:
                 "definition_owner": self.definition_owner,
                 "name": self.name,
                 "signature": self.signature,
+            })
+        if self.kind == _MODULE_DEFINITION_KIND:
+            return _canonical_json({
+                "kind": self.kind, "module": self.module.stable_key(),
+                "name": self.name, "signature": self.signature,
             })
         fields = {
             "kind": self.kind, "namespace": self.namespace,
@@ -197,6 +209,14 @@ class CallSiteId:
             raise TypeError("CallSiteId.callee must be a FunctionId")
         if not isinstance(self.ordinal, int) or isinstance(self.ordinal, bool) or self.ordinal < 0:
             raise ValueError("CallSiteId.ordinal must be a non-negative integer")
+
+
+def module_definition_function_id(definition: SourceDefinitionRef, signature: str) -> FunctionId:
+    """Identify an independently compiled definition and its resolved input types."""
+    if not isinstance(definition, SourceDefinitionRef):
+        raise TypeError("Module function identity needs a canonical SourceDefinitionRef")
+    return FunctionId(kind=_MODULE_DEFINITION_KIND, module=definition.module,
+                      name=definition.name, signature=str(signature))
 
 
 def local_function_id(definition_owner: str, name: str, signature: str) -> FunctionId:

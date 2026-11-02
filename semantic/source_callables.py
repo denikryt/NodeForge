@@ -77,6 +77,12 @@ class PreparedSourceCallable:
         if not isinstance(identity, GroupCompilationIdentity):
             raise TypeError("prepared source callable group must expose GroupCompilationIdentity")
         function_id = self.contract.function_id
+        if function_id.kind == "MODULE_DEF":
+            if self.source_record is not None and (
+                    getattr(self.source_record, "source_path", None) is None
+                    or function_id.module.kind not in {"LOCAL", "PACKAGE", "EXAMPLES"}):
+                raise TypeError("Module definition source record does not match its file owner")
+            return
         if function_id.kind == "LOCAL_DEF":
             if self.source_record is not None:
                 raise TypeError("prepared local callable must not carry a library source record")

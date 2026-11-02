@@ -315,7 +315,7 @@ def lower_analyzed_expression(expr, analysis, *, dependency_sources=None):
 
             if analyzed.target.kind is CallableKind.BUILTIN:
                 target = IRCallableTarget(IRCallableKind.BUILTIN, analyzed.target.source_name)
-            elif analyzed.target.kind in {CallableKind.LOCAL_FUNCTION, CallableKind.LIBRARY}:
+            elif analyzed.target.kind in {CallableKind.LOCAL_FUNCTION, CallableKind.LIBRARY, CallableKind.MODULE_DEFINITION}:
                 if analyzed.source_function_id is None:
                     raise CompileError("Internal error: source-backed call is missing FunctionId")
                 target = IRCallableTarget(

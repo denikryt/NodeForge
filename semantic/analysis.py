@@ -13,6 +13,7 @@ from ..compiler_identities import (
     BindingId,
     GroupCompilationIdentity,
     local_function_id,
+    module_definition_function_id,
 )
 from .call_resolution import (
     AnalyzedCall,
@@ -1728,6 +1729,119 @@ def analyze_expression(expr, environment):
                         call_operand_nodes=tuple(runtime_nodes),
                     ),
                 )
+            if resolved.kind is CallableKind.LOCAL_FUNCTION and name in environment.callable_environment.local_definition_refs:
+                # A top-level declaration belongs to a canonical source module,
+                # even when invoked before its text or through a local alias.
+                from .source_bindings import SourceDefinitionBinding
+                ref = environment.callable_environment.local_definition_refs[name]
+                session = environment.source_callable_session
+                snapshot = None if session is None else session.module_snapshots.get(ref.module)
+                if snapshot is None:
+                    raise CompileError("Internal error: local module function has no authoritative source snapshot")
+                binding = SourceDefinitionBinding("module", ref.name, None, ref, snapshot)
+                resolved = ResolvedCallable(CallableKind.MODULE_DEFINITION, name, binding)
+
+            if resolved.kind is CallableKind.MODULE_DEFINITION:
+                session = environment.source_callable_session
+                if session is None or not callable(environment.source_call_site_allocator):
+                    raise CompileError("Internal error: module call requires source session and occurrence allocator")
+                binding = resolved.target
+                snapshot = binding.snapshot
+                fn = snapshot.definitions[binding.definition.name]
+                from .function_signatures import compile_function_signature, resolve_parameter_annotation
+                if fn.args.posonlyargs or fn.args.vararg or fn.args.kwarg or fn.args.kwonlyargs or fn.args.kw_defaults:
+                    raise CompileError(f"{name}() accepts only ordinary named parameters")
+                parameters = tuple(arg.arg for arg in fn.args.args)
+                default_offset = len(parameters) - len(fn.args.defaults)
+                declarations = {
+                    arg.arg: resolve_parameter_annotation(arg.annotation)[0]
+                    for arg in fn.args.args
+                }
+                templates = tuple(SourceCallableParameter(
+                    input_index=i, source_name=arg.arg, display_name=arg.arg,
+                    keyword_key=arg.arg, typ=declarations[arg.arg] or NFType.FLOAT,
+                    public=True, has_default=i >= default_offset,
+                ) for i, arg in enumerate(fn.args.args))
+                bound_pairs = bind_unified_source_arguments(
+                    templates, tuple(cleaned_call.args),
+                    tuple((item.arg, item.value) for item in cleaned_call.keywords), name,
+                )
+                bound_nodes: dict[str, ast.expr] = {}
+                inferred: dict[str, NFType] = {}
+                for parameter, child in bound_pairs:
+                    child_fact = analyze(child)
+                    if child_fact.semantic_payload is not None or isinstance(child_fact.result_shape, ArrayResultShape):
+                        raise CompileError(f"{name}() arguments must have supported runtime types")
+                    actual = _require_runtime_type(child_fact, "module definition argument")
+                    declared = declarations[parameter.source_name]
+                    if declared is not None and not source_argument_type_matches(declared, actual):
+                        raise CompileError(f"{name}() parameter {parameter.source_name!r} expects {declared}, got {actual}")
+                    bound_nodes[parameter.source_name] = child
+                    inferred[parameter.source_name] = declared or actual
+                definition_owner = binding.definition.stable_key()
+                initial_signature = compile_function_signature(
+                    fn, owner_scope=definition_owner,
+                    declaration_owner=definition_owner,
+                    inferred_types=inferred,
+                    compile_time_values=environment.const_eval_values,
+                )
+                types_by_name = {item.target_name: item.typ for item in initial_signature.declarations}
+                function_id = module_definition_function_id(
+                    binding.definition, serialize_local_signature(parameters, types_by_name)
+                )
+                materialization = IRFunctionMaterialization(
+                    function_id, IRFunctionMaterializationMode.UNIQUE if modifiers.unique else IRFunctionMaterializationMode.SHARED,
+                    environment.source_call_site_allocator(function_id) if modifiers.unique else None,
+                )
+                owner_scope = function_materialization_owner_scope(materialization)
+                identity = GroupCompilationIdentity(None, owner_scope, definition_owner, function_id.stable_key())
+                # Imported source modules have independent lexical imports and
+                # constants; never inherit caller bindings or run imported body.
+                if binding.definition.module in environment.callable_environment.local_definition_refs.values():
+                    module_callable_environment = environment.callable_environment
+                    module_values = environment.const_eval_values
+                else:
+                    from .group import resolve_module_callable_environment
+                    module_callable_environment, module_values = session.callable_environment_for_module(snapshot)
+                prepared = session.prepare_definition(
+                    function_id=function_id, identity=identity, fn=fn,
+                    parameter_types=inferred,
+                    callable_environment=module_callable_environment,
+                    compile_time_values=module_values,
+                    helper_namespace=fn.name,
+                    source_record=binding.record, source_module=snapshot,
+                )
+                physical_parameters = {parameter.source_name: parameter for parameter in prepared.contract.parameters}
+                runtime_nodes = []
+                runtime_operands = []
+                static_operands = []
+                for parameter_name in parameters:
+                    if parameter_name not in bound_nodes:
+                        continue
+                    parameter = physical_parameters[parameter_name]
+                    child = bound_nodes[parameter_name]
+                    actual = _require_runtime_type(facts[child], "module definition argument")
+                    if not source_argument_type_matches(parameter.typ, actual):
+                        raise CompileError(f"{name}() parameter {parameter_name!r} expects {parameter.typ}, got {actual}")
+                    folded = try_runtime_fold(child, environment.const_eval_values)
+                    if folded is NOT_FOLDABLE:
+                        runtime_nodes.append(child)
+                        runtime_operands.append(AnalyzedCallOperand(parameter_name, actual, parameter.input_index))
+                    else:
+                        static_operands.append(AnalyzedStaticCallOperand(parameter.input_index, folded))
+                result_types = tuple(output.typ for output in prepared.contract.outputs)
+                if not result_types:
+                    raise CompileError(f"{name}() definition has no return values")
+                result_spec = RuntimeCallResult(result_types[0]) if len(result_types) == 1 else TupleCallResult(result_types)
+                return record(node, ExpressionFact(
+                    call_result_shape(result_spec),
+                    analyzed_call=AnalyzedCall(
+                        target=resolved, runtime_operands=tuple(runtime_operands), options=(),
+                        result=result_spec, source_function_id=function_id,
+                        materialization=materialization, static_operands=tuple(static_operands),
+                    ), call_operand_nodes=tuple(runtime_nodes),
+                ))
+
             if resolved.kind is CallableKind.LOCAL_FUNCTION:
                 session = environment.source_callable_session
                 if session is None or not callable(environment.source_call_site_allocator):

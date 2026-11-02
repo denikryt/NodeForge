@@ -574,3 +574,9 @@ lifecycle.
 
 - Freeze package `.nf` file-module snapshots before function export discovery and expose every top-level function, including underscore-prefixed declarations, as a separate member of the package Functions namespace.
 - Resolve exported module definitions through immutable source identities, reject collisions with other modules or Extension API v2 owners, and surface failed package discovery on explicit member access.
+
+## 0.80.0
+
+- Added canonical `MODULE_DEF` function identity and physical shared/unique owner scope for individual `.nf` definitions.
+- Connected local and imported package function calls to direct AST semantic preparation and the existing transaction-backed Blender `FunctionMaterializer`; nested groups update in-place.
+- Added module-local lexical compilation for imported functions, reusing captured `.nf` source snapshots without executing imported top-level statements.

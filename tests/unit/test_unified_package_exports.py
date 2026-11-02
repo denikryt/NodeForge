@@ -152,3 +152,42 @@ def test_source_definition_collides_with_extension_api_export(tmp_path):
     assert not namespace.exports
     with pytest.raises(CompileError, match='move'):
         _resolve_member(resolve_environment(), 'move')
+
+
+def test_imported_package_definition_compiles_from_captured_snapshot(tmp_path):
+    """Top-level composition in a module is never lowered when a member is called."""
+    installed = _install(tmp_path / 'pkg', {'geometry.nf': '''def leaf(x: Float):
+    return x + 1
+
+def move(x: Float):
+    return leaf(x)
+
+cube(1)
+'''})
+    env = resolve_environment()
+    from NodeForge.compiler_identities import GroupCompilationIdentity
+    from NodeForge.semantic.group import analyze_group_source
+    from NodeForge.semantic.source_callable_session import SourceCallableSession
+    session = SourceCallableSession(resolved_environment=env)
+    group = analyze_group_source('from packages import shapes\noutput(shapes.move(5))',
+        compilation_identity=GroupCompilationIdentity(None, 'PACKAGE/CALL', 'PACKAGE/CALL', 'PACKAGE/CALL'),
+        resolved_environment=env, source_callable_session=session)
+    assert {key.function_id.name for key in session.prepared} == {'move', 'leaf'}
+    assert all(key.function_id.kind == 'MODULE_DEF' for key in session.prepared)
+    assert not any('cube(' in item.group.source for item in session.prepared.values())
+    (installed.root / 'functions' / 'geometry.nf').write_text('not valid python!\n', encoding='utf-8')
+    assert all(item.group.source for item in session.prepared.values())
+
+
+def test_imported_package_definition_bad_call_rejects_before_materialization(tmp_path):
+    _install(tmp_path / 'pkg', {'geometry.nf': 'def move(x: Float):\n    return x\n'})
+    from NodeForge.compiler_identities import GroupCompilationIdentity
+    from NodeForge.semantic.group import analyze_group_source
+    from NodeForge.semantic.source_callable_session import SourceCallableSession
+    env = resolve_environment()
+    session = SourceCallableSession(resolved_environment=env)
+    with pytest.raises(CompileError, match='missing required'):
+        analyze_group_source('from packages import shapes\noutput(shapes.move())',
+            compilation_identity=GroupCompilationIdentity(None, 'PACKAGE/CALL', 'PACKAGE/CALL', 'PACKAGE/CALL'),
+            resolved_environment=env, source_callable_session=session)
+    assert not session.prepared

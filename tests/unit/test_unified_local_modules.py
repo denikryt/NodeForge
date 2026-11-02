@@ -86,7 +86,7 @@ cube(1.0)''')
     group = analyze_group_source('from local import geometry\noutput(2.0)',
         compilation_identity=GroupCompilationIdentity(None, 'ROOT', 'ROOT', 'ROOT'),
         resolved_environment=env, source_callable_session=session)
-    assert len(session.module_snapshots) == 1
+    assert len([module for module in session.module_snapshots if module.kind == "LOCAL"]) == 1
     assert not session.prepared
     assert len(group.interface.outputs) == 1
 

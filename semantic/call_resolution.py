@@ -273,7 +273,7 @@ class AnalyzedCall:
             raise TypeError("runtime_operands must contain AnalyzedCallOperand records")
         if not all(isinstance(item, AnalyzedStaticCallOperand) for item in self.static_operands):
             raise TypeError("static_operands must contain AnalyzedStaticCallOperand records")
-        if self.target.kind in {CallableKind.LOCAL_FUNCTION, CallableKind.LIBRARY}:
+        if self.target.kind in {CallableKind.LOCAL_FUNCTION, CallableKind.LIBRARY, CallableKind.MODULE_DEFINITION}:
             if not isinstance(self.source_function_id, FunctionId):
                 raise TypeError("source-backed analyzed call requires FunctionId")
             if self.materialization is not None and self.materialization.callee != self.source_function_id:

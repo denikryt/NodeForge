@@ -123,6 +123,11 @@ def function_materialization_owner_scope(
             callee.signature,
             instance_key=instance_key,
         )
+    if callee.kind == "MODULE_DEF":
+        return function_group_owner_scope(
+            "MODULE_DEF", callee.module.stable_key(), callee.name, callee.signature,
+            instance_key=instance_key or None,
+        )
     if callee.kind == "LIBRARY":
         if callee.namespace == "local":
             return direct_library_owner_scope_for_id(callee, instance_key=instance_key or None)

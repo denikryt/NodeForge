@@ -492,6 +492,45 @@ def _build_interface_contract(
     return GroupInterfaceContract(tuple(final_inputs), tuple(outputs))
 
 
+def resolve_module_callable_environment(source_module, resolved_environment, source_callable_session):
+    """Build import/definition bindings for a captured module without executing its body.
+
+    The same import validators as direct source compilation supply the lexical
+    environment for a selected module function. Imported module top-level
+    statements are never lowered or published as a side effect of invocation.
+    """
+    if not isinstance(source_module, SourceModuleSnapshot):
+        raise TypeError("Module callable environment requires a source snapshot")
+    raw_stmts = source_module.tree.body
+    raw_body_stmts, import_pairs, package_imports = _extract_function_imports(raw_stmts)
+    resolved = resolve_source_module(source_module)
+    resolve_source_call_graph(resolved)
+    definitions = dict(source_module.definitions)
+    for alias, ref in resolved.definition_aliases.items():
+        definitions[alias] = definitions[ref.name]
+    package_bindings = _validate_package_import_bindings(
+        package_imports, raw_body_stmts, definitions, resolved_environment,
+    )
+    namespaces = {}
+    imported = _validate_import_bindings(
+        import_pairs, raw_body_stmts, definitions, resolved_environment,
+        additional_reserved_names=frozenset(package_bindings),
+        directory_bindings=namespaces, source_callable_session=source_callable_session,
+    )
+    _validate_registered_name_bindings(
+        raw_body_stmts, _registered_name_labels(definitions, imported, package_bindings),
+        top_level_function_names=definitions,
+    )
+    return CallableEnvironment(
+        callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
+        local_functions=definitions,
+        imported_functions=imported,
+        package_namespaces=package_bindings,
+        local_namespaces=namespaces,
+        local_definition_refs=resolved.definition_refs,
+    ), resolved.preprocessed.initial_compile_time.values
+
+
 def analyze_group_source(
     source: str,
     *,
@@ -514,6 +553,10 @@ def analyze_group_source(
         )
     elif source_module.source != source:
         raise CompileError("Source module snapshot does not match the requested source revision")
+    if source_callable_session is not None:
+        stored = source_callable_session.module_snapshots.setdefault(source_module.module_id, source_module)
+        if stored is not source_module:
+            raise CompileError("Conflicting source module revisions inside one compilation attempt")
     raw_stmts = source_module.tree.body
     raw_body_stmts, import_pairs, package_imports = _extract_function_imports(raw_stmts)
 
