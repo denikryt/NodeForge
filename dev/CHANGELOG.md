@@ -541,3 +541,7 @@ lifecycle.
 ## 0.73.1
 
 - Introduced single-revision `.nf` module snapshots with canonical module/definition identities, declaration collection, and preserved source offsets for semantic preparation.
+
+## 0.73.2
+
+- Resolve source-module declarations and forward function identities before runtime lowering; preserve compile-time residualization as the authority for effective executable statements.

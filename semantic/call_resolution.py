@@ -7,7 +7,7 @@ from enum import Enum, auto
 from types import MappingProxyType
 from typing import Mapping, TYPE_CHECKING
 
-from ..compiler_identities import FunctionId, library_function_id, library_function_id_for_record
+from ..compiler_identities import FunctionId, SourceDefinitionRef, library_function_id, library_function_id_for_record
 from ..errors import CompileError
 from .group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
 from ..extensions.contracts import ExtensionCallableId, TypeSpec, validate_extension_argument_positions
@@ -65,12 +65,20 @@ class CallableEnvironment:
     imported_functions: Mapping[str, object]
     package_namespaces: Mapping[str, object] = field(default_factory=dict)
     local_namespaces: Mapping[str, object] = field(default_factory=dict)
+    local_definition_refs: Mapping[str, SourceDefinitionRef] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Defensively freeze all name collections for one analysis invocation."""
         object.__setattr__(self, "callable_builtins", frozenset(self.callable_builtins))
         object.__setattr__(self, "local_functions", MappingProxyType(dict(self.local_functions)))
         object.__setattr__(self, "imported_functions", MappingProxyType(dict(self.imported_functions)))
+        refs = dict(self.local_definition_refs)
+        if not set(refs).issubset(self.local_functions) or any(
+            not isinstance(ref, SourceDefinitionRef) or ref.name != name
+            for name, ref in refs.items()
+        ):
+            raise TypeError("local_definition_refs must identify registered source definitions")
+        object.__setattr__(self, "local_definition_refs", MappingProxyType(refs))
         package_namespaces = dict(self.package_namespaces)
         for alias, binding in package_namespaces.items():
             if not isinstance(alias, str) or not alias or getattr(binding, "source_name", None) != alias:
@@ -530,7 +538,10 @@ def resolve_simple_callable(name: str, environment: CallableEnvironment):
             raise error
         raise ambiguous_callable_error(name, labels, package=True)
     if is_local:
-        return ResolvedCallable(CallableKind.LOCAL_FUNCTION, name, target=name)
+        return ResolvedCallable(
+            CallableKind.LOCAL_FUNCTION, name,
+            target=environment.local_definition_refs.get(name, name),
+        )
     if binding is not None:
         return _resolved_from_library_binding(name, binding)
     if local_candidates:

@@ -17,14 +17,14 @@ from .callable_contracts import (
 )
 from ..compiler_identities import BindingId, GroupCompilationIdentity, ModuleId
 from .constants import TYPE_FLOAT, TYPE_INT, TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
-from .residualization import _infer_input_types, _preprocess_compile_time
+from .residualization import _infer_input_types
 from ..errors import CompileError
 from ..nf_types import NFType
 from ..extensions.contracts import ExtensionCallableId
 from .source_bindings import LibraryBinding, PackageNamespaceBinding, LocalDirectoryNamespaceBinding
 from ..extensions.registry import library_owner_key
 from .parsing import _assigned_names, _binding_names, _collect_inputs, _extract_function_imports, _needs_geometry_io, normalized_statements
-from .source_modules import SourceModuleSnapshot, parse_source_module
+from .source_modules import SourceModuleSnapshot, parse_source_module, resolve_source_module
 from .runtime_bindings import RuntimeBindingSymbol, allows_existing_top_level_shadow, format_reserved_binding_label
 from .body import BasicBodyCompilation, lower_basic_body
 from .ir import IRBody, IRIf, IRInputDeclaration, IRPanelDeclaration, IRRepeat
@@ -455,14 +455,14 @@ def analyze_group_source(
     raw_body_stmts, import_pairs, package_imports = _extract_function_imports(raw_stmts)
 
     local_function_defs = dict(inherited_local_functions or {})
-    body_stmts = []
-    for stmt in raw_body_stmts:
-        if isinstance(stmt, ast.FunctionDef):
-            if stmt.name in local_function_defs:
-                raise CompileError(f"Duplicate local function: {stmt.name}")
-            local_function_defs[stmt.name] = stmt
-        else:
-            body_stmts.append(stmt)
+    for name, fn in source_module.definitions.items():
+        if name in local_function_defs:
+            raise CompileError(
+                f"Duplicate function {name!r} at line {fn.lineno}, "
+                f"column {fn.col_offset + 1}"
+            )
+        local_function_defs[name] = fn
+    body_stmts = list(source_module.statements)
 
     resolved_environment.catalog("examples").names()
     package_bindings = _validate_package_import_bindings(
@@ -492,7 +492,8 @@ def analyze_group_source(
     )
     _validate_interface_directive_placement(raw_body_stmts)
 
-    preprocessed = _preprocess_compile_time(body_stmts)
+    resolved_source_module = resolve_source_module(source_module, inherited_definitions=inherited_local_functions)
+    preprocessed = resolved_source_module.preprocessed
     stmts = list(preprocessed.statements)
     callable_names = set(imported) | set(local_function_defs) | set(package_bindings) | set(local_directories)
     input_names = sorted(
@@ -519,6 +520,7 @@ def analyze_group_source(
         imported_functions=imported,
         package_namespaces=package_bindings,
         local_namespaces=local_directories,
+        local_definition_refs=resolved_source_module.definition_refs,
     )
     extension_dependencies: dict[tuple[str, ...], str] = {}
     body_compilation = lower_basic_body(
