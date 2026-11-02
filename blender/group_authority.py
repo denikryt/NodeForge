@@ -97,11 +97,52 @@ def is_authority_ineligible_group(group) -> bool:
     return is_transaction_private(group) or is_provisional(group)
 
 
+def find_unique_authoritative_group(
+    matches_identity,
+    *,
+    description: str,
+    selected=None,
+    transaction=None,
+):
+    """Find exactly one eligible Blender owner for a complete canonical identity.
+
+    This boundary is shared by automatic lookup and user-selected Reload. A
+    copied ID duplicates custom properties, so neither Blender naming nor the
+    selected pointer may decide which duplicate is authoritative.
+    """
+    from ..errors import CompileError
+
+    matches = []
+    for group in bpy.data.node_groups:
+        if getattr(group, "bl_idname", None) != "GeometryNodeTree":
+            continue
+        if transaction is not None and hasattr(transaction, "owns_group") and transaction.owns_group(group):
+            continue
+        if is_authority_ineligible_group(group):
+            continue
+        if matches_identity(group):
+            matches.append(group)
+    if len(matches) > 1:
+        owners = ", ".join(f"{item.name} [{item.as_pointer()}]" for item in matches)
+        raise CompileError(
+            f"Duplicate authoritative source owners for {description}: {owners}. "
+            "Select the independent single-user copy and detach its NodeForge source ownership."
+        )
+    canonical = matches[0] if matches else None
+    if selected is not None and canonical is not selected:
+        raise CompileError(
+            f"Selected node group is not the sole canonical source owner for {description}; "
+            "it may be detached or belong to a different definition/specialization/instance."
+        )
+    return canonical
+
+
 __all__ = [
     "BACKEND_PRIVATE_GROUP_PROPERTIES",
     "PROVISIONAL_REGISTRY_KEY",
     "TRANSACTION_PRIVATE_PROP",
     "forget",
+    "find_unique_authoritative_group",
     "is_authority_ineligible_group",
     "is_provisional",
     "is_transaction_private",

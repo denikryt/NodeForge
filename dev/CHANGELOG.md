@@ -580,3 +580,9 @@ lifecycle.
 - Added canonical `MODULE_DEF` function identity and physical shared/unique owner scope for individual `.nf` definitions.
 - Connected local and imported package function calls to direct AST semantic preparation and the existing transaction-backed Blender `FunctionMaterializer`; nested groups update in-place.
 - Added module-local lexical compilation for imported functions, reusing captured `.nf` source snapshots without executing imported top-level statements.
+
+## 0.81.0
+
+- Centralized canonical function-group candidate lookup for module definitions, local helpers and library entries with strict duplicate-owner rejection.
+- Validate explicitly selected source-reload targets against all live eligible groups of the same full source/instance identity before compilation or mutation.
+- Preserve legal distinct `__unique__` instance owner keys; copied Blender ID metadata is ambiguous until explicitly detached.

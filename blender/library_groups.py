@@ -262,6 +262,9 @@ def update_materialized_library_entry_group_for_record(
 ):
     """Update an existing root group through one prepared semantic compilation."""
     validate_reloadable_library_entry_record(group, record)
+    _validate_selected_library_owner(
+        group, record, instance_key=str(group.get(FUNCTION_INSTANCE_KEY_PROP) or "")
+    )
     source = load_library_entry_source_for_record(record)
     function_id = library_function_id_for_record(record)
     instance_key = (
@@ -335,20 +338,31 @@ def _library_metadata_matches(group, record: LibraryEntryRecord, *, instance_key
 
 def _find_owned_library_entry_group(record: LibraryEntryRecord, *, instance_key: str | None = None, transaction=None):
     """Find the sole live imported function group by ownership metadata."""
-    matches = []
-    for group in bpy.data.node_groups:
-        if getattr(group, "bl_idname", None) != "GeometryNodeTree":
-            continue
-        if transaction is not None and hasattr(transaction, "owns_group") and transaction.owns_group(group):
-            continue
-        if is_authority_ineligible_group(group):
-            continue
-        if _library_metadata_matches(group, record, instance_key=instance_key):
-            matches.append(group)
-    if len(matches) > 1:
-        mode = "unique" if instance_key else "shared"
-        raise CompileError(f"Multiple {mode} {record.namespace} library groups match {record.name!r}")
-    return matches[0] if matches else None
+    from .group_authority import find_unique_authoritative_group
+    return find_unique_authoritative_group(
+        lambda group: _library_metadata_matches(group, record, instance_key=instance_key),
+        description=f"{record.namespace} {record.package_id or 'core'}/{record.name} "
+                    f"instance {str(instance_key or 'SHARED')!r}",
+        transaction=transaction,
+    )
+
+
+def _validate_selected_library_owner(group, record, *, instance_key: str):
+    """Reject ambiguous copies or a detached selected group before source mutation."""
+    from .group_authority import find_unique_authoritative_group
+    from ..function_instances import FUNCTION_DEFINITION_OWNER_PROP
+    function_id = library_function_id_for_record(record)
+    authoritative = group.get(FUNCTION_DEFINITION_OWNER_PROP)
+    if authoritative and authoritative != function_id.stable_key():
+        raise CompileError("Selected source group carries a different canonical definition identity")
+    return find_unique_authoritative_group(
+        lambda candidate: _library_metadata_matches(candidate, record, instance_key=instance_key)
+            and (not candidate.get(FUNCTION_DEFINITION_OWNER_PROP)
+                 or candidate.get(FUNCTION_DEFINITION_OWNER_PROP) == function_id.stable_key()),
+        description=f"selected {record.namespace} {record.package_id or 'core'}/{record.name} "
+                    f"instance {instance_key or 'SHARED'}",
+        selected=group,
+    )
 
 
 def _validate_library_function_id(function_id: FunctionId, record: LibraryEntryRecord) -> None:

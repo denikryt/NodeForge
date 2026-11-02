@@ -43,27 +43,17 @@ def _local_helper_group_name(namespace, function_name, signature):
 
 def _find_local_helper(*, namespace, function_name, signature, definition_owner=None, instance_key=None, transaction=None):
     """Return the unique helper matching the exact metadata identity."""
-    matches = []
-    for group in bpy.data.node_groups:
-        if transaction is not None and hasattr(transaction, "owns_group") and transaction.owns_group(group):
-            continue
-        if is_authority_ineligible_group(group):
-            continue
-        if _helper_metadata_matches(
-            group,
-            namespace=namespace,
-            function_name=function_name,
-            signature=signature,
-            return_shape=None,
-            definition_owner=definition_owner,
-            instance_key=instance_key,
-        ):
-            matches.append(group)
-    if len(matches) > 1:
-        raise CompileError(
-            f"Multiple local function helpers match {function_name}() with signature {signature}"
-        )
-    return matches[0] if matches else None
+    from .group_authority import find_unique_authoritative_group
+    return find_unique_authoritative_group(
+        lambda group: _helper_metadata_matches(
+            group, namespace=namespace, function_name=function_name,
+            signature=signature, return_shape=None,
+            definition_owner=definition_owner, instance_key=instance_key,
+        ),
+        description=f"local function {function_name!r} specialization {signature!r} "
+                    f"instance {str(instance_key or 'SHARED')!r}",
+        transaction=transaction,
+    )
 
 def _helper_metadata_matches(group, *, namespace, function_name, signature, return_shape=None, definition_owner=None, instance_key=None):
     """Return True when an existing group is an owned matching local-function helper."""

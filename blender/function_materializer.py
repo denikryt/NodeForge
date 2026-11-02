@@ -136,7 +136,7 @@ class FunctionMaterializer:
         unique occurrence key; no module-specific backing generation is made.
         """
         import bpy
-        from .group_authority import is_authority_ineligible_group
+        from .group_authority import find_unique_authoritative_group
 
         function_id = materialization.callee
         if function_id.kind != "MODULE_DEF" or prepared_callable.contract.function_id != function_id:
@@ -153,18 +153,15 @@ class FunctionMaterializer:
             self._record_dependency(context.function_compilation_trace, materialization, group)
             return MaterializedFunctionGroup(group, instance_key, owner_scope)
         from ..function_instances import FUNCTION_DEFINITION_OWNER_PROP, FUNCTION_INSTANCE_KEY_PROP
-        matches = [candidate for candidate in bpy.data.node_groups
-                   if candidate.bl_idname == "GeometryNodeTree"
-                   and not is_authority_ineligible_group(candidate)
-                   and candidate.get(FUNCTION_DEFINITION_OWNER_PROP) == function_id.stable_key()
-                   and str(candidate.get(FUNCTION_INSTANCE_KEY_PROP) or "") == instance_key]
-        if len(matches) > 1:
-            raise CompileError(
-                f"Ambiguous canonical function owner {function_id.name!r}: "
-                + ", ".join(item.name for item in matches)
-                + ". Detach source ownership from the selected single-user copy."
-            )
-        existing = matches[0] if matches else None
+        existing = find_unique_authoritative_group(
+            lambda candidate: (
+                candidate.get(FUNCTION_DEFINITION_OWNER_PROP) == function_id.stable_key()
+                and str(candidate.get(FUNCTION_INSTANCE_KEY_PROP) or "") == instance_key
+            ),
+            description=f"module {function_id.module.stable_key()}::{function_id.name} "
+                        f"specialization {function_id.signature} instance {instance_key or 'SHARED'}",
+            transaction=context.function_group_transaction,
+        )
         own_inputs = {
             "kind": "module-def", "definition": function_id.stable_key(),
             "source": normalized_source(prepared.source),
