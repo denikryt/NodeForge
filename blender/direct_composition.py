@@ -24,6 +24,10 @@ def compose_prepared_initial(prepared, target, backend, session, *, source_modul
     if prepared.geometry_mode or prepared.interface.inputs or prepared.interface.outputs:
         raise CompileError('Direct composition may not declare a base tree interface')
 
+    # Journal only the nodes introduced in this initial attempt. These are the
+    # only level-zero objects eligible for failure cleanup; existing user nodes
+    # and their links are never removed or reconciled.
+    preexisting_nodes = {node.as_pointer() for node in target.nodes}
     transaction = BlenderGroupBuildTransaction()
     cache = {}
     trace = FunctionCompilationTrace()
@@ -47,8 +51,25 @@ def compose_prepared_initial(prepared, target, backend, session, *, source_modul
         else:
             _place_definition_entries(prepared, context, source_module)
         transaction.commit()
-    except Exception:
-        transaction.rollback()
+    except Exception as error:
+        # Remove attempt-local Group Nodes before their referenced backing
+        # groups can be rolled back/destroyed by the nested transaction.
+        cleanup_failure = None
+        for node in tuple(target.nodes):
+            if node.as_pointer() not in preexisting_nodes:
+                try:
+                    target.nodes.remove(node)
+                except Exception as exc:
+                    if cleanup_failure is None:
+                        cleanup_failure = exc
+        try:
+            transaction.rollback()
+        except Exception as exc:
+            if cleanup_failure is None:
+                cleanup_failure = exc
+        if cleanup_failure is not None:
+            error.add_note(f"Initial-composition rollback also failed: {cleanup_failure}")
+            raise error from cleanup_failure
         raise
     return target
 

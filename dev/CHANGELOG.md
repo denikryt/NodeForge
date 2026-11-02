@@ -609,3 +609,9 @@ lifecycle.
 - Place every zero-incoming source definition as an ordinary Group Node in the existing base tree when effective module composition is empty.
 - Materialize transitive nested definitions through shared backend ownership; unconnected required entry inputs are retained, while executable sources suppress automatic entries.
 - Reuse the final compile-time constant snapshot for independently prepared definition-only functions.
+
+## 0.85.0
+
+- Made one initial direct-composition attempt failure-atomic: newly inserted base-tree nodes are removed before rolling back nested group updates and generated resources through the existing transaction.
+- Preserved exact preexisting level-zero nodes, links and interface during late failures in mixed source and definition-only entry placement.
+- Kept cleanup ephemeral to one attempt without introducing managed level-zero node ownership, reconciliation or repeated-compilation semantics.
