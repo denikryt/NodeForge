@@ -7,10 +7,9 @@ from bpy.types import Operator, Panel, PropertyGroup, UIList, AddonPreferences
 from bpy.props import StringProperty, PointerProperty, CollectionProperty, IntProperty, BoolProperty
 
 from .compiler import (
-    compile_script_auto,
+    compose_source_initial,
     create_selected_library_group_auto,
     update_mesh_compute_modifier,
-    update_expression_group,
     create_library_catalog_group,
     create_package_function_group,
     update_library_catalog_group,
@@ -54,6 +53,15 @@ def _active_gn_tree(context):
         if tree and getattr(tree, "bl_idname", None) == "GeometryNodeTree":
             return tree
     return None
+
+def _base_gn_tree(context):
+    """Resolve only the base Geometry Nodes tree from the editor, never edit_tree."""
+    space = getattr(context, "space_data", None)
+    if space is None or getattr(space, "type", None) != 'NODE_EDITOR':
+        return None
+    target = getattr(space, "node_tree", None)
+    return target if getattr(target, "bl_idname", None) == 'GeometryNodeTree' else None
+
 
 def _selected_group_node(context):
     """Function `_selected_group_node` used by the NodeForge addon."""
@@ -333,43 +341,34 @@ class GNSCRIPT_MVP_Properties(PropertyGroup):
     local_overwrite: BoolProperty(name="Overwrite", default=False)
 
 class GNSCRIPT_MVP_OT_compile_expression(Operator):
-    """Class `GNSCRIPT_MVP_OT_compile_expression` used by the NodeForge addon."""
+    """Compose unified NF source once in the existing base Geometry Nodes tree."""
     bl_idname = "gn_script_mvp.compile_expression"
-    bl_label = "Compile NodeForge Group"
-    bl_description = "Compile a NodeForge group or install a root Mesh Compute modifier"
+    bl_label = "Compile Script"
+    bl_description = "Insert NF statements or definition entries into the existing base node tree"
     bl_options = {'REGISTER', 'UNDO'}
 
     expression: StringProperty(default="")
-    insert_node: bpy.props.BoolProperty(default=True)
 
     @classmethod
     def poll(cls, context):
-        """Function `poll` used by the NodeForge addon."""
-        return True
+        """Keep the action available so execute can provide a useful target diagnostic."""
+        return getattr(context, "scene", None) is not None
 
     def execute(self, context):
-        """Function `execute` used by the NodeForge addon."""
-        props = getattr(context.scene, "gn_script_mvp", None)
+        """Compile into space.node_tree and let the compiler own rollback on error."""
+        props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
         source = self.expression or _source_from_props(props)
+        target = _base_gn_tree(context)
+        if target is None:
+            self.report({'ERROR'}, "Open a base Geometry Nodes tree in the Node Editor")
+            return {'CANCELLED'}
         try:
-            group, installed_modifier = compile_script_auto(source, context.active_object)
+            compose_source_initial(source, target)
         except Exception as exc:
             traceback.print_exc()
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
-
-        tree = _active_gn_tree(context)
-        if self.insert_node and not installed_modifier and tree is not None:
-            node = tree.nodes.new("GeometryNodeGroup")
-            node.node_tree = group
-            _apply_group_defaults_to_node(node)
-            node.location = (0, 0)
-            tree.nodes.active = node
-            node.select = True
-        if installed_modifier:
-            _report_mesh_compute_evaluation(self, context, group)
-        else:
-            self.report({'INFO'}, f"Created node group: {group.name}")
+        self.report({'INFO'}, f"Compiled script into: {target.name}")
         return {'FINISHED'}
 
 
@@ -428,36 +427,32 @@ class NODEFORGE_OT_reload_mesh_compute_modifier(Operator):
         return {'FINISHED'}
 
 
-class GNSCRIPT_MVP_OT_update_selected_group(Operator):
-    """Class `GNSCRIPT_MVP_OT_update_selected_group` used by the NodeForge addon."""
-    bl_idname = "gn_script_mvp.update_selected_group"
-    bl_label = "Update Selected NodeGroup"
-    bl_description = "Recompile the current script into the selected Geometry Node Group, preserving the group datablock and name"
+class NODEFORGE_OT_detach_selected_source_owner(Operator):
+    """Explicitly remove authoritative source stamps from a selected user copy."""
+    bl_idname = "nodeforge.detach_selected_source_owner"
+    bl_label = "Detach Source Ownership"
+    bl_description = "Detach the selected single-user copy from canonical NodeForge source updates"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
-        """Function `poll` used by the NodeForge addon."""
+        """Only a selected Group Node can nominate the exact copy to detach."""
         return _selected_group_node(context) is not None
 
     def execute(self, context):
-        """Function `execute` used by the NodeForge addon."""
-        props = getattr(context.scene, "gn_script_mvp", None)
-        source = _source_from_props(props)
+        """Fail closed if the selected datablock is not an eligible user copy."""
+        from .blender.group_authority import detach_selected_source_owner
+
         node = _selected_group_node(context)
         if node is None:
-            self.report({'ERROR'}, "Select exactly one Geometry Node Group node to update")
+            self.report({'ERROR'}, "Select one Geometry Node Group copy")
             return {'CANCELLED'}
-        old_name = node.node_tree.name
         try:
-            update_expression_group(node.node_tree, source)
+            detach_selected_source_owner(node.node_tree)
         except Exception as exc:
-            traceback.print_exc()
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
-        node.node_tree.name = old_name
-        node.name = node.name or old_name
-        self.report({'INFO'}, f"Updated node group: {old_name}")
+        self.report({'INFO'}, f"Detached source ownership: {node.node_tree.name}")
         return {'FINISHED'}
 
 
@@ -1073,13 +1068,12 @@ class GNSCRIPT_MVP_PT_panel(Panel):
         """Function `draw` used by the NodeForge addon."""
         layout = self.layout
         props = context.scene.gn_script_mvp
-        layout.label(text="Python-like script → Node Group")
+        layout.label(text="NF source → existing base Geometry Nodes tree")
         layout.prop(props, "text_block")
         if props.text_block is None:
             layout.label(text="Select a Blender Text datablock", icon='INFO')
         op = layout.operator(GNSCRIPT_MVP_OT_compile_expression.bl_idname, text="Compile Script")
         op.expression = ""
-        op.insert_node = True
         owner = getattr(context, "active_object", None)
         if owner is not None and getattr(owner, "type", None) == "MESH" and owner.modifiers:
             from .blender.mesh_compute_runtime import get_modifier_binding
@@ -1101,12 +1095,14 @@ class GNSCRIPT_MVP_PT_panel(Panel):
                                 text="Reload Compute", icon='FILE_REFRESH')
                 if stage.last_error:
                     layout.label(text=stage.last_error[:100], icon='ERROR')
-        row = layout.row()
         selected_group = _selected_group_node(context)
-        row.enabled = selected_group is not None
-        row.operator(GNSCRIPT_MVP_OT_update_selected_group.bl_idname, text="Update Selected NodeGroup")
         row = layout.row()
-        row.operator(NODEFORGE_OT_reload_selected_library_group.bl_idname, text="Reload from Source", icon='FILE_REFRESH')
+        row.enabled = selected_group is not None
+        row.operator(NODEFORGE_OT_reload_selected_library_group.bl_idname, text="Reload Function from Source", icon='FILE_REFRESH')
+        row = layout.row()
+        row.enabled = selected_group is not None
+        row.operator(NODEFORGE_OT_detach_selected_source_owner.bl_idname,
+                     text="Detach Selected Copy", icon='UNLINKED')
         embedded_source = _extract_group_source(selected_group.node_tree) if selected_group is not None else ""
         row = layout.row()
         row.enabled = bool(embedded_source)
@@ -1240,12 +1236,11 @@ class NODEFORGE_PT_library_packages(Panel):
 def menu_func(self, context):
     """Function `menu_func` used by the NodeForge addon."""
     space = getattr(context, "space_data", None)
-    tree = getattr(space, "edit_tree", None) if space else None
-    if tree and getattr(tree, "bl_idname", None) == "GeometryNodeTree":
+    tree = _base_gn_tree(context)
+    if tree is not None:
         self.layout.separator()
-        op = self.layout.operator(GNSCRIPT_MVP_OT_compile_expression.bl_idname, text="NodeForge: Compile Group")
+        op = self.layout.operator(GNSCRIPT_MVP_OT_compile_expression.bl_idname, text="NodeForge: Compile Script")
         op.expression = ""
-        op.insert_node = True
 
 classes = (
     NODEFORGE_OT_reload_addon,
@@ -1257,7 +1252,7 @@ classes = (
     NODEFORGE_UL_packages,
     GNSCRIPT_MVP_OT_compile_expression,
     NODEFORGE_OT_reload_mesh_compute_modifier,
-    GNSCRIPT_MVP_OT_update_selected_group,
+    NODEFORGE_OT_detach_selected_source_owner,
     NODEFORGE_OT_reload_selected_library_group,
     GNSCRIPT_MVP_OT_load_selected_group_source,
     NODEFORGE_OT_refresh_function_library,

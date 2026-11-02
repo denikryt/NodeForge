@@ -17,7 +17,6 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from ..semantic.builtin_registry import BUILTIN_NAMES
-from ..semantic.callable_contracts import normalize_callable_keyword
 
 
 @dataclass(frozen=True)
@@ -28,10 +27,12 @@ class Parameter:
     typ: str = ""
     default: str | None = None
     keyword: str | None = None
+    display_label: str | None = None
 
     def label(self) -> str:
-        """Format a compact signature parameter."""
-        return f"{self.name}{': ' + self.typ if self.typ else ''}{' = ' + self.default if self.default is not None else ''}"
+        """Render the source parameter name and optional Blender display label."""
+        name = self.name if not self.display_label else f'{self.name} [{self.display_label}]'
+        return f"{name}{': ' + self.typ if self.typ else ''}{' = ' + self.default if self.default is not None else ''}"
 
 
 @dataclass(frozen=True)
@@ -82,11 +83,6 @@ _CORE_SIGNATURES = {
     "vector": ("x: Float", "y: Float", "z: Float"),
     "transform": ("geometry: Geometry", "translation: Vector", "rotation: Vector", "scale: Vector | Float"),
     "set_position": ("geometry: Geometry", "position: Vector", "selection: Bool"),
-    "output": ("name: String", "value"),
-    "input_float": ("name: String", "default: Float = 0.0"),
-    "input_int": ("name: String", "default: Int = 0"),
-    "input_vector": ("name: String", "default: Vector"),
-    "input_bool": ("name: String", "default: Bool = False"),
     "join": ("geometries",),
 }
 
@@ -96,8 +92,6 @@ _CORE_SIGNATURES = {
 _CORE_OUTPUT_TYPES = {
     "cube": "Geometry", "points": "Geometry", "vector": "Vector",
     "transform": "Geometry", "set_position": "Geometry", "join": "Geometry",
-    "input_float": "Float", "input_int": "Int", "input_vector": "Vector",
-    "input_bool": "Bool",
 }
 
 
@@ -118,80 +112,63 @@ def _core_signature(name: str) -> Signature:
     return Signature(name, tuple(params), outputs)
 
 
-def _display_keyword(label: str) -> str | None:
-    """Render a readable legal keyword with the compiler's normalization semantics."""
-    name = re.sub(r"\W+", "_", label.casefold()).strip("_")
-    if not name.isidentifier() or keyword.iskeyword(name):
-        return None
-    return name if normalize_callable_keyword(name) == normalize_callable_keyword(label) else None
-
-
-def _source_signature(name: str, source: str) -> Signature:
-    """Inspect declarations without executing source or building Blender nodes.
-
-    This provisional display handles literal input labels and defaults; richer
-    compile-time labels remain opaque until a future semantic-only projection.
-    """
-    try:
-        body = ast.parse(source).body
-    except SyntaxError:
-        return Signature(name)
-    params = []
-    outputs = []
-    for statement in body:
-        if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
-            call = statement.value
-            if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
-                continue
-            if not call.func.id.startswith("input_") or not call.args:
-                continue
-            label_expr = call.args[0]
-            if not isinstance(label_expr, ast.Constant) or not isinstance(label_expr.value, str):
-                continue
-            label = label_expr.value
-            default_arg = next((arg.value for arg in call.keywords if arg.arg == "default"), None)
-            default = ast.unparse(default_arg) if default_arg is not None else None
-            typ = call.func.id.removeprefix("input_").capitalize()
-            params.append(Parameter(label, typ, default, _display_keyword(label)))
-        elif isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
-            call = statement.value
-            if isinstance(call.func, ast.Name) and call.func.id == "output" and len(call.args) >= 2:
-                label = call.args[0]
-                if isinstance(label, ast.Constant) and isinstance(label.value, str):
-                    outputs.append(Output(label.value, "?"))
-    keys = [normalize_callable_keyword(p.name) for p in params]
-    # A repeated normalized input label must be supplied positionally.
-    params = [Parameter(p.name, p.typ, p.default, p.keyword if keys.count(keys[i]) == 1 else None)
-              for i, p in enumerate(params)]
-    return Signature(name, tuple(params), tuple(outputs))
+def _definition_signature(fn: ast.FunctionDef, display_name: str) -> Signature:
+    """Project one source function's exact keyword contract from its AST."""
+    arguments = fn.args.args
+    offset = len(arguments) - len(fn.args.defaults)
+    parameters = []
+    for index, arg in enumerate(arguments):
+        typ = ast.unparse(arg.annotation) if arg.annotation is not None else ""
+        label = None
+        if (isinstance(arg.annotation, ast.Subscript)
+                and isinstance(arg.annotation.value, ast.Name)
+                and isinstance(arg.annotation.slice, ast.Constant)
+                and isinstance(arg.annotation.slice.value, str)):
+            typ = arg.annotation.value.id
+            label = arg.annotation.slice.value
+        default = ast.unparse(fn.args.defaults[index - offset]) if index >= offset else None
+        parameters.append(Parameter(arg.arg, typ, default, arg.arg, label))
+    outputs = ()
+    if fn.body and isinstance(fn.body[-1], ast.Return):
+        returned = fn.body[-1].value
+        if isinstance(returned, ast.Tuple):
+            names = []
+            for index, element in enumerate(returned.elts):
+                title = element.id.replace('_', ' ').title() if isinstance(element, ast.Name) else f'Value {index + 1}'
+                names.append(title)
+            counts = {}
+            unique = []
+            for title in names:
+                counts[title] = counts.get(title, 0) + 1
+                unique.append(title if counts[title] == 1 else f'{title} {counts[title]}')
+            outputs = tuple(Output(title, '?') for title in unique)
+        elif returned is not None:
+            annotation = ast.unparse(fn.returns) if fn.returns is not None else '?'
+            if fn.returns is None and isinstance(returned, ast.Name):
+                annotation = next((p.typ for p in parameters if p.name == returned.id and p.typ), '?')
+            if fn.returns is None and isinstance(returned, ast.Call) and isinstance(returned.func, ast.Name):
+                annotation = _CORE_OUTPUT_TYPES.get(returned.func.id, '?')
+            outputs = (Output('Value', annotation),)
+    return Signature(display_name, tuple(parameters), outputs)
 
 
 def _def_signatures(source: str) -> dict[str, tuple[Signature, ...]]:
-    """Collect top-level local function headers even when later text is incomplete."""
-    result = {}
-    # AST parse of a standalone header accepts annotations/defaults without
-    # requiring the remainder of the currently edited file to be valid.
-    for line in source.splitlines():
-        if not line.startswith("def ") or not line.rstrip().endswith(":"):
-            continue
-        try:
-            node = ast.parse(line + "\n    pass").body[0]
-        except SyntaxError:
-            continue
-        if not isinstance(node, ast.FunctionDef):
-            continue
-        all_args = node.args.posonlyargs + node.args.args
-        offset = len(all_args) - len(node.args.defaults)
-        parameters = []
-        for i, arg in enumerate(all_args):
-            typ = ast.unparse(arg.annotation) if arg.annotation else ""
-            default = ast.unparse(node.args.defaults[i - offset]) if i >= offset else None
-            parameters.append(Parameter(arg.arg, typ, default, arg.arg))
-        returns = ()
-        if node.returns is not None:
-            returns = (Output("Value", ast.unparse(node.returns)),)
-        result[node.name] = (Signature(node.name, tuple(parameters), returns),)
-    return result
+    """Index function declarations by name, tolerating an incomplete editor buffer."""
+    try:
+        definitions = [statement for statement in ast.parse(source).body
+                       if isinstance(statement, ast.FunctionDef)]
+    except SyntaxError:
+        definitions = []
+        for line in source.splitlines():
+            if not line.startswith('def ') or not line.rstrip().endswith(':'):
+                continue
+            try:
+                definition = ast.parse(line + '\n    pass').body[0]
+            except SyntaxError:
+                continue
+            if isinstance(definition, ast.FunctionDef):
+                definitions.append(definition)
+    return {fn.name: (_definition_signature(fn, fn.name),) for fn in definitions}
 
 
 def _typespec_label(spec) -> str:
@@ -241,63 +218,53 @@ class SymbolIndex:
     def __init__(self, environment):
         """Retain one immutable environment; resolve imported names on demand."""
         self.environment = environment
-        self._source_cache: dict[Path, tuple[int, Signature]] = {}
+        self._source_cache: dict[tuple[Path, str], tuple[int, Signature]] = {}
         self._typed_cache: dict[Path, tuple[int, tuple[Output, ...] | None]] = {}
 
-    def _record_signatures(self, record, name: str) -> tuple[Signature, ...]:
-        """Read a selected source function's public parameters lazily."""
-        path = getattr(record, "source_path", None)
-        if path is None:
+    def _record_signatures(self, record, name: str, *, definition: str | None = None,
+                           snapshot=None) -> tuple[Signature, ...]:
+        """Expose a selected `.nf` module definition, never a callable file."""
+        path = getattr(record, 'source_path', None)
+        if path is None or path.suffix != '.nf':
             return ()
+        definition = definition or name
         try:
-            stamp = path.stat().st_mtime_ns
-            cached = self._source_cache.get(path)
-            if cached is None or cached[0] != stamp:
-                signature = _source_signature(name, path.read_text(encoding="utf-8"))
-                self._source_cache[path] = (stamp, signature)
+            if snapshot is not None:
+                fn = snapshot.definitions.get(definition)
+                if fn is None:
+                    return ()
+                signature = _definition_signature(fn, name)
             else:
-                signature = cached[1]
+                stamp = path.stat().st_mtime_ns
+                key = (path, definition)
+                cached = self._source_cache.get(key)
+                if cached is not None and cached[0] == stamp:
+                    signature = cached[1]
+                else:
+                    fn_sig = _def_signatures(path.read_text(encoding='utf-8')).get(definition)
+                    if fn_sig is None:
+                        return ()
+                    signature = fn_sig[0]
+                    self._source_cache[key] = (stamp, signature)
+                signature = replace(signature, name=name)
         except OSError:
             return ()
-        return (Signature(name, signature.parameters, signature.outputs, record),)
+        return (signature,)
+
+    def _module_members(self, record) -> dict[str, tuple[Signature, ...]]:
+        """Expose only real definitions in the explicitly selected `.nf` file."""
+        path = getattr(record, 'source_path', None)
+        if path is None or path.suffix != '.nf':
+            return {}
+        try:
+            names = _def_signatures(path.read_text(encoding='utf-8'))
+        except OSError:
+            return {}
+        return {name: self._record_signatures(record, name, definition=name) for name in names}
 
     def _typed_signature(self, signature: Signature) -> Signature:
-        """Resolve source output types lazily using the existing semantic frontend.
-
-        Member inventories remain cheap: this runs only for the function at the
-        caret, not for every exported function in a package or Local folder.
-        Failed semantic preparation keeps the untyped source labels visible.
-        """
-        record = signature.source_record
-        if record is None:
-            return signature
-        path = record.source_path
-        try:
-            stamp = path.stat().st_mtime_ns
-        except OSError:
-            return signature
-        cached = self._typed_cache.get(path)
-        if cached is not None and cached[0] == stamp:
-            outputs = cached[1]
-        else:
-            try:
-                from ..compiler_identities import GroupCompilationIdentity, library_function_id_for_record
-                from ..semantic.source_callable_session import SourceCallableSession
-
-                function_id = library_function_id_for_record(record)
-                key = function_id.stable_key()
-                identity = GroupCompilationIdentity(None, f"EDITOR/{key}", key, key)
-                prepared = SourceCallableSession(resolved_environment=self.environment).prepare_library(
-                    function_id=function_id, identity=identity, record=record
-                )
-                outputs = tuple(Output(item.display_name, item.typ.value.title())
-                                for item in prepared.contract.outputs)
-            except Exception:
-                # Incomplete dependencies must not break editing. Remember the
-                # failure until the source changes or the user refreshes catalogs.
-                outputs = None
-            self._typed_cache[path] = (stamp, outputs)
-        return replace(signature, outputs=outputs) if outputs is not None else signature
+        """Retain syntax-level signature details; inferred types require compilation."""
+        return signature
 
     def _export_signatures(self, export, name: str) -> tuple[Signature, ...]:
         """Read source-backed or Extension API signatures of a selected export."""
@@ -305,8 +272,28 @@ class SymbolIndex:
             specs = self.environment.extension_registry.callable_specs(export.extension_callable_id)
             return _extension_signatures(name, specs)
         if export.record is not None:
-            return self._record_signatures(export.record, name)
+            return self._record_signatures(export.record, name,
+                                           definition=export.definition.name if export.definition else name,
+                                           snapshot=export.source_snapshot)
         return ()
+
+    def _directory_members(self, index, directory, alias, namespaces):
+        """Expose module and directory members without treating files as callables."""
+        from ..local_index import LocalDirectoryCandidate
+
+        members = {}
+        for name in index.path_members.get(directory.import_path, {}):
+            try:
+                selected = index.resolve_member(directory, name)
+            except Exception:
+                continue
+            if isinstance(selected, LocalDirectoryCandidate):
+                members[name] = ()
+                self._directory_members(index, selected, f'{alias}.{name}', namespaces)
+            elif selected is not None:
+                members[name] = ()
+                namespaces[f'{alias}.{name}'] = self._module_members(selected)
+        namespaces[alias] = members
 
     def symbols(self, source: str) -> dict[str, dict[str, tuple[Signature, ...]]]:
         """Bind imported packages and Local functions with the compiler's catalog rules.
@@ -315,7 +302,8 @@ class SymbolIndex:
         aliases to their member tables. Invalid/ambiguous names are omitted.
         """
         env = self.environment
-        top = {name: (_core_signature(name),) for name in BUILTIN_NAMES}
+        top = {name: (_core_signature(name),) for name in BUILTIN_NAMES
+               if not name.startswith('input_') and name != 'output'}
         top.update(_def_signatures(source))
         namespaces: dict[str, dict[str, tuple[Signature, ...]]] = {"": top}
         local_index = env.catalog("local").local_index
@@ -343,42 +331,35 @@ class SymbolIndex:
             elif module == "local" or module.startswith("local."):
                 if local_index is None:
                     continue
+                from ..local_index import LocalDirectoryCandidate
+                path = tuple(module.split('.')[1:])
+                try:
+                    parent = local_index.resolve_path(path) if path else None
+                except Exception:
+                    continue
+                if parent is not None and not isinstance(parent, LocalDirectoryCandidate):
+                    members = self._module_members(parent)
+                    for item in statement.names:
+                        signature = members.get(item.name, ())
+                        if signature:
+                            top[item.asname or item.name] = tuple(replace(sig, name=item.asname or item.name)
+                                                                   for sig in signature)
+                    continue
                 for item in statement.names:
-                    alias = item.asname or item.name
-                    if item.name == "*":
-                        for name in local_index.flat_names():
-                            try:
-                                record = local_index.find_flat_function(name)
-                            except Exception:
-                                continue
-                            if record is not None:
-                                top[name] = self._record_signatures(record, name)
+                    if item.name == '*':
                         continue
                     try:
-                        if module == "local":
-                            selected = local_index.resolve_root_import(item.name)
-                        else:
-                            directory = local_index.resolve_directory(tuple(module.split(".")[1:]))
-                            selected = local_index.resolve_member(directory, item.name)
+                        selected = (local_index.resolve_member(parent, item.name) if parent is not None
+                                    else local_index.resolve_root_import(item.name))
                     except Exception:
                         continue
                     if selected is None:
                         continue
-                    from ..local_index import LocalDirectoryCandidate
+                    alias = item.asname or item.name
                     if isinstance(selected, LocalDirectoryCandidate):
-                        members = {}
-                        for member_name in local_index.path_members.get(selected.import_path, ()):
-                            try:
-                                member = local_index.resolve_member(selected, member_name)
-                            except Exception:
-                                continue
-                            if hasattr(member, "source_path"):
-                                members[member_name] = self._record_signatures(member, member_name)
-                                if item.asname is None and member.source_path.suffix == ".nf":
-                                    top.setdefault(member_name, members[member_name])
-                        namespaces[alias] = members
+                        self._directory_members(local_index, selected, alias, namespaces)
                     else:
-                        top[alias] = self._record_signatures(selected, alias)
+                        namespaces[alias] = self._module_members(selected)
             elif module == "examples":
                 for item in statement.names:
                     try:
@@ -386,7 +367,7 @@ class SymbolIndex:
                     except Exception:
                         continue
                     if record is not None:
-                        top[item.asname or item.name] = self._record_signatures(record, item.asname or item.name)
+                        namespaces[item.asname or item.name] = self._module_members(record)
         return namespaces
 
 
@@ -550,7 +531,7 @@ def cursor_assistance(source: str, line: int, column: int, index: SymbolIndex) -
                 return Assistance(candidates, signatures, active_parameter, column - len(partial), column, line)
 
     suffix = prefix.split("\n")[-1]
-    match = re.search(r"(?<![\w.])(?:(\w+)\.)?([A-Za-z_]\w*)?$", suffix)
+    match = re.search(r"(?<![\w.])(?:([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\.)?([A-Za-z_]\w*)?$", suffix)
     if match:
         qualifier, partial = match.groups()
         partial = partial or ""

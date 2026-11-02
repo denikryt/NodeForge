@@ -621,3 +621,9 @@ lifecycle.
 - Introduced explicit ROOT and NESTED semantic runtime roles: all source function bodies are NESTED regardless of call-stack depth; used root-only Mesh Compute callbacks are rejected there while unused imports remain lazy.
 - Added preflight of effective level-zero IR that rejects all physical Extension API v2 calls before their potentially destructive backend runs against an existing user graph.
 - Retained nested physical extensions inside transaction-owned Function Node Groups; direct Mesh Compute installation without a root modifier contract is rejected.
+
+## 0.87.0
+
+- Routed Compile Script into the existing base Geometry Nodes tree through the unified direct-composition operation; removed the legacy root-group UI compilation/update action.
+- Added explicit Detach Selected Copy for eligible NodeForge-managed Function Node Group copies and retained source Reload for catalog-backed functions.
+- Updated the editor index for module-qualified definitions, exact signature keywords, annotation labels/defaults, and per-definition package exports.
