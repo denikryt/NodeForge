@@ -342,6 +342,9 @@ def _validate_interface_directive_placement(stmts):
         return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "panel"
 
     for stmt in stmts:
+        if isinstance(stmt, ast.FunctionDef):
+            # Function-body panel declarations are validated by its own signature frontend.
+            continue
         direct_call = stmt.value if isinstance(stmt, ast.Expr) and is_panel_call(stmt.value) else None
         for node in ast.walk(stmt):
             if is_panel_call(node) and node is not direct_call:

@@ -1733,7 +1733,8 @@ def analyze_expression(expr, environment):
                     if arg.arg == "__unique__":
                         raise CompileError("Local function parameter __unique__ is reserved by the compiler")
                 params = [arg.arg for arg in fn.args.args]
-                declared = {arg.arg: resolve_local_parameter_annotation(arg.annotation) for arg in fn.args.args}
+                from .function_signatures import resolve_parameter_annotation
+                declared = {arg.arg: resolve_parameter_annotation(arg.annotation)[0] for arg in fn.args.args}
                 bound_nodes: dict[str, ast.expr] = {}
                 bound_types: dict[str, NFType] = {}
                 bound_arguments = bind_local_source_arguments(
@@ -1761,21 +1762,9 @@ def analyze_expression(expr, environment):
                     bound_nodes[param_name] = child
                     bound_types[param_name] = expected or actual_type
 
-                captures = analyze_local_captures(
-                    fn,
-                    local_functions=environment.callable_environment.local_functions,
-                    runtime_bindings=environment.runtime_bindings,
-                    compile_time_values=environment.const_eval_values,
-                    reserved_name_labels=environment.reserved_name_labels,
-                    structural_binding_names=environment.structural_bindings,
-                    structural_array_names=environment.structural_arrays.bindings,
-                    builder_binding_names=environment.builder_bindings,
-                    extension_binding_names=environment.extension_bindings,
-                    callable_environment=environment.callable_environment,
-                )
-                for capture in captures:
-                    bound_types[capture.name] = capture.typ
-                signature_names = tuple(params) + tuple(capture.name for capture in captures)
+                # A function has only declared parameters. Module compile-time
+                # values remain lexical constants, never hidden input sockets.
+                signature_names = tuple(params)
                 signature = serialize_local_signature(signature_names, bound_types)
                 definition_owner = environment.source_definition_owner or environment.source_owner_scope
                 if not definition_owner:
@@ -1797,31 +1786,14 @@ def analyze_expression(expr, environment):
                     definition_owner=function_id.definition_owner,
                     declaration_owner=function_id.stable_key(),
                 )
-                return_shape = analyze_local_return_shape(fn)
-                generated_source = local_function_source(
-                    fn,
-                    bound_types,
-                    hidden_captures=tuple(capture.name for capture in captures),
-                    return_shape=return_shape,
-                )
-                local_names = local_binding_names(fn)
-                inherited_package_namespaces = {
-                    alias: binding
-                    for alias, binding in environment.callable_environment.package_namespaces.items()
-                    if alias not in local_names
-                }
-                prepared = session.prepare_local(
+                prepared = session.prepare_definition(
                     function_id=function_id,
                     identity=identity,
-                    generated_source=generated_source,
-                    explicit_parameter_names=tuple(params),
-                    hidden_capture_names=tuple(capture.name for capture in captures),
-                    local_functions=environment.callable_environment.local_functions,
-                    imported_library_functions=environment.callable_environment.imported_functions,
-                    package_namespaces=inherited_package_namespaces,
-                    local_namespaces={alias: binding for alias, binding in environment.callable_environment.local_namespaces.items() if alias not in local_names},
+                    fn=fn,
+                    parameter_types=bound_types,
+                    callable_environment=environment.callable_environment,
+                    compile_time_values=environment.const_eval_values,
                     helper_namespace=environment.helper_namespace,
-                    return_shape=return_shape,
                 )
                 contract_by_name = {parameter.source_name: parameter for parameter in prepared.contract.parameters}
                 runtime_nodes = []
@@ -1841,22 +1813,6 @@ def analyze_expression(expr, environment):
                         runtime_operands.append(AnalyzedCallOperand(param, actual_type, parameter.input_index))
                     else:
                         static_operands.append(AnalyzedStaticCallOperand(parameter.input_index, folded))
-                for capture in captures:
-                    parameter = contract_by_name.get(capture.name)
-                    if parameter is None:
-                        raise CompileError(f"Internal error: local semantic contract lost capture {capture.name!r}")
-                    if capture.runtime:
-                        child = ast.copy_location(ast.Name(id=capture.name, ctx=ast.Load()), node)
-                        capture_fact = analyze(child)
-                        actual_type = _require_runtime_type(capture_fact, "script-local function capture")
-                        runtime_nodes.append(child)
-                        runtime_operands.append(
-                            AnalyzedCallOperand(capture.name, actual_type, parameter.input_index)
-                        )
-                    else:
-                        static_operands.append(
-                            AnalyzedStaticCallOperand(parameter.input_index, capture.compile_time_value)
-                        )
                 result_types = tuple(output.typ for output in prepared.contract.outputs)
                 if not result_types:
                     raise CompileError(f"Local function {name}() has no outputs")

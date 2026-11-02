@@ -154,6 +154,73 @@ class SourceCallableSession:
             local_output_count=len(return_shape.elements),
         )
 
+    def prepare_definition(
+        self,
+        *,
+        function_id: FunctionId,
+        identity: GroupCompilationIdentity,
+        fn,
+        parameter_types,
+        callable_environment,
+        compile_time_values,
+        helper_namespace: str,
+    ) -> PreparedSourceCallable:
+        """Compile one FunctionDef AST directly under its physical shared/unique owner."""
+        import ast
+
+        from .function_bodies import compile_function_definition
+
+        key = SourceCallablePreparationKey(function_id, identity.owner_scope)
+        cached = self.prepared.get(key)
+        if cached is not None:
+            return cached
+        if function_id in self._active_stack:
+            chain = " -> ".join(item.name for item in self._active_stack + [function_id])
+            raise CompileError(f"Recursive source function calls are not supported: {chain}")
+        source = ast.unparse(fn)
+        existing_source = self.source_snapshots.setdefault(function_id, source)
+        if existing_source != source:
+            raise CompileError("Source function changed during a single preparation attempt")
+        self._active_stack.append(function_id)
+        try:
+            group = compile_function_definition(
+                fn,
+                compilation_identity=identity,
+                callable_environment=callable_environment,
+                resolved_environment=self.resolved_environment,
+                inferred_parameter_types=parameter_types,
+                compile_time_values=compile_time_values,
+                source_callable_session=self,
+                helper_namespace=helper_namespace,
+            )
+        finally:
+            popped = self._active_stack.pop()
+            if popped != function_id:
+                raise CompileError("Internal error: source function compilation stack was corrupted")
+        if group.identity.owner_scope != key.owner_scope:
+            raise CompileError("Internal error: function body changed its physical owner")
+        inputs = {item.source_name: (index, item) for index, item in enumerate(group.interface.inputs)}
+        parameters = []
+        for argument in fn.args.args:
+            indexed = inputs.get(argument.arg)
+            if indexed is None:
+                raise CompileError(f"Internal error: function interface lost parameter {argument.arg!r}")
+            input_index, contract = indexed
+            parameters.append(SourceCallableParameter(
+                input_index=input_index,
+                source_name=argument.arg,
+                display_name=contract.display_name,
+                keyword_key=argument.arg,
+                typ=contract.typ,
+                public=True,
+            ))
+        prepared = PreparedSourceCallable(
+            SourceCallableContract(function_id, tuple(parameters), group.interface.outputs),
+            group,
+        )
+        self.prepared[key] = prepared
+        return prepared
+
     def prepare_library(
         self,
         *,

@@ -504,6 +504,7 @@ def lower_basic_body(
     helper_namespace: str = "Group",
     extension_registry=None,
     extension_dependency_sink=None,
+    terminal_return_shape=None,
 ):
     """Lower one whole eligible source body to compiler-owned structured Semantic IR."""
     validate_input_declaration_placement(stmts)
@@ -2135,6 +2136,16 @@ def lower_basic_body(
                         raise CompileError("Named multi-output results are structural and cannot be used in final expression")
                     raise CompileError("final expression requires a runtime value")
                 emit(IRFinalExpression(analyzed.program))
+                continue
+
+            if isinstance(stmt, ast.Return):
+                if not root or terminal_return_shape is None or not is_final:
+                    raise CompileError("return is permitted only as a function's final statement")
+                for element in terminal_return_shape.elements:
+                    analyzed = accept_expression(element.expression, active, active_compile_time, statements)
+                    if not isinstance(analyzed.result_shape, RuntimeResultShape) or not isinstance(analyzed.program.result, IRValue):
+                        raise CompileError(f"return element {element.index + 1} must produce one runtime value")
+                    emit(IROutput(element.socket_name, analyzed.program))
                 continue
 
             raise CompileError("Unsupported statement")

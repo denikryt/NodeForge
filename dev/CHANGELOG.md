@@ -549,3 +549,8 @@ lifecycle.
 ## 0.74.0
 
 - Added direct AST compilation of typed function parameters with labels, compile-time defaults, requiredness, stable socket identities and prefix panel projection. Typed Semantic IR now distinguishes absent defaults from native socket fallback values.
+
+## 0.75.0
+
+- Compiled local FunctionDef bodies directly from AST into typed IR and nested group interface declarations, with mandatory terminal return, deterministic multi-output names, checked return annotations and no implicit function geometry interface.
+- Reused the existing semantic lowering engine with typed initial parameter bindings rather than generating and reparsing input/output DSL.
