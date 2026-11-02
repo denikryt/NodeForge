@@ -137,12 +137,79 @@ def find_unique_authoritative_group(
     return canonical
 
 
+def detach_selected_source_owner(group) -> None:
+    """Detach an explicitly selected copied group from canonical source lookup.
+
+    This operation never chooses which duplicate is the user-owned copy. It
+    requires the caller to supply the actual selected GeometryNodeTree and
+    checks that another group still carries its same canonical source stamps.
+    Only authoritative lookup attributes are removed; graph contents and
+    generated-resource provenance remain untouched.
+    """
+    from ..errors import CompileError
+    from ..function_instances import (
+        FUNCTION_DEFINITION_OWNER_PROP, FUNCTION_INSTANCE_KEY_PROP,
+    )
+
+    if not _is_live_exact(group) or getattr(group, "bl_idname", None) != "GeometryNodeTree":
+        raise CompileError("Select a live Geometry Node function-group copy to detach")
+    if is_authority_ineligible_group(group):
+        raise CompileError("Transaction-private groups cannot be source-detached")
+    module_owner = str(group.get(FUNCTION_DEFINITION_OWNER_PROP) or "")
+    module_identity = str(group.get("nodeforge_module_definition") or "")
+    lib_namespace = str(group.get("nodeforge_library_namespace") or "")
+    local_namespace = str(group.get("nodeforge_local_function_namespace") or "")
+    local_kind = str(group.get("nodeforge_generated_kind") or "")
+    if not module_owner and not lib_namespace and not (local_namespace and local_kind == "local_function_helper"):
+        raise CompileError("Selected group has no canonical NodeForge source ownership to detach")
+    if not (module_identity or lib_namespace or (local_namespace and local_kind == "local_function_helper")):
+        raise CompileError("Selected group does not identify a NodeForge-managed source function")
+
+    # Compare only source-authority identity. Fingerprints and physical Blender
+    # names are deliberately excluded: even a changed user copy remains a
+    # collision until the chosen copy is detached.
+    keys = [FUNCTION_DEFINITION_OWNER_PROP, FUNCTION_INSTANCE_KEY_PROP]
+    if module_identity:
+        keys += ["nodeforge_module_definition"]
+    elif lib_namespace:
+        keys += ["nodeforge_library_namespace", "nodeforge_library_name",
+                 "nodeforge_library_source_origin", "nodeforge_library_physical_origin",
+                 "nodeforge_library_import_path", "nodeforge_package_id"]
+    else:
+        keys += ["nodeforge_generated_kind", "nodeforge_local_function_name",
+                 "nodeforge_local_function_signature", "nodeforge_local_function_namespace"]
+    identity = tuple(group.get(key) for key in keys)
+    siblings = [candidate for candidate in bpy.data.node_groups
+                if candidate is not group and getattr(candidate, "bl_idname", None) == "GeometryNodeTree"
+                and not is_authority_ineligible_group(candidate)
+                and tuple(candidate.get(key) for key in keys) == identity]
+    if not siblings:
+        raise CompileError(
+            "Source ownership detachment requires a selected single-user copy "
+            "with another eligible group retaining its canonical owner"
+        )
+    strip = [FUNCTION_DEFINITION_OWNER_PROP]
+    if lib_namespace:
+        strip.append("nodeforge_library_namespace")
+    if local_namespace and local_kind == "local_function_helper":
+        strip.append("nodeforge_local_function_namespace")
+    stored = {key: group[key] for key in strip if key in group}
+    try:
+        for key in stored:
+            del group[key]
+    except Exception as exc:
+        for key, value in stored.items():
+            group[key] = value
+        raise CompileError("Cannot detach source ownership from selected group") from exc
+
+
 __all__ = [
     "BACKEND_PRIVATE_GROUP_PROPERTIES",
     "PROVISIONAL_REGISTRY_KEY",
     "TRANSACTION_PRIVATE_PROP",
     "forget",
     "find_unique_authoritative_group",
+    "detach_selected_source_owner",
     "is_authority_ineligible_group",
     "is_provisional",
     "is_transaction_private",

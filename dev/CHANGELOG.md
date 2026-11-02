@@ -586,3 +586,9 @@ lifecycle.
 - Centralized canonical function-group candidate lookup for module definitions, local helpers and library entries with strict duplicate-owner rejection.
 - Validate explicitly selected source-reload targets against all live eligible groups of the same full source/instance identity before compilation or mutation.
 - Preserve legal distinct `__unique__` instance owner keys; copied Blender ID metadata is ambiguous until explicitly detached.
+
+## 0.82.0
+
+- Added an explicit backend action to detach a user-selected Blender single-user function-group copy from NodeForge canonical source ownership.
+- Detachment strips only lookup identity properties for module, library and local-helper owners; graph content, other provenance and resource-safety metadata are preserved across `.blend` reopen.
+- Require a second eligible group retaining the same complete owner identity so detachment cannot inadvertently act on a lone canonical group.
