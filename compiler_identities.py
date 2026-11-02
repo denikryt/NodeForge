@@ -28,6 +28,53 @@ def normalize_library_package_id(package_id: str | None) -> str:
 
 
 @dataclass(frozen=True)
+class ModuleId:
+    """Identity of a source module, independent of its source text revision.
+
+    The origin is an absolute canonical origin for Local/Examples, a relative
+    module filename for a package, or a non-file context for ROOT_TEXT.
+    """
+
+    kind: str
+    origin: str
+    package_id: str = ""
+
+    def __post_init__(self) -> None:
+        """Reject ambiguous module identity forms at construction."""
+        if self.kind not in {"LOCAL", "EXAMPLES", "PACKAGE", "ROOT_TEXT"}:
+            raise ValueError(f"Unsupported module origin: {self.kind!r}")
+        if not isinstance(self.origin, str) or not self.origin.strip():
+            raise ValueError("ModuleId.origin must be a non-empty source origin")
+        if self.kind == "PACKAGE" and not self.package_id:
+            raise ValueError("Package module identity requires a package_id")
+        if self.kind != "PACKAGE" and self.package_id:
+            raise ValueError("Only package module identity may carry package_id")
+
+    def stable_key(self) -> str:
+        """Return a deterministic owner-independent module key."""
+        return _canonical_json({"kind": self.kind, "origin": self.origin, "package_id": self.package_id})
+
+
+@dataclass(frozen=True)
+class SourceDefinitionRef:
+    """Identify a declared function within one canonical module."""
+
+    module: ModuleId
+    name: str
+
+    def __post_init__(self) -> None:
+        """Require a valid module and source function identifier."""
+        if not isinstance(self.module, ModuleId):
+            raise TypeError("SourceDefinitionRef.module must be ModuleId")
+        if not isinstance(self.name, str) or not self.name.isidentifier():
+            raise ValueError("SourceDefinitionRef.name must be a valid identifier")
+
+    def stable_key(self) -> str:
+        """Return a deterministic module-qualified definition key."""
+        return _canonical_json({"module": self.module.stable_key(), "name": self.name})
+
+
+@dataclass(frozen=True)
 class BindingId:
     """Identify one mutable runtime binding slot within a compiler owner scope."""
 
@@ -213,6 +260,8 @@ __all__ = [
     "GroupCompilationIdentity",
     "InputDeclarationId",
     "InterfaceInputOrigin",
+    "ModuleId",
+    "SourceDefinitionRef",
     "library_function_id",
     "library_function_id_for_record",
     "local_function_id",

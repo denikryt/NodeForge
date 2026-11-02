@@ -537,3 +537,7 @@ lifecycle.
 - Added focused pure-Python and Blender 5.2 UI/insertion regression checks.
 - Refined Text Editor popup: one vertical row per parameter, bounded layout, active argument, and typed results including multiple outputs; source output types reuse semantic callable preparation on demand.
 - Include Text Editor modules in the Extension release ZIP and adapt package-backed completion tests to the current package installer.
+
+## 0.73.1
+
+- Introduced single-revision `.nf` module snapshots with canonical module/definition identities, declaration collection, and preserved source offsets for semantic preparation.

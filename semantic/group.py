@@ -15,7 +15,7 @@ from .callable_contracts import (
     canonicalize_group_input_default,
     project_group_input_layout,
 )
-from ..compiler_identities import BindingId, GroupCompilationIdentity
+from ..compiler_identities import BindingId, GroupCompilationIdentity, ModuleId
 from .constants import TYPE_FLOAT, TYPE_INT, TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
 from .residualization import _infer_input_types, _preprocess_compile_time
 from ..errors import CompileError
@@ -23,7 +23,8 @@ from ..nf_types import NFType
 from ..extensions.contracts import ExtensionCallableId
 from .source_bindings import LibraryBinding, PackageNamespaceBinding, LocalDirectoryNamespaceBinding
 from ..extensions.registry import library_owner_key
-from .parsing import _assigned_names, _binding_names, _collect_inputs, _extract_function_imports, _needs_geometry_io, _parse_source, normalized_statements
+from .parsing import _assigned_names, _binding_names, _collect_inputs, _extract_function_imports, _needs_geometry_io, normalized_statements
+from .source_modules import SourceModuleSnapshot, parse_source_module
 from .runtime_bindings import RuntimeBindingSymbol, allows_existing_top_level_shadow, format_reserved_binding_label
 from .body import BasicBodyCompilation, lower_basic_body
 from .ir import IRBody, IRIf, IRInputDeclaration, IRPanelDeclaration, IRRepeat
@@ -439,11 +440,18 @@ def analyze_group_source(
     inherited_local_namespaces=None,
     helper_namespace: str = "NodeForge Group",
     source_callable_session=None,
+    source_module: SourceModuleSnapshot | None = None,
 ) -> SemanticGroupCompilation:
     """Compile one source snapshot to typed group IR before any Blender mutation."""
     if not isinstance(compilation_identity, GroupCompilationIdentity):
         raise TypeError("compilation_identity must be GroupCompilationIdentity")
-    raw_stmts = _parse_source(source)
+    if source_module is None:
+        source_module = parse_source_module(
+            source, ModuleId("ROOT_TEXT", compilation_identity.definition_owner)
+        )
+    elif source_module.source != source:
+        raise CompileError("Source module snapshot does not match the requested source revision")
+    raw_stmts = source_module.tree.body
     raw_body_stmts, import_pairs, package_imports = _extract_function_imports(raw_stmts)
 
     local_function_defs = dict(inherited_local_functions or {})
