@@ -74,7 +74,7 @@ class CallableEnvironment:
         object.__setattr__(self, "imported_functions", MappingProxyType(dict(self.imported_functions)))
         refs = dict(self.local_definition_refs)
         if not set(refs).issubset(self.local_functions) or any(
-            not isinstance(ref, SourceDefinitionRef) or ref.name != name
+            not isinstance(ref, SourceDefinitionRef) or getattr(self.local_functions[name], "name", None) != ref.name
             for name, ref in refs.items()
         ):
             raise TypeError("local_definition_refs must identify registered source definitions")

@@ -504,6 +504,7 @@ def test_source_callable_records_keep_only_required_preparation_boundary_state()
         "interface",
         "geometry_mode",
         "extension_dependencies",
+        "source_call_graph",
     }
     assert "origin_kind" not in {field.name for field in fields(GroupInputContract)}
     assert "index" not in {field.name for field in fields(GroupInputContract)}

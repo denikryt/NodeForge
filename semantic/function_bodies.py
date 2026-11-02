@@ -18,6 +18,7 @@ from .compile_time import CompileTimeSnapshot
 from .function_signatures import compile_function_signature
 from .ir import IRBody
 from .parsing import normalized_statements
+from .source_modules import collect_source_definition_aliases
 from .residualization import _preprocess_compile_time
 from .runtime_bindings import RuntimeBindingSymbol
 from .source_callables import analyze_local_return_shape
@@ -67,7 +68,22 @@ def compile_function_definition(
                     f"{fn.name}() uses obsolete group interface declaration {node.func.id}(); "
                     "define inputs in parameters and outputs with return"
                 )
-    preprocessed = _preprocess_compile_time(fn.body)
+    body_stmts, aliases = collect_source_definition_aliases(fn.body, callable_environment.local_functions)
+    if aliases:
+        # Both static graph construction and runtime lowering resolve aliases to
+        # their original AST declaration, never to another inferred function.
+        functions = dict(callable_environment.local_functions)
+        refs = dict(callable_environment.local_definition_refs)
+        for alias, canonical in aliases.items():
+            functions[alias] = functions[canonical]
+            if canonical in refs:
+                refs[alias] = refs[canonical]
+        callable_environment = CallableEnvironment(
+            callable_environment.callable_builtins, functions,
+            callable_environment.imported_functions,
+            callable_environment.package_namespaces, callable_environment.local_namespaces, refs,
+        )
+    preprocessed = _preprocess_compile_time(body_stmts)
     if not preprocessed.statements or preprocessed.statements[-1] is not fn.body[-1]:
         raise CompileError(f"{fn.name}() return must remain terminal after preprocessing")
     bindings = {

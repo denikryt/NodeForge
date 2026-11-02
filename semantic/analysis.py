@@ -1773,7 +1773,7 @@ def analyze_expression(expr, environment):
                 )
                 signature_types = {item.target_name: item.typ for item in preliminary_signature.declarations}
                 signature = serialize_local_signature(params, signature_types)
-                function_id = local_function_id(definition_owner, name, signature)
+                function_id = local_function_id(definition_owner, fn.name, signature)
                 if modifiers.unique:
                     call_site = environment.source_call_site_allocator(function_id)
                     materialization = IRFunctionMaterialization(

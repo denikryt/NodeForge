@@ -64,13 +64,15 @@ class ResolvedSourceModule:
     snapshot: SourceModuleSnapshot
     definition_refs: Mapping[str, SourceDefinitionRef]
     preprocessed: PreprocessedBody
+    definition_aliases: Mapping[str, SourceDefinitionRef] = None
 
     def __post_init__(self) -> None:
         """Freeze resolved identities and reject mixed-source bindings."""
         for name, ref in self.definition_refs.items():
-            if not isinstance(ref, SourceDefinitionRef) or ref.name != name or ref.module != self.snapshot.module_id:
+            if not isinstance(ref, SourceDefinitionRef) or ref.module != self.snapshot.module_id or (ref.name != name and name not in (self.definition_aliases or {})):
                 raise ValueError("Definition references must use their source module identity")
         object.__setattr__(self, "definition_refs", MappingProxyType(dict(self.definition_refs)))
+        object.__setattr__(self, "definition_aliases", MappingProxyType(dict(self.definition_aliases or {})))
         if not isinstance(self.preprocessed, PreprocessedBody):
             raise TypeError("Resolved module requires a preprocessed source body")
 
@@ -78,6 +80,131 @@ class ResolvedSourceModule:
     def has_executable_statements(self) -> bool:
         """Return whether any runtime statements remain after preprocessing."""
         return bool(self.preprocessed.statements)
+
+
+def collect_source_definition_aliases(
+    statements: tuple[ast.stmt, ...] | list[ast.stmt],
+    definitions: Mapping[str, ast.FunctionDef],
+) -> tuple[tuple[ast.stmt, ...], Mapping[str, str]]:
+    """Collect lexical ``alias = definition`` declarations without runtime effects.
+
+    The definitions are already collected, so aliases can refer to declarations
+    later in the source. Only single-name assignments are treated as aliases.
+    An ordinary runtime assignment remains in the executable statement stream.
+    """
+    canonical = {name: fn.name for name, fn in definitions.items()}
+    aliases = {}
+    runtime = []
+    for statement in statements:
+        if (isinstance(statement, ast.Assign) and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name) and isinstance(statement.value, ast.Name)
+                and statement.value.id in canonical):
+            alias = statement.targets[0].id
+            if alias in canonical or alias in aliases:
+                raise CompileError(f"Duplicate function alias {alias!r} at line {statement.lineno}")
+            aliases[alias] = canonical[statement.value.id]
+            canonical[alias] = canonical[statement.value.id]
+        else:
+            runtime.append(statement)
+    return tuple(runtime), MappingProxyType(aliases)
+
+
+@dataclass(frozen=True)
+class SourceCallGraph:
+    """Resolved intra-module call edges with deterministic entry selection."""
+
+    vertices: tuple[SourceDefinitionRef, ...]
+    edges: tuple[tuple[SourceDefinitionRef, SourceDefinitionRef], ...]
+
+    @property
+    def entries(self) -> tuple[SourceDefinitionRef, ...]:
+        """Return only definitions without incoming intra-module references."""
+        incoming = {target for _, target in self.edges}
+        return tuple(vertex for vertex in self.vertices if vertex not in incoming)
+
+
+def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph:
+    """Resolve function edges through the same CallableEnvironment name resolver.
+
+    Imports and top-level calls are not edges. Locally declared aliases share
+    the canonical SourceDefinitionRef and known compile-time branches are pruned.
+    """
+    from .call_resolution import CallableEnvironment, CallableKind, UNRESOLVED, resolve_simple_callable
+    from .builtin_calls import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
+    from .consteval import ConstEvalUnavailable, _const_eval
+
+    snapshot = resolved.snapshot
+    definitions = dict(snapshot.definitions)
+    definitions.update({alias: snapshot.definitions[target.name] for alias, target in resolved.definition_aliases.items()})
+    base = CallableEnvironment(
+        callable_builtins=frozenset(INPUT_DECLARATION_BUILTIN_NAMES | IR_CAPABLE_BUILTIN_NAMES),
+        local_functions=definitions, imported_functions={},
+        local_definition_refs=resolved.definition_refs,
+    )
+    edges = set()
+
+    def visit(node, owner, environment, values):
+        """Walk only reachable runtime AST and resolve each local callee."""
+        if isinstance(node, ast.If):
+            try:
+                branch = _const_eval(node.test, values)
+            except (ConstEvalUnavailable, CompileError):
+                branch = None
+            if type(branch) is bool:
+                selected = node.body if branch else node.orelse
+                for child in selected:
+                    visit(child, owner, environment, values)
+                return
+        if isinstance(node, ast.FunctionDef):
+            return
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            target = resolve_simple_callable(node.func.id, environment)
+            if target is not UNRESOLVED and target.kind is CallableKind.LOCAL_FUNCTION:
+                if not isinstance(target.target, SourceDefinitionRef):
+                    raise CompileError("Internal error: graph callable lost its canonical source identity")
+                edges.add((owner, target.target))
+        for child in ast.iter_child_nodes(node):
+            visit(child, owner, environment, values)
+
+    for name, fn in snapshot.definitions.items():
+        body, aliases = collect_source_definition_aliases(fn.body, definitions)
+        local_functions = dict(definitions)
+        local_refs = dict(resolved.definition_refs)
+        for alias, canonical in aliases.items():
+            local_functions[alias] = snapshot.definitions[canonical]
+            local_refs[alias] = snapshot.definition_ref(canonical)
+        env = CallableEnvironment(base.callable_builtins, local_functions, {},
+                                  local_definition_refs=local_refs)
+        residual = _preprocess_compile_time(body)
+        owner = snapshot.definition_ref(name)
+        values = residual.final_compile_time.values
+        for statement in residual.statements:
+            visit(statement, owner, env, values)
+    ordered_edges = tuple(sorted(edges, key=lambda pair: (pair[0].name, pair[1].name)))
+    vertices = tuple(snapshot.definition_ref(name) for name in snapshot.definitions)
+    graph = SourceCallGraph(vertices, ordered_edges)
+    adj = {node: [] for node in vertices}
+    for src, dst in ordered_edges:
+        adj[src].append(dst)
+    active = set()
+    finished = set()
+
+    def walk(node, chain):
+        """Reject both direct and mutual recursion with the resolved chain."""
+        if node in active:
+            cycle = chain[chain.index(node):]
+            raise CompileError("Recursive module definitions: " + " -> ".join(x.name for x in cycle))
+        if node in finished:
+            return
+        active.add(node)
+        for child in adj[node]:
+            walk(child, chain + [child])
+        active.remove(node)
+        finished.add(node)
+
+    for vertex in vertices:
+        walk(vertex, [vertex])
+    return graph
 
 
 def resolve_source_module(
@@ -98,9 +225,14 @@ def resolve_source_module(
                 f"column {fn.col_offset + 1}"
             )
         definitions[name] = fn
+    runtime, aliases = collect_source_definition_aliases(snapshot.statements, definitions)
     refs = {name: SourceDefinitionRef(snapshot.module_id, name) for name in definitions}
-    preprocessed = _preprocess_compile_time(snapshot.statements)
-    return ResolvedSourceModule(snapshot, refs, preprocessed)
+    for alias, canonical in aliases.items():
+        if alias in refs:
+            raise CompileError(f"Source alias {alias!r} conflicts with a declared function")
+        refs[alias] = SourceDefinitionRef(snapshot.module_id, canonical)
+    preprocessed = _preprocess_compile_time(runtime)
+    return ResolvedSourceModule(snapshot, refs, preprocessed, {alias: refs[alias] for alias in aliases})
 
 
 def parse_source_module(source: str, module_id: ModuleId) -> SourceModuleSnapshot:
@@ -139,5 +271,7 @@ def parse_source_module(source: str, module_id: ModuleId) -> SourceModuleSnapsho
 
 
 __all__ = [
-    "ResolvedSourceModule", "SourceModuleSnapshot", "parse_source_module", "resolve_source_module",
+    "ResolvedSourceModule", "SourceModuleSnapshot", "SourceCallGraph",
+    "collect_source_definition_aliases", "resolve_source_call_graph",
+    "parse_source_module", "resolve_source_module",
 ]

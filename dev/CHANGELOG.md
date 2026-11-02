@@ -559,3 +559,8 @@ lifecycle.
 
 - Added one logical source parameter binder for local and imported module calls, with exact parameter-keywords, declared requiredness, optional omitted inputs and physical-panel index independence.
 - Source-local calls now use declared optional defaults and typed signature specialization with AST-based function interfaces.
+
+## 0.77.0
+
+- Added canonical source-definition alias bindings and a resolved intra-module call graph for entry selection, forward calls, compile-time-pruned branches and direct/mutual recursion diagnostics.
+- Reused canonical lexical identities for aliased source calls in the semantic frontend, including function-local aliases.

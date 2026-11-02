@@ -24,7 +24,7 @@ from ..extensions.contracts import ExtensionCallableId
 from .source_bindings import LibraryBinding, PackageNamespaceBinding, LocalDirectoryNamespaceBinding
 from ..extensions.registry import library_owner_key
 from .parsing import _assigned_names, _binding_names, _collect_inputs, _extract_function_imports, _needs_geometry_io, normalized_statements
-from .source_modules import SourceModuleSnapshot, parse_source_module, resolve_source_module
+from .source_modules import SourceModuleSnapshot, SourceCallGraph, parse_source_module, resolve_source_module, resolve_source_call_graph
 from .runtime_bindings import RuntimeBindingSymbol, allows_existing_top_level_shadow, format_reserved_binding_label
 from .body import BasicBodyCompilation, lower_basic_body
 from .ir import IRBody, IRIf, IRInputDeclaration, IRPanelDeclaration, IRRepeat
@@ -41,6 +41,7 @@ class SemanticGroupCompilation:
     interface: GroupInterfaceContract
     geometry_mode: bool
     extension_dependencies: tuple[tuple[tuple[str, ...], str], ...] = ()
+    source_call_graph: SourceCallGraph | None = None
 
     def __post_init__(self) -> None:
         """Freeze owner-independent metadata and reject backend objects by construction."""
@@ -466,6 +467,11 @@ def analyze_group_source(
             )
         local_function_defs[name] = fn
     body_stmts = list(source_module.statements)
+    resolved_source_module = resolve_source_module(source_module, inherited_definitions=inherited_local_functions)
+    for alias, ref in resolved_source_module.definition_aliases.items():
+        if alias in local_function_defs:
+            raise CompileError(f"Source function alias {alias!r} conflicts with a declaration")
+        local_function_defs[alias] = local_function_defs[ref.name]
 
     resolved_environment.catalog("examples").names()
     package_bindings = _validate_package_import_bindings(
@@ -488,14 +494,22 @@ def analyze_group_source(
         allow_local_runtime=not bool(getattr(source_callable_session, "_active_stack", ())),
     )
     reserved_name_labels = _registered_name_labels(local_function_defs, imported, package_bindings)
+    alias_names = set(resolved_source_module.definition_aliases)
+    binding_validation_stmts = [
+        statement for statement in raw_body_stmts
+        if not (isinstance(statement, ast.Assign) and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and statement.targets[0].id in alias_names
+                and isinstance(statement.value, ast.Name))
+    ]
     _validate_registered_name_bindings(
-        raw_body_stmts,
+        binding_validation_stmts,
         reserved_name_labels,
         top_level_function_names=local_function_defs,
     )
     _validate_interface_directive_placement(raw_body_stmts)
 
-    resolved_source_module = resolve_source_module(source_module, inherited_definitions=inherited_local_functions)
+    source_call_graph = resolve_source_call_graph(resolved_source_module)
     preprocessed = resolved_source_module.preprocessed
     stmts = list(preprocessed.statements)
     callable_names = set(imported) | set(local_function_defs) | set(package_bindings) | set(local_directories)
@@ -559,6 +573,7 @@ def analyze_group_source(
         interface=interface,
         geometry_mode=geometry_mode,
         extension_dependencies=tuple(sorted(extension_dependencies.items(), key=lambda row: row[0])),
+        source_call_graph=source_call_graph,
     )
 
 
