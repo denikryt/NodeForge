@@ -70,24 +70,6 @@ def call_ids(value):
     return identities
 
 
-def test_qualified_flat_alias_and_deep_examples_share_exact_selection(tmp_path):
-    """A nested source is accessible through flat, dotted and directory aliases."""
-    write(tmp_path, 'terrain/erosion.nf')
-    write(tmp_path, 'terrain/tools/slope.nf', 'x + 1')
-    env = selected(tmp_path)
-    result, session = compile_source('''from examples import erosion as erosion_alias
-from examples.terrain import erosion as direct
-from examples import terrain as t
-from examples.terrain.tools import slope
-output(erosion_alias(1.0) + direct(2.0) + t.erosion(3.0) + slope(4.0))
-''', env)
-    ids = call_ids(result.body)
-    assert len(ids) == 4
-    assert ids[0] == ids[1] == ids[2]
-    assert ids[3] != ids[0]
-    assert len(session.prepared) == 2
-    assert env.catalog('examples').find('erosion') is None  # Legacy projection unchanged.
-    assert set(env.catalog('examples').names()) == set()
 
 
 def test_root_owner_precedence_and_nested_logical_identity(tmp_path):
@@ -140,14 +122,6 @@ def test_legacy_star_names_and_owners_do_not_change(tmp_path):
     assert {x.name for x in call_ids(group.body)} == {'root', 'legacy'}
 
 
-def test_unaliased_directory_exposes_nf_bare_and_alias_does_not(tmp_path):
-    """Directory bare-call admission is explicit and tracks alias status."""
-    write(tmp_path, 'terrain/erosion.nf')
-    env = selected(tmp_path)
-    group, _ = compile_source('from examples import terrain\noutput(erosion(1.0))', env)
-    assert call_ids(group.body)[0].source_origin == 'terrain/erosion.nf'
-    with pytest.raises(CompileError):
-        compile_source('from examples import terrain as t\noutput(erosion(1.0))', env)
 
 
 def test_directory_member_missing_star_and_invalid_member(tmp_path):

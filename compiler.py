@@ -140,6 +140,60 @@ def compile_script_auto(source: str, owner=None, name: str = "NodeForge Group"):
     return group, False
 
 
+def _materialize_standalone_module_definition(snapshot, definition, backend):
+    """Build one selected `.nf` definition through the shared nested-group owner.
+
+    This is a user-requested Add, not a module import or initial base-tree
+    composition. Executable top-level source statements are never evaluated.
+    """
+    from .compiler_identities import GroupCompilationIdentity, module_definition_function_id
+    from .function_instances import function_materialization_owner_scope
+    from .semantic.function_signatures import compile_function_signature
+    from .semantic.source_callables import serialize_local_signature
+    from .semantic.ir import IRFunctionMaterialization, IRFunctionMaterializationMode
+    from .blender.function_materializer import (
+        FunctionMaterializer, FunctionMaterializationContext,
+    )
+    from .blender.group_backend import BlenderGroupBuildTransaction
+    from .function_instances import FunctionCompilationTrace
+
+    fn = snapshot.definitions[definition.name]
+    session = backend.new_source_callable_session()
+    environment, compile_time = session.callable_environment_for_module(snapshot)
+    signature = compile_function_signature(
+        fn, owner_scope=definition.stable_key(),
+        declaration_owner=definition.stable_key(),
+        compile_time_values=compile_time,
+    )
+    types = {item.target_name: item.typ for item in signature.declarations}
+    function_id = module_definition_function_id(
+        definition, serialize_local_signature([arg.arg for arg in fn.args.args], types),
+    )
+    materialization = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.SHARED)
+    owner_scope = function_materialization_owner_scope(materialization)
+    identity = GroupCompilationIdentity(None, owner_scope, definition.stable_key(), function_id.stable_key())
+    prepared = session.prepare_definition(
+        function_id=function_id, identity=identity, fn=fn, parameter_types=types,
+        callable_environment=environment, compile_time_values=compile_time,
+        source_module=snapshot, helper_namespace=fn.name,
+    )
+    tx = BlenderGroupBuildTransaction()
+    context = FunctionMaterializationContext(
+        function_group_cache={}, function_group_transaction=tx,
+        function_compilation_trace=FunctionCompilationTrace(),
+        source_callable_session=session,
+    )
+    try:
+        materialized = FunctionMaterializer(group_backend=backend).materialize_module(
+            prepared, materialization, context,
+        )
+        tx.commit()
+    except Exception:
+        tx.rollback()
+        raise
+    return materialized.group
+
+
 def create_selected_library_group_auto(namespace: str, source_origin: str, owner=None,
                                        package_id: str = "", *, editor_available: bool = True):
     """Compile the exact selected Local/Examples root without guessing its owner.
@@ -161,15 +215,24 @@ def create_selected_library_group_auto(namespace: str, source_origin: str, owner
     if (record.source_path is not None and record.source_path.suffix == ".nf"
             and record.kind == "script"):
         if _path_key(record.source_path) != record.source_origin:
-            raise CompileError(f"Selected {namespace} root changed identity during compilation")
+            raise CompileError(f"Selected {namespace} module changed identity during compilation")
+        if not editor_available:
+            raise CompileError("Open a Geometry Nodes editor to add a module function")
+        from .semantic.source_modules import parse_source_module, resolve_source_module, resolve_source_call_graph
+        from .compiler_identities import ModuleId
+
         source = load_library_entry_source_for_record(record)
-        backend = _new_group_backend(environment)
-        prepared, session = _prepare_root_build(backend, source, name=record.name)
-        if _requires_mesh_compute(prepared):
-            group = _install_prepared_mesh_compute_modifier(
-                backend, prepared, session, owner, name=record.name,
+        module_id = ModuleId(namespace.upper(), record.source_origin)
+        snapshot = parse_source_module(source, module_id)
+        graph = resolve_source_call_graph(resolve_source_module(snapshot))
+        if len(graph.entries) != 1:
+            raise CompileError(
+                f"Selected {namespace} module has {len(graph.entries)} entry definitions; "
+                "Add a specific function from a script instead of guessing its entry"
             )
-            return group, True
+        return _materialize_standalone_module_definition(
+            snapshot, graph.entries[0], _new_group_backend(environment),
+        ), False
     if not editor_available:
         raise CompileError("Open a Geometry Nodes editor to add a library node group")
     return materialize_library_entry_group_for_record(record, _new_group_backend(environment)), False
@@ -239,12 +302,18 @@ def create_local_source_group(source_origin: str):
 
 
 def create_package_function_group(package_id: str, name: str):
-    """Create or update one exact package-owned Functions entry."""
+    """Add one exact package function, using its frozen `.nf` definition when present."""
     environment = resolve_environment()
-    record = environment.package_function_record(package_id, name)
-    if record is None:
+    namespace = environment.package_by_id(package_id)
+    export = None if namespace is None else namespace.find(name)
+    if export is None or export.record is None:
         raise CompileError(f"Unknown package function {package_id}/{name}")
-    return materialize_library_entry_group_for_record(record, _new_group_backend(environment))
+    backend = _new_group_backend(environment)
+    if export.definition is not None:
+        return _materialize_standalone_module_definition(
+            export.source_snapshot, export.definition, backend,
+        )
+    return materialize_library_entry_group_for_record(export.record, backend)
 
 
 def update_library_catalog_group(group, namespace: str | None = None, name: str | None = None):

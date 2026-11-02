@@ -14,7 +14,7 @@ def _make_package(root: Path, *, version: str = "1.0.0", value: float = 1.0) -> 
     functions = root / "functions"
     functions.mkdir(parents=True)
     (functions / "vendor_value.nf").write_text(
-        f'value = input_float("Value", default={value})\noutput("Value", value)\n',
+        f'def vendor_value(value: Float = {value}) -> Float:\n    return value\n',
         encoding="utf-8",
     )
     (root / "nodeforge_package.json").write_text(
@@ -46,7 +46,7 @@ def test_directory_zip_replace_uninstall_and_reinstall_lifecycle():
             assert installed.package_id == "vendor.lifecycle"
             assert has_package_function("vendor_value")
             compile_group(
-                'from packages import lifecycle\nx = vendor_value(2.0)\noutput("Value", x)',
+                'from packages import lifecycle\nx = lifecycle.vendor_value(2.0)\n',
                 "NFTest_vendor_lifecycle_directory",
             )
 
@@ -64,7 +64,7 @@ def test_directory_zip_replace_uninstall_and_reinstall_lifecycle():
             packages.uninstall_package("vendor.lifecycle")
             assert not has_package_function("vendor_value")
             expect_compile_error(
-                'from packages import lifecycle\nx = vendor_value(2.0)\noutput("Value", x)',
+                'from packages import lifecycle\nx = lifecycle.vendor_value(2.0)\n',
                 "NFTest_vendor_lifecycle_uninstalled",
             )
 

@@ -183,35 +183,6 @@ output("Geometry", obj.geometry)
     check(info_nodes[0].inputs["As Instance"].default_value is False, "raw Object configuration was lost")
 
 
-def test_installed_library_object_input_and_output_keep_object_behavior():
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp) / "vendor.objecttest"
-        functions = root / "functions"
-        functions.mkdir(parents=True)
-        _write_package_manifest(root, "vendor.objecttest")
-        (functions / "object_passthrough.nf").write_text(
-            'source = input_object("Source")\noutput("Value", source)\n',
-            encoding="utf-8",
-        )
-        packages.install_package_directory(root)
-        try:
-            group = compile_group(
-                '''
-from packages import objecttest
-obj = input_object("Source")
-returned = object_passthrough(obj)
-returned.info(transform_space="RELATIVE", as_instance=False)
-output("Geometry", returned.geometry)
-''',
-                "NFTest_object_installed_library_boundary",
-            )
-            function_nodes = [node for node in group.nodes if node.bl_idname == "GeometryNodeGroup"]
-            check(function_nodes, "installed Object library call node missing")
-            check(function_nodes[0].outputs[0].bl_idname == "NodeSocketObject", "installed library Object output type was lost")
-            info_nodes = _object_info_nodes(group)
-            check(len(info_nodes) == 1, "installed library Object output did not retain property behavior")
-        finally:
-            packages.uninstall_package("vendor.objecttest")
 
 
 def test_object_runtime_geometry_location_rotation_and_scale_evaluation():

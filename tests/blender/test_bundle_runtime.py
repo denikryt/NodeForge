@@ -125,96 +125,10 @@ output("State", state)
     check(getattr(inp, "parent", None) is not None and inp.parent.name == "State Panel", "Bundle input was not placed in panel")
 
 
-def test_bundle_local_function_parameter_return_tuple_and_hidden_capture():
-    group = compile_group('''
-def identity(state: Bundle):
-    return state
-
-def pair(state: Bundle):
-    return state, bundle_get(state, "value", typ=Float)
-
-captured = bundle(value=4.0)
-def use_capture():
-    return captured
-
-source = bundle(value=2.0)
-runtime = identity(source)
-state, value = pair(runtime)
-hidden = use_capture()
-output("State", state)
-output("Value", value)
-output("Hidden", hidden)
-''', "NFTest_bundle_local_functions")
-    helpers = {
-        node.node_tree.get("nodeforge_local_function_name"): node.node_tree
-        for node in group.nodes
-        if node.bl_idname == "GeometryNodeGroup" and node.node_tree is not None and node.node_tree.get("nodeforge_local_function_name")
-    }
-    check({"identity", "pair", "use_capture"} <= set(helpers), f"missing Bundle helpers: {set(helpers)}")
-    check(_interface_socket(helpers["identity"], "state").socket_type == "NodeSocketBundle", "Bundle local parameter mismatch")
-    check(_interface_socket(helpers["identity"], "Value", "OUTPUT").socket_type == "NodeSocketBundle", "Bundle local return mismatch")
-    pair_outputs = [item for item in helpers["pair"].interface.items_tree if getattr(item, "in_out", None) == "OUTPUT"]
-    check([item.socket_type for item in pair_outputs] == ["NodeSocketBundle", "NodeSocketFloat"], f"Bundle tuple return mismatch: {[item.socket_type for item in pair_outputs]}")
-    capture_inputs = [item for item in helpers["use_capture"].interface.items_tree if getattr(item, "in_out", None) == "INPUT"]
-    check(any(item.socket_type == "NodeSocketBundle" for item in capture_inputs), "hidden Bundle capture did not materialize as Bundle input")
 
 
-def test_bundle_packaged_library_function_round_trip():
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        root = tmp / "vendor.bundle"
-        functions = root / "functions"
-        functions.mkdir(parents=True)
-        _write_package_manifest(root, "vendor.bundle")
-        (functions / "bundle_identity.nf").write_text(
-            'state = input_bundle("State")\noutput("State", state)\n',
-            encoding="utf-8",
-        )
-        packages.set_packages_dir_for_tests(tmp / "inventory")
-        try:
-            packages.install_package_directory(root)
-            group = compile_group('''
-from packages import bundle as bundle_pkg
-state = bundle(value=2.0)
-result = bundle_identity(state)
-value = bundle_get(result, "value", typ=Float)
-output("State", result)
-output("Value", value)
-''', "NFTest_bundle_library")
-            calls = [node for node in group.nodes if node.bl_idname == "GeometryNodeGroup"]
-            check(len(calls) == 1, f"expected one Bundle library call, got {len(calls)}")
-            call = calls[0]
-            check(call.inputs["State"].bl_idname == "NodeSocketBundle" and call.inputs["State"].is_linked, "library Bundle input mismatch")
-            check(call.outputs["State"].bl_idname == "NodeSocketBundle", "library Bundle output mismatch")
-        finally:
-            packages.set_packages_dir_for_tests(None)
-            packages.invalidate_caches()
 
 
-def test_bundle_local_catalog_round_trip():
-    local = local_sources.ensure_local_catalog_dir()
-    source = local / "bundle_local_catalog_probe.nf"
-    try:
-        source.write_text(
-            'state = input_bundle("State")\noutput("State", state)\n',
-            encoding="utf-8",
-        )
-        group = compile_group(
-            'from local import bundle_local_catalog_probe\n'
-            'state = bundle(value=7.0)\n'
-            'result = bundle_local_catalog_probe(state)\n'
-            'value = bundle_get(result, "value", typ=Float)\n'
-            'output("State", result)\n'
-            'output("Value", value)\n',
-            "NFTest_bundle_local_catalog",
-        )
-        calls = [node for node in group.nodes if node.bl_idname == "GeometryNodeGroup"]
-        check(len(calls) == 1, f"expected one local Bundle call, got {len(calls)}")
-        call = calls[0]
-        check(call.inputs["State"].bl_idname == "NodeSocketBundle", "local Bundle input mismatch")
-        check(call.outputs["State"].bl_idname == "NodeSocketBundle", "local Bundle output mismatch")
-    finally:
-        source.unlink(missing_ok=True)
 
 
 def test_raw_node_bundle_type_and_static_bundle_sockets():

@@ -35,37 +35,6 @@ output("Geometry", geo)
     check(named_node.inputs["Material"].default_value == bpy.data.materials["NFTest Named Material"], "named material compatibility failed")
 
 
-def test_material_local_function_and_raw_node_sockets():
-    local = compile_group('''
-mat = input_material("Material")
-def apply(geo, material):
-    return set_material(geo, material)
-out = apply(cube(1.0), mat)
-output("Geometry", out)
-''', "NFTest_local_material")
-    helper = next(group for group in bpy.data.node_groups if group.get("nodeforge_generated_kind") == "local_function_helper" and group.get("nodeforge_local_function_name") == "apply")
-    check(_interface_socket(helper, "material", "INPUT").socket_type == "NodeSocketMaterial", "local function Material parameter missing")
-
-    raw = compile_group('''
-mat = input_material("Material")
-geo = node(
-    "GeometryNodeSetMaterial",
-    inputs={"Geometry": cube(1.0), "Material": mat},
-    output="Geometry",
-    typ=Geometry,
-)
-output("Geometry", geo)
-''', "NFTest_raw_material")
-    raw_node = next(node for node in raw.nodes if node.bl_idname == "GeometryNodeSetMaterial")
-    check(raw_node.inputs["Material"].is_linked, "raw Material input was not linked")
-
-    raw_output = compile_group('''
-mat = node("GeometryNodeInputMaterial", output="Material", typ=Material)
-geo = set_material(cube(1.0), mat)
-output("Geometry", geo)
-''', "NFTest_raw_material_output")
-    input_node = next(node for node in raw_output.nodes if node.bl_idname == "GeometryNodeInputMaterial")
-    check(input_node.outputs["Material"].is_linked, "raw Material output was not linked")
 
 
 def test_set_material_rejects_non_material_runtime_value():

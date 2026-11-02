@@ -219,18 +219,17 @@ def test_source_session_caches_snapshot_by_function_and_preparation_by_owner(tmp
     first = session.prepare_library(function_id=function_id, identity=_identity("LIBRARY/one"), record=record)
     same = session.prepare_library(function_id=function_id, identity=_identity("LIBRARY/one"), record=record)
     source_path.write_text('x = input_float("Changed", default=9.0)\noutput(x)\n', encoding="utf-8")
-    second_owner = session.prepare_library(function_id=function_id, identity=_identity("LIBRARY/two"), record=record)
-
+    # One attempt must not combine the first frozen source revision with a later edit.
+    with pytest.raises(CompileError, match='Conflicting source module revisions'):
+        session.prepare_library(function_id=function_id, identity=_identity("LIBRARY/two"), record=record)
     assert first is same
-    assert first is not second_owner
-    assert first.group.source == second_owner.group.source
-    assert '"X"' in second_owner.group.source
-    assert '"Changed"' not in second_owner.group.source
-    assert set(session.prepared) == {
-        SourceCallablePreparationKey(function_id, "LIBRARY/one"),
-        SourceCallablePreparationKey(function_id, "LIBRARY/two"),
-    }
+    assert set(session.prepared) == {SourceCallablePreparationKey(function_id, "LIBRARY/one")}
     assert session.source_snapshots[function_id] == first.group.source
+    # A subsequent attempt is free to observe the changed source.
+    next_session = SourceCallableSession(resolved_environment=_environment())
+    next_owner = next_session.prepare_library(
+        function_id=function_id, identity=_identity("LIBRARY/two"), record=record)
+    assert '"Changed"' in next_owner.group.source
 
 
 def test_source_session_cycle_detection_is_function_id_based(tmp_path):
@@ -437,6 +436,7 @@ def test_selected_library_update_forwards_prepared_semantics_only():
         def __init__(self):
             super().__init__()
             self.name = "Demo"
+            self.interface = SimpleNamespace(items_tree=[])
 
     function_id = library_function_id("functions", "vendor.pkg", "demo")
     owner = function_group_owner_scope("LIBRARY", "functions", function_id.package_id, "demo")
@@ -577,6 +577,12 @@ def test_pure_source_catalog_namespaces_route_through_source_function_ir(tmp_pat
         if namespace == "functions"
         else f"from {namespace} import demo\ny = demo(2.0)\noutput(y)\n"
     )
+    if namespace == "local":
+        # Old bare-file calls are a negative contract in the unified language.
+        with pytest.raises(CompileError, match="not callable"):
+            analyze_group_source(root_source, compilation_identity=_identity("ROOT/local"),
+                                 resolved_environment=environment, source_callable_session=session)
+        return
     compilation = analyze_group_source(
         root_source,
         compilation_identity=_identity(f"ROOT/{namespace}", f"ROOT/{namespace}"),

@@ -395,6 +395,26 @@ def _validate_registered_name_bindings(stmts, labels, *, top_level_function_name
         visit(stmt, top_level=True)
 
 
+def _without_definition_alias_declarations(stmts, resolved):
+    """Exclude only validated alias declarations from reserved-name checking.
+
+    An assignment to an established alias with an unrelated expression must
+    still be rejected; earlier filtering by LHS alone could suppress it.
+    """
+    aliases = resolved.definition_aliases
+    refs = resolved.definition_refs
+    return [
+        statement for statement in stmts
+        if not (
+            isinstance(statement, ast.Assign) and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+            and isinstance(statement.value, ast.Name)
+            and statement.targets[0].id in aliases
+            and refs.get(statement.value.id) == aliases[statement.targets[0].id]
+        )
+    ]
+
+
 def _validate_interface_directive_placement(stmts):
     """Allow ``panel()`` only as a direct expression in the immediate group body."""
     def is_panel_call(node):
@@ -518,7 +538,8 @@ def resolve_module_callable_environment(source_module, resolved_environment, sou
         directory_bindings=namespaces, source_callable_session=source_callable_session,
     )
     _validate_registered_name_bindings(
-        raw_body_stmts, _registered_name_labels(definitions, imported, package_bindings),
+        _without_definition_alias_declarations(raw_body_stmts, resolved),
+        _registered_name_labels(definitions, imported, package_bindings),
         top_level_function_names=definitions,
     )
     return CallableEnvironment(
@@ -601,14 +622,9 @@ def analyze_group_source(
         source_callable_session=source_callable_session,
     )
     reserved_name_labels = _registered_name_labels(local_function_defs, imported, package_bindings)
-    alias_names = set(resolved_source_module.definition_aliases)
-    binding_validation_stmts = [
-        statement for statement in raw_body_stmts
-        if not (isinstance(statement, ast.Assign) and len(statement.targets) == 1
-                and isinstance(statement.targets[0], ast.Name)
-                and statement.targets[0].id in alias_names
-                and isinstance(statement.value, ast.Name))
-    ]
+    binding_validation_stmts = _without_definition_alias_declarations(
+        raw_body_stmts, resolved_source_module,
+    )
     _validate_registered_name_bindings(
         binding_validation_stmts,
         reserved_name_labels,

@@ -159,7 +159,7 @@ def test_local_source_argument_rejects_package_semantic_value(tmp_path):
     """Package semantic state cannot cross a local source-callable input contract."""
     _session, environment, identity = _fixture(tmp_path)
     source_session = SourceCallableSession(resolved_environment=environment)
-    with pytest.raises(CompileError, match="source function arguments cannot be package semantic values"):
+    with pytest.raises(CompileError, match="arguments must have supported runtime types"):
         analyze_group_source(
             'from packages import semantic\nx = input_float("X")\npart = make(x)\ndef f(p):\n    return p\noutput(f(part))\n',
             compilation_identity=identity,
@@ -172,7 +172,7 @@ def test_local_source_capture_rejects_package_semantic_value(tmp_path):
     """Package semantic state cannot cross a local source-callable capture contract."""
     _session, environment, identity = _fixture(tmp_path)
     source_session = SourceCallableSession(resolved_environment=environment)
-    with pytest.raises(CompileError, match="cannot capture part: package semantic values are not supported"):
+    with pytest.raises(CompileError, match="Unknown name: part"):
         analyze_group_source(
             'from packages import semantic\nx = input_float("X")\npart = make(x)\ndef f():\n    return part\noutput(f())\n',
             compilation_identity=identity,

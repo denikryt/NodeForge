@@ -136,59 +136,8 @@ output("Name", name)
     check(statement_switch.input_type == "STRING", "runtime if statement did not use a String Switch")
 
 
-def test_local_function_accepts_runtime_and_constant_string_arguments():
-    group = compile_group('''
-def identity(name: String):
-    return name
-
-source = input_string("Source", default="Weight_A")
-runtime = identity(source)
-literal = identity("Weight_B")
-output("Runtime", runtime)
-output("Literal", literal)
-''', "NFTest_string_local_function")
-    helper = next(
-        node.node_tree for node in group.nodes
-        if node.bl_idname == "GeometryNodeGroup"
-        and getattr(node.node_tree, "get", lambda *_: None)("nodeforge_local_function_name") == "identity"
-    )
-    check(_interface_socket(helper, "name").socket_type == "NodeSocketString", "local function String parameter socket mismatch")
-    call_nodes = [node for node in group.nodes if node.bl_idname == "GeometryNodeGroup" and node.node_tree is helper]
-    check(len(call_nodes) == 2, f"expected two String local-function calls, got {len(call_nodes)}")
-    check(any(node.inputs["name"].is_linked for node in call_nodes), "runtime String local-function argument was not linked")
-    check(any(node.inputs["name"].default_value == "Weight_B" for node in call_nodes), "constant String local-function argument was not assigned as default")
 
 
-def test_packaged_library_function_accepts_runtime_and_constant_string_arguments():
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        root = tmp / "vendor.string"
-        functions = root / "functions"
-        functions.mkdir(parents=True)
-        _write_package_manifest(root, "vendor.string")
-        (functions / "string_identity.nf").write_text(
-            'value = input_string("Text", default="Default")\noutput("Text", value)\n',
-            encoding="utf-8",
-        )
-        packages.set_packages_dir_for_tests(tmp / "inventory")
-        try:
-            packages.install_package_directory(root)
-            group = compile_group('''
-from packages import string as string_pkg
-source = input_string("Source", default="Weight_A")
-runtime = string_identity(source)
-literal = string_identity("Weight_B")
-output("Runtime", runtime)
-output("Literal", literal)
-''', "NFTest_string_library_function")
-            calls = [node for node in group.nodes if node.bl_idname == "GeometryNodeGroup"]
-            check(len(calls) == 2, f"expected two String library calls, got {len(calls)}")
-            check(any(node.inputs["Text"].is_linked for node in calls), "runtime String library argument was not linked")
-            check(any(node.inputs["Text"].default_value == "Weight_B" for node in calls), "constant String library argument was not assigned as default")
-            check(all(node.outputs["Text"].bl_idname == "NodeSocketString" for node in calls), "library String output type mismatch")
-        finally:
-            packages.set_packages_dir_for_tests(None)
-            packages.invalidate_caches()
 
 
 def test_string_default_update_preserves_override_and_applies_new_default():

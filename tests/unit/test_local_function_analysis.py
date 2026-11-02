@@ -80,10 +80,10 @@ def test_local_call_hands_physical_materialization_to_function_materializer():
     lowering_source = (root / "blender/ir_lowering.py").read_text(encoding="utf-8")
     physical_source = (root / "blender/local_functions.py").read_text(encoding="utf-8")
 
-    assert "session.prepare_local(" in semantic_source
+    assert "session.prepare_definition(" in semantic_source
     assert "IRFunctionMaterialization(" in semantic_source
-    assert "build_prepared_local_materialization_spec" in lowering_source
-    assert ".materialize_local(" in lowering_source
+    assert 'function_id.kind == "MODULE_DEF"' in lowering_source
+    assert ".materialize_module(" in lowering_source
     assert "def compile_local_function_call" not in physical_source
     assert "resolve_reusable_function_materialization" not in physical_source
 

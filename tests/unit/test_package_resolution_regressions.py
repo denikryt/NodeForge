@@ -74,7 +74,10 @@ def test_broken_callable_inventory_keeps_manifest_import_reservation(tmp_path, r
     )
     assert [m.package_id for m in packages.active_package_manifest_snapshot()] == ['vendor.old']
     environment = resolve_environment()
-    assert environment.package_by_id('vendor.old') is None
+    failed_namespace = environment.package_by_id('vendor.old')
+    assert failed_namespace is not None
+    with pytest.raises(CompileError, match='EXTENSIONS'):
+        failed_namespace.find('system_value')
     candidate = write_package(tmp_path / 'new', 'vendor.old' if replacement else 'vendor.new')
     if replacement:
         packages.install_package_directory(candidate, replace=True)

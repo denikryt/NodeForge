@@ -320,127 +320,14 @@ def test_persistent_extension_value_blocks_bare_package_call_and_qualified_call_
     compilation, _ = _compile(good, environment)
     assert compilation.extension_dependencies
 
-def test_local_helper_bare_collision_and_qualified_receiver_capture_rules(tmp_path):
-    """Local preparation validates bare conflicts while qualified receiver stays non-capture syntax."""
-    environment, _ = _environment(tmp_path, [("nodeforge.math", "math", ("sin",))])
-    bad = (
-        "from packages import math\n"
-        "sin=input_float('Sin')\n"
-        "x=input_float('X')\n"
-        "def helper(x):\n"
-        "    return sin(x)\n"
-        "output(helper(x))\n"
-    )
-    with pytest.raises(CompileError, match=r"Cannot call 'sin'.*math\.sin"):
-        _compile(bad, environment)
-
-    good = (
-        "from packages import math as m\n"
-        "sin=input_float('Sin')\n"
-        "offset=input_float('Offset')\n"
-        "x=input_float('X')\n"
-        "def helper(x):\n"
-        "    return m.sin(x + offset)\n"
-        "output(helper(x))\n"
-    )
-    compilation, session = _compile(good, environment)
-    helper = next(prepared for key, prepared in session.prepared.items() if key.function_id.kind == "LOCAL_DEF")
-    hidden = [parameter.source_name for parameter in helper.contract.parameters if not parameter.public]
-    assert hidden == ["offset"]
-    assert "m" not in hidden
-    assert _source_calls(compilation)
 
 
-def test_nonconflicting_bare_package_call_inside_local_helper_remains_valid(tmp_path):
-    """Local preparation preserves ordinary unambiguous bare package resolution."""
-    environment, _ = _environment(tmp_path, [("nodeforge.math", "math", ("sin",))])
-    source = (
-        "from packages import math\n"
-        "x=input_float('X')\n"
-        "def helper(x):\n"
-        "    return sin(x)\n"
-        "output(helper(x))\n"
-    )
-    compilation, session = _compile(source, environment)
-    helper = next(
-        prepared
-        for key, prepared in session.prepared.items()
-        if key.function_id.kind == "LOCAL_DEF" and key.function_id.name == "helper"
-    )
-    assert [parameter.source_name for parameter in helper.contract.parameters if not parameter.public] == []
-    assert _source_calls(helper.group)[0].target.function_id.package_id == "nodeforge.math"
-    assert compilation is not None
 
 
-def test_transitive_qualified_package_call_preserves_real_runtime_capture(tmp_path):
-    """Package receivers stay syntax while a real runtime capture propagates through local calls."""
-    environment, _ = _environment(tmp_path, [("nodeforge.math", "math", ("sin",))])
-    source = (
-        "from packages import math as m\n"
-        "offset=input_float('Offset')\n"
-        "x=input_float('X')\n"
-        "def inner(x):\n"
-        "    return m.sin(x + offset)\n"
-        "def outer(x):\n"
-        "    return inner(x)\n"
-        "output(outer(x))\n"
-    )
-    _compilation, session = _compile(source, environment)
-    local_prepared = {
-        key.function_id.name: prepared
-        for key, prepared in session.prepared.items()
-        if key.function_id.kind == "LOCAL_DEF"
-    }
-    assert set(local_prepared) == {"inner", "outer"}
-    for name in ("inner", "outer"):
-        hidden = [parameter.source_name for parameter in local_prepared[name].contract.parameters if not parameter.public]
-        assert hidden == ["offset"]
-    assert _source_calls(local_prepared["inner"].group)[0].target.function_id.package_id == "nodeforge.math"
 
 
-def test_transitive_local_bare_collision_is_checked_before_preparation(tmp_path):
-    """Recursive local analysis carries the same invocation-time bare-call collision rule."""
-    environment, _ = _environment(tmp_path, [("nodeforge.math", "math", ("sin",))])
-    source = (
-        "from packages import math\n"
-        "sin=input_float('Sin')\n"
-        "x=input_float('X')\n"
-        "def inner(x):\n"
-        "    return sin(x)\n"
-        "def outer(x):\n"
-        "    return inner(x)\n"
-        "output(outer(x))\n"
-    )
-    with pytest.raises(CompileError, match=r"Cannot call 'sin'.*math\.sin"):
-        _compile(source, environment)
 
 
-def test_repeated_local_invocation_revalidates_outer_collision_before_cache(tmp_path):
-    """A prepared helper cannot bypass a later source-value conflict on a second invocation."""
-    environment, _ = _environment(tmp_path, [("nodeforge.math", "math", ("sin",))])
-    source = (
-        "from packages import math\n"
-        "x=input_float('X')\n"
-        "def helper(x):\n"
-        "    return sin(x)\n"
-        "first=helper(x)\n"
-        "sin=input_float('Sin')\n"
-        "second=helper(x)\n"
-        "output(first)\n"
-    )
-    session = SourceCallableSession(resolved_environment=environment)
-    with pytest.raises(CompileError, match=r"Cannot call 'sin'.*math\.sin"):
-        _compile(source, environment, session=session)
-    # The first invocation prepared the local helper before the second invocation failed.
-    local_items = [
-        (key, prepared)
-        for key, prepared in session.prepared.items()
-        if key.function_id.kind == "LOCAL_DEF" and key.function_id.name == "helper"
-    ]
-    assert len(local_items) == 1
-    key, prepared = local_items[0]
-    assert "sin" not in key.function_id.signature
-    assert [parameter.source_name for parameter in prepared.contract.parameters if not parameter.public] == []
 
 
 def test_local_parameter_named_like_package_export_remains_non_callable(tmp_path):
@@ -490,39 +377,8 @@ def test_package_source_callable_keeps_its_own_explicit_package_scope(tmp_path):
     assert _source_calls(helper_group)[0].target.function_id.package_id == "nodeforge.math"
 
 
-def test_package_namespace_value_use_fails_but_ordinary_object_receiver_remains_normal(tmp_path):
-    """Namespace aliases are not values; receiver suppression is not global attribute suppression."""
-    environment, _ = _environment(tmp_path, [("nodeforge.math", "math", ("sin",))])
-    with pytest.raises(CompileError, match="Package namespace 'math' cannot be used as a value"):
-        _compile("from packages import math\nx = math\noutput(x)\n", environment)
-    with pytest.raises(CompileError, match="Package namespace 'math' cannot be used as a value"):
-        _compile("from packages import math\ny = math.sin(math)\noutput(y)\n", environment)
-
-    source = (
-        "from packages import math as m\n"
-        "obj=input_object('Object')\n"
-        "def helper():\n"
-        "    return obj.info()\n"
-        "output(helper())\n"
-    )
-    compilation, session = _compile(source, environment)
-    helper = next(prepared for key, prepared in session.prepared.items() if key.function_id.kind == "LOCAL_DEF")
-    assert [parameter.source_name for parameter in helper.contract.parameters if not parameter.public] == ["obj"]
-    assert compilation is not None
 
 
-def test_local_parameter_can_shadow_outer_package_alias(tmp_path):
-    """Lexical local identity wins over an inherited package alias with the same spelling."""
-    environment, _ = _environment(tmp_path, [("nodeforge.math", "math", ("sin",))])
-    source = (
-        "from packages import math\n"
-        "obj=input_object('Object')\n"
-        "def helper(math):\n"
-        "    return math.info()\n"
-        "output(helper(obj))\n"
-    )
-    compilation, _ = _compile(source, environment)
-    assert compilation is not None
 
 
 @pytest.mark.parametrize('case', ['selected', 'value_collision', 'ambiguous'])

@@ -59,7 +59,7 @@ Declarations are visible before their textual definition. Parameters use exact P
 
 When a module has no executable top-level statements, **Compile Script** automatically places the functions that are not called by other definitions in that same module. All functions, including names beginning with `_`, remain importable.
 
-`node(...)` is the universal low-level form for Blender nodes that do not have a dedicated NodeForge wrapper. Here it creates **Merge by Distance** directly while the rest of the script stays in the higher-level DSL.
+`node(...)` is the universal low-level form for Blender nodes without a dedicated NodeForge wrapper. It creates an ordinary Blender node, which can be combined with typed function calls and other expressions.
 
 The language is intended to make procedural logic easier to express and maintain as the graph grows. Mathematical relationships can be written directly as expressions, while Geometry Nodes operations remain visible through functions that fit naturally into Python-like code. 
 
@@ -76,7 +76,8 @@ Installed package APIs are imported through the package namespace:
 ```python
 from packages import math
 
-value = math.sin(0.5)
+def sine(x: Float) -> Float:
+    return math.sin(x)
 ```
 
 Reusable `.nf` files from the Local library, including folders added from disk with **Add Folder...**, can be imported and called from other scripts:
@@ -87,7 +88,7 @@ from local import erosion
 # result = erosion.apply(geometry)
 ```
 
-See [Local imports](https://denikryt.github.io/NodeForgeDocs/latest/SYNTAX/#local) for the supported import forms.
+See [Unified `.nf` source reference](docs/UNIFIED_NF.md) for current source syntax, Local imports, function ownership and direct-composition semantics.
 
 ## Coverage
 
@@ -110,7 +111,7 @@ typed Semantic IR
     ↓
 Blender lowering and materialization
     ↓
-GeometryNodeTree
+existing base GeometryNodeTree + nested function GeometryNodeTrees
 ```
 
 ### Learn more in the documentation:

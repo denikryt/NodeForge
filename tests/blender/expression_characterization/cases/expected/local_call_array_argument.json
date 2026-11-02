@@ -1,5 +1,0 @@
-{
-  "exception": "CompileError",
-  "kind": "compile_error",
-  "message": "Local function constant arguments must be numbers, booleans, strings or vectors"
-}

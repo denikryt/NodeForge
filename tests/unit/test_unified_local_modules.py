@@ -150,3 +150,42 @@ def test_calling_a_file_module_without_member_is_a_source_error(tmp_path):
         analyze_group_source('from local import geometry\noutput(geometry(1))',
             compilation_identity=GroupCompilationIdentity(None, 'ROOT', 'ROOT', 'ROOT'),
             resolved_environment=env, source_callable_session=session)
+
+
+def test_unselected_local_registry_failure_is_lazy_and_replayed(tmp_path, monkeypatch):
+    """Local-free modules do not evaluate a broken registry; selected imports do."""
+    from NodeForge import environment_resolution, local_sources
+    registry = tmp_path / 'registry.json'
+    registry.write_text('{"version":999,"roots":[]}', encoding='utf-8')
+    monkeypatch.setattr(local_sources, '_local_sources_registry_path', lambda: registry)
+    monkeypatch.setattr(local_sources, '_default_local_catalog_dir', lambda: tmp_path / 'local')
+    environment = environment_resolution._make_compilation_environment()
+    session = SourceCallableSession(resolved_environment=environment)
+    clean = analyze_group_source('value = cube(1.0)',
+        compilation_identity=GroupCompilationIdentity(None, 'ROOT/lazy', 'ROOT/lazy', 'ROOT/lazy'),
+        resolved_environment=environment, source_callable_session=session)
+    assert clean.body.statements
+    with pytest.raises(CompileError, match='registry format'):
+        _resolve(environment, session, ('local', 'geometry', 'geometry'))
+    registry.unlink()
+    with pytest.raises(CompileError, match='registry format'):
+        _resolve(environment, session, ('local', 'geometry', 'geometry'))
+
+
+def test_imported_local_revision_is_frozen_until_next_attempt(tmp_path):
+    """A single selected file is parsed once and new attempts see new revisions."""
+    path = _source(tmp_path, 'geometry.nf', 'def move(x: Float) -> Float:\n    return x + 1\n')
+    environment = _env(tmp_path)
+    session = SourceCallableSession(resolved_environment=environment)
+    direct, namespaces = _resolve(environment, session,
+        ('local', 'geometry', 'geo'), ('local.geometry', 'move', 'move'))
+    frozen = namespaces['geo'].snapshot
+    path.write_text('def move(x: Float) -> Float:\n    return x + 2\n', encoding='utf-8')
+    second, second_modules = _resolve(environment, session, ('local.geometry', 'move', 'another'))
+    assert second['another'].snapshot is frozen
+    assert direct['move'].snapshot is frozen
+    assert '+ 1' in frozen.source and '+ 2' not in frozen.source
+    next_session = SourceCallableSession(resolved_environment=environment)
+    newer, _ = _resolve(environment, next_session, ('local.geometry', 'move', 'move'))
+    assert newer['move'].snapshot is not frozen
+    assert '+ 2' in newer['move'].snapshot.source

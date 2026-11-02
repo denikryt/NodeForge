@@ -19,49 +19,6 @@ def _register_legacy_linked_file(path):
 
 
 
-def test_linked_local_folder_is_live_and_does_not_copy_sources():
-    with tempfile.TemporaryDirectory(prefix='nodeforge_linked_local_') as temp:
-        root = Path(temp) / 'project_scripts'
-        nested = root / 'plants'
-        nested.mkdir(parents=True)
-        source = nested / 'linked_live_probe.nf'
-        _write(source, 'x = input_float("X")\noutput("x", x * 2.0)\n')
-
-        linked = local_sources.link_local_source_folder(str(root))
-        try:
-            check(linked == root.resolve(), 'linked source root path changed unexpectedly')
-            check(local_sources.find_local_entry_record('linked_live_probe') is not None, 'linked Local script was not discovered')
-            record = local_sources.find_local_entry_record('linked_live_probe')
-            check(record.source_path == source.resolve(), 'linked Local source was copied instead of read in place')
-
-            first = compile_group(
-                'from local import linked_live_probe\n'
-                'x = linked_live_probe(2.0)\n'
-                'output("x", x)\n',
-                'NFTest_linked_local_first',
-            )
-            first_backing = next(
-                node.node_tree for node in first.nodes
-                if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'linked_live_probe'
-            )
-
-            _write(source, 'x = input_float("X")\noutput("x", x * 3.0)\n')
-            second = compile_group(
-                'from local import linked_live_probe\n'
-                'x = linked_live_probe(2.0)\n'
-                'output("x", x)\n',
-                'NFTest_linked_local_second',
-            )
-            second_backing = next(
-                node.node_tree for node in second.nodes
-                if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'linked_live_probe'
-            )
-            check(second_backing is not first_backing, 'changed linked source reused the old snapshot')
-        finally:
-            local_sources.unlink_local_source_folder(str(root))
-
-        check(source.exists(), 'unlink deleted an external source file')
-        check(local_sources.find_local_entry_record('linked_live_probe') is None, 'unlinked source remained discoverable')
 
 
 def test_local_browser_shows_direct_managed_folders_and_linked_roots():

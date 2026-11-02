@@ -627,3 +627,9 @@ lifecycle.
 - Routed Compile Script into the existing base Geometry Nodes tree through the unified direct-composition operation; removed the legacy root-group UI compilation/update action.
 - Added explicit Detach Selected Copy for eligible NodeForge-managed Function Node Group copies and retained source Reload for catalog-backed functions.
 - Updated the editor index for module-qualified definitions, exact signature keywords, annotation labels/defaults, and per-definition package exports.
+
+## 0.87.1
+
+- Completed unified `.nf` catalog Add routing and final source/definition regression coverage for Issue #48.
+- Migrated active package lifecycle and frontend tests away from obsolete file-as-function assumptions; retained Blender interface and transaction tests with new typed function coverage.
+- Documented unified compilation, source-owner detachment, in-place function updates, and the root-only Mesh Compute follow-up boundary.
