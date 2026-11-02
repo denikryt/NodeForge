@@ -362,6 +362,10 @@ def _resolved_from_package_export(source_name: str, export) -> ResolvedCallable:
         return ResolvedCallable(CallableKind.EXTENSION, source_name, target=extension_callable_id)
     if record is None:
         raise ValueError("package export has no semantic target")
+    if getattr(export, "definition", None) is not None:
+        from .source_bindings import SourceDefinitionBinding
+        binding = SourceDefinitionBinding("functions", export.name, record, export.definition, export.source_snapshot)
+        return ResolvedCallable(CallableKind.MODULE_DEFINITION, source_name, binding)
     from .source_bindings import LibraryBinding
 
     binding = LibraryBinding("functions", export.name, record, None)

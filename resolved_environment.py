@@ -141,6 +141,8 @@ class PackageCallableExport:
     name: str
     record: "LibraryEntryRecord | None" = None
     extension_callable_id: object | None = None
+    definition: object | None = None
+    source_snapshot: object | None = None
 
     def __post_init__(self) -> None:
         """Validate owner/name provenance without retaining implementation objects."""
@@ -157,10 +159,22 @@ class PackageCallableExport:
         if record is not None:
             if (
                 getattr(record, "namespace", None) != "functions"
-                or getattr(record, "name", None) != self.name
+                or (self.definition is None and getattr(record, "name", None) != self.name)
                 or getattr(record, "package_id", None) != self.package_id
             ):
                 raise ValueError("package callable export record does not match owner/member")
+        if self.definition is not None or self.source_snapshot is not None:
+            from .compiler_identities import SourceDefinitionRef
+            from .semantic.source_modules import SourceModuleSnapshot
+            if (not isinstance(self.definition, SourceDefinitionRef)
+                    or not isinstance(self.source_snapshot, SourceModuleSnapshot)
+                    or self.definition.module != self.source_snapshot.module_id
+                    or self.source_snapshot.module_id.kind != "PACKAGE"
+                    or self.source_snapshot.module_id.package_id != self.package_id
+                    or self.definition.name != self.name
+                    or self.definition.name not in self.source_snapshot.definitions
+                    or record is None or getattr(record, "source_path", None) is None):
+                raise ValueError("package callable definition must match a frozen package source module")
         if extension_id is not None:
             if not isinstance(extension_id, ExtensionCallableId) or extension_id.name != self.name:
                 raise TypeError("package callable export extension target must match member name")
@@ -180,6 +194,7 @@ class ResolvedPackageNamespace:
     package_name: str
     package_version: str
     exports: Mapping[str, PackageCallableExport]
+    failure: ResolvedCatalogFailure | None = None
 
     def __post_init__(self) -> None:
         """Freeze exports and require every member to belong to this package."""
@@ -189,10 +204,14 @@ class ResolvedPackageNamespace:
         for name, export in copied.items():
             if name != export.name or export.package_id != self.package_id:
                 raise ValueError("resolved package export key does not match package owner/member")
+        if self.failure is not None and copied:
+            raise ValueError("Failed package namespace cannot publish partial exports")
         object.__setattr__(self, "exports", MappingProxyType(copied))
 
     def find(self, name: str) -> PackageCallableExport | None:
         """Return one exact public member from this package namespace."""
+        if self.failure is not None:
+            self.failure.raise_error()
         return self.exports.get(name)
 
 

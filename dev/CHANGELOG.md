@@ -569,3 +569,8 @@ lifecycle.
 
 - Added file-module and exact definition-member imports for Local .nf sources, including qualified directories, aliases, one per-attempt source snapshot and early member diagnostics.
 - Removed file-as-callable and Local star-import semantics while retaining explicitly selected Local Mesh Compute Python runtime imports.
+
+## 0.79.0
+
+- Freeze package `.nf` file-module snapshots before function export discovery and expose every top-level function, including underscore-prefixed declarations, as a separate member of the package Functions namespace.
+- Resolve exported module definitions through immutable source identities, reject collisions with other modules or Extension API v2 owners, and surface failed package discovery on explicit member access.
