@@ -564,3 +564,8 @@ lifecycle.
 
 - Added canonical source-definition alias bindings and a resolved intra-module call graph for entry selection, forward calls, compile-time-pruned branches and direct/mutual recursion diagnostics.
 - Reused canonical lexical identities for aliased source calls in the semantic frontend, including function-local aliases.
+
+## 0.78.0
+
+- Added file-module and exact definition-member imports for Local .nf sources, including qualified directories, aliases, one per-attempt source snapshot and early member diagnostics.
+- Removed file-as-callable and Local star-import semantics while retaining explicitly selected Local Mesh Compute Python runtime imports.

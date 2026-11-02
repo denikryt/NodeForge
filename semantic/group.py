@@ -21,7 +21,10 @@ from .residualization import _infer_input_types
 from ..errors import CompileError
 from ..nf_types import NFType
 from ..extensions.contracts import ExtensionCallableId
-from .source_bindings import LibraryBinding, PackageNamespaceBinding, LocalDirectoryNamespaceBinding
+from .source_bindings import (
+    LibraryBinding, PackageNamespaceBinding, LocalDirectoryNamespaceBinding,
+    SourceModuleNamespaceBinding, SourceDefinitionBinding,
+)
 from ..extensions.registry import library_owner_key
 from .parsing import _assigned_names, _binding_names, _collect_inputs, _extract_function_imports, _needs_geometry_io, normalized_statements
 from .source_modules import SourceModuleSnapshot, SourceCallGraph, parse_source_module, resolve_source_module, resolve_source_call_graph
@@ -79,9 +82,10 @@ def _validate_import_bindings(
     inherited_local_namespaces=None,
     directory_bindings=None,
     allow_local_runtime=True,
+    source_callable_session=None,
 ):
     """Validate and return source-local namespace-aware catalog bindings."""
-    imported: dict[str, LibraryBinding] = {}
+    imported: dict[str, LibraryBinding | SourceDefinitionBinding] = {}
     directories = {}
     local_bindings = _binding_names(body_stmts)
     reserved_names = (
@@ -98,8 +102,29 @@ def _validate_import_bindings(
         catalog = resolved_environment.catalog(base_namespace)
         catalog._raise_if_failed()
         index = catalog.local_index if base_namespace == "local" else catalog.examples_index
+        source_member = None
         if inherited_record is not None and index is not None:
             record = index.find_origin(inherited_record.source_origin)
+        elif base_namespace == "local" and index is not None:
+            path = tuple(namespace.split(".")[1:])
+            try:
+                selected = index.resolve_path(path + (canonical_name,) if not path else path)
+            except CompileError:
+                # Explicitly linked runtime Python owners are index-addressable
+                # even when not located inside a scanned Local root directory.
+                runtime = index.find_flat_function(canonical_name) if not path else None
+                if getattr(runtime, "kind", None) != "runtime":
+                    raise
+                selected = runtime
+            from ..local_index import LocalDirectoryCandidate
+            if path and not isinstance(selected, LocalDirectoryCandidate):
+                # The module itself is a file; the imported name selects a def.
+                record = selected
+                source_member = canonical_name
+            elif path:
+                record = index.resolve_path(path + (canonical_name,))
+            else:
+                record = selected
         elif base_namespace == "examples" and index is not None:
             record = catalog.select_import(namespace, canonical_name, flat_only=flat_only)
         elif index is not None:
@@ -117,6 +142,26 @@ def _validate_import_bindings(
         if inherited_record is not None and inherited_record is not record:
             raise CompileError("Internal error: inherited library binding does not match resolved environment")
         from ..local_index import LocalDirectoryCandidate
+        if (base_namespace == "local" and getattr(record, "source_path", None) is not None
+                and record.source_path.suffix == ".nf"):
+
+            if source_callable_session is None:
+                from .source_callable_session import SourceCallableSession
+                capture_session = SourceCallableSession(resolved_environment=resolved_environment)
+            else:
+                capture_session = source_callable_session
+            snapshot = capture_session.capture_local_module(record)
+            if source_member is None:
+                binding = SourceModuleNamespaceBinding(exposed_name, record, snapshot)
+                if exposed_name in imported or exposed_name in directories or exposed_name in local_bindings or exposed_name in local_function_defs or exposed_name in reserved_names:
+                    raise CompileError(f"Local module import alias {exposed_name!r} conflicts with an existing binding")
+                directories[exposed_name] = binding
+            else:
+                binding = SourceDefinitionBinding(base_namespace, source_member, record, snapshot.definition_ref(source_member), snapshot)
+                if exposed_name in imported or exposed_name in directories or exposed_name in local_bindings or exposed_name in local_function_defs or exposed_name in reserved_names:
+                    raise CompileError(f"Local function import alias {exposed_name!r} conflicts with an existing binding")
+                imported[exposed_name] = binding
+            return
         if isinstance(record, LocalDirectoryCandidate):
             if exposed_name in imported or exposed_name in directories:
                 raise CompileError(f"Duplicate function import name: {exposed_name}")
@@ -125,10 +170,13 @@ def _validate_import_bindings(
             if exposed_name in reserved_names:
                 raise CompileError(f"Directory import name conflicts with reserved name: {exposed_name}")
             directories[exposed_name] = LocalDirectoryNamespaceBinding(
-                exposed_name, index, record, expose_unqualified=not has_explicit_alias,
+                exposed_name, index, record, expose_unqualified=False,
                 namespace=base_namespace,
             )
             return
+        if (base_namespace == "local" and getattr(record, "source_path", None) is not None
+                and record.source_path.suffix == ".nodeforge"):
+            raise CompileError("Legacy .nodeforge modules are unsupported; use .nf")
         namespace = base_namespace
         extension_callable_id = None
         if getattr(record, "kind", None) == "runtime":
@@ -158,6 +206,8 @@ def _validate_import_bindings(
     for import_request in import_pairs:
         namespace = import_request.module
         if import_request.is_star:
+            if namespace.split(".")[0] == "local":
+                raise CompileError("Local star imports are unsupported; select a file module or an explicit function member")
             for library_name in sorted(resolved_environment.catalog(namespace).names(), key=str.lower):
                 if namespace == "local":
                     flat = resolved_environment.catalog("local").local_index.flat_candidates.get(library_name, ())
@@ -169,7 +219,11 @@ def _validate_import_bindings(
             validate_pair(namespace, import_request.canonical_name, import_request.exposed_name,
                           has_explicit_alias=import_request.has_explicit_alias)
     for exposed_name, inherited_binding in dict(inherited_imports or {}).items():
-        if isinstance(inherited_binding, LibraryBinding):
+        if isinstance(inherited_binding, SourceDefinitionBinding):
+            if exposed_name in imported or exposed_name in directories or exposed_name in local_function_defs:
+                raise CompileError(f"Inherited Local function {exposed_name!r} conflicts with a source declaration")
+            imported[exposed_name] = inherited_binding
+        elif isinstance(inherited_binding, LibraryBinding):
             validate_pair(
                 inherited_binding.namespace,
                 inherited_binding.canonical_name,
@@ -180,8 +234,13 @@ def _validate_import_bindings(
         else:
             raise CompileError("Internal error: inherited library binding is not owner-resolved")
     for alias, binding in dict(inherited_local_namespaces or {}).items():
-        if not isinstance(binding, LocalDirectoryNamespaceBinding) or binding.source_name != alias:
+        if not isinstance(binding, (LocalDirectoryNamespaceBinding, SourceModuleNamespaceBinding)) or binding.source_name != alias:
             raise CompileError("Internal error: invalid inherited source namespace")
+        if isinstance(binding, SourceModuleNamespaceBinding):
+            if alias in directories or alias in imported or alias in local_function_defs or alias in reserved_names:
+                raise CompileError(f"Inherited Local module {alias!r} conflicts with an existing binding")
+            directories[alias] = binding
+            continue
         catalog = resolved_environment.catalog(binding.namespace)
         index = catalog.local_index if binding.namespace == "local" else catalog.examples_index
         if binding.index_snapshot is not index:
@@ -492,6 +551,7 @@ def analyze_group_source(
         inherited_local_namespaces=inherited_local_namespaces,
         directory_bindings=local_directories,
         allow_local_runtime=not bool(getattr(source_callable_session, "_active_stack", ())),
+        source_callable_session=source_callable_session,
     )
     reserved_name_labels = _registered_name_labels(local_function_defs, imported, package_bindings)
     alias_names = set(resolved_source_module.definition_aliases)

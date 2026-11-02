@@ -1607,6 +1607,13 @@ def analyze_expression(expr, environment):
                     )
             elif isinstance(node.func, ast.Name):
                 name = node.func.id
+                if (name in environment.callable_environment.local_namespaces
+                        and name not in environment.runtime_bindings
+                        and name not in environment.const_eval_values):
+                    raise CompileError(
+                        f"Local module/directory {name!r} is not callable; "
+                        "import its .nf definition or call module.definition(...)"
+                    )
                 if name in environment.callable_environment.package_namespaces:
                     raise CompileError(
                         f"Package namespace {name!r} cannot be called directly; use {name}.<member>(...)"

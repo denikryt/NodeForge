@@ -149,6 +149,29 @@ class DirectorySourceIndex:
         dirs = self.path_members.get((), {}).get(name, LocalMember()).directory_candidates
         return self._select(name, LocalMember(self.flat_candidates.get(name, ()), dirs))
 
+    def resolve_path(self, path):
+        """Resolve an explicit Local path to exactly one file module or directory.
+
+        Unlike legacy flat-file lookup, every path component must occur at the
+        specified physical position. A file/directory collision is never guessed.
+        """
+        path = tuple(path)
+        if not path:
+            raise CompileError("Local module path must identify a file or directory")
+        parent = ()
+        for index, name in enumerate(path):
+            if not is_public_local_name(name):
+                raise CompileError(f"Invalid Local source path component {name!r}")
+            member = self.path_members.get(parent, {}).get(name, LocalMember())
+            selected = self._select(name, member)
+            if selected is None:
+                raise CompileError(f"Unknown Local source path: local.{'.'.join(path[:index + 1])}")
+            if index < len(path) - 1:
+                if not isinstance(selected, LocalDirectoryCandidate):
+                    raise CompileError(f"Local source module {name!r} is a file, not a directory")
+                parent = selected.import_path
+        return selected
+
     def resolve_directory(self, path):
         """Resolve every directory prefix before inspecting any requested member."""
         parent = ()

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..compiler_identities import SourceDefinitionRef
+from ..errors import CompileError
+
 from ..extensions.contracts import ExtensionCallableId
 from ..resolved_environment import ResolvedPackageNamespace
 
@@ -23,6 +26,49 @@ class LibraryBinding:
             raise ValueError("Library binding does not match its resolved record")
         if self.extension_callable_id is not None and not isinstance(self.extension_callable_id, ExtensionCallableId):
             raise TypeError("LibraryBinding.extension_callable_id must be ExtensionCallableId or None")
+
+
+@dataclass(frozen=True)
+class SourceModuleNamespaceBinding:
+    """Bind one selected physical .nf file as an importable definition namespace."""
+
+    source_name: str
+    record: object
+    snapshot: object
+    namespace: str = "local"
+
+    def __post_init__(self) -> None:
+        """Require a module snapshot of the exact selected canonical source owner."""
+        from .source_modules import SourceModuleSnapshot
+        if not self.source_name or not isinstance(self.snapshot, SourceModuleSnapshot):
+            raise TypeError("Module namespace requires one captured .nf source snapshot")
+        if self.record.source_origin != self.snapshot.module_id.origin:
+            raise ValueError("Module binding snapshot does not match the selected source origin")
+
+    def member(self, name: str) -> "SourceDefinitionBinding":
+        """Resolve only definitions physically declared within this source file."""
+        return SourceDefinitionBinding(self.namespace, name, self.record, self.snapshot.definition_ref(name), self.snapshot)
+
+
+@dataclass(frozen=True)
+class SourceDefinitionBinding:
+    """Bind one exact source definition, independently of import alias spelling."""
+
+    namespace: str
+    canonical_name: str
+    record: object
+    definition: SourceDefinitionRef
+    snapshot: object
+
+    def __post_init__(self) -> None:
+        """Ensure the source member and physical module snapshot agree."""
+        from .source_modules import SourceModuleSnapshot
+        if (not isinstance(self.snapshot, SourceModuleSnapshot)
+                or not isinstance(self.definition, SourceDefinitionRef)
+                or self.definition.module != self.snapshot.module_id
+                or self.definition.name != self.canonical_name
+                or self.definition.name not in self.snapshot.definitions):
+            raise ValueError("Source definition binding needs a matching declared member")
 
 
 @dataclass(frozen=True)
@@ -69,4 +115,5 @@ class LocalDirectoryNamespaceBinding:
             raise ValueError("Local namespace directory does not belong to its snapshot")
 
 
-__all__ = ["LibraryBinding", "PackageNamespaceBinding", "LocalDirectoryNamespaceBinding"]
+__all__ = ["LibraryBinding", "PackageNamespaceBinding", "LocalDirectoryNamespaceBinding",
+           "SourceModuleNamespaceBinding", "SourceDefinitionBinding"]

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Mapping
 
 from .callable_contracts import SourceCallableContract, SourceCallableParameter, normalize_callable_keyword
-from ..compiler_identities import FunctionId, GroupCompilationIdentity
+from ..compiler_identities import FunctionId, GroupCompilationIdentity, ModuleId
 from ..errors import CompileError
 from .source_callables import LocalReturnShape, PreparedSourceCallable, SourceCallablePreparationKey
 
@@ -16,8 +16,21 @@ class SourceCallableSession:
         """Share one eager environment or compiler demand view through recursive preparation."""
         self.resolved_environment = resolved_environment
         self.source_snapshots: dict[FunctionId, str] = {}
+        self.module_snapshots = {}
         self.prepared: dict[SourceCallablePreparationKey, PreparedSourceCallable] = {}
         self._active_stack: list[FunctionId] = []
+
+    def capture_local_module(self, record):
+        """Freeze a selected Local .nf revision once per compilation attempt."""
+        from .source_modules import parse_source_module
+        if record.namespace != "local" or record.source_path is None or record.source_path.suffix != ".nf":
+            raise CompileError("Selected Local module must be a .nf source file")
+        module_id = ModuleId("LOCAL", record.source_origin)
+        snapshot = self.module_snapshots.get(module_id)
+        if snapshot is None:
+            snapshot = parse_source_module(record.source_path.read_text(encoding="utf-8"), module_id)
+            self.module_snapshots[module_id] = snapshot
+        return snapshot
 
     def _source_snapshot(self, function_id: FunctionId, source_supplier) -> str:
         """Capture one coherent definition source snapshot for this root attempt."""
