@@ -51,3 +51,21 @@ def test_direct_compose_requires_geometry_node_tree():
     """Invalid targets cannot produce a new generated root group."""
     with pytest.raises(CompileError, match='existing base GeometryNodeTree'):
         compiler.compose_source_initial('a = cube(1)', None)
+
+
+def test_definition_only_entries_respect_module_compile_time_condition():
+    """A compile-time-disabled reverse call does not prevent nested materialization."""
+    target = bpy.data.node_groups.new('NFTest_module_ct_entry', 'GeometryNodeTree')
+    compiler.compose_source_initial('''FLAG = False
+
+def a() -> Geometry:
+    if FLAG:
+        b()
+    return cube(1)
+
+def b() -> Geometry:
+    return a()
+''', target)
+    entries = [node for node in target.nodes if node.bl_idname == 'GeometryNodeGroup']
+    assert len(entries) == 1
+    assert entries[0].node_tree.get('nodeforge_module_name') == 'b'

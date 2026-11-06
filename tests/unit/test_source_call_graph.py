@@ -123,3 +123,71 @@ output(x)'''
         resolved_environment=environment, source_callable_session=session)
     assert {(a.name, b.name) for a, b in group.source_call_graph.edges} == {('A','B')}
     assert {prepared.contract.function_id.name for prepared in session.prepared.values()} == {'A', 'B'}
+
+@pytest.mark.parametrize('flag,entries,recursive', [
+    ('False', ['b'], False),
+    ('True', None, True),
+])
+def test_module_compile_time_flags_control_reachable_recursive_edges(flag, entries, recursive):
+    """Source-level compile-time constants select edges before cycle analysis."""
+    source = f'''FLAG = {flag}
+def a():
+    if FLAG:
+        b()
+    return 1
+def b():
+    return a()'''
+    if recursive:
+        with pytest.raises(CompileError, match='Recursive module definitions'):
+            _graph(source)
+    else:
+        assert [ref.name for ref in _graph(source).entries] == entries
+
+
+def test_local_compile_time_assignments_are_observed_in_source_order():
+    """A later constant must not reinterpret an earlier branch or its edges."""
+    source = '''def a():
+    flag = False
+    if flag:
+        b()
+    flag = True
+    if flag:
+        c()
+    return 1
+def b():
+    return 2
+def c():
+    return 3'''
+    graph = _graph(source)
+    assert {(u.name, v.name) for u, v in graph.edges} == {('a', 'c')}
+    assert [entry.name for entry in graph.entries] == ['a', 'b']
+
+
+def test_parameter_shadows_same_named_module_constant_in_graph():
+    """A dynamic function parameter cannot be treated as the module's constant."""
+    source = '''FLAG = False
+def a(FLAG: Bool):
+    if FLAG:
+        b()
+    return 1
+def b():
+    return 2'''
+    graph = _graph(source)
+    assert {(u.name, v.name) for u, v in graph.edges} == {('a', 'b')}
+
+
+def test_module_snapshot_revision_changes_edges_between_compilations():
+    """Each independently resolved source revision has its own CT environment."""
+    original = '''CHOOSE = False
+def a():
+    if CHOOSE:
+        b()
+    return 1
+def b():
+    return 2'''
+    changed = original.replace('CHOOSE = False', 'CHOOSE = True')
+    first = _graph(original)
+    second = _graph(changed)
+    assert not first.edges
+    assert {(u.name, v.name) for u, v in second.edges} == {('a', 'b')}
+    assert not first.edges  # resolved snapshots do not read live source again

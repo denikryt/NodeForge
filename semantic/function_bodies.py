@@ -84,7 +84,11 @@ def compile_function_definition(
             callable_environment.imported_functions,
             callable_environment.package_namespaces, callable_environment.local_namespaces, refs,
         )
-    preprocessed = _preprocess_compile_time(body_stmts)
+    preprocessed = _preprocess_compile_time(
+        body_stmts,
+        initial_compile_time=values,
+        shadowed_names=(arg.arg for arg in fn.args.args),
+    )
     if not preprocessed.statements or preprocessed.statements[-1] is not fn.body[-1]:
         raise CompileError(f"{fn.name}() return must remain terminal after preprocessing")
     bindings = {
@@ -104,7 +108,7 @@ def compile_function_definition(
     body = lower_basic_body(
         list(preprocessed.statements),
         initial_runtime_bindings=bindings,
-        initial_compile_time=CompileTimeSnapshot(values),
+        initial_compile_time=preprocessed.initial_compile_time,
         reserved_name_labels=reserved,
         callable_environment=callable_environment,
         owner_scope=compilation_identity.owner_scope,

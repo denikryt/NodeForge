@@ -175,11 +175,14 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
             local_refs[alias] = snapshot.definition_ref(canonical)
         env = CallableEnvironment(base.callable_builtins, local_functions, {},
                                   local_definition_refs=local_refs)
-        residual = _preprocess_compile_time(body)
+        residual = _preprocess_compile_time(
+            body,
+            initial_compile_time=resolved.preprocessed.final_compile_time,
+            shadowed_names=(arg.arg for arg in fn.args.args),
+        )
         owner = snapshot.definition_ref(name)
-        values = residual.final_compile_time.values
-        for statement in residual.statements:
-            visit(statement, owner, env, values)
+        for statement, before in zip(residual.statements, residual.compile_time_before):
+            visit(statement, owner, env, before.values)
     ordered_edges = tuple(sorted(edges, key=lambda pair: (pair[0].name, pair[1].name)))
     vertices = tuple(snapshot.definition_ref(name) for name in snapshot.definitions)
     graph = SourceCallGraph(vertices, ordered_edges)

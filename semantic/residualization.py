@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from .constants import TYPE_INT
 from ..errors import CompileError
-from .compile_time import CompileTimeState
+from .compile_time import CompileTimeSnapshot, CompileTimeState
 from .consteval import (
     NOT_FOLDABLE,
     ConstEvalUnavailable,
@@ -61,6 +61,7 @@ class PreprocessedBody:
     trailing_effects: tuple[CompileTimeEffect, ...]
     initial_compile_time: object
     final_compile_time: object
+    compile_time_before: tuple[object, ...] = ()
 
 
 class _PreprocessRecorder:
@@ -362,25 +363,36 @@ def _repeat_range_state_names(stmts):
     return preserve
 
 
-def _preprocess_compile_time(stmts):
-    """Return residual source plus erased compile-time effects in source order."""
-    state = CompileTimeState()
+def _preprocess_compile_time(stmts, *, initial_compile_time=None, shadowed_names=()):
+    """Residualize against inherited constants, recording each statement's CT state.
+
+    Parameter bindings shadow module constants before any body preprocessing.
+    Per-statement states let graph analysis inspect the same reachable source
+    without incorrectly using the function's *final* compile-time values.
+    """
+    state = CompileTimeState(
+        initial_compile_time.values if isinstance(initial_compile_time, CompileTimeSnapshot)
+        else initial_compile_time
+    )
+    for name in shadowed_names:
+        state.discard(name)
     initial = state.snapshot()
     recorder = _PreprocessRecorder()
     preserve = _repeat_range_state_names(stmts)
+    per_statement = []
     for stmt in stmts:
-        _handle_compile_time_stmt(
-            stmt,
-            state,
-            recorder,
-            preserve,
-        )
+        before = state.snapshot()
+        retained = len(recorder.statements)
+        _handle_compile_time_stmt(stmt, state, recorder, preserve)
+        if len(recorder.statements) != retained:
+            per_statement.append(before)
     return PreprocessedBody(
         statements=tuple(recorder.statements),
         effects_before=tuple(recorder.effects_before),
         trailing_effects=tuple(recorder.pending_effects),
         initial_compile_time=initial,
         final_compile_time=state.snapshot(),
+        compile_time_before=tuple(per_statement),
     )
 
 

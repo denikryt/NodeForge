@@ -1426,6 +1426,24 @@ def lower_basic_body(
             is_final = root and index == len(source_stmts) - 1
 
             if isinstance(stmt, ast.If):
+                try:
+                    static_condition = _const_eval(stmt.test, active_compile_time.values)
+                except (ConstEvalUnavailable, CompileError):
+                    static_condition = None
+                if terminal_return_shape is not None and type(static_condition) is bool:
+                    # Reachability must agree with source call-graph analysis.
+                    # Do not generate runtime IF nodes for compile-time branches.
+                    chosen = stmt.body if static_condition else stmt.orelse
+                    selected_body = lower_statements(
+                        chosen, active, active_compile_time,
+                        control_policy=control_policy,
+                        repeat_merge_ids=repeat_merge_ids,
+                        repeat_merge_symbols=repeat_merge_symbols,
+                        runtime_if_builder_baseline=runtime_if_builder_baseline,
+                        root=False,
+                    )
+                    emit_many(selected_body.statements)
+                    continue
                 policy = control_policy or BranchMergePolicy.TOP_LEVEL
                 if policy is BranchMergePolicy.TOP_LEVEL:
                     branch_region = tuple(stmt.body) + tuple(stmt.orelse)
