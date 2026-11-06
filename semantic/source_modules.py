@@ -249,6 +249,20 @@ def parse_source_module(source: str, module_id: ModuleId) -> SourceModuleSnapsho
         raise TypeError("module_id must be ModuleId")
     tree = _parse_source_tree(source)
     from .function_signatures import validate_function_parameters
+    # Interface declarations were specific to the removed generated-root DSL.
+    # Validate once at source capture, before imports, residualization or IR.
+    from .builtin_calls import INPUT_DECLARATION_BUILTIN_NAMES
+    obsolete = set(INPUT_DECLARATION_BUILTIN_NAMES) | {'output'}
+    for statement in tree.body:
+        if isinstance(statement, (ast.FunctionDef, ast.ImportFrom)):
+            continue
+        for node in ast.walk(statement):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id in obsolete):
+                raise CompileError(
+                    f"Unsupported legacy .nf interface {node.func.id}() "
+                    f"at line {node.lineno}, column {node.col_offset + 1}"
+                )
     imports = []
     functions = {}
     assignments = []

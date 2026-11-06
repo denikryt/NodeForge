@@ -8,29 +8,21 @@ from dataclasses import dataclass
 from .builtin_calls import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
 from . import builtin_registry
 from .call_resolution import CallableEnvironment
-from .callable_contracts import (
-    GroupInputContract,
-    GroupInterfaceContract,
-    GroupOutputContract,
-    canonicalize_group_input_default,
-    project_group_input_layout,
-)
-from ..compiler_identities import BindingId, GroupCompilationIdentity, ModuleId
-from .constants import TYPE_FLOAT, TYPE_INT, TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
-from .residualization import _infer_input_types
+from .callable_contracts import GroupInterfaceContract
+from ..compiler_identities import GroupCompilationIdentity, ModuleId
+from .constants import TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
 from ..errors import CompileError
-from ..nf_types import NFType
 from ..extensions.contracts import ExtensionCallableId
 from .source_bindings import (
     LibraryBinding, PackageNamespaceBinding, LocalDirectoryNamespaceBinding,
     SourceModuleNamespaceBinding, SourceDefinitionBinding,
 )
 from ..extensions.registry import library_owner_key
-from .parsing import _assigned_names, _binding_names, _collect_inputs, _extract_function_imports, _needs_geometry_io, normalized_statements
+from .parsing import _assigned_names, _binding_names, _extract_function_imports, normalized_statements
 from .source_modules import SourceModuleSnapshot, SourceCallGraph, parse_source_module, resolve_source_module, resolve_source_call_graph
-from .runtime_bindings import RuntimeBindingSymbol, allows_existing_top_level_shadow, format_reserved_binding_label
-from .body import BasicBodyCompilation, lower_basic_body
-from .ir import IRBody, IRIf, IRInputDeclaration, IRPanelDeclaration, IRRepeat
+from .runtime_bindings import allows_existing_top_level_shadow, format_reserved_binding_label
+from .body import lower_basic_body
+from .ir import IRBody
 
 
 @dataclass(frozen=True)
@@ -431,87 +423,6 @@ def _validate_interface_directive_placement(stmts):
                 raise CompileError("panel() is a top-level interface declaration")
 
 
-def _walk_body_statements(body: IRBody):
-    """Yield body statements recursively in physical semantic traversal order."""
-    for statement in body.statements:
-        yield statement
-        if isinstance(statement, IRIf):
-            yield from _walk_body_statements(statement.true_body)
-            yield from _walk_body_statements(statement.false_body)
-        elif isinstance(statement, IRRepeat):
-            yield from _walk_body_statements(statement.body)
-
-
-def _build_interface_contract(
-    *,
-    geometry_mode: bool,
-    implicit_inputs,
-    body_compilation: BasicBodyCompilation,
-) -> GroupInterfaceContract:
-    """Infer final callable input/output order from semantic body facts only."""
-    base_inputs: list[GroupInputContract] = []
-    if geometry_mode:
-        base_inputs.append(
-            GroupInputContract(
-                source_name=None,
-                display_name="Geometry",
-                typ=NFType.GEOMETRY,
-                default=None,
-                has_default=False,
-                interface_origin=None,
-            )
-        )
-    for source_name, binding_id, typ, default in implicit_inputs:
-        base_inputs.append(
-            GroupInputContract(
-                source_name=source_name,
-                display_name=source_name,
-                typ=typ,
-                default=canonicalize_group_input_default(typ, default),
-                has_default=True,
-                interface_origin=binding_id,
-            )
-        )
-    panels: list[IRPanelDeclaration] = []
-    for statement in _walk_body_statements(body_compilation.body):
-        if isinstance(statement, IRInputDeclaration):
-            has_default = statement.has_default
-            default = canonicalize_group_input_default(statement.typ, statement.default) if has_default else None
-            base_inputs.append(
-                GroupInputContract(
-                    source_name=statement.target_name,
-                    display_name=statement.display_name,
-                    typ=statement.typ,
-                    default=default,
-                    has_default=has_default,
-                    interface_origin=statement.declaration_id,
-                )
-            )
-        elif isinstance(statement, IRPanelDeclaration):
-            panels.append(statement)
-    final_inputs = project_group_input_layout(tuple(base_inputs), tuple(panels))
-
-    outputs: list[GroupOutputContract] = []
-    used_names = {"Geometry"} if geometry_mode else set()
-    if geometry_mode:
-        outputs.append(GroupOutputContract(0, "Geometry", NFType.GEOMETRY))
-    source_outputs = (
-        body_compilation.output_summary.explicit_outputs
-        if body_compilation.output_summary.explicit_outputs
-        else ((body_compilation.output_summary.auto_output,) if body_compilation.output_summary.auto_output is not None else ())
-    )
-    for requested_name, typ in source_outputs:
-        base = requested_name or "out"
-        display = base
-        suffix = 2
-        while display in used_names:
-            display = f"{base}_{suffix}"
-            suffix += 1
-        used_names.add(display)
-        outputs.append(GroupOutputContract(len(outputs), display, typ))
-    return GroupInterfaceContract(tuple(final_inputs), tuple(outputs))
-
-
 def resolve_module_callable_environment(source_module, resolved_environment, source_callable_session):
     """Build import/definition bindings for a captured module without executing its body.
 
@@ -564,12 +475,17 @@ def analyze_group_source(
     helper_namespace: str = "NodeForge Group",
     source_callable_session=None,
     source_module: SourceModuleSnapshot | None = None,
-    direct_composition: bool = False,
+    direct_composition: bool = True,
     runtime_role=None,
 ) -> SemanticGroupCompilation:
     """Compile one source snapshot to typed group IR before any Blender mutation."""
     if not isinstance(compilation_identity, GroupCompilationIdentity):
         raise TypeError("compilation_identity must be GroupCompilationIdentity")
+    if not direct_composition:
+        raise CompileError(
+            'The generated-root DSL is unsupported; compile top-level statements '
+            'directly into an existing base tree or materialize a typed def'
+        )
     from .runtime_capabilities import RuntimeRole
     role = RuntimeRole.ROOT if runtime_role is None else RuntimeRole(runtime_role)
     if source_module is None:
@@ -647,25 +563,9 @@ def analyze_group_source(
     source_call_graph = resolve_source_call_graph(resolved_source_module)
     preprocessed = resolved_source_module.preprocessed
     stmts = list(preprocessed.statements)
-    callable_names = set(imported) | set(local_function_defs) | set(package_bindings) | set(local_directories)
-    input_names = ([] if direct_composition else sorted(
-        set(_collect_inputs(stmts, extra_builtin_names=callable_names, consts=preprocessed.final_compile_time.values))
-        - set(preprocessed.final_compile_time.values.keys())
-    ))
-    input_types = _infer_input_types(stmts)
-    geometry_mode = False if direct_composition else _needs_geometry_io(stmts)
-
-    initial_runtime_bindings: dict[str, RuntimeBindingSymbol] = {}
-    initial_origins = {}
-    implicit_inputs = []
-    for local_id, input_name in enumerate(input_names):
-        typ = input_types.get(input_name, TYPE_FLOAT)
-        binding_id = BindingId(compilation_identity.owner_scope, local_id)
-        initial_runtime_bindings[input_name] = RuntimeBindingSymbol(binding_id, typ)
-        initial_origins[binding_id] = binding_id
-        default = 1 if typ is TYPE_INT and input_name == "iterations" else (0 if typ is TYPE_INT else 0.0)
-        implicit_inputs.append((input_name, binding_id, typ, default))
-
+    # Root statements have no implicit inputs or outputs. Only typed def
+    # signatures and final return values create physical function interfaces.
+    geometry_mode = False
     callable_environment = CallableEnvironment(
         callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
         local_functions=local_function_defs,
@@ -677,14 +577,14 @@ def analyze_group_source(
     extension_dependencies: dict[tuple[str, ...], str] = {}
     body_compilation = lower_basic_body(
         stmts,
-        initial_runtime_bindings=initial_runtime_bindings,
+        initial_runtime_bindings={},
         initial_compile_time=preprocessed.initial_compile_time,
         reserved_name_labels=reserved_name_labels,
         callable_environment=callable_environment,
         owner_scope=compilation_identity.owner_scope,
         declaration_owner=compilation_identity.declaration_owner,
         geometry_mode=geometry_mode,
-        initial_interface_input_origins=initial_origins,
+        initial_interface_input_origins={},
         compile_time_effects_before=preprocessed.effects_before,
         trailing_compile_time_effects=preprocessed.trailing_effects,
         source_callable_session=source_callable_session,
@@ -694,14 +594,7 @@ def analyze_group_source(
         extension_dependency_sink=extension_dependencies,
         runtime_role=role,
     )
-    interface = (GroupInterfaceContract((), ()) if direct_composition else
-                 _build_interface_contract(
-                     geometry_mode=geometry_mode,
-                     implicit_inputs=tuple(implicit_inputs),
-                     body_compilation=body_compilation,
-                 ))
-    if not direct_composition and not geometry_mode and not interface.outputs:
-        raise CompileError("Script produced no output. Use out = ..., output(...), set_position(...), or store(...)")
+    interface = GroupInterfaceContract((), ())
     return SemanticGroupCompilation(
         source=source,
         identity=compilation_identity,

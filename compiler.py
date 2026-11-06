@@ -28,10 +28,11 @@ class _ResolvedEnvironmentBoundBackend(BlenderGroupBackend):
         return SourceCallableSession(resolved_environment=self._resolved_environment_for_session())
 
     def compile_group_callback(self, source: str, name: str = "NodeForge Group", **kwargs):
-        """Ensure public package builds share one source-call session across both phases."""
-        if kwargs.get("source_callable_session") is None:
-            kwargs["source_callable_session"] = self.new_source_callable_session()
-        return super().compile_group_callback(source, name=name, **kwargs)
+        """Reject the removed raw-source backend entry point."""
+        raise CompileError(
+            'Raw-source backend compilation is unsupported; '
+            'supply prepared typed IR via BlenderGroupBuildRequest'
+        )
 
 
 def _new_group_backend(resolved_environment: ResolvedEnvironment | None = None):
@@ -41,17 +42,10 @@ def _new_group_backend(resolved_environment: ResolvedEnvironment | None = None):
         return resolved_environment if resolved_environment is not None else _make_compilation_environment()
 
     def prepare(source, *, compilation_identity, source_callable_session=None, **kwargs):
-        session = source_callable_session or SourceCallableSession(resolved_environment=environment_for_session())
-        if resolved_environment is not None and session.resolved_environment is not resolved_environment:
-            raise CompileError("Source callable session does not match supplied resolved environment")
-        return analyze_group_source(
-            source,
-            compilation_identity=compilation_identity,
-            resolved_environment=session.resolved_environment,
-            inherited_local_functions=kwargs.get("inherited_local_functions"),
-            inherited_imported_library_functions=kwargs.get("inherited_imported_library_functions"),
-            helper_namespace=kwargs.get("helper_namespace") or "NodeForge Group",
-            source_callable_session=session,
+        """Raw-source backend compilation no longer has a supported root contract."""
+        raise CompileError(
+            'Raw-source backend preparation is unsupported; '
+            'compile an individual def to typed IR before Blender publication'
         )
 
     return _ResolvedEnvironmentBoundBackend(
@@ -62,28 +56,34 @@ def _new_group_backend(resolved_environment: ResolvedEnvironment | None = None):
 
 
 def _prepare_root_build(backend, source: str, *, name: str, existing_group=None):
-    """Resolve final root identity and semantic compilation before Blender mutation."""
-    session = backend.new_source_callable_session()
-    identity = backend.resolve_root_compilation_identity(existing_group)
-    prepared = backend.prepare_source_compilation(
-        source,
-        compilation_identity=identity,
-        helper_namespace=name,
-        source_callable_session=session,
+    """Reject the removed generated-root compilation contract."""
+    raise CompileError(
+        'Generated-root source compilation is removed; '
+        'use the unified function frontend or direct composition'
     )
-    return prepared, session
 
 
 def create_expression_group(source: str, name: str = "NodeForge Group"):
-    """Create a new Geometry Nodes group from one prepared NodeForge compilation."""
-    backend = _new_group_backend()
-    prepared, session = _prepare_root_build(backend, source, name=name)
-    return backend.create_or_update(BlenderGroupBuildRequest(
-        prepared_compilation=prepared,
-        name=name,
-        source_callable_session=session,
-        helper_namespace=name,
-    ))
+    """Materialize exactly one standalone unified `.nf` definition.
+
+    This API no longer accepts a generated-root script or implicit root I/O.
+    Use ``compose_source_initial`` for executable top-level composition.
+    """
+    from uuid import uuid4
+    from .compiler_identities import ModuleId
+    from .semantic.source_modules import parse_source_module, resolve_source_module
+
+    snapshot = parse_source_module(source, ModuleId("ROOT_TEXT", f"standalone:{uuid4().hex}"))
+    resolved = resolve_source_module(snapshot)
+    if resolved.has_executable_statements or len(snapshot.definitions) != 1:
+        raise CompileError(
+            "Creating a standalone Function Node Group requires exactly one def "
+            "and no executable top-level statements; use direct composition otherwise"
+        )
+    definition = snapshot.definition_ref(next(iter(snapshot.definitions)))
+    group = _materialize_standalone_module_definition(snapshot, definition, _new_group_backend())
+    group.name = name
+    return group
 
 
 def compose_source_initial(source: str, target, *, resolved_environment=None,
@@ -123,21 +123,19 @@ def _requires_mesh_compute(prepared) -> bool:
 
 
 def compile_script_auto(source: str, owner=None, name: str = "NodeForge Group"):
-    """Compile ordinary source as a group, or a used Mesh Compute root as a modifier.
+    """Compile top-level `.nf` only into the explicitly supplied base node tree.
 
-    Return (group, installed_modifier). No target is needed to prepare or
-    classify ordinary scripts; runtime-only target validation happens later.
+    ``name`` is retained for callers, not used to create a generated root.
+    Mesh Object/modifier installation belongs to the separate Mesh Compute
+    runtime contract and is not an implicit fallback for this operation.
     """
-    backend = _new_group_backend()
-    prepared, session = _prepare_root_build(backend, source, name=name)
-    if _requires_mesh_compute(prepared):
-        group = _install_prepared_mesh_compute_modifier(backend, prepared, session, owner, name=name)
-        return group, True
-    group = backend.create_or_update(BlenderGroupBuildRequest(
-        prepared_compilation=prepared, name=name, source_callable_session=session,
-        helper_namespace=name,
-    ))
-    return group, False
+    if getattr(owner, 'bl_idname', None) != 'GeometryNodeTree':
+        raise CompileError(
+            'Unified Compile Script requires an existing base GeometryNodeTree; '
+            'generated-root and modifier compilation are unsupported'
+        )
+    compose_source_initial(source, owner)
+    return owner, False
 
 
 def _materialize_standalone_module_definition(snapshot, definition, backend):
@@ -451,17 +449,23 @@ def update_library_catalog_group(group, namespace: str | None = None, name: str 
 
 
 def update_expression_group(group, source: str):
-    """Rebuild an existing Geometry Nodes group from one prepared compilation."""
-    name = getattr(group, "name", "NodeForge Group")
-    backend = _new_group_backend()
-    prepared, session = _prepare_root_build(backend, source, name=name, existing_group=group)
-    return backend.create_or_update(BlenderGroupBuildRequest(
-        prepared_compilation=prepared,
-        name=name,
-        existing_group=group,
-        source_callable_session=session,
-        helper_namespace=name,
-    ))
+    """Update a selected standalone Function Node Group from unified source.
+
+    Updating generated-root scripts is deliberately unsupported. Canonical
+    module definitions instead use the same selected in-place Reload boundary.
+    """
+    if not str(group.get('nodeforge_module_definition') or ''):
+        raise CompileError(
+            'Update requires a canonical MODULE_DEF Function Node Group; '
+            'legacy generated-root scripts are unsupported'
+        )
+    from .compiler_identities import parse_module_definition_function_id
+    function_id = parse_module_definition_function_id(group['nodeforge_module_definition'])
+    if function_id.module.kind != 'ROOT_TEXT':
+        raise CompileError('Use source Reload for Local, Examples and package definitions')
+    return update_library_catalog_group(
+        group, source=source, module_context=function_id.module.origin,
+    )
 
 
 def _blank_mesh_compute_modifier(owner):
