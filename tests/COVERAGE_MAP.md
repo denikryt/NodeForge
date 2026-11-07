@@ -33,6 +33,19 @@ root-group creation are **not** evidence of the unified language contract.
 | **S21 — operators/editor** | `tests/unit/test_unified_editor_signatures.py`, `tests/unit/test_editor_intelligence.py`, `tests/blender/test_unified_ui_integration.py`, `tests/blender/test_unified_catalog_add.py` symbol names, base tree target, Add and detachment. |
 | **S22 — diagnostics and atomicity** | `tests/blender/test_unified_initial_composition_rollback.py`, `tests/blender/test_unified_runtime_capability_preflight.py`, `tests/blender/test_unified_final_regressions.py`, `tests/blender/test_unified_group_authority.py` attempted-node cleanup, nested/resource rollback, destructive extension preflight, bad source and duplicate owners. |
 
+## Issue #48 Semantic Fixes Rev2 (F01–F12)
+
+| Contract | Regression targets |
+| --- | --- |
+| **F01 — isolated mutable CT function state** | `tests/unit/test_rev2_semantic_contracts.py`, `tests/unit/test_compile_time_state.py` independent scan, aliased/nested lists and unsupported resource copying; `tests/blender/test_unified_semantic_scope.py` physical sibling isolation. |
+| **F02 — unknown path/loop soundness** | `tests/unit/test_rev2_semantic_contracts.py`, `tests/unit/test_source_call_graph.py` branch ordering, no cross-arm leakage, conservative joins, zero/many loop iterations and static iteration writes; `tests/blender/test_unified_semantic_scope.py` false recursion and `test_runtime_loop_index_shadowing.py` physical execution. |
+| **F03 — defining-module final CT defaults** | `tests/unit/test_rev2_semantic_contracts.py`, `tests/unit/test_function_signatures.py` default context and caller isolation; `tests/blender/test_unified_semantic_scope.py`, `tests/blender/test_rev2_module_snapshot_reload.py` unlinked socket defaults and in-place Reload. |
+| **F04–F05 — eager pure declarations, lazy physical groups** | `tests/unit/test_rev2_semantic_contracts.py` used/unused invalid contracts; `tests/blender/test_unified_semantic_scope.py`, `tests/blender/test_rev2_module_snapshot_reload.py` negative preflight and no graph changes. |
+| **F06–F09 — lexical ownership and definite assignment** | `tests/unit/test_rev2_semantic_contracts.py` AST inventory, `tests/unit/test_rev2_lexical_runtime.py` parameter/local shadowing, alias calls and read-before-assignment; `tests/blender/test_unified_semantic_scope.py` evaluated shadowing and rollback-safe failure; `tests/blender/test_runtime_loop_index_shadowing.py` dynamic/static loop index restoration. |
+| **F10 — source attempt and in-place update isolation** | `tests/blender/test_rev2_module_snapshot_reload.py`, `tests/blender/test_unified_selected_unique_reload.py`, `tests/blender/test_module_compile_time_fingerprints.py` current Local/package snapshots, owner pointers and shared/unique preservation. |
+| **F11 — process-local UI lifecycle** | `tests/blender/test_addon_lifecycle.py` repeated register/unregister, partial class/editor registration cleanup, generated resource preservation, editor catalog refresh and restart. |
+| **F12 — retained scope boundaries** | Existing `test_unified_runtime_capability_preflight.py`, `test_unified_initial_composition_rollback.py` and source-syntax negative tests retain runtime capability, failure-only cleanup and no selective level-0 reconciliation. Mesh Compute migration remains separate. |
+
 ## Reusable infrastructure (not legacy source-language compatibility)
 
 - `tests/unit/test_semantic_ir.py`, `tests/unit/test_semantic_analysis.py`,
@@ -70,5 +83,6 @@ not affect the existing runtime backend/resource tests, which remain active.
 The old erosion example remains a legacy fixture and is not documented as a
 working unified `.nf` example.
 
-The existing Blender add-on double-unregister failure is tracked separately as a
-pre-#48 baseline failure; it is not converted to an expected failure.
+The previously observed Blender add-on double-unregister failure was fixed by
+Rev2 F11. The full **non-Mesh Compute** Blender suite now includes this
+lifecycle regression as a passing test rather than a baseline exception.

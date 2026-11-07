@@ -659,3 +659,12 @@ lifecycle.
 - Carry compile-time assignments from one statically unrolled loop iteration to the next when resolving intra-module function call edges and definition-only entries.
 - Preserve the loop index's lexical binding and pass the final compile-time state to following statements, matching function-body lowering.
 - Add positive and negative semantic/Blender regressions for cross-iteration calls, nested static loops, recursion, unreachable callees, and numerical evaluation.
+
+## 0.89.0
+
+- Isolated supported mutable compile-time state per function and speculative runtime control-flow path; analysis of unknown loops accounts for zero and multiple iterations while static loops continue sequentially.
+- Made parameter defaults use the defining module's final captured compile-time revision and validated every selected source definition before initial composition or source Reload, without eagerly materializing unused groups.
+- Unified lexical function scope across call-graph analysis and runtime lowering: local parameters/targets shadow outer functions/imports/constants; read-before-assignment and non-callable local calls fail with source locations; loop indices retain temporary scope.
+- Added physical Blender regressions for source isolation, declaration preflight, group identity and final defaults, including local/shared/unique Reload.
+- Made NodeForge add-on/editor registration and unregistration idempotent with partial-registration rollback, while preserving generated user resources.
+- Kept root-only Mesh Compute migration and level-zero selective reconciliation outside this change.
