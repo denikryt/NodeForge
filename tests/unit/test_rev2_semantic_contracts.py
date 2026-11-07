@@ -375,3 +375,54 @@ def test_imported_module_preflight_validates_unselected_definition():
     with pytest.raises(CompileError, match="bad.*invalid default"):
         session.preflight_module_contracts(snapshot)
     assert not session.prepared
+
+
+def test_function_lexical_inventory_separates_locals_from_temporary_loop_index():
+    import ast
+    from NodeForge.semantic.source_bindings import collect_function_lexical_inventory
+    source = """def f(h: Float):
+    if h > 0:
+        value = h
+    else:
+        other = 1
+    for i in repeat_range(3):
+        value += i
+    return value"""
+    fn = ast.parse(source).body[0]
+    inventory = collect_function_lexical_inventory(fn)
+    assert inventory.parameters == {"h"}
+    assert inventory.locals == {"value", "other"}
+    assert inventory.owned_names == {"value", "other", "h"}
+    assert inventory.loop_targets[id(fn.body[1])] == {"i"}
+    assert "i" not in inventory.owned_names
+
+
+def test_function_lexical_inventory_recognizes_later_assignments_and_skips_nested_scope():
+    import ast
+    from NodeForge.semantic.source_bindings import collect_function_lexical_inventory
+    fn = ast.parse("""def f(x: Float):
+    before = y
+    def nested():
+        secret = 2
+        return secret
+    if x > 1:
+        y = 1
+    else:
+        z = 2
+    return before""").body[0]
+    inventory = collect_function_lexical_inventory(fn)
+    assert {"x", "before", "y", "z"}.issubset(inventory.owned_names)
+    assert "secret" not in inventory.owned_names
+
+
+def test_function_lexical_alias_inventory_preserves_canonical_reference():
+    import ast
+    from NodeForge.semantic.source_bindings import collect_function_lexical_inventory
+    module = ast.parse("""def f():
+    helper = g
+    return helper()
+def g():
+    return 1""")
+    ref = _resolved(ast.unparse(module)).snapshot.definition_ref("g")
+    inventory = collect_function_lexical_inventory(module.body[0], {"g": ref})
+    assert inventory.source_aliases["helper"] == ref

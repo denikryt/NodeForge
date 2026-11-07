@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Mapping
 
 from ..compiler_identities import SourceDefinitionRef
 from ..errors import CompileError
@@ -117,3 +118,85 @@ class LocalDirectoryNamespaceBinding:
 
 __all__ = ["LibraryBinding", "PackageNamespaceBinding", "LocalDirectoryNamespaceBinding",
            "SourceModuleNamespaceBinding", "SourceDefinitionBinding"]
+
+
+@dataclass(frozen=True)
+class FunctionLexicalInventory:
+    """AST-only ownership inventory, independent of execution-path assignment.
+
+    Parameters and ordinary assignment targets are function-local from entry;
+    loop-target names are temporary to their own `for` statement. Whether a
+    local currently has a value is a separate definite-assignment question.
+    """
+
+    parameters: frozenset[str]
+    locals: frozenset[str]
+    loop_targets: Mapping[int, frozenset[str]]
+    source_aliases: Mapping[str, SourceDefinitionRef]
+
+    def __post_init__(self):
+        from types import MappingProxyType
+        object.__setattr__(self, "loop_targets", MappingProxyType(dict(self.loop_targets)))
+        object.__setattr__(self, "source_aliases", MappingProxyType(dict(self.source_aliases)))
+
+    @property
+    def owned_names(self) -> frozenset[str]:
+        return self.parameters | self.locals
+
+
+def collect_function_lexical_inventory(
+    fn, definition_refs: Mapping[str, SourceDefinitionRef] | None = None,
+) -> FunctionLexicalInventory:
+    """Collect lexical source bindings without executing code or resolving calls.
+
+    Nested FunctionDefs own their bodies and are not traversed. A for-target
+    receives a temporary nested scope; ordinary assignments in its body remain
+    ordinary function-owned locals, subject to definite-assignment checks.
+    """
+    import ast
+
+    if not isinstance(fn, ast.FunctionDef):
+        raise TypeError("Lexical inventory requires one FunctionDef")
+    refs = definition_refs or {}
+    locals_: set[str] = set()
+    loops: dict[int, frozenset[str]] = {}
+    aliases: dict[str, SourceDefinitionRef] = {}
+
+    def names(target):
+        if isinstance(target, ast.Name):
+            return {target.id}
+        if isinstance(target, (ast.Tuple, ast.List)):
+            return set().union(*(names(item) for item in target.elts))
+        return set()
+
+    def visit(stmt):
+        if isinstance(stmt, ast.FunctionDef):
+            return
+        if isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                locals_.update(names(target))
+            if (len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
+                    and isinstance(stmt.value, ast.Name) and stmt.value.id in refs):
+                aliases[stmt.targets[0].id] = refs[stmt.value.id]
+            return
+        if isinstance(stmt, (ast.AugAssign, ast.AnnAssign)):
+            locals_.update(names(stmt.target))
+            return
+        if isinstance(stmt, ast.If):
+            for sub in (*stmt.body, *stmt.orelse):
+                visit(sub)
+            return
+        if isinstance(stmt, ast.For):
+            loops[id(stmt)] = frozenset(names(stmt.target))
+            for sub in (*stmt.body, *stmt.orelse):
+                visit(sub)
+            return
+
+    for statement in fn.body:
+        visit(statement)
+    return FunctionLexicalInventory(
+        frozenset(arg.arg for arg in fn.args.args),
+        frozenset(locals_), loops, aliases,
+    )
+
+__all__ += ["FunctionLexicalInventory", "collect_function_lexical_inventory"]
