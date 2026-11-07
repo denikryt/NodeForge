@@ -19,7 +19,6 @@ from .constants import TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
 from .builtin_registry import BUILTIN_NAMES
 from .consteval import ConstEvalUnavailable, _const_eval
 from .ir import IRInputDeclaration, IRPanelDeclaration
-from .source_callables import value_type_for_const
 
 
 @dataclass(frozen=True)
@@ -97,26 +96,43 @@ def _panel_declaration(call: ast.Call, origins: Mapping[str, InputDeclarationId]
     return IRPanelDeclaration(tuple(origins[item] for item in names), name, collapsed)
 
 
+def validate_function_parameters(fn: ast.FunctionDef) -> None:
+    """Reject unsupported parameter declarations at the source AST boundary.
+
+    Every declaration is checked, including definitions that are never called
+    or physically materialized. Defaults are evaluated later in their module's
+    compile-time environment, after this structural check.
+    """
+    if fn.args.posonlyargs or fn.args.kwonlyargs or fn.args.vararg or fn.args.kwarg or fn.args.kw_defaults:
+        raise CompileError(f"{fn.name}() accepts only ordinary named positional-or-keyword parameters")
+    for arg in fn.args.args:
+        name = arg.arg
+        location = f"line {arg.lineno}, column {arg.col_offset + 1}"
+        if name == "__unique__":
+            raise CompileError(f"{fn.name}() cannot declare compiler-reserved __unique__ at {location}")
+        if name in TYPE_TOKEN_NAMES or name in _ALLOWED_CONSTS or name in BUILTIN_NAMES or name in {"output", "store", "panel"}:
+            raise CompileError(f"{fn.name}() parameter {name!r} conflicts with a reserved source name at {location}")
+        if arg.annotation is None:
+            raise CompileError(f"{fn.name}(): parameter {name!r} requires an explicit type annotation at {location}")
+        resolve_parameter_annotation(arg.annotation)
+
+
 def compile_function_signature(
     fn: ast.FunctionDef,
     *,
     owner_scope: str,
     declaration_owner: str,
-    inferred_types: Mapping[str, NFType] | None = None,
     compile_time_values: Mapping[str, object] | None = None,
 ) -> FunctionSignature:
     """Compile typed parameters directly from a FunctionDef into existing IR.
 
-    Independently materialized unannotated arguments require a provably unique
-    type from a declared default or the caller's already-resolved type facts.
-    A missing declared '=' is represented as required, not a scalar None default.
+    Parameter types come only from source annotations. Defaults are evaluated
+    within the defining module, never used to select a parameter type.
     """
     if not isinstance(fn, ast.FunctionDef):
         raise TypeError("Function signature source must be ast.FunctionDef")
-    if fn.args.posonlyargs or fn.args.kwonlyargs or fn.args.vararg or fn.args.kwarg or fn.args.kw_defaults:
-        raise CompileError(f"{fn.name}() accepts only ordinary named positional-or-keyword parameters")
+    validate_function_parameters(fn)
     values = dict(compile_time_values or {})
-    inference = dict(inferred_types or {})
     arguments = fn.args.args
     default_offset = len(arguments) - len(fn.args.defaults)
     declarations = []
@@ -124,31 +140,22 @@ def compile_function_signature(
     origins = {}
     for index, arg in enumerate(arguments):
         name = arg.arg
-        if name == "__unique__":
-            raise CompileError(f"{fn.name}() cannot declare compiler-reserved __unique__")
-        if name in TYPE_TOKEN_NAMES or name in _ALLOWED_CONSTS or name in BUILTIN_NAMES or name in {"output", "store", "panel"}:
-            raise CompileError(f"{fn.name}() parameter {name!r} conflicts with a reserved source name")
         typ, label = resolve_parameter_annotation(arg.annotation)
         has_default = index >= default_offset
         default = None
         if has_default:
+            expression = fn.args.defaults[index - default_offset]
+            # Parameters are runtime inputs, even when an identically named
+            # module compile-time constant exists in the source snapshot.
+            parameters = {parameter.arg for parameter in arguments}
+            if any(isinstance(node, ast.Name) and node.id in parameters
+                   for node in ast.walk(expression)):
+                raise CompileError(f"{fn.name}() parameter {name!r} default cannot reference a runtime parameter")
             try:
-                evaluated = _const_eval(fn.args.defaults[index - default_offset], values)
+                evaluated = _const_eval(expression, values)
             except ConstEvalUnavailable as exc:
                 raise CompileError(f"{fn.name}() parameter {name!r} requires a compile-time default") from exc
-            if typ is None:
-                typ = value_type_for_const(evaluated)
             default = canonicalize_group_input_default(typ, evaluated)
-        if typ is None:
-            typ = inference.get(name)
-        if not isinstance(typ, NFType):
-            raise CompileError(f"{fn.name}() cannot infer type for parameter {name!r}; add an annotation")
-        if name in inference and inference[name] is not typ:
-            # Int is accepted at Float call sites, but a specialized function's
-            # declared inputs must remain the same type on every materialization.
-            from .callable_contracts import source_argument_type_matches
-            if not source_argument_type_matches(typ, inference[name]):
-                raise CompileError(f"{fn.name}() parameter {name!r} conflicts with its inferred type")
         binding = BindingId(owner_scope, index)
         origin = InputDeclarationId(declaration_owner, name, 0)
         origins[name] = origin
@@ -183,4 +190,4 @@ def compile_function_signature(
     )
 
 
-__all__ = ["FunctionSignature", "compile_function_signature", "resolve_parameter_annotation"]
+__all__ = ["FunctionSignature", "compile_function_signature", "resolve_parameter_annotation", "validate_function_parameters"]

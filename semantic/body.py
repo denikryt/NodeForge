@@ -1543,6 +1543,18 @@ def lower_basic_body(
 
             if isinstance(stmt, ast.For):
                 parsed = parse_repeat_range_for(stmt)
+                if parsed is None and terminal_return_shape is not None:
+                    # A one-argument range over a runtime parameter uses the
+                    # existing Repeat Zone contract; static ranges still unroll.
+                    iterator = stmt.iter
+                    if (isinstance(iterator, ast.Call)
+                            and isinstance(iterator.func, ast.Name)
+                            and iterator.func.id == 'range'
+                            and len(iterator.args) == 1 and not iterator.keywords
+                            and not stmt.orelse and isinstance(stmt.target, ast.Name)
+                            and isinstance(iterator.args[0], ast.Name)
+                            and iterator.args[0].id in active.runtime_bindings):
+                        parsed = iterator.args[0], stmt.body, stmt.target.id
                 if parsed is None:
                     unpacking_target_names = _unpacking_loop_target_names(
                         stmt.target, stmt.body,

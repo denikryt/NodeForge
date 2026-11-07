@@ -31,7 +31,6 @@ def compile_function_definition(
     compilation_identity: GroupCompilationIdentity,
     callable_environment: CallableEnvironment,
     resolved_environment,
-    inferred_parameter_types: Mapping[str, NFType] | None = None,
     compile_time_values: Mapping[str, object] | None = None,
     source_callable_session=None,
     helper_namespace: str = "Function",
@@ -57,7 +56,6 @@ def compile_function_definition(
         fn,
         owner_scope=compilation_identity.owner_scope,
         declaration_owner=compilation_identity.declaration_owner,
-        inferred_types=inferred_parameter_types,
         compile_time_values=values,
     )
     for statement in fn.body:
@@ -88,6 +86,7 @@ def compile_function_definition(
         body_stmts,
         initial_compile_time=values,
         shadowed_names=(arg.arg for arg in fn.args.args),
+        runtime_range_names=(arg.arg for arg in fn.args.args),
     )
     if not preprocessed.statements or preprocessed.statements[-1] is not fn.body[-1]:
         raise CompileError(f"{fn.name}() return must remain terminal after preprocessing")

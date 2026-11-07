@@ -135,18 +135,23 @@ def test_invalid_panels_fail_before_body_lowering(body):
         _signature(f'def fn(value: Float):\n    {body}\n    return value')
 
 
-def test_unannotated_default_or_explicit_inference_is_supported():
-    """Type facts from a default or unique call specialization can type a parameter."""
-    assert _signature('def fn(value=3):\n    return value').logical_inputs[0].typ is NFType.INT
-    required = _signature('def fn(value):\n    return value', inferred_types={'value': NFType.VECTOR})
-    assert required.logical_inputs[0].typ is NFType.VECTOR
-    assert not required.logical_inputs[0].has_default
+@pytest.mark.parametrize('parameter', [
+    'value', 'value=3',
+])
+def test_function_parameters_require_annotations_even_with_defaults(parameter):
+    """No default or caller specialization can supply a missing declaration type."""
+    with pytest.raises(CompileError, match="fn\(\): parameter 'value' requires an explicit type annotation at line 1"):
+        _signature(f'def fn({parameter}):\n    return value')
 
 
-def test_unannotated_uninferrable_parameter_does_not_guess_float():
-    """An unknown required parameter cannot acquire an arbitrary Float default."""
-    with pytest.raises(CompileError, match='cannot infer type'):
-        _signature('def fn(value):\n    return value')
+def test_default_uses_declaring_module_constants_and_rejects_parameter_names():
+    """Defaults accept CT module values, never runtime bindings shadowing them."""
+    signature = _signature('def fn(amount: Float = STEP * 3):\n    return amount',
+                           compile_time_values={'STEP': 2.0})
+    assert signature.logical_inputs[0].default == 6.0
+    with pytest.raises(CompileError, match='runtime parameter'):
+        _signature('def fn(a: Float, b: Float = a):\n    return b',
+                   compile_time_values={'a': 9.0})
 
 
 def test_ir_input_declaration_rejects_absent_default_with_value():
@@ -187,3 +192,28 @@ def test_ir_optional_input_must_have_a_supported_real_default():
             BindingId('scope', 0), InputDeclarationId('def', 'geo', 0),
             'geo', 'Geometry', NFType.GEOMETRY, 2.0, True,
         )
+
+
+@pytest.mark.parametrize('body', [
+    'return count',
+    'return count + 1',
+    'for i in range(count):\n        count = count + 1\n    return count',
+    'for i in repeat_range(count):\n        count = count + 1\n    return count',
+    'if False:\n        for i in range(count):\n            count = count + 1\n    return 0',
+])
+def test_function_body_never_supplies_missing_parameter_type(body):
+    """Typed body operations and reachable branches cannot define input types."""
+    source = 'def fn(count):\n    ' + body
+    with pytest.raises(CompileError, match='requires an explicit type annotation'):
+        _signature(source)
+
+
+def test_typed_runtime_count_is_int_without_body_inference():
+    """Explicit Int remains the only parameter type for supported runtime loops."""
+    assert _signature('def fn(count: Int):\n    return count').logical_inputs[0].typ is NFType.INT
+
+
+def test_float_annotation_is_not_changed_by_runtime_count_operations():
+    """The declaration remains Float; semantic lowering checks invalid uses."""
+    signature = _signature('def fn(count: Float):\n    for i in range(count):\n        x = i\n    return count')
+    assert signature.logical_inputs[0].typ is NFType.FLOAT

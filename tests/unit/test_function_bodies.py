@@ -14,7 +14,7 @@ from NodeForge.semantic.function_bodies import compile_function_definition
 from NodeForge.semantic.ir import IRInputDeclaration, IROutput, IRPanelDeclaration
 
 
-def _compile(source, *, inferred=None, constants=None):
+def _compile(source, *, constants=None):
     """Compile one AST definition with a detached empty source environment."""
     fn = ast.parse(source).body[0]
     env = ResolvedEnvironment({
@@ -26,7 +26,6 @@ def _compile(source, *, inferred=None, constants=None):
         fn, compilation_identity=GroupCompilationIdentity(None, 'FUNCTION/owner', 'module', 'decl'),
         callable_environment=CallableEnvironment(frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES), {}, {}),
         resolved_environment=env,
-        inferred_parameter_types=inferred,
         compile_time_values=constants,
     )
 

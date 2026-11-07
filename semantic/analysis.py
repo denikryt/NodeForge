@@ -1753,18 +1753,27 @@ def analyze_expression(expr, environment):
                 binding = resolved.target
                 snapshot = binding.snapshot
                 fn = snapshot.definitions[binding.definition.name]
-                from .function_signatures import compile_function_signature, resolve_parameter_annotation
+                from .function_signatures import compile_function_signature
                 if fn.args.posonlyargs or fn.args.vararg or fn.args.kwarg or fn.args.kwonlyargs or fn.args.kw_defaults:
                     raise CompileError(f"{name}() accepts only ordinary named parameters")
                 parameters = tuple(arg.arg for arg in fn.args.args)
                 default_offset = len(parameters) - len(fn.args.defaults)
-                declarations = {
-                    arg.arg: resolve_parameter_annotation(arg.annotation)[0]
-                    for arg in fn.args.args
-                }
+                # The authoritative signature precedes argument binding and uses
+                # the defining module's own compile-time values, not the caller's.
+                if binding.definition.module in environment.callable_environment.local_definition_refs.values():
+                    module_callable_environment = environment.callable_environment
+                    module_values = environment.const_eval_values
+                else:
+                    module_callable_environment, module_values = session.callable_environment_for_module(snapshot)
+                definition_owner = binding.definition.stable_key()
+                initial_signature = compile_function_signature(
+                    fn, owner_scope=definition_owner, declaration_owner=definition_owner,
+                    compile_time_values=module_values,
+                )
+                declarations = {item.target_name: item.typ for item in initial_signature.declarations}
                 templates = tuple(SourceCallableParameter(
                     input_index=i, source_name=arg.arg, display_name=arg.arg,
-                    keyword_key=arg.arg, typ=declarations[arg.arg] or NFType.FLOAT,
+                    keyword_key=arg.arg, typ=declarations[arg.arg],
                     public=True, has_default=i >= default_offset,
                 ) for i, arg in enumerate(fn.args.args))
                 bound_pairs = bind_unified_source_arguments(
@@ -1772,24 +1781,15 @@ def analyze_expression(expr, environment):
                     tuple((item.arg, item.value) for item in cleaned_call.keywords), name,
                 )
                 bound_nodes: dict[str, ast.expr] = {}
-                inferred: dict[str, NFType] = {}
                 for parameter, child in bound_pairs:
                     child_fact = analyze(child)
                     if child_fact.semantic_payload is not None or isinstance(child_fact.result_shape, ArrayResultShape):
                         raise CompileError(f"{name}() arguments must have supported runtime types")
                     actual = _require_runtime_type(child_fact, "module definition argument")
                     declared = declarations[parameter.source_name]
-                    if declared is not None and not source_argument_type_matches(declared, actual):
+                    if not source_argument_type_matches(declared, actual):
                         raise CompileError(f"{name}() parameter {parameter.source_name!r} expects {declared}, got {actual}")
                     bound_nodes[parameter.source_name] = child
-                    inferred[parameter.source_name] = declared or actual
-                definition_owner = binding.definition.stable_key()
-                initial_signature = compile_function_signature(
-                    fn, owner_scope=definition_owner,
-                    declaration_owner=definition_owner,
-                    inferred_types=inferred,
-                    compile_time_values=environment.const_eval_values,
-                )
                 types_by_name = {item.target_name: item.typ for item in initial_signature.declarations}
                 function_id = module_definition_function_id(
                     binding.definition, serialize_local_signature(parameters, types_by_name)
@@ -1802,15 +1802,8 @@ def analyze_expression(expr, environment):
                 identity = GroupCompilationIdentity(None, owner_scope, definition_owner, function_id.stable_key())
                 # Imported source modules have independent lexical imports and
                 # constants; never inherit caller bindings or run imported body.
-                if binding.definition.module in environment.callable_environment.local_definition_refs.values():
-                    module_callable_environment = environment.callable_environment
-                    module_values = environment.const_eval_values
-                else:
-                    from .group import resolve_module_callable_environment
-                    module_callable_environment, module_values = session.callable_environment_for_module(snapshot)
                 prepared = session.prepare_definition(
                     function_id=function_id, identity=identity, fn=fn,
-                    parameter_types=inferred,
                     callable_environment=module_callable_environment,
                     compile_time_values=module_values,
                     helper_namespace=fn.name,
@@ -1854,16 +1847,23 @@ def analyze_expression(expr, environment):
                 fn = environment.callable_environment.local_functions[name]
                 if not isinstance(fn, ast.FunctionDef):
                     raise CompileError(f"Internal error: local function {name!r} is not an AST definition")
-                from .function_signatures import compile_function_signature, resolve_parameter_annotation
+                from .function_signatures import compile_function_signature
                 if fn.args.posonlyargs or fn.args.vararg or fn.args.kwarg or fn.args.kwonlyargs or fn.args.kw_defaults:
                     raise CompileError(f"{name}() accepts only ordinary named parameters")
                 params = tuple(argument.arg for argument in fn.args.args)
                 offset = len(params) - len(fn.args.defaults)
-                declared = {argument.arg: resolve_parameter_annotation(argument.annotation)[0] for argument in fn.args.args}
+                definition_owner = environment.source_definition_owner or environment.source_owner_scope
+                if not definition_owner:
+                    raise CompileError("Internal error: source call has no definition owner")
+                preliminary_signature = compile_function_signature(
+                    fn, owner_scope=definition_owner, declaration_owner=definition_owner,
+                    compile_time_values=environment.const_eval_values,
+                )
+                declared = {item.target_name: item.typ for item in preliminary_signature.declarations}
                 templates = tuple(
                     SourceCallableParameter(
                         input_index=index, source_name=param, display_name=param,
-                        keyword_key=param, typ=declared[param] or NFType.FLOAT,
+                        keyword_key=param, typ=declared[param],
                         public=True, has_default=index >= offset,
                     )
                     for index, param in enumerate(params)
@@ -1873,7 +1873,6 @@ def analyze_expression(expr, environment):
                     tuple((keyword.arg, keyword.value) for keyword in cleaned_call.keywords), name,
                 )
                 bound_nodes: dict[str, ast.expr] = {}
-                bound_types: dict[str, NFType] = {}
                 for parameter, child in bound_pairs:
                     child_fact = analyze(child)
                     if child_fact.semantic_payload is not None:
@@ -1882,21 +1881,12 @@ def analyze_expression(expr, environment):
                         raise CompileError(f"{name}() arguments must have supported runtime types")
                     actual_type = _require_runtime_type(child_fact, "source function argument")
                     expected = declared[parameter.source_name]
-                    if expected is not None and not source_argument_type_matches(expected, actual_type):
+                    if not source_argument_type_matches(expected, actual_type):
                         raise CompileError(
                             f"{name}() parameter {parameter.source_name!r} expects {expected}, got {actual_type}"
                         )
                     bound_nodes[parameter.source_name] = child
-                    bound_types[parameter.source_name] = expected or actual_type
 
-                definition_owner = environment.source_definition_owner or environment.source_owner_scope
-                if not definition_owner:
-                    raise CompileError("Internal error: source call has no definition owner")
-                # Resolve optional unbound parameter types from their declarations/defaults.
-                preliminary_signature = compile_function_signature(
-                    fn, owner_scope=definition_owner, declaration_owner=definition_owner,
-                    inferred_types=bound_types, compile_time_values=environment.const_eval_values,
-                )
                 signature_types = {item.target_name: item.typ for item in preliminary_signature.declarations}
                 signature = serialize_local_signature(params, signature_types)
                 function_id = local_function_id(definition_owner, fn.name, signature)
@@ -1920,7 +1910,6 @@ def analyze_expression(expr, environment):
                     function_id=function_id,
                     identity=identity,
                     fn=fn,
-                    parameter_types=bound_types,
                     callable_environment=environment.callable_environment,
                     compile_time_values=environment.const_eval_values,
                     helper_namespace=environment.helper_namespace,

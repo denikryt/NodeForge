@@ -248,6 +248,7 @@ def parse_source_module(source: str, module_id: ModuleId) -> SourceModuleSnapsho
     if not isinstance(module_id, ModuleId):
         raise TypeError("module_id must be ModuleId")
     tree = _parse_source_tree(source)
+    from .function_signatures import validate_function_parameters
     imports = []
     functions = {}
     assignments = []
@@ -256,6 +257,7 @@ def parse_source_module(source: str, module_id: ModuleId) -> SourceModuleSnapsho
         if isinstance(statement, ast.ImportFrom):
             imports.append(statement)
         elif isinstance(statement, ast.FunctionDef):
+            validate_function_parameters(statement)
             if statement.name in functions:
                 raise CompileError(
                     f"Duplicate function {statement.name!r} at "

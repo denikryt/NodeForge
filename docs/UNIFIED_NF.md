@@ -36,7 +36,7 @@ Cycles between declarations, including self-recursion, are errors.
 
 ## Function signatures and outputs
 
-Parameter order is the logical positional order. Keywords use the **exact source parameter identifiers**. Supported types use `Float`, `Int`, `Bool`, `Vector`, `Geometry`, `Rotation`, `String`, `Object`, `Material`, `Bundle`, and other forms enumerated by the current `NFType` contract. The form `Type["Socket Label"]` changes only the socket's display label. A parameter without `=` is required in an explicit DSL call; Blender's native unlinked socket value does not make it optional. A parameter with `=` has a compile-time-validated default. Omitting an optional parameter leaves its input socket unlinked.
+Parameter order is the logical positional order. Keywords use the **exact source parameter identifiers**. Supported types use `Float`, `Int`, `Bool`, `Vector`, `Geometry`, `Rotation`, `String`, `Object`, `Material`, `Bundle`, and other forms enumerated by the current `NFType` contract. The form `Type["Socket Label"]` changes only the socket's display label. Every parameter requires an explicit type annotation. A parameter without `=` is required in an explicit DSL call; Blender's native unlinked socket value does not make it optional. A parameter with `=` has a compile-time-validated default evaluated from constants in the defining module. Parameter types are never inferred from default values, the function body or call arguments. A default cannot refer to runtime parameters, even when they share a name with a module constant. Omitting an optional parameter leaves its input socket unlinked.
 
 ```python
 def translate(geo: Geometry, by: Vector["Offset"] = vector(0, 0, 1)) -> Geometry:
@@ -76,9 +76,25 @@ def arrange(geometry: Geometry) -> Geometry:
     return shapes.move(geometry, offset=vector(0, 0, 1))
 ```
 
+## Runtime loop counts
+
+A runtime range count is an explicitly typed `Int` parameter. For example:
+
+```python
+def accumulate(count: Int) -> Float:
+    amount = 0.0
+    for i in range(count):
+        amount = amount + 1.0
+    return amount
+```
+
+Runtime `range(count)` compiles through a Repeat Zone; compile-time integer
+ranges retain their compile-time behavior. Neither loop syntax nor a call
+argument determines the type of an unannotated parameter.
+
 ## Identity, sharing and updates
 
-A function's source module, name and resolved input-type specialization determine its canonical definition identity. Ordinary repeated calls share a backing `GeometryNodeTree` when the existing ownership policy allows it. `__unique__=True` chooses a distinct function-instance owner. Updating a canonical Function Node Group recompiles it **in place**, retaining the datablock pointer and compatible links/default overrides of its Group Node users.
+A function's source module, name and declared input-type signature determine its canonical definition identity. Ordinary repeated calls share a backing `GeometryNodeTree` when the existing ownership policy allows it. `__unique__=True` chooses a distinct function-instance owner. Updating a canonical Function Node Group recompiles it **in place**, retaining the datablock pointer and compatible links/default overrides of its Group Node users.
 
 **Make Single User** in Blender creates an independent datablock but copies NodeForge's authoritative source-owner metadata. If the copy and original have identical metadata, both automatic canonical lookup and explicitly selected source Reload reject the ambiguity before changing either. Select the user-created copy and click **Detach Selected Copy**. This removes only the authoritative lookup attributes; the copy's graph and generated-resource provenance are retained. The original can then be updated canonically. A detached copy is no longer an eligible canonical source Reload target. Distinct `__unique__` instance keys are not conflicting owners.
 

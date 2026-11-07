@@ -63,7 +63,7 @@ def constant_entry(x: Float) -> Float:
 def test_ambiguous_untyped_definition_only_entry_is_rejected():
     """An entry requiring unspecified type inference must not become arbitrary Float."""
     group = bpy.data.node_groups.new('NFTest_untyped_entry', 'GeometryNodeTree')
-    with pytest.raises(CompileError, match='cannot infer type'):
+    with pytest.raises(CompileError, match='requires an explicit type annotation'):
         compiler.compose_source_initial('''def ambiguous(x):
     return x
 ''', group)

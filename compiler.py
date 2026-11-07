@@ -173,7 +173,7 @@ def _materialize_standalone_module_definition(snapshot, definition, backend):
     owner_scope = function_materialization_owner_scope(materialization)
     identity = GroupCompilationIdentity(None, owner_scope, definition.stable_key(), function_id.stable_key())
     prepared = session.prepare_definition(
-        function_id=function_id, identity=identity, fn=fn, parameter_types=types,
+        function_id=function_id, identity=identity, fn=fn,
         callable_environment=environment, compile_time_values=compile_time,
         source_module=snapshot, helper_namespace=fn.name,
     )

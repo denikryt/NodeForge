@@ -115,7 +115,7 @@ def _place_definition_entries(prepared, context, snapshot):
         identity = GroupCompilationIdentity(None, owner_scope, reference.stable_key(), function_id.stable_key())
         prepared_callable = session.prepare_definition(
             function_id=function_id, identity=identity, fn=fn,
-            parameter_types=types, callable_environment=env,
+            callable_environment=env,
             compile_time_values=compile_time_values, source_module=snapshot,
             helper_namespace=fn.name,
         )
