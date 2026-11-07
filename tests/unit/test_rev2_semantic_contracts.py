@@ -48,7 +48,6 @@ def g():
     assert ("b", "g") not in _edges(source)
 
 
-@pytest.mark.xfail(strict=True, reason="F02: speculative if arms must be isolated")
 def test_runtime_if_sibling_arm_cannot_see_other_arm_append():
     source = '''L = [1]
 def f(flag: Bool):
@@ -115,3 +114,64 @@ def test_foreign_constants_are_not_deepcopied_or_shared_with_function():
     detached = detached_compile_time_mapping({"foreign": original})
     assert detached["foreign"] is not original
     assert type(detached["foreign"]).__name__ == "_UnsupportedConstEvalValue"
+
+
+def test_post_join_possible_append_keeps_reachable_call():
+    source = """L = [1]
+def f(flag: Bool):
+    if flag:
+        L.append(2)
+    if len(L) == 2:
+        return g()
+    return 1
+def g():
+    return 2"""
+    assert ("f", "g") in _edges(source)
+
+
+def test_runtime_if_sibling_order_cannot_create_false_recursion():
+    first = """L = [1]
+def unused(flag: Bool):
+    if flag:
+        L.append(2)
+    else:
+        if len(L) == 2:
+            return unused(flag)
+    return 0
+def ok():
+    return 1"""
+    reversed_arms = first.replace(
+        "if flag:\n        L.append(2)\n    else:\n        if len(L) == 2:\n            return unused(flag)",
+        "if flag:\n        if len(L) == 2:\n            return unused(flag)\n    else:\n        L.append(2)",
+    )
+    assert not _edges(first)
+    assert not _edges(reversed_arms)
+
+
+def test_speculative_alias_append_invalidates_outer_mutable_ancestor():
+    source = """L = [[1]]
+def f(flag: Bool):
+    A = L[0]
+    if flag:
+        A.append(2)
+    if len(L[0]) == 2:
+        return g()
+    return 1
+def g():
+    return 2"""
+    assert ("f", "g") in _edges(source)
+
+
+def test_read_only_if_join_retains_inherited_list_fact():
+    source = """L = [1]
+def f(flag: Bool):
+    if flag:
+        x = 1
+    else:
+        x = 2
+    if len(L) == 2:
+        return g()
+    return 1
+def g():
+    return 2"""
+    assert ("f", "g") not in _edges(source)

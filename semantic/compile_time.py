@@ -67,13 +67,15 @@ def _seed_const_copy_memo(value, memo, seen):
     memo[id(value)] = _UnsupportedConstEvalValue()
 
 
-def detached_compile_time_mapping(values: Mapping[str, object]) -> dict[str, object]:
+def detached_compile_time_mapping(
+    values: Mapping[str, object], *, copy_memo: dict[int, object] | None = None,
+) -> dict[str, object]:
     """Isolate supported compile-time values for one function or speculative path.
 
     Objects outside the supported constant domain are never deep-copied and
     never become directly accessible as compiler-owned constants.
     """
-    memo: dict[int, object] = {}
+    memo: dict[int, object] = {} if copy_memo is None else copy_memo
     seen: set[int] = set()
     for value in values.values():
         _seed_const_copy_memo(value, memo, seen)

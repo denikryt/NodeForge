@@ -15,7 +15,10 @@ from typing import Mapping
 from ..compiler_identities import ModuleId, SourceDefinitionRef
 from ..errors import CompileError
 from .parsing import _parse_source_tree
-from .compile_time import CompileTimeSnapshot, detached_compile_time_mapping
+from .compile_time import (
+    CompileTimeSnapshot, CompileTimeState, detached_compile_time_mapping,
+    merge_runtime_if_compile_time,
+)
 from .residualization import PreprocessedBody, _preprocess_compile_time, _repeat_range_state_names
 
 
@@ -144,12 +147,61 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
     )
     edges = set()
 
-    def visit(node, owner, environment, values, runtime_range_names):
+    def container_ids(value, seen=None):
+        """Collect inherited mutable object origins, including nested aliases."""
+        seen = set() if seen is None else seen
+        if type(value) not in (list, tuple) or id(value) in seen:
+            return seen
+        seen.add(id(value))
+        for child in value:
+            container_ids(child, seen)
+        return seen
+
+    def clone_path(values, provenance):
+        """Fork one speculative CT path without sharing mutable containers."""
+        memo = {}
+        copy_values = detached_compile_time_mapping(values, copy_memo=memo)
+        child_provenance = {}
+        for parent_id, cloned in memo.items():
+            if type(cloned) is list:
+                child_provenance[id(cloned)] = provenance.get(parent_id, parent_id)
+        for value in copy_values.values():
+            for candidate in container_ids(value):
+                child_provenance.setdefault(candidate, candidate)
+        return copy_values, child_provenance, memo
+
+    def join_paths(before, left, right, left_memo, right_memo, changed):
+        """Keep only proved facts after alternative execution paths.
+
+        Mutable facts survive only if both exits retain the exact cloned
+        binding from entry and no observed CT append affected any descendant.
+        Comparing cloned values is insufficient: equality loses mutation
+        provenance and could make an impossible edge appear safe.
+        """
+        merged = dict(merge_runtime_if_compile_time(
+            CompileTimeSnapshot(before), CompileTimeState(left), CompileTimeState(right),
+        ).values)
+        for name, original in before.items():
+            if type(original) not in (list, tuple):
+                continue
+            origin = id(original)
+            if name not in left or name not in right:
+                continue
+            if left.get(name) is not left_memo.get(origin):
+                continue
+            if right.get(name) is not right_memo.get(origin):
+                continue
+            if not container_ids(original).isdisjoint(changed):
+                continue
+            merged[name] = original
+        return CompileTimeSnapshot(merged)
+
+    def visit(node, owner, environment, values, runtime_range_names, provenance, changes):
         """Record resolved calls in reachable expression/statement subtrees."""
         if isinstance(node, ast.FunctionDef):
             return None
         if isinstance(node, ast.If):
-            visit(node.test, owner, environment, values, runtime_range_names)
+            visit(node.test, owner, environment, values, runtime_range_names, provenance, changes)
             try:
                 branch = _const_eval(node.test, values)
             except (ConstEvalUnavailable, CompileError):
@@ -159,15 +211,29 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
                 # remain visible to later statements of the same lexical block.
                 return visit_block(
                     node.body if branch else node.orelse,
-                    owner, environment, values, runtime_range_names,
+                    owner, environment, values, runtime_range_names, provenance, changes,
                 )
-            # Runtime conditions may take either branch. Their effects do not
-            # become unconditional compile-time facts after this statement.
-            visit_block(node.body, owner, environment, values, runtime_range_names)
-            visit_block(node.orelse, owner, environment, values, runtime_range_names)
-            return None
+            # An unknown condition forks *both* arms from one entry state.
+            # Neither arm may mutate the other's snapshot or module state.
+            left, left_prov, left_memo = clone_path(values, provenance)
+            right, right_prov, right_memo = clone_path(values, provenance)
+            left_changed, right_changed = set(), set()
+            left_exit = visit_block(
+                node.body, owner, environment, left, runtime_range_names,
+                left_prov, left_changed,
+            )
+            right_exit = visit_block(
+                node.orelse, owner, environment, right, runtime_range_names,
+                right_prov, right_changed,
+            )
+            changed = left_changed | right_changed
+            changes.update(changed)
+            return join_paths(
+                values, left_exit.values, right_exit.values,
+                left_memo, right_memo, changed,
+            )
         if isinstance(node, ast.For):
-            visit(node.iter, owner, environment, values, runtime_range_names)
+            visit(node.iter, owner, environment, values, runtime_range_names, provenance, changes)
             # A for-target is a lexical binding, never a read of an outer
             # same-named module constant. For a known compile-time iterable,
             # evaluate the retained body with each actual item, as the body
@@ -197,7 +263,7 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
                     iteration_values[loop_name] = item
                     iteration_values = dict(visit_block(
                         node.body, owner, environment, iteration_values,
-                        runtime_range_names,
+                        runtime_range_names, provenance, changes,
                     ).values)
                 # The loop index is a lexical binding, not a replacement for
                 # a surrounding module constant. Other CT assignments are
@@ -209,7 +275,7 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
                 if node.orelse:
                     iteration_values = dict(visit_block(
                         node.orelse, owner, environment, iteration_values,
-                        runtime_range_names,
+                        runtime_range_names, provenance, changes,
                     ).values)
                 return CompileTimeSnapshot(iteration_values)
             else:
@@ -217,8 +283,8 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
                 for target in ast.walk(node.target):
                     if isinstance(target, ast.Name):
                         body_values.pop(target.id, None)
-                visit_block(node.body, owner, environment, body_values, runtime_range_names)
-            visit_block(node.orelse, owner, environment, values, runtime_range_names)
+                visit_block(node.body, owner, environment, body_values, runtime_range_names, provenance, changes)
+            visit_block(node.orelse, owner, environment, values, runtime_range_names, provenance, changes)
             return None
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             target = resolve_simple_callable(node.func.id, environment)
@@ -227,10 +293,13 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
                     raise CompileError("Internal error: graph callable lost its canonical source identity")
                 edges.add((owner, target.target))
         for child in ast.iter_child_nodes(node):
-            visit(child, owner, environment, values, runtime_range_names)
+            visit(child, owner, environment, values, runtime_range_names, provenance, changes)
         return None
 
-    def visit_block(statements, owner, environment, initial_values, runtime_range_names):
+    def visit_block(
+        statements, owner, environment, initial_values, runtime_range_names,
+        provenance, changes,
+    ):
         """Visit statements in order using the established CT residualizer.
 
         Residualization of an entire block conservatively invalidates writes
@@ -248,15 +317,20 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
             statements, runtime_range_names=runtime_range_names,
         )
         for statement in statements:
+            append_journal = []
             residual = _preprocess_compile_time(
                 (statement,), initial_compile_time=values,
                 runtime_range_names=runtime_range_names,
                 preserve_names=preserve_names,
+                append_journal=append_journal,
             )
+            for target, _old_length in append_journal:
+                changes.add(provenance.get(id(target), id(target)))
             branch_exit = None
             for retained, before in zip(residual.statements, residual.compile_time_before):
                 branch_exit = visit(
                     retained, owner, environment, before.values, runtime_range_names,
+                    provenance, changes,
                 )
             values = branch_exit if branch_exit is not None else residual.final_compile_time
         return values
@@ -274,7 +348,14 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
         runtime_range_names = tuple(arg.arg for arg in fn.args.args)
         for parameter in runtime_range_names:
             initial.pop(parameter, None)
-        visit_block(body, snapshot.definition_ref(name), env, initial, runtime_range_names)
+        provenance = {}
+        for value in initial.values():
+            for origin in container_ids(value):
+                provenance[origin] = origin
+        visit_block(
+            body, snapshot.definition_ref(name), env, initial, runtime_range_names,
+            provenance, set(),
+        )
     ordered_edges = tuple(sorted(edges, key=lambda pair: (pair[0].name, pair[1].name)))
     vertices = tuple(snapshot.definition_ref(name) for name in snapshot.definitions)
     graph = SourceCallGraph(vertices, ordered_edges)
