@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import copy
 import inspect
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -63,7 +62,7 @@ from .constants import (
     _COMPARE_OPS,
 )
 from .consteval import NOT_FOLDABLE, ConstEvalUnavailable, _const_eval, try_runtime_fold
-from .compile_time import CompileTimeSnapshot, _is_const_vector
+from .compile_time import CompileTimeSnapshot, detached_compile_time_mapping, _is_const_vector
 from ..errors import CompileError
 from ..nf_types import NFType, NUMERIC_NF_TYPES
 from .numeric_semantics import (
@@ -318,12 +317,6 @@ def _validate_compare(left_typ, right_typ):
     raise CompileError("Comparison inputs must both be numeric, both Bool, or both Vector")
 
 
-class _UnsupportedConstEvalValue:
-    """Frontend-owned fail-closed placeholder for non-detachable compile-time values."""
-
-
-
-
 def _normalize_semantic_constant_inner(value, active):
     """Return one semantic constant plus whether its container graph contains a cycle."""
     if type(value) is bool:
@@ -374,33 +367,6 @@ def _normalize_semantic_constant(value):
     return constant
 
 
-def _seed_const_eval_copy_memo(value, memo, visited):
-    """Pre-seed deepcopy replacements while preserving supported container graph identity."""
-    if _is_const_vector(value):
-        memo[id(value)] = tuple(normalize_float_constant(item) for item in value)
-        return
-    if isinstance(value, (bool, int, float, str, type(None))):
-        return
-    if isinstance(value, (list, tuple)):
-        identity = id(value)
-        if identity in visited:
-            return
-        visited.add(identity)
-        for item in value:
-            _seed_const_eval_copy_memo(item, memo, visited)
-        return
-    memo[id(value)] = _UnsupportedConstEvalValue()
-
-
-def _detached_const_eval_mapping(constants):
-    """Copy the complete const mapping while preserving cycles, aliasing, and container kinds."""
-    memo = {}
-    visited = set()
-    for value in constants.values():
-        _seed_const_eval_copy_memo(value, memo, visited)
-    return copy.deepcopy(dict(constants), memo)
-
-
 def build_semantic_constant_snapshot(compile_time: CompileTimeSnapshot):
     """Build detached semantic and const-eval mappings from one compile-time snapshot."""
     if not isinstance(compile_time, CompileTimeSnapshot):
@@ -410,7 +376,7 @@ def build_semantic_constant_snapshot(compile_time: CompileTimeSnapshot):
         name: _normalize_semantic_constant(value)
         for name, value in values.items()
     }
-    const_eval_values = _detached_const_eval_mapping(values)
+    const_eval_values = detached_compile_time_mapping(values)
     return MappingProxyType(semantic), MappingProxyType(const_eval_values)
 
 

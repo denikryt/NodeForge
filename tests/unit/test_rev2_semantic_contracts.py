@@ -20,7 +20,6 @@ def _edges(source):
     return {(a.name, b.name) for a, b in resolve_source_call_graph(_resolved(source)).edges}
 
 
-@pytest.mark.xfail(strict=True, reason="F01: graph scan mutates defining module CT data")
 def test_graph_scan_does_not_mutate_module_mutable_constant():
     resolved = _resolved('''L = [1]
 def a():
@@ -35,7 +34,6 @@ def b():
     assert resolved.preprocessed.final_compile_time.values["L"] == before
 
 
-@pytest.mark.xfail(strict=True, reason="F01: one function's mutable CT writes leak into another")
 def test_unrelated_function_does_not_influence_other_function_edges():
     source = '''L = [1]
 def a():
@@ -91,3 +89,29 @@ def f(flag: Bool):
 def g():
     return 2'''
     assert ("f", "g") not in _edges(source)
+
+
+def test_detached_function_state_preserves_aliases_and_nested_cycles():
+    from NodeForge.semantic.compile_time import detached_compile_time_mapping
+    inner = [1]
+    outer = [inner]
+    outer.append(outer)
+    source = {"A": outer, "B": outer, "C": inner}
+    detached = detached_compile_time_mapping(source)
+    assert detached["A"] is detached["B"]
+    assert detached["A"] is not source["A"]
+    assert detached["A"][0] is detached["C"]
+    assert detached["A"][1] is detached["A"]
+    detached["C"].append(7)
+    assert inner == [1]
+
+
+def test_foreign_constants_are_not_deepcopied_or_shared_with_function():
+    from NodeForge.semantic.compile_time import detached_compile_time_mapping
+    class ForeignResource:
+        def __deepcopy__(self, memo):
+            raise AssertionError("must never invoke external deepcopy")
+    original = ForeignResource()
+    detached = detached_compile_time_mapping({"foreign": original})
+    assert detached["foreign"] is not original
+    assert type(detached["foreign"]).__name__ == "_UnsupportedConstEvalValue"

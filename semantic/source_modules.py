@@ -15,7 +15,7 @@ from typing import Mapping
 from ..compiler_identities import ModuleId, SourceDefinitionRef
 from ..errors import CompileError
 from .parsing import _parse_source_tree
-from .compile_time import CompileTimeSnapshot
+from .compile_time import CompileTimeSnapshot, detached_compile_time_mapping
 from .residualization import PreprocessedBody, _preprocess_compile_time, _repeat_range_state_names
 
 
@@ -270,7 +270,7 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
             local_refs[alias] = snapshot.definition_ref(canonical)
         env = CallableEnvironment(base.callable_builtins, local_functions, {},
                                   local_definition_refs=local_refs)
-        initial = dict(resolved.preprocessed.final_compile_time.values)
+        initial = detached_compile_time_mapping(resolved.preprocessed.final_compile_time.values)
         runtime_range_names = tuple(arg.arg for arg in fn.args.args)
         for parameter in runtime_range_names:
             initial.pop(parameter, None)

@@ -1,5 +1,6 @@
-"""Compile-time value carriers, predicates, snapshots, and merge helpers."""
+"""Compile-time value carriers, isolated source domains, and conservative joins."""
 
+import copy
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
@@ -36,6 +37,47 @@ def _as_float_const(value, context="value"):
     if _is_const_number(value):
         return normalize_float_constant(value)
     raise CompileError(f"Expected numeric compile-time {context}")
+
+
+class _UnsupportedConstEvalValue:
+    """Fail-closed marker for non-detachable extension/Blender values."""
+
+
+def _seed_const_copy_memo(value, memo, seen):
+    """Seed a shared deepcopy memo without invoking foreign-object copy hooks.
+
+    Only builtin list/tuple graphs can own mutable compile-time state. A single
+    memo preserves aliases and container cycles within one execution path.
+    """
+    if _is_const_vector(value):
+        memo[id(value)] = tuple(normalize_float_constant(item) for item in value)
+        return
+    if type(value) in (bool, int, float, str, type(None)):
+        return
+    if type(value) in (list, tuple):
+        identity = id(value)
+        if identity in seen:
+            return
+        seen.add(identity)
+        for element in value:
+            _seed_const_copy_memo(element, memo, seen)
+        return
+    # An opaque resource (or a list subclass with arbitrary deepcopy code)
+    # cannot be safely shared between independent compilation domains.
+    memo[id(value)] = _UnsupportedConstEvalValue()
+
+
+def detached_compile_time_mapping(values: Mapping[str, object]) -> dict[str, object]:
+    """Isolate supported compile-time values for one function or speculative path.
+
+    Objects outside the supported constant domain are never deep-copied and
+    never become directly accessible as compiler-owned constants.
+    """
+    memo: dict[int, object] = {}
+    seen: set[int] = set()
+    for value in values.values():
+        _seed_const_copy_memo(value, memo, seen)
+    return copy.deepcopy(dict(values), memo)
 
 
 @dataclass(frozen=True)
@@ -152,6 +194,7 @@ __all__ = [
     "_is_const_vector_like",
     "_as_float_const",
     "CompileTimeSnapshot",
+    "detached_compile_time_mapping",
     "CompileTimeState",
     "merge_runtime_if_compile_time",
 ]

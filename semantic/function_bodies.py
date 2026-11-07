@@ -14,7 +14,7 @@ from ..errors import CompileError
 from ..nf_types import NFType
 from .call_resolution import CallableEnvironment
 from .callable_contracts import GroupInterfaceContract, GroupOutputContract, source_argument_type_matches
-from .compile_time import CompileTimeSnapshot
+from .compile_time import CompileTimeSnapshot, detached_compile_time_mapping
 from .function_signatures import compile_function_signature
 from .ir import IRBody
 from .parsing import normalized_statements
@@ -51,7 +51,7 @@ def compile_function_definition(
     if not isinstance(fn, ast.FunctionDef):
         raise TypeError("Function compilation requires FunctionDef")
     shape = analyze_local_return_shape(fn)
-    values = dict(compile_time_values or {})
+    values = detached_compile_time_mapping(compile_time_values or {})
     signature = compile_function_signature(
         fn,
         owner_scope=compilation_identity.owner_scope,
