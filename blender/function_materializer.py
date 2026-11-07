@@ -21,6 +21,7 @@ from ..function_instances import (
     direct_library_owner_scope_for_id,
     FUNCTION_INSTANCE_KEY_PROP,
     function_materialization_owner_scope,
+    module_definition_owner_scope,
     instance_key_for_materialization,
     stamp_function_metadata,
     stored_fingerprint,
@@ -129,6 +130,9 @@ class FunctionMaterializer:
         prepared_callable,
         materialization: IRFunctionMaterialization,
         context: FunctionMaterializationContext,
+        *,
+        selected_group=None,
+        selected_instance_key: str | None = None,
     ) -> MaterializedFunctionGroup:
         """Publish a source-module definition through the existing in-place backend.
 
@@ -142,15 +146,21 @@ class FunctionMaterializer:
         function_id = materialization.callee
         if function_id.kind != "MODULE_DEF" or prepared_callable.contract.function_id != function_id:
             raise CompileError("Module definition materialization identity mismatch")
-        owner_scope = function_materialization_owner_scope(materialization)
+        if selected_group is not None:
+            if selected_instance_key is None:
+                raise CompileError("Selected module Reload requires its preserved instance key")
+            instance_key = selected_instance_key
+            owner_scope = module_definition_owner_scope(function_id, instance_key=instance_key)
+        else:
+            instance_key = instance_key_for_materialization(materialization)
+            owner_scope = function_materialization_owner_scope(materialization)
         prepared = prepared_callable.group
         if prepared.identity.owner_scope != owner_scope:
             raise CompileError("Prepared module definition has a different physical owner")
-        instance_key = instance_key_for_materialization(materialization)
         cache_key = ("module-def", function_id, instance_key or "SHARED")
         cache = context.function_group_cache
         group = cache.get(cache_key)
-        if group is not None:
+        if group is not None and selected_group is None:
             self._record_dependency(context.function_compilation_trace, materialization, group)
             return MaterializedFunctionGroup(group, instance_key, owner_scope)
         from ..function_instances import FUNCTION_DEFINITION_OWNER_PROP, FUNCTION_INSTANCE_KEY_PROP
@@ -161,8 +171,11 @@ class FunctionMaterializer:
             ),
             description=f"module {function_id.module.stable_key()}::{function_id.name} "
                         f"specialization {function_id.signature} instance {instance_key or 'SHARED'}",
+            selected=selected_group,
             transaction=context.function_group_transaction,
         )
+        if selected_group is not None and existing is None:
+            raise CompileError("Selected module definition is not an authoritative source owner")
         own_inputs = {
             "kind": "module-def", "definition": function_id.stable_key(),
             "source": normalized_source(prepared.source),
@@ -178,6 +191,14 @@ class FunctionMaterializer:
             group["nodeforge_module_name"] = function_id.name
             group["nodeforge_module_origin"] = function_id.module.stable_key()
             group["nodeforge_library_source"] = prepared.source
+            if selected_group is not None:
+                if (group is not selected_group
+                        or group.get(FUNCTION_DEFINITION_OWNER_PROP) != function_id.stable_key()
+                        or group.get("nodeforge_module_definition") != function_id.stable_key()
+                        or str(group.get(FUNCTION_INSTANCE_KEY_PROP) or "") != instance_key
+                        or prepared.identity.owner_scope != module_definition_owner_scope(
+                            function_id, instance_key=instance_key)):
+                    raise CompileError("Selected module Reload changed its canonical owner identity")
 
         request = BlenderGroupBuildRequest(
             prepared_compilation=prepared,
@@ -192,7 +213,8 @@ class FunctionMaterializer:
         )
         group = self._group_backend.create_or_update(request, finalize_before_commit=finalize)
         cache[cache_key] = group
-        self._record_dependency(context.function_compilation_trace, materialization, group)
+        if selected_group is None:
+            self._record_dependency(context.function_compilation_trace, materialization, group)
         return MaterializedFunctionGroup(group, instance_key, owner_scope)
 
     def materialize_local(

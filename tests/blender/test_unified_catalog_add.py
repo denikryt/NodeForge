@@ -65,3 +65,26 @@ def test_local_add_requires_unambiguous_entry(tmp_path, monkeypatch):
     assert not modifier and group.get('nodeforge_module_name') == 'lift'
     with pytest.raises(Exception, match='2 entry definitions'):
         compiler.create_selected_library_group_auto('local', _path_key(multiple))
+
+
+def test_package_module_definition_selected_reload_in_place(tmp_path):
+    """Reload uses an exported def identity, not the containing .nf library file."""
+    from NodeForge.environment_resolution import resolve_environment
+    packages.set_packages_dir_for_tests(tmp_path / 'packages')
+    try:
+        packages.install_package_directory(_manifest(tmp_path))
+        group = compiler.create_package_function_group('vendor.add', 'grow')
+        pointer = group.as_pointer()
+        other = compiler.create_package_function_group('vendor.add', 'shrink')
+        old_other_pointer = other.as_pointer()
+        assert compiler.update_library_catalog_group(group) is group
+        assert group.as_pointer() == pointer
+        export = resolve_environment().package_by_id('vendor.add').find('grow')
+        path = export.record.source_path
+        path.write_text(path.read_text(encoding='utf-8').replace('return x + 1', 'return x + 3'), encoding='utf-8')
+        assert compiler.update_library_catalog_group(group) is group
+        assert group.as_pointer() == pointer
+        assert other.as_pointer() == old_other_pointer
+        assert compiler.create_package_function_group('vendor.add', 'grow') is group
+    finally:
+        packages.set_packages_dir_for_tests(None)

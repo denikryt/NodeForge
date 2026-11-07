@@ -33,6 +33,58 @@ class SourceCallableSession:
             self.module_snapshots[module_id] = snapshot
         return snapshot
 
+    def snapshot_for_selected_definition(
+        self, function_id: FunctionId, *, explicit_source=None, module_context=None,
+    ):
+        """Resolve the selected definition's current exact module revision once.
+
+        Package selection uses environment-frozen exports; Local and Examples
+        use their canonical index origins. ROOT_TEXT needs either an explicitly
+        supplied revision/context or a unique live Text ID binding.
+        """
+        from .source_modules import parse_source_module
+        from ..catalog import _path_key
+        module = function_id.module
+        if module.kind == 'PACKAGE':
+            package = self.resolved_environment.package_by_id(module.package_id)
+            export = None if package is None else package.find(function_id.name)
+            if export is None or export.definition is None or export.definition.module != module:
+                raise CompileError('Selected package module definition is no longer exported')
+            snapshot = export.source_snapshot
+        elif module.kind in {'LOCAL', 'EXAMPLES'}:
+            catalog = self.resolved_environment.catalog(module.kind.lower())
+            catalog._raise_if_failed()
+            index = catalog.local_index if module.kind == 'LOCAL' else catalog.examples_index
+            record = None if index is None else index.find_origin(module.origin)
+            if (record is None or record.source_path is None or record.source_path.suffix != '.nf'
+                    or _path_key(record.source_path) != module.origin):
+                raise CompileError(f'Selected {module.kind} module source is unavailable: {module.origin}')
+            snapshot = parse_source_module(record.source_path.read_text(encoding='utf-8'), module)
+        else:
+            if explicit_source is not None:
+                if module_context != module.origin:
+                    raise CompileError('Selected Text/string Reload requires its original module context')
+                snapshot = parse_source_module(explicit_source, module)
+            else:
+                from ..compiler_identities import TEXT_MODULE_CONTEXT_PROP
+                import bpy
+                matches = [text for text in bpy.data.texts
+                           if str(text.get(TEXT_MODULE_CONTEXT_PROP) or '') == module.origin]
+                if not module.origin.startswith('text:') or len(matches) != 1:
+                    raise CompileError(
+                        'Selected source has no unique live Text binding; '
+                        'supply new source with its original module context'
+                    )
+                snapshot = parse_source_module(matches[0].as_string(), module)
+        if function_id.name not in snapshot.definitions:
+            raise CompileError(
+                f'Selected source module no longer declares {function_id.name!r}'
+            )
+        stored = self.module_snapshots.setdefault(module, snapshot)
+        if stored is not snapshot:
+            raise CompileError('Source revision changed during selected Reload')
+        return snapshot
+
     def callable_environment_for_module(self, snapshot):
         """Resolve an imported module's own names once, without executing its body."""
         from .group import resolve_module_callable_environment

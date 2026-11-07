@@ -101,3 +101,29 @@ def test_detach_selected_copy_operator_preserves_canonical_group(editor_context)
     assert other.node_tree is duplicate
     assert 'nodeforge_function_definition_owner' not in duplicate
     assert 'nodeforge_function_definition_owner' in canonical
+
+
+def test_selected_module_reload_operator_from_bound_text(editor_context):
+    """Actual Compile Script Text binding survives an in-place selected group Reload."""
+    area, group, text = editor_context
+    text.write('''def bump(x: Float = 1.0) -> Float:
+    return x + 1
+''')
+    with bpy.context.temp_override(area=area):
+        assert bpy.ops.gn_script_mvp.compile_expression() == {'FINISHED'}
+    node = next(node for node in group.nodes if node.bl_idname == 'GeometryNodeGroup')
+    for candidate in group.nodes:
+        candidate.select = False
+    node.select = True
+    group.nodes.active = node
+    pointer = node.node_tree.as_pointer()
+    assert node.node_tree.get('nodeforge_module_definition')
+    text.clear()
+    text.write('''def bump(x: Float = 1.0) -> Float:
+    return x + 6
+''')
+    with bpy.context.temp_override(area=area):
+        assert bpy.ops.nodeforge.reload_selected_library_group.poll()
+        assert bpy.ops.nodeforge.reload_selected_library_group() == {'FINISHED'}
+    assert node.node_tree.as_pointer() == pointer
+    assert 'x + 6' in str(node.node_tree['nodeforge_library_source'])

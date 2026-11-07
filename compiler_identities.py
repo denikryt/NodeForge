@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import TypeAlias
 
 CORE_PACKAGE_ID = "__nodeforge_core__"
+TEXT_MODULE_CONTEXT_PROP = "nodeforge_source_text_context_v1"
 _LOCAL_FUNCTION_KIND = "LOCAL_DEF"
 _LIBRARY_FUNCTION_KIND = "LIBRARY"
 _MODULE_DEFINITION_KIND = "MODULE_DEF"
@@ -217,6 +218,34 @@ def module_definition_function_id(definition: SourceDefinitionRef, signature: st
         raise TypeError("Module function identity needs a canonical SourceDefinitionRef")
     return FunctionId(kind=_MODULE_DEFINITION_KIND, module=definition.module,
                       name=definition.name, signature=str(signature))
+
+
+def parse_module_definition_function_id(value: str) -> FunctionId:
+    """Recover one complete MODULE_DEF owner from canonical Blender ID properties.
+
+    Names of Blender datablocks and catalog entries are never used for lookup.
+    Malformed or noncanonical metadata is rejected before source discovery.
+    """
+    from .errors import CompileError
+
+    try:
+        raw = json.loads(value)
+        if not isinstance(raw, dict) or set(raw) != {'kind', 'module', 'name', 'signature'}:
+            raise ValueError('Invalid module definition fields')
+        module_raw = json.loads(raw['module'])
+        if not isinstance(module_raw, dict) or set(module_raw) != {'kind', 'origin', 'package_id'}:
+            raise ValueError('Invalid module identity fields')
+        module = ModuleId(**module_raw)
+        if raw['kind'] != _MODULE_DEFINITION_KIND:
+            raise ValueError('Not a source module definition')
+        function_id = module_definition_function_id(
+            SourceDefinitionRef(module, raw['name']), raw['signature'],
+        )
+        if function_id.stable_key() != value:
+            raise ValueError('Noncanonical module definition identity')
+        return function_id
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise CompileError('Selected group has invalid MODULE_DEF source identity') from exc
 
 
 def local_function_id(definition_owner: str, name: str, signature: str) -> FunctionId:

@@ -316,9 +316,132 @@ def create_package_function_group(package_id: str, name: str):
     return materialize_library_entry_group_for_record(export.record, backend)
 
 
-def update_library_catalog_group(group, namespace: str | None = None, name: str | None = None):
-    """Reload a catalog-backed group using persisted owner identity where required."""
+def ensure_source_text_context(text) -> str:
+    """Return one save/reopen-stable live Text origin for new source definitions.
+
+    The Text ID owns the binding, not the user-managed base node tree. Copied
+    Text IDs inheriting the same property are ambiguous until explicitly fixed.
+    """
+    import bpy
+    import uuid
+    from .compiler_identities import TEXT_MODULE_CONTEXT_PROP
+
+    if text is None or not any(item is text for item in bpy.data.texts):
+        raise CompileError('A live Blender Text is required for source binding')
+    identity = str(text.get(TEXT_MODULE_CONTEXT_PROP) or '')
+    if not identity:
+        identity = 'text:' + uuid.uuid4().hex
+        text[TEXT_MODULE_CONTEXT_PROP] = identity
+    if not identity.startswith('text:') or sum(
+        str(candidate.get(TEXT_MODULE_CONTEXT_PROP) or '') == identity
+        for candidate in bpy.data.texts
+    ) != 1:
+        raise CompileError('Source Text identity is duplicated or invalid')
+    return identity
+
+
+def _reload_selected_module_definition(
+    group, backend, *, explicit_source=None, module_context=None,
+):
+    """Reload an exact MODULE_DEF specialization into its selected datablock."""
+    from .compiler_identities import (
+        GroupCompilationIdentity, parse_module_definition_function_id,
+    )
+    from .semantic.source_callables import deserialize_module_parameter_signature
+    from .semantic.function_signatures import compile_function_signature
+    from .semantic.ir import IRFunctionMaterialization, IRFunctionMaterializationMode
+    from .function_instances import (
+        FUNCTION_DEFINITION_OWNER_PROP, FUNCTION_INSTANCE_KEY_PROP,
+        FunctionCompilationTrace, module_definition_owner_scope,
+    )
+    from .blender.group_authority import find_unique_authoritative_group
+    from .blender.function_materializer import (
+        FunctionMaterializer, FunctionMaterializationContext,
+    )
+    from .blender.group_backend import BlenderGroupBuildTransaction
+
+    if getattr(group, 'bl_idname', None) != 'GeometryNodeTree':
+        raise CompileError('Select an existing GeometryNodeTree function')
+    stored_definition = str(group.get('nodeforge_module_definition') or '')
+    function_id = parse_module_definition_function_id(stored_definition)
+    instance_key = str(group.get(FUNCTION_INSTANCE_KEY_PROP) or '')
+    if (str(group.get(FUNCTION_DEFINITION_OWNER_PROP) or '') != stored_definition
+            or group.get('nodeforge_module_origin') != function_id.module.stable_key()
+            or group.get('nodeforge_module_name') != function_id.name
+            or (instance_key and (len(instance_key) != 32
+                                  or any(ch not in '0123456789abcdef' for ch in instance_key)))):
+        raise CompileError('Selected MODULE_DEF metadata is incomplete, detached or inconsistent')
+    # This lookup is the authoritative pre-source boundary, including user ID copies.
+    find_unique_authoritative_group(
+        lambda candidate: (
+            candidate.get(FUNCTION_DEFINITION_OWNER_PROP) == stored_definition
+            and str(candidate.get(FUNCTION_INSTANCE_KEY_PROP) or '') == instance_key
+        ),
+        description=f'MODULE_DEF {function_id.name} / {instance_key or "SHARED"}',
+        selected=group,
+    )
+
+    session = backend.new_source_callable_session()
+    snapshot = session.snapshot_for_selected_definition(
+        function_id, explicit_source=explicit_source, module_context=module_context,
+    )
+    fn = snapshot.definitions[function_id.name]
+    signature_items = deserialize_module_parameter_signature(function_id.signature)
+    if tuple(arg.arg for arg in fn.args.args) != tuple(name for name, _ in signature_items):
+        raise CompileError('Selected module function signature is incompatible with saved specialization')
+    types = dict(signature_items)
+    environment, compile_time = session.callable_environment_for_module(snapshot)
+    owner_scope = module_definition_owner_scope(function_id, instance_key=instance_key)
+    identity = GroupCompilationIdentity(
+        None, owner_scope, snapshot.definition_ref(function_id.name).stable_key(),
+        function_id.stable_key(),
+    )
+    verified = compile_function_signature(
+        fn, owner_scope=owner_scope, declaration_owner=function_id.stable_key(),
+        compile_time_values=compile_time,
+    )
+    if any(item.typ is not types[item.target_name] for item in verified.declarations):
+        raise CompileError('Selected module function types are incompatible with saved specialization')
+    prepared = session.prepare_definition(
+        function_id=function_id, identity=identity, fn=fn,
+        callable_environment=environment,
+        compile_time_values=compile_time, source_module=snapshot,
+        helper_namespace=fn.name,
+    )
+    transaction = BlenderGroupBuildTransaction()
+    context = FunctionMaterializationContext(
+        function_group_cache={}, function_group_transaction=transaction,
+        function_compilation_trace=FunctionCompilationTrace(),
+        source_callable_session=session,
+    )
+    materialization = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.SHARED)
+    try:
+        result = FunctionMaterializer(group_backend=backend).materialize_module(
+            prepared, materialization, context,
+            selected_group=group, selected_instance_key=instance_key,
+        )
+        if result.group is not group or result.owner_scope != owner_scope:
+            raise CompileError('Selected module Reload changed physical group ownership')
+        transaction.commit()
+    except Exception:
+        transaction.rollback()
+        raise
+    return group
+
+
+def update_library_catalog_group(group, namespace: str | None = None, name: str | None = None,
+                                 *, source: str | None = None, module_context: str | None = None):
+    """Reload the exact selected source function, retaining its physical identity."""
     environment = resolve_environment()
+    if str(group.get('nodeforge_module_definition') or ''):
+        if namespace is not None or name is not None:
+            raise CompileError('MODULE_DEF Reload uses its canonical source definition, not a catalog name')
+        return _reload_selected_module_definition(
+            group, _new_group_backend(environment),
+            explicit_source=source, module_context=module_context,
+        )
+    if source is not None or module_context is not None:
+        raise CompileError('Explicit source Reload is supported only for MODULE_DEF groups')
     record = resolve_reloadable_library_entry(
         group, namespace, name, resolved_environment=environment
     )

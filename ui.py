@@ -363,7 +363,10 @@ class GNSCRIPT_MVP_OT_compile_expression(Operator):
             self.report({'ERROR'}, "Open a base Geometry Nodes tree in the Node Editor")
             return {'CANCELLED'}
         try:
-            compose_source_initial(source, target)
+            from .compiler import ensure_source_text_context
+            text = None if self.expression else getattr(props, 'text_block', None)
+            module_context = ensure_source_text_context(text) if text is not None else None
+            compose_source_initial(source, target, module_context=module_context)
         except Exception as exc:
             traceback.print_exc()
             self.report({'ERROR'}, str(exc))
@@ -457,10 +460,10 @@ class NODEFORGE_OT_detach_selected_source_owner(Operator):
 
 
 class NODEFORGE_OT_reload_selected_library_group(Operator):
-    """Reload the selected library-backed group from its current catalog source."""
+    """Reload a selected source-backed Function Node Group in place."""
     bl_idname = "nodeforge.reload_selected_library_group"
     bl_label = "Reload from Source"
-    bl_description = "Rebuild the selected NodeForge library group from its current catalog source while preserving the group datablock and node state"
+    bl_description = "Rebuild the selected NodeForge function from its current source while retaining the group datablock"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -476,6 +479,8 @@ class NODEFORGE_OT_reload_selected_library_group(Operator):
             return False
         group = node.node_tree
         try:
+            if str(group.get('nodeforge_module_definition') or ''):
+                return True
             namespace = str(group.get("nodeforge_library_namespace") or "")
             name = str(group.get("nodeforge_library_name") or "")
         except Exception:

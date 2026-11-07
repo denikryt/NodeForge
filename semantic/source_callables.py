@@ -189,6 +189,29 @@ def serialize_local_signature(signature_names, param_types: Mapping[str, NFType]
     return ",".join(f"{name}:{serialize_nf_type(param_types[name])}" for name in signature_names)
 
 
+def deserialize_module_parameter_signature(signature: str) -> tuple[tuple[str, NFType], ...]:
+    """Decode the exact specialization types of one persisted module definition."""
+    from ..nf_types import deserialize_nf_type
+
+    if not isinstance(signature, str):
+        raise CompileError('Invalid module specialization signature')
+    if not signature:
+        return ()
+    result = []
+    seen = set()
+    for entry in signature.split(','):
+        name, separator, token = entry.partition(':')
+        if not separator or not name.isidentifier() or name in seen:
+            raise CompileError('Invalid module specialization signature')
+        try:
+            typ = deserialize_nf_type(token)
+        except (TypeError, ValueError) as exc:
+            raise CompileError('Invalid module specialization type') from exc
+        seen.add(name)
+        result.append((name, typ))
+    return tuple(result)
+
+
 def local_function_source(
     fn: ast.FunctionDef,
     param_types: Mapping[str, NFType],
@@ -516,5 +539,6 @@ __all__ = [
     "local_function_source",
     "resolve_local_parameter_annotation",
     "serialize_local_signature",
+    "deserialize_module_parameter_signature",
     "value_type_for_const",
 ]
