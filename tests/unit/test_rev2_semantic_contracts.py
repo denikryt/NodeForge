@@ -213,3 +213,65 @@ def f(n: Int):
 def g():
     return 2"""
     assert ("f", "g") in _edges(source)
+
+
+def _compiled_defaults(source):
+    from NodeForge.compiler_identities import GroupCompilationIdentity
+    from NodeForge.resolved_environment import ResolvedCatalog, ResolvedEnvironment
+    from NodeForge.semantic.source_callable_session import SourceCallableSession
+    from NodeForge.semantic.group import analyze_group_source
+    environment = ResolvedEnvironment({
+        name: ResolvedCatalog(name, {})
+        for name in ("functions", "examples", "local")
+    })
+    session = SourceCallableSession(resolved_environment=environment)
+    analyze_group_source(
+        source,
+        compilation_identity=GroupCompilationIdentity(
+            None, "ROOT/ct-default", "ROOT/ct-default", "ROOT/ct-default",
+        ),
+        resolved_environment=environment,
+        source_callable_session=session,
+    )
+    return {
+        item.contract.function_id.name: item.group.interface.inputs[0].default
+        for item in session.prepared.values()
+        if item.group.interface.inputs
+    }
+
+
+def test_function_default_uses_final_module_constant_before_and_after_call():
+    before = """K = 1
+x = f()
+def f(value: Int = K) -> Int:
+    return value
+K = 9"""
+    after = """K = 1
+def f(value: Int = K) -> Int:
+    return value
+K = 9
+x = f()"""
+    assert _compiled_defaults(before) == {"f": 9}
+    assert _compiled_defaults(after) == {"f": 9}
+
+
+def test_module_final_default_is_not_changed_by_local_write_in_caller():
+    source = """K = 1
+def caller() -> Int:
+    K = 100
+    return f()
+def f(value: Int = K) -> Int:
+    return value
+K = 9
+x = caller()"""
+    assert _compiled_defaults(source)["f"] == 9
+
+
+def test_each_compilation_attempt_uses_its_own_final_module_values():
+    original = """K = 9
+def f(value: Int = K) -> Int:
+    return value
+x = f()"""
+    revised = original.replace("K = 9", "K = 7")
+    assert _compiled_defaults(original) == {"f": 9}
+    assert _compiled_defaults(revised) == {"f": 7}

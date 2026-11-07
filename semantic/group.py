@@ -584,6 +584,10 @@ def analyze_group_source(
 
     source_call_graph = resolve_source_call_graph(resolved_source_module)
     preprocessed = resolved_source_module.preprocessed
+    if source_callable_session is not None:
+        source_callable_session.remember_module_final_compile_time(
+            source_module, preprocessed.final_compile_time.values,
+        )
     stmts = list(preprocessed.statements)
     # Root statements have no implicit inputs or outputs. Only typed def
     # signatures and final return values create physical function interfaces.

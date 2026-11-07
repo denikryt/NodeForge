@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import MappingProxyType
 from typing import Mapping
 
 from .callable_contracts import SourceCallableContract, SourceCallableParameter, normalize_callable_keyword
@@ -18,6 +19,7 @@ class SourceCallableSession:
         self.source_snapshots: dict[FunctionId, str] = {}
         self.module_snapshots = {}
         self.module_environments = {}
+        self.module_final_compile_time = {}
         self.prepared: dict[SourceCallablePreparationKey, PreparedSourceCallable] = {}
         self._active_stack: list[FunctionId] = []
 
@@ -101,8 +103,36 @@ class SourceCallableSession:
         result = self.module_environments.get(snapshot.module_id)
         if result is None:
             result = resolve_module_callable_environment(snapshot, self.resolved_environment, self)
+            final_values = self.remember_module_final_compile_time(snapshot, result[1])
+            result = result[0], final_values
             self.module_environments[snapshot.module_id] = result
         return result
+
+    def remember_module_final_compile_time(self, snapshot, values):
+        """Freeze one defining module's final CT bindings for this source revision.
+
+        This is not the caller's lexical state at any invocation point. Imported
+        modules can have a different final value for the same symbol.
+        """
+        from .compile_time import detached_compile_time_mapping
+        known = self.module_snapshots.setdefault(snapshot.module_id, snapshot)
+        if known is not snapshot:
+            raise CompileError("Conflicting module snapshot during CT context capture")
+        existing = self.module_final_compile_time.get(snapshot.module_id)
+        if existing is None:
+            existing = MappingProxyType(detached_compile_time_mapping(values))
+            self.module_final_compile_time[snapshot.module_id] = existing
+        return existing
+
+    def defining_module_compile_time(self, snapshot):
+        """Resolve only the authoritative final CT context for one module."""
+        cached = self.module_final_compile_time.get(snapshot.module_id)
+        if cached is not None:
+            if self.module_snapshots.get(snapshot.module_id) is not snapshot:
+                raise CompileError("Conflicting module snapshot for defining CT context")
+            return cached
+        self.callable_environment_for_module(snapshot)
+        return self.module_final_compile_time[snapshot.module_id]
 
     def _source_snapshot(self, function_id: FunctionId, source_supplier) -> str:
         """Capture one coherent definition source snapshot for this root attempt."""

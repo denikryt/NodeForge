@@ -1728,7 +1728,7 @@ def analyze_expression(expr, environment):
                 # the defining module's own compile-time values, not the caller's.
                 if binding.definition.module in environment.callable_environment.local_definition_refs.values():
                     module_callable_environment = environment.callable_environment
-                    module_values = environment.const_eval_values
+                    module_values = session.defining_module_compile_time(snapshot)
                 else:
                     module_callable_environment, module_values = session.callable_environment_for_module(snapshot)
                 definition_owner = binding.definition.stable_key()
