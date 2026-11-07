@@ -62,7 +62,6 @@ def g():
     assert ("f", "g") not in _edges(source)
 
 
-@pytest.mark.xfail(strict=True, reason="F02: reachable later loop iterations must be considered")
 def test_runtime_loop_multiple_iterations_preserve_possible_edges():
     source = '''L = [1]
 def f(count: Int):
@@ -175,3 +174,42 @@ def f(flag: Bool):
 def g():
     return 2"""
     assert ("f", "g") not in _edges(source)
+
+
+def test_runtime_loop_can_mutate_scalar_before_reaching_call():
+    source = """V = 0
+def f(n: Int):
+    for i in repeat_range(n):
+        if V == 2:
+            return g()
+        V = V + 1
+    return 1
+def g():
+    return 2"""
+    assert ("f", "g") in _edges(source)
+
+
+def test_runtime_loop_read_only_does_not_invent_mutable_dependencies():
+    source = """L = [1]
+def f(n: Int):
+    for i in repeat_range(n):
+        x = i + 1
+    if len(L) == 2:
+        return g()
+    return 1
+def g():
+    return 2"""
+    assert ("f", "g") not in _edges(source)
+
+
+def test_runtime_loop_may_have_zero_iterations_without_publishing_append():
+    source = """L = [1]
+def f(n: Int):
+    for i in repeat_range(n):
+        L.append(2)
+    if len(L) == 2:
+        return g()
+    return 1
+def g():
+    return 2"""
+    assert ("f", "g") in _edges(source)

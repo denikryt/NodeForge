@@ -279,13 +279,65 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
                     ).values)
                 return CompileTimeSnapshot(iteration_values)
             else:
-                body_values = dict(values)
-                for target in ast.walk(node.target):
-                    if isinstance(target, ast.Name):
-                        body_values.pop(target.id, None)
-                visit_block(node.body, owner, environment, body_values, runtime_range_names, provenance, changes)
-            visit_block(node.orelse, owner, environment, values, runtime_range_names, provenance, changes)
-            return None
+                # Runtime-unknown loops can execute zero, one, or arbitrarily
+                # many times. A single concrete visit misses dependencies that
+                # become reachable after subsequent iterations. Widen by
+                # intersecting the zero-iteration facts with one speculative
+                # body execution, then revisit while CT facts can still change.
+                # Facts only disappear; no finite unrolling bound is assumed.
+                abstract_values = dict(values)
+                target_names = {
+                    target.id for target in ast.walk(node.target)
+                    if isinstance(target, ast.Name)
+                }
+                while True:
+                    zero, _, zero_memo = clone_path(abstract_values, provenance)
+                    once, once_prov, once_memo = clone_path(abstract_values, provenance)
+                    for target_name in target_names:
+                        once.pop(target_name, None)
+                    changed = set()
+                    once_exit = dict(visit_block(
+                        node.body, owner, environment, once, runtime_range_names,
+                        once_prov, changed,
+                    ).values)
+                    for target_name in target_names:
+                        if target_name in abstract_values:
+                            once_exit[target_name] = once_memo.get(
+                                id(abstract_values[target_name]),
+                                abstract_values[target_name],
+                            )
+                        else:
+                            once_exit.pop(target_name, None)
+                    changes.update(changed)
+                    joined = join_paths(
+                        abstract_values, zero, once_exit,
+                        zero_memo, once_memo, changed,
+                    )
+                    next_values = dict(joined.values)
+                    if len(next_values) == len(abstract_values) and all(
+                        (next_values[name] is value)
+                        or (type(value) in (int, bool, str)
+                            and type(next_values[name]) is type(value)
+                            and next_values[name] == value)
+                        for name, value in abstract_values.items()
+                    ):
+                        abstract_values = next_values
+                        break
+                    abstract_values = next_values
+                if node.orelse:
+                    zero, _, zero_memo = clone_path(abstract_values, provenance)
+                    one, one_prov, one_memo = clone_path(abstract_values, provenance)
+                    else_changed = set()
+                    else_exit = visit_block(
+                        node.orelse, owner, environment, one,
+                        runtime_range_names, one_prov, else_changed,
+                    )
+                    changes.update(else_changed)
+                    abstract_values = dict(join_paths(
+                        abstract_values, zero, else_exit.values,
+                        zero_memo, one_memo, else_changed,
+                    ).values)
+                return CompileTimeSnapshot(abstract_values)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             target = resolve_simple_callable(node.func.id, environment)
             if target is not UNRESOLVED and target.kind is CallableKind.LOCAL_FUNCTION:
