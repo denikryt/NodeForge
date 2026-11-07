@@ -118,7 +118,28 @@ def _validate_import_bindings(
             else:
                 record = selected
         elif base_namespace == "examples" and index is not None:
-            record = catalog.select_import(namespace, canonical_name, flat_only=flat_only)
+            path = tuple(namespace.split(".")[1:])
+            if not path:
+                record = catalog.select_import(namespace, canonical_name, flat_only=flat_only)
+            else:
+                # An Examples extension owner can occupy a file and directory
+                # position simultaneously. Explicit directory-member imports
+                # resolve the directory; a file-qualified member resolves the
+                # module only when the path is not a directory.
+                from ..local_index import LocalDirectoryCandidate
+                try:
+                    directory = index.resolve_directory(path)
+                except CompileError:
+                    directory = None
+                if directory is not None:
+                    record = index.resolve_member(directory, canonical_name)
+                else:
+                    selected = index.resolve_path(path)
+                    if isinstance(selected, LocalDirectoryCandidate):
+                        record = index.resolve_member(selected, canonical_name)
+                    else:
+                        record = selected
+                        source_member = canonical_name
         elif index is not None:
             if namespace == "local":
                 record = index.find_flat_function(canonical_name) if flat_only else index.resolve_root_import(canonical_name)
@@ -134,7 +155,8 @@ def _validate_import_bindings(
         if inherited_record is not None and inherited_record is not record:
             raise CompileError("Internal error: inherited library binding does not match resolved environment")
         from ..local_index import LocalDirectoryCandidate
-        if (base_namespace == "local" and getattr(record, "source_path", None) is not None
+        if (base_namespace in {"local", "examples"}
+                and getattr(record, "source_path", None) is not None
                 and record.source_path.suffix == ".nf"):
 
             if source_callable_session is None:
@@ -142,16 +164,16 @@ def _validate_import_bindings(
                 capture_session = SourceCallableSession(resolved_environment=resolved_environment)
             else:
                 capture_session = source_callable_session
-            snapshot = capture_session.capture_local_module(record)
+            snapshot = capture_session.capture_source_module(record)
             if source_member is None:
-                binding = SourceModuleNamespaceBinding(exposed_name, record, snapshot)
+                binding = SourceModuleNamespaceBinding(exposed_name, record, snapshot, namespace=base_namespace)
                 if exposed_name in imported or exposed_name in directories or exposed_name in local_bindings or exposed_name in local_function_defs or exposed_name in reserved_names:
-                    raise CompileError(f"Local module import alias {exposed_name!r} conflicts with an existing binding")
+                    raise CompileError(f"{base_namespace.title()} module import alias {exposed_name!r} conflicts with an existing binding")
                 directories[exposed_name] = binding
             else:
                 binding = SourceDefinitionBinding(base_namespace, source_member, record, snapshot.definition_ref(source_member), snapshot)
                 if exposed_name in imported or exposed_name in directories or exposed_name in local_bindings or exposed_name in local_function_defs or exposed_name in reserved_names:
-                    raise CompileError(f"Local function import alias {exposed_name!r} conflicts with an existing binding")
+                    raise CompileError(f"{base_namespace.title()} function import alias {exposed_name!r} conflicts with an existing binding")
                 imported[exposed_name] = binding
             return
         if isinstance(record, LocalDirectoryCandidate):

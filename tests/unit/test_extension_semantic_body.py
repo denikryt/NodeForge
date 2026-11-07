@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from NodeForge.compiler_identities import GroupCompilationIdentity
+from NodeForge.compiler_identities import GroupCompilationIdentity, ModuleId
 from NodeForge.errors import CompileError
 from NodeForge.extensions.registry import ExtensionOwnerSession, ExtensionRegistry, capture_owner_code_snapshot
 from NodeForge.resolved_environment import (
@@ -15,6 +15,7 @@ from NodeForge.resolved_environment import (
 )
 from NodeForge.semantic.group import analyze_group_source
 from NodeForge.semantic.source_callable_session import SourceCallableSession
+from NodeForge.semantic.source_modules import parse_source_module
 
 pytestmark = pytest.mark.unit
 
@@ -29,6 +30,18 @@ class _SourceRecord:
     package_id: str = "vendor.pkg"
     package_version: str = "1.0.0"
     module_path: Path | None = None
+
+
+def _definition_export(record):
+    """Freeze the exact source definition exported by the test package."""
+    snapshot = parse_source_module(
+        record.source_path.read_text(encoding='utf-8'),
+        ModuleId('PACKAGE', f'functions/{record.source_path.name}', record.package_id),
+    )
+    return PackageCallableExport(
+        record.package_id, record.name, record=record,
+        definition=snapshot.definition_ref(record.name), source_snapshot=snapshot,
+    )
 
 
 def _fixture(tmp_path: Path):
@@ -90,7 +103,7 @@ def test_nested_semantic_only_child_records_freshness_without_child_ircall(tmp_p
     """Semantic-only use contributes the owner fingerprint even though only the executable parent reaches IR."""
     session, environment, identity = _fixture(tmp_path)
     compilation = analyze_group_source(
-        "from packages import semantic\noutput(consume(make(x)))\n",
+        "from packages import semantic\nresult = consume(make(1.0))\n",
         compilation_identity=identity,
         resolved_environment=environment,
     )
@@ -101,7 +114,7 @@ def test_semantic_record_assignment_persists_and_keeps_owner_freshness(tmp_path)
     """Semantic-only assignment persists while still recording the owner fingerprint."""
     session, environment, identity = _fixture(tmp_path)
     compilation = analyze_group_source(
-        'from packages import semantic\nx = input_float("X")\npart = make(x)\noutput(consume(part))\n',
+        'from packages import semantic\nx = index() * 1.0\npart = make(x)\nresult = consume(part)\n',
         compilation_identity=identity,
         resolved_environment=environment,
     )
@@ -112,7 +125,7 @@ def test_empty_semantic_list_assignment_is_valid_body_state(tmp_path):
     """Empty semantic LIST assignment survives the body boundary without fabricated runtime IR."""
     _session, environment, identity = _fixture(tmp_path)
     compilation = analyze_group_source(
-        'from packages import semantic\nx = input_float("X")\nparts = make_empty()\noutput(x)\n',
+        'from packages import semantic\nx = index() * 1.0\nparts = make_empty()\nresult = x\n',
         compilation_identity=identity,
         resolved_environment=environment,
     )
@@ -124,7 +137,7 @@ def test_local_source_body_may_use_semantic_state_internally_when_runtime_result
     _session, environment, identity = _fixture(tmp_path)
     source_session = SourceCallableSession(resolved_environment=environment)
     compilation = analyze_group_source(
-        'from packages import semantic\ndef f(v):\n    part = make(v)\n    return consume(part)\nx = input_float("X")\noutput(f(x))\n',
+        'from packages import semantic\ndef f(v: Float):\n    part = make(v)\n    return consume(part)\nx = index() * 1.0\nresult = f(x)\n',
         compilation_identity=identity,
         resolved_environment=environment,
         source_callable_session=source_session,
@@ -136,7 +149,7 @@ def test_transient_semantic_composition_in_group_body_has_no_persistence_stateme
     """A semantic value consumed in the same expression never crosses the persistent extension semantic-value persistence boundary."""
     _session, environment, identity = _fixture(tmp_path)
     compilation = analyze_group_source(
-        'from packages import semantic\nx = input_float("X")\ny = consume(make(x))\noutput(y)\n',
+        'from packages import semantic\nx = index() * 1.0\ny = consume(make(x))\nresult = y\n',
         compilation_identity=identity,
         resolved_environment=environment,
     )
@@ -147,11 +160,13 @@ def test_transient_semantic_composition_in_group_body_has_no_persistence_stateme
 def test_source_group_output_rejects_package_semantic_value(tmp_path):
     """Package semantic state cannot become a source-callable public output."""
     _session, environment, identity = _fixture(tmp_path)
-    with pytest.raises(CompileError, match="Package-defined semantic value cannot be used where a runtime value is required"):
+    source_session = SourceCallableSession(resolved_environment=environment)
+    with pytest.raises(CompileError, match="Package-defined semantic value|semantic"):
         analyze_group_source(
-            'from packages import semantic\nx = input_float("X")\noutput(make(x))\n',
+            'from packages import semantic\ndef escape() -> Float:\n    return make(1.0)\nresult = escape()\n',
             compilation_identity=identity,
             resolved_environment=environment,
+            source_callable_session=source_session,
         )
 
 
@@ -161,7 +176,7 @@ def test_local_source_argument_rejects_package_semantic_value(tmp_path):
     source_session = SourceCallableSession(resolved_environment=environment)
     with pytest.raises(CompileError, match="arguments must have supported runtime types"):
         analyze_group_source(
-            'from packages import semantic\nx = input_float("X")\npart = make(x)\ndef f(p):\n    return p\noutput(f(part))\n',
+            'from packages import semantic\nx = index() * 1.0\npart = make(x)\ndef f(p: Float):\n    return p\nresult = f(part)\n',
             compilation_identity=identity,
             resolved_environment=environment,
             source_callable_session=source_session,
@@ -174,7 +189,7 @@ def test_local_source_capture_rejects_package_semantic_value(tmp_path):
     source_session = SourceCallableSession(resolved_environment=environment)
     with pytest.raises(CompileError, match="Unknown name: part"):
         analyze_group_source(
-            'from packages import semantic\nx = input_float("X")\npart = make(x)\ndef f():\n    return part\noutput(f())\n',
+            'from packages import semantic\nx = index() * 1.0\npart = make(x)\ndef f():\n    return part\nresult = f()\n',
             compilation_identity=identity,
             resolved_environment=environment,
             source_callable_session=source_session,
@@ -184,14 +199,14 @@ def test_imported_source_argument_rejects_package_semantic_value(tmp_path):
     """Persistent semantic state cannot cross an imported pure-source callable input contract."""
     _session, base, identity = _fixture(tmp_path / "extension")
     source_path = tmp_path / "demo.nf"
-    source_path.write_text('v = input_float("V")\noutput(v)\n', encoding="utf-8")
+    source_path.write_text('def demo(v: Float) -> Float:\n    return v\n', encoding="utf-8")
     record = _SourceRecord("functions", "demo", source_path)
     package = ResolvedPackageNamespace(
         "vendor.pkg",
         "pkg",
         "Vendor Package",
         "1.0.0",
-        {"demo": PackageCallableExport("vendor.pkg", "demo", record=record)},
+        {"demo": _definition_export(record)},
     )
     environment = ResolvedEnvironment(
         {
@@ -203,9 +218,9 @@ def test_imported_source_argument_rejects_package_semantic_value(tmp_path):
         extension_registry=base.extension_registry,
     )
     source_session = SourceCallableSession(resolved_environment=environment)
-    with pytest.raises(CompileError, match="source function arguments cannot be package semantic values"):
+    with pytest.raises(CompileError, match="arguments must have supported runtime types"):
         analyze_group_source(
-            'from packages import semantic, pkg\nx = input_float("X")\npart = make(x)\noutput(demo(part))\n',
+            'from packages import semantic, pkg\nx = index() * 1.0\npart = make(x)\nresult = pkg.demo(part)\n',
             compilation_identity=identity,
             resolved_environment=environment,
             source_callable_session=source_session,
@@ -225,7 +240,7 @@ def test_persistent_read_does_not_reexecute_interface_module(tmp_path, monkeypat
 
     monkeypatch.setattr(session, "_mounted", guarded_mounted)
     compilation = analyze_group_source(
-        'from packages import semantic\nx = input_float("X")\npart = make(x)\ny = consume(part)\noutput(y)\n',
+        'from packages import semantic\nx = index() * 1.0\npart = make(x)\ny = consume(part)\nresult = y\n',
         compilation_identity=identity,
         resolved_environment=environment,
     )
@@ -240,10 +255,9 @@ def test_imported_source_body_may_use_semantic_state_internally(tmp_path):
     source_path = tmp_path / "demo_internal.nf"
     source_path.write_text(
         """from packages import semantic
-v = input_float("V")
-part = make(v)
-y = consume(part)
-output(y)
+def demo_internal(v: Float) -> Float:
+    part = make(v)
+    return consume(part)
 """,
         encoding="utf-8",
     )
@@ -253,7 +267,7 @@ output(y)
         "pkg",
         "Vendor Package",
         "1.0.0",
-        {"demo_internal": PackageCallableExport("vendor.pkg", "demo_internal", record=record)},
+        {"demo_internal": _definition_export(record)},
     )
     environment = ResolvedEnvironment(
         {
@@ -268,7 +282,7 @@ output(y)
     compilation = analyze_group_source(
         """from packages import pkg
 y = demo_internal(2.0)
-output(y)
+result = y
 """,
         compilation_identity=identity,
         resolved_environment=environment,

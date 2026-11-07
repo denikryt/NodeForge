@@ -1553,7 +1553,11 @@ def lower_basic_body(
                             and len(iterator.args) == 1 and not iterator.keywords
                             and not stmt.orelse and isinstance(stmt.target, ast.Name)
                             and isinstance(iterator.args[0], ast.Name)
-                            and iterator.args[0].id in active.runtime_bindings):
+                            and iterator.args[0].id in active.runtime_bindings
+                            # A constant proven at this exact source point must
+                            # keep ordinary range() unrolling, even if its
+                            # assignment also has a runtime binding.
+                            and not (type(active_compile_time.get(iterator.args[0].id)) is int)):
                         parsed = iterator.args[0], stmt.body, stmt.target.id
                 if parsed is None:
                     unpacking_target_names = _unpacking_loop_target_names(

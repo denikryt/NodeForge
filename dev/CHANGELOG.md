@@ -633,3 +633,11 @@ lifecycle.
 - Completed unified `.nf` catalog Add routing and final source/definition regression coverage for Issue #48.
 - Migrated active package lifecycle and frontend tests away from obsolete file-as-function assumptions; retained Blender interface and transaction tests with new typed function coverage.
 - Documented unified compilation, source-owner detachment, in-place function updates, and the root-only Mesh Compute follow-up boundary.
+
+## 0.88.0
+
+- Made explicit `NFType` annotations mandatory for all `.nf` function parameters, including unused definitions and parameters with compile-time defaults; removed parameter inference from bodies, defaults and arguments.
+- Preserved typed `range(count)` Repeat Zone lowering and declaration-stable shared function identity, with captured defining-module defaults and source-located annotation errors.
+- Unified module compile-time state for reachability, repaired selected `MODULE_DEF` Reload identity and rollback, and retired public legacy generated-root compilation.
+- Migrated source/catalog and Blender regression fixtures to the unified DSL; Local/Examples Add now resolves exact function definitions and reuses the selected environment.
+- Retained the separate unresolved root-only Mesh Compute migration and existing Blender addon lifecycle baseline failure.

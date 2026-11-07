@@ -84,4 +84,4 @@ def test_missing_index_never_reinterprets_qualified_import_as_flat(tmp_path):
     record = catalog.LibraryEntryRecord('local', 'noise', 'script', path, source_path=path, source_origin=catalog._path_key(path))
     env = ResolvedEnvironment({n: ResolvedCatalog(n, {'noise': record} if n == 'local' else {}) for n in ('functions', 'examples', 'local')})
     with pytest.raises(CompileError, match='captured Local source index'):
-        compile_source('from local.missing import noise\noutput(noise(1.0))', env)
+        compile_source('from local.missing import noise\nresult = noise(1.0)', env)

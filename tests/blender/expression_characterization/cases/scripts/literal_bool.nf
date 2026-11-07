@@ -1,1 +1,2 @@
-output("Result", True)
+def nf_fixture():
+    return True

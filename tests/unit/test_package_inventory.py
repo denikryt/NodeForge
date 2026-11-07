@@ -939,92 +939,70 @@ def test_uninstall_removes_invalid_record_without_deleting_untrusted_target(pack
 
 
 def test_local_catalog_adapter_uses_build_local_transaction_cache(monkeypatch, tmp_path):
-    """Local source materialization reuses the transaction-tracked build cache and fingerprint."""
-    class FakeGroup(dict):
+    """Unified MODULE_DEF materialization reuses a transaction cache and reports dependencies."""
+    from NodeForge.compiler_identities import ModuleId, GroupCompilationIdentity, module_definition_function_id
+    from NodeForge.function_instances import function_materialization_owner_scope, FUNCTION_COMPILATION_FINGERPRINT_PROP
+    from NodeForge.blender.function_materializer import FunctionMaterializer, FunctionMaterializationContext
+    from NodeForge.semantic.source_modules import parse_source_module
+    from NodeForge.semantic.source_callable_session import SourceCallableSession
+    from NodeForge.semantic.builtin_registry import BUILTIN_NAMES
+    from NodeForge.semantic.call_resolution import CallableEnvironment
+    from NodeForge.semantic.ir import IRFunctionMaterialization, IRFunctionMaterializationMode
+
+    class Group(dict):
         def __init__(self, name):
             super().__init__()
-            self.name = name
-            self.bl_idname = "GeometryNodeTree"
+            self.name, self.bl_idname = name, 'GeometryNodeTree'
             self.interface = types.SimpleNamespace(items_tree=[])
-
-    class FakeNodeGroups(list):
-        def get(self, name, default=None):
-            return next((group for group in self if group.name == name), default)
 
     class Frame:
         def __init__(self):
-            self.identity_children = []
+            self.dependencies = []
+        def record_dependency(self, materialization, fingerprint):
+            self.dependencies.append((materialization, fingerprint))
 
-        def record_dependency_identity(self, owner_scope, fingerprint):
-            self.identity_children.append((owner_scope, fingerprint))
-
-    fake_groups = FakeNodeGroups()
-    fake_bpy = types.SimpleNamespace(
-        data=types.SimpleNamespace(node_groups=fake_groups),
-        app=types.SimpleNamespace(driver_namespace={}),
-    )
-    monkeypatch.setitem(sys.modules, "bpy", fake_bpy)
-    import NodeForge.blender.library_groups as library_groups
-    from NodeForge import catalog, local_sources
-    library_groups = importlib.reload(library_groups)
-
-    from NodeForge.function_instances import (
-        FUNCTION_COMPILATION_FINGERPRINT_PROP,
-        direct_library_owner_scope_for_id,
-    )
-    from NodeForge.blender.function_materializer import FunctionMaterializationContext
-
-    source_path = tmp_path / "demo.nf"
-    source_path.write_text("output(value=1)\n", encoding="utf-8")
-    record = catalog.LibraryEntryRecord(
-        namespace="local",
-        name="demo",
-        kind="source",
-        path=source_path,
-        source_path=source_path,
-        source_origin=local_sources._path_key(source_path),
-    )
-    monkeypatch.setattr(local_sources, "find_local_entry_record", lambda name: record)
-
-    transaction = object()
-    frame = Frame()
-    trace = types.SimpleNamespace(current=frame)
-    callback_calls = []
-
-    def compile_group(source, group_name, **kwargs):
-        callback_calls.append(kwargs)
-        group = FakeGroup(group_name)
-        group[FUNCTION_COMPILATION_FINGERPRINT_PROP] = "local-fingerprint"
-        fake_groups.append(group)
+    groups = []
+    fake_bpy = types.SimpleNamespace(data=types.SimpleNamespace(node_groups=groups),
+                                     app=types.SimpleNamespace(driver_namespace={}))
+    monkeypatch.setitem(sys.modules, 'bpy', fake_bpy)
+    from NodeForge.resolved_environment import ResolvedCatalog, ResolvedEnvironment
+    environment = ResolvedEnvironment({key: ResolvedCatalog(key, {})
+                                       for key in ('functions', 'examples', 'local')})
+    source = 'def demo(value: Float) -> Float:\n    return value\n'
+    module = ModuleId('LOCAL', str(tmp_path / 'demo.nf'))
+    snapshot = parse_source_module(source, module)
+    fid = module_definition_function_id(snapshot.definition_ref('demo'), '[]')
+    materialization = IRFunctionMaterialization(fid, IRFunctionMaterializationMode.SHARED)
+    owner = function_materialization_owner_scope(materialization)
+    identity = GroupCompilationIdentity(None, owner, fid.stable_key(), fid.stable_key())
+    session = SourceCallableSession(resolved_environment=environment)
+    semantics = CallableEnvironment(frozenset(BUILTIN_NAMES), dict(snapshot.definitions), {},
+        local_definition_refs={'demo': snapshot.definition_ref('demo')})
+    prepared = session.prepare_definition(function_id=fid, identity=identity, fn=snapshot.definitions['demo'],
+        callable_environment=semantics, compile_time_values={},
+        helper_namespace='demo', source_module=snapshot)
+    backend = _FakeGroupBackend(lambda source, name, **kwargs: Group(name))
+    def publication(request, *, finalize_before_commit=None):
+        group = Group(request.name)
+        group[FUNCTION_COMPILATION_FINGERPRINT_PROP] = 'fingerprint-module'
+        groups.append(group)
+        finalize_before_commit(group)
+        backend.requests.append(request)
         return group
-
-    backend = _FakeGroupBackend(compile_group)
-    cache = {}
-    session = backend.new_source_callable_session()
-    context = FunctionMaterializationContext(cache, transaction, trace, session)
-
-    first = library_groups.get_or_create_library_entry_group(
-        "local", "demo", backend, materialization_context=context
-    )
-    second = library_groups.get_or_create_library_entry_group(
-        "local", "demo", backend, materialization_context=context
-    )
-
+    monkeypatch.setattr(backend, 'create_or_update', publication)
+    frame = Frame()
+    context = FunctionMaterializationContext({}, object(), types.SimpleNamespace(current=frame), session)
+    materializer = FunctionMaterializer(group_backend=backend)
+    first = materializer.materialize_module(prepared, materialization, context)
+    second = materializer.materialize_module(prepared, materialization, context)
     assert first.group is second.group
-    assert first.instance_key == second.instance_key == ""
-    assert len(callback_calls) == 1
-    from NodeForge.compiler_identities import library_function_id_for_record
-    function_id = library_function_id_for_record(record)
-    assert cache[("local-catalog", function_id)] is first.group
-    assert callback_calls[0]["function_group_transaction"] is transaction
-    assert callback_calls[0]["function_compilation_trace"] is trace
-    assert callback_calls[0]["function_compilation_inputs"]["kind"] == "library"
-    assert callback_calls[0]["function_compilation_inputs"]["namespace"] == "local"
-    owner = direct_library_owner_scope_for_id(function_id)
-    assert frame.identity_children == [
-        (owner, "local-fingerprint"),
-        (owner, "local-fingerprint"),
-    ]
+    assert first.instance_key == second.instance_key == ''
+    assert len(backend.requests) == 1
+    assert context.function_group_cache[('module-def', fid, 'SHARED')] is first.group
+    assert backend.requests[0].function_group_transaction is context.function_group_transaction
+    assert backend.requests[0].function_compilation_trace is context.function_compilation_trace
+    assert backend.requests[0].function_compilation_inputs['kind'] == 'module-def'
+    assert frame.dependencies == [(materialization, 'fingerprint-module')] * 2
 
 
 def test_functions_catalog_keeps_duplicate_member_rows_owner_qualified(monkeypatch, tmp_path):

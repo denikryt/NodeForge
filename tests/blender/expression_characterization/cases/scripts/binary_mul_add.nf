@@ -1,4 +1,3 @@
-a = input_float("A", default=2.0)
-b = input_float("B", default=3.0)
-result = a * 2 + b
-output("Result", result)
+def nf_fixture(a: Float['A']=2.0, b: Float['B']=3.0):
+    result = a * 2 + b
+    return result

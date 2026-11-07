@@ -97,13 +97,13 @@ def test_alias_call_produces_same_cached_function_definition():
 x = alias(1)
 def later(n: Float) -> Float:
     return n + 1
-output(x)'''
+result = x'''
     group = analyze_group_source(source,
         compilation_identity=GroupCompilationIdentity(None, 'ROOT/alias', 'ROOT/alias', 'ROOT/alias'),
         resolved_environment=environment, source_callable_session=session)
     assert len(session.prepared) == 1
     assert next(iter(session.prepared.values())).contract.function_id.name == 'later'
-    assert len(group.interface.outputs) == 1
+    assert not group.interface.outputs
     assert [ref.name for ref in group.source_call_graph.entries] == ["later"]
 
 
@@ -117,7 +117,7 @@ def test_nested_definition_alias_compiles_through_the_same_semantic_lookup():
 def B(n: Float) -> Float:
     return n * 2
 x = A(2)
-output(x)'''
+result = x'''
     group = analyze_group_source(source,
         compilation_identity=GroupCompilationIdentity(None, 'ROOT/nested-alias', 'ROOT/nested-alias', 'ROOT/nested-alias'),
         resolved_environment=environment, source_callable_session=session)

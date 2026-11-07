@@ -1,1 +1,2 @@
-output("Result", "text")
+def nf_fixture():
+    return 'text'

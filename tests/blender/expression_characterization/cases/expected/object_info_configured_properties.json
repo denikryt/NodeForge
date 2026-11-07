@@ -3,12 +3,12 @@
     "interface": [
       {
         "in_out": "OUTPUT",
-        "name": "Geometry",
+        "name": "Value 1",
         "socket_type": "NodeSocketGeometry"
       },
       {
         "in_out": "OUTPUT",
-        "name": "Location",
+        "name": "Value 2",
         "socket_type": "NodeSocketVector"
       },
       {

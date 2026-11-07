@@ -83,12 +83,12 @@ def test_file_import_does_not_execute_executable_statements(tmp_path):
 cube(1.0)''')
     env = _env(tmp_path)
     session = SourceCallableSession(resolved_environment=env)
-    group = analyze_group_source('from local import geometry\noutput(2.0)',
+    group = analyze_group_source('from local import geometry\nv = cube(2.0)',
         compilation_identity=GroupCompilationIdentity(None, 'ROOT', 'ROOT', 'ROOT'),
         resolved_environment=env, source_callable_session=session)
     assert len([module for module in session.module_snapshots if module.kind == "LOCAL"]) == 1
     assert not session.prepared
-    assert len(group.interface.outputs) == 1
+    assert len(group.interface.outputs) == 0
 
 
 @pytest.mark.parametrize('import_request, error', [
@@ -136,7 +136,7 @@ def test_star_import_is_rejected_instead_of_exposing_legacy_file_functions(tmp_p
     env = _env(tmp_path)
     session = SourceCallableSession(resolved_environment=env)
     with pytest.raises(CompileError, match='star imports are unsupported'):
-        analyze_group_source('from local import *\noutput(1)',
+        analyze_group_source('from local import *\nv = cube(1)',
             compilation_identity=GroupCompilationIdentity(None, 'ROOT', 'ROOT', 'ROOT'),
             resolved_environment=env, source_callable_session=session)
 
@@ -147,7 +147,7 @@ def test_calling_a_file_module_without_member_is_a_source_error(tmp_path):
     env = _env(tmp_path)
     session = SourceCallableSession(resolved_environment=env)
     with pytest.raises(CompileError, match='not callable'):
-        analyze_group_source('from local import geometry\noutput(geometry(1))',
+        analyze_group_source('from local import geometry\nv = geometry(1)',
             compilation_identity=GroupCompilationIdentity(None, 'ROOT', 'ROOT', 'ROOT'),
             resolved_environment=env, source_callable_session=session)
 

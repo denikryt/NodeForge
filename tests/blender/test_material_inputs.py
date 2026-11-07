@@ -17,9 +17,10 @@ def _interface_socket(group, name, in_out):
 
 def test_input_material_wires_set_material_and_preserves_named_material_mode():
     group = compile_group('''
-mat = input_material("Surface Material")
-geo = set_material(cube(1.0), mat)
-output("Geometry", geo)
+def nf_fixture(mat: Material['Surface Material']):
+    geo = set_material(cube(1.0), mat)
+    geometry = geo
+    return (geometry,)
 ''', "NFTest_runtime_material")
     iface = _interface_socket(group, "Surface Material", "INPUT")
     check(iface.socket_type == "NodeSocketMaterial", "input_material did not create a Material interface socket")
@@ -28,8 +29,10 @@ output("Geometry", geo)
     check(set_node.inputs["Material"].bl_idname == "NodeSocketMaterial", "Material socket type changed")
 
     named = compile_group('''
-geo = set_material(cube(1.0), "NFTest Named Material")
-output("Geometry", geo)
+def nf_fixture():
+    geo = set_material(cube(1.0), "NFTest Named Material")
+    geometry = geo
+    return (geometry,)
 ''', "NFTest_named_material_compat")
     named_node = next(node for node in named.nodes if node.bl_idname == "GeometryNodeSetMaterial")
     check(named_node.inputs["Material"].default_value == bpy.data.materials["NFTest Named Material"], "named material compatibility failed")
@@ -39,7 +42,8 @@ output("Geometry", geo)
 
 def test_set_material_rejects_non_material_runtime_value():
     expect_compile_error('''
-value = input_float("Value")
-geo = set_material(cube(1.0), value)
-output("Geometry", geo)
+def nf_fixture(value: Float['Value']):
+    geo = set_material(cube(1.0), value)
+    geometry = geo
+    return (geometry,)
 ''', "NFTest_bad_runtime_material")

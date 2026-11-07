@@ -55,7 +55,7 @@ right = move_x(cube(1.0), 2.0)
 combined = join([left, right])
 ```
 
-Declarations are visible before their textual definition. Parameters use exact Python identifiers as keyword names; `Float["X Shift"]` changes the Blender display label, not the keyword `x_shift`. A parameter without `=` is required in explicit calls, while omitted optional parameters use their declared defaults.
+Declarations are visible before their textual definition. Parameters use exact Python identifiers as keyword names; `Float["X Shift"]` changes the Blender display label, not the keyword `x_shift`. Every parameter must have an explicit type annotation, even if it has a default. A parameter without `=` is required in explicit calls, while omitted optional parameters use their declared defaults.
 
 When a module has no executable top-level statements, **Compile Script** automatically places the functions that are not called by other definitions in that same module. All functions, including names beginning with `_`, remain importable.
 

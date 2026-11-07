@@ -1,1 +1,2 @@
-output("Result", 1.0)
+def nf_fixture():
+    return 1.0

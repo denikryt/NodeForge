@@ -29,12 +29,12 @@ def test_nested_role_rejects_used_root_only_mesh_compute_but_root_allows_it(tmp_
         '    return {"point_attributes": {"out_height": [amount] * mesh.vertex_count}}\n')
     monkeypatch.setattr(local_sources, '_default_local_catalog_dir', lambda: folder)
     monkeypatch.setattr(local_sources, '_local_sources_registry_path', lambda: tmp_path / 'registry.json')
-    source = 'from local import erosion\ngeo = input_geometry("Geometry")\noutput(erosion(geo))\n'
+    source = 'from local import erosion\ngeo = cube(1)\nresult = erosion(geo)\n'
     with pytest.raises(CompileError, match='root-only Mesh Compute'):
         _prepare(source, environment_resolution._make_compilation_environment(), RuntimeRole.NESTED)
     group = _prepare(source, environment_resolution._make_compilation_environment(), RuntimeRole.ROOT)
     assert group.extension_dependencies
-    unused = _prepare('from local import erosion\noutput(1.0)\n',
+    unused = _prepare('from local import erosion\nvalue = cube(1)\n',
                       environment_resolution._make_compilation_environment(), RuntimeRole.NESTED)
     assert not unused.extension_dependencies
 
@@ -50,4 +50,4 @@ def test_direct_preflight_allows_plain_builtin_ir_and_does_not_change_it():
 def test_invalid_runtime_role_fails_during_semantic_environment_construction():
     """Unknown semantic roles cannot silently acquire ROOT privileges."""
     with pytest.raises(ValueError):
-        _prepare('output(1.0)\n', environment_resolution._make_compilation_environment(), 'UNKNOWN_ROLE')
+        _prepare('x = cube(1)\n', environment_resolution._make_compilation_environment(), 'UNKNOWN_ROLE')

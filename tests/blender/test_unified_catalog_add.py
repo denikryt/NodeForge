@@ -88,3 +88,20 @@ def test_package_module_definition_selected_reload_in_place(tmp_path):
         assert compiler.create_package_function_group('vendor.add', 'grow') is group
     finally:
         packages.set_packages_dir_for_tests(None)
+
+
+def test_local_catalog_add_reuses_one_resolved_environment(tmp_path, monkeypatch):
+    """Catalog discovery and function Add must use the same environment revision."""
+    from NodeForge import local_sources
+    root = tmp_path / 'local'
+    root.mkdir()
+    (root / 'one.nf').write_text(
+        'def make(x: Float = 1.0) -> Float:\n    return x + 1\n', encoding='utf-8',
+    )
+    monkeypatch.setattr(local_sources, '_catalog_input_paths', lambda: ((root,), ()))
+    monkeypatch.setattr(
+        compiler, '_make_compilation_environment',
+        lambda: pytest.fail('catalog Add re-resolved an already selected source environment'),
+    )
+    group = compiler.create_library_catalog_group('local', 'one')
+    assert group.get('nodeforge_module_name') == 'make'

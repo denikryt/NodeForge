@@ -339,10 +339,12 @@ def test_v2_system_dispatch_is_lazy_and_uses_public_backend_context():
         assert not hasattr(builtins, "_nodeforge_extension_v2_blender_impl_hits")
 
         group = compile_group(
-            'from packages import v2\n'
-            'value = input_float("Value", default=3.0)\n'
-            'result = ext_scale(value)\n'
-            'output("Result", result)\n',
+            '''from packages import v2
+
+def nf_fixture(value: Float['Value']=3.0):
+    result = ext_scale(value)
+    return result
+''',
             "NFTest_extension_v2_scale",
         )
 
@@ -362,10 +364,12 @@ def test_nested_owner_local_imports_work_through_install_and_physical_dispatch()
         _write_nested_import_extension_package(source)
         packages.install_package_directory(source)
         group = compile_group(
-            'from packages import nested\n'
-            'value = input_float("Value", default=3.0)\n'
-            'result = nested_scale(value)\n'
-            'output("Result", result)\n',
+            '''from packages import nested
+
+def nf_fixture(value: Float['Value']=3.0):
+    result = nested_scale(value)
+    return result
+''',
             "NFTest_extension_v2_nested_imports",
         )
 
@@ -382,11 +386,13 @@ def test_rotation_extension_result_can_cross_another_extension_and_group_output(
         _write_rotation_extension_package(source)
         packages.install_package_directory(source)
         group = compile_group(
-            'from packages import rotation as rotpkg\n'
-            'value = input_vector("Euler")\n'
-            'rotation = make_rotation(value)\n'
-            'result = identity_rotation(rotation)\n'
-            'output("Rotation", result)\n',
+            '''from packages import rotation as rotpkg
+
+def nf_fixture(value: Vector['Euler']):
+    rotation = make_rotation(value)
+    result = identity_rotation(rotation)
+    return result
+''',
             "NFTest_extension_v2_rotation",
         )
         output = next(
@@ -394,7 +400,7 @@ def test_rotation_extension_result_can_cross_another_extension_and_group_output(
             for item in group.interface.items_tree
             if getattr(item, "item_type", None) == "SOCKET"
             and getattr(item, "in_out", None) == "OUTPUT"
-            and item.name == "Rotation"
+            and item.name == "Value"
         )
         assert output.socket_type == "NodeSocketRotation"
 
@@ -408,10 +414,12 @@ def test_direct_wrapper_cannot_return_an_input_socket_as_runtime_result():
         before = set(bpy.data.node_groups)
         with pytest.raises(CompileError, match="output sockets"):
             compile_group(
-                'from packages import v2\n'
-                'value = input_float("Value", default=3.0)\n'
-                'result = ext_scale(value)\n'
-                'output("Result", result)\n',
+                '''from packages import v2
+
+def nf_fixture(value: Float['Value']=3.0):
+    result = ext_scale(value)
+    return result
+''',
                 "NFTest_extension_v2_bad_result",
             )
         assert set(bpy.data.node_groups) == before
@@ -428,10 +436,12 @@ def test_invalid_extension_result_rolls_back_generated_resources():
 
         with pytest.raises(CompileError, match="output sockets"):
             compile_group(
-                'from packages import v2\n'
-                'value = input_float("Value", default=3.0)\n'
-                'result = ext_scale(value)\n'
-                'output("Result", result)\n',
+                '''from packages import v2
+
+def nf_fixture(value: Float['Value']=3.0):
+    result = ext_scale(value)
+    return result
+''',
                 "NFTest_extension_v2_resource_rollback",
             )
 
@@ -448,10 +458,12 @@ def test_semantic_state_reconstructs_exact_records_and_runtime_leaf():
             _write_semantic_extension_package(source)
             packages.install_package_directory(source)
             group = compile_group(
-                'from packages import semantic\n'
-                'value = input_int("Value", default=3)\n'
-                'result = consume_part(make_part(value))\n'
-                'output("Result", result)\n',
+                '''from packages import semantic
+
+def nf_fixture(value: Int['Value']=3):
+    result = consume_part(make_part(value))
+    return result
+''',
                 "NFTest_extension_v2_semantic_state",
             )
 
@@ -479,10 +491,12 @@ def test_semantic_backend_result_failure_rolls_back_generated_resources():
 
             with pytest.raises(CompileError) as exc_info:
                 compile_group(
-                    'from packages import semantic\n'
-                    'value = input_int("Value", default=3)\n'
-                    'result = bad_consume_part(make_part(value))\n'
-                    'output("Result", result)\n',
+                    '''from packages import semantic
+
+def nf_fixture(value: Int['Value']=3):
+    result = bad_consume_part(make_part(value))
+    return result
+''',
                     "NFTest_extension_v2_semantic_rollback",
                 )
 
@@ -506,11 +520,13 @@ def test_persistent_semantic_assignment_reconstructs_runtime_leaf_later():
             _write_semantic_extension_package(source)
             packages.install_package_directory(source)
             group = compile_group(
-                'from packages import semantic\n'
-                'value = input_int("Value", default=3)\n'
-                'part = make_part(value)\n'
-                'result = consume_part(part)\n'
-                'output("Result", result)\n',
+                '''from packages import semantic
+
+def nf_fixture(value: Int['Value']=3):
+    part = make_part(value)
+    result = consume_part(part)
+    return result
+''',
                 "NFTest_extension_v2_persistent_semantic_state",
             )
             math_nodes = [
@@ -533,10 +549,12 @@ def test_discarded_runtime_extension_argument_creates_no_backend_or_resource():
             packages.install_package_directory(source)
             before_meshes = {mesh.as_pointer() for mesh in bpy.data.meshes}
             group = compile_group(
-                'from packages import semantic\n'
-                'value = input_int("Value", default=3)\n'
-                'part = ignore_part_input(runtime_resource(value))\n'
-                'output("Value", value)\n',
+                '''from packages import semantic
+
+def nf_fixture(value: Int['Value']=3):
+    part = ignore_part_input(runtime_resource(value))
+    return value
+''',
                 "NFTest_extension_v2_discarded_runtime_demand",
             )
             assert group is not None
@@ -559,11 +577,13 @@ def test_persistent_semantic_backend_failure_still_rolls_back_resources():
             before_objects = {obj.as_pointer() for obj in bpy.data.objects}
             with pytest.raises(CompileError) as exc_info:
                 compile_group(
-                    'from packages import semantic\n'
-                    'value = input_int("Value", default=3)\n'
-                    'part = make_part(value)\n'
-                    'result = bad_consume_part(part)\n'
-                    'output("Result", result)\n',
+                    '''from packages import semantic
+
+def nf_fixture(value: Int['Value']=3):
+    part = make_part(value)
+    result = bad_consume_part(part)
+    return result
+''',
                     "NFTest_extension_v2_persistent_semantic_rollback",
                 )
             message = str(exc_info.value)
@@ -583,10 +603,12 @@ def test_nodeforge_math_v2_reference_package():
     packages.install_package_directory(Path(package_path))
 
     sine_group = compile_group(
-        'from packages import math\n'
-        'value = input_float("Value", default=0.5)\n'
-        'result = sin(value)\n'
-        'output("Result", result)\n',
+        '''from packages import math
+
+def nf_fixture(value: Float['Value']=0.5):
+    result = sin(value)
+    return result
+''',
         "NFTest_math_v2_sin",
     )
     sine_nodes = [
@@ -596,12 +618,12 @@ def test_nodeforge_math_v2_reference_package():
     assert len(sine_nodes) == 1
 
     select_group = compile_group(
-        'from packages import math\n'
-        'cond = input_bool("Condition", default=True)\n'
-        'a = input_int("A", default=1)\n'
-        'b = input_int("B", default=2)\n'
-        'result = select(cond, a, b)\n'
-        'output("Result", result)\n',
+        '''from packages import math
+
+def nf_fixture(cond: Bool['Condition']=True, a: Int['A']=1, b: Int['B']=2):
+    result = select(cond, a, b)
+    return result
+''',
         "NFTest_math_v2_select_int",
     )
     switches = [node for node in select_group.nodes if node.bl_idname == "GeometryNodeSwitch"]

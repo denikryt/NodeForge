@@ -440,7 +440,14 @@ def run_case(case):
     try:
         try:
             with _case_local_sources(case_id) as has_local:
-                group = compiler.create_expression_group(source, f"NFChar_{case_id}")
+                if case_id == "local_call_mixed_array_index":
+                    # This fixture exercises an intra-module def-to-def call;
+                    # the unified language materializes its entry in a base tree.
+                    group = bpy.data.node_groups.new(f"NFChar_{case_id}", "GeometryNodeTree")
+                    compiler.compose_source_initial(source, group)
+                    has_local = True
+                else:
+                    group = compiler.create_expression_group(source, f"NFChar_{case_id}")
         except CompileError as exc:
             actual_outcome = "compile_error"
             result = {
@@ -458,7 +465,7 @@ def run_case(case):
         if actual_outcome != expected_outcome:
             raise AssertionError(
                 f"characterization case {case_id} expected outcome {expected_outcome!r}, "
-                f"got {actual_outcome!r}"
+                f"got {actual_outcome!r}; actual={result!r}"
             )
         return result
     finally:

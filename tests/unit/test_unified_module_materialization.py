@@ -40,7 +40,7 @@ def test_module_function_uses_physical_owner_and_unified_parameter_binding():
 
 first = move(3)
 second = move(4, __unique__=True)
-output(first + second)
+combined = first + second
 ''')
     assert len(session.prepared) == 2
     ids = {key.function_id for key in session.prepared}
@@ -60,4 +60,26 @@ output(first + second)
 
 def test_invalid_module_call_raises_without_prepared_artifact():
     with pytest.raises(CompileError, match='missing required'):
-        _analyze('def f(x: Float):\n    return x\noutput(f())')
+        _analyze('def f(x: Float):\n    return x\ncombined = f()')
+
+
+def test_explicit_float_parameter_identity_is_independent_of_argument_types_and_defaults():
+    """Both Int and Float arguments reference one declared Float owner, not inferred specializations."""
+    group, session = _analyze('def scaled(value: Float = 2.0) -> Float:\n    return value\n\none = scaled()\ntwo = scaled(3)\nthree = scaled(3.5)\n')
+    assert len(session.prepared) == 1
+    prepared, = session.prepared.values()
+    parameter, = prepared.contract.parameters
+    assert parameter.typ.name == 'FLOAT'
+    assert parameter.has_default
+    assert prepared.group.interface.inputs[0].default == 2.0
+    calls = [op for stmt in group.body.statements
+             for op in getattr(getattr(stmt, 'value', None), 'operations', ())
+             if isinstance(op, IRCall)]
+    assert len(calls) == 3
+    assert len({op.target.function_id for op in calls}) == 1
+
+
+def test_unannotated_parameter_is_rejected_before_call_type_specialization():
+    """Supplying an Int at a call site never fills a missing source annotation."""
+    with pytest.raises(CompileError, match='requires an explicit type annotation'):
+        _analyze('def f(value):\n    return value\nresult = f(3)\n')

@@ -263,7 +263,7 @@ class SymbolIndex:
         return {name: self._record_signatures(record, name, definition=name) for name in names}
 
     def _typed_signature(self, signature: Signature) -> Signature:
-        """Retain syntax-level signature details; inferred types require compilation."""
+        """Retain declared parameter types and source-level signature details."""
         return signature
 
     def _export_signatures(self, export, name: str) -> tuple[Signature, ...]:

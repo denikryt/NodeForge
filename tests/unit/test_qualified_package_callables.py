@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from NodeForge.compiler_identities import GroupCompilationIdentity, library_function_id
+from NodeForge.compiler_identities import GroupCompilationIdentity, ModuleId, module_definition_function_id
 from NodeForge.errors import CompileError
 from NodeForge.extensions.registry import ExtensionOwnerSession, ExtensionRegistry, capture_owner_code_snapshot
 from NodeForge.resolved_environment import (
@@ -19,6 +19,7 @@ from NodeForge.resolved_environment import (
 from NodeForge.semantic.group import analyze_group_source
 from NodeForge.semantic.ir import IRCall, IRCallableKind
 from NodeForge.semantic.source_callable_session import SourceCallableSession
+from NodeForge.semantic.source_modules import parse_source_module
 
 pytestmark = pytest.mark.unit
 
@@ -31,7 +32,7 @@ def _identity(label: str = "ROOT/package_namespaces") -> GroupCompilationIdentit
 def _source_record(tmp_path: Path, package_id: str, name: str, *, result_expr: str = "x"):
     """Create one pure source-backed package callable record."""
     path = tmp_path / f"{package_id.replace('.', '_')}_{name}.nf"
-    path.write_text(f'x = input_float("X")\noutput({result_expr})\n', encoding="utf-8")
+    path.write_text(f'def {name}(x: Float) -> Float:\n    return {result_expr}\n', encoding="utf-8")
     return SimpleNamespace(
         namespace="functions",
         name=name,
@@ -45,7 +46,7 @@ def _source_record(tmp_path: Path, package_id: str, name: str, *, result_expr: s
     )
 
 
-def _environment(tmp_path: Path, specs):
+def _environment(tmp_path: Path, specs, *, source_overrides=None):
     """Build one immutable owner-qualified environment from source-callable specs."""
     namespaces = {}
     records = {}
@@ -53,8 +54,17 @@ def _environment(tmp_path: Path, specs):
         exports = {}
         for name in names:
             record = _source_record(tmp_path, package_id, name)
+            if source_overrides and (package_id, name) in source_overrides:
+                record.path.write_text(source_overrides[(package_id, name)], encoding='utf-8')
             records[(package_id, name)] = record
-            exports[name] = PackageCallableExport(package_id, name, record=record)
+            snapshot = parse_source_module(
+                record.path.read_text(encoding='utf-8'),
+                ModuleId('PACKAGE', f'functions/{record.path.name}', package_id=package_id),
+            )
+            exports[name] = PackageCallableExport(
+                package_id, name, record=record,
+                definition=snapshot.definition_ref(name), source_snapshot=snapshot,
+            )
         namespaces[package_id] = ResolvedPackageNamespace(
             package_id,
             import_name,
@@ -154,19 +164,19 @@ def _source_calls(compilation):
 
 def test_core_reserved_bare_points_and_qualified_package_points_coexist(tmp_path):
     """Core bare reservation does not invalidate or shadow owner-qualified package points."""
-    environment, _ = _environment(tmp_path, [("nodeforge.lsystem", "lsystem", ("points",))])
+    environment, _ = _environment(tmp_path, [("nodeforge.lsystem", "lsystem", ("rings",))])
     compilation, _session = _compile(
         "from packages import lsystem\n"
-        "count = input_int('Count')\n"
+        "count = 1\n"
         "core_geo = points(count)\n"
-        "x = input_float('X')\n"
-        "pkg_value = lsystem.points(x)\n"
-        "output(core_geo)\n",
+        "x = 1.0\n"
+        "pkg_value = lsystem.rings(x)\n"
+        "display = core_geo\n",
         environment,
     )
     calls = _source_calls(compilation)
     assert [call.target.function_id for call in calls] == [
-        library_function_id("functions", "nodeforge.lsystem", "points")
+        next(iter(_session.prepared)).function_id
     ]
 
 
@@ -174,7 +184,7 @@ def test_qualified_missing_member_never_falls_back_to_core(tmp_path):
     """An imported package namespace owns qualified lookup failure completely."""
     environment, _ = _environment(tmp_path, [("nodeforge.lsystem", "lsystem", ("other",))])
     with pytest.raises(CompileError, match="has no callable member 'points'"):
-        _compile("from packages import lsystem\ng = lsystem.points(1)\noutput(g)\n", environment)
+        _compile("from packages import lsystem\ng = lsystem.points(1)\nresult = g\n", environment)
 
 
 def test_same_member_from_two_packages_is_qualified_and_bare_is_ambiguous(tmp_path):
@@ -184,44 +194,44 @@ def test_same_member_from_two_packages_is_qualified_and_bare_is_ambiguous(tmp_pa
         [("vendor.a", "a", ("foo",)), ("vendor.b", "b", ("foo",))],
     )
     with pytest.raises(CompileError, match=r"Ambiguous callable 'foo'.*a\.foo.*b\.foo"):
-        _compile("from packages import a, b\nx = input_float('X')\ny = foo(x)\noutput(y)\n", environment)
+        _compile("from packages import a, b\nx = 1.0\ny = foo(x)\nresult = y\n", environment)
 
-    first, _ = _compile("from packages import a, b\nx = input_float('X')\ny = a.foo(x)\noutput(y)\n", environment, label="ROOT/a")
-    second, _ = _compile("from packages import a, b\nx = input_float('X')\ny = b.foo(x)\noutput(y)\n", environment, label="ROOT/b")
-    assert _source_calls(first)[0].target.function_id.package_id == "vendor.a"
-    assert _source_calls(second)[0].target.function_id.package_id == "vendor.b"
+    first, _ = _compile("from packages import a, b\nx = 1.0\ny = a.foo(x)\nresult = y\n", environment, label="ROOT/a")
+    second, _ = _compile("from packages import a, b\nx = 1.0\ny = b.foo(x)\nresult = y\n", environment, label="ROOT/b")
+    assert _source_calls(first)[0].target.function_id.module.package_id == "vendor.a"
+    assert _source_calls(second)[0].target.function_id.module.package_id == "vendor.b"
 
 
 def test_alias_spelling_does_not_change_canonical_callable_identity(tmp_path):
     """Source alias is scope syntax only, never semantic identity."""
     environment, _ = _environment(tmp_path, [("nodeforge.math", "math", ("sin",))])
-    first, _ = _compile("from packages import math\nx=input_float('X')\ny=math.sin(x)\noutput(y)\n", environment, label="ROOT/math")
-    second, _ = _compile("from packages import math as m\nx=input_float('X')\ny=m.sin(x)\noutput(y)\n", environment, label="ROOT/m")
+    first, _ = _compile("from packages import math\nx=1.0\ny=math.sin(x)\nresult = y\n", environment, label="ROOT/math")
+    second, _ = _compile("from packages import math as m\nx=1.0\ny=m.sin(x)\nresult = y\n", environment, label="ROOT/m")
     assert _source_calls(first)[0].target.function_id == _source_calls(second)[0].target.function_id
 
 
 def test_runtime_source_value_blocks_bare_package_call_but_qualified_call_works(tmp_path):
     """A live source value owns its bare name while package qualification remains explicit."""
     environment, _ = _environment(tmp_path, [("nodeforge.math", "math", ("sin",))])
-    source = "from packages import math\nsin=input_float('Sin')\nx=input_float('X')\ny=sin(x)\noutput(y)\n"
+    source = "from packages import math\nsin=math.sin(1.0)\nx=1.0\ny=sin(x)\nresult = y\n"
     with pytest.raises(CompileError, match=r"Cannot call 'sin'.*source value.*math\.sin"):
         _compile(source, environment)
-    qualified = "from packages import math\nsin=input_float('Sin')\nx=input_float('X')\ny=math.sin(x)\noutput(y)\n"
+    qualified = "from packages import math\nsin=math.sin(1.0)\nx=1.0\ny=math.sin(x)\nresult = y\n"
     compilation, _ = _compile(qualified, environment)
-    assert _source_calls(compilation)[0].target.function_id.package_id == "nodeforge.math"
+    assert _source_calls(compilation)[0].target.function_id.module.package_id == "nodeforge.math"
 
 
 def test_compile_time_source_value_blocks_bare_package_call_but_qualified_call_works(tmp_path):
     """Compile-time source values own bare names without hiding qualified package members."""
     environment, _ = _environment(tmp_path, [("nodeforge.math", "math", ("sin",))])
     with pytest.raises(CompileError, match=r"Cannot call 'sin'.*source value.*math\.sin"):
-        _compile("from packages import math\nsin = 2.0\nx=input_float('X')\ny=sin(x)\noutput(y)\n", environment)
+        _compile("from packages import math\nsin = 2.0\nx=1.0\ny=sin(x)\nresult = y\n", environment)
 
     compilation, _ = _compile(
-        "from packages import math\nsin = 2.0\nx=input_float('X')\ny=math.sin(x)\noutput(y)\n",
+        "from packages import math\nsin = 2.0\nx=1.0\ny=math.sin(x)\nresult = y\n",
         environment,
     )
-    assert _source_calls(compilation)[0].target.function_id.package_id == "nodeforge.math"
+    assert _source_calls(compilation)[0].target.function_id.module.package_id == "nodeforge.math"
 
 
 def test_structural_array_source_value_blocks_bare_package_call_but_qualified_call_works(tmp_path):
@@ -230,22 +240,22 @@ def test_structural_array_source_value_blocks_bare_package_call_but_qualified_ca
     with pytest.raises(CompileError, match=r"Cannot call 'items'.*source value.*arr\.items"):
         _compile(
             "from packages import arr\n"
-            "x=input_float('X')\n"
+            "x=1.0\n"
             "items=[x]\n"
             "y=items(x)\n"
-            "output(y)\n",
+            "result = y\n",
             environment,
         )
 
     compilation, _ = _compile(
         "from packages import arr\n"
-        "x=input_float('X')\n"
+        "x=1.0\n"
         "items=[x]\n"
         "y=arr.items(x)\n"
-        "output(y)\n",
+        "result = y\n",
         environment,
     )
-    assert _source_calls(compilation)[0].target.function_id.package_id == "vendor.arr"
+    assert _source_calls(compilation)[0].target.function_id.module.package_id == "vendor.arr"
 
 
 
@@ -254,23 +264,23 @@ def test_plain_structural_binding_blocks_bare_package_call_and_qualified_call_wo
     environment, _ = _environment(tmp_path, [("vendor.struct", "struct", ("pair",))])
     bad = (
         "from packages import struct\n"
-        "x=input_float('X')\n"
+        "x=1.0\n"
         "pair=(x, x)\n"
         "y=pair(x)\n"
-        "output(y)\n"
+        "result = y\n"
     )
     with pytest.raises(CompileError, match=r"Cannot call 'pair'.*source value.*struct\.pair"):
         _compile(bad, environment)
 
     good = (
         "from packages import struct\n"
-        "x=input_float('X')\n"
+        "x=1.0\n"
         "pair=(x, x)\n"
         "y=struct.pair(x)\n"
-        "output(y)\n"
+        "result = y\n"
     )
     compilation, _ = _compile(good, environment)
-    assert _source_calls(compilation)[0].target.function_id.package_id == "vendor.struct"
+    assert _source_calls(compilation)[0].target.function_id.module.package_id == "vendor.struct"
 
 
 def test_geometry_builder_binding_blocks_bare_package_call_and_qualified_call_works(tmp_path):
@@ -279,9 +289,9 @@ def test_geometry_builder_binding_blocks_bare_package_call_and_qualified_call_wo
     bad = (
         "from packages import pkg\n"
         "builder=geometry_builder()\n"
-        "x=input_float('X')\n"
+        "x=1.0\n"
         "y=builder(x)\n"
-        "output(y)\n"
+        "result = y\n"
     )
     with pytest.raises(CompileError, match=r"Cannot call 'builder'.*source value.*pkg\.builder"):
         _compile(bad, environment)
@@ -289,12 +299,12 @@ def test_geometry_builder_binding_blocks_bare_package_call_and_qualified_call_wo
     good = (
         "from packages import pkg\n"
         "builder=geometry_builder()\n"
-        "x=input_float('X')\n"
+        "x=1.0\n"
         "y=pkg.builder(x)\n"
-        "output(y)\n"
+        "result = y\n"
     )
     compilation, _ = _compile(good, environment)
-    assert _source_calls(compilation)[0].target.function_id.package_id == "vendor.builder"
+    assert _source_calls(compilation)[0].target.function_id.module.package_id == "vendor.builder"
 
 
 def test_persistent_extension_value_blocks_bare_package_call_and_qualified_call_works(tmp_path):
@@ -302,20 +312,20 @@ def test_persistent_extension_value_blocks_bare_package_call_and_qualified_call_
     environment = _semantic_environment(tmp_path)
     bad = (
         "from packages import semantic\n"
-        "x=input_float('X')\n"
+        "x=1.0\n"
         "part=make(x)\n"
         "other=part(x)\n"
-        "output(x)\n"
+        "result = x\n"
     )
     with pytest.raises(CompileError, match=r"Cannot call 'part'.*source value.*semantic\.part"):
         _compile(bad, environment)
 
     good = (
         "from packages import semantic\n"
-        "x=input_float('X')\n"
+        "x=1.0\n"
         "part=make(x)\n"
         "other=semantic.part(x)\n"
-        "output(x)\n"
+        "result = x\n"
     )
     compilation, _ = _compile(good, environment)
     assert compilation.extension_dependencies
@@ -335,10 +345,10 @@ def test_local_parameter_named_like_package_export_remains_non_callable(tmp_path
     environment, _ = _environment(tmp_path, [("nodeforge.math", "math", ("sin",))])
     source = (
         "from packages import math\n"
-        "x=input_float('X')\n"
-        "def helper(sin, x):\n"
+        "x=1.0\n"
+        "def helper(sin: Float, x: Float):\n"
         "    return sin(x)\n"
-        "output(helper(x, x))\n"
+        "result = helper(x, x)\n"
     )
     with pytest.raises(CompileError, match=r"Cannot call 'sin'.*source value"):
         _compile(source, environment)
@@ -352,29 +362,27 @@ def test_package_source_callable_keeps_its_own_explicit_package_scope(tmp_path):
             ("nodeforge.math", "math", ("sin",)),
             ("vendor.helpers", "helpers", ("apply_sin",)),
         ],
-    )
-    records[("vendor.helpers", "apply_sin")].path.write_text(
-        "from packages import math\n"
-        "x=input_float('X')\n"
-        "value=sin(x)\n"
-        "output(value)\n",
-        encoding="utf-8",
+        source_overrides={
+            ("vendor.helpers", "apply_sin"):
+                "from packages import math\ndef apply_sin(x: Float) -> Float:\n"
+                "    return math.sin(x)\n",
+        },
     )
     source = (
         "from packages import helpers, math\n"
-        "sin=input_float('Sin')\n"
-        "x=input_float('X')\n"
+        "sin=1.0\n"
+        "x=1.0\n"
         "y=helpers.apply_sin(x)\n"
-        "output(y)\n"
+        "result = y\n"
     )
     compilation, session = _compile(source, environment)
-    assert _source_calls(compilation)[0].target.function_id.package_id == "vendor.helpers"
+    assert _source_calls(compilation)[0].target.function_id.module.package_id == "vendor.helpers"
     helper_group = next(
         prepared.group
         for key, prepared in session.prepared.items()
-        if key.function_id.kind == "LIBRARY" and key.function_id.package_id == "vendor.helpers"
+        if key.function_id.kind == "MODULE_DEF" and key.function_id.module.package_id == "vendor.helpers"
     )
-    assert _source_calls(helper_group)[0].target.function_id.package_id == "nodeforge.math"
+    assert _source_calls(helper_group)[0].target.function_id.module.package_id == "nodeforge.math"
 
 
 
@@ -394,12 +402,12 @@ def test_package_target_is_constructed_only_after_selection(tmp_path, monkeypatc
         conversions.append(export.package_id)
         return original(name, export)
     monkeypatch.setattr(call_resolution, '_resolved_from_package_export', convert)
-    source = 'from packages import math\nx=input_float("X")\n'
+    source = 'from packages import math\nx=1.0\n'
     if case == 'ambiguous':
         source += 'from packages import other\n'
     elif case == 'value_collision':
         source += 'sin=2.0\n'
-    source += 'output(sin(x))\n'
+    source += 'result = sin(x)\n'
     if case == 'selected':
         _compile(source, environment)
         assert conversions == ['nodeforge.math']

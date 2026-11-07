@@ -3,13 +3,7 @@
     "interface": [
       {
         "in_out": "OUTPUT",
-        "name": "Result",
-        "socket_type": "NodeSocketFloat"
-      },
-      {
-        "default": 0.0,
-        "in_out": "INPUT",
-        "name": "missing",
+        "name": "Value",
         "socket_type": "NodeSocketFloat"
       },
       {
@@ -23,11 +17,11 @@
       {
         "from": [
           "n0",
-          "Socket_1"
+          "Socket_0"
         ],
         "to": [
           "n1",
-          "Socket_2"
+          "Socket_1"
         ]
       }
     ],

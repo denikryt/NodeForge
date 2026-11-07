@@ -81,7 +81,7 @@ def test_source_module_reuse_does_not_reparse_or_mutate_source(monkeypatch):
     from NodeForge.semantic import group
     from NodeForge.compiler_identities import GroupCompilationIdentity
 
-    text = 'x = 1\noutput("x", x)'
+    text = 'x = 1\nv = cube(1)'
     snapshot = parse_source_module(text, _module())
     # Snapshot matching must happen before the compiler asks for environment state.
     with pytest.raises(CompileError, match="does not match"):
@@ -153,7 +153,7 @@ def test_forward_call_uses_one_frontend_resolution_path():
     from NodeForge.resolved_environment import ResolvedCatalog, ResolvedEnvironment
     from NodeForge.semantic.group import analyze_group_source
 
-    source = 'result = move(2)\ndef move(value: Float):\n    return value\noutput("Result", result)'
+    source = 'result = move(2)\ndef move(value: Float):\n    return value\n'
     environment = ResolvedEnvironment({
         'functions': ResolvedCatalog('functions', {}),
         'examples': ResolvedCatalog('examples', {}),
@@ -168,7 +168,8 @@ def test_forward_call_uses_one_frontend_resolution_path():
         source_callable_session=__import__('NodeForge.semantic.source_callable_session', fromlist=['SourceCallableSession']).SourceCallableSession(resolved_environment=environment),
     )
     assert result.source == source
-    assert result.interface.outputs[0].display_name == 'Result'
+    assert len(result.interface.outputs) == 0
+    assert result.source_call_graph.entries[0].name == 'move'
 
 
 def _empty_environment():
@@ -187,7 +188,7 @@ def test_incompatible_function_binding_fails_before_runtime_lowering():
     from NodeForge.semantic.group import analyze_group_source
     from NodeForge.compiler_identities import GroupCompilationIdentity
 
-    source = 'result = good(1)\ndef good(value: Float):\n    return value\ngood = 2\noutput(result)'
+    source = 'result = good(1)\ndef good(value: Float):\n    return value\ngood = 2'
     with pytest.raises(CompileError, match=r'Cannot assign to good'):
         analyze_group_source(
             source,
@@ -205,3 +206,21 @@ def test_unresolved_forward_call_does_not_create_a_false_definition_ref():
     resolution = resolve_source_module(snapshot)
     env = CallableEnvironment(frozenset(), snapshot.definitions, {}, local_definition_refs=resolution.definition_refs)
     assert resolve_simple_callable('missing', env) is UNRESOLVED
+
+
+@pytest.mark.parametrize('declaration', [
+    'def forgotten(value):\n    return value',
+    'def forgotten(value = 3):\n    return value',
+    'def forgotten(value: Unknown):\n    return value',
+])
+def test_every_module_definition_requires_a_valid_parameter_annotation(declaration):
+    """Unused and non-entry definitions are validated before runtime compilation."""
+    source = 'def used(value: Float):\n    return value\n\n' + declaration
+    with pytest.raises(CompileError, match='forgotten|Unsupported function parameter'):
+        parse_source_module(source, _module())
+
+
+def test_invalid_unused_definition_cannot_hide_behind_executable_statements():
+    """The original module's declaration pass precedes executable lowering."""
+    with pytest.raises(CompileError, match='unused.*requires an explicit type'):
+        parse_source_module('cube(1)\ndef unused(x):\n    return x\n', _module())

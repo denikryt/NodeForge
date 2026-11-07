@@ -42,7 +42,7 @@ def test_resolved_environment_defers_local_failure_without_repeating_discovery(m
     environment = environment_resolution.resolve_environment()
     backend = compiler._new_group_backend(environment)
     group = prepared_create_or_update(
-        'value = 2.0\noutput("Value", value)\n',
+        'def nf_fixture() -> Float:\n    return 2.0\n',
         "NFTest_deferred_local_failure",
         backend=backend,
     )
@@ -76,7 +76,7 @@ def test_explicit_local_import_replays_deferred_local_failure(monkeypatch):
     backend = compiler._new_group_backend(environment)
     with pytest.raises(CompileError, match="Unsupported Local source registry format"):
         prepared_create_or_update(
-            'from local import missing\nvalue = 2.0\noutput("Value", value)\n',
+            'from local import missing\ndef nf_fixture() -> Float:\n    return 2.0\n',
             "NFTest_deferred_local_failure_used",
             backend=backend,
         )
@@ -144,14 +144,14 @@ def test_reload_local_catalog_group_fails_before_mutation_when_source_disappears
     source = local / "local_reload_missing.nf"
     group = None
     try:
-        _write(source, 'x = input_float("X", default=1.0)\noutput("Value", x)\n')
+        _write(source, 'def reload_value(x: Float["X"] = 1.0) -> Float:\n    return x\n')
         group = compiler.create_library_catalog_group("local", "local_reload_missing")
         pointer = group.as_pointer()
         embedded = group.get("nodeforge_library_source")
         node_count = len(group.nodes)
         source.unlink()
         try:
-            compiler.update_library_catalog_group(group, "local", "local_reload_missing")
+            compiler.update_library_catalog_group(group)
         except CompileError:
             pass
         else:
@@ -171,14 +171,14 @@ def test_reload_local_catalog_group_rolls_back_invalid_current_source_without_le
     source = local / "local_reload_invalid.nf"
     group = None
     try:
-        original = 'x = input_float("X", default=1.0)\noutput("Value", x)\n'
+        original = 'def reload_value(x: Float["X"] = 1.0) -> Float:\n    return x\n'
         _write(source, original)
         group = compiler.create_library_catalog_group("local", "local_reload_invalid")
         pointer = group.as_pointer()
         node_names = [node.name for node in group.nodes]
-        _write(source, 'x = missing_reload_function(1)\noutput("Value", x)\n')
+        _write(source, 'def reload_value(x: Float["X"] = 1.0) -> Float:\n    return missing_reload_function(x)\n')
         try:
-            compiler.update_library_catalog_group(group, "local", "local_reload_invalid")
+            compiler.update_library_catalog_group(group)
         except Exception:
             pass
         else:
@@ -201,7 +201,7 @@ def _make_reload_package(root: Path, *, package_id: str, version: str, value: fl
     functions = root / "functions"
     functions.mkdir(parents=True)
     (functions / "reload_value.nf").write_text(
-        f'value = input_float("Value", default={value})\noutput("Value", value)\n',
+        f'def reload_value(value: Float = {value}) -> Float:\n    return value\n',
         encoding="utf-8",
     )
     (root / "nodeforge_package.json").write_text(

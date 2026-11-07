@@ -1,109 +1,128 @@
-"""Selected package and Examples reload retains the complete shared/unique owner."""
+"""Selected source Reload keeps shared/unique identity for real .nf module owners."""
 
-from helpers import *
-from NodeForge.blender import library_groups
+import json
+
+import bpy
+import pytest
+
+from helpers import check
+from NodeForge import catalog, compiler, local_sources, packages
 from NodeForge.blender.group_authority import detach_selected_source_owner
-from NodeForge.catalog import LibraryEntryRecord, _path_key
-from NodeForge.compiler_identities import library_function_id_for_record
+from NodeForge.compiler_identities import parse_module_definition_function_id
 from NodeForge.function_instances import (
     FUNCTION_DEFINITION_OWNER_PROP, FUNCTION_INSTANCE_KEY_PROP,
-    direct_library_owner_scope_for_id, stamp_function_metadata,
+    module_definition_owner_scope,
 )
+from NodeForge.errors import CompileError
 
 
-def _catalog_group(record, key):
-    """Build a source-owned group using the same backend as ordinary catalog Add."""
-    backend = compiler._new_group_backend()
-    function_id = library_function_id_for_record(record)
-    session = backend.new_source_callable_session()
-    prepared = backend.prepare_source_compilation(
-        record.source_path.read_text(encoding='utf-8'),
-        compilation_identity=library_groups._direct_library_compilation_identity(
-            function_id, instance_key=key),
-        helper_namespace=record.name, source_callable_session=session,
+SOURCE = 'def grow(x: Float) -> Float:\n    return x + 1\n'
+
+
+def _source_owner(namespace, tmp_path, monkeypatch):
+    """Expose one canonical def from a real Local, Examples or installed Package module."""
+    if namespace == 'functions':
+        packages.set_packages_dir_for_tests(tmp_path / 'installed')
+        root = tmp_path / 'source_package'
+        functions = root / 'functions'
+        functions.mkdir(parents=True)
+        (functions / 'growth.nf').write_text(SOURCE, encoding='utf-8')
+        (root / 'nodeforge_package.json').write_text(json.dumps({
+            'schema_version': 1, 'id': 'vendor.reload', 'import_name': 'reloadpkg',
+            'name': 'Reload fixture', 'version': '1.0.0', 'author': 'Test',
+            'description': 'Unique reload regression',
+            'nodeforge_min_version': '0.65.0', 'nodeforge_max_version': None,
+            'contents': {'functions': 'functions'}, 'permissions': {'python': False},
+        }), encoding='utf-8')
+        packages.install_package_directory(root)
+        from NodeForge.environment_resolution import resolve_environment
+        record = resolve_environment().package_by_id('vendor.reload').find('grow').record
+        return record.source_path, 'from packages import reloadpkg\n', 'reloadpkg.grow'
+    source_root = tmp_path / namespace
+    source_root.mkdir()
+    source_file = source_root / 'growth.nf'
+    source_file.write_text(SOURCE, encoding='utf-8')
+    if namespace == 'local':
+        monkeypatch.setattr(local_sources, '_catalog_input_paths', lambda: ((source_root,), ()))
+        return source_file, 'from local import growth\n', 'growth.grow'
+    original_catalog_dir = catalog.catalog_dir
+    monkeypatch.setattr(
+        catalog, 'catalog_dir',
+        lambda ns: source_root if ns == 'examples' else original_catalog_dir(ns),
     )
+    return source_file, 'from examples import growth\n', 'growth.grow'
 
-    def finalize(group):
-        library_groups._write_package_metadata(group, record)
-        stamp_function_metadata(group, instance_key=key,
-                                definition_owner=function_id.stable_key())
-    group = backend.create_or_update(BlenderGroupBuildRequest(
-        prepared_compilation=prepared,
-        name=f'NFTest_reload_{record.namespace}_{key or "shared"}',
-        function_instance_key=key, source_callable_session=session,
-    ), finalize_before_commit=finalize)
-    group.use_fake_user = True
-    return group
+
+def _materialize(prefix, callee):
+    """Make three level-0 calls with one shared and two distinct unique owners."""
+    target = bpy.data.node_groups.new('NFTest_unique_reload_base', 'GeometryNodeTree')
+    compiler.compose_source_initial(
+        prefix + f'a = {callee}(1.0)\nb = {callee}(2.0, __unique__=True)\n'
+                 f'c = {callee}(3.0, __unique__=True)\n',
+        target, module_context='unique-reload-fixture',
+    )
+    groups = [node.node_tree for node in target.nodes if node.bl_idname == 'GeometryNodeGroup']
+    assert len(groups) == 3 and len({group.as_pointer() for group in groups}) == 3
+    return target, groups
+
+
+def _identity(group):
+    """Return the complete canonical owner signature, including physical pointer."""
+    function_id = parse_module_definition_function_id(group['nodeforge_module_definition'])
+    instance_key = str(group.get(FUNCTION_INSTANCE_KEY_PROP) or '')
+    assert group.get(FUNCTION_DEFINITION_OWNER_PROP) == function_id.stable_key()
+    return function_id, instance_key, module_definition_owner_scope(
+        function_id, instance_key=instance_key,
+    ), group.as_pointer()
 
 
 @pytest.mark.parametrize('namespace', ['functions', 'examples', 'local'])
-def test_selected_unique_reload_preserves_owner_scope_and_unrelated_instances(tmp_path, namespace):
-    """A selected unique reload is an in-place operation, never restamps SHARED."""
-    file = tmp_path / f'{namespace}_reload.nf'
-    file.write_text('value = 1\noutput(value)\n', encoding='utf-8')
-    record = LibraryEntryRecord(namespace, 'unique_reload', 'script', file,
-                                source_path=file, source_origin=_path_key(file),
-                                package_id='vendor.reload' if namespace == 'functions' else None)
-    shared = _catalog_group(record, '')
-    first = _catalog_group(record, 'a' * 32)
-    second = _catalog_group(record, 'b' * 32)
+def test_selected_unique_reload_preserves_owner_scope_and_unrelated_instances(
+    namespace, tmp_path, monkeypatch,
+):
+    """Live source Reload preserves selected unique identity and other group instances."""
+    path, prefix, callee = _source_owner(namespace, tmp_path, monkeypatch)
     try:
-        pointer = first.as_pointer()
-        expected = library_function_id_for_record(record).stable_key()
-        assert first.get(FUNCTION_DEFINITION_OWNER_PROP) == expected
-        assert library_groups._find_owned_library_entry_group(record, instance_key='') is shared
-        assert library_groups._find_owned_library_entry_group(record, instance_key='a' * 32) is first
-        result = library_groups.update_materialized_library_entry_group_for_record(
-            record, first, compiler._new_group_backend())
-        assert result.as_pointer() == pointer
-        assert result.get(FUNCTION_INSTANCE_KEY_PROP) == 'a' * 32
-        assert result.get(FUNCTION_DEFINITION_OWNER_PROP) == expected
-        assert library_groups._direct_library_compilation_identity(
-            library_function_id_for_record(record), instance_key='a' * 32
-        ).owner_scope == direct_library_owner_scope_for_id(
-            library_function_id_for_record(record), instance_key='a' * 32
-        )
-        assert library_groups._find_owned_library_entry_group(record, instance_key='') is shared
-        assert library_groups._find_owned_library_entry_group(record, instance_key='b' * 32) is second
-        file.write_text('value = 2\noutput(value)\n', encoding='utf-8')
-        assert library_groups.update_materialized_library_entry_group_for_record(
-            record, first, compiler._new_group_backend()).as_pointer() == pointer
-        assert first.get(FUNCTION_INSTANCE_KEY_PROP) == 'a' * 32
-        assert library_groups._find_owned_library_entry_group(record, instance_key='') is shared
+        _, (shared, first, second) = _materialize(prefix, callee)
+        expected = [_identity(group) for group in (shared, first, second)]
+        assert expected[0][1] == ''
+        assert len(expected[1][1]) == len(expected[2][1]) == 32
+        assert expected[1][1] != expected[2][1]
+        assert compiler.update_library_catalog_group(first) is first
+        assert [_identity(group) for group in (shared, first, second)] == expected
+        path.write_text(SOURCE.replace('x + 1', 'x + 2'), encoding='utf-8')
+        assert compiler.update_library_catalog_group(first) is first
+        assert [_identity(group) for group in (shared, first, second)] == expected
+        assert 'x + 2' in first['nodeforge_library_source']
         copied = first.copy()
-        try:
-            with pytest.raises(CompileError, match='Duplicate authoritative source owners'):
-                library_groups.update_materialized_library_entry_group_for_record(
-                    record, first, compiler._new_group_backend())
-            detach_selected_source_owner(copied)
-            assert library_groups.update_materialized_library_entry_group_for_record(
-                record, first, compiler._new_group_backend()).as_pointer() == pointer
-            with pytest.raises(CompileError, match='no NodeForge library provenance'):
-                library_groups.update_materialized_library_entry_group_for_record(
-                    record, copied, compiler._new_group_backend())
-        finally:
-            bpy.data.node_groups.remove(copied)
+        with pytest.raises(CompileError, match='Duplicate authoritative source owners'):
+            compiler.update_library_catalog_group(first)
+        assert [_identity(group) for group in (shared, first, second)] == expected
+        detach_selected_source_owner(copied)
+        assert compiler.update_library_catalog_group(first) is first
+        with pytest.raises(CompileError, match='incomplete|detached'):
+            compiler.update_library_catalog_group(copied)
+        assert [_identity(group) for group in (shared, first, second)] == expected
     finally:
-        for group in (shared, first, second):
-            bpy.data.node_groups.remove(group)
+        if namespace == 'functions':
+            packages.set_packages_dir_for_tests(None)
 
 
-def test_package_unique_reload_keeps_key_after_blend_reopen(tmp_path):
-    """Blender serialization does not rewrite unique owner properties."""
-    source_file = tmp_path / 'persistent.nf'
-    source_file.write_text('output(value=1)\n', encoding='utf-8')
-    record = LibraryEntryRecord('functions', 'reopen_unique', 'script', source_file,
-                                source_path=source_file, package_id='vendor.reopen')
-    shared = _catalog_group(record, '')
-    unique = _catalog_group(record, 'c' * 32)
-    unique_name = unique.name
-    shared_name = shared.name
-    filename = str(tmp_path / 'unique-reload.blend')
-    bpy.ops.wm.save_as_mainfile(filepath=filename)
-    bpy.ops.wm.open_mainfile(filepath=filename)
-    reopened = bpy.data.node_groups[unique_name]
-    pointer = reopened.as_pointer()
-    assert library_groups.update_materialized_library_entry_group_for_record(
-        record, reopened, compiler._new_group_backend()).as_pointer() == pointer
-    assert reopened.get(FUNCTION_INSTANCE_KEY_PROP) == 'c' * 32
-    assert library_groups._find_owned_library_entry_group(record, instance_key='') is bpy.data.node_groups[shared_name]
+def test_package_unique_reload_keeps_key_after_blend_reopen(tmp_path, monkeypatch):
+    """A unique package MODULE_DEF is still reloadable after native .blend persistence."""
+    _path, prefix, callee = _source_owner('functions', tmp_path, monkeypatch)
+    try:
+        _, (shared, first, second) = _materialize(prefix, callee)
+        names = (shared.name, first.name, second.name)
+        owners = [_identity(group)[:3] for group in (shared, first, second)]
+        bpy.ops.wm.save_as_mainfile(filepath=str(tmp_path / 'reopen.blend'))
+        bpy.ops.wm.open_mainfile(filepath=str(tmp_path / 'reopen.blend'))
+        groups = [bpy.data.node_groups[name] for name in names]
+        assert [_identity(group)[:3] for group in groups] == owners
+        selected = groups[1]
+        pointer = selected.as_pointer()
+        assert compiler.update_library_catalog_group(selected) is selected
+        assert selected.as_pointer() == pointer
+        assert [_identity(group)[:3] for group in groups] == owners
+    finally:
+        packages.set_packages_dir_for_tests(None)

@@ -1,6 +1,7 @@
 """Explicit single-user function-group detachment preserves user graph/resources."""
 
 from helpers import *
+from NodeForge.compiler_identities import parse_module_definition_function_id
 from NodeForge.blender.group_authority import detach_selected_source_owner, TRANSACTION_PRIVATE_PROP
 from NodeForge.blender import library_groups
 from NodeForge.catalog import LibraryEntryRecord, _path_key
@@ -18,23 +19,26 @@ def test_module_single_user_detachment_restores_canonical_updates():
     return x + 1
 
 v = detachable_function(1)
-output(v)
+v = v
 '''
-    root = compile_group(initial, 'NFTest_module_detachment')
+    root = bpy.data.node_groups.new('NFTest_module_detachment', 'GeometryNodeTree')
+    compiler.compose_source_initial(initial, root)
     original = _group('detachable_function')
+    from NodeForge.compiler_identities import parse_module_definition_function_id
+    module_context = parse_module_definition_function_id(original['nodeforge_module_definition']).module.origin
     copy = original.copy()
     copy["nodeforge_resource_provenance_probe"] = "retain"
     before_nodes = tuple((node.bl_idname, node.name) for node in copy.nodes)
     try:
         with pytest.raises(CompileError, match='Duplicate authoritative source owners'):
-            compiler.update_expression_group(root, initial.replace('x + 1', 'x + 2'))
+            compiler.update_library_catalog_group(original, source=initial.replace('x + 1', 'x + 2'), module_context=module_context)
         detach_selected_source_owner(copy)
         assert copy.get(FUNCTION_DEFINITION_OWNER_PROP) is None
         assert copy.get('nodeforge_resource_provenance_probe') == 'retain'
         assert copy.get('nodeforge_module_name') == 'detachable_function'
         assert copy.get(TRANSACTION_PRIVATE_PROP) is None
         pointer = original.as_pointer()
-        compiler.update_expression_group(root, initial.replace('x + 1', 'x + 2'))
+        compiler.update_library_catalog_group(original, source=initial.replace('x + 1', 'x + 2'), module_context=module_context)
         assert original.as_pointer() == pointer
         assert copy.as_pointer() != pointer
         assert tuple((node.bl_idname, node.name) for node in copy.nodes) == before_nodes
@@ -74,12 +78,13 @@ def test_detachment_requires_a_selected_source_owned_copy():
             detach_selected_source_owner(plain)
     finally:
         bpy.data.node_groups.remove(plain)
-    original = compile_group('''def sole_owned_leaf(x: Float):
+    original = bpy.data.node_groups.new('NFTest_cannot_detach_canonical_without_copy', 'GeometryNodeTree')
+    compiler.compose_source_initial('''def sole_owned_leaf(x: Float):
     return x
 
 v = sole_owned_leaf(1)
-output(v)
-''', 'NFTest_cannot_detach_canonical_without_copy')
+v = v
+''', original)
     owned = _group('sole_owned_leaf')
     with pytest.raises(CompileError, match='requires a selected single-user copy'):
         detach_selected_source_owner(owned)
@@ -90,9 +95,10 @@ def test_source_detachment_is_persistent_after_save_and_reopen(tmp_path):
     return x + 1
 
 v = persistent_detachment(1)
-output(v)
+v = v
 '''
-    root = compile_group(original_source, 'NFTest_persistent_detachment')
+    root = bpy.data.node_groups.new('NFTest_persistent_detachment', 'GeometryNodeTree')
+    compiler.compose_source_initial(original_source, root)
     owned = _group('persistent_detachment')
     copy = owned.copy()
     detached_name = copy.name
@@ -108,8 +114,7 @@ output(v)
     assert current_copy.get(FUNCTION_DEFINITION_OWNER_PROP) is None
     assert original.get(FUNCTION_DEFINITION_OWNER_PROP)
     pointer = original.as_pointer()
-    compiler.update_expression_group(bpy.data.node_groups['NFTest_persistent_detachment'],
-                                     original_source.replace('x + 1', 'x + 3'))
+    compiler.update_library_catalog_group(original, source=original_source.replace('x + 1', 'x + 3'), module_context=parse_module_definition_function_id(original['nodeforge_module_definition']).module.origin)
     assert original.as_pointer() == pointer
     assert current_copy.get(FUNCTION_DEFINITION_OWNER_PROP) is None
 

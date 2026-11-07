@@ -83,9 +83,8 @@ def compose_prepared_initial(prepared, target, backend, session, *, source_modul
 def _place_definition_entries(prepared, context, snapshot):
     """Place zero-incoming source functions without treating them as DSL calls.
 
-    Required inputs deliberately remain unconnected. Type specializations are
-    determined from annotations/defaults; ambiguous untyped entries must be
-    annotated rather than silently specialized as Float.
+    Required inputs deliberately remain unconnected. Input types come only
+    from validated annotations; defaults do not supply missing types.
     """
     from ..compiler_identities import GroupCompilationIdentity, module_definition_function_id
     from ..function_instances import function_materialization_owner_scope

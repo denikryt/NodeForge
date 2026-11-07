@@ -1,2 +1,3 @@
-v = vector(1, 2, 3)
-output("Result", v[1])
+def nf_fixture():
+    v = vector(1, 2, 3)
+    return v[1]

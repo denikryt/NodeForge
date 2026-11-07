@@ -193,7 +193,8 @@ def _materialize_standalone_module_definition(snapshot, definition, backend):
 
 
 def create_selected_library_group_auto(namespace: str, source_origin: str, owner=None,
-                                       package_id: str = "", *, editor_available: bool = True):
+                                       package_id: str = "", *, editor_available: bool = True,
+                                       resolved_environment=None):
     """Compile the exact selected Local/Examples root without guessing its owner.
 
     Ordinary catalog entries keep their existing reusable materialization path;
@@ -202,7 +203,7 @@ def create_selected_library_group_auto(namespace: str, source_origin: str, owner
     if namespace not in {"local", "examples"}:
         raise CompileError("Automatic library routing supports Local and Examples only")
     from .catalog import _path_key, load_library_entry_source_for_record
-    environment = _make_compilation_environment()
+    environment = resolved_environment if resolved_environment is not None else _make_compilation_environment()
     catalog = environment.catalog(namespace)
     catalog._raise_if_failed()
     origin = _path_key(source_origin)
@@ -251,6 +252,13 @@ def create_library_catalog_group(namespace: str, name: str):
         record = environment.catalog(namespace).find(name)
     if record is None:
         raise CompileError(f"Unknown {namespace} library entry: {name}")
+    if (namespace in {"local", "examples"} and record.kind == "script"
+            and record.source_path is not None and record.source_path.suffix == ".nf"):
+        group, _ = create_selected_library_group_auto(
+            namespace, record.source_origin, package_id=record.package_id or "",
+            resolved_environment=environment,
+        )
+        return group
     return materialize_library_entry_group_for_record(record, _new_group_backend(environment))
 
 
@@ -265,6 +273,12 @@ def create_examples_source_group(source_origin: str, package_id: str = ""):
     if (record is None or record.package_id != package_id or record.source_path is None
             or record.kind == "runtime"):
         raise CompileError(f"Current Examples source is unavailable: {source_origin}")
+    if record.kind == "script" and record.source_path.suffix == ".nf":
+        group, _ = create_selected_library_group_auto(
+            "examples", record.source_origin, package_id=package_id,
+            resolved_environment=environment,
+        )
+        return group
     return materialize_library_entry_group_for_record(record, _new_group_backend(environment))
 
 
@@ -296,6 +310,12 @@ def create_local_source_group(source_origin: str):
     record = None if selected.local_index is None else selected.local_index.find_origin(origin)
     if record is None:
         raise CompileError(f"Current Local source is unavailable: {source_origin}")
+    if (record.kind == "script" and record.source_path is not None
+            and record.source_path.suffix == ".nf"):
+        group, _ = create_selected_library_group_auto(
+            "local", record.source_origin, resolved_environment=environment,
+        )
+        return group
     return materialize_library_entry_group_for_record(record, _new_group_backend(environment))
 
 

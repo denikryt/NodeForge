@@ -10,6 +10,7 @@ import bpy
 from helpers import (
     check,
     compile_group,
+    compile_entry_group,
     expect_compile_error,
     _evaluated_mesh_snapshot,
     _socket_identifier_by_name,
@@ -84,12 +85,13 @@ def _write_package_manifest(root, package_id):
 def test_object_input_defaults_lazy_cache_chaining_and_properties():
     group = compile_group(
         '''
-obj = input_object("Source")
-same = obj.info()
-location = same.location
-rotation = obj.rotation
-scale = obj.scale
-output("Geometry", obj.geometry)
+def nf_fixture(obj: Object['Source']):
+    same = obj.info()
+    location = same.location
+    rotation = obj.rotation
+    scale = obj.scale
+    geometry = obj.geometry
+    return (geometry,)
 ''',
         "NFTest_object_defaults_properties",
     )
@@ -107,10 +109,11 @@ output("Geometry", obj.geometry)
 def test_object_info_partial_unresolved_updates_and_explicit_configuration():
     group = compile_group(
         '''
-obj = input_object("Source")
-obj.info(transform_space="RELATIVE")
-obj.info(as_instance=False)
-output("Geometry", obj.geometry)
+def nf_fixture(obj: Object['Source']):
+    obj.info(transform_space="RELATIVE")
+    obj.info(as_instance=False)
+    geometry = obj.geometry
+    return (geometry,)
 ''',
         "NFTest_object_partial_config",
     )
@@ -122,39 +125,114 @@ output("Geometry", obj.geometry)
 
 def test_object_compile_time_contract_and_unknown_properties():
     invalid_sources = (
-        ('obj = input_object("O", default=None)\noutput("G", cube(1.0))', "default"),
-        ('obj = input_object("O", transform_space="RELATIVE")\noutput("G", cube(1.0))', "input transform_space"),
-        ('obj = input_object("O", as_instance=False)\noutput("G", cube(1.0))', "input as_instance"),
-        ('obj = input_object("O", "extra")\noutput("G", cube(1.0))', "input positional"),
-        ('x = input_float("X", as_instance=True)\noutput("G", cube(1.0))', "keyword leak float"),
-        ('g = input_geometry("G", transform_space="RELATIVE")\noutput("G", g)', "keyword leak geometry"),
-        ('obj = input_object("O")\nobj.info("RELATIVE")\noutput("G", cube(1.0))', "info positional"),
-        ('obj = input_object("O")\nobj.info(unknown=True)\noutput("G", cube(1.0))', "info unknown keyword"),
-        ('obj = input_object("O")\nobj.info(transform_space="WORLD")\noutput("G", cube(1.0))', "info invalid transform"),
-        ('obj = input_object("O")\nspace = input_float("Space")\nobj.info(transform_space=space)\noutput("G", cube(1.0))', "info runtime transform"),
-        ('obj = input_object("O")\nobj.info(as_instance=1)\noutput("G", cube(1.0))', "info non-bool instance"),
-        ('obj = input_object("O")\nflag = input_bool("Flag")\nobj.info(as_instance=flag)\noutput("G", cube(1.0))', "info runtime instance"),
-        ('obj = input_object("O")\ng = obj.geometry\nobj.info()\noutput("G", g)', "info resolution lock"),
-        ('obj = input_object("O")\ng = obj.geometry\nobj.info(as_instance=True)\noutput("G", g)', "info identical resolution lock"),
-        ('obj = input_object("O")\nx = obj.transform\noutput("G", cube(1.0))', "unknown Object property"),
-        ('x = input_float("X")\nx.info()\noutput("G", cube(1.0))', "info non-object"),
+        ('''
+def nf_fixture(obj: Object['O'] = 1.0):
+    return cube(1.0)
+''', "default"),
+        ('''
+def nf_fixture(obj: Object['O']):
+    obj.info(transform_space=123)
+    return cube(1.0)
+''', "input transform_space"),
+        ('''
+def nf_fixture(obj: Object['O']):
+    obj.info(as_instance="False")
+    return cube(1.0)
+''', "input as_instance"),
+        ('''
+def nf_fixture(obj: Object['O']):
+    obj.info("WORLD", as_instance=False)
+    return cube(1.0)
+''', "input positional"),
+        ('''
+def nf_fixture(x: Float['X']):
+    x.info()
+    return cube(1.0)
+''', "keyword leak float"),
+        ('''
+def nf_fixture(g: Geometry['G']):
+    g.unknown_object_property
+    return g
+''', "keyword leak geometry"),
+        ('''
+def nf_fixture(obj: Object['O']):
+    obj.info("RELATIVE")
+    g = cube(1.0)
+    return (g,)
+''', "info positional"),
+        ('''
+def nf_fixture(obj: Object['O']):
+    obj.info(unknown=True)
+    g = cube(1.0)
+    return (g,)
+''', "info unknown keyword"),
+        ('''
+def nf_fixture(obj: Object['O']):
+    obj.info(transform_space="WORLD")
+    g = cube(1.0)
+    return (g,)
+''', "info invalid transform"),
+        ('''
+def nf_fixture(obj: Object['O'], space: Float['Space']):
+    obj.info(transform_space=space)
+    g = cube(1.0)
+    return (g,)
+''', "info runtime transform"),
+        ('''
+def nf_fixture(obj: Object['O']):
+    obj.info(as_instance=1)
+    g = cube(1.0)
+    return (g,)
+''', "info non-bool instance"),
+        ('''
+def nf_fixture(obj: Object['O'], flag: Bool['Flag']):
+    obj.info(as_instance=flag)
+    g = cube(1.0)
+    return (g,)
+''', "info runtime instance"),
+        ('''
+def nf_fixture(obj: Object['O']):
+    g = obj.geometry
+    obj.info()
+    g = g
+    return (g,)
+''', "info resolution lock"),
+        ('''
+def nf_fixture(obj: Object['O']):
+    g = obj.geometry
+    obj.info(as_instance=True)
+    g = g
+    return (g,)
+''', "info identical resolution lock"),
+        ('''
+def nf_fixture(obj: Object['O']):
+    x = obj.transform
+    g = cube(1.0)
+    return (g,)
+''', "unknown Object property"),
+        ('''
+def nf_fixture(x: Float['X']):
+    x.info()
+    g = cube(1.0)
+    return (g,)
+''', "info non-object"),
     )
     for source, suffix in invalid_sources:
         expect_compile_error(source, "NFTest_object_invalid_" + suffix.replace(" ", "_"))
 
 
 def test_local_function_object_input_and_output_keep_object_behavior():
-    group = compile_group(
+    group = compile_entry_group(
         '''
-def passthrough(source):
+def passthrough(source: Object) -> Object:
     return source
 
-obj = input_object("Source")
-returned = passthrough(obj)
-returned.info(transform_space="RELATIVE", as_instance=False)
-output("Geometry", returned.geometry)
+def nf_fixture(obj: Object['Source']) -> Geometry:
+    returned = passthrough(obj)
+    returned.info(transform_space="RELATIVE", as_instance=False)
+    return returned.geometry
 ''',
-        "NFTest_object_local_boundary",
+        "NFTest_object_local_boundary", "nf_fixture",
     )
     group_nodes = [node for node in group.nodes if node.bl_idname == "GeometryNodeGroup"]
     check(group_nodes, "local Object helper group was not created")
@@ -167,13 +245,15 @@ output("Geometry", returned.geometry)
 def test_raw_object_output_keeps_object_value_behavior():
     group = compile_group(
         '''
-obj = node(
-    "GeometryNodeInputObject",
-    output="Object",
-    typ=Object,
-)
-obj.info(as_instance=False)
-output("Geometry", obj.geometry)
+def nf_fixture():
+    obj = node(
+        "GeometryNodeInputObject",
+        output="Object",
+        typ=Object,
+    )
+    obj.info(as_instance=False)
+    geometry = obj.geometry
+    return (geometry,)
 ''',
         "NFTest_object_raw_output",
     )
@@ -196,7 +276,12 @@ def test_object_runtime_geometry_location_rotation_and_scale_evaluation():
     source_obj.scale = (1.5, 2.0, 2.5)
 
     geometry_group = compile_group(
-        'obj = input_object("Source")\nobj.info(as_instance=False)\noutput("Geometry", obj.geometry)',
+        '''
+def nf_fixture(obj: Object['Source']):
+    obj.info(as_instance=False)
+    geometry = obj.geometry
+    return (geometry,)
+''',
         "NFTest_object_runtime_geometry",
     )
     target_obj, target_mesh, modifier = _attach_modifier(geometry_group, "NFTestObjectGeometryTarget")
@@ -206,11 +291,12 @@ def test_object_runtime_geometry_location_rotation_and_scale_evaluation():
 
     vector_group = compile_group(
         '''
-obj = input_object("Source")
-location_point = point(obj.location)
-rotation_point = point(obj.rotation + vector(10.0, 0.0, 0.0))
-scale_point = point(obj.scale + vector(20.0, 0.0, 0.0))
-output("Geometry", join(location_point, rotation_point, scale_point))
+def nf_fixture(obj: Object['Source']):
+    location_point = point(obj.location)
+    rotation_point = point(obj.rotation + vector(10.0, 0.0, 0.0))
+    scale_point = point(obj.scale + vector(20.0, 0.0, 0.0))
+    geometry = join(location_point, rotation_point, scale_point)
+    return (geometry,)
 ''',
         "NFTest_object_runtime_vectors",
     )
@@ -231,10 +317,11 @@ def test_object_info_configuration_persists_across_structural_body_state():
     """Object.info configuration remains frontend-owned across later structural statements."""
     group = compile_group(
         '''
-obj = input_object("Source")
-obj.info(as_instance=False)
-items = [1.0]
-output("Geometry", obj.geometry)
+def nf_fixture(obj: Object['Source']):
+    obj.info(as_instance=False)
+    items = [1.0]
+    geometry = obj.geometry
+    return (geometry,)
 ''',
         "NFTest_object_info_permanent_config",
     )
@@ -250,22 +337,24 @@ def test_object_info_resolution_lock_is_shared_through_aliases():
         (
             "direct",
             '''
-obj = input_object("Source")
-geometry = obj.geometry
-items = [1.0]
-obj.info(as_instance=False)
-output("Geometry", geometry)
+def nf_fixture(obj: Object['Source']):
+    geometry = obj.geometry
+    items = [1.0]
+    obj.info(as_instance=False)
+    geometry = geometry
+    return (geometry,)
 ''',
         ),
         (
             "alias",
             '''
-obj = input_object("Source")
-alias = obj
-geometry = alias.geometry
-items = [1.0]
-obj.info(as_instance=False)
-output("Geometry", geometry)
+def nf_fixture(obj: Object['Source']):
+    alias = obj
+    geometry = alias.geometry
+    items = [1.0]
+    obj.info(as_instance=False)
+    geometry = geometry
+    return (geometry,)
 ''',
         ),
     ):

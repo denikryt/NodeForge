@@ -43,10 +43,10 @@ def _expect_message(source, expected, name):
 
 def test_interface_panel_basic_grouping_defaults_and_real_group_node():
     source = '''
-a = input_float("A", default=1.0)
-b = input_int("B", default=2)
-panel([a, b], name="Main")
-output("A", a)
+def nf_fixture(a: Float['A'] = 1.0, b: Int['B'] = 2):
+    panel([a, b], name="Main")
+    a = a
+    return (a,)
 '''
     group = compile_group(source, "NFTest_panel_basic")
     panels = _interface_panels(group)
@@ -69,13 +69,11 @@ output("A", a)
 
 def test_interface_panel_multiple_panels_ungrouped_and_collapsed():
     source = '''
-loose = input_float("Loose")
-a = input_float("A")
-b = input_float("B")
-c = input_float("C")
-panel([b, a], name="First")
-panel([c], name="Second", collapsed=True)
-output("Loose", loose)
+def nf_fixture(loose: Float['Loose'], a: Float['A'], b: Float['B'], c: Float['C']):
+    panel([b, a], name="First")
+    panel([c], name="Second", collapsed=True)
+    loose = loose
+    return (loose,)
 '''
     group = compile_group(source, "NFTest_panel_multiple")
     panels = _interface_panels(group)
@@ -96,39 +94,60 @@ output("Loose", loose)
     )
 
 
-def test_interface_panel_accepts_implicit_external_input():
-    source = '''
-result = source_value * 2
-loose = input_float("Loose")
-panel([source_value], name="Inputs")
-output("Value", result + loose)
-'''
-    group = compile_group(source, "NFTest_panel_implicit")
-    inputs = _interface_inputs(group)
-    check("source_value" in inputs, "implicit external input was not created")
-    check(_parent_name(inputs["source_value"]) == "Inputs", "implicit external input was not grouped")
-    check(_parent_name(inputs["Loose"]) == "", "explicit root input did not remain outside the panel")
-    check("panel" not in inputs, "panel helper was incorrectly inferred as an implicit input")
-
-    wrapper = bpy.data.node_groups.new("NFTest_panel_implicit_wrapper", "GeometryNodeTree")
-    group_node = wrapper.nodes.new("GeometryNodeGroup")
-    group_node.node_tree = group
-    physical_order = [socket.name for socket in group_node.inputs]
-    check(
-        physical_order == ["Loose", "source_value"],
-        f"mixed root/panel callable order mismatch: {physical_order}",
-    )
+def test_interface_panel_rejects_implicit_external_input():
+    """Only declared function parameters can appear in a panel prefix."""
+    _expect_message('''
+def nf_fixture(loose: Float['Loose']):
+    panel([source_value], name="Inputs")
+    return loose
+''', "is not a function parameter", "NFTest_panel_implicit_rejected")
 
 
 def test_interface_panel_rejects_invalid_members_and_arguments():
     cases = [
-        ('value = 1\npanel([value], name="Bad")\noutput("Value", value)', "panel() item value is not a group input"),
-        ('x = input_float("X")\npanel([x * 2], name="Bad")\noutput("X", x)', "panel() items must be simple input variable names"),
-        ('x = input_float("X")\npanel(x, name="Bad")\noutput("X", x)', "panel() first argument must be a list or tuple"),
-        ('x = input_float("X")\npanel([], name="Bad")\noutput("X", x)', "panel() requires at least one input"),
-        ('x = input_float("X")\npanel([x])\noutput("X", x)', "panel() requires name="),
-        ('x = input_float("X")\npanel([x], name="Bad", collapsed=1)\noutput("X", x)', "panel() collapsed= must be a compile-time bool"),
-        ('x = input_float("X")\npanel([x], name="Bad", extra=True)\noutput("X", x)', "Unsupported keyword argument(s): extra"),
+        ('''
+def nf_fixture():
+    panel([value], name="Bad")
+    value = 1
+    value = value
+    return (value,)
+''', "is not a function parameter"),
+        ('''
+def nf_fixture(x: Float['X']):
+    panel([x * 2], name="Bad")
+    x = x
+    return (x,)
+''', "simple parameter names"),
+        ('''
+def nf_fixture(x: Float['X']):
+    panel(x, name="Bad")
+    x = x
+    return (x,)
+''', "expects exactly one positional list or tuple"),
+        ('''
+def nf_fixture(x: Float['X']):
+    panel([], name="Bad")
+    x = x
+    return (x,)
+''', "requires one or more simple parameter names"),
+        ('''
+def nf_fixture(x: Float['X']):
+    panel([x])
+    x = x
+    return (x,)
+''', "panel() requires name="),
+        ('''
+def nf_fixture(x: Float['X']):
+    panel([x], name="Bad", collapsed=1)
+    x = x
+    return (x,)
+''', "collapsed must be Bool"),
+        ('''
+def nf_fixture(x: Float['X']):
+    panel([x], name="Bad", extra=True)
+    x = x
+    return (x,)
+''', "panel() unknown keyword"),
     ]
     for index, (source, message) in enumerate(cases):
         _expect_message(source, message, f"NFTest_panel_invalid_{index}")
@@ -139,23 +158,26 @@ def test_interface_panel_rejects_invalid_members_and_arguments():
 def test_interface_panel_duplicate_membership_uses_resolved_socket_identity():
     cases = [
         '''
-x = input_float("X")
-panel([x], name="One")
-panel([x], name="Two")
-output("X", x)
+def nf_fixture(x: Float['X']):
+    panel([x], name="One")
+    panel([x], name="Two")
+    x = x
+    return (x,)
 ''',
         '''
-a = input_float("A")
-b = a
-panel([a, b], name="Bad")
-output("A", a)
+def nf_fixture(a: Float['A']):
+    panel([a, b], name="Bad")
+    b = a
+    a = a
+    return (a,)
 ''',
         '''
-a = input_float("A")
-b = a
-panel([a], name="One")
-panel([b], name="Two")
-output("A", a)
+def nf_fixture(a: Float['A']):
+    panel([a], name="One")
+    panel([b], name="Two")
+    b = a
+    a = a
+    return (a,)
 ''',
     ]
     before = {group.name for group in bpy.data.node_groups}
@@ -167,25 +189,32 @@ output("A", a)
 
 
 def test_interface_panel_rejects_computed_and_local_function_outputs_as_members():
-    source = '''
-def helper(v):
-    return v * 2
-
-source = input_float("Source")
-x = helper(source)
-panel([x], name="Bad")
-output("Result", x)
-'''
-    _expect_message(source, "panel() item x is not a group input", "NFTest_panel_foreign_socket")
+    _expect_message('''
+def nf_fixture(source: Float['Source']):
+    panel([x], name="Bad")
+    x = source * 2
+    return x
+''', "is not a function parameter", "NFTest_panel_foreign_socket")
 
 
 def test_interface_panel_duplicate_names_and_reserved_binding():
     _expect_message(
-        'a = input_float("A")\nb = input_float("B")\npanel([a], name="Same")\npanel([b], name="Same")\noutput("A", a)',
-        "panel() duplicate panel name: Same",
+        '''
+def nf_fixture(a: Float['A'], b: Float['B']):
+    panel([a], name="Same")
+    panel([b], name="Same")
+    a = a
+    return (a,)
+''',
+        "duplicate panel name: Same",
         "NFTest_panel_duplicate_name",
     )
-    _expect_message('panel = 1\noutput("x", 1)', "Cannot assign to panel", "NFTest_panel_reserved_binding")
+    _expect_message('''
+def nf_fixture():
+    panel = 1
+    x = 1
+    return (x,)
+''', "Cannot assign to panel", "NFTest_panel_reserved_binding")
 
 
 def test_copy_interface_preserves_nested_native_panel_hierarchy():
@@ -221,27 +250,35 @@ def test_copy_interface_preserves_nested_native_panel_hierarchy():
     check(int(inputs["Nested"].default_value) == 7, "nested socket default was not copied")
 
 
-def test_interface_panel_accepts_exact_input_alias_and_rejects_switch_or_repeat_outputs():
-    """Frontend provenance follows physical Group Input identity and clears after control-flow materialization."""
-    alias_group = compile_group(
-        'x = input_float("X")\ny = x\npanel([y], name="Alias")\noutput("Y", y)',
-        "NFTest_panel_alias",
-    )
-    inputs = _interface_inputs(alias_group)
-    check(_parent_name(inputs["X"]) == "Alias", "exact input alias did not retain panel eligibility")
-    bpy.data.node_groups.remove(alias_group)
-
-    _expect_message(
-        'x = input_float("X")\nflag = input_bool("Flag")\n'
-        'if flag:\n    y = x\nelse:\n    y = x\n'
-        'panel([y], name="Bad")\noutput("Y", y)',
-        "panel() item y is not a group input",
-        "NFTest_panel_switch_alias",
-    )
-    _expect_message(
-        'x = input_float("X")\n'
-        'for i in repeat_range(1):\n    x = x\n'
-        'panel([x], name="Bad")\noutput("X", x)',
-        "panel() item x is not a group input",
-        "NFTest_panel_repeat_alias",
-    )
+def test_interface_panel_rejects_aliases_and_keeps_parameter_identity():
+    """Panel references name formal parameters, not local aliases or values."""
+    group = compile_group('''
+def nf_fixture(x: Float['X']):
+    panel([x], name="Inputs")
+    y = x
+    return y
+''', "NFTest_panel_exact_parameter")
+    check(_parent_name(_interface_inputs(group)["X"]) == "Inputs", "declared input was not grouped")
+    bpy.data.node_groups.remove(group)
+    _expect_message('''
+def nf_fixture(x: Float['X']):
+    panel([y], name="Alias")
+    y = x
+    return y
+''', "is not a function parameter", "NFTest_panel_alias_rejected")
+    _expect_message('''
+def nf_fixture(x: Float['X'], flag: Bool['Flag']):
+    panel([y], name="Bad")
+    if flag:
+        y = x
+    else:
+        y = x
+    return y
+''', "is not a function parameter", "NFTest_panel_switch_alias")
+    _expect_message('''
+def nf_fixture(x: Float['X']):
+    for i in repeat_range(1):
+        x = x
+    panel([x], name="Late")
+    return x
+''', "panel()", "NFTest_panel_after_repeat")

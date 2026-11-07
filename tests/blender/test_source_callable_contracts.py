@@ -3,7 +3,7 @@
 import bpy
 import pytest
 
-from helpers import check, compile_group
+from helpers import check, compile_group, prepared_create_or_update
 from NodeForge import compiler, local_sources
 from NodeForge.blender import group_assembly as blender_group_assembly
 from NodeForge.blender import ir_lowering as blender_ir_lowering
@@ -31,17 +31,17 @@ def test_selected_local_catalog_reload_reuses_direct_library_owner_policy():
     group = None
     try:
         source.write_text(
-            'x = input_float("X", default=1.0)\noutput("Value", x + 1.0)\n',
+            'def inc(x: Float["X"] = 1.0) -> Float:\n    return x + 1.0\n',
             encoding="utf-8",
         )
         group = compiler.create_library_catalog_group("local", "source_callable_selected_local_reload")
         pointer = group.as_pointer()
         source.write_text(
-            'x = input_float("X", default=1.0)\noutput("Value", x + 2.0)\n',
+            'def inc(x: Float["X"] = 1.0) -> Float:\n    return x + 2.0\n',
             encoding="utf-8",
         )
 
-        compiler.update_library_catalog_group(group, "local", "source_callable_selected_local_reload")
+        compiler.update_library_catalog_group(group)
 
         check(group.as_pointer() == pointer, "selected Local reload replaced the root datablock")
         check(
@@ -54,28 +54,22 @@ def test_selected_local_catalog_reload_reuses_direct_library_owner_policy():
 
 
 def test_public_materialize_group_callback_prepares_before_backend_publication():
-    """Package-style materialize_group callbacks keep raw source outside the physical backend."""
+    """Raw callback sources cannot bypass typed IR preparation and publication."""
     root = None
     try:
         backend = compiler._new_group_backend()
-
-        def materialize_group(compile_group_callback):
-            """Exercise the existing package-facing raw-source callback signature."""
-            return compile_group_callback(
-                'x = input_float("X", default=1.0)\noutput("X", x + 1.0)\n',
-                name="NFTest_source_callable_public_compile_callback",
-            )
-
-        root = materialize_group(backend.compile_group_callback)
-        check(root is not None, "package materialize_group callback returned no node group")
-        check(root.get("nodeforge_function_root_owner_id"), "callback publication lost prepared root identity")
-        check(any(node.bl_idname == "ShaderNodeMath" for node in root.nodes), "callback source was not materialized")
+        source = 'def nf_fixture(x: Float["X"] = 1.0) -> Float:\n    return x + 1.0\n'
+        with pytest.raises(CompileError, match='Raw-source backend'):
+            backend.compile_group_callback(source, name='NFTest_raw_callback_rejected')
+        root = prepared_create_or_update(
+            source, 'NFTest_source_callable_public_compile_callback', backend=backend,
+        )
+        check(root is not None, 'typed publication returned no node group')
+        check(any(item.name == 'X' for item in root.interface.items_tree), 'typed IR input interface was not published')
+        check(any(node.bl_idname == 'ShaderNodeMath' for node in root.nodes),
+              'prepared function body was not materialized')
     finally:
         _remove_group(root)
-
-
-
-
 
 
 def test_trace_context_is_released_when_physical_lowering_raises(monkeypatch):
@@ -94,11 +88,13 @@ def test_trace_context_is_released_when_physical_lowering_raises(monkeypatch):
     monkeypatch.setattr(blender_group_assembly, "lower_body", fail_lowering)
     backend = compiler._new_group_backend()
     with pytest.raises(RuntimeError, match="trace-context-sentinel"):
-        backend.compile_group_callback(
-            'x = input_float("X", default=1.0)\noutput("X", x)\n',
-            name="NFTest_trace_context_failure_cleanup",
-            function_compilation_trace=trace,
-            function_compilation_inputs={"kind": "trace-regression"},
+        prepared_create_or_update(
+            'def nf_fixture(x: Float["X"] = 1.0) -> Float:\n    return x\n',
+            "NFTest_trace_context_failure_cleanup", backend=backend,
+            build_options={
+                "function_compilation_trace": trace,
+                "function_compilation_inputs": {"kind": "trace-regression"},
+            },
         )
 
     check(observed.get("active") is True, "trace frame was not active during physical lowering")

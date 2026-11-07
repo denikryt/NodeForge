@@ -374,8 +374,8 @@ def test_reserved_target_validation_is_shared_language_semantics():
         _lower("foo = 1", reserved={"foo": "imported function"})
 
 
-def test_group_semantic_preparation_publishes_entry_binding_identity_through_interface():
-    """Implicit group inputs expose their final owner-scoped BindingId through the canonical interface."""
+def test_group_semantic_preparation_rejects_undeclared_root_inputs():
+    """Top-level source never synthesizes implicit input sockets."""
     from NodeForge.compiler_identities import GroupCompilationIdentity
     from NodeForge.resolved_environment import ResolvedCatalog, ResolvedEnvironment
     from NodeForge.semantic.group import analyze_group_source
@@ -384,18 +384,16 @@ def test_group_semantic_preparation_publishes_entry_binding_identity_through_int
         {name: ResolvedCatalog(name, {}) for name in ("functions", "examples", "local")},
     )
     identity = GroupCompilationIdentity(None, "ROOT/test-owner", "definition", "declaration")
+    with pytest.raises(CompileError, match='Unknown name: x'):
+        analyze_group_source(
+            "result = x\n", compilation_identity=identity, resolved_environment=environment,
+        )
     compilation = analyze_group_source(
-        "output(x)\n",
-        compilation_identity=identity,
-        resolved_environment=environment,
+        "result = cube(1)\n", compilation_identity=identity, resolved_environment=environment,
     )
-    entry_origins = [
-        item.interface_origin
-        for item in compilation.interface.inputs
-        if isinstance(item.interface_origin, BindingId)
-    ]
-    assert entry_origins == [BindingId("ROOT/test-owner", 0)]
-    assert entry_origins[0].owner_scope == compilation.identity.owner_scope
+    assert not compilation.interface.inputs
+    assert not compilation.interface.outputs
+
 
 def test_basic_body_frontend_has_no_backend_dependencies_or_compiler_mutation():
     """The body semantic phase remains pure and cannot publish backend Values."""

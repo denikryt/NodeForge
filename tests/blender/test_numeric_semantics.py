@@ -26,8 +26,16 @@ def _evaluated_point_position(group, name):
     mesh = bpy.data.meshes.new(name + "_Mesh")
     obj = bpy.data.objects.new(name + "_Object", mesh)
     bpy.context.collection.objects.link(obj)
+    # The new DSL function exposes Value; a physical wrapper explicitly wires
+    # that geometry into the modifier's Geometry output. No root DSL I/O exists.
+    wrapper = bpy.data.node_groups.new(name + "_Wrapper", "GeometryNodeTree")
+    wrapper.interface.new_socket(name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    output = wrapper.nodes.new("NodeGroupOutput")
+    function_node = wrapper.nodes.new("GeometryNodeGroup")
+    function_node.node_tree = group
+    wrapper.links.new(function_node.outputs[0], output.inputs["Geometry"])
     modifier = obj.modifiers.new("NodeForge", "NODES")
-    modifier.node_group = group
+    modifier.node_group = wrapper
     bpy.context.view_layer.update()
     evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
     out = evaluated.to_mesh()
@@ -39,12 +47,13 @@ def _evaluated_point_position(group, name):
         bpy.data.objects.remove(obj, do_unlink=True)
         bpy.data.meshes.remove(mesh, do_unlink=True)
         bpy.data.node_groups.remove(group, do_unlink=True)
+        bpy.data.node_groups.remove(wrapper, do_unlink=True)
 
 
 def _evaluated_x(expression, name):
     """Compile one numeric expression into point position X and return the evaluated value."""
     group = compile_group(
-        f'x = {expression}\noutput("Geometry", point(vector(x, 0.0, 0.0)))\n',
+        f'def evaluate():\n    x = {expression}\n    return point(vector(x, 0.0, 0.0))\n',
         name,
     )
     return _evaluated_point_position(group, name)[0]
@@ -54,25 +63,27 @@ def test_numeric_ir_uses_typed_integer_math_math_and_compare_nodes():
     """Typed numeric IR selects physical node families without backend type inference."""
     group = compile_group(
         '''
-i = index()
-int_add = i + 1
-int_floor = i // 2
-int_mod = i % 3
-float_div = i / 2
-float_floor = i // 2.0
-float_mod = i % 3.0
-int_cmp = i < 4
-float_cmp = i == 4.0
-power = 2.0 ** 3.0
-output("Int Add", int_add)
-output("Int Floor", int_floor)
-output("Int Mod", int_mod)
-output("Float Div", float_div)
-output("Float Floor", float_floor)
-output("Float Mod", float_mod)
-output("Int Cmp", int_cmp)
-output("Float Cmp", float_cmp)
-output("Power", power)
+def nf_fixture():
+    i = index()
+    int_add = i + 1
+    int_floor = i // 2
+    int_mod = i % 3
+    float_div = i / 2
+    float_floor = i // 2.0
+    float_mod = i % 3.0
+    int_cmp = i < 4
+    float_cmp = i == 4.0
+    power = 2.0 ** 3.0
+    int_add = int_add
+    int_floor = int_floor
+    int_mod = int_mod
+    float_div = float_div
+    float_floor = float_floor
+    float_mod = float_mod
+    int_cmp = int_cmp
+    float_cmp = float_cmp
+    power = power
+    return (int_add, int_floor, int_mod, float_div, float_floor, float_mod, int_cmp, float_cmp, power,)
 ''',
         "NFTest_numeric_backend_families",
     )
@@ -102,14 +113,16 @@ def test_numeric_semantics_vector_int_scalars_keep_scale_and_reciprocal_topology
     """Vector Int scalars reuse SCALE and vector division keeps reciprocal-plus-SCALE topology."""
     group = compile_group(
         '''
-i = index()
-v = vector(10000000000.0, 2.0, 3.0)
-a = v * i
-b = i * v
-c = v / i
-output("A", a)
-output("B", b)
-output("C", c)
+def nf_fixture():
+    i = index()
+    v = vector(10000000000.0, 2.0, 3.0)
+    a = v * i
+    b = i * v
+    c = v / i
+    a = a
+    b = b
+    c = c
+    return (a, b, c,)
 ''',
         "NFTest_numeric_semantics_vector_int_scalar_topology",
     )
@@ -137,7 +150,7 @@ def test_numeric_semantics_direct_runtime_consumer_rejects_known_int_domain_erro
     """Direct runtime consumers cannot bypass hard signed-32 semantic validation."""
     try:
         compile_group(
-            f'output("X", {expression})\n',
+            f'def negative_case():\n    return {expression}\n',
             f"NFTest_numeric_semantics_direct_int_domain_{suffix}",
         )
     except CompileError:
@@ -147,7 +160,11 @@ def test_numeric_semantics_direct_runtime_consumer_rejects_known_int_domain_erro
 
 def test_numeric_semantics_direct_known_valid_int_expression_remains_integer_math_add():
     """Hard-domain validation does not fold a valid known runtime Int expression."""
-    group = compile_group('output("X", 1 + 2)\n', "NFTest_numeric_semantics_direct_valid_int_add")
+    group = compile_group('''
+def nf_fixture():
+    x = 1 + 2
+    return (x,)
+''', "NFTest_numeric_semantics_direct_valid_int_add")
     try:
         integer_add = _nodes(group, "FunctionNodeIntegerMath", "ADD")
         check(len(integer_add) == 1, f"expected one Integer Math ADD, got {len(integer_add)}")
@@ -196,7 +213,7 @@ def test_numeric_semantics_float_characterization_matches_actual_geometry_nodes(
 def test_numeric_semantics_integer_floor_pair_matches_actual_integer_math(suffix, left, right, expected_q, expected_r):
     """Integer floor quotient/remainder match evaluated Integer Math, including zero divisor."""
     group = compile_group(
-        f'''\nq = {left} // {right}\nr = {left} % {right}\ngeo = point(vector(q, r, 0.0))\noutput("Geometry", geo)\n''',
+        f'''\ndef evaluate():\n    q = {left} // {right}\n    r = {left} % {right}\n    return point(vector(q, r, 0.0))\n''',
         f"NFTest_numeric_semantics_int_floor_pair_{suffix}",
     )
     position = _evaluated_point_position(group, f"NFTest_numeric_semantics_int_floor_pair_{suffix}")

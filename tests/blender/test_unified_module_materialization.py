@@ -13,12 +13,19 @@ def _nested_groups(tree):
     return [node for node in tree.nodes if node.bl_idname == "GeometryNodeGroup"]
 
 
+def _compose_module(source, name, *, environment=None):
+    """Compile unified top-level statements into a pre-existing base node tree."""
+    root = bpy.data.node_groups.new(name, 'GeometryNodeTree')
+    compiler.compose_source_initial(source, root, resolved_environment=environment)
+    return root
+
+
 def test_module_definition_is_physical_nested_group():
-    root = compile_group('''def module_leaf(x: Float) -> Float:
+    root = _compose_module('''def module_leaf(x: Float) -> Float:
     return x + 2
 
 value = module_leaf(3.0)
-output(value)
+value = value
 ''', 'NFTest_module_definition_physical')
     leaf = _module_groups('module_leaf')
     assert len(leaf) == 1
@@ -28,14 +35,14 @@ output(value)
 
 
 def test_nested_module_functions_materialize_through_shared_backend():
-    root = compile_group('''def nested_module_leaf(x: Float) -> Float:
+    root = _compose_module('''def nested_module_leaf(x: Float) -> Float:
     return x + 1
 
 def nested_module_wrapper(x: Float) -> Float:
     return nested_module_leaf(x)
 
 result = nested_module_wrapper(5)
-output(result)
+result = result
 ''', 'NFTest_nested_module_function_physical')
     wrapper = _module_groups('nested_module_wrapper')
     leaf = _module_groups('nested_module_leaf')
@@ -45,13 +52,13 @@ output(result)
 
 
 def test_module_calls_share_by_default_and_split_unique_instances():
-    root = compile_group('''def module_shared_unique_leaf(x: Float) -> Float:
+    root = _compose_module('''def module_shared_unique_leaf(x: Float) -> Float:
     return x + 1
 
 a = module_shared_unique_leaf(1)
 b = module_shared_unique_leaf(2)
 c = module_shared_unique_leaf(3, __unique__=True)
-output(a + b + c)
+total = a + b + c
 ''', 'NFTest_module_shared_unique')
     leaves = _module_groups('module_shared_unique_leaf')
     assert len(leaves) == 2
@@ -67,13 +74,15 @@ def test_module_function_in_place_update_retains_datablock_pointer():
     return x + 2
 
 value = update_module_leaf(3)
-output(value)
+value = value
 '''
     after = before.replace('x + 2', 'x + 4')
-    root = compile_group(before, 'NFTest_module_in_place_update')
+    root = _compose_module(before, 'NFTest_module_in_place_update')
     group = _module_groups('update_module_leaf')[0]
     pointer = group.as_pointer()
-    compiler.update_expression_group(root, after)
+    from NodeForge.compiler_identities import parse_module_definition_function_id
+    origin = parse_module_definition_function_id(group['nodeforge_module_definition']).module.origin
+    compiler.update_library_catalog_group(group, source=after, module_context=origin)
     updated = _module_groups('update_module_leaf')
     assert len(updated) == 1
     assert updated[0].as_pointer() == pointer
@@ -102,9 +111,9 @@ def package_wrapper(x: Float) -> Float:
 cube(1)
 ''', encoding='utf-8')
     packages.install_package_directory(root)
-    root_tree = compile_group('''from packages import modulefixture
+    root_tree = _compose_module('''from packages import modulefixture
 v = modulefixture.package_wrapper(3)
-output(v)
+v = v
 ''', 'NFTest_package_module_materialized')
     wrapper = _module_groups('package_wrapper')
     leaf = _module_groups('package_leaf')
@@ -131,16 +140,10 @@ cube(1)
         for name in ('functions', 'examples', 'local')
     })
     backend = compiler._new_group_backend(environment)
-    prepared, session = compiler._prepare_root_build(
-        backend, '''from local import local_geometry
+    root = _compose_module('''from local import local_geometry
 v = local_geometry.local_mod_leaf(3)
-output(v)
-''', name='NFTest_local_module_imported',
-    )
-    root = backend.create_or_update(BlenderGroupBuildRequest(
-        prepared_compilation=prepared, name='NFTest_local_module_imported',
-        source_callable_session=session,
-    ))
+v = v
+''', 'NFTest_local_module_imported', environment=environment)
     groups = _module_groups('local_mod_leaf')
     assert len(groups) == 1
     assert _nested_groups(root)[0].node_tree is groups[0]

@@ -76,6 +76,21 @@ def arrange(geometry: Geometry) -> Geometry:
     return shapes.move(geometry, offset=vector(0, 0, 1))
 ```
 
+### Examples file modules
+
+A selected `.nf` file in Examples is also a definition namespace. Use its
+qualified file path to import one function, or import the file namespace and
+call its member. Names from different files remain distinct, even if their
+filenames or function names coincide.
+
+```python
+from examples.terrain.erosion import smooth as smooth_terrain
+from examples.water import erosion
+
+def process(geometry: Geometry) -> Geometry:
+    return smooth_terrain(geometry)
+```
+
 ## Runtime loop counts
 
 A runtime range count is an explicitly typed `Int` parameter. For example:
@@ -98,7 +113,7 @@ A function's source module, name and declared input-type signature determine its
 
 **Make Single User** in Blender creates an independent datablock but copies NodeForge's authoritative source-owner metadata. If the copy and original have identical metadata, both automatic canonical lookup and explicitly selected source Reload reject the ambiguity before changing either. Select the user-created copy and click **Detach Selected Copy**. This removes only the authoritative lookup attributes; the copy's graph and generated-resource provenance are retained. The original can then be updated canonically. A detached copy is no longer an eligible canonical source Reload target. Distinct `__unique__` instance keys are not conflicting owners.
 
-**Reload Function from Source** updates an eligible selected catalog-backed Function Node Group in place, preserving its complete canonical identity and instance key. It is distinct from Compile Script and does not selectively recompile previously placed level-0 node occurrences.
+**Reload Function from Source** updates an eligible selected source-owned Function Node Group in place, preserving its complete canonical definition, declared input-type signature, instance key, owner scope and datablock pointer. Local/Examples owners use the current file at their canonical origin; package functions use the package's resolved export snapshot. A function created from a Text datablock can be reloaded automatically only while its original uniquely identified Text still exists. An arbitrary string source requires an explicit replacement source and unchanged module context. A changed or missing definition, ambiguous copy or incompatible specialization fails without modifying the selected group. This operation is distinct from Compile Script and does not selectively recompile previously placed level-0 node occurrences.
 
 ## Initial-attempt safety and capability limits
 

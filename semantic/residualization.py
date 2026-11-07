@@ -9,7 +9,6 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 
-from .constants import TYPE_INT
 from ..errors import CompileError
 from .compile_time import CompileTimeSnapshot, CompileTimeState
 from .consteval import (
@@ -410,26 +409,6 @@ def _preprocess_compile_time(stmts, *, initial_compile_time=None, shadowed_names
     )
 
 
-def _infer_input_types(stmts):
-    """Infer implicit input types required by runtime repeat counts at any depth."""
-    result = {}
-
-    def visit(sub_stmts):
-        for stmt in sub_stmts:
-            if _is_repeat_range_for(stmt):
-                arg = stmt.iter.args[0]
-                if isinstance(arg, ast.Name):
-                    result[arg.id] = TYPE_INT
-                visit(stmt.body)
-            elif isinstance(stmt, ast.If):
-                visit(stmt.body)
-                visit(stmt.orelse)
-
-    visit(stmts)
-    return result
-
-
-
 __all__ = [
     "CompileTimeAppendExpression",
     "CompileTimeBindExpression",
@@ -438,5 +417,4 @@ __all__ = [
     "_PreprocessRecorder",
     "_handle_compile_time_stmt",
     "_preprocess_compile_time",
-    "_infer_input_types",
 ]

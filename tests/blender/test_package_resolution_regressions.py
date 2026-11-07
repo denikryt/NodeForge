@@ -39,12 +39,12 @@ def test_python_example_import_materializes_through_registry(tmp_path):
     (owner / 'backend.py').write_text('def build(context, value):\n    return value\n')
     packages.install_package_directory(root)
     group = compile_group(
-        'from examples import review_example\nx = input_float("X")\noutput("Value", review_example(x))\n',
+        'from examples import review_example\ndef nf_fixture(x: Float["X"]):\n    return review_example(x)\n',
         'NFTest_review_python_example',
     )
     check(group is not None, 'Python Example failed physical materialization')
     expect_compile_error(
-        'from packages import review\nx = input_float("X")\noutput(review.review_example(x))\n',
+        'from packages import review\ndef nf_fixture(x: Float["X"]):\n    return review.review_example(x)\n',
         'NFTest_review_example_not_export',
     )
 
@@ -64,13 +64,17 @@ def test_native_function_materializes_source_calls(tmp_path, style):
     )
     (owner / 'backend.py').write_text('def build(context, value):\n    return value\n')
     packages.install_package_directory(root)
-    source = 'from packages import review\nx=input_float("X")\n'
+    source = 'from packages import review\n'
     if style == 'local':
-        source += 'def helper(x):\n    return review.native_value(x)\noutput(helper(x))\n'
+        source += 'def helper(x: Float) -> Float:\n    return review.native_value(x)\ndef nf_fixture(x: Float):\n    return helper(x)\n'
     else:
         callee = 'native_value' if style == 'bare' else 'review.native_value'
-        source += f'output({callee}(x))\n'
-    assert compile_group(source, 'NFTest_native_function_' + style) is not None
+        source += f'def nf_fixture(x: Float):\n    return {callee}(x)\n'
+    if style == 'local':
+        group = compile_entry_group(source, 'NFTest_native_function_' + style, 'nf_fixture')
+    else:
+        group = compile_group(source, 'NFTest_native_function_' + style)
+    assert group is not None
 
 
 

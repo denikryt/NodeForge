@@ -145,3 +145,16 @@ def test_selected_module_reload_resolves_exact_local_source(tmp_path, monkeypatc
     with pytest.raises(CompileError, match='unavailable|no longer'):
         compiler.update_library_catalog_group(group)
     assert group.as_pointer() == pointer
+
+
+def test_reload_does_not_recover_missing_annotation_from_saved_identity():
+    """Selected Reload cannot use its serialized parameter types as source defaults."""
+    _target, (_shared, selected, _second) = _materialized()
+    before = _identity(selected)
+    old_source = str(selected['nodeforge_library_source'])
+    with pytest.raises(CompileError, match='requires an explicit type annotation'):
+        compiler.update_library_catalog_group(
+            selected, source=_SOURCE.replace('x: Float', 'x'), module_context=_CONTEXT,
+        )
+    assert _identity(selected) == before
+    assert str(selected['nodeforge_library_source']) == old_source

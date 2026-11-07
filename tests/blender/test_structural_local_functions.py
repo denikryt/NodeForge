@@ -43,23 +43,29 @@ def f(x):
 y = f(1.0)
 output("y", y)
 """,
-        """
-Float = 1.0
-output("x", Float)
-""",
+        '''
+def nf_fixture():
+    Float = 1.0
+    x = Float
+    return (x,)
+''',
     )
     for index, source in enumerate(cases):
         expect_compile_error(source, f'NFTest_structural_reserved_name_{index}')
 
 
 def test_structural_top_level_builtin_and_constant_shadowing_remains_compatible():
-    group = compile_group("""
-length = input_float("Length", default=1.0)
-e = length + 1.0
-grid = e + 2.0
-output("grid", grid)
-""", 'NFTest_structural_legacy_shadowing')
-    check(getattr(group, 'bl_idname', None) == 'GeometryNodeTree', 'legacy top-level builtin/constant shadowing did not compile')
+    group = compile_group('''
+def nf_fixture(length_value: Float['Length'] = 1.0):
+    adjusted_value = length_value + 1.0
+    result_value = adjusted_value + 2.0
+    return result_value
+''', 'NFTest_structural_legacy_shadowing')
+    check(group.bl_idname == 'GeometryNodeTree', 'non-reserved parameter shadowing failed')
+    expect_compile_error(
+        "def nf_fixture(length: Float = 1.0) -> Float:\n    return length + 1.0\n",
+        'NFTest_reserved_builtin_parameter',
+    )
 
 
 

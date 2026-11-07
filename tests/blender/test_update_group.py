@@ -7,8 +7,18 @@ from NodeForge.blender import update as blender_update
 
 
 def test_update_group_rollback_and_preflight_contracts():
-    group = compile_group('x = 1\noutput("x", x)', 'NFTest_update')
-    compiler.update_expression_group(group, 'x = 2\noutput("x", x)')
+    group = compile_group('''
+def nf_fixture():
+    x = 1
+    x = x
+    return (x,)
+''', 'NFTest_update')
+    compiler.update_expression_group(group, '''
+def nf_fixture():
+    x = 2
+    x = x
+    return (x,)
+''')
     try:
         compiler.update_expression_group(group, '\ndef inc(a):\n    return a + 1\n\nx = inc(1)\ny = missing_func(1)\noutput("y", y)\n')
     except Exception:
@@ -23,12 +33,22 @@ def test_update_group_rollback_and_preflight_contracts():
 
 def test_rollback_backup_copy_failure_is_exception_safe(monkeypatch):
     """Backup construction cleans its private datablock before returning failure."""
-    group = compile_group('x = 1\noutput("x", x)', 'NFTest_backup_copy_failure')
+    group = compile_group('''
+def nf_fixture():
+    x = 1
+    x = x
+    return (x,)
+''', 'NFTest_backup_copy_failure')
     before = {g.name for g in bpy.data.node_groups if g.name.startswith("NodeForge.rollback.")}
     blender_group_backend._TEST_BACKUP_COPY_FAIL_AFTER_RESET = True
     try:
         try:
-            compiler.update_expression_group(group, 'x = 2\noutput("x", x)')
+            compiler.update_expression_group(group, '''
+def nf_fixture():
+    x = 2
+    x = x
+    return (x,)
+''')
         except RuntimeError as exc:
             check("rollback-backup copy failure" in str(exc), f"unexpected backup-copy failure: {exc}")
         else:
@@ -41,7 +61,12 @@ def test_rollback_backup_copy_failure_is_exception_safe(monkeypatch):
 
 def test_rollback_backup_failed_cleanup_remains_authority_ineligible(monkeypatch):
     """A backup leaked only by failed removal remains permanently non-authoritative."""
-    group = compile_group('x = 1\noutput("x", x)', 'NFTest_backup_cleanup_failure')
+    group = compile_group('''
+def nf_fixture():
+    x = 1
+    x = x
+    return (x,)
+''', 'NFTest_backup_cleanup_failure')
     original_remove = blender_group_backend._remove_node_group_if_live
     leaked = []
 
@@ -57,7 +82,12 @@ def test_rollback_backup_failed_cleanup_remains_authority_ineligible(monkeypatch
     blender_group_backend._TEST_BACKUP_COPY_FAIL_AFTER_RESET = True
     try:
         try:
-            compiler.update_expression_group(group, 'x = 2\noutput("x", x)')
+            compiler.update_expression_group(group, '''
+def nf_fixture():
+    x = 2
+    x = x
+    return (x,)
+''')
         except RuntimeError as exc:
             check("rollback-backup copy failure" in str(exc), f"unexpected backup-copy failure: {exc}")
         else:
@@ -73,11 +103,12 @@ def test_rollback_backup_failed_cleanup_remains_authority_ineligible(monkeypatch
 
 def test_update_group_preserves_repeat_zone_dynamic_state_sockets_with_external_links():
     source = '''
-count = input_int("Count", default=4)
-instance_points = points(1)
-for i in repeat_range(count):
-    instance_points = join(instance_points, points(1))
-output("instance_points", instance_points)
+def nf_fixture(count: Int['Count'] = 4):
+    instance_points = points(1)
+    for i in repeat_range(count):
+        instance_points = join(instance_points, points(1))
+    instance_points = instance_points
+    return (instance_points,)
 '''
     group = compile_group(source, 'NFTest_update_repeat_dynamic_sockets')
     wrapper = bpy.data.node_groups.new('NFTest_update_repeat_dynamic_wrapper', 'GeometryNodeTree')
@@ -85,14 +116,14 @@ output("instance_points", instance_points)
     group_output = wrapper.nodes.new('NodeGroupOutput')
     group_node = wrapper.nodes.new('GeometryNodeGroup')
     group_node.node_tree = group
-    wrapper.links.new(group_node.outputs['instance_points'], group_output.inputs['Geometry'])
+    wrapper.links.new(group_node.outputs['Value'], group_output.inputs['Geometry'])
 
     compiler.update_expression_group(group, source)
 
     output_names = [socket.name for socket in group_node.outputs]
-    check('instance_points' in output_names, f'updated group node outputs missing instance_points: {output_names}')
+    check('Value' in output_names, f'updated group node outputs missing instance_points: {output_names}')
     link_names = [(link.from_socket.name, link.to_socket.name) for link in wrapper.links]
-    check(('instance_points', 'Geometry') in link_names, f'instance_points external link was not preserved: {link_names}')
+    check(('Value', 'Geometry') in link_names, f'instance_points external link was not preserved: {link_names}')
 
     repeat_outputs = [node for node in group.nodes if node.bl_idname == 'GeometryNodeRepeatOutput']
     check(len(repeat_outputs) == 1, 'expected one Repeat Output after update')
@@ -119,16 +150,16 @@ def _panel_snapshot(group):
 
 def test_update_group_preserves_panel_hierarchy_values_links_and_rollback():
     source_before = '''
-radius = input_float("Radius", default=0.1)
-segments = input_int("Segments", default=8)
-panel([radius, segments], name="Stem")
-output("Radius", radius)
+def nf_fixture(radius: Float['Radius'] = 0.1, segments: Int['Segments'] = 8):
+    panel([radius, segments], name="Stem")
+    radius = radius
+    return (radius,)
 '''
     source_after = '''
-radius = input_float("Radius", default=0.2)
-segments = input_int("Segments", default=12)
-panel([segments, radius], name="Stem", collapsed=True)
-output("Radius", radius)
+def nf_fixture(radius: Float['Radius'] = 0.2, segments: Int['Segments'] = 12):
+    panel([segments, radius], name="Stem", collapsed=True)
+    radius = radius
+    return (radius,)
 '''
     group = compile_group(source_before, "NFTest_update_panels")
 
@@ -140,7 +171,7 @@ output("Radius", radius)
     group_node = wrapper.nodes.new("GeometryNodeGroup")
     group_node.node_tree = group
     wrapper.links.new(wrapper_input.outputs["External Segments"], group_node.inputs["Segments"])
-    wrapper.links.new(group_node.outputs["Radius"], wrapper_output.inputs["Result"])
+    wrapper.links.new(group_node.outputs["Value"], wrapper_output.inputs["Result"])
     group_node.inputs["Radius"].default_value = 0.33
 
     compiler.update_expression_group(group, source_after)
@@ -163,10 +194,10 @@ output("Radius", radius)
         compiler.update_expression_group(
             group,
             '''
-radius = input_float("Radius", default=0.4)
-segments = input_int("Segments", default=16)
-panel([radius, segments], name="Changed")
-output("Radius", radius)
+def nf_fixture(radius: Float['Radius'] = 0.4, segments: Int['Segments'] = 16):
+    panel([radius, segments], name="Changed")
+    radius = radius
+    return (radius,)
 ''',
         )
     except RuntimeError as exc:
@@ -199,17 +230,14 @@ def _close(actual, expected):
 def test_update_group_preserves_all_shared_instances_cross_links_defaults_and_rollback():
     """One in-place update must preserve every user of the shared datablock."""
     source_before = '''
-x = input_float("X", default=1.0)
-y = input_float("Y", default=2.0)
-z = input_float("Z", default=3.0)
-output("Result", x + y + z)
+def nf_fixture(x: Float['X'] = 1.0, y: Float['Y'] = 2.0, z: Float['Z'] = 3.0):
+    result = x + y + z
+    return (result,)
 '''
     source_after = '''
-x = input_float("X", default=10.0)
-y = input_float("Y", default=20.0)
-w = input_float("W", default=40.0)
-z = input_float("Z", default=30.0)
-output("Result", x + y + z + w)
+def nf_fixture(x: Float['X'] = 10.0, y: Float['Y'] = 20.0, z: Float['Z'] = 30.0):
+    result = x + y + z + 40.0
+    return (result,)
 '''
     group = compile_group(source_before, "NFTest_update_shared_instances")
     pointer = group.as_pointer()
@@ -243,9 +271,9 @@ output("Result", x + y + z + w)
     leaf_3.inputs["Z"].default_value = 3.3
 
     wrapper_a.links.new(driver.outputs["Driver"], leaf_1.inputs["Y"])
-    wrapper_a.links.new(leaf_2.outputs["Result"], leaf_1.inputs["X"])
-    wrapper_a.links.new(leaf_1.outputs["Result"], output.inputs["Result"])
-    wrapper_b.links.new(leaf_3.outputs["Result"], math.inputs[0])
+    wrapper_a.links.new(leaf_2.outputs["Value"], leaf_1.inputs["X"])
+    wrapper_a.links.new(leaf_1.outputs["Value"], output.inputs["Result"])
+    wrapper_b.links.new(leaf_3.outputs["Value"], math.inputs[0])
 
     compiler.update_expression_group(group, source_after)
 
@@ -253,9 +281,9 @@ output("Result", x + y + z + w)
     identifiers_after = _group_input_identifiers(group)
     check(identifiers_before["X"] != identifiers_after["X"], "shared update did not exercise interface recreation")
     expected = {
-        leaf_1: {"X": 1.1, "Y": 1.2, "Z": 1.3, "W": 40.0},
-        leaf_2: {"X": 2.1, "Y": 2.2, "Z": 2.3, "W": 40.0},
-        leaf_3: {"X": 3.1, "Y": 20.0, "Z": 3.3, "W": 40.0},
+        leaf_1: {"X": 1.1, "Y": 1.2, "Z": 1.3},
+        leaf_2: {"X": 2.1, "Y": 2.2, "Z": 2.3},
+        leaf_3: {"X": 3.1, "Y": 20.0, "Z": 3.3},
     }
     for node, values in expected.items():
         for socket_name, value in values.items():
@@ -264,9 +292,9 @@ output("Result", x + y + z + w)
     links_a = [(link.from_node, link.from_socket.name, link.to_node, link.to_socket.name) for link in wrapper_a.links]
     links_b = [(link.from_node, link.from_socket.name, link.to_node, link.to_socket.name) for link in wrapper_b.links]
     check(links_a.count((driver, "Driver", leaf_1, "Y")) == 1, "stable-to-affected link was not restored exactly once")
-    check(links_a.count((leaf_2, "Result", leaf_1, "X")) == 1, "affected-to-affected link was not restored exactly once")
-    check(links_a.count((leaf_1, "Result", output, "Result")) == 1, "affected-to-stable link was not restored exactly once")
-    check(links_b.count((leaf_3, "Result", math, "Value")) == 1, "cross-tree affected link was not restored exactly once")
+    check(links_a.count((leaf_2, "Value", leaf_1, "X")) == 1, "affected-to-affected link was not restored exactly once")
+    check(links_a.count((leaf_1, "Value", output, "Result")) == 1, "affected-to-stable link was not restored exactly once")
+    check(links_b.count((leaf_3, "Value", math, "Value")) == 1, "cross-tree affected link was not restored exactly once")
 
     blender_group_backend._TEST_CUTOVER_FAIL_AFTER_RESET = True
     try:
@@ -282,9 +310,9 @@ output("Result", x + y + z + w)
     links_a = [(link.from_node, link.from_socket.name, link.to_node, link.to_socket.name) for link in wrapper_a.links]
     links_b = [(link.from_node, link.from_socket.name, link.to_node, link.to_socket.name) for link in wrapper_b.links]
     check(links_a.count((driver, "Driver", leaf_1, "Y")) == 1, "rollback lost stable-to-affected link")
-    check(links_a.count((leaf_2, "Result", leaf_1, "X")) == 1, "rollback lost affected-to-affected link")
-    check(links_a.count((leaf_1, "Result", output, "Result")) == 1, "rollback lost affected-to-stable link")
-    check(links_b.count((leaf_3, "Result", math, "Value")) == 1, "rollback lost cross-tree affected link")
+    check(links_a.count((leaf_2, "Value", leaf_1, "X")) == 1, "rollback lost affected-to-affected link")
+    check(links_a.count((leaf_1, "Value", output, "Result")) == 1, "rollback lost affected-to-stable link")
+    check(links_b.count((leaf_3, "Value", math, "Value")) == 1, "rollback lost cross-tree affected link")
     leaked = [
         item.name
         for item in bpy.data.node_groups
@@ -314,80 +342,78 @@ output("Result", x + y + z + w)
 
 
 def test_update_group_drops_removed_and_incompatible_socket_state_without_positional_reuse():
-    """Success restore skips removed/type-changed sockets without shifting state."""
-    before = '''
-keep = input_float("Keep", default=1.0)
-removed = input_float("Removed", default=2.0)
-changed = input_float("Changed", default=3.0)
-output("Changed", changed)
+    """Selected MODULE_DEF Reload rejects incompatible specialization before changing users."""
+    before = '''def nf_fixture(keep: Float['Keep'] = 1.0, removed: Float['Removed'] = 2.0, changed: Float['Changed'] = 3.0):
+    return changed
 '''
-    after = '''
-new = input_float("New", default=9.0)
-keep = input_float("Keep", default=10.0)
-changed = input_int("Changed", default=30)
-output("Changed", changed)
+    after = '''def nf_fixture(new: Float['New'] = 9.0, keep: Float['Keep'] = 10.0, changed: Int['Changed'] = 30):
+    return changed
 '''
-    group = compile_group(before, "NFTest_update_removed_incompatible")
-    wrapper = bpy.data.node_groups.new("NFTest_update_removed_incompatible_wrapper", "GeometryNodeTree")
-    group_node = wrapper.nodes.new("GeometryNodeGroup")
+    group = compile_group(before, 'NFTest_update_removed_incompatible')
+    pointer = group.as_pointer()
+    wrapper = bpy.data.node_groups.new('NFTest_incompatible_wrapper', 'GeometryNodeTree')
+    group_node = wrapper.nodes.new('GeometryNodeGroup')
     group_node.node_tree = group
-    blender_update._apply_group_defaults_to_node(group_node)
-    group_node.inputs["Keep"].default_value = 1.5
-    group_node.inputs["Removed"].default_value = 2.5
-    group_node.inputs["Changed"].default_value = 3.5
-    math = wrapper.nodes.new("ShaderNodeMath")
-    wrapper.links.new(group_node.outputs["Changed"], math.inputs[0])
-
-    compiler.update_expression_group(group, after)
-
-    check(_close(group_node.inputs["Keep"].default_value, 1.5), "unchanged input override was lost")
-    check(_close(group_node.inputs["New"].default_value, 9.0), "new input did not receive its script default")
-    check(int(group_node.inputs["Changed"].default_value) == 30, "incompatible Float state was applied to Int input")
-    check(group_node.inputs.get("Removed") is None, "removed input survived cutover")
-    check(not any(link.from_node == group_node and link.to_node == math for link in wrapper.links), "incompatible output link was restored")
+    group_node.inputs['Keep'].default_value = 1.5
+    group_node.inputs['Changed'].default_value = 3.5
+    math = wrapper.nodes.new('ShaderNodeMath')
+    wrapper.links.new(group_node.outputs['Value'], math.inputs[0])
+    previous_links = tuple((link.from_socket.name, link.to_socket.name) for link in wrapper.links)
+    with pytest.raises(CompileError, match='specialization'):
+        compiler.update_expression_group(group, after)
+    check(group.as_pointer() == pointer, 'incompatible update replaced original datablock')
+    check([socket.name for socket in group_node.inputs] == ['Keep', 'Removed', 'Changed'],
+          'incompatible update changed published source signature')
+    check(_close(group_node.inputs['Keep'].default_value, 1.5), 'incompatible update changed user override')
+    check(_close(group_node.inputs['Changed'].default_value, 3.5), 'incompatible update changed user override')
+    check(tuple((link.from_socket.name, link.to_socket.name) for link in wrapper.links) == previous_links,
+          'incompatible update changed existing endpoint links')
 
 
 def test_update_group_preserves_supported_vector_object_and_material_overrides():
-    """Group-wide restoration must retain sequence values and Blender ID pointers."""
-    before = '''
-vector_value = input_vector("Vector", default=(1, 2, 3))
-object_value = input_object("Object")
-material_value = input_material("Material")
-output("Vector", vector_value)
+    """Compatible typed Vector/Object/Material inputs retain per-instance user values."""
+    before = '''def nf_fixture(object_value: Object['Object'], material_value: Material['Material'], vector_value: Vector['Vector'] = (1, 2, 3)):
+    return vector_value
 '''
-    after = '''
-vector_value = input_vector("Vector", default=(10, 20, 30))
-object_value = input_object("Object")
-material_value = input_material("Material")
-extra = input_float("Extra", default=4.0)
-output("Vector", vector_value)
+    after = '''def nf_fixture(object_value: Object['Object'], material_value: Material['Material'], vector_value: Vector['Vector'] = (10, 20, 30)):
+    return vector_value
 '''
-    group = compile_group(before, "NFTest_update_pointer_values")
-    wrapper = bpy.data.node_groups.new("NFTest_update_pointer_values_wrapper", "GeometryNodeTree")
-    group_node = wrapper.nodes.new("GeometryNodeGroup")
+    group = compile_group(before, 'NFTest_update_pointer_values')
+    wrapper = bpy.data.node_groups.new('NFTest_update_pointer_values_wrapper', 'GeometryNodeTree')
+    group_node = wrapper.nodes.new('GeometryNodeGroup')
     group_node.node_tree = group
     blender_update._apply_group_defaults_to_node(group_node)
-    mesh = bpy.data.meshes.new("NFTest_update_pointer_mesh")
-    obj = bpy.data.objects.new("NFTest_update_pointer_object", mesh)
-    material = bpy.data.materials.new("NFTest_update_pointer_material")
-    group_node.inputs["Vector"].default_value = (4.0, 5.0, 6.0)
-    group_node.inputs["Object"].default_value = obj
-    group_node.inputs["Material"].default_value = material
-
+    mesh = bpy.data.meshes.new('NFTest_update_pointer_mesh')
+    obj = bpy.data.objects.new('NFTest_update_pointer_object', mesh)
+    material = bpy.data.materials.new('NFTest_update_pointer_material')
+    group_node.inputs['Vector'].default_value = (4.0, 5.0, 6.0)
+    group_node.inputs['Object'].default_value = obj
+    group_node.inputs['Material'].default_value = material
     compiler.update_expression_group(group, after)
-
-    vector = tuple(float(value) for value in group_node.inputs["Vector"].default_value)
-    check(all(_close(actual, expected) for actual, expected in zip(vector, (4.0, 5.0, 6.0))), f"Vector override changed: {vector}")
-    check(group_node.inputs["Object"].default_value is obj, "Object override was not restored")
-    check(group_node.inputs["Material"].default_value is material, "Material override was not restored")
-    check(_close(group_node.inputs["Extra"].default_value, 4.0), "new Extra default was not applied")
+    vector = tuple(float(value) for value in group_node.inputs['Vector'].default_value)
+    check(all(_close(actual, expected) for actual, expected in zip(vector, (4.0, 5.0, 6.0))),
+          f'Vector override changed: {vector}')
+    check(group_node.inputs['Object'].default_value is obj, 'Object override was not restored')
+    check(group_node.inputs['Material'].default_value is material, 'Material override was not restored')
 
 
 def test_deferred_group_transaction_rollback_restores_first_external_snapshot():
     """Outer rollback must use the first backup and first external snapshot."""
-    first = 'x = input_float("X", default=1.0)\noutput("X", x)'
-    second = 'x = input_float("X", default=2.0)\noutput("X", x)'
-    third = 'x = input_float("X", default=3.0)\noutput("X", x)'
+    first = '''
+def nf_fixture(x: Float['X'] = 1.0):
+    x = x
+    return (x,)
+'''
+    second = '''
+def nf_fixture(x: Float['X'] = 2.0):
+    x = x
+    return (x,)
+'''
+    third = '''
+def nf_fixture(x: Float['X'] = 3.0):
+    x = x
+    return (x,)
+'''
     group = compile_group(first, "NFTest_deferred_external_snapshot")
     wrapper = bpy.data.node_groups.new("NFTest_deferred_external_snapshot_wrapper", "GeometryNodeTree")
     wrapper.interface.new_socket(name="X", in_out="OUTPUT", socket_type="NodeSocketFloat")
@@ -396,14 +422,14 @@ def test_deferred_group_transaction_rollback_restores_first_external_snapshot():
     group_node.node_tree = group
     blender_update._apply_group_defaults_to_node(group_node)
     group_node.inputs["X"].default_value = 1.5
-    wrapper.links.new(group_node.outputs["X"], output.inputs["X"])
+    wrapper.links.new(group_node.outputs["Value"], output.inputs["X"])
 
     transaction = blender_group_backend.BlenderGroupBuildTransaction()
     prepared_create_or_update(second, group.name, existing_group=group, build_options={"local_helper_transaction": transaction})
     check(_close(group_node.inputs["X"].default_value, 1.5), "first deferred update lost the original override")
     group_node.inputs["X"].default_value = 2.5
     prepared_create_or_update(third, group.name, existing_group=group, build_options={"local_helper_transaction": transaction})
-    check(_close(group_node.inputs["X"].default_value, 2.5), "second deferred update lost the intermediate override")
+    check(_close(group_node.inputs["X"].default_value, 2.5), f"second deferred update lost the intermediate override: {group_node.inputs['X'].default_value}")
 
     transaction.rollback()
 
@@ -416,9 +442,21 @@ def test_deferred_group_transaction_rollback_restores_first_external_snapshot():
 
 def test_function_group_savepoint_restores_immediate_state_after_second_update():
     """Savepoint rollback restores the mutation immediately before the checkpoint."""
-    first = 'x = input_float("X", default=1.0)\noutput("X", x)'
-    second = 'x = input_float("X", default=2.0)\noutput("X", x)'
-    third = 'x = input_float("X", default=3.0)\noutput("X", x)'
+    first = '''
+def nf_fixture(x: Float['X'] = 1.0):
+    x = x
+    return (x,)
+'''
+    second = '''
+def nf_fixture(x: Float['X'] = 2.0):
+    x = x
+    return (x,)
+'''
+    third = '''
+def nf_fixture(x: Float['X'] = 3.0):
+    x = x
+    return (x,)
+'''
     group = compile_group(first, "NFTest_function_group_savepoint")
     pointer = group.as_pointer()
     transaction = blender_group_backend.BlenderGroupBuildTransaction()
@@ -507,13 +545,15 @@ def _evaluate_group_geometry_vertices(group, name):
 
 def test_update_group_preserves_nested_repeat_pairings_dynamic_state_and_result():
     """Transactional cutover must rebuild both nested Repeat pairs and their state sockets."""
-    source = """
-x = 0
-for i in repeat_range(2):
-    for j in repeat_range(3):
-        x = x + 1
-output("Geometry", point(vector(x, 0, 0)))
-"""
+    source = '''
+def nf_fixture():
+    x = 0
+    for i in repeat_range(2):
+        for j in repeat_range(3):
+            x = x + 1
+    geometry = point(vector(x, 0, 0))
+    return (geometry,)
+'''
     group = compile_group(source, "NFTest_update_nested_repeat")
 
     wrapper = bpy.data.node_groups.new("NFTest_update_nested_repeat_wrapper", "GeometryNodeTree")
@@ -521,7 +561,7 @@ output("Geometry", point(vector(x, 0, 0)))
     group_output = wrapper.nodes.new("NodeGroupOutput")
     group_node = wrapper.nodes.new("GeometryNodeGroup")
     group_node.node_tree = group
-    wrapper.links.new(group_node.outputs["Geometry"], group_output.inputs["Geometry"])
+    wrapper.links.new(group_node.outputs["Value"], group_output.inputs["Geometry"])
 
     compiler.update_expression_group(group, source)
 
@@ -539,7 +579,7 @@ output("Geometry", point(vector(x, 0, 0)))
         check("x" in output_names, f"nested Repeat Output lost x output socket: {output_names}")
 
     link_names = [(link.from_socket.name, link.to_socket.name) for link in wrapper.links]
-    check(("Geometry", "Geometry") in link_names, f"nested update lost external Geometry link: {link_names}")
+    check(("Value", "Geometry") in link_names, f"nested update lost external Geometry link: {link_names}")
     check(
         _evaluate_group_geometry_vertices(group, "NFTest_update_nested_repeat_eval") == [(6.0, 0.0, 0.0)],
         "nested Repeat result changed after transactional cutover",
@@ -548,13 +588,15 @@ output("Geometry", point(vector(x, 0, 0)))
 
 def test_nested_repeat_save_reopen_preserves_pairings_dynamic_state_and_result(tmp_path):
     """Nested Repeat pairings and dynamic sockets must survive .blend serialization and reload."""
-    source = """
-x = 0
-for i in repeat_range(2):
-    for j in repeat_range(3):
-        x = x + 1
-output("Geometry", point(vector(x, 0, 0)))
-"""
+    source = '''
+def nf_fixture():
+    x = 0
+    for i in repeat_range(2):
+        for j in repeat_range(3):
+            x = x + 1
+    geometry = point(vector(x, 0, 0))
+    return (geometry,)
+'''
     group_name = "NFTest_nested_repeat_persistence"
     object_name = "NFTest_nested_repeat_persistence_object"
     group = compile_group(source, group_name)
@@ -609,10 +651,14 @@ def test_library_reload_preserves_all_instance_values_defaults_and_links():
     group = wrapper = second_wrapper = None
     try:
         source.write_text(
-            'radius = input_float("Radius", default=0.1)\nsegments = input_int("Segments", default=8)\noutput("Radius", radius)\n',
+            '''
+def nf_fixture(radius: Float['Radius'] = 0.1, segments: Int['Segments'] = 8):
+    radius = radius
+    return (radius,)
+''',
             encoding="utf-8",
         )
-        group = compiler.create_library_catalog_group("local", "local_reload_state")
+        group, _runtime = compiler.create_selected_library_group_auto("local", str(source))
         pointer = group.as_pointer()
         wrapper = bpy.data.node_groups.new("NFTest_library_reload_state_wrapper", "GeometryNodeTree")
         wrapper.interface.new_socket(name="External Segments", in_out="INPUT", socket_type="NodeSocketInt")
@@ -622,7 +668,7 @@ def test_library_reload_preserves_all_instance_values_defaults_and_links():
         group_node = wrapper.nodes.new("GeometryNodeGroup")
         group_node.node_tree = group
         wrapper.links.new(wrapper_input.outputs["External Segments"], group_node.inputs["Segments"])
-        wrapper.links.new(group_node.outputs["Radius"], wrapper_output.inputs["Result"])
+        wrapper.links.new(group_node.outputs["Value"], wrapper_output.inputs["Result"])
         group_node.inputs["Radius"].default_value = 0.33
 
         second_wrapper = bpy.data.node_groups.new("NFTest_library_reload_state_second_wrapper", "GeometryNodeTree")
@@ -631,13 +677,17 @@ def test_library_reload_preserves_all_instance_values_defaults_and_links():
         blender_update._apply_group_defaults_to_node(second_node)
         second_node.inputs["Radius"].default_value = 0.44
         math = second_wrapper.nodes.new("ShaderNodeMath")
-        second_wrapper.links.new(second_node.outputs["Radius"], math.inputs[0])
+        second_wrapper.links.new(second_node.outputs["Value"], math.inputs[0])
 
         source.write_text(
-            'radius = input_float("Radius", default=0.2)\nsegments = input_int("Segments", default=12)\noutput("Radius", radius)\n',
+            '''
+def nf_fixture(radius: Float['Radius'] = 0.2, segments: Int['Segments'] = 12):
+    radius = radius
+    return (radius,)
+''',
             encoding="utf-8",
         )
-        compiler.update_library_catalog_group(group, "local", "local_reload_state")
+        compiler.update_library_catalog_group(group)
 
         check(group.as_pointer() == pointer, "library reload replaced the selected root group")
         check(abs(float(group_node.inputs["Radius"].default_value) - 0.33) < 1e-6, "library reload lost user input override")
@@ -645,7 +695,7 @@ def test_library_reload_preserves_all_instance_values_defaults_and_links():
         check(abs(float(second_node.inputs["Radius"].default_value) - 0.44) < 1e-6, "library reload lost another instance override")
         check(int(second_node.inputs["Segments"].default_value) == 12, "library reload did not apply new default to another instance")
         incoming = [link for link in wrapper.links if link.to_node == group_node and link.to_socket.name == "Segments"]
-        outgoing = [link for link in wrapper.links if link.from_node == group_node and link.from_socket.name == "Radius"]
+        outgoing = [link for link in wrapper.links if link.from_node == group_node and link.from_socket.name == "Value"]
         check(len(incoming) == 1, "library reload lost incoming external link")
         check(len(outgoing) == 1, "library reload lost outgoing external link")
         check(any(link.from_node == second_node and link.to_node == math for link in second_wrapper.links), "library reload lost another tree's link")
@@ -662,15 +712,14 @@ def test_library_reload_preserves_all_instance_values_defaults_and_links():
 def test_duplicate_input_update_preserves_live_state_by_declaration_identity():
     """Insertion/reorder/display rename cannot retarget state between duplicate input labels."""
     before = '''
-first = input_float("Scale", default=1.0)
-second = input_float("Scale", default=7.0)
-output("Second", second)
+def nf_fixture(first: Float['Scale'] = 1.0, second: Float['Scale'] = 7.0):
+    second = second
+    return (second,)
 '''
     after = '''
-inserted = input_float("Scale", default=0.5)
-second = input_float("Renamed", default=8.0)
-first = input_float("Scale", default=2.0)
-output("Second", second)
+def nf_fixture(inserted: Float['Scale'] = 0.5, second: Float['Renamed'] = 8.0, first: Float['Scale'] = 2.0):
+    second = second
+    return (second,)
 '''
     group = compile_group(before, "NFTest_input_declaration_identity_update")
     wrapper = bpy.data.node_groups.new("NFTest_input_declaration_identity_wrapper", "GeometryNodeTree")
@@ -684,7 +733,7 @@ output("Second", second)
     old_scale[1].default_value = 9.0
     wrapper.links.new(wrapper_input.outputs["Driver"], old_scale[1])
 
-    compiler.update_expression_group(group, after)
+    prepared_create_or_update(after, group.name, existing_group=group)
 
     scale = [socket for socket in group_node.inputs if socket.name == "Scale"]
     renamed = [socket for socket in group_node.inputs if socket.name == "Renamed"]
@@ -700,44 +749,38 @@ output("Second", second)
 
 
 def test_legacy_duplicate_input_live_state_aborts_before_cutover():
-    """A group without declaration metadata never guesses among duplicate replacement inputs."""
-    from NodeForge.blender import interface as interface_module
-
-    source = '''
-first = input_float("Scale", default=0.0)
-second = input_float("Scale", default=0.0)
-output("Second", second)
+    """A copied authoritative MODULE_DEF owner blocks update until explicit detachment."""
+    from NodeForge.blender.group_authority import detach_selected_source_owner
+    before = '''def nf_fixture(x: Float['Scale'] = 0.0):
+    return x
 '''
-    group = compile_group(source, "NFTest_legacy_duplicate_input_ambiguity")
-    wrapper = bpy.data.node_groups.new("NFTest_legacy_duplicate_input_ambiguity_wrapper", "GeometryNodeTree")
-    group_node = wrapper.nodes.new("GeometryNodeGroup")
-    group_node.node_tree = group
-    blender_update._apply_group_defaults_to_node(group_node)
-    scale = [socket for socket in group_node.inputs if socket.name == "Scale"]
-    scale[1].default_value = 3.0
-    if interface_module.INPUT_DECLARATIONS_PROP in group:
-        del group[interface_module.INPUT_DECLARATIONS_PROP]
-
-    try:
-        compiler.update_expression_group(group, source)
-    except CompileError as exc:
-        check("correspondence is ambiguous" in str(exc), f"unexpected legacy ambiguity diagnostic: {exc}")
-    else:
-        raise AssertionError("ambiguous legacy duplicate live state did not block cutover")
-
-    scale_after = [socket for socket in group_node.inputs if socket.name == "Scale"]
-    check(len(scale_after) == 2, "failed pre-cutover migration changed authoritative interface")
-    check(_close(scale_after[1].default_value, 3.0), "failed pre-cutover migration changed authoritative override")
-
-    bpy.data.node_groups.remove(wrapper, do_unlink=True)
-    bpy.data.node_groups.remove(group, do_unlink=True)
+    after = '''def nf_fixture(x: Float['Scale'] = 1.0):
+    return x + 1.0
+'''
+    group = compile_group(before, 'NFTest_duplicate_source_owner')
+    copied = group.copy()
+    pointer = group.as_pointer()
+    initial_nodes = len(group.nodes)
+    with pytest.raises(CompileError, match='Duplicate authoritative source owners'):
+        compiler.update_expression_group(group, after)
+    check(group.as_pointer() == pointer and len(group.nodes) == initial_nodes,
+          'duplicate owner allowed selected mutation')
+    check(len(copied.nodes) == initial_nodes, 'duplicate owner changed independent copy')
+    detach_selected_source_owner(copied)
+    compiler.update_expression_group(group, after)
+    check(group.as_pointer() == pointer, 'post-detach update replaced canonical owner')
+    check(len(copied.nodes) == initial_nodes, 'post-detach update changed detached copy')
 
 
 def test_legacy_unique_input_live_state_migrates_unambiguously():
     """Legacy groups without declaration metadata still migrate one provably unique input."""
     from NodeForge.blender import interface as interface_module
 
-    group = compile_group('x = input_float("Scale", default=0.0)\noutput(x)', "NFTest_legacy_unique_input")
+    group = compile_group('''
+def nf_fixture(x: Float['Scale'] = 0.0):
+    value = x
+    return (value,)
+''', "NFTest_legacy_unique_input")
     wrapper = bpy.data.node_groups.new("NFTest_legacy_unique_input_wrapper", "GeometryNodeTree")
     group_node = wrapper.nodes.new("GeometryNodeGroup")
     group_node.node_tree = group
@@ -746,7 +789,11 @@ def test_legacy_unique_input_live_state_migrates_unambiguously():
     if interface_module.INPUT_DECLARATIONS_PROP in group:
         del group[interface_module.INPUT_DECLARATIONS_PROP]
 
-    compiler.update_expression_group(group, 'x = input_float("Scale", default=1.0)\noutput(x)')
+    compiler.update_expression_group(group, '''
+def nf_fixture(x: Float['Scale'] = 1.0):
+    value = x
+    return (value,)
+''')
     check(_close(group_node.inputs["Scale"].default_value, 3.0), "unambiguous legacy override was not migrated")
 
     bpy.data.node_groups.remove(wrapper, do_unlink=True)
@@ -757,7 +804,11 @@ def test_input_declaration_metadata_failure_never_publishes_or_cuts_over(monkeyp
     """Mandatory declaration metadata failure stays inside the existing group transaction."""
     from NodeForge.blender import interface
 
-    source = 'x = input_float("Scale", default=1.0)\noutput("X", x)'
+    source = '''
+def nf_fixture(x: Float['Scale'] = 1.0):
+    x = x
+    return (x,)
+'''
     group = compile_group(source, "NFTest_input_metadata_failure_existing")
     pointer = group.as_pointer()
     interface_before = [
@@ -785,7 +836,11 @@ def test_input_declaration_metadata_failure_never_publishes_or_cuts_over(monkeyp
     check(bpy.data.node_groups.get("NFTest_input_metadata_failure_new") is None, "failed initial compilation published a group")
 
     try:
-        compiler.update_expression_group(group, 'x = input_float("Renamed", default=2.0)\noutput("X", x)')
+        compiler.update_expression_group(group, '''
+def nf_fixture(x: Float['Renamed'] = 2.0):
+    x = x
+    return (x,)
+''')
     except CompileError as exc:
         check("Failed to persist NodeForge input declaration metadata" in str(exc), f"unexpected update metadata failure: {exc}")
     else:
@@ -808,109 +863,88 @@ def test_input_declaration_metadata_failure_never_publishes_or_cuts_over(monkeyp
 
 
 def test_invalid_nested_input_update_fails_before_cutover():
-    """Declaration-only input grammar prevents invalid replacement source from mutating authority."""
-    source = 'x = input_float("Scale", default=1.0)\noutput("X", x)'
-    group = compile_group(source, "NFTest_nested_input_update_rejected")
+    """Legacy input declarations inside typed functions fail without changing the group."""
+    source = '''def nf_fixture(x: Float['Scale'] = 1.0):
+    return x
+'''
+    invalid = '''def nf_fixture(x: Float['Scale'] = 1.0):
+    y = input_float('Other', default=7.0) + 1.0
+    return x + y
+'''
+    group = compile_group(source, 'NFTest_nested_input_update_rejected')
     pointer = group.as_pointer()
-    interface_before = [
-        (item.name, item.in_out, getattr(item, "socket_type", ""))
-        for item in group.interface.items_tree
-        if getattr(item, "item_type", "") == "SOCKET"
-    ]
-    try:
-        compiler.update_expression_group(
-            group,
-            'x = input_float("Scale", default=7.0) + 1.0\noutput("X", x)',
-        )
-    except CompileError as exc:
-        check(
-            str(exc) == "input_*() may only be used as the complete right-hand side of a simple assignment",
-            f"unexpected nested-input update diagnostic: {exc}",
-        )
-    else:
-        raise AssertionError("invalid nested input update unexpectedly succeeded")
-    check(group.as_pointer() == pointer, "invalid nested input update replaced authority")
-    interface_after = [
-        (item.name, item.in_out, getattr(item, "socket_type", ""))
-        for item in group.interface.items_tree
-        if getattr(item, "item_type", "") == "SOCKET"
-    ]
-    check(interface_after == interface_before, "invalid nested input update changed authoritative interface")
-    leaked = [item.name for item in bpy.data.node_groups if item.name.startswith("NodeForge.replacement.")]
-    check(not leaked, f"invalid nested input update leaked replacement groups: {leaked}")
-    bpy.data.node_groups.remove(group)
+    interface_before = tuple((item.name, item.in_out, getattr(item, 'socket_type', ''))
+                             for item in group.interface.items_tree
+                             if getattr(item, 'item_type', '') == 'SOCKET')
+    with pytest.raises(CompileError, match='obsolete group interface declaration input_float'):
+        compiler.update_expression_group(group, invalid)
+    check(group.as_pointer() == pointer, 'invalid nested input replaced authoritative group')
+    interface_after = tuple((item.name, item.in_out, getattr(item, 'socket_type', ''))
+                            for item in group.interface.items_tree
+                            if getattr(item, 'item_type', '') == 'SOCKET')
+    check(interface_after == interface_before, 'invalid nested input changed published interface')
 
 
 def test_update_group_preserves_zero_override_with_mixed_implicit_and_explicit_input_defaults():
-    """Explicit declaration metadata must not hide implicit-input defaults during update capture."""
-    source = '''
-x = input_float("Scale", default=1.0)
-for i in repeat_range(iterations):
-    x = x + 1.0
-output("Result", x)
+    """Explicit typed defaults retain zero-valued user overrides across in-place updates."""
+    source = '''def nf_fixture(iterations: Int['Iterations'] = 1, x: Float['Scale'] = 1.0):
+    for i in repeat_range(iterations):
+        x = x + 1.0
+    return x
 '''
-    group = compile_group(source, "NFTest_update_mixed_input_defaults")
-    wrapper = bpy.data.node_groups.new("NFTest_update_mixed_input_defaults_wrapper", "GeometryNodeTree")
-    group_node = wrapper.nodes.new("GeometryNodeGroup")
+    updated = '''def nf_fixture(iterations: Int['Iterations'] = 3, x: Float['Scale'] = 1.0):
+    for i in repeat_range(iterations):
+        x = x + 2.0
+    return x
+'''
+    group = compile_group(source, 'NFTest_update_mixed_input_defaults')
+    wrapper = bpy.data.node_groups.new('NFTest_update_mixed_input_defaults_wrapper', 'GeometryNodeTree')
+    group_node = wrapper.nodes.new('GeometryNodeGroup')
     group_node.node_tree = group
     blender_update._apply_group_defaults_to_node(group_node)
-
-    check(int(group_node.inputs["iterations"].default_value) == 1, "implicit script default was not applied")
-    check(abs(float(group_node.inputs["Scale"].default_value) - 1.0) < 1e-6, "explicit script default was not applied")
-    group_node.inputs["iterations"].default_value = 0
-
-    compiler.update_expression_group(group, source)
-
-    check(int(group_node.inputs["iterations"].default_value) == 0, "zero-valued implicit-input override was lost")
-    check(abs(float(group_node.inputs["Scale"].default_value) - 1.0) < 1e-6, "explicit default changed unexpectedly")
+    check(int(group_node.inputs['Iterations'].default_value) == 1, 'initial Int default was not applied')
+    group_node.inputs['Iterations'].default_value = 0
+    compiler.update_expression_group(group, updated)
+    check(int(group_node.inputs['Iterations'].default_value) == 0, 'zero-valued override was lost')
+    check(abs(float(group_node.inputs['Scale'].default_value) - 1.0) < 1e-6,
+          'unmodified Float default changed unexpectedly')
 
 
 def test_update_group_preserves_branch_input_declaration_identity_overrides_and_link():
-    """Branch-local explicit inputs keep durable identities and live wrapper state across update."""
+    """Typed parameters keep stable origins across branch and default changes."""
     from NodeForge.blender import interface
-
-    before = '''
-flag = input_bool("Flag", default=True)
-if flag:
-    x = input_float("A", default=1.0)
-else:
-    x = input_float("B", default=2.0)
-output("X", x)
+    before = '''def nf_fixture(flag: Bool['Flag'] = True, a: Float['A'] = 1.0, b: Float['B'] = 2.0):
+    if flag:
+        x = a
+    else:
+        x = b
+    return x
 '''
-    after = '''
-flag = input_bool("Flag", default=True)
-if flag:
-    x = input_float("A", default=10.0)
-else:
-    x = input_float("B", default=20.0)
-x = x + 0
-output("X", x)
+    after = '''def nf_fixture(flag: Bool['Flag'] = True, a: Float['A'] = 10.0, b: Float['B'] = 20.0):
+    if flag:
+        x = a + 0.0
+    else:
+        x = b
+    return x
 '''
-    group = compile_group(before, "NFTest_update_branch_input_identity")
+    group = compile_group(before, 'NFTest_update_branch_input_identity')
     before_records = interface._get_group_input_declarations(group)
-    before_x_keys = sorted(
-        key for key, record in before_records.items() if record["declaration_id"].target_name == "x"
-    )
-    check(len(before_x_keys) == 2, f"expected two x declaration identities, got {before_x_keys}")
-
-    wrapper = bpy.data.node_groups.new("NFTest_update_branch_input_identity_wrapper", "GeometryNodeTree")
-    wrapper.interface.new_socket(name="External B", in_out="INPUT", socket_type="NodeSocketFloat")
-    wrapper_input = wrapper.nodes.new("NodeGroupInput")
-    group_node = wrapper.nodes.new("GeometryNodeGroup")
+    before_keys = {record['declaration_id'].target_name: key for key, record in before_records.items()}
+    check(set(before_keys) == {'flag', 'a', 'b'}, 'expected stable typed parameter origins')
+    wrapper = bpy.data.node_groups.new('NFTest_update_branch_input_identity_wrapper', 'GeometryNodeTree')
+    wrapper.interface.new_socket(name='External B', in_out='INPUT', socket_type='NodeSocketFloat')
+    wrapper_input = wrapper.nodes.new('NodeGroupInput')
+    group_node = wrapper.nodes.new('GeometryNodeGroup')
     group_node.node_tree = group
     blender_update._apply_group_defaults_to_node(group_node)
-    group_node.inputs["A"].default_value = 11.0
-    group_node.inputs["B"].default_value = 22.0
-    wrapper.links.new(wrapper_input.outputs["External B"], group_node.inputs["B"])
-
+    group_node.inputs['A'].default_value = 11.0
+    group_node.inputs['B'].default_value = 22.0
+    wrapper.links.new(wrapper_input.outputs['External B'], group_node.inputs['B'])
     compiler.update_expression_group(group, after)
-
     after_records = interface._get_group_input_declarations(group)
-    after_x_keys = sorted(
-        key for key, record in after_records.items() if record["declaration_id"].target_name == "x"
-    )
-    check(after_x_keys == before_x_keys, f"branch declaration stable keys changed: {before_x_keys} -> {after_x_keys}")
-    check(abs(float(group_node.inputs["A"].default_value) - 11.0) < 1e-6, "A override was not restored")
-    check(abs(float(group_node.inputs["B"].default_value) - 22.0) < 1e-6, "B override was not restored")
-    incoming = [link for link in wrapper.links if link.to_node == group_node and link.to_socket.name == "B"]
-    check(len(incoming) == 1 and incoming[0].from_socket.name == "External B", "external B link was not restored")
+    after_keys = {record['declaration_id'].target_name: key for key, record in after_records.items()}
+    check(after_keys == before_keys, 'typed parameter origin IDs changed during update')
+    check(abs(float(group_node.inputs['A'].default_value) - 11.0) < 1e-6, 'A override was not restored')
+    check(abs(float(group_node.inputs['B'].default_value) - 22.0) < 1e-6, 'B override was not restored')
+    incoming = [link for link in wrapper.links if link.to_node == group_node and link.to_socket.name == 'B']
+    check(len(incoming) == 1 and incoming[0].from_socket.name == 'External B', 'external B link was not restored')

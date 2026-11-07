@@ -169,7 +169,7 @@ cube(1)
     from NodeForge.semantic.group import analyze_group_source
     from NodeForge.semantic.source_callable_session import SourceCallableSession
     session = SourceCallableSession(resolved_environment=env)
-    group = analyze_group_source('from packages import shapes\noutput(shapes.move(5))',
+    group = analyze_group_source('from packages import shapes\nv = shapes.move(5)',
         compilation_identity=GroupCompilationIdentity(None, 'PACKAGE/CALL', 'PACKAGE/CALL', 'PACKAGE/CALL'),
         resolved_environment=env, source_callable_session=session)
     assert {key.function_id.name for key in session.prepared} == {'move', 'leaf'}
@@ -187,7 +187,7 @@ def test_imported_package_definition_bad_call_rejects_before_materialization(tmp
     env = resolve_environment()
     session = SourceCallableSession(resolved_environment=env)
     with pytest.raises(CompileError, match='missing required'):
-        analyze_group_source('from packages import shapes\noutput(shapes.move())',
+        analyze_group_source('from packages import shapes\nv = shapes.move()',
             compilation_identity=GroupCompilationIdentity(None, 'PACKAGE/CALL', 'PACKAGE/CALL', 'PACKAGE/CALL'),
             resolved_environment=env, source_callable_session=session)
     assert not session.prepared

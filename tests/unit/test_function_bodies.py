@@ -111,3 +111,15 @@ def test_singleton_tuple_return_remains_a_valid_single_value():
     group = _compile('def fn(x: Float):\n    return (x,)')
     assert [item.typ for item in group.interface.outputs] == [NFType.FLOAT]
     assert [item.display_name for item in group.interface.outputs] == ['Value']
+
+
+@pytest.mark.parametrize('call_name', ['range', 'repeat_range'])
+def test_explicit_float_loop_count_remains_float_and_is_rejected(call_name):
+    """An Int-only runtime loop cannot respecialize a declared Float parameter."""
+    with pytest.raises(CompileError, match='Int'):
+        _compile(f"""def fn(count: Float):
+    value = 0.0
+    for i in {call_name}(count):
+        value = value + 1.0
+    return value
+""")

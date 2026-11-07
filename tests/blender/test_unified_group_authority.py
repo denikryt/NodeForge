@@ -12,9 +12,10 @@ def test_automatic_module_owner_lookup_rejects_copied_group_without_mutation():
     return x + 1
 
 v = authority_module_leaf(3)
-output(v)
+v = v
 '''
-    root = compile_group(original, 'NFTest_module_authority')
+    root = bpy.data.node_groups.new('NFTest_module_authority', 'GeometryNodeTree')
+    compiler.compose_source_initial(original, root)
     owned = next(g for g in bpy.data.node_groups if g.get('nodeforge_module_name') == 'authority_module_leaf')
     copy = owned.copy()
     root_pointer = root.as_pointer()
@@ -22,7 +23,7 @@ output(v)
     original_nodes = tuple((node.bl_idname, node.name) for node in owned.nodes)
     try:
         with pytest.raises(CompileError, match='Duplicate authoritative source owners'):
-            compiler.update_expression_group(root, original.replace('x + 1', 'x + 2'))
+            compiler.update_library_catalog_group(owned, source=original.replace('x + 1', 'x + 2'), module_context='base-tree:' + root.name)
         assert root.as_pointer() == root_pointer
         assert owned.as_pointer() == owned_pointer
         assert tuple((n.bl_idname, n.name) for n in owned.nodes) == original_nodes
@@ -81,9 +82,10 @@ def test_duplicate_owner_id_properties_remain_ambiguous_after_save_reopen(tmp_pa
     return x + 2
 
 v = persistent_authority_leaf(1)
-output(v)
+v = v
 '''
-    root = compile_group(source, 'NFTest_authority_reopen')
+    root = bpy.data.node_groups.new('NFTest_authority_reopen', 'GeometryNodeTree')
+    compiler.compose_source_initial(source, root)
     owned = next(g for g in bpy.data.node_groups if g.get('nodeforge_module_name') == 'persistent_authority_leaf')
     copy = owned.copy()
     root.use_fake_user = True
@@ -97,5 +99,5 @@ output(v)
     assert len(groups) == 2
     before = tuple((g.name, len(g.nodes)) for g in groups)
     with pytest.raises(CompileError, match='Duplicate authoritative source owners'):
-        compiler.update_expression_group(reopened_root, source)
+        compiler.update_library_catalog_group(groups[0], source=source, module_context='base-tree:' + reopened_root.name)
     assert tuple((g.name, len(g.nodes)) for g in groups) == before

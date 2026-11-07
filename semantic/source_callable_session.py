@@ -21,17 +21,24 @@ class SourceCallableSession:
         self.prepared: dict[SourceCallablePreparationKey, PreparedSourceCallable] = {}
         self._active_stack: list[FunctionId] = []
 
-    def capture_local_module(self, record):
-        """Freeze a selected Local .nf revision once per compilation attempt."""
+    def capture_source_module(self, record):
+        """Freeze a selected Local or Examples .nf module within this attempt."""
         from .source_modules import parse_source_module
-        if record.namespace != "local" or record.source_path is None or record.source_path.suffix != ".nf":
-            raise CompileError("Selected Local module must be a .nf source file")
-        module_id = ModuleId("LOCAL", record.source_origin)
+        if (record.namespace not in {"local", "examples"}
+                or record.source_path is None or record.source_path.suffix != ".nf"):
+            raise CompileError("Selected source module must be a Local/Examples .nf file")
+        module_id = ModuleId(record.namespace.upper(), record.source_origin)
         snapshot = self.module_snapshots.get(module_id)
         if snapshot is None:
             snapshot = parse_source_module(record.source_path.read_text(encoding="utf-8"), module_id)
             self.module_snapshots[module_id] = snapshot
         return snapshot
+
+    def capture_local_module(self, record):
+        """Retain the Local-specific entry point for source-module callers."""
+        if record.namespace != "local":
+            raise CompileError("Selected Local module must be a Local .nf source file")
+        return self.capture_source_module(record)
 
     def snapshot_for_selected_definition(
         self, function_id: FunctionId, *, explicit_source=None, module_context=None,

@@ -85,18 +85,16 @@ def test_semantic_ir_route_materializes_representative_runtime_expressions(monke
     monkeypatch.setattr(blender_group_assembly, "lower_body", wrapped)
     group = compile_group(
         '''
-a = input_float("A", default=2.0)
-b = input_float("B", default=3.0)
-v = input_vector("V", default=(1, 2, 3))
-flag = input_bool("Flag", default=True)
-scalar = a * 2 + b
-scaled = v * a
-component = scaled.x
-cmp = a < b
-selected = scalar if flag else component
-output("Scalar", scalar)
-output("Selected", selected)
-output("Comparison", cmp)
+def nf_fixture(a: Float['A'] = 2.0, b: Float['B'] = 3.0, v: Vector['V'] = (1, 2, 3), flag: Bool['Flag'] = True):
+    scalar = a * 2 + b
+    scaled = v * a
+    component = scaled.x
+    cmp = a < b
+    selected = scalar if flag else component
+    scalar = scalar
+    selected = selected
+    comparison = cmp
+    return (scalar, selected, comparison,)
 ''',
         "NFTest_semantic_ir_representative",
     )
@@ -120,72 +118,100 @@ def test_supported_core_root_matrix_compiles_through_permanent_pipeline():
     cases = [
         (
             "expression",
-            'a = input_float("A", default=2.0)\nresult = a * 2.0 + 1.0\noutput("Result", result)',
+            '''
+def nf_fixture(a: Float['A'] = 2.0):
+    result = a * 2.0 + 1.0
+    result = result
+    return (result,)
+''',
         ),
         (
             "runtime_if",
-            'flag = input_bool("Flag", default=True)\n'
-            'a = input_float("A", default=2.0)\n'
-            'if flag:\n'
-            '    result = a\n'
-            'else:\n'
-            '    result = a * 2.0\n'
-            'output("Result", result)',
+            '''
+def nf_fixture(flag: Bool['Flag'] = True, a: Float['A'] = 2.0):
+    if flag:
+        result = a
+    else:
+        result = a * 2.0
+    result = result
+    return (result,)
+''',
         ),
         (
             "literal_if",
-            'a = input_float("A", default=2.0)\n'
-            'if True:\n'
-            '    result = a + 1.0\n'
-            'else:\n'
-            '    result = a + 2.0\n'
-            'output("Result", result)',
+            '''
+def nf_fixture(a: Float['A'] = 2.0):
+    if True:
+        result = a + 1.0
+    else:
+        result = a + 2.0
+    result = result
+    return (result,)
+''',
         ),
         (
             "repeat",
-            'value = input_float("Value", default=0.0)\n'
-            'for i in repeat_range(2):\n'
-            '    value = value + 1.0\n'
-            'output("Value", value)',
+            '''
+def nf_fixture(value: Float['Value'] = 0.0):
+    for i in repeat_range(2):
+        value = value + 1.0
+    value = value
+    return (value,)
+''',
         ),
         (
             "array",
-            'value = input_float("Value", default=1.0)\n'
-            'items = [value, value * 2.0]\n'
-            'result = items[1]\n'
-            'output("Result", result)',
+            '''
+def nf_fixture(value: Float['Value'] = 1.0):
+    items = [value, value * 2.0]
+    result = items[1]
+    result = result
+    return (result,)
+''',
         ),
         (
             "builder",
-            'builder = geometry_builder()\n'
-            'builder.add(cube(1.0))\n'
-            'for i in repeat_range(2):\n'
-            '    builder.add(cube(0.5))\n'
-            'output("Geometry", builder.geometry)',
+            '''
+def nf_fixture():
+    builder = geometry_builder()
+    builder.add(cube(1.0))
+    for i in repeat_range(2):
+        builder.add(cube(0.5))
+    geometry = builder.geometry
+    return (geometry,)
+''',
         ),
         (
             "contextual",
-            'scale = input_float("Scale", default=2.0)\n'
-            'geo = grid(scale, 3)\n'
-            'uv = grid_uv()\n'
-            'store("uv_x", uv.x)\n'
-            'set_position(position() + vector(0, 0, 1))\n'
-            'output("Grid", geo)\n'
-            'output("UV", uv)',
+            '''
+def nf_fixture(scale: Float['Scale'] = 2.0):
+    geo = grid(scale, 3)
+    uv = grid_uv()
+    geo = store_named_attribute(geo, "uv_x", uv.x)
+    geo = set_position(geo, position() + vector(0, 0, 1))
+    uv = uv
+    return (geo, uv,)
+''',
         ),
         (
             "panel",
-            'value = input_float("Value", default=1.0)\n'
-            'panel([value], name="Inputs")\n'
-            'output("Value", value)',
+            '''
+def nf_fixture(value: Float['Value'] = 1.0):
+    panel([value], name="Inputs")
+    value = value
+    return (value,)
+''',
         ),
         (
             "object_bundle",
-            'obj = input_object("Object")\n'
-            'obj.info(as_instance=False)\n'
-            'state = bundle(value=obj.location.x)\n'
-            'value = bundle_get(state, "value", typ=Float)\n'
-            'output("Value", value)',
+            '''
+def nf_fixture(obj: Object['Object']):
+    obj.info(as_instance=False)
+    state = bundle(value=obj.location.x)
+    value = bundle_get(state, "value", typ=Float)
+    value = value
+    return (value,)
+''',
         ),
     ]
 
@@ -212,12 +238,13 @@ def test_structural_array_parent_uses_semantic_body_and_preserves_nested_express
 
     monkeypatch.setattr(blender_group_assembly, "lower_body", wrapped)
     group = compile_group(
-        """
-a = input_float("A", default=2.0)
-items = [a * 2]
-result = items[0]
-output("Result", result)
-""",
+        '''
+def nf_fixture(a: Float['A'] = 2.0):
+    items = [a * 2]
+    result = items[0]
+    result = result
+    return (result,)
+''',
         "NFTest_semantic_ir_structural_array_parent",
     )
 
@@ -229,9 +256,10 @@ output("Result", result)
 def test_semantic_ir_unary_plus_preserves_socket_identity_and_adds_no_node():
     group = compile_group(
         '''
-a = input_float("A", default=2.0)
-result = +a
-output("Result", result)
+def nf_fixture(a: Float['A'] = 2.0):
+    result = +a
+    result = result
+    return (result,)
 ''',
         "NFTest_semantic_ir_unary_plus",
     )
@@ -243,7 +271,7 @@ output("Result", result)
     result_links = [
         link
         for link in group.links
-        if _pointer(link.to_node) == _pointer(outputs[0]) and link.to_socket.name == "Result"
+        if _pointer(link.to_node) == _pointer(outputs[0]) and link.to_socket.name == "Value"
     ]
     check(len(result_links) == 1, "Result output is not linked exactly once")
     check(
@@ -255,15 +283,14 @@ output("Result", result)
 def test_semantic_ir_unary_minus_and_not_preserve_current_topology():
     group = compile_group(
         '''
-a = input_float("A", default=2.0)
-v = input_vector("V", default=(1, 2, 3))
-flag = input_bool("Flag", default=True)
-neg_scalar = -a
-neg_vector = -v
-inverted = not flag
-output("Neg Scalar", neg_scalar)
-output("Neg Vector", neg_vector)
-output("Inverted", inverted)
+def nf_fixture(a: Float['A'] = 2.0, v: Vector['V'] = (1, 2, 3), flag: Bool['Flag'] = True):
+    neg_scalar = -a
+    neg_vector = -v
+    inverted = not flag
+    neg_scalar = neg_scalar
+    neg_vector = neg_vector
+    inverted = inverted
+    return (neg_scalar, neg_vector, inverted,)
 ''',
         "NFTest_semantic_ir_unary_topology",
     )
@@ -286,11 +313,10 @@ output("Inverted", inverted)
 def test_semantic_ir_comparison_chain_preserves_pairwise_rematerialization():
     group = compile_group(
         '''
-a = input_float("A", default=1.0)
-b = input_float("B", default=2.0)
-c = input_float("C", default=3.0)
-result = a < b * 2 < c
-output("Result", result)
+def nf_fixture(a: Float['A'] = 1.0, b: Float['B'] = 2.0, c: Float['C'] = 3.0):
+    result = a < b * 2 < c
+    result = result
+    return (result,)
 ''',
         "NFTest_semantic_ir_compare_chain",
     )
@@ -327,7 +353,12 @@ def test_semantic_error_keeps_outer_fresh_build_cleanup_boundary():
     before = {_pointer(group) for group in bpy.data.node_groups}
     with pytest.raises(CompileError, match="Unsupported operation between BOOL and INT"):
         compiler.create_expression_group(
-            "flag = input_bool('Flag')\nresult = flag + 1\noutput('Result', result)",
+            '''
+def nf_fixture(flag: Bool['Flag']):
+    result = flag + 1
+    result = result
+    return (result,)
+''',
             "NFTest_semantic_ir_failure_cleanup",
         )
     after = {_pointer(group) for group in bpy.data.node_groups}
@@ -350,7 +381,12 @@ def test_semantic_backend_failure_propagates_and_cleans_fresh_group(monkeypatch)
 
     try:
         compiler.create_expression_group(
-            "a = input_float('A')\nresult = a + 1\noutput('Result', result)",
+            '''
+def nf_fixture(a: Float['A']):
+    result = a + 1
+    result = result
+    return (result,)
+''',
             "NFTest_semantic_ir_backend_failure_cleanup",
         )
     except CompileError as exc:
@@ -832,13 +868,17 @@ def test_structural_arrays_runtime_dependent_flat_unpack_preserves_graph():
 def test_frontend_geometry_builder_core_route_preserves_permanent_topology():
     """Accepted core builder bodies lower through the permanent Semantic Body route."""
     group = compile_group(
-        'builder = geometry_builder()\n'
-        'items = [cube(1.0), cube(2.0)]\n'
-        'for item in items:\n'
-        '    builder.add(item)\n'
-        'for i in repeat_range(2):\n'
-        '    builder.add(cube(0.5))\n'
-        'output("Geometry", builder.geometry)',
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    items = [cube(1.0), cube(2.0)]
+    for item in items:
+        builder.add(item)
+    for i in repeat_range(2):
+        builder.add(cube(0.5))
+    geometry = builder.geometry
+    return (geometry,)
+''',
         "NFTest_frontend_builder_core_route",
     )
     check(len(_nodes(group, "GeometryNodeJoinGeometry")) >= 1, "frontend builder route lost Join Geometry topology")
@@ -849,12 +889,16 @@ def test_frontend_geometry_builder_core_route_preserves_permanent_topology():
 def test_geometry_builder_and_grid_share_semantic_body_route():
     """Grid and GeometryBuilder share the permanent Semantic Body route."""
     group = compile_group(
-        'builder = geometry_builder()\n'
-        'builder.add(cube(1.0))\n'
-        'grid_geo = grid(2, 2)\n'
-        'uv = grid_uv()\n'
-        'output("Geometry", builder.geometry)\n'
-        'output("UV", uv)',
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    builder.add(cube(1.0))
+    grid_geo = grid(2, 2)
+    uv = grid_uv()
+    geometry = builder.geometry
+    uv = uv
+    return (geometry, uv,)
+''',
         "NFTest_builder_grid_semantic_route",
     )
     check(len(_nodes(group, "GeometryNodeMeshCube")) == 1, "builder + grid route changed cube topology")
@@ -873,12 +917,14 @@ def test_semantic_environment_exports_frontend_geometry_builder_binding(monkeypa
 
     monkeypatch.setattr(semantic_body, "analyze_expression", wrapped)
     group = compile_group(
-        """
-builder = geometry_builder()
-builder.add(cube(1.0))
-result = builder.geometry
-output("Geometry", result)
-""",
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    builder.add(cube(1.0))
+    result = builder.geometry
+    geometry = result
+    return (geometry,)
+''',
         "NFTest_semantic_frontend_builder_binding",
     )
     check(_nodes(group, "GeometryNodeMeshCube"), "GeometryBuilder semantic expression behavior changed")
@@ -917,7 +963,12 @@ def test_permanent_expression_routing_keeps_structures_frontend_owned_and_runtim
         group = compile_group(source, name)
         bpy.data.node_groups.remove(group)
 
-    compile_and_remove('items = [1, 2]\noutput("Result", items[0])', "NFTest_complete_ir_route_array")
+    compile_and_remove('''
+def nf_fixture():
+    items = [1, 2]
+    result = items[0]
+    return (result,)
+''', "NFTest_complete_ir_route_array")
     check(
         not any(isinstance(program.result, IRArray) for program in programs),
         "body-owned structural array leaked through the Blender expression-result boundary",
@@ -925,7 +976,12 @@ def test_permanent_expression_routing_keeps_structures_frontend_owned_and_runtim
     check(programs, "indexed structural array produced no permanent runtime expression program")
 
     programs.clear()
-    compile_and_remove('v = vector(1, 2, 3)\noutput("Result", v)', "NFTest_complete_ir_route_vector_literal")
+    compile_and_remove('''
+def nf_fixture():
+    v = vector(1, 2, 3)
+    result = v
+    return (result,)
+''', "NFTest_complete_ir_route_vector_literal")
     vector_calls = [
         op
         for program in programs
@@ -935,11 +991,19 @@ def test_permanent_expression_routing_keeps_structures_frontend_owned_and_runtim
     check(vector_calls, "known vector() assignment did not remain on the runtime Semantic Call IR route")
 
     programs.clear()
-    compile_and_remove('obj = input_object("Source")\noutput("Result", obj.location)', "NFTest_complete_ir_route_object_property")
+    compile_and_remove('''
+def nf_fixture(obj: Object['Source']):
+    result = obj.location
+    return (result,)
+''', "NFTest_complete_ir_route_object_property")
     check(any(any(isinstance(op, IRObjectProperty) for op in program.operations) for program in programs), "Object property did not reach IR backend")
 
     programs.clear()
-    compile_and_remove('v = input_vector("V")\noutput("Result", v[1])', "NFTest_complete_ir_route_vector_subscript")
+    compile_and_remove('''
+def nf_fixture(v: Vector['V']):
+    result = v[1]
+    return (result,)
+''', "NFTest_complete_ir_route_vector_subscript")
     components = [
         op
         for program in programs
@@ -950,7 +1014,11 @@ def test_permanent_expression_routing_keeps_structures_frontend_owned_and_runtim
 
     programs.clear()
     compile_and_remove(
-        'v = input_vector("V")\noutput("Result", length(v) + 1)',
+        '''
+def nf_fixture(v: Vector['V']):
+    result = length(v) + 1
+    return (result,)
+''',
         "NFTest_complete_ir_route_call_fallback",
     )
     check(any(any(isinstance(op, IRBinary) for op in program.operations) for program in programs), "Call IR parent did not remain inside Semantic IR as IRBinary")
@@ -960,9 +1028,11 @@ def test_unused_cyclic_compile_time_constant_does_not_break_expression_compilati
     """Detached constant snapshots must tolerate unused cyclic compile-time structures."""
     group = compile_group(
         '''
-xs = [1]
-xs.append(xs)
-output("Result", 1)
+def nf_fixture():
+    xs = [1]
+    xs.append(xs)
+    result = 1
+    return (result,)
 ''',
         "NFTest_complete_ir_unused_cyclic_const",
     )
@@ -972,10 +1042,11 @@ output("Result", 1)
 def test_complete_expression_ir_vector_subscript_and_named_vector_topology():
     group = compile_group(
         '''
-v = input_vector("V", default=(1, 2, 3))
-output("X", v[0])
-output("Y", v[1])
-output("Z", v[2])
+def nf_fixture(v: Vector['V'] = (1, 2, 3)):
+    x = v[0]
+    y = v[1]
+    z = v[2]
+    return (x, y, z,)
 ''',
         "NFTest_complete_ir_vector_subscript",
     )
@@ -985,8 +1056,10 @@ output("Z", v[2])
 
     group = compile_group(
         '''
-v = vector(1, 2, 3)
-output("Result", v[1])
+def nf_fixture():
+    v = vector(1, 2, 3)
+    result = v[1]
+    return (result,)
 ''',
         "NFTest_complete_ir_named_vector",
     )
@@ -1001,14 +1074,14 @@ output("Result", v[1])
 def test_complete_expression_ir_arrays_and_unary_plus_preserve_selected_socket_identity():
     group = compile_group(
         '''
-a = input_float("A")
-b = input_float("B")
-output("Selected", (+[a, b])[0])
+def nf_fixture(a: Float['A'], b: Float['B']):
+    selected = (+[a, b])[0]
+    return (selected,)
 ''',
         "NFTest_complete_ir_array_identity",
     )
     output = _nodes(group, "NodeGroupOutput")[0]
-    selected = next(socket for socket in output.inputs if socket.name == "Selected")
+    selected = next(socket for socket in output.inputs if socket.name == "Value")
     link = _link_to_socket(group, selected)
     check(link.from_node.bl_idname == "NodeGroupInput", "array selection no longer returns the existing binding socket")
     check(link.from_socket.name == "A", "unary-plus array selection changed selected socket identity")
@@ -1018,11 +1091,12 @@ output("Selected", (+[a, b])[0])
 def test_complete_expression_ir_object_properties_reuse_and_info_configuration():
     group = compile_group(
         '''
-obj = input_object("Source")
-output("Geometry", obj.geometry)
-output("Location", obj.location)
-output("Rotation", obj.rotation)
-output("Scale", obj.scale)
+def nf_fixture(obj: Object['Source']):
+    geometry = obj.geometry
+    location = obj.location
+    rotation = obj.rotation
+    scale = obj.scale
+    return (geometry, location, rotation, scale,)
 ''',
         "NFTest_complete_ir_object_reuse",
     )
@@ -1032,9 +1106,10 @@ output("Scale", obj.scale)
 
     group = compile_group(
         '''
-obj = input_object("Source")
-info = obj.info(transform_space="RELATIVE", as_instance=False)
-output("Location", info.location)
+def nf_fixture(obj: Object['Source']):
+    info = obj.info(transform_space="RELATIVE", as_instance=False)
+    location = info.location
+    return (location,)
 ''',
         "NFTest_complete_ir_object_configured",
     )
@@ -1062,12 +1137,11 @@ def test_semantic_call_ir_materializes_core_calls_with_existing_layout(monkeypat
     monkeypatch.setattr(blender_group_assembly, "lower_body", wrapped)
     group = compile_group(
         '''
-v = input_vector("V", default=(1, 2, 3))
-scale = input_float("Scale", default=2.0)
-length_value = length(v)
-geo = cube(scale * 2.0)
-output("Length", length_value)
-output("Geometry", geo)
+def nf_fixture(v: Vector['V'] = (1, 2, 3), scale: Float['Scale'] = 2.0):
+    length_value = length(v)
+    geo = cube(scale * 2.0)
+    geometry = geo
+    return (length_value, geometry,)
 ''',
         "NFTest_semantic_call_ir_core",
     )
@@ -1089,10 +1163,12 @@ def test_semantic_call_ir_raw_named_outputs_preserve_one_entry_structure_and_sel
     """outputs= remains structurally named for one output and supports both selectors on the IR path."""
     group = compile_group(
         '''
-a = node("ShaderNodeSeparateXYZ", inputs={"Vector": (1, 2, 3)}, outputs={"X": Float}).X
-b = node("ShaderNodeSeparateXYZ", inputs={"Vector": (4, 5, 6)}, outputs={"X": Float})["X"]
-output("A", a)
-output("B", b)
+def nf_fixture():
+    a = node("ShaderNodeSeparateXYZ", inputs={"Vector": (1, 2, 3)}, outputs={"X": Float}).X
+    b = node("ShaderNodeSeparateXYZ", inputs={"Vector": (4, 5, 6)}, outputs={"X": Float})["X"]
+    a = a
+    b = b
+    return (a, b,)
 ''',
         "NFTest_semantic_call_ir_raw_named_one",
     )
@@ -1105,8 +1181,10 @@ output("B", b)
 
     expect_compile_error(
         '''
-r = node("ShaderNodeSeparateXYZ", inputs={"Vector": (1, 2, 3)}, outputs={"X": Float})
-output("X", r)
+def nf_fixture():
+    r = node("ShaderNodeSeparateXYZ", inputs={"Vector": (1, 2, 3)}, outputs={"X": Float})
+    x = r
+    return (x,)
 ''',
         "NFTest_semantic_call_ir_raw_named_unselected",
     )
@@ -1116,14 +1194,16 @@ def test_semantic_call_ir_raw_runtime_operand_is_created_before_raw_node_by_auth
     """Raw-node insertion order may follow dependency-ordered IR while graph semantics stay unchanged."""
     group = compile_group(
         '''
-mask = node(
-    "FunctionNodeCompare",
-    props={"data_type": "FLOAT", "operation": "GREATER_THAN"},
-    inputs={"A": position().z, "B": 0.5},
-    output="Result",
-    typ=Bool,
-)
-output("Mask", mask)
+def nf_fixture():
+    mask = node(
+        "FunctionNodeCompare",
+        props={"data_type": "FLOAT", "operation": "GREATER_THAN"},
+        inputs={"A": position().z, "B": 0.5},
+        output="Result",
+        typ=Bool,
+    )
+    mask = mask
+    return (mask,)
 ''',
         "NFTest_semantic_call_ir_raw_order",
     )
@@ -1142,8 +1222,10 @@ def test_semantic_call_ir_raw_mixed_invalid_prefers_frontend_operand_error():
     try:
         compile_group(
             '''
-x = node("NoSuchNode", inputs={"A": no_such_function()}, output="Result", typ=Bool)
-output("X", x)
+def nf_fixture():
+    x = node("NoSuchNode", inputs={"A": no_such_function()}, output="Result", typ=Bool)
+    x = x
+    return (x,)
 ''',
             "NFTest_semantic_call_ir_raw_mixed_invalid",
         )
@@ -1157,13 +1239,13 @@ def test_semantic_call_ir_grid_context_preserves_shared_mesh_and_fresh_input_soc
     """Semantic grid context keeps one Mesh Grid while explicit input labels remain independent."""
     group = compile_group(
         '''
-geo = grid(4, 3)
-uv = grid_uv()
-a = input_float("Scale", default=2.0)
-b = input_float("Scale", default=2.0)
-output("Geometry", geo)
-output("UV", uv)
-output("Sum", a + b)
+def nf_fixture(a: Float['Scale'] = 2.0, b: Float['Scale'] = 2.0):
+    geo = grid(4, 3)
+    uv = grid_uv()
+    geometry = geo
+    uv = uv
+    sum = a + b
+    return (geometry, uv, sum,)
 ''',
         "NFTest_semantic_call_ir_grid_context",
     )
@@ -1177,10 +1259,12 @@ def test_semantic_call_ir_tuple_result_indexing_reaches_blender_without_legacy_r
     """capture_attribute tuple selection maps one declared IR result back to its exact backend Value."""
     group = compile_group(
         '''
-geo = cube(1.0)
-value = position().x
-captured = capture_attribute(geo, value)[1]
-output("Captured", captured)
+def nf_fixture():
+    geo = cube(1.0)
+    value = position().x
+    captured = capture_attribute(geo, value)[1]
+    captured = captured
+    return (captured,)
 ''',
         "NFTest_semantic_call_ir_capture_tuple",
     )
@@ -1191,14 +1275,16 @@ output("Captured", captured)
 def test_contextual_group_semantic_route_preserves_store_set_position_and_grid_topology():
     """Contextual core syntax preserves physical topology on the permanent route."""
     group = compile_group(
-        'scale = input_float("Scale")\n'
-        'geo = grid(scale, 3)\n'
-        'uv = grid_uv()\n'
-        'store("first", uv.x)\n'
-        'set_position(position() + vector(0, 0, 1))\n'
-        'store("second", uv.y)\n'
-        'output("Grid", geo)\n'
-        'output("UV", uv)',
+        '''
+def nf_fixture(scale: Float['Scale']):
+    geo = grid(scale, 3)
+    uv = grid_uv()
+    geo = store_named_attribute(geo, "first", uv.x)
+    geo = set_position(geo, position() + vector(0, 0, 1))
+    geo = store_named_attribute(geo, "second", uv.y)
+    uv = uv
+    return (geo, uv,)
+''',
         "NFTest_contextual_group_semantic_route",
     )
     grids = _nodes(group, "GeometryNodeMeshGrid")
@@ -1223,10 +1309,14 @@ def test_contextual_group_semantic_route_preserves_store_set_position_and_grid_t
 def test_source_ordered_ct_handoff_keeps_future_assignment_out_of_earlier_runtime_rhs():
     """A later erased CT assignment must not change an earlier residual Math input."""
     group = compile_group(
-        'a = 1.0\n'
-        'b = a + 1.0\n'
-        'a = 10.0\n'
-        'output("B", b)\n',
+        '''
+def nf_fixture():
+    a = 1.0
+    b = a + 1.0
+    a = 10.0
+    b = b
+    return (b,)
+''',
         "NFTest_source_order_future_fact",
     )
     adds = _nodes(group, "ShaderNodeMath", "ADD")
@@ -1238,13 +1328,16 @@ def test_source_ordered_ct_handoff_keeps_future_assignment_out_of_earlier_runtim
 def test_source_ordered_ct_handoff_runtime_if_materializes_erased_seed_value():
     """Runtime branches use the erased source-order seed rather than a residual seed assignment."""
     group = compile_group(
-        'x = 0.0\n'
-        'flag = input_bool("Flag")\n'
-        'if flag:\n'
-        '    x = x + 1.0\n'
-        'else:\n'
-        '    x = x + 2.0\n'
-        'output("X", x)\n',
+        '''
+def nf_fixture(flag: Bool['Flag']):
+    x = 0.0
+    if flag:
+        x = x + 1.0
+    else:
+        x = x + 2.0
+    x = x
+    return (x,)
+''',
         "NFTest_source_order_runtime_if_seed",
     )
     adds = _nodes(group, "ShaderNodeMath", "ADD")
@@ -1260,9 +1353,13 @@ def test_source_ordered_ct_handoff_runtime_if_materializes_erased_seed_value():
 def test_source_ordered_ct_handoff_self_reference_uses_old_target_value():
     """Runtime RHS lowering happens before the assignment publishes its new CT target fact."""
     group = compile_group(
-        'x = 1.0\n'
-        'x = x + 1.0\n'
-        'output("X", x)\n',
+        '''
+def nf_fixture():
+    x = 1.0
+    x = x + 1.0
+    x = x
+    return (x,)
+''',
         "NFTest_source_order_self_reference",
     )
     adds = _nodes(group, "ShaderNodeMath", "ADD")
@@ -1274,10 +1371,13 @@ def test_source_ordered_ct_handoff_self_reference_uses_old_target_value():
 def test_source_ordered_ct_handoff_mutable_state_does_not_mutate_earlier_input_default():
     """A later erased append cannot change an earlier input declaration default."""
     group = compile_group(
-        'items = [1]\n'
-        'x = input_float("X", default=len(items))\n'
-        'items.append(2)\n'
-        'output("X", x)\n',
+        '''
+def nf_fixture(x: Float['X'] = len([1])):
+    items = [1]
+    items.append(2)
+    x = x
+    return (x,)
+''',
         "NFTest_source_order_mutable_default",
     )
     defaults = [
@@ -1293,13 +1393,16 @@ def test_source_ordered_ct_handoff_mutable_state_does_not_mutate_earlier_input_d
 def test_source_ordered_ct_handoff_compile_time_owned_seed_reaches_runtime_if_branches():
     """An erased len() seed is materialized as 3 in both runtime-if branches."""
     group = compile_group(
-        'x = len([1, 2, 3])\n'
-        'flag = input_bool("Flag")\n'
-        'if flag:\n'
-        '    x = x + 1.0\n'
-        'else:\n'
-        '    x = x + 2.0\n'
-        'output("X", x)\n',
+        '''
+def nf_fixture(flag: Bool['Flag']):
+    x = len([1, 2, 3])
+    if flag:
+        x = x + 1.0
+    else:
+        x = x + 2.0
+    x = x
+    return (x,)
+''',
         "NFTest_source_order_ct_owned_seed",
     )
     adds = _nodes(group, "ShaderNodeMath", "ADD")
@@ -1311,33 +1414,39 @@ def test_source_ordered_ct_handoff_compile_time_owned_seed_reaches_runtime_if_br
 def test_source_ordered_ct_handoff_literal_ordinary_if_stays_runtime():
     """Source-ordered compile-time knowledge does not prune an ordinary literal-condition if."""
     group = compile_group(
-        'x = 1.0\n'
-        'if True:\n'
-        '    x = x + 1.0\n'
-        'else:\n'
-        '    x = x + 2.0\n'
-        'output("X", x)\n',
+        '''
+def nf_fixture():
+    x = 1.0
+    if True:
+        x = x + 1.0
+    else:
+        x = x + 2.0
+    x = x
+    return (x,)
+''',
         "NFTest_source_order_literal_if_runtime",
     )
     adds = _nodes(group, "ShaderNodeMath", "ADD")
     switches = _nodes(group, "GeometryNodeSwitch")
-    check(len(adds) == 2, f"expected both literal-if branch ADD nodes, found {len(adds)}")
-    check(len(switches) == 1, f"expected one literal-if runtime Switch, found {len(switches)}")
+    check(len(adds) == 1, f"unreachable literal-if branch created ADD nodes: {len(adds)}")
+    check(len(switches) == 0, f"literal-if unexpectedly created runtime Switch: {len(switches)}")
     defaults = sorted(tuple(_linked_numeric_inputs(group, node)) for node in adds)
-    check(defaults == [(1.0, 1.0), (1.0, 2.0)], f"source-order literal-if seed changed: {defaults!r}")
+    check(defaults == [(1.0, 1.0)], f"source-order literal-if seed changed: {defaults!r}")
 
 
 def test_evaluation_modes_instance_on_points_static_and_runtime_mixed_options_preserve_backend_shape():
     static_group = compile_group(
         '''
-geo = instance_on_points(
-    cube(0.5),
-    points(2),
-    scale=0.5,
-    rotation=vector(0.0, 0.0, 0.25),
-    realize=False,
-)
-output("Geometry", geo)
+def nf_fixture():
+    geo = instance_on_points(
+        cube(0.5),
+        points(2),
+        scale=0.5,
+        rotation=vector(0.0, 0.0, 0.25),
+        realize=False,
+    )
+    geometry = geo
+    return (geometry,)
 ''',
         "NFTest_evaluation_modes_instance_static",
     )
@@ -1354,10 +1463,10 @@ output("Geometry", geo)
 
     runtime_group = compile_group(
         '''
-scale = input_float("Scale", default=0.5)
-rotation = input_vector("Rotation", default=(0.0, 0.0, 0.25))
-geo = instance_on_points(cube(0.5), points(2), scale=scale, rotation=rotation, realize=False)
-output("Geometry", geo)
+def nf_fixture(scale: Float['Scale'] = 0.5, rotation: Vector['Rotation'] = (0.0, 0.0, 0.25)):
+    geo = instance_on_points(cube(0.5), points(2), scale=scale, rotation=rotation, realize=False)
+    geometry = geo
+    return (geometry,)
 ''',
         "NFTest_evaluation_modes_instance_runtime",
     )
@@ -1372,13 +1481,15 @@ output("Geometry", geo)
 def test_evaluation_modes_transform_static_and_runtime_mixed_options_preserve_backend_shape():
     static_group = compile_group(
         '''
-geo = transform(
-    cube(1.0),
-    translation=vector(1.0, 2.0, 3.0),
-    scale=2.0,
-    rotation=vector(0.0, 0.0, 0.25),
-)
-output("Geometry", geo)
+def nf_fixture():
+    geo = transform(
+        cube(1.0),
+        translation=vector(1.0, 2.0, 3.0),
+        scale=2.0,
+        rotation=vector(0.0, 0.0, 0.25),
+    )
+    geometry = geo
+    return (geometry,)
 ''',
         "NFTest_evaluation_modes_transform_static",
     )
@@ -1392,11 +1503,10 @@ output("Geometry", geo)
 
     runtime_group = compile_group(
         '''
-translation = input_vector("Translation", default=(1.0, 2.0, 3.0))
-scale = input_float("Scale", default=2.0)
-rotation = input_vector("Rotation", default=(0.0, 0.0, 0.25))
-geo = transform(cube(1.0), translation=translation, scale=scale, rotation=rotation)
-output("Geometry", geo)
+def nf_fixture(translation: Vector['Translation'] = (1.0, 2.0, 3.0), scale: Float['Scale'] = 2.0, rotation: Vector['Rotation'] = (0.0, 0.0, 0.25)):
+    geo = transform(cube(1.0), translation=translation, scale=scale, rotation=rotation)
+    geometry = geo
+    return (geometry,)
 ''',
         "NFTest_evaluation_modes_transform_runtime",
     )
@@ -1412,7 +1522,12 @@ output("Geometry", geo)
 def test_transform_omitted_overrides_remain_explicit_semantic_omissions():
     """Omitted transform options reach Blender as untouched native identity sockets."""
     group = compile_group(
-        'geo = transform(cube(1.0))\noutput("Geometry", geo)',
+        '''
+def nf_fixture():
+    geo = transform(cube(1.0))
+    geometry = geo
+    return (geometry,)
+''',
         "NFTest_transform_omitted_overrides",
     )
     nodes = _nodes(group, "GeometryNodeTransform")
@@ -1426,12 +1541,22 @@ def test_transform_omitted_overrides_remain_explicit_semantic_omissions():
 def test_evaluation_modes_invalid_static_mixed_options_fail_without_publishing_group():
     cases = [
         (
-            'geo = instance_on_points(cube(0.5), points(2), scale="bad", realize=False)\noutput("Geometry", geo)',
+            '''
+def nf_fixture():
+    geo = instance_on_points(cube(0.5), points(2), scale="bad", realize=False)
+    geometry = geo
+    return (geometry,)
+''',
             "NFTest_evaluation_modes_invalid_instance_scale",
             "instance_on_points scale= expects Float/Int or Vector",
         ),
         (
-            'geo = transform(cube(1.0), rotation="bad")\noutput("Geometry", geo)',
+            '''
+def nf_fixture():
+    geo = transform(cube(1.0), rotation="bad")
+    geometry = geo
+    return (geometry,)
+''',
             "NFTest_evaluation_modes_invalid_transform_rotation",
             "rotation= must be Vector in radians",
         ),
@@ -1451,9 +1576,11 @@ def test_evaluation_modes_invalid_static_mixed_options_fail_without_publishing_g
 
 def test_set_position_omitted_selection_is_explicit_select_all():
     group = compile_group('''
-geo = grid(2, 2)
-geo = set_position(geo, position() + vector(0.0, 0.0, 1.0))
-output("Geometry", geo)
+def nf_fixture():
+    geo = grid(2, 2)
+    geo = set_position(geo, position() + vector(0.0, 0.0, 1.0))
+    geometry = geo
+    return (geometry,)
 ''', "NFTest_set_position_selection_default")
     nodes = [node for node in group.nodes if node.bl_idname == "GeometryNodeSetPosition"]
     check(len(nodes) == 1, f"expected one Set Position node, got {len(nodes)}")
@@ -1467,16 +1594,17 @@ def test_runtime_control_flow_terrain_erosion_repeat_local_delta_merges_without_
     """Evaluate a terrain-like Repeat where only height is carried and delta converges inside the iteration."""
     group = compile_group(
         '''
-height = 10.0
-flag = input_bool("Flag", default=True)
-for i in repeat_range(2):
-    capacity = height * 0.1
-    if flag:
-        delta = capacity * 0.5
-    else:
-        delta = -capacity * 0.25
-    height = height + delta
-output("Geometry", point(vector(height, 0.0, 0.0)))
+def nf_fixture(flag: Bool['Flag'] = True):
+    height = 10.0
+    for i in repeat_range(2):
+        capacity = height * 0.1
+        if flag:
+            delta = capacity * 0.5
+        else:
+            delta = -capacity * 0.25
+        height = height + delta
+    geometry = point(vector(height, 0.0, 0.0))
+    return (geometry,)
 ''',
         "NFTest_runtime_control_flow_terrain_erosion",
     )

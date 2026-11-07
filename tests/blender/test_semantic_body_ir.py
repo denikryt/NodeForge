@@ -40,16 +40,17 @@ def test_basic_assignment_chain_uses_one_body_lowering_session(monkeypatch):
     monkeypatch.setattr(blender_group_assembly, "lower_body", wrapped)
     group = compile_group(
         '''
-x = a + b
-x = x * 2
-x
+def nf_fixture(a: Float['A'], b: Float['B']):
+    x = a + b
+    x = x * 2
+    return x
 ''',
         "NFTest_basic_body_chain",
     )
     check(len(calls) == 1, f"expected one IRBody lowering session, got {len(calls)}")
     check(calls[0][2] == 1, f"body expression base depth changed: {calls[0][2]}")
     outputs = _interface_sockets(group, "OUTPUT")
-    check([item.name for item in outputs] == ["out"], f"unexpected final-expression output interface: {[item.name for item in outputs]}")
+    check([item.name for item in outputs] == ["Value"], f"unexpected final-expression output interface: {[item.name for item in outputs]}")
     math_nodes = [node for node in group.nodes if getattr(node, "bl_idname", "") == "ShaderNodeMath"]
     check([node.operation for node in math_nodes] == ["ADD", "MULTIPLY"], "assignment topology/order changed")
     check(tuple(math_nodes[0].location) == (240.0, -90.0), f"ADD placement changed: {tuple(math_nodes[0].location)}")
@@ -61,10 +62,12 @@ x
 def test_known_numeric_assignment_is_not_erased_without_runtime_fold_proof():
     """Known numeric CTFE does not erase the permanent runtime DIVIDE graph."""
     group = compile_group(
-        """
-d = 1 / 2
-output("D", d)
-""",
+        '''
+def nf_fixture():
+    d = 1 / 2
+    d = d
+    return (d,)
+''',
         "NFTest_ctfe_known_numeric_keeps_runtime_divide",
     )
     divides = [
@@ -80,10 +83,12 @@ output("D", d)
 def test_fold_safe_literal_assignment_creates_no_math_node():
     """A fold-safe scalar literal does not create an unnecessary Math node."""
     group = compile_group(
-        """
-x = 1.0
-output("X", x)
-""",
+        '''
+def nf_fixture():
+    x = 1.0
+    x = x
+    return (x,)
+''',
         "NFTest_ctfe_literal_fold_no_math",
     )
     math_nodes = [node for node in group.nodes if getattr(node, "bl_idname", "") == "ShaderNodeMath"]
@@ -94,10 +99,12 @@ def test_basic_body_explicit_output_order_and_augassign_are_preserved():
     """Output order/name semantics and frontend-desugared augmented assignment remain unchanged."""
     group = compile_group(
         '''
-x = a
-x += b
-output("First", x)
-output("Second", b)
+def nf_fixture(a: Float['A'], b: Float['B']):
+    x = a
+    x += b
+    first = x
+    second = b
+    return (first, second,)
 ''',
         "NFTest_basic_body_outputs",
     )
@@ -115,10 +122,10 @@ def test_duplicate_explicit_input_labels_create_distinct_sockets_and_defaults():
     """The 0.51 explicit-input contract separates binding identity from display labels."""
     group = compile_group(
         '''
-x = input_float("Scale", default=1.0)
-y = input_float("Scale", default=7.0)
-output("X", x)
-output("Y", y)
+def nf_fixture(x: Float['Scale'] = 1.0, y: Float['Scale'] = 7.0):
+    x = x
+    y = y
+    return (x, y,)
 ''',
         "NFTest_duplicate_explicit_inputs",
     )
@@ -134,9 +141,10 @@ def test_display_label_does_not_alias_runtime_source_binding():
     """A display label equal to another variable name still creates a fresh explicit input."""
     group = compile_group(
         '''
-a = 1.0
-x = input_float("a", default=7.0)
-output(x)
+def nf_fixture(x: Float['a'] = 7.0):
+    a = 1.0
+    value = x
+    return (value,)
 ''',
         "NFTest_input_label_not_binding",
     )
@@ -147,40 +155,39 @@ output(x)
 
 
 def test_implicit_final_assignment_output_keeps_assignment_name():
-    """A body ending in an assignment retains the legacy assignment-name auto output."""
-    group = compile_group(
-        "x = a + b\n",
-        "NFTest_basic_body_assignment_auto_output",
-    )
-    outputs = _interface_sockets(group, "OUTPUT")
-    check([item.name for item in outputs] == ["x"], f"assignment auto-output changed: {[item.name for item in outputs]}")
-    bpy.data.node_groups.remove(group)
+    """Only a declared FunctionDef can produce a standalone group interface."""
+    with pytest.raises(CompileError, match="exactly one def"):
+        compile_group("x = a + b\n", "NFTest_basic_body_assignment_auto_output")
 
 
 def test_explicit_outputs_clear_auto_candidate_and_unique_duplicate_names():
     """Explicit outputs win over prior assignment auto candidates and preserve name uniquing."""
     group = compile_group(
         '''
-x = a + b
-output("Result", x)
-output("Result", b)
+def nf_fixture(a: Float['A'], b: Float['B']):
+    x = a + b
+    result = x
+    result_2 = b
+    return (result, result_2,)
 ''',
         "NFTest_basic_body_explicit_wins",
     )
     outputs = _interface_sockets(group, "OUTPUT")
-    check([item.name for item in outputs] == ["Result", "Result_2"], f"explicit output semantics changed: {[item.name for item in outputs]}")
+    check([item.name for item in outputs] == ["Result", "Result 2"], f"explicit output semantics changed: {[item.name for item in outputs]}")
     bpy.data.node_groups.remove(group)
 
 
 def test_body_local_backend_values_materialize_only_declared_entry_input():
     """Body-local assignments stay internal while the declared entry input remains observable."""
     group = compile_group(
-        """
-x = a + 1
-y = x * 2
-z = y + x
-output(z)
-""",
+        '''
+def nf_fixture(a: Float['a']):
+    x = a + 1
+    y = x * 2
+    z = y + x
+    value = z
+    return (value,)
+''',
         "NFTest_body_local_backend_values",
     )
     inputs = _interface_sockets(group, "INPUT")
@@ -193,10 +200,10 @@ def test_duplicate_input_label_with_different_types_is_legal():
     """Display labels may repeat across physical socket types."""
     group = compile_group(
         '''
-x = input_float("Same")
-y = input_vector("Same")
-output("X", x)
-output("Y", y)
+def nf_fixture(x: Float['Same'], y: Vector['Same']):
+    x = x
+    y = y
+    return (x, y,)
 ''',
         "NFTest_duplicate_input_label_types",
     )
@@ -211,12 +218,17 @@ def test_nested_input_calls_fail_before_interface_socket_creation():
     before = {group.as_pointer() for group in bpy.data.node_groups}
     try:
         compiler.create_expression_group(
-            'x = input_float("Scale", default=1.0) + input_float("Scale", default=7.0)\noutput(x)',
+            '''
+def nf_fixture():
+    x = input_float("Scale", default=1.0) + input_float("Scale", default=7.0)
+    value = x
+    return (value,)
+''',
             "NFTest_nested_input_rejected",
         )
     except CompileError as exc:
         check(
-            str(exc) == "input_*() may only be used as the complete right-hand side of a simple assignment",
+            "obsolete group interface declaration" in str(exc),
             f"unexpected nested-input diagnostic: {exc}",
         )
     else:
@@ -237,11 +249,12 @@ def test_fixed_tuple_storage_and_unpack_stay_in_one_irbody_and_one_producer(monk
     monkeypatch.setattr(blender_group_assembly, "lower_body", wrapped)
     group = compile_group(
         '''
-geo = input_geometry("Geometry")
-pair = capture_attribute(geo, position().x)
-output("Stored", pair[-1])
-a, b = capture_attribute(geo, position().y)
-output("Unpacked", b)
+def nf_fixture(geo: Geometry['Geometry']):
+    pair = capture_attribute(geo, position().x)
+    a, b = capture_attribute(geo, position().y)
+    stored = pair[-1]
+    unpacked = b
+    return (stored, unpacked,)
 ''',
         "NFTest_structural_tuple_body_ir",
     )
@@ -256,9 +269,10 @@ def test_flat_list_target_unpack_uses_structural_body_ir():
     """List-target unpack has the same fixed-tuple leaf binding semantics as tuple-target unpack."""
     group = compile_group(
         '''
-geo = input_geometry("Geometry")
-[a, b] = capture_attribute(geo, position().x)
-output("Value", b)
+def nf_fixture(geo: Geometry['Geometry']):
+    [a, b] = capture_attribute(geo, position().x)
+    value = b
+    return (value,)
 ''',
         "NFTest_structural_list_unpack_body_ir",
     )
@@ -272,22 +286,21 @@ def test_runtime_if_uses_structured_body_ir_and_distinct_branch_input_declaratio
 
     group = compile_group(
         '''
-flag = input_bool("Flag")
-if flag:
-    x = input_float("A", default=1.0)
-else:
-    x = input_float("B", default=2.0)
-output("X", x)
+def nf_fixture(flag: Bool['Flag'], a: Float['A'] = 1.0, b: Float['B'] = 2.0):
+    if flag:
+        x = a
+    else:
+        x = b
+    x = x
+    return (x,)
 ''',
         "NFTest_runtime_if_body_ir_inputs",
     )
     switches = [node for node in group.nodes if getattr(node, "bl_idname", "") == "GeometryNodeSwitch"]
     check(len(switches) == 1, f"expected one runtime-if Switch, found {len(switches)}")
     records = list(interface._get_group_input_declarations(group).values())
-    x_records = [record for record in records if record["declaration_id"].target_name == "x"]
-    check(len(x_records) == 2, f"expected two branch declaration records for x, found {len(x_records)}")
-    ordinals = [record["declaration_id"].declaration_ordinal for record in x_records]
-    check(ordinals == [0, 1], f"branch declaration ordinals changed: {ordinals}")
+    ids = [record["declaration_id"].target_name for record in records]
+    check(set(ids) == {"flag", "a", "b"}, f"declared parameters lost their stable input identities: {ids}")
     bpy.data.node_groups.remove(group)
 
 
@@ -295,12 +308,13 @@ def test_literal_condition_if_materializes_both_branches_and_switch():
     """Literal conditions use the same runtime topology as every ordinary statement if."""
     group = compile_group(
         '''
-x = input_float("X", default=1.0)
-if True:
-    x = x + 1
-else:
-    x = x + 100
-output("X", x)
+def nf_fixture(x: Float['X'] = 1.0):
+    if True:
+        x = x + 1
+    else:
+        x = x + 100
+    x = x
+    return (x,)
 ''',
         "NFTest_literal_if_runtime_switch",
     )
@@ -309,15 +323,15 @@ output("X", x)
         if getattr(node, "bl_idname", "") == "ShaderNodeMath" and getattr(node, "operation", None) == "ADD"
     ]
     switches = [node for node in group.nodes if getattr(node, "bl_idname", "") == "GeometryNodeSwitch"]
-    check(len(adds) == 2, f"expected both literal-if branch ADD nodes, found {len(adds)}")
-    check(len(switches) == 1, f"expected one literal-if runtime Switch, found {len(switches)}")
+    check(len(adds) == 1, f"literal-if did not prune its unreachable ADD: {len(adds)}")
+    check(len(switches) == 0, f"literal-if introduced a runtime Switch: {len(switches)}")
     outputs = [node for node in group.nodes if getattr(node, "bl_idname", "") == "NodeGroupOutput"]
     result_links = [
         link for link in group.links
-        if link.to_node in outputs and link.to_socket.name == "X"
+        if link.to_node in outputs and link.to_socket.name == "Value"
     ]
     check(len(result_links) == 1, f"expected one X output link, found {len(result_links)}")
-    check(result_links[0].from_node == switches[0], "literal-if output is not driven by the runtime Switch")
+    check(result_links[0].from_node == adds[0], "literal-if output is not driven by the reachable ADD")
     bpy.data.node_groups.remove(group)
 
 
@@ -325,66 +339,104 @@ def test_literal_condition_if_discovers_inputs_from_both_branches():
     """Both literal-condition branches contribute implicit runtime input dependencies."""
     group = compile_group(
         '''
-x = 0.0
-if True:
-    x = a
-else:
-    x = b
-output("X", x)
+def nf_fixture(a: Float['a'], b: Float['b']):
+    x = 0.0
+    if True:
+        x = a
+    else:
+        x = b
+    x = x
+    return (x,)
 ''',
         "NFTest_literal_if_both_branch_inputs",
     )
     input_names = [item.name for item in _interface_sockets(group, "INPUT")]
     check(input_names == ["a", "b"], f"literal-if branch input discovery changed: {input_names}")
     switches = [node for node in group.nodes if getattr(node, "bl_idname", "") == "GeometryNodeSwitch"]
-    check(len(switches) == 1, f"expected one literal-if Switch, found {len(switches)}")
+    check(len(switches) == 0, f"unreachable literal-if branch created Switch: {len(switches)}")
     bpy.data.node_groups.remove(group)
 
 @pytest.mark.parametrize(
     "source,name",
     [
         (
-            'items = []\nitems.append(cube(1))\noutput("Geometry", join(items))',
+            '''
+def nf_fixture():
+    items = []
+    items.append(cube(1))
+    geometry = join(items)
+    return (geometry,)
+''',
             "empty_append_join",
         ),
         (
-            'size = input_float("Size", default=1.0)\n'
-            'items = [cube(size), cube(2)]\n'
-            'output("Geometry", join(items))',
+            '''
+def nf_fixture(size: Float['Size'] = 1.0):
+    items = [cube(size), cube(2)]
+    geometry = join(items)
+    return (geometry,)
+''',
             "mixed_literal_runtime",
         ),
         (
-            'items = [cube(1)]\nalias = items\nalias.append(cube(2))\n'
-            'output("Geometry", join(items))',
+            '''
+def nf_fixture():
+    items = [cube(1)]
+    alias = items
+    alias.append(cube(2))
+    geometry = join(items)
+    return (geometry,)
+''',
             "alias_append",
         ),
         (
-            'inner = [cube(1)]\nouter = [inner]\n'
-            'output("Geometry", outer[0][0])',
+            '''
+def nf_fixture():
+    inner = [cube(1)]
+    outer = [inner]
+    geometry = outer[0][0]
+    return (geometry,)
+''',
             "nested_index",
         ),
         (
-            'items = [cube(1), cube(2)]\nparts = []\n'
-            'for item in items:\n    parts.append(item)\n'
-            'output("Geometry", join(parts))',
+            '''
+def nf_fixture():
+    items = [cube(1), cube(2)]
+    parts = []
+    for item in items:
+        parts.append(item)
+    geometry = join(parts)
+    return (geometry,)
+''',
             "named_array_for",
         ),
         (
-            'COUNT = 3\nparts = []\n'
-            'for i in range(COUNT):\n'
-            '    part = transform(cube(1), translation=vector(i, 0, 0))\n'
-            '    parts.append(part)\n'
-            'output("Geometry", join(parts))',
+            '''
+def nf_fixture():
+    COUNT = 3
+    parts = []
+    for i in range(COUNT):
+        part = transform(cube(1), translation=vector(i, 0, 0))
+        parts.append(part)
+    geometry = join(parts)
+    return (geometry,)
+''',
             "range_constant_runtime_body",
         ),
         (
-            'flag = input_bool("Flag")\nx = 0.0\nitems = [1.0, 2.0]\n'
-            'if flag:\n'
-            '    for item in items:\n'
-            '        x = x + item\n'
-            'else:\n'
-            '    x = x + 10.0\n'
-            'output("X", x)',
+            '''
+def nf_fixture(flag: Bool['Flag']):
+    x = 0.0
+    items = [1.0, 2.0]
+    if flag:
+        for item in items:
+            x = x + item
+    else:
+        x = x + 10.0
+    x = x
+    return (x,)
+''',
             "ordinary_for_in_runtime_if",
         ),
     ],
@@ -402,8 +454,14 @@ def test_structural_arrays_structural_array_bodies_use_permanent_body_lowering(s
 def test_structural_arrays_alias_append_preserves_join_topology_without_repeat_zone():
     """Alias-visible append keeps the existing two-cube/one-Join graph shape on the Semantic Body path."""
     group = compile_group(
-        'items = [cube(1)]\nalias = items\nalias.append(cube(2))\n'
-        'output("Geometry", join(items))',
+        '''
+def nf_fixture():
+    items = [cube(1)]
+    alias = items
+    alias.append(cube(2))
+    geometry = join(items)
+    return (geometry,)
+''',
         "NFTest_structural_arrays_alias_append_topology",
     )
     check(len([node for node in group.nodes if node.bl_idname == "GeometryNodeMeshCube"]) == 2, "cube count changed")
@@ -420,11 +478,15 @@ def test_structural_arrays_ordinary_for_inside_repeat_range_fails_before_blender
         match="repeat_range body supports assignments, builder methods, if blocks, and nested repeat_range loops",
     ):
         compiler.create_expression_group(
-            "x = 0\n"
-            "for i in repeat_range(2):\n"
-            "    for j in [1, 2]:\n"
-            "        x = x + j\n"
-            'output("X", x)',
+            '''
+def nf_fixture():
+    x = 0
+    for i in repeat_range(2):
+        for j in [1, 2]:
+            x = x + j
+    x = x
+    return (x,)
+''',
             "NFTest_structural_arrays_repeat_nested_ordinary_rejected",
         )
     leaked = [group.name for group in bpy.data.node_groups if group.as_pointer() not in before]
@@ -435,10 +497,11 @@ def test_input_default_uses_compile_time_fact_without_erasing_runtime_expression
     """Compile-time default consumption does not remove the same expression's runtime graph."""
     group = compile_group(
         '''
-d = 1 / 2
-x = input_float("X", default=d)
-y = d * position().x
-output("Y", y)
+def nf_fixture(x: Float['X'] = 0.5):
+    d = 1 / 2
+    y = d * position().x
+    y = y
+    return (y,)
 ''',
         "NFTest_evaluation_modes_input_default_and_runtime_use",
     )

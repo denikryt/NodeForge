@@ -64,7 +64,7 @@ def test_optional_omitted_parameters_have_no_call_operands():
     group, session = _analyze('''def f(value: Float, multiplier: Float = 2):
     return value * multiplier
 x = f(3)
-output(x)''')
+result = x''')
     prepared = next(iter(session.prepared.values()))
     assert [p.has_default for p in prepared.contract.parameters] == [False, True]
     operations = [op for statement in group.body.statements for op in getattr(getattr(statement, 'value', None), 'operations', ())]
@@ -79,7 +79,7 @@ def test_panel_reordering_has_no_effect_on_call_socket_mapping():
     panel([b, a], name="P")
     return a + b + c
 x = f(1, b=2)
-output(x)''')
+result = x''')
     prepared = next(iter(session.prepared.values()))
     assert [(p.source_name, p.input_index) for p in prepared.contract.parameters] == [('a', 2), ('b', 1), ('c', 0)]
 
@@ -87,10 +87,10 @@ output(x)''')
 def test_missing_required_argument_fails_before_function_body_preparation():
     """Explicitly omitted inputs are diagnosed before any function materialization."""
     with pytest.raises(CompileError, match='missing required arguments'):
-        _analyze('def f(x: Float):\n    return x\noutput(f())')
+        _analyze('def f(x: Float):\n    return x\nresult = f()')
 
 
 def test_label_cannot_be_used_as_keyword_for_local_source_function():
     """The user-facing socket label is not a valid source keyword alias."""
     with pytest.raises(CompileError, match='unknown keyword'):
-        _analyze('def f(x: Float["Rate"]):\n    return x\noutput(f(Rate=2))')
+        _analyze('def f(x: Float["Rate"]):\n    return x\nresult = f(Rate=2)')

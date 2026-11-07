@@ -114,7 +114,10 @@ def validate_function_parameters(fn: ast.FunctionDef) -> None:
             raise CompileError(f"{fn.name}() parameter {name!r} conflicts with a reserved source name at {location}")
         if arg.annotation is None:
             raise CompileError(f"{fn.name}(): parameter {name!r} requires an explicit type annotation at {location}")
-        resolve_parameter_annotation(arg.annotation)
+        try:
+            resolve_parameter_annotation(arg.annotation)
+        except CompileError as exc:
+            raise CompileError(f"{fn.name}() parameter {name!r} at {location}: {exc}") from exc
 
 
 def compile_function_signature(
@@ -155,7 +158,10 @@ def compile_function_signature(
                 evaluated = _const_eval(expression, values)
             except ConstEvalUnavailable as exc:
                 raise CompileError(f"{fn.name}() parameter {name!r} requires a compile-time default") from exc
-            default = canonicalize_group_input_default(typ, evaluated)
+            try:
+                default = canonicalize_group_input_default(typ, evaluated)
+            except CompileError as exc:
+                raise CompileError(f"{fn.name}() parameter {name!r} has an invalid default: {exc}") from exc
         binding = BindingId(owner_scope, index)
         origin = InputDeclarationId(declaration_owner, name, 0)
         origins[name] = origin

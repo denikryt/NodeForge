@@ -3,17 +3,17 @@
     "interface": [
       {
         "in_out": "OUTPUT",
-        "name": "X",
+        "name": "Value 1",
         "socket_type": "NodeSocketFloat"
       },
       {
         "in_out": "OUTPUT",
-        "name": "Y",
+        "name": "Value 2",
         "socket_type": "NodeSocketFloat"
       },
       {
         "in_out": "OUTPUT",
-        "name": "Z",
+        "name": "Value 3",
         "socket_type": "NodeSocketFloat"
       },
       {
