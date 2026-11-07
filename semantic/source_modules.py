@@ -91,6 +91,7 @@ def collect_source_definition_aliases(
     statements: tuple[ast.stmt, ...] | list[ast.stmt],
     definitions: Mapping[str, ast.FunctionDef],
     *, require_local_assignment_order: bool = False,
+    verified_local_aliases: Mapping[str, SourceDefinitionRef] | None = None,
 ) -> tuple[tuple[ast.stmt, ...], Mapping[str, str]]:
     """Collect lexical ``alias = definition`` declarations without runtime effects.
 
@@ -105,7 +106,11 @@ def collect_source_definition_aliases(
     for statement in statements:
         if (isinstance(statement, ast.Assign) and len(statement.targets) == 1
                 and isinstance(statement.targets[0], ast.Name) and isinstance(statement.value, ast.Name)
-                and statement.value.id in canonical):
+                and statement.value.id in canonical
+                and (verified_local_aliases is None
+                     or (statement.targets[0].id in verified_local_aliases
+                         and verified_local_aliases[statement.targets[0].id].name
+                         == canonical[statement.value.id]))):
             alias = statement.targets[0].id
             if alias in canonical or alias in aliases:
                 raise CompileError(f"Duplicate function alias {alias!r} at line {statement.lineno}")
@@ -414,8 +419,10 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
         return values
 
     for name, fn in snapshot.definitions.items():
+        inventory = collect_function_lexical_inventory(fn, resolved.definition_refs)
         body, aliases = collect_source_definition_aliases(
             fn.body, definitions, require_local_assignment_order=True,
+            verified_local_aliases=inventory.source_aliases,
         )
         local_functions = dict(definitions)
         local_refs = dict(resolved.definition_refs)
@@ -424,7 +431,6 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
             local_refs[alias] = snapshot.definition_ref(canonical)
         env = CallableEnvironment(base.callable_builtins, local_functions, {},
                                   local_definition_refs=local_refs)
-        inventory = collect_function_lexical_inventory(fn, local_refs)
         initial = detached_compile_time_mapping(resolved.preprocessed.final_compile_time.values)
         runtime_range_names = tuple(arg.arg for arg in fn.args.args)
         for local in inventory.owned_names:

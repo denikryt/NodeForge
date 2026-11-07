@@ -150,3 +150,65 @@ value = f(3)
     tree, calls = _compose(source, 'loop-callable-' + iterator[:5])
     assert len(calls) == 1
     assert round(_evaluate_float_output(tree, calls[0].outputs[0]), 5) == expected
+
+
+@pytest.mark.parametrize(('parameter', 'assignment', 'expected'), [
+    ('helper: Float', '', 5.0),
+    ('x: Float', 'helper = x + 1.0\n    ', 6.0),
+])
+def test_function_name_shadowing_keeps_copied_numeric_local(parameter, assignment, expected):
+    """Physical Group Node must return the numeric binding, not a function alias."""
+    source = f'''def helper(x: Float) -> Float:
+    return x * 2.0
+
+def outer({parameter}) -> Float:
+    {assignment}copied = helper
+    return copied
+result = outer(5.0)'''
+    tree, calls = _compose(source, 'copied-numeric-' + str(expected))
+    assert [call.node_tree.get('nodeforge_module_name') for call in calls] == ['outer']
+    assert not any(n.bl_idname == 'GeometryNodeGroup' for n in calls[0].node_tree.nodes)
+    assert round(_evaluate_float_output(tree, calls[0].outputs[0]), 5) == expected
+
+
+@pytest.mark.parametrize(('parameter', 'assignment'), [
+    ('helper: Float', ''),
+    ('x: Float', 'helper = x + 1.0\n    '),
+])
+def test_calling_copied_numeric_shadow_fails_without_publication(parameter, assignment):
+    """Reject a non-callable local before modifying unrelated user graph/groups."""
+    source = f'''def helper(x: Float) -> Float:
+    return x * 2.0
+
+def outer({parameter}) -> Float:
+    {assignment}copied = helper
+    return copied(3.0)
+result = outer(5.0)'''
+    tree = bpy.data.node_groups.new('NF-Rev2-invalid-copied-numeric', 'GeometryNodeTree')
+    cube = tree.nodes.new('GeometryNodeMeshCube')
+    transform = tree.nodes.new('GeometryNodeTransform')
+    tree.links.new(cube.outputs['Mesh'], transform.inputs['Geometry'])
+    initial_nodes = {node.as_pointer() for node in tree.nodes}
+    initial_links = {(link.from_node.as_pointer(), link.to_node.as_pointer()) for link in tree.links}
+    original_groups = {group.as_pointer() for group in bpy.data.node_groups}
+    with pytest.raises(CompileError, match="Cannot call 'copied'"):
+        compiler.compose_source_initial(source, tree, module_context='test:rev2-invalid-copied-numeric')
+    assert {node.as_pointer() for node in tree.nodes} == initial_nodes
+    assert {(link.from_node.as_pointer(), link.to_node.as_pointer()) for link in tree.links} == initial_links
+    assert {group.as_pointer() for group in bpy.data.node_groups} == original_groups
+
+
+def test_verified_source_alias_chain_still_physically_invokes_canonical_definition():
+    src = '''def outer(x: Float) -> Float:
+    first = helper
+    second = first
+    return second(x)
+
+def helper(x: Float) -> Float:
+    return x * 2.0
+result = outer(5.0)'''
+    tree, calls = _compose(src, 'verified-source-alias-chain')
+    assert len(calls) == 1
+    assert [node.node_tree.get('nodeforge_module_name') for node in calls[0].node_tree.nodes
+            if node.bl_idname == 'GeometryNodeGroup'] == ['helper']
+    assert round(_evaluate_float_output(tree, calls[0].outputs[0]), 5) == 10.0

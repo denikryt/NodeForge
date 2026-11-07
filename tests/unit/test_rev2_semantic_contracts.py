@@ -426,3 +426,42 @@ def g():
     ref = _resolved(ast.unparse(module)).snapshot.definition_ref("g")
     inventory = collect_function_lexical_inventory(module.body[0], {"g": ref})
     assert inventory.source_aliases["helper"] == ref
+
+
+def test_function_lexical_alias_inventory_excludes_shadowed_sources():
+    import ast
+    from NodeForge.semantic.source_bindings import collect_function_lexical_inventory
+    src = '''def helper(x: Float):
+    return x
+
+def outer(helper: Float):
+    copied = helper
+    return copied
+
+def local(x: Float):
+    helper = x
+    copied = helper
+    return copied'''
+    tree = ast.parse(src)
+    refs = {'helper': _resolved(src).snapshot.definition_ref('helper')}
+    for fn in tree.body[1:]:
+        inventory = collect_function_lexical_inventory(fn, refs)
+        assert 'copied' in inventory.owned_names
+        assert 'copied' not in inventory.source_aliases
+    assert 'helper' in collect_function_lexical_inventory(tree.body[1], refs).parameters
+
+
+def test_function_lexical_alias_does_not_skip_a_later_ordinary_rebinding():
+    import ast
+    from NodeForge.semantic.source_bindings import collect_function_lexical_inventory
+    src = '''def helper(x: Float):
+    return x
+
+def outer(x: Float):
+    copied = helper
+    copied = x
+    return copied'''
+    tree = ast.parse(src)
+    refs = {'helper': _resolved(src).snapshot.definition_ref('helper')}
+    inventory = collect_function_lexical_inventory(tree.body[1], refs)
+    assert 'copied' not in inventory.source_aliases

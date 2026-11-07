@@ -668,3 +668,8 @@ lifecycle.
 - Added physical Blender regressions for source isolation, declaration preflight, group identity and final defaults, including local/shared/unique Reload.
 - Made NodeForge add-on/editor registration and unregistration idempotent with partial-registration rollback, while preserving generated user resources.
 - Kept root-only Mesh Compute migration and level-zero selective reconciliation outside this change.
+
+## 0.89.1
+
+- Resolve function-local source aliases using lexical ownership: copying a numeric parameter or ordinary local cannot silently become a reference to an identically named module function.
+- Keep validated source-function aliases and forward definitions working; reject calls to copied non-callable locals before Blender publication. Add physical value/rollback and call-graph regression coverage.

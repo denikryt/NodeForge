@@ -566,3 +566,108 @@ def b():
 ''')
     assert {(src.name, dst.name) for src, dst in graph.edges} == {('a', 'b')}
     assert [entry.name for entry in graph.entries] == ['a']
+
+@pytest.mark.parametrize(('assignment', 'expected'), [
+    ('', 'helper'),
+    ('helper = x + 1.0\n    ', 'helper'),
+])
+def test_shadowed_module_function_is_copied_as_a_local_numeric_value(assignment, expected):
+    """A textual RHS is not a source alias when it resolves to a function local."""
+    param = 'helper: Float' if not assignment else 'x: Float'
+    src = f'''def helper(x: Float) -> Float:
+    return x * 2.0
+
+def outer({param}) -> Float:
+    {assignment}copied = helper
+    return copied
+result = outer(5.0)'''
+    assert not _graph(src).edges
+    environment = ResolvedEnvironment({name: ResolvedCatalog(name, {})
+                                       for name in ('functions', 'examples', 'local')})
+    session = SourceCallableSession(resolved_environment=environment)
+    analyze_group_source(src,
+        compilation_identity=GroupCompilationIdentity(None, 'ROOT/numeric-shadow', 'ROOT/numeric-shadow', 'ROOT/numeric-shadow'),
+        resolved_environment=environment, source_callable_session=session)
+    assert {item.contract.function_id.name for item in session.prepared.values()} == {'outer'}
+
+
+@pytest.mark.parametrize('assignment', ('', 'helper = x + 1.0\n    '))
+def test_call_of_copied_numeric_local_is_rejected_without_false_call_edge(assignment):
+    """A number cannot become a module function merely by sharing its name."""
+    param = 'helper: Float' if not assignment else 'x: Float'
+    src = f'''def helper(x: Float) -> Float:
+    return x * 2.0
+
+def outer({param}) -> Float:
+    {assignment}copied = helper
+    return copied(3.0)
+result = outer(5.0)'''
+    assert not _graph(src).edges
+    environment = ResolvedEnvironment({name: ResolvedCatalog(name, {})
+                                       for name in ('functions', 'examples', 'local')})
+    session = SourceCallableSession(resolved_environment=environment)
+    with pytest.raises(CompileError, match=r"Cannot call 'copied'.*line \d+, column \d+"):
+        analyze_group_source(src,
+            compilation_identity=GroupCompilationIdentity(None, 'ROOT/noncallable-shadow', 'ROOT/noncallable-shadow', 'ROOT/noncallable-shadow'),
+            resolved_environment=environment, source_callable_session=session)
+    assert not any(item.contract.function_id.name == 'helper' for item in session.prepared.values())
+
+
+def test_chained_source_aliases_keep_canonical_function_identity():
+    src = '''def outer(x: Float) -> Float:
+    first = helper
+    second = first
+    return second(x)
+
+def helper(x: Float) -> Float:
+    return x * 2.0
+result = outer(5.0)'''
+    assert {(a.name, b.name) for a, b in _graph(src).edges} == {('outer', 'helper')}
+    environment = ResolvedEnvironment({name: ResolvedCatalog(name, {})
+                                       for name in ('functions', 'examples', 'local')})
+    session = SourceCallableSession(resolved_environment=environment)
+    analyze_group_source(src,
+        compilation_identity=GroupCompilationIdentity(None, 'ROOT/chained-source-alias', 'ROOT/chained-source-alias', 'ROOT/chained-source-alias'),
+        resolved_environment=environment, source_callable_session=session)
+    assert {item.contract.function_id.name for item in session.prepared.values()} == {'outer', 'helper'}
+
+
+def test_copy_of_shadowed_module_level_alias_remains_numeric():
+    """A parameter shadows aliases exported by the same source module too."""
+    src = '''module_alias = helper
+
+def helper(x: Float) -> Float:
+    return x * 2.0
+
+def outer(module_alias: Float) -> Float:
+    copied = module_alias
+    return copied
+result = outer(5.0)'''
+    assert not _graph(src).edges
+    environment = ResolvedEnvironment({name: ResolvedCatalog(name, {})
+                                       for name in ('functions', 'examples', 'local')})
+    session = SourceCallableSession(resolved_environment=environment)
+    analyze_group_source(src,
+        compilation_identity=GroupCompilationIdentity(None, 'ROOT/shadow-module-alias', 'ROOT/shadow-module-alias', 'ROOT/shadow-module-alias'),
+        resolved_environment=environment, source_callable_session=session)
+    assert {item.contract.function_id.name for item in session.prepared.values()} == {'outer'}
+
+
+def test_function_body_read_before_later_local_shadows_source_alias():
+    """A later normal assignment owns the name from function entry, not from use."""
+    src = '''def helper(x: Float) -> Float:
+    return x * 2.0
+
+def outer(x: Float) -> Float:
+    copied = helper
+    helper = x + 1.0
+    return copied
+result = outer(5.0)'''
+    assert not _graph(src).edges
+    environment = ResolvedEnvironment({name: ResolvedCatalog(name, {})
+                                       for name in ('functions', 'examples', 'local')})
+    with pytest.raises(CompileError, match=r"Local name 'helper' used before assignment"):
+        analyze_group_source(src,
+            compilation_identity=GroupCompilationIdentity(None, 'ROOT/later-shadow', 'ROOT/later-shadow', 'ROOT/later-shadow'),
+            resolved_environment=environment,
+            source_callable_session=SourceCallableSession(resolved_environment=environment))

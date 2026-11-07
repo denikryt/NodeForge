@@ -158,9 +158,13 @@ def collect_function_lexical_inventory(
     if not isinstance(fn, ast.FunctionDef):
         raise TypeError("Lexical inventory requires one FunctionDef")
     refs = definition_refs or {}
-    locals_: set[str] = set()
+    parameters = frozenset(arg.arg for arg in fn.args.args)
+    ordinary_locals: set[str] = set()
     loops: dict[int, frozenset[str]] = {}
-    aliases: dict[str, SourceDefinitionRef] = {}
+    # Only unconditional, simple assignments in the function body can declare
+    # source-function aliases. Assignments in conditional/loop blocks are
+    # ordinary locals, even when their RHS happens to spell a module function.
+    candidate_aliases: list[tuple[str, str]] = []
 
     def names(target):
         if isinstance(target, ast.Name):
@@ -169,18 +173,20 @@ def collect_function_lexical_inventory(
             return set().union(*(names(item) for item in target.elts))
         return set()
 
-    def visit(stmt):
+    def visit(stmt, *, direct=False):
         if isinstance(stmt, ast.FunctionDef):
             return
         if isinstance(stmt, ast.Assign):
-            for target in stmt.targets:
-                locals_.update(names(target))
-            if (len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
-                    and isinstance(stmt.value, ast.Name) and stmt.value.id in refs):
-                aliases[stmt.targets[0].id] = refs[stmt.value.id]
+            if (direct and len(stmt.targets) == 1
+                    and isinstance(stmt.targets[0], ast.Name)
+                    and isinstance(stmt.value, ast.Name)):
+                candidate_aliases.append((stmt.targets[0].id, stmt.value.id))
+            else:
+                for target in stmt.targets:
+                    ordinary_locals.update(names(target))
             return
         if isinstance(stmt, (ast.AugAssign, ast.AnnAssign)):
-            locals_.update(names(stmt.target))
+            ordinary_locals.update(names(stmt.target))
             return
         if isinstance(stmt, ast.If):
             for sub in (*stmt.body, *stmt.orelse):
@@ -193,10 +199,40 @@ def collect_function_lexical_inventory(
             return
 
     for statement in fn.body:
-        visit(statement)
+        visit(statement, direct=True)
+
+    # Ownership must be decided before treating a textual RHS as a function.
+    # A parameter or *any* ordinary assignment (even a later one) shadows an
+    # outer source definition for the whole function. Alias chains, however,
+    # may refer to earlier, verified aliases. Iterate when a candidate itself
+    # proves to be an ordinary local, so aliases depending on it are invalidated
+    # independent of the order in which statements were inspected.
+    candidate_targets = {target for target, _ in candidate_aliases}
+    non_alias_locals = set(parameters) | ordinary_locals
+    while True:
+        aliases: dict[str, SourceDefinitionRef] = {}
+        previous = set(non_alias_locals)
+        for target, source in candidate_aliases:
+            if target in non_alias_locals:
+                continue
+            if source == target or source in non_alias_locals:
+                non_alias_locals.add(target)
+                continue
+            if source in candidate_targets:
+                ref = aliases.get(source)  # Only preceding valid aliases bind.
+            else:
+                ref = refs.get(source)
+            if ref is None:
+                non_alias_locals.add(target)
+            else:
+                aliases[target] = ref
+        if non_alias_locals == previous:
+            break
+
     return FunctionLexicalInventory(
-        frozenset(arg.arg for arg in fn.args.args),
-        frozenset(locals_), loops, aliases,
+        parameters,
+        frozenset(ordinary_locals | candidate_targets), loops, aliases,
     )
+
 
 __all__ += ["FunctionLexicalInventory", "collect_function_lexical_inventory"]

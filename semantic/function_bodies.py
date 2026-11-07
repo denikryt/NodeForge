@@ -62,6 +62,7 @@ def compile_function_definition(
     body_stmts, aliases = collect_source_definition_aliases(
         fn.body, callable_environment.local_functions,
         require_local_assignment_order=True,
+        verified_local_aliases=inventory.source_aliases,
     )
     if aliases:
         # Both static graph construction and runtime lowering resolve aliases to
