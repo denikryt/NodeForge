@@ -647,3 +647,9 @@ lifecycle.
 - Include effective typed function IR in reusable-group freshness fingerprints so changes to used module constants update existing groups in place without rebuilding for unrelated source edits.
 - Track source-ordered compile-time state through nested conditionals in function call-graph analysis, aligning entry placement and recursion detection with reachable function bodies.
 - Add focused Python and Blender regressions for constant-only reload, shared-group reuse, nested reachability and runtime loop-state preservation.
+
+## 0.88.2
+
+- Respect lexical loop-index bindings over same-named module compile-time constants during call-graph analysis and Repeat Zone lowering.
+- Analyze retained compile-time loops with their actual iteration values, matching physical unrolling and restoring the enclosing binding after the loop.
+- Add semantic and Blender execution regressions for runtime and compile-time loop shadowing, including nested loops and source-owner independent entry selection.

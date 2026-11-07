@@ -326,3 +326,129 @@ def b():
 '''
     graph = _graph(source)
     assert {(src.name, dst.name) for src, dst in graph.edges} == {('a', 'b')}
+
+
+@pytest.mark.parametrize('iterator', ('repeat_range(count)', 'range(count)'))
+def test_runtime_loop_index_shadows_module_constant_in_graph(iterator):
+    """A runtime index, not an outer constant, determines reachable callees."""
+    source = f'''i = 100
+
+def a(count: Int):
+    x = 1.0
+    for i in {iterator}:
+        if i == 1:
+            x = b(x)
+        x = x + 1.0
+    return x
+
+def b(x: Float):
+    return x + 10.0
+'''
+    shadowed = _graph(source)
+    control = _graph(source.replace('i = 100\n', ''))
+    expected = {('a', 'b')}
+    assert {(src.name, dst.name) for src, dst in shadowed.edges} == expected
+    assert shadowed.edges == control.edges
+    assert [ref.name for ref in shadowed.entries] == ['a']
+
+
+def test_runtime_loop_target_scope_restores_module_constant_after_loop():
+    """The loop body sees a dynamic index; a later sibling sees the outer constant."""
+    graph = _graph('''i = 100
+
+def a(count: Int):
+    x = 1.0
+    for i in repeat_range(count):
+        if i == 1:
+            x = b(x)
+    if i == 100:
+        x = c(x)
+    if i == 1:
+        x = d(x)
+    return x
+
+def b(x: Float):
+    return x + 1.0
+
+def c(x: Float):
+    return x + 1.0
+
+def d(x: Float):
+    return x + 1.0
+''')
+    assert {(src.name, dst.name) for src, dst in graph.edges} == {
+        ('a', 'b'), ('a', 'c'),
+    }
+    assert [ref.name for ref in graph.entries] == ['a', 'd']
+
+
+def test_nested_runtime_loop_indices_shadow_outer_constant():
+    """A nested runtime loop with the same target name retains dynamic reachability."""
+    graph = _graph('''i = 100
+
+def a(count: Int):
+    x = 1.0
+    for i in repeat_range(count):
+        for i in repeat_range(2):
+            if i == 1:
+                x = b(x)
+    return x
+
+def b(x: Float):
+    return x + 10.0
+''')
+    assert {(src.name, dst.name) for src, dst in graph.edges} == {('a', 'b')}
+
+
+def test_module_constant_outside_runtime_loop_remains_compile_time():
+    """Shadowing is lexical, not a permanent removal of the module value."""
+    graph = _graph('''i = 100
+
+def a(count: Int):
+    x = 1.0
+    if i == 1:
+        x = b(x)
+    for i in repeat_range(count):
+        x = x + 1.0
+    return x
+
+def b(x: Float):
+    return x + 10.0
+''')
+    assert not graph.edges
+
+
+@pytest.mark.parametrize('iterator', ('range(3)', '[0, 1, 2]'))
+def test_static_loop_target_shadows_same_named_module_constant(iterator):
+    """A known iterable binds each item, never the enclosing module constant."""
+    graph = _graph(f'''i = 100
+
+def a():
+    x = 1.0
+    for i in {iterator}:
+        if i == 1:
+            x = b(x)
+    return x
+
+def b(x: Float):
+    return x + 10.0
+''')
+    assert {(src.name, dst.name) for src, dst in graph.edges} == {('a', 'b')}
+    assert [ref.name for ref in graph.entries] == ['a']
+
+
+def test_static_loop_does_not_invent_calls_from_unvisited_iteration_values():
+    graph = _graph('''i = 100
+
+def a():
+    x = 1.0
+    for i in [2, 3]:
+        if i == 1:
+            x = b(x)
+    return x
+
+def b(x: Float):
+    return x + 10.0
+''')
+    assert not graph.edges
+    assert [ref.name for ref in graph.entries] == ['a', 'b']

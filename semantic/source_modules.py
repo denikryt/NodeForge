@@ -167,7 +167,33 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
             return None
         if isinstance(node, ast.For):
             visit(node.iter, owner, environment, values, runtime_range_names)
-            visit_block(node.body, owner, environment, values, runtime_range_names)
+            # A for-target is a lexical binding, never a read of an outer
+            # same-named module constant. For a known compile-time iterable,
+            # evaluate the retained body with each actual item, as the body
+            # lowerer does when unrolling. Runtime iteration has no constant
+            # item and must conservatively retain either branch of an if.
+            runtime_repeat = (
+                isinstance(node.iter, ast.Call)
+                and isinstance(node.iter.func, ast.Name)
+                and node.iter.func.id == "repeat_range"
+            )
+            items = None
+            if not runtime_repeat:
+                try:
+                    items = _const_eval(node.iter, values)
+                except ConstEvalUnavailable:
+                    pass
+            if isinstance(node.target, ast.Name) and isinstance(items, (tuple, list)):
+                for item in items:
+                    iteration_values = dict(values)
+                    iteration_values[node.target.id] = item
+                    visit_block(node.body, owner, environment, iteration_values, runtime_range_names)
+            else:
+                body_values = dict(values)
+                for target in ast.walk(node.target):
+                    if isinstance(target, ast.Name):
+                        body_values.pop(target.id, None)
+                visit_block(node.body, owner, environment, body_values, runtime_range_names)
             visit_block(node.orelse, owner, environment, values, runtime_range_names)
             return None
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):

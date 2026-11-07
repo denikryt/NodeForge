@@ -1656,6 +1656,10 @@ def lower_basic_body(
                 iterations_expr, repeat_body, iteration_name = parsed
                 validate_runtime_binding_target(iteration_name, reserved_name_labels)
                 repeat_compile_time = active_compile_time.fork()
+                # The index is a runtime lexical binding inside the Repeat Zone.
+                # In particular, a module constant with this name must not fold
+                # conditions in the loop body before runtime expression analysis.
+                repeat_compile_time.discard(iteration_name)
                 try:
                     repeat_count_constant = _const_eval(iterations_expr, repeat_compile_time.values)
                 except ConstEvalUnavailable:
@@ -1758,6 +1762,13 @@ def lower_basic_body(
                     require_repeat_state_assignment(record.source_name, record.typ, exit_symbol.typ)
                 repeat = IRRepeat(iterations.program, iteration_binding_id, iteration_name, tuple(state_records), repeat_ir_body)
                 emit(repeat)
+                # The runtime index exists only in the loop's lexical scope.
+                # Publish other body CT effects while restoring the enclosing
+                # binding (including a module constant of the same name).
+                if active_compile_time.contains(iteration_name):
+                    repeat_compile_time.bind(iteration_name, active_compile_time.get(iteration_name))
+                else:
+                    repeat_compile_time.discard(iteration_name)
                 active_compile_time.replace(repeat_compile_time)
                 for record in state_records:
                     if not record.publish_to_parent:

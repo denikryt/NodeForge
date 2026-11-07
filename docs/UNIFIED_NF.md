@@ -107,6 +107,13 @@ Runtime `range(count)` compiles through a Repeat Zone; compile-time integer
 ranges retain their compile-time behavior. Neither loop syntax nor a call
 argument determines the type of an unannotated parameter.
 
+Function parameters and local loop targets take precedence over same-named
+compile-time constants from the containing module. Module constants remain
+available to function bodies when no local binding shadows them. A runtime
+loop index is an Int value inside its loop, and the enclosing binding is
+restored after that loop. A compile-time `for` instead binds each known
+iteration value while its body is compiled.
+
 ## Identity, sharing and updates
 
 A function's source module, name and declared input-type signature determine its canonical definition identity. Ordinary repeated calls share a backing `GeometryNodeTree` when the existing ownership policy allows it. `__unique__=True` chooses a distinct function-instance owner. Updating a canonical Function Node Group recompiles it **in place**, retaining the datablock pointer and compatible links/default overrides of its Group Node users.
