@@ -15,13 +15,12 @@ from ..nf_types import NFType
 from .call_resolution import CallableEnvironment
 from .callable_contracts import GroupInterfaceContract, GroupOutputContract, source_argument_type_matches
 from .compile_time import CompileTimeSnapshot, detached_compile_time_mapping
-from .function_signatures import compile_function_signature
+from .source_definition_contract import validate_source_definition_contract
 from .ir import IRBody
 from .parsing import normalized_statements
 from .source_modules import collect_source_definition_aliases
 from .residualization import _preprocess_compile_time
 from .runtime_bindings import RuntimeBindingSymbol
-from .source_callables import analyze_local_return_shape
 from .body import lower_basic_body
 
 
@@ -50,23 +49,12 @@ def compile_function_definition(
         raise TypeError("Function compilation requires CallableEnvironment")
     if not isinstance(fn, ast.FunctionDef):
         raise TypeError("Function compilation requires FunctionDef")
-    shape = analyze_local_return_shape(fn)
     values = detached_compile_time_mapping(compile_time_values or {})
-    signature = compile_function_signature(
-        fn,
-        owner_scope=compilation_identity.owner_scope,
+    signature, shape = validate_source_definition_contract(
+        fn, owner_scope=compilation_identity.owner_scope,
         declaration_owner=compilation_identity.declaration_owner,
         compile_time_values=values,
     )
-    for statement in fn.body:
-        for node in ast.walk(statement):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and (
-                node.func.id == "output" or node.func.id.startswith("input_")
-            ):
-                raise CompileError(
-                    f"{fn.name}() uses obsolete group interface declaration {node.func.id}(); "
-                    "define inputs in parameters and outputs with return"
-                )
     body_stmts, aliases = collect_source_definition_aliases(fn.body, callable_environment.local_functions)
     if aliases:
         # Both static graph construction and runtime lowering resolve aliases to

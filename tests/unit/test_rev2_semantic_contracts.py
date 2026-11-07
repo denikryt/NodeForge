@@ -7,6 +7,7 @@ marker at the checkpoint which implements the corresponding contract.
 import pytest
 
 from NodeForge.compiler_identities import ModuleId
+from NodeForge.errors import CompileError
 from NodeForge.semantic.source_modules import (
     parse_source_module, resolve_source_module, resolve_source_call_graph,
 )
@@ -275,3 +276,37 @@ x = f()"""
     revised = original.replace("K = 9", "K = 7")
     assert _compiled_defaults(original) == {"f": 9}
     assert _compiled_defaults(revised) == {"f": 7}
+
+
+@pytest.mark.parametrize("body,expected", [
+    ("def broken(x):\n    return x", "requires an explicit type"),
+    ("def broken(x: Int = 2.5):\n    return x", "invalid default"),
+    ("def broken(x: Int):\n    x = x + 1", "final top-level return"),
+    ("def broken(x: Int):\n    return ()", "empty tuple"),
+    ("def broken(x: Int):\n    output('Value', x)\n    return x", "obsolete group interface"),
+    ("def broken(x: Int):\n    x = x + 1\n    panel([x], name='P')\n    return x", "precede executable statements"),
+    ("def broken(x: Int) -> Vector['Label']:\n    return x", "unlabelled runtime type"),
+])
+def test_pure_declaration_contract_rejects_invalid_source_without_backend(body, expected):
+    import ast
+    from NodeForge.semantic.source_definition_contract import validate_source_definition_contract
+    fn = ast.parse(body).body[0]
+    with pytest.raises(CompileError, match=expected) as caught:
+        validate_source_definition_contract(
+            fn, owner_scope="source", declaration_owner="source",
+            module_origin="some/module.nf",
+        )
+    assert "broken()" in str(caught.value)
+    assert "line" in str(caught.value)
+    assert "some/module.nf" in str(caught.value)
+
+
+def test_pure_contract_does_not_eagerly_check_runtime_body_operations():
+    import ast
+    from NodeForge.semantic.source_definition_contract import validate_source_definition_contract
+    fn = ast.parse("def f(x: Float = 1.0) -> Float:\n    return unknown_runtime_function(x)").body[0]
+    signature, result = validate_source_definition_contract(
+        fn, owner_scope="s", declaration_owner="d",
+    )
+    assert signature.logical_inputs[0].has_default
+    assert len(result.elements) == 1
