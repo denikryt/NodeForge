@@ -15,6 +15,7 @@ from typing import Mapping
 from ..compiler_identities import ModuleId, SourceDefinitionRef
 from ..errors import CompileError
 from .parsing import _parse_source_tree
+from .compile_time import CompileTimeSnapshot
 from .residualization import PreprocessedBody, _preprocess_compile_time, _repeat_range_state_names
 
 
@@ -184,10 +185,33 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
                 except ConstEvalUnavailable:
                     pass
             if isinstance(node.target, ast.Name) and isinstance(items, (tuple, list)):
+                # Static unrolling uses one evolving CT state, not an
+                # independent copy of the module state per iteration. The
+                # function-body lowerer likewise executes the iterations in
+                # order and publishes assignments made by earlier iterations.
+                iteration_values = dict(values)
+                loop_name = node.target.id
+                original_binding = iteration_values.get(loop_name)
+                had_original_binding = loop_name in iteration_values
                 for item in items:
-                    iteration_values = dict(values)
-                    iteration_values[node.target.id] = item
-                    visit_block(node.body, owner, environment, iteration_values, runtime_range_names)
+                    iteration_values[loop_name] = item
+                    iteration_values = dict(visit_block(
+                        node.body, owner, environment, iteration_values,
+                        runtime_range_names,
+                    ).values)
+                # The loop index is a lexical binding, not a replacement for
+                # a surrounding module constant. Other CT assignments are
+                # deliberately retained for the next statement after the loop.
+                if had_original_binding:
+                    iteration_values[loop_name] = original_binding
+                else:
+                    iteration_values.pop(loop_name, None)
+                if node.orelse:
+                    iteration_values = dict(visit_block(
+                        node.orelse, owner, environment, iteration_values,
+                        runtime_range_names,
+                    ).values)
+                return CompileTimeSnapshot(iteration_values)
             else:
                 body_values = dict(values)
                 for target in ast.walk(node.target):
@@ -215,7 +239,8 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
         against the preceding state and recurse through that selected branch;
         this is the same CT evaluator, not a second expression interpreter.
         """
-        values = initial_values
+        values = (initial_values if isinstance(initial_values, CompileTimeSnapshot)
+                  else CompileTimeSnapshot(initial_values))
         # Repeat-zone state assignments have to remain runtime values even
         # when their initializer is a compile-time literal. The residualizer
         # normally computes this over the whole block, not each statement.

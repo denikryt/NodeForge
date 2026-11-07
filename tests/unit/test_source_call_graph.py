@@ -452,3 +452,117 @@ def b(x: Float):
 ''')
     assert not graph.edges
     assert [ref.name for ref in graph.entries] == ['a', 'b']
+
+
+def test_static_loop_compile_time_writes_flow_between_iterations():
+    """A later unrolled iteration sees compile-time writes of its predecessor."""
+    source = '''FLAG = False
+
+def a(x: Float = 1):
+    for i in [0, 1]:
+        if FLAG:
+            x = b(x)
+        FLAG = True
+    return x
+
+def b(x: Float):
+    return x + 10
+'''
+    graph = _graph(source)
+    assert {(src.name, dst.name) for src, dst in graph.edges} == {('a', 'b')}
+    assert [entry.name for entry in graph.entries] == ['a']
+
+
+def test_static_loop_compile_time_writes_flow_to_following_statement():
+    """After a fully unrolled loop, later tests see its final CT state."""
+    graph = _graph('''FLAG = False
+
+def a():
+    for i in [0, 1]:
+        FLAG = True
+    if FLAG:
+        b()
+    return 1
+
+def b():
+    return 2
+''')
+    assert {(src.name, dst.name) for src, dst in graph.edges} == {('a', 'b')}
+    assert [entry.name for entry in graph.entries] == ['a']
+
+
+def test_static_loop_compile_time_false_state_does_not_add_spurious_edge():
+    """An overwritten condition must not leave a phantom call or false cycle."""
+    graph = _graph('''FLAG = True
+
+def a():
+    for i in [0, 1]:
+        FLAG = False
+        if FLAG:
+            b()
+    return 1
+
+def b():
+    return a()
+''')
+    assert {(src.name, dst.name) for src, dst in graph.edges} == {('b', 'a')}
+    assert [entry.name for entry in graph.entries] == ['b']
+
+
+def test_static_loop_compile_time_later_iteration_detects_real_cycle():
+    """The second iteration's reachable call participates in cycle detection."""
+    source = '''FLAG = False
+
+def a():
+    for i in [0, 1]:
+        if FLAG:
+            b()
+        FLAG = True
+    return 1
+
+def b():
+    return a()
+'''
+    with pytest.raises(CompileError, match='Recursive module definitions'):
+        _graph(source)
+
+
+def test_static_loop_target_restores_outer_compile_time_binding_after_loop():
+    """The lexical loop target must not overwrite a module-level constant."""
+    graph = _graph('''i = 100
+
+def a():
+    for i in [0, 1]:
+        if i == 1:
+            b()
+    if i == 100:
+        c()
+    return 1
+
+def b():
+    return 2
+
+def c():
+    return 3
+''')
+    assert {(src.name, dst.name) for src, dst in graph.edges} == {('a', 'b'), ('a', 'c')}
+    assert [entry.name for entry in graph.entries] == ['a']
+
+
+def test_nested_static_loops_carry_state_across_outer_iterations():
+    """Effects in an inner unrolled loop reach the next outer iteration."""
+    graph = _graph('''FLAG = False
+
+def a():
+    for outer in [0, 1]:
+        for inner in [0, 1]:
+            if FLAG:
+                b()
+            FLAG = True
+    return 1
+
+def b():
+    return 2
+''')
+    assert {(src.name, dst.name) for src, dst in graph.edges} == {('a', 'b')}
+    assert [entry.name for entry in graph.entries] == ['a']

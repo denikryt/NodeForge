@@ -653,3 +653,9 @@ lifecycle.
 - Respect lexical loop-index bindings over same-named module compile-time constants during call-graph analysis and Repeat Zone lowering.
 - Analyze retained compile-time loops with their actual iteration values, matching physical unrolling and restoring the enclosing binding after the loop.
 - Add semantic and Blender execution regressions for runtime and compile-time loop shadowing, including nested loops and source-owner independent entry selection.
+
+## 0.88.3
+
+- Carry compile-time assignments from one statically unrolled loop iteration to the next when resolving intra-module function call edges and definition-only entries.
+- Preserve the loop index's lexical binding and pass the final compile-time state to following statements, matching function-body lowering.
+- Add positive and negative semantic/Blender regressions for cross-iteration calls, nested static loops, recursion, unreachable callees, and numerical evaluation.

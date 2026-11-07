@@ -112,7 +112,10 @@ compile-time constants from the containing module. Module constants remain
 available to function bodies when no local binding shadows them. A runtime
 loop index is an Int value inside its loop, and the enclosing binding is
 restored after that loop. A compile-time `for` instead binds each known
-iteration value while its body is compiled.
+iteration value while its body is compiled. Compile-time assignments made by
+earlier static iterations are visible to later iterations and subsequent
+statements, while the loop index itself retains its lexical scope. This is
+also used when resolving call-graph dependencies and definition-only entries.
 
 ## Identity, sharing and updates
 

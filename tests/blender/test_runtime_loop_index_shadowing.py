@@ -99,3 +99,48 @@ result = a()
     nested = [node for node in call.node_tree.nodes if node.bl_idname == 'GeometryNodeGroup']
     assert len(nested) == 1
     assert nested[0].node_tree.get('nodeforge_module_name') == 'b'
+
+
+def test_static_loop_cross_iteration_state_places_only_reachable_entry():
+    """The second unrolled iteration materializes b, never an extra root b."""
+    source = '''FLAG = False
+
+def a(x: Float = 1):
+    for i in [0, 1]:
+        if FLAG:
+            x = b(x)
+        FLAG = True
+    return x
+
+def b(x: Float):
+    return x + 10
+'''
+    base = bpy.data.node_groups.new('NF-static-loop-CT-state', 'GeometryNodeTree')
+    compiler.compose_source_initial(source, base, module_context='test:static-loop-ct')
+    calls = [node for node in base.nodes if node.bl_idname == 'GeometryNodeGroup']
+    assert [node.node_tree.get('nodeforge_module_name') for node in calls] == ['a']
+    nested = [node for node in calls[0].node_tree.nodes if node.bl_idname == 'GeometryNodeGroup']
+    assert [node.node_tree.get('nodeforge_module_name') for node in nested] == ['b']
+    assert round(_evaluate_float_output(base, calls[0].outputs[0]), 5) == 11.0
+
+
+def test_static_loop_false_state_does_not_materialize_unreachable_callee():
+    """Pruned static calls do not become dependencies or nested Group Nodes."""
+    source = '''FLAG = True
+
+def a(x: Float = 1):
+    for i in [0, 1]:
+        FLAG = False
+        if FLAG:
+            x = b(x)
+    return x
+
+def b(x: Float):
+    return x + 10
+'''
+    base = bpy.data.node_groups.new('NF-static-loop-CT-false', 'GeometryNodeTree')
+    compiler.compose_source_initial(source, base, module_context='test:static-loop-ct-false')
+    calls = [node for node in base.nodes if node.bl_idname == 'GeometryNodeGroup']
+    assert [node.node_tree.get('nodeforge_module_name') for node in calls] == ['a', 'b']
+    assert not [node for node in calls[0].node_tree.nodes if node.bl_idname == 'GeometryNodeGroup']
+    assert round(_evaluate_float_output(base, calls[0].outputs[0]), 5) == 1.0
