@@ -1302,52 +1302,85 @@ def _refresh_startup_browser_items():
     return None  # One-shot timer; every activation schedules a fresh refresh.
 
 
+# A process-local ledger covers only registrations made by this UI module;
+# Blender datablocks are never add-on lifecycle ownership records.
+_REGISTERED_CLASSES: list[type] = []
+_SCENE_PROP_REGISTERED = False
+_ADD_MENU_REGISTERED = False
+_RUNTIME_LOAD_REGISTERED = False
+_EDITOR_REGISTRATION_ATTEMPTED = False
+_UI_ENABLED = False
+
+
 def register():
-    """Register UI and install included ordinary Packages on activation."""
-    generated_resources.cleanup_restart_orphans_deferred()
-    from .blender.mesh_compute_runtime import register_runtime_load_handler
-    register_runtime_load_handler()
-    for cls in classes:
-        bpy.utils.register_class(cls)
-    bpy.types.Scene.gn_script_mvp = PointerProperty(type=GNSCRIPT_MVP_Properties)
-    bpy.types.NODE_MT_add.append(menu_func)
-    global _PACKAGE_BOOTSTRAP_ERRORS
+    """Install NodeForge UI once, undoing successful partial steps on failure."""
+    global _PACKAGE_BOOTSTRAP_ERRORS, _SCENE_PROP_REGISTERED
+    global _ADD_MENU_REGISTERED, _RUNTIME_LOAD_REGISTERED
+    global _EDITOR_REGISTRATION_ATTEMPTED, _UI_ENABLED
+    if _UI_ENABLED:
+        return
     try:
-        _PACKAGE_BOOTSTRAP_ERRORS = packages.install_included_packages(Path(__file__).resolve().parent)
-    except Exception as exc:
-        _PACKAGE_BOOTSTRAP_ERRORS = (str(exc),)
-    for message in _PACKAGE_BOOTSTRAP_ERRORS:
-        print(f"NodeForge package initialization: {message}")
-    # Blender restricts bpy.data while add-ons register. Populate the Scene
-    # collections on the next event-loop tick instead of touching bpy.data here.
-    if not bpy.app.timers.is_registered(_refresh_startup_browser_items):
-        bpy.app.timers.register(_refresh_startup_browser_items, first_interval=0.0)
-    from .editor import blender_ui
-    blender_ui.register()
+        generated_resources.cleanup_restart_orphans_deferred()
+        from .blender.mesh_compute_runtime import register_runtime_load_handler
+        register_runtime_load_handler()
+        _RUNTIME_LOAD_REGISTERED = True
+        for cls in classes:
+            bpy.utils.register_class(cls)
+            _REGISTERED_CLASSES.append(cls)
+        bpy.types.Scene.gn_script_mvp = PointerProperty(type=GNSCRIPT_MVP_Properties)
+        _SCENE_PROP_REGISTERED = True
+        bpy.types.NODE_MT_add.append(menu_func)
+        _ADD_MENU_REGISTERED = True
+        try:
+            _PACKAGE_BOOTSTRAP_ERRORS = packages.install_included_packages(Path(__file__).resolve().parent)
+        except Exception as exc:
+            _PACKAGE_BOOTSTRAP_ERRORS = (str(exc),)
+        for message in _PACKAGE_BOOTSTRAP_ERRORS:
+            print(f"NodeForge package initialization: {message}")
+        # Browser data is unavailable in some Blender registration contexts.
+        if not bpy.app.timers.is_registered(_refresh_startup_browser_items):
+            bpy.app.timers.register(_refresh_startup_browser_items, first_interval=0.0)
+        from .editor import blender_ui
+        _EDITOR_REGISTRATION_ATTEMPTED = True
+        blender_ui.register()
+        _UI_ENABLED = True
+    except BaseException:
+        unregister()
+        raise
+
 
 def unregister():
-    """Unregister NodeForge UI and operators without mutating generated node-group data."""
+    """Release only our UI registration state; preserve generated datablocks."""
+    global _SCENE_PROP_REGISTERED, _ADD_MENU_REGISTERED
+    global _RUNTIME_LOAD_REGISTERED, _EDITOR_REGISTRATION_ATTEMPTED, _UI_ENABLED
+    if not (_UI_ENABLED or _REGISTERED_CLASSES or _SCENE_PROP_REGISTERED
+            or _ADD_MENU_REGISTERED or _RUNTIME_LOAD_REGISTERED
+            or _EDITOR_REGISTRATION_ATTEMPTED):
+        return
+    _UI_ENABLED = False
     if bpy.app.timers.is_registered(_refresh_startup_browser_items):
         bpy.app.timers.unregister(_refresh_startup_browser_items)
-    from .blender.mesh_compute_runtime import (
-        shutdown_runtime_bindings, unregister_runtime_load_handler,
-    )
-    shutdown_runtime_bindings()
-    unregister_runtime_load_handler()
-    try:
+    if _EDITOR_REGISTRATION_ATTEMPTED:
+        from .editor import blender_ui
+        blender_ui.unregister()
+        _EDITOR_REGISTRATION_ATTEMPTED = False
+    if _ADD_MENU_REGISTERED:
         bpy.types.NODE_MT_add.remove(menu_func)
-    except Exception:
-        pass
-    if hasattr(bpy.types.Scene, "gn_script_mvp"):
+        _ADD_MENU_REGISTERED = False
+    if _SCENE_PROP_REGISTERED:
         del bpy.types.Scene.gn_script_mvp
-    from .editor import blender_ui
-    blender_ui.unregister()
-    for cls in reversed(classes):
-        try:
-            bpy.utils.unregister_class(cls)
-        except RuntimeError as exc:
-            if "missing bl_rna attribute" not in str(exc):
-                raise
+        _SCENE_PROP_REGISTERED = False
+    while _REGISTERED_CLASSES:
+        cls = _REGISTERED_CLASSES[-1]
+        bpy.utils.unregister_class(cls)
+        _REGISTERED_CLASSES.pop()
+    if _RUNTIME_LOAD_REGISTERED:
+        from .blender.mesh_compute_runtime import (
+            shutdown_runtime_bindings, unregister_runtime_load_handler,
+        )
+        shutdown_runtime_bindings()
+        unregister_runtime_load_handler()
+        _RUNTIME_LOAD_REGISTERED = False
 
 if __name__ == "__main__":
     register()
