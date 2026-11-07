@@ -15,7 +15,7 @@ from typing import Mapping
 from ..compiler_identities import ModuleId, SourceDefinitionRef
 from ..errors import CompileError
 from .parsing import _parse_source_tree
-from .residualization import PreprocessedBody, _preprocess_compile_time
+from .residualization import PreprocessedBody, _preprocess_compile_time, _repeat_range_state_names
 
 
 @dataclass(frozen=True)
@@ -143,20 +143,33 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
     )
     edges = set()
 
-    def visit(node, owner, environment, values):
-        """Walk only reachable runtime AST and resolve each local callee."""
+    def visit(node, owner, environment, values, runtime_range_names):
+        """Record resolved calls in reachable expression/statement subtrees."""
+        if isinstance(node, ast.FunctionDef):
+            return None
         if isinstance(node, ast.If):
+            visit(node.test, owner, environment, values, runtime_range_names)
             try:
                 branch = _const_eval(node.test, values)
             except (ConstEvalUnavailable, CompileError):
                 branch = None
             if type(branch) is bool:
-                selected = node.body if branch else node.orelse
-                for child in selected:
-                    visit(child, owner, environment, values)
-                return
-        if isinstance(node, ast.FunctionDef):
-            return
+                # A known branch executes with a sequential CT state; its writes
+                # remain visible to later statements of the same lexical block.
+                return visit_block(
+                    node.body if branch else node.orelse,
+                    owner, environment, values, runtime_range_names,
+                )
+            # Runtime conditions may take either branch. Their effects do not
+            # become unconditional compile-time facts after this statement.
+            visit_block(node.body, owner, environment, values, runtime_range_names)
+            visit_block(node.orelse, owner, environment, values, runtime_range_names)
+            return None
+        if isinstance(node, ast.For):
+            visit(node.iter, owner, environment, values, runtime_range_names)
+            visit_block(node.body, owner, environment, values, runtime_range_names)
+            visit_block(node.orelse, owner, environment, values, runtime_range_names)
+            return None
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             target = resolve_simple_callable(node.func.id, environment)
             if target is not UNRESOLVED and target.kind is CallableKind.LOCAL_FUNCTION:
@@ -164,7 +177,38 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
                     raise CompileError("Internal error: graph callable lost its canonical source identity")
                 edges.add((owner, target.target))
         for child in ast.iter_child_nodes(node):
-            visit(child, owner, environment, values)
+            visit(child, owner, environment, values, runtime_range_names)
+        return None
+
+    def visit_block(statements, owner, environment, initial_values, runtime_range_names):
+        """Visit statements in order using the established CT residualizer.
+
+        Residualization of an entire block conservatively invalidates writes
+        inside a retained ``if``. A selected compile-time branch, however,
+        publishes its writes to subsequent statements. Process each statement
+        against the preceding state and recurse through that selected branch;
+        this is the same CT evaluator, not a second expression interpreter.
+        """
+        values = initial_values
+        # Repeat-zone state assignments have to remain runtime values even
+        # when their initializer is a compile-time literal. The residualizer
+        # normally computes this over the whole block, not each statement.
+        preserve_names = _repeat_range_state_names(
+            statements, runtime_range_names=runtime_range_names,
+        )
+        for statement in statements:
+            residual = _preprocess_compile_time(
+                (statement,), initial_compile_time=values,
+                runtime_range_names=runtime_range_names,
+                preserve_names=preserve_names,
+            )
+            branch_exit = None
+            for retained, before in zip(residual.statements, residual.compile_time_before):
+                branch_exit = visit(
+                    retained, owner, environment, before.values, runtime_range_names,
+                )
+            values = branch_exit if branch_exit is not None else residual.final_compile_time
+        return values
 
     for name, fn in snapshot.definitions.items():
         body, aliases = collect_source_definition_aliases(fn.body, definitions)
@@ -175,14 +219,11 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
             local_refs[alias] = snapshot.definition_ref(canonical)
         env = CallableEnvironment(base.callable_builtins, local_functions, {},
                                   local_definition_refs=local_refs)
-        residual = _preprocess_compile_time(
-            body,
-            initial_compile_time=resolved.preprocessed.final_compile_time,
-            shadowed_names=(arg.arg for arg in fn.args.args),
-        )
-        owner = snapshot.definition_ref(name)
-        for statement, before in zip(residual.statements, residual.compile_time_before):
-            visit(statement, owner, env, before.values)
+        initial = dict(resolved.preprocessed.final_compile_time.values)
+        runtime_range_names = tuple(arg.arg for arg in fn.args.args)
+        for parameter in runtime_range_names:
+            initial.pop(parameter, None)
+        visit_block(body, snapshot.definition_ref(name), env, initial, runtime_range_names)
     ordered_edges = tuple(sorted(edges, key=lambda pair: (pair[0].name, pair[1].name)))
     vertices = tuple(snapshot.definition_ref(name) for name in snapshot.definitions)
     graph = SourceCallGraph(vertices, ordered_edges)

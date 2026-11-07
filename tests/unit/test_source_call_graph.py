@@ -191,3 +191,138 @@ def b():
     assert not first.edges
     assert {(u.name, v.name) for u, v in second.edges} == {('a', 'b')}
     assert not first.edges  # resolved snapshots do not read live source again
+
+
+def test_nested_compile_time_assignments_select_the_reachable_entry():
+    """A constant set inside a known branch is visible to its nested if."""
+    source = '''FLAG = False
+
+def a():
+    if True:
+        FLAG = True
+        if FLAG:
+            value = b()
+    return 1
+
+def b():
+    return 2
+'''
+    graph = _graph(source)
+    assert {(src.name, dst.name) for src, dst in graph.edges} == {('a', 'b')}
+    assert [entry.name for entry in graph.entries] == ['a']
+
+
+def test_nested_compile_time_false_branch_does_not_create_a_false_cycle():
+    """Source-order updates to a selected nested branch prune a dead call."""
+    source = '''FLAG = True
+
+def a():
+    if True:
+        FLAG = False
+        if FLAG:
+            b()
+    return 1
+
+def b():
+    return a()
+'''
+    graph = _graph(source)
+    assert {(src.name, dst.name) for src, dst in graph.edges} == {('b', 'a')}
+    assert [entry.name for entry in graph.entries] == ['b']
+
+
+def test_nested_compile_time_reachability_reports_real_recursion():
+    """Do not lose a genuinely reachable edge in a mutually recursive pair."""
+    source = '''FLAG = False
+
+def a():
+    if True:
+        FLAG = True
+        if FLAG:
+            b()
+    return 1
+
+def b():
+    return a()
+'''
+    with pytest.raises(CompileError, match='Recursive module definitions'):
+        _graph(source)
+
+
+def test_selected_branch_assignments_reach_following_sibling_statements():
+    """A known branch's updated constant survives beyond the if statement."""
+    source = '''FLAG = True
+
+def a():
+    if True:
+        FLAG = False
+    if FLAG:
+        b()
+    return 1
+
+def b():
+    return 2
+'''
+    graph = _graph(source)
+    assert not graph.edges
+    assert [entry.name for entry in graph.entries] == ['a', 'b']
+
+
+def test_runtime_branch_still_retains_both_possible_calls():
+    """A runtime Bool cannot erase one of two potentially reachable callees."""
+    source = '''FLAG = False
+
+def a(flag: Bool):
+    if flag:
+        FLAG = True
+        if FLAG:
+            b()
+    else:
+        c()
+    return 1
+
+def b():
+    return 2
+
+def c():
+    return 3
+'''
+    graph = _graph(source)
+    assert {(src.name, dst.name) for src, dst in graph.edges} == {('a', 'b'), ('a', 'c')}
+    assert [entry.name for entry in graph.entries] == ['a']
+
+
+def test_repeat_zone_state_does_not_become_a_false_compile_time_constant():
+    """Runtime loop state stays dynamic when the graph scans individual statements."""
+    source = '''def a(count: Int):
+    x = 1
+    for i in repeat_range(count):
+        x = x + 1
+        if x == 2:
+            b()
+    return 1
+
+def b():
+    return 2
+'''
+    graph = _graph(source)
+    assert {(src.name, dst.name) for src, dst in graph.edges} == {('a', 'b')}
+    assert [entry.name for entry in graph.entries] == ['a']
+
+
+def test_runtime_branch_writes_cannot_be_treated_as_unconditional_constants():
+    """After a runtime if, a possibly changed flag keeps dependent calls reachable."""
+    source = '''FLAG = False
+
+def a(cond: Bool):
+    if cond:
+        FLAG = True
+    if FLAG:
+        b()
+    return 1
+
+def b():
+    return 2
+'''
+    graph = _graph(source)
+    assert {(src.name, dst.name) for src, dst in graph.edges} == {('a', 'b')}

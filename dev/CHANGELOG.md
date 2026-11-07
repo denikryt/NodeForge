@@ -641,3 +641,9 @@ lifecycle.
 - Unified module compile-time state for reachability, repaired selected `MODULE_DEF` Reload identity and rollback, and retired public legacy generated-root compilation.
 - Migrated source/catalog and Blender regression fixtures to the unified DSL; Local/Examples Add now resolves exact function definitions and reuses the selected environment.
 - Retained the separate unresolved root-only Mesh Compute migration and existing Blender addon lifecycle baseline failure.
+
+## 0.88.1
+
+- Include effective typed function IR in reusable-group freshness fingerprints so changes to used module constants update existing groups in place without rebuilding for unrelated source edits.
+- Track source-ordered compile-time state through nested conditionals in function call-graph analysis, aligning entry placement and recursion detection with reachable function bodies.
+- Add focused Python and Blender regressions for constant-only reload, shared-group reuse, nested reachability and runtime loop-state preservation.

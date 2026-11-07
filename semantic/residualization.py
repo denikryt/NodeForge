@@ -376,7 +376,7 @@ def _repeat_range_state_names(stmts, *, runtime_range_names=()):
     return preserve
 
 
-def _preprocess_compile_time(stmts, *, initial_compile_time=None, shadowed_names=(), runtime_range_names=()):
+def _preprocess_compile_time(stmts, *, initial_compile_time=None, shadowed_names=(), runtime_range_names=(), preserve_names=()):
     """Residualize against inherited constants, recording each statement's CT state.
 
     Parameter bindings shadow module constants before any body preprocessing.
@@ -391,7 +391,7 @@ def _preprocess_compile_time(stmts, *, initial_compile_time=None, shadowed_names
         state.discard(name)
     initial = state.snapshot()
     recorder = _PreprocessRecorder()
-    preserve = _repeat_range_state_names(stmts, runtime_range_names=runtime_range_names)
+    preserve = _repeat_range_state_names(stmts, runtime_range_names=runtime_range_names) | set(preserve_names)
     per_statement = []
     for stmt in stmts:
         before = state.snapshot()

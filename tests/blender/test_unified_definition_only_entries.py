@@ -113,3 +113,45 @@ v = a(1)
     groups = _group_nodes(group)
     assert len(groups) == 1
     assert groups[0].node_tree.get('nodeforge_module_name') == 'a'
+
+
+def test_nested_compile_time_branch_places_only_reachable_entry():
+    """Nested CT writes must produce the same edges as actual group materialization."""
+    tree = bpy.data.node_groups.new('NFTest_nested_ct_true_entry', 'GeometryNodeTree')
+    compiler.compose_source_initial('''FLAG = False
+
+def a():
+    if True:
+        FLAG = True
+        if FLAG:
+            value = b()
+    return 1
+
+def b():
+    return 2
+''', tree)
+    entries = _group_nodes(tree)
+    assert [node.node_tree.get('nodeforge_module_name') for node in entries] == ['a']
+    children = _group_nodes(entries[0].node_tree)
+    assert [node.node_tree.get('nodeforge_module_name') for node in children] == ['b']
+
+
+def test_nested_compile_time_dead_call_does_not_hide_independent_entry():
+    """Nested CT reassignment prunes a dead call in both graph and Blender body."""
+    tree = bpy.data.node_groups.new('NFTest_nested_ct_false_entry', 'GeometryNodeTree')
+    compiler.compose_source_initial('''FLAG = True
+
+def a():
+    if True:
+        FLAG = False
+        if FLAG:
+            value = b()
+    return 1
+
+def b():
+    return 2
+''', tree)
+    entries = _group_nodes(tree)
+    assert {node.node_tree.get('nodeforge_module_name') for node in entries} == {'a', 'b'}
+    a = next(node for node in entries if node.node_tree.get('nodeforge_module_name') == 'a')
+    assert _group_nodes(a.node_tree) == []
