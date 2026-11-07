@@ -310,3 +310,68 @@ def test_pure_contract_does_not_eagerly_check_runtime_body_operations():
     )
     assert signature.logical_inputs[0].has_default
     assert len(result.elements) == 1
+
+
+def test_unused_invalid_default_fails_before_any_function_preparation():
+    from NodeForge.compiler_identities import GroupCompilationIdentity
+    from NodeForge.resolved_environment import ResolvedCatalog, ResolvedEnvironment
+    from NodeForge.semantic.group import analyze_group_source
+    from NodeForge.semantic.source_callable_session import SourceCallableSession
+    env = ResolvedEnvironment({
+        name: ResolvedCatalog(name, {}) for name in ("functions", "examples", "local")
+    })
+    session = SourceCallableSession(resolved_environment=env)
+    source = """def ok() -> Int:
+    return 1
+def unused(value: Int = 1.5) -> Int:
+    return value
+x = ok()"""
+    with pytest.raises(CompileError, match="unused.*invalid default"):
+        analyze_group_source(
+            source,
+            compilation_identity=GroupCompilationIdentity(
+                None, "ROOT/invalid", "ROOT/invalid", "ROOT/invalid",
+            ),
+            resolved_environment=env, source_callable_session=session,
+        )
+    assert not session.prepared
+
+
+def test_valid_unused_definition_does_not_prepare_runtime_or_extensions():
+    from NodeForge.compiler_identities import GroupCompilationIdentity
+    from NodeForge.resolved_environment import ResolvedCatalog, ResolvedEnvironment
+    from NodeForge.semantic.group import analyze_group_source
+    from NodeForge.semantic.source_callable_session import SourceCallableSession
+    env = ResolvedEnvironment({
+        name: ResolvedCatalog(name, {}) for name in ("functions", "examples", "local")
+    })
+    session = SourceCallableSession(resolved_environment=env)
+    source = """def ok() -> Int:
+    return 1
+def unused(value: Float) -> Float:
+    return no_such_extension(value)
+x = ok()"""
+    analyze_group_source(
+        source,
+        compilation_identity=GroupCompilationIdentity(
+            None, "ROOT/lazy", "ROOT/lazy", "ROOT/lazy",
+        ),
+        resolved_environment=env, source_callable_session=session,
+    )
+    assert {item.contract.function_id.name for item in session.prepared.values()} == {"ok"}
+
+
+def test_imported_module_preflight_validates_unselected_definition():
+    from NodeForge.resolved_environment import ResolvedCatalog, ResolvedEnvironment
+    from NodeForge.semantic.source_callable_session import SourceCallableSession
+    env = ResolvedEnvironment({
+        name: ResolvedCatalog(name, {}) for name in ("functions", "examples", "local")
+    })
+    snapshot = parse_source_module(
+        "def good() -> Int:\n    return 1\ndef bad(x: Int = 1.5) -> Int:\n    return x",
+        ModuleId("LOCAL", "/module/selected.nf"),
+    )
+    session = SourceCallableSession(resolved_environment=env)
+    with pytest.raises(CompileError, match="bad.*invalid default"):
+        session.preflight_module_contracts(snapshot)
+    assert not session.prepared

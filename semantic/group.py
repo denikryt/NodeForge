@@ -165,6 +165,7 @@ def _validate_import_bindings(
             else:
                 capture_session = source_callable_session
             snapshot = capture_session.capture_source_module(record)
+            capture_session.preflight_module_contracts(snapshot)
             if source_member is None:
                 binding = SourceModuleNamespaceBinding(exposed_name, record, snapshot, namespace=base_namespace)
                 if exposed_name in imported or exposed_name in directories or exposed_name in local_bindings or exposed_name in local_function_defs or exposed_name in reserved_names:
@@ -582,12 +583,21 @@ def analyze_group_source(
                         f"in direct composition at line {node.lineno}"
                     )
 
-    source_call_graph = resolve_source_call_graph(resolved_source_module)
     preprocessed = resolved_source_module.preprocessed
     if source_callable_session is not None:
-        source_callable_session.remember_module_final_compile_time(
+        source_callable_session.preflight_module_contracts(
             source_module, preprocessed.final_compile_time.values,
         )
+    else:
+        from .source_definition_contract import validate_source_definition_contract
+        for name, fn in source_module.definitions.items():
+            owner = source_module.definition_ref(name).stable_key()
+            validate_source_definition_contract(
+                fn, owner_scope=owner, declaration_owner=owner,
+                compile_time_values=preprocessed.final_compile_time.values,
+                module_origin=source_module.module_id.origin,
+            )
+    source_call_graph = resolve_source_call_graph(resolved_source_module)
     stmts = list(preprocessed.statements)
     # Root statements have no implicit inputs or outputs. Only typed def
     # signatures and final return values create physical function interfaces.

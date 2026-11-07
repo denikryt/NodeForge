@@ -20,6 +20,7 @@ class SourceCallableSession:
         self.module_snapshots = {}
         self.module_environments = {}
         self.module_final_compile_time = {}
+        self.validated_module_contracts = set()
         self.prepared: dict[SourceCallablePreparationKey, PreparedSourceCallable] = {}
         self._active_stack: list[FunctionId] = []
 
@@ -100,6 +101,7 @@ class SourceCallableSession:
         stored = self.module_snapshots.setdefault(snapshot.module_id, snapshot)
         if stored is not snapshot:
             raise CompileError("Conflicting source revisions for one imported module")
+        self.preflight_module_contracts(snapshot)
         result = self.module_environments.get(snapshot.module_id)
         if result is None:
             result = resolve_module_callable_environment(snapshot, self.resolved_environment, self)
@@ -123,6 +125,30 @@ class SourceCallableSession:
             existing = MappingProxyType(detached_compile_time_mapping(values))
             self.module_final_compile_time[snapshot.module_id] = existing
         return existing
+
+    def preflight_module_contracts(self, snapshot, final_values=None):
+        """Validate every selected declaration once, before physical publication.
+
+        Only source-level signature/shape restrictions are eager. Runtime body
+        expression typing and extension execution remain demand-driven.
+        """
+        if final_values is None:
+            from .source_modules import resolve_source_module
+            final_values = resolve_source_module(snapshot).preprocessed.final_compile_time.values
+        values = self.remember_module_final_compile_time(snapshot, final_values)
+        if snapshot.module_id in self.validated_module_contracts:
+            return values
+        from .source_definition_contract import validate_source_definition_contract
+        for name, fn in snapshot.definitions.items():
+            definition_owner = snapshot.definition_ref(name).stable_key()
+            validate_source_definition_contract(
+                fn, owner_scope=definition_owner,
+                declaration_owner=definition_owner,
+                compile_time_values=values,
+                module_origin=snapshot.module_id.origin,
+            )
+        self.validated_module_contracts.add(snapshot.module_id)
+        return values
 
     def defining_module_compile_time(self, snapshot):
         """Resolve only the authoritative final CT context for one module."""
