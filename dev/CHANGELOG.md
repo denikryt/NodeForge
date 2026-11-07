@@ -673,3 +673,9 @@ lifecycle.
 
 - Resolve function-local source aliases using lexical ownership: copying a numeric parameter or ordinary local cannot silently become a reference to an identically named module function.
 - Keep validated source-function aliases and forward definitions working; reject calls to copied non-callable locals before Blender publication. Add physical value/rollback and call-graph regression coverage.
+
+
+## 0.89.2
+
+- Replace the source-module call-graph's bespoke recursion DFS with standard-library `graphlib.TopologicalSorter` cycle detection while preserving source-level caller-to-callee diagnostics and definition-only entry selection.
+- Add a directed three-function recursion regression to guard the displayed call-chain orientation.

@@ -83,6 +83,19 @@ def test_recursion_is_rejected_from_resolved_edges(source, cycle):
     assert cycle in str(raised.value)
 
 
+def test_recursion_diagnostic_follows_caller_to_callee_direction():
+    """A directed three-definition cycle must read in source-call order."""
+    source = '''def A():
+    return C()
+def B():
+    return A()
+def C():
+    return B()'''
+    with pytest.raises(CompileError, match='Recursive module definitions') as raised:
+        _graph(source)
+    assert 'A -> C -> B -> A' in str(raised.value)
+
+
 def test_duplicate_alias_rejected_before_lowering():
     """Two declarations may not claim the same function-alias binding."""
     with pytest.raises(CompileError, match='Duplicate function alias'):

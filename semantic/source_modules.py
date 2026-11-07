@@ -8,6 +8,7 @@ compile-time residualization and physical Blender publication.
 from __future__ import annotations
 
 import ast
+from graphlib import CycleError, TopologicalSorter
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
@@ -447,27 +448,20 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
     ordered_edges = tuple(sorted(edges, key=lambda pair: (pair[0].name, pair[1].name)))
     vertices = tuple(snapshot.definition_ref(name) for name in snapshot.definitions)
     graph = SourceCallGraph(vertices, ordered_edges)
-    adj = {node: [] for node in vertices}
-    for src, dst in ordered_edges:
-        adj[src].append(dst)
-    active = set()
-    finished = set()
-
-    def walk(node, chain):
-        """Reject both direct and mutual recursion with the resolved chain."""
-        if node in active:
-            cycle = chain[chain.index(node):]
-            raise CompileError("Recursive module definitions: " + " -> ".join(x.name for x in cycle))
-        if node in finished:
-            return
-        active.add(node)
-        for child in adj[node]:
-            walk(child, chain + [child])
-        active.remove(node)
-        finished.add(node)
-
+    # This sorter only validates cycles; graph entry selection uses the original edges.
+    sorter = TopologicalSorter()
     for vertex in vertices:
-        walk(vertex, [vertex])
+        sorter.add(vertex)
+    for caller, callee in ordered_edges:
+        sorter.add(caller, callee)
+    try:
+        sorter.prepare()
+    except CycleError as exc:
+        # graphlib tracks predecessor edges; reverse to display caller -> callee.
+        cycle = reversed(exc.args[1])
+        raise CompileError(
+            "Recursive module definitions: " + " -> ".join(item.name for item in cycle)
+        ) from exc
     return graph
 
 
