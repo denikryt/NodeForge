@@ -19,6 +19,7 @@ from .source_definition_contract import validate_source_definition_contract
 from .ir import IRBody
 from .parsing import normalized_statements
 from .source_modules import collect_source_definition_aliases
+from .source_bindings import collect_function_lexical_inventory
 from .residualization import _preprocess_compile_time
 from .runtime_bindings import RuntimeBindingSymbol
 from .body import lower_basic_body
@@ -55,7 +56,13 @@ def compile_function_definition(
         declaration_owner=compilation_identity.declaration_owner,
         compile_time_values=values,
     )
-    body_stmts, aliases = collect_source_definition_aliases(fn.body, callable_environment.local_functions)
+    inventory = collect_function_lexical_inventory(
+        fn, callable_environment.local_definition_refs,
+    )
+    body_stmts, aliases = collect_source_definition_aliases(
+        fn.body, callable_environment.local_functions,
+        require_local_assignment_order=True,
+    )
     if aliases:
         # Both static graph construction and runtime lowering resolve aliases to
         # their original AST declaration, never to another inferred function.
@@ -73,7 +80,7 @@ def compile_function_definition(
     preprocessed = _preprocess_compile_time(
         body_stmts,
         initial_compile_time=values,
-        shadowed_names=(arg.arg for arg in fn.args.args),
+        shadowed_names=inventory.owned_names,
         runtime_range_names=(arg.arg for arg in fn.args.args),
     )
     if not preprocessed.statements or preprocessed.statements[-1] is not fn.body[-1]:
@@ -87,10 +94,14 @@ def compile_function_definition(
     # neither adds implicit geometry I/O nor inherits external runtime sockets.
     reserved = {
         name: "local function" for name in callable_environment.local_functions
+        if name not in inventory.owned_names
     }
-    reserved.update({name: "imported function" for name in callable_environment.imported_functions})
-    reserved.update({name: "imported package" for name in callable_environment.package_namespaces})
-    reserved.update({name: "local directory" for name in callable_environment.local_namespaces})
+    reserved.update({name: "imported function" for name in callable_environment.imported_functions
+                     if name not in inventory.owned_names})
+    reserved.update({name: "imported package" for name in callable_environment.package_namespaces
+                     if name not in inventory.owned_names})
+    reserved.update({name: "local directory" for name in callable_environment.local_namespaces
+                     if name not in inventory.owned_names})
     dependencies: dict[tuple[str, ...], str] = {}
     body = lower_basic_body(
         list(preprocessed.statements),
@@ -111,6 +122,11 @@ def compile_function_definition(
         terminal_return_shape=shape,
         geometry_mode=False,
         runtime_role=RuntimeRole.NESTED,
+        lexical_owned_names=inventory.owned_names,
+        lexical_callable_aliases=frozenset(
+            name for name in inventory.source_aliases
+            if name not in inventory.parameters
+        ),
     )
     outputs = tuple(
         GroupOutputContract(index, name, typ)

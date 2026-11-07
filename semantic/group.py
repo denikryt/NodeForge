@@ -345,12 +345,16 @@ def _registered_name_labels(local_function_defs, imported_library_functions, pac
     return labels
 
 
-def _check_registered_binding(name, labels, *, context="assign", allow_existing_shadow=False):
+def _check_registered_binding(name, labels, *, context="assign", allow_existing_shadow=False, in_local_function=False):
     """Reject source bindings that collide with non-shadowable registered names."""
     label = labels.get(name)
     if label is None:
         return
     if allow_existing_shadow and allows_existing_top_level_shadow(label):
+        return
+    if in_local_function and label in {"local function", "imported function", "imported package"}:
+        # A function body owns its parameters and ordinary local targets;
+        # module function/import bindings remain available to other scopes.
         return
     if context == "parameter":
         raise CompileError(f"Local function parameter {name} is {format_reserved_binding_label(label)}")
@@ -361,26 +365,26 @@ def _validate_registered_name_bindings(stmts, labels, *, top_level_function_name
     """Validate raw AST binding sites before preprocessing can erase them."""
     top_level_function_names = set(top_level_function_names or ())
 
-    def check_target(target, *, allow_existing_shadow=False):
+    def check_target(target, *, allow_existing_shadow=False, in_local_function=False):
         """Validate one assignment target against reserved compiler-owned names."""
         if isinstance(target, ast.Name):
-            _check_registered_binding(target.id, labels, allow_existing_shadow=allow_existing_shadow)
+            _check_registered_binding(target.id, labels, allow_existing_shadow=allow_existing_shadow, in_local_function=in_local_function)
         elif isinstance(target, (ast.Tuple, ast.List)):
             for item in target.elts:
-                check_target(item, allow_existing_shadow=allow_existing_shadow)
+                check_target(item, allow_existing_shadow=allow_existing_shadow, in_local_function=in_local_function)
 
     def visit(stmt, *, top_level=False, in_local_function=False):
         """Traverse one statement while preserving top-level/local shadowing rules."""
         allow_existing_shadow = not in_local_function
         if isinstance(stmt, ast.Assign):
             for target in stmt.targets:
-                check_target(target, allow_existing_shadow=allow_existing_shadow)
+                check_target(target, allow_existing_shadow=allow_existing_shadow, in_local_function=in_local_function)
             return
         if isinstance(stmt, ast.AugAssign):
-            check_target(stmt.target, allow_existing_shadow=allow_existing_shadow)
+            check_target(stmt.target, allow_existing_shadow=allow_existing_shadow, in_local_function=in_local_function)
             return
         if isinstance(stmt, ast.For):
-            check_target(stmt.target, allow_existing_shadow=allow_existing_shadow)
+            check_target(stmt.target, allow_existing_shadow=allow_existing_shadow, in_local_function=in_local_function)
             for sub in stmt.body:
                 visit(sub, in_local_function=in_local_function)
             for sub in stmt.orelse:
@@ -398,11 +402,11 @@ def _validate_registered_name_bindings(stmts, labels, *, top_level_function_name
             for arg in list(stmt.args.posonlyargs) + list(stmt.args.args) + list(stmt.args.kwonlyargs):
                 if arg.arg == "__unique__":
                     raise CompileError("Local function parameter __unique__ is reserved by the compiler")
-                _check_registered_binding(arg.arg, labels, context="parameter")
+                _check_registered_binding(arg.arg, labels, context="parameter", in_local_function=True)
             if stmt.args.vararg is not None:
-                _check_registered_binding(stmt.args.vararg.arg, labels, context="parameter")
+                _check_registered_binding(stmt.args.vararg.arg, labels, context="parameter", in_local_function=True)
             if stmt.args.kwarg is not None:
-                _check_registered_binding(stmt.args.kwarg.arg, labels, context="parameter")
+                _check_registered_binding(stmt.args.kwarg.arg, labels, context="parameter", in_local_function=True)
             for sub in stmt.body:
                 visit(sub, in_local_function=True)
 

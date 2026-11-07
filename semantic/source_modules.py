@@ -20,6 +20,7 @@ from .compile_time import (
     merge_runtime_if_compile_time,
 )
 from .residualization import PreprocessedBody, _preprocess_compile_time, _repeat_range_state_names
+from .source_bindings import collect_function_lexical_inventory
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,7 @@ class ResolvedSourceModule:
 def collect_source_definition_aliases(
     statements: tuple[ast.stmt, ...] | list[ast.stmt],
     definitions: Mapping[str, ast.FunctionDef],
+    *, require_local_assignment_order: bool = False,
 ) -> tuple[tuple[ast.stmt, ...], Mapping[str, str]]:
     """Collect lexical ``alias = definition`` declarations without runtime effects.
 
@@ -98,6 +100,7 @@ def collect_source_definition_aliases(
     """
     canonical = {name: fn.name for name, fn in definitions.items()}
     aliases = {}
+    alias_declarations = {}
     runtime = []
     for statement in statements:
         if (isinstance(statement, ast.Assign) and len(statement.targets) == 1
@@ -107,9 +110,24 @@ def collect_source_definition_aliases(
             if alias in canonical or alias in aliases:
                 raise CompileError(f"Duplicate function alias {alias!r} at line {statement.lineno}")
             aliases[alias] = canonical[statement.value.id]
+            alias_declarations[alias] = (statement.lineno, statement.col_offset)
             canonical[alias] = canonical[statement.value.id]
         else:
             runtime.append(statement)
+    if require_local_assignment_order:
+        # Source-definition aliases are static declarations, but they remain
+        # local *bindings*.  Removing their CT-only assignments must not make
+        # a read/call that occurs before the declaration look initialized.
+        for statement in runtime:
+            for node in ast.walk(statement):
+                if not (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)):
+                    continue
+                assigned_at = alias_declarations.get(node.id)
+                if assigned_at is not None and (node.lineno, node.col_offset) < assigned_at:
+                    raise CompileError(
+                        f"Local alias {node.id!r} used before assignment "
+                        f"at line {node.lineno}, column {node.col_offset + 1}"
+                    )
     return tuple(runtime), MappingProxyType(aliases)
 
 
@@ -136,6 +154,7 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
     from .call_resolution import CallableEnvironment, CallableKind, UNRESOLVED, resolve_simple_callable
     from .builtin_calls import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
     from .consteval import ConstEvalUnavailable, _const_eval
+    from .source_bindings import collect_function_lexical_inventory
 
     snapshot = resolved.snapshot
     definitions = dict(snapshot.definitions)
@@ -196,12 +215,12 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
             merged[name] = original
         return CompileTimeSnapshot(merged)
 
-    def visit(node, owner, environment, values, runtime_range_names, provenance, changes):
+    def visit(node, owner, environment, values, runtime_range_names, provenance, changes, lexical_owned, callable_aliases):
         """Record resolved calls in reachable expression/statement subtrees."""
         if isinstance(node, ast.FunctionDef):
             return None
         if isinstance(node, ast.If):
-            visit(node.test, owner, environment, values, runtime_range_names, provenance, changes)
+            visit(node.test, owner, environment, values, runtime_range_names, provenance, changes, lexical_owned, callable_aliases)
             try:
                 branch = _const_eval(node.test, values)
             except (ConstEvalUnavailable, CompileError):
@@ -211,7 +230,7 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
                 # remain visible to later statements of the same lexical block.
                 return visit_block(
                     node.body if branch else node.orelse,
-                    owner, environment, values, runtime_range_names, provenance, changes,
+                    owner, environment, values, runtime_range_names, provenance, changes, lexical_owned, callable_aliases,
                 )
             # An unknown condition forks *both* arms from one entry state.
             # Neither arm may mutate the other's snapshot or module state.
@@ -220,11 +239,11 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
             left_changed, right_changed = set(), set()
             left_exit = visit_block(
                 node.body, owner, environment, left, runtime_range_names,
-                left_prov, left_changed,
+                left_prov, left_changed, lexical_owned, callable_aliases,
             )
             right_exit = visit_block(
                 node.orelse, owner, environment, right, runtime_range_names,
-                right_prov, right_changed,
+                right_prov, right_changed, lexical_owned, callable_aliases,
             )
             changed = left_changed | right_changed
             changes.update(changed)
@@ -233,7 +252,7 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
                 left_memo, right_memo, changed,
             )
         if isinstance(node, ast.For):
-            visit(node.iter, owner, environment, values, runtime_range_names, provenance, changes)
+            visit(node.iter, owner, environment, values, runtime_range_names, provenance, changes, lexical_owned, callable_aliases)
             # A for-target is a lexical binding, never a read of an outer
             # same-named module constant. For a known compile-time iterable,
             # evaluate the retained body with each actual item, as the body
@@ -250,6 +269,12 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
                     items = _const_eval(node.iter, values)
                 except ConstEvalUnavailable:
                     pass
+            target_names = {
+                target.id for target in ast.walk(node.target)
+                if isinstance(target, ast.Name)
+            }
+            scoped_owned = frozenset(lexical_owned) | target_names
+            scoped_aliases = frozenset(callable_aliases) - target_names
             if isinstance(node.target, ast.Name) and isinstance(items, (tuple, list)):
                 # Static unrolling uses one evolving CT state, not an
                 # independent copy of the module state per iteration. The
@@ -263,7 +288,7 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
                     iteration_values[loop_name] = item
                     iteration_values = dict(visit_block(
                         node.body, owner, environment, iteration_values,
-                        runtime_range_names, provenance, changes,
+                        runtime_range_names, provenance, changes, scoped_owned, scoped_aliases,
                     ).values)
                 # The loop index is a lexical binding, not a replacement for
                 # a surrounding module constant. Other CT assignments are
@@ -275,7 +300,7 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
                 if node.orelse:
                     iteration_values = dict(visit_block(
                         node.orelse, owner, environment, iteration_values,
-                        runtime_range_names, provenance, changes,
+                        runtime_range_names, provenance, changes, lexical_owned, callable_aliases,
                     ).values)
                 return CompileTimeSnapshot(iteration_values)
             else:
@@ -286,10 +311,6 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
                 # body execution, then revisit while CT facts can still change.
                 # Facts only disappear; no finite unrolling bound is assumed.
                 abstract_values = dict(values)
-                target_names = {
-                    target.id for target in ast.walk(node.target)
-                    if isinstance(target, ast.Name)
-                }
                 while True:
                     zero, _, zero_memo = clone_path(abstract_values, provenance)
                     once, once_prov, once_memo = clone_path(abstract_values, provenance)
@@ -298,7 +319,7 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
                     changed = set()
                     once_exit = dict(visit_block(
                         node.body, owner, environment, once, runtime_range_names,
-                        once_prov, changed,
+                        once_prov, changed, scoped_owned, scoped_aliases,
                     ).values)
                     for target_name in target_names:
                         if target_name in abstract_values:
@@ -330,7 +351,7 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
                     else_changed = set()
                     else_exit = visit_block(
                         node.orelse, owner, environment, one,
-                        runtime_range_names, one_prov, else_changed,
+                        runtime_range_names, one_prov, else_changed, lexical_owned, callable_aliases,
                     )
                     changes.update(else_changed)
                     abstract_values = dict(join_paths(
@@ -339,18 +360,23 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
                     ).values)
                 return CompileTimeSnapshot(abstract_values)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            # A local runtime variable (including parameters) blocks outer
+            # callables.  Local source aliases retain their canonical identity.
+            if (node.func.id in lexical_owned
+                    and node.func.id not in callable_aliases):
+                return None
             target = resolve_simple_callable(node.func.id, environment)
             if target is not UNRESOLVED and target.kind is CallableKind.LOCAL_FUNCTION:
                 if not isinstance(target.target, SourceDefinitionRef):
                     raise CompileError("Internal error: graph callable lost its canonical source identity")
                 edges.add((owner, target.target))
         for child in ast.iter_child_nodes(node):
-            visit(child, owner, environment, values, runtime_range_names, provenance, changes)
+            visit(child, owner, environment, values, runtime_range_names, provenance, changes, lexical_owned, callable_aliases)
         return None
 
     def visit_block(
         statements, owner, environment, initial_values, runtime_range_names,
-        provenance, changes,
+        provenance, changes, lexical_owned, callable_aliases,
     ):
         """Visit statements in order using the established CT residualizer.
 
@@ -382,13 +408,15 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
             for retained, before in zip(residual.statements, residual.compile_time_before):
                 branch_exit = visit(
                     retained, owner, environment, before.values, runtime_range_names,
-                    provenance, changes,
+                    provenance, changes, lexical_owned, callable_aliases,
                 )
             values = branch_exit if branch_exit is not None else residual.final_compile_time
         return values
 
     for name, fn in snapshot.definitions.items():
-        body, aliases = collect_source_definition_aliases(fn.body, definitions)
+        body, aliases = collect_source_definition_aliases(
+            fn.body, definitions, require_local_assignment_order=True,
+        )
         local_functions = dict(definitions)
         local_refs = dict(resolved.definition_refs)
         for alias, canonical in aliases.items():
@@ -396,17 +424,19 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
             local_refs[alias] = snapshot.definition_ref(canonical)
         env = CallableEnvironment(base.callable_builtins, local_functions, {},
                                   local_definition_refs=local_refs)
+        inventory = collect_function_lexical_inventory(fn, local_refs)
         initial = detached_compile_time_mapping(resolved.preprocessed.final_compile_time.values)
         runtime_range_names = tuple(arg.arg for arg in fn.args.args)
-        for parameter in runtime_range_names:
-            initial.pop(parameter, None)
+        for local in inventory.owned_names:
+            initial.pop(local, None)
         provenance = {}
         for value in initial.values():
             for origin in container_ids(value):
                 provenance[origin] = origin
         visit_block(
             body, snapshot.definition_ref(name), env, initial, runtime_range_names,
-            provenance, set(),
+            provenance, set(), inventory.owned_names,
+            frozenset(inventory.source_aliases),
         )
     ordered_edges = tuple(sorted(edges, key=lambda pair: (pair[0].name, pair[1].name)))
     vertices = tuple(snapshot.definition_ref(name) for name in snapshot.definitions)

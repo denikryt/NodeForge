@@ -186,6 +186,8 @@ class SemanticEnvironment:
     helper_namespace: str = "Group"
     extension_registry: object | None = None
     runtime_role: object = None
+    lexical_owned_names: frozenset[str] = frozenset()
+    lexical_callable_aliases: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -947,6 +949,8 @@ def build_semantic_environment(
     helper_namespace="Group",
     extension_registry=None,
     runtime_role=None,
+    lexical_owned_names=frozenset(),
+    lexical_callable_aliases=frozenset(),
 ):
     """Build one immutable expression environment from detached compiler-owned snapshots."""
     structural_bindings = {} if structural_bindings is None else dict(structural_bindings)
@@ -994,6 +998,8 @@ def build_semantic_environment(
     role = RuntimeRole.ROOT if runtime_role is None else RuntimeRole(runtime_role)
     return SemanticEnvironment(
         runtime_role=role,
+        lexical_owned_names=frozenset(lexical_owned_names),
+        lexical_callable_aliases=frozenset(lexical_callable_aliases),
         runtime_bindings=MappingProxyType(runtime_bindings),
         constants=semantic_constants,
         const_eval_values=const_eval_values,
@@ -1094,9 +1100,11 @@ def analyze_expression(expr, environment):
         if isinstance(node, ast.Name):
             if node.id in TYPE_TOKEN_NAMES:
                 raise CompileError(f"Type token {node.id} may only be used in node(...) type declarations")
-            if node.id in environment.callable_environment.local_namespaces and node.id not in environment.runtime_bindings and node.id not in environment.const_eval_values:
+            if (node.id in environment.callable_environment.local_namespaces
+                    and node.id not in environment.lexical_owned_names
+                    and node.id not in environment.runtime_bindings and node.id not in environment.const_eval_values):
                 raise CompileError(f"Local directory namespace {node.id!r} cannot be used as a value")
-            if node.id in environment.callable_environment.package_namespaces:
+            if node.id in environment.callable_environment.package_namespaces and node.id not in environment.lexical_owned_names:
                 raise CompileError(f"Package namespace {node.id!r} cannot be used as a value")
             if node.id in environment.runtime_bindings:
                 symbol = environment.runtime_bindings[node.id]
@@ -1147,6 +1155,11 @@ def analyze_expression(expr, environment):
                         _semantic_result_shape(payload.type_spec, payload.value),
                         semantic_payload=payload,
                     ),
+                )
+            if node.id in environment.lexical_owned_names and node.id not in environment.constants:
+                raise CompileError(
+                    f"Local name {node.id!r} used before assignment "
+                    f"at line {node.lineno}, column {node.col_offset + 1}"
                 )
             if node.id in environment.constants:
                 constant = environment.constants[node.id]
@@ -1493,6 +1506,7 @@ def analyze_expression(expr, environment):
                     isinstance(node.func.value, ast.Attribute)
                     and isinstance(receiver_root, ast.Name)
                     and receiver_root.id in environment.callable_environment.local_namespaces
+                    and receiver_root.id not in environment.lexical_owned_names
                     and receiver_root.id not in environment.runtime_bindings
                     and receiver_root.id not in environment.const_eval_values
                 ):
@@ -1500,6 +1514,7 @@ def analyze_expression(expr, environment):
                 if (
                     isinstance(node.func.value, ast.Name)
                     and node.func.value.id in environment.callable_environment.local_namespaces
+                    and node.func.value.id not in environment.lexical_owned_names
                     and node.func.value.id not in environment.runtime_bindings
                     and node.func.value.id not in environment.const_eval_values
                 ):
@@ -1510,6 +1525,7 @@ def analyze_expression(expr, environment):
                 elif (
                     isinstance(node.func.value, ast.Name)
                     and node.func.value.id in environment.callable_environment.package_namespaces
+                    and node.func.value.id not in environment.lexical_owned_names
                 ):
                     package_alias = node.func.value.id
                     name = f"{package_alias}.{node.func.attr}"
@@ -1579,6 +1595,22 @@ def analyze_expression(expr, environment):
                     )
             elif isinstance(node.func, ast.Name):
                 name = node.func.id
+                outer_callable_shadowed = (
+                    (name in environment.runtime_bindings or name in environment.const_eval_values)
+                    and (name in environment.callable_environment.local_functions
+                         or name in environment.callable_environment.imported_functions
+                         or name in environment.callable_environment.package_namespaces
+                         or name in environment.callable_environment.local_namespaces)
+                )
+                if outer_callable_shadowed or (name in environment.lexical_owned_names and (
+                    name not in environment.lexical_callable_aliases
+                    or name in environment.runtime_bindings
+                    or name in environment.const_eval_values
+                )):
+                    raise CompileError(
+                        f"Cannot call {name!r}: local source value is not callable "
+                        f"at line {node.lineno}, column {node.col_offset + 1}"
+                    )
                 if (name in environment.callable_environment.local_namespaces
                         and name not in environment.runtime_bindings
                         and name not in environment.const_eval_values):

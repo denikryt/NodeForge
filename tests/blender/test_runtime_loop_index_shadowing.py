@@ -103,9 +103,10 @@ result = a()
 
 def test_static_loop_cross_iteration_state_places_only_reachable_entry():
     """The second unrolled iteration materializes b, never an extra root b."""
-    source = '''FLAG = False
+    source = '''FLAG = True
 
 def a(x: Float = 1):
+    FLAG = False
     for i in [0, 1]:
         if FLAG:
             x = b(x)

@@ -506,6 +506,8 @@ def lower_basic_body(
     extension_dependency_sink=None,
     terminal_return_shape=None,
     runtime_role=None,
+    lexical_owned_names=frozenset(),
+    lexical_callable_aliases=frozenset(),
 ):
     """Lower one whole eligible source body to compiler-owned structured Semantic IR."""
     validate_input_declaration_placement(stmts)
@@ -1087,7 +1089,9 @@ def lower_basic_body(
         materialize_literal: bool = False,
     ):
         """Bind one compile-time/structural iteration item and return optional runtime publication IR."""
-        validate_runtime_binding_target(name, reserved_name_labels)
+        validate_runtime_binding_target(
+            name, reserved_name_labels, temporary_loop_target=True,
+        )
         if materialize_literal and isinstance(item, (bool, int, float, str)):
             # Builder-loop literal materialization follows the canonical numeric literal
             # contract while preserving the existing node-emission behavior of this narrow path.
@@ -1171,6 +1175,8 @@ def lower_basic_body(
             helper_namespace=helper_namespace,
             extension_registry=extension_registry,
             runtime_role=runtime_role,
+            lexical_owned_names=lexical_owned_names,
+            lexical_callable_aliases=lexical_callable_aliases,
         )
         analysis = analyze_expression(expr, environment)
         if analysis.object_semantics is None:
@@ -1567,7 +1573,9 @@ def lower_basic_body(
                     iterable_items = _iterable_items(stmt.iter, active, active_compile_time)
                     target_names = unpacking_target_names or _ordinary_for_target_names(stmt.target)
                     for name in target_names:
-                        validate_runtime_binding_target(name, reserved_name_labels)
+                        validate_runtime_binding_target(
+                            name, reserved_name_labels, temporary_loop_target=True,
+                        )
                         if name in active.builder_states:
                             raise CompileError("Cannot assign over geometry_builder binding")
 
@@ -1654,7 +1662,9 @@ def lower_basic_body(
                                 identities.ordinary_reservations[name] = previous
                     continue
                 iterations_expr, repeat_body, iteration_name = parsed
-                validate_runtime_binding_target(iteration_name, reserved_name_labels)
+                validate_runtime_binding_target(
+                    iteration_name, reserved_name_labels, temporary_loop_target=True,
+                )
                 repeat_compile_time = active_compile_time.fork()
                 # The index is a runtime lexical binding inside the Repeat Zone.
                 # In particular, a module constant with this name must not fold

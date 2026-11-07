@@ -47,9 +47,15 @@ def allows_existing_top_level_shadow(label: str | None) -> bool:
     return label in {"DSL builtin", "compile-time constant"}
 
 
-def validate_runtime_binding_target(name: str, reserved_name_labels) -> None:
-    """Apply the canonical assignment-target reservation rule with established diagnostics."""
+def validate_runtime_binding_target(
+    name: str, reserved_name_labels, *, temporary_loop_target: bool = False,
+) -> None:
+    """Validate a binding; loop-index scope can shadow outer callable names."""
     label = reserved_binding_label(reserved_name_labels, name)
+    if temporary_loop_target and label in {
+        "local function", "imported function", "imported package", "local directory",
+    }:
+        return
     if label is not None and not allows_existing_top_level_shadow(label):
         from ..errors import CompileError
         raise CompileError(f"Cannot assign to {name}: name is {format_reserved_binding_label(label)}")
