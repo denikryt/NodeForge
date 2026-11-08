@@ -54,6 +54,8 @@ They pin forward declarations with ordinary nodes, automatic entry selection,
 multi-level nesting, shared callees, Local module/member imports, alias identity,
 `__unique__` ownership, typed panel defaults, tuple outputs, lexical shadowing,
 static root loops, preservation of preexisting user links and controlled failures.
+The `top_level_reachable_subgraph` case pins A→B→C nesting and direct C sharing
+with root cubes, while unused D and E→B must not create physical groups.
 The harness also tests the ordinary expression-group route; it records nested
 physical group dependencies and reference sharing in deterministic JSON.
 `test_cases.py` independently pins sharing, nesting and interface/link invariants

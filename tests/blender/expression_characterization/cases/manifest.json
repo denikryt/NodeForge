@@ -685,5 +685,18 @@
       "links"
     ],
     "outcome": "graph"
+  },
+  {
+    "id": "top_level_reachable_subgraph",
+    "description": "Mixed root nodes and A→B→C plus direct C reuse; unused standalone and B-calling definitions produce no groups",
+    "tags": [
+      "top-level",
+      "mixed",
+      "nested",
+      "sharing",
+      "unused",
+      "reachability"
+    ],
+    "outcome": "graph"
   }
 ]

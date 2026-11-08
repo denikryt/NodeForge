@@ -197,3 +197,27 @@ def test_top_level_baselines_pin_interface_outputs_and_existing_links():
         "ShaderNodeMath", "ShaderNodeMath", "GeometryNodeMeshCube",
     ]
     assert preserved["links"] == [{"from": ["n0", "Value"], "to": ["n1", "Value"]}]
+
+
+def test_top_level_baseline_pins_only_reachable_function_groups():
+    """A→B→C and direct C share one leaf; D and E→B stay unmaterialized."""
+    graph = load_case_baseline("top_level_reachable_subgraph")["graph"]
+    root_nodes = graph["nodes"]
+    assert [node["bl_idname"] for node in root_nodes] == [
+        "GeometryNodeMeshCube", "GeometryNodeGroup",
+        "GeometryNodeGroup", "GeometryNodeMeshCube",
+    ]
+    assert graph["links"] == [
+        {"from": ["n0", "Mesh"], "to": ["n1", "Socket_0"]},
+        {"from": ["n0", "Mesh"], "to": ["n2", "Socket_0"]},
+    ]
+
+    a = root_nodes[1]["group"]
+    b = next(node["group"] for node in a["graph"]["nodes"] if "group" in node)
+    c = next(node["group"] for node in b["graph"]["nodes"] if "group" in node)
+    direct_c = root_nodes[2]["group"]
+    assert len({a["id"], b["id"], c["id"]}) == 3
+    assert direct_c == {"id": c["id"], "unique": False}
+    assert [node["bl_idname"] for node in c["graph"]["nodes"]] == [
+        "NodeGroupInput", "NodeGroupOutput", "GeometryNodeTransform",
+    ]
