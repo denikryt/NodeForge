@@ -46,6 +46,24 @@ root-group creation are **not** evidence of the unified language contract.
 | **F11 — process-local UI lifecycle** | `tests/blender/test_addon_lifecycle.py` repeated register/unregister, partial class/editor registration cleanup, generated resource preservation, editor catalog refresh and restart. |
 | **F12 — retained scope boundaries** | Existing `test_unified_runtime_capability_preflight.py`, `test_unified_initial_composition_rollback.py` and source-syntax negative tests retain runtime capability, failure-only cleanup and no selective level-0 reconciliation. Mesh Compute migration remains separate. |
 
+## Blender characterization snapshots (Issue #48)
+
+`tests/blender/expression_characterization/cases/manifest.json` now includes
+`top-level` fixtures that compile directly into an existing `GeometryNodeTree`.
+They pin forward declarations with ordinary nodes, automatic entry selection,
+multi-level nesting, shared callees, Local module/member imports, alias identity,
+`__unique__` ownership, typed panel defaults, tuple outputs, lexical shadowing,
+static root loops, preservation of preexisting user links and controlled failures.
+The harness also tests the ordinary expression-group route; it records nested
+physical group dependencies and reference sharing in deterministic JSON.
+`test_cases.py` independently pins sharing, nesting and interface/link invariants
+so baseline regeneration alone cannot silently change these contracts.
+
+Regenerate only selected top-level snapshots with
+`blender -b --factory-startup --python tests/blender/expression_characterization/harness.py -- --tag top-level`.
+All committed snapshots must be checked against the scenario's intended graph,
+not accepted solely because a recorder produced them.
+
 ## Reusable infrastructure (not legacy source-language compatibility)
 
 - `tests/unit/test_semantic_ir.py`, `tests/unit/test_semantic_analysis.py`,
