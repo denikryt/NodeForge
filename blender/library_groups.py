@@ -144,17 +144,6 @@ def _group_catalog_provenance(group) -> tuple[str, str]:
     return namespace, name
 
 
-def _find_unique_package_function_record(environment, name: str) -> LibraryEntryRecord | None:
-    """Return one live package function record by name, rejecting owner ambiguity."""
-    matches = [record for record in environment.package_function_records() if record.name == name]
-    if not matches:
-        return None
-    if len(matches) > 1:
-        owners = ", ".join(sorted(record.package_id for record in matches))
-        raise CompileError(
-            f"Ambiguous functions library entry {name!r}: {owners}. Select a package owner explicitly."
-        )
-    return matches[0]
 
 
 def resolve_reloadable_library_entry(
@@ -423,38 +412,6 @@ def materialize_prepared_library_callable(
     return materializer.materialize_library(spec, context=materialization_context)
 
 
-def get_or_create_library_entry_group(
-    namespace: str,
-    name: str,
-    group_backend,
-    *,
-    materialization: IRFunctionMaterialization | None = None,
-    function_id: FunctionId | None = None,
-    materialization_context: FunctionMaterializationContext | None = None,
-) -> MaterializedFunctionGroup:
-    """Resolve an editable catalog definition and return its materialization result."""
-    if namespace == "local":
-        from ..local_sources import find_local_entry_record
-
-        record = find_local_entry_record(name)
-    else:
-        from ..environment_resolution import resolve_environment
-
-        environment = resolve_environment()
-        record = (
-            _find_unique_package_function_record(environment, name)
-            if namespace == "functions"
-            else environment.catalog(namespace).find(name)
-        )
-    if record is None:
-        raise CompileError(f"{namespace} library entry {name!r} has no editable .nf source")
-    return get_or_create_library_entry_group_for_record(
-        record,
-        group_backend,
-        materialization=materialization,
-        function_id=function_id,
-        materialization_context=materialization_context,
-    )
 
 
 def get_or_create_library_entry_group_for_record(
@@ -513,24 +470,6 @@ def get_or_create_library_entry_group_for_record(
     )
 
 
-def materialize_library_entry_group(namespace: str, name: str, group_backend):
-    """Create/update a GeometryNodeTree for a catalog entry."""
-    if namespace == "local":
-        from ..local_sources import find_local_entry_record
-
-        record = find_local_entry_record(name)
-    else:
-        from ..environment_resolution import resolve_environment
-
-        environment = resolve_environment()
-        record = (
-            _find_unique_package_function_record(environment, name)
-            if namespace == "functions"
-            else environment.catalog(namespace).find(name)
-        )
-    if record is None:
-        raise CompileError(f"Unknown {namespace} library entry: {name}")
-    return materialize_library_entry_group_for_record(record, group_backend)
 
 
 def materialize_library_entry_group_for_record(record: LibraryEntryRecord, group_backend):
