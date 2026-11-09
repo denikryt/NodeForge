@@ -37,7 +37,7 @@ def modifier(
     outlet_level: Bool['Legacy Outlet'] = False,
 ) -> Geometry:
     # Adjustable base shape; erosion equations from v2.
-    # Enable bundled Examples executable Python in the Examples panel before compiling.
+    # This bundled Python callback runs with Blender Python privileges.
     n = requested_n if requested_n >= 3 else 3
     steps = requested_steps if requested_steps >= 0 else 0
     dx = math.max(size, 0.01) / (n - 1)
@@ -58,7 +58,8 @@ def modifier(
     generated_height = base_level + hill_height * math.exp(-(px * px + py * py) * 0.075) + slope_y * (size * 0.5 - p0.y) + slope_x * p0.x + (noise0 - 0.5) * fine_height + (noise1 - 0.5) * broad_height + second_height * math.exp(-(px2 * px2 + py2 * py2) * 0.075)
     source_mesh = node("GeometryNodeRealizeInstances", inputs={"Geometry": source_geo}, output="Geometry", typ=Geometry)
     bounds = node("GeometryNodeBoundBox", inputs={"Geometry": source_mesh}, outputs={"low": ("Min", Vector), "high": ("Max", Vector)})
-    ray = node("GeometryNodeRaycast", inputs={"Target Geometry": source_mesh, "Source Position": vector(grid_position.x, grid_position.y, bounds.high.z + 1.0), "Ray Direction": vector(0.0, 0.0, -1.0), "Ray Length": math.max(bounds.high.z - bounds.low.z + 2.0, 2.0)}, outputs={"hit": ("Is Hit", Bool), "location": ("Hit Position", Vector)})
+    # Sample slightly inside grid edges: rays exactly on a polygon boundary can miss.
+    ray = node("GeometryNodeRaycast", inputs={"Target Geometry": source_mesh, "Source Position": vector(grid_position.x * 0.999999, grid_position.y * 0.999999, bounds.high.z + 1.0), "Ray Direction": vector(0.0, 0.0, -1.0), "Ray Length": math.max(bounds.high.z - bounds.low.z + 2.0, 2.0)}, outputs={"hit": ("Is Hit", Bool), "location": ("Hit Position", Vector)})
     source_height = ray.location.z + source_offset if ray.hit else base_level
     h0 = source_height if use_source else generated_height
     geo = store_named_attribute(geo, "source_hit", (1.0 if ray.hit else 0.0) if use_source else 1.0, domain="POINT", type="FLOAT")

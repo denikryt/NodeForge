@@ -13,9 +13,9 @@ in the companion NodeForge script `erosion_numpy.nf`.
 1. Enable NodeForge and install NumPy in Blender's Python if needed. For the full terrain generator, also install the **NodeForge Math** package (import name `math`).
 2. Select a Mesh object with no existing modifiers.
 3. In **NodeForge → Library → Examples**, refresh and select `mesh_compute_erosion/erosion_numpy.nf`.
-4. Enable **Executable Python: Allowed** in the Examples panel. This permission applies only to bundled Examples and is disabled by default. The `erosion.py` callback executes with normal Python privileges.
+4. Review the bundled `erosion.py` before using it: the callback executes with Blender Python privileges. There is no separate **Executable Python: Allowed** toggle in the current Examples panel.
 5. Click **Add Node Group**. The example now declares a typed `modifier(...) -> Geometry` entry rather than legacy root `input_*()` / `output()` statements. Set Resolution, Steps and the other parameters on the generated modifier. The material `Erosion Terrain` can be assigned as in the original example. Ordinary scripts selected from the same list still create reusable node groups.
-6. Edit `erosion.py` and use **Reload Compute** to capture the changed Python callback. Saving/reopening a `.blend`, Undo and Redo invalidate executable bindings; use Reload Compute to restore them. Revoking the Examples Python permission disables evaluation and invalidates the result. For interactive rendering, enable **Render Properties → Lock Interface**.
+6. Edit `erosion.py` and use **Reload Compute** to capture the changed Python callback. Saving/reopening a `.blend`, Undo and Redo invalidate executable bindings; use Reload Compute to restore them. Removing the callback source or its registered owner invalidates the executable binding. For interactive rendering, enable **Render Properties → Lock Interface**.
 
 The companion script imports the callback directly:
 
@@ -42,11 +42,16 @@ field from the prefix into the suffix.
   temporary expressions in a different order. Small floating-point differences
   are normal; do not expect bitwise identity with native GN.
 - Only the erosion *simulation* was moved to NumPy. The noise/raycast source,
-  GN group compilation and final GN suffix are still Blender work.
+  GN group compilation and final GN suffix are still Blender work. Source-surface
+  sampling moves each grid XY coordinate inward by one part per million to avoid
+  boundary-ray misses on coincident planar meshes. Actual surface gaps remain
+  misses, recorded in the `source_hit` attribute, with `Base Level` fallback.
 - An independent scalar reference validates each hydraulic and thermal subpass
   at small sizes. A real Blender GN→Local callback→GN test validates the
   self-contained example. Full result-by-result parity with the original
-  source GN Repeat Zone still requires the separate `nodeforge.math` package.
+  source GN Repeat Zone additionally requires an external reference `.nf` source;
+  the comparison harness accepts a typed reference or migrates a single-output
+  legacy root reference for the test run.
 - Output `height` uses the same original surface datum, `height_change` is
   recomputed by the GN suffix, and all simulation inputs are explicit uniform
   parameters. The kernel has no external RNG/global/time dependencies.
