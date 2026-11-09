@@ -8,7 +8,7 @@ from typing import Mapping
 from .callable_contracts import SourceCallableContract, SourceCallableParameter, normalize_callable_keyword
 from ..compiler_identities import FunctionId, GroupCompilationIdentity, ModuleId
 from ..errors import CompileError
-from .source_callables import LocalReturnShape, PreparedSourceCallable, SourceCallablePreparationKey
+from .source_callables import PreparedSourceCallable, SourceCallablePreparationKey
 
 class SourceCallableSession:
     """Own one root-attempt source snapshot and owner-specific preparation cache."""
@@ -176,17 +176,10 @@ class SourceCallableSession:
         function_id: FunctionId,
         identity: GroupCompilationIdentity,
         source_supplier,
-        local_functions,
-        imported_library_functions,
-        package_namespaces,
         helper_namespace: str,
-        local_namespaces=None,
-        local_public_names: tuple[str, ...] | None = None,
-        local_hidden_names: tuple[str, ...] = (),
-        local_output_count: int | None = None,
-        source_record=None,
+        source_record,
     ) -> PreparedSourceCallable:
-        """Prepare/cache one exact owner-specific semantic group and callable contract."""
+        """Prepare/cache one exact library-source group and callable contract."""
         key = SourceCallablePreparationKey(function_id, identity.owner_scope)
         cached = self.prepared.get(key)
         if cached is not None:
@@ -199,15 +192,10 @@ class SourceCallableSession:
         try:
             from .group import analyze_group_source
             from .runtime_capabilities import RuntimeRole
-
             group = analyze_group_source(
                 source,
                 compilation_identity=identity,
                 resolved_environment=self.resolved_environment,
-                inherited_local_functions=local_functions,
-                inherited_imported_library_functions=imported_library_functions,
-                inherited_package_namespaces=package_namespaces,
-                inherited_local_namespaces=local_namespaces,
                 helper_namespace=helper_namespace,
                 source_callable_session=self,
                 runtime_role=RuntimeRole.NESTED,
@@ -216,88 +204,25 @@ class SourceCallableSession:
             popped = self._active_stack.pop()
             if popped != function_id:
                 raise CompileError("Internal error: source-call semantic activity stack was corrupted")
-
         if group.source != source:
             raise CompileError("Internal error: prepared source callable changed its captured source snapshot")
-        if local_public_names is None:
-            parameters = tuple(
-                SourceCallableParameter(
-                    input_index=input_index,
-                    source_name=item.source_name,
-                    display_name=item.display_name,
-                    keyword_key=normalize_callable_keyword(item.display_name),
-                    typ=item.typ,
-                    public=True,
-                )
-                for input_index, item in enumerate(group.interface.inputs)
+        parameters = tuple(
+            SourceCallableParameter(
+                input_index=input_index,
+                source_name=item.source_name,
+                display_name=item.display_name,
+                keyword_key=normalize_callable_keyword(item.display_name),
+                typ=item.typ,
+                public=True,
             )
-        else:
-            inputs_by_name = {
-                item.source_name: (input_index, item)
-                for input_index, item in enumerate(group.interface.inputs)
-                if item.source_name is not None
-            }
-            parameters_list: list[SourceCallableParameter] = []
-            for name in local_public_names + local_hidden_names:
-                indexed_item = inputs_by_name.get(name)
-                if indexed_item is None:
-                    raise CompileError(f"Internal error: local helper semantic interface lost input {name!r}")
-                input_index, item = indexed_item
-                public = name in local_public_names
-                parameters_list.append(
-                    SourceCallableParameter(
-                        input_index=input_index,
-                        source_name=name,
-                        display_name=item.display_name,
-                        keyword_key=name if public else None,
-                        typ=item.typ,
-                        public=public,
-                        has_default=item.has_default,
-                        interface_origin=item.interface_origin,
-                    )
-                )
-            parameters = tuple(parameters_list)
-        outputs = group.interface.outputs
-        if local_output_count is not None:
-            if local_output_count <= 0 or local_output_count > len(outputs):
-                raise CompileError("Internal error: local helper semantic output count does not match return shape")
-            outputs = outputs[-local_output_count:]
-        contract = SourceCallableContract(function_id, parameters, outputs)
+            for input_index, item in enumerate(group.interface.inputs)
+        )
+        contract = SourceCallableContract(function_id, parameters, group.interface.outputs)
         if contract.function_id != key.function_id or group.identity.owner_scope != key.owner_scope:
             raise CompileError("Internal error: prepared source callable cache key does not match semantic result")
         prepared = PreparedSourceCallable(contract, group, source_record)
         self.prepared[key] = prepared
         return prepared
-
-    def prepare_local(
-        self,
-        *,
-        function_id: FunctionId,
-        identity: GroupCompilationIdentity,
-        generated_source: str,
-        explicit_parameter_names: tuple[str, ...],
-        hidden_capture_names: tuple[str, ...],
-        local_functions,
-        imported_library_functions,
-        package_namespaces,
-        helper_namespace: str,
-        local_namespaces=None,
-        return_shape: LocalReturnShape,
-    ) -> PreparedSourceCallable:
-        """Prepare one local specialization under its final shared/unique physical owner."""
-        return self._prepare(
-            function_id=function_id,
-            identity=identity,
-            source_supplier=lambda: generated_source,
-            local_functions=local_functions,
-            imported_library_functions=imported_library_functions,
-            package_namespaces=package_namespaces,
-            local_namespaces=local_namespaces,
-            helper_namespace=helper_namespace,
-            local_public_names=tuple(explicit_parameter_names),
-            local_hidden_names=tuple(hidden_capture_names),
-            local_output_count=len(return_shape.elements),
-        )
 
     def prepare_definition(
         self,
@@ -391,9 +316,6 @@ class SourceCallableSession:
             function_id=function_id,
             identity=identity,
             source_supplier=lambda: source_path.read_text(encoding="utf-8"),
-            local_functions={},
-            imported_library_functions={},
-            package_namespaces={},
             helper_namespace=getattr(record, "name", function_id.name),
             source_record=record,
         )
