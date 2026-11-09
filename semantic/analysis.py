@@ -104,11 +104,6 @@ from ..extensions.values import (
     type_spec_accepts_nf,
 )
 from .source_callables import (
-    analyze_local_captures,
-    analyze_local_return_shape,
-    local_binding_names,
-    local_function_source,
-    resolve_local_parameter_annotation,
     serialize_local_signature,
     has_source_value_binding,
 )

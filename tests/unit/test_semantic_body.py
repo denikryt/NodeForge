@@ -459,19 +459,6 @@ def test_library_duplicate_display_labels_bind_positionally_and_reject_ambiguous
     with pytest.raises(CompileError, match="multiple values for input 'Unique'"):
         bind_imported_source_arguments(parameters, (1.0, 7.0, 9.0), (("Unique", 4.0),), "dup")
 
-def test_generated_local_function_source_prologue_is_basic_body_eligible():
-    """Generated helper input prologues enter IRBody rather than forcing legacy fallback."""
-    from NodeForge.semantic.source_callables import analyze_local_return_shape, local_function_source
-
-    fn = ast.parse("def f(x):\n    doubled = x * 2\n    return doubled\n").body[0]
-    shape = analyze_local_return_shape(fn)
-    source = local_function_source(fn, {"x": NFType.FLOAT}, return_shape=shape)
-    result = _lower(source)
-
-    assert result.body is not None
-    assert isinstance(result.body.statements[0], IRInputDeclaration)
-    assert result.body.statements[0].target_name == "x"
-    assert result.body.statements[0].display_name == "x"
 
 def test_imported_source_call_argument_slots_are_final_interface_positions():
     """Semantic imported-call binding carries physical input positions without socket-name lookup."""

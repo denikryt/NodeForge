@@ -181,8 +181,6 @@ def canonicalize_group_input_default(typ: NFType, value: object) -> object:
     raise CompileError(f"{typ} does not own a semantic group input default")
 
 
-
-
 def bind_unified_source_arguments(
     parameters: tuple[SourceCallableParameter, ...],
     positional_values: tuple[object, ...],
@@ -216,36 +214,6 @@ def bind_unified_source_arguments(
     if missing:
         raise CompileError(f"{function_name}() missing required arguments: {', '.join(missing)}")
     return tuple((item, bound[item.source_name]) for item in public if item.source_name in bound)
-
-def bind_local_source_arguments(
-    parameter_names: tuple[str, ...],
-    positional_values: tuple[object, ...],
-    keyword_values: tuple[tuple[str | None, object], ...],
-    function_name: str,
-) -> tuple[tuple[str, object], ...]:
-    """Bind one local source call using the established Python-like plain-parameter rules."""
-    names = tuple(parameter_names)
-    if len(positional_values) > len(names):
-        raise CompileError(f"{function_name}() got too many positional arguments")
-    bound: dict[str, object] = {}
-    source_order: list[tuple[str, object]] = []
-    for index, value in enumerate(positional_values):
-        name = names[index]
-        bound[name] = value
-        source_order.append((name, value))
-    for keyword_name, value in keyword_values:
-        if keyword_name is None:
-            raise CompileError(f"{function_name}() does not support **kwargs")
-        if keyword_name not in names:
-            raise CompileError(f"{function_name}() got unknown keyword argument {keyword_name!r}")
-        if keyword_name in bound:
-            raise CompileError(f"{function_name}() got multiple values for argument {keyword_name!r}")
-        bound[keyword_name] = value
-        source_order.append((keyword_name, value))
-    missing = [name for name in names if name not in bound]
-    if missing:
-        raise CompileError(f"{function_name}() missing arguments: {', '.join(missing)}")
-    return tuple(source_order)
 
 
 def bind_imported_source_arguments(
@@ -327,7 +295,6 @@ __all__ = [
     "SourceCallableParameter",
     "bind_imported_source_arguments",
     "bind_unified_source_arguments",
-    "bind_local_source_arguments",
     "canonicalize_group_input_default",
     "normalize_callable_keyword",
     "project_group_input_layout",

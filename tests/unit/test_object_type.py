@@ -4,7 +4,6 @@ import ast
 
 from NodeForge.semantic.builtin_calls import INPUT_DECLARATION_BUILTIN_NAMES
 from NodeForge.semantic.constants import TYPE_OBJECT, TYPE_TOKEN_NAMES
-from NodeForge.semantic.source_callables import input_call_for_type
 from NodeForge.blender import raw_nodes
 from NodeForge.blender.values import ObjectValue, make_value
 
@@ -17,10 +16,6 @@ def test_object_type_token_and_permanent_input_registration():
     assert TYPE_TOKEN_NAMES["Object"] == TYPE_OBJECT
     assert "input_object" in INPUT_DECLARATION_BUILTIN_NAMES
     assert TYPE_OBJECT in raw_nodes._SUPPORTED_TYPES
-
-
-def test_local_function_object_parameter_source():
-    assert input_call_for_type("source", TYPE_OBJECT) == "source = input_object('source')"
 
 
 def test_raw_node_object_type_is_owned_by_type_token_vocabulary():

@@ -10,6 +10,40 @@ def _compose(source, suffix):
     return tree, [node for node in tree.nodes if node.bl_idname == 'GeometryNodeGroup']
 
 
+def test_function_reads_module_compile_time_constant_without_hidden_capture():
+    """A module constant is resolved in the defining scope, not exposed as an input."""
+    source = '''FACTOR = 3.0
+
+def scale(value: Float) -> Float:
+    return value * FACTOR
+
+result = scale(2.0)
+'''
+    tree, calls = _compose(source, 'module-constant-not-capture')
+    assert len(calls) == 1
+    assert [socket.name for socket in calls[0].node_tree.interface.items_tree
+            if socket.item_type == 'SOCKET' and socket.in_out == 'INPUT'] == ['value']
+    assert round(_evaluate_float_output(tree, calls[0].outputs[0]), 5) == 6.0
+
+
+def test_root_runtime_value_is_not_implicitly_captured_by_definition():
+    """Undeclared root runtime values cannot become hidden function parameters."""
+    source = '''root_geo = cube(1.0)
+
+def reuse() -> Geometry:
+    return root_geo
+
+result = reuse()
+'''
+    tree = bpy.data.node_groups.new('NF-Rev2-no-implicit-capture', 'GeometryNodeTree')
+    user_node = tree.nodes.new('GeometryNodeMeshCube')
+    groups_before = {group.as_pointer() for group in bpy.data.node_groups}
+    with pytest.raises(CompileError, match='Unknown name: root_geo'):
+        compiler.compose_source_initial(source, tree, module_context='test:no-implicit-capture')
+    assert [node.as_pointer() for node in tree.nodes] == [user_node.as_pointer()]
+    assert {group.as_pointer() for group in bpy.data.node_groups} == groups_before
+
+
 def test_independent_function_compile_time_list_mutations_do_not_leak():
     """An unused function cannot modify the list visible to a demanded sibling."""
     source = '''L = [1]
