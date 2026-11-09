@@ -100,3 +100,33 @@ def test_best_effort_rollback_continues_after_one_exact_removal_failure(monkeypa
         tx._owned_ids.clear()
         if group.name in bpy.data.node_groups:
             bpy.data.node_groups.remove(group)
+
+
+def test_explicit_resource_kind_is_persisted_without_kind_inference():
+    """Registration uses the supplied kind, and rollback retires the exact new ID."""
+    mesh = bpy.data.meshes.new("NFTest_explicit_resource_kind")
+    tx = generated_resources.GeneratedResourceTransaction("explicit-kind-owner")
+    try:
+        ref = tx.add(mesh, "MESH", "test-mesh")
+        assert ref.kind == "MESH"
+        assert tx._owned_ids == [(mesh, "MESH")]
+        assert generated_resources.read_id_metadata(mesh) == ref
+        tx.rollback()
+        assert bpy.data.meshes.get("NFTest_explicit_resource_kind") is None
+    finally:
+        if bpy.data.meshes.get("NFTest_explicit_resource_kind") is mesh:
+            bpy.data.meshes.remove(mesh)
+
+
+def test_invalid_resource_kind_fails_before_registration():
+    """Invalid kinds cannot create ownership records or generated metadata."""
+    mesh = bpy.data.meshes.new("NFTest_invalid_resource_kind")
+    tx = generated_resources.GeneratedResourceTransaction("invalid-kind-owner")
+    try:
+        with pytest.raises(ValueError, match="generated resource kind"):
+            tx.add(mesh, "UNSUPPORTED", "test-mesh")
+        assert tx._owned_ids == []
+        assert tx.resources == []
+        assert generated_resources.read_id_metadata(mesh) is None
+    finally:
+        bpy.data.meshes.remove(mesh)

@@ -79,6 +79,8 @@ not accepted solely because a recorder produced them.
 - `tests/blender/test_update_group.py`, `tests/blender/test_generated_resources.py`:
   function datablock updates, reversible graph publication, interface default/link
   migration and post-commit resource retirement.
+  Explicit generated-ID kind registration and invalid-kind rejection are also
+  verified without relying on inferred Blender ID kinds.
 - `tests/blender/test_unified_source_detachment.py`,
   `tests/blender/test_unified_selected_unique_reload.py`: explicit copied-owner
   detachment and in-place selected group updates, including `.blend` reopen.

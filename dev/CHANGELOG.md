@@ -679,3 +679,9 @@ lifecycle.
 
 - Replace the source-module call-graph's bespoke recursion DFS with standard-library `graphlib.TopologicalSorter` cycle detection while preserving source-level caller-to-callee diagnostics and definition-only entry selection.
 - Add a directed three-function recursion regression to guard the displayed call-chain orientation.
+
+## 0.89.3
+
+- Removed unreachable generated-local callable preparation mode, retaining the active library and source-definition preparation paths and cache/recursion checks.
+- Removed unused name-only catalog materialization wrappers; public compiler selection continues to resolve exact owner records before group construction.
+- Removed unreferenced Blender generated-ID kind guessing; explicit kind validation, rollback and resource ownership remain unchanged, with additional positive/negative Blender regression tests.

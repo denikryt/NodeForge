@@ -144,8 +144,6 @@ def _group_catalog_provenance(group) -> tuple[str, str]:
     return namespace, name
 
 
-
-
 def resolve_reloadable_library_entry(
     group, namespace: str | None = None, name: str | None = None,
     *, resolved_environment: ResolvedEnvironment | None = None,
