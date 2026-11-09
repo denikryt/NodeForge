@@ -186,14 +186,46 @@ generated resources that remain referenced by the user's scene.
 
 An initial direct composition is guarded by an ephemeral journal of the nodes created during that attempt plus the existing nested-group/resource transaction. On a pre-commit error the new level-0 nodes are removed **first**, followed by rollback of nested groups and generated resources; user-existing nodes, links and root interfaces are preserved. After successful commit the new nodes become ordinary user-managed nodes. NodeForge does not track, match or selectively update earlier inserted level-0 instances, and no repeated direct-compilation policy is defined.
 
-Top-level executable statements have semantic `ROOT` capability; **every** function body is `NESTED` regardless of placement or call depth. Used root-only Mesh Compute callbacks cannot run inside a nested function. The compiler rejects physical Extension API v2 implementations called directly at level 0 **before invoking their backend**, because extension code may mutate unrelated user-owned nodes. Supported physical extensions can execute within transaction-owned nested Function Node Groups with appropriate resource transactions. Unused imported extensions do not require physical installation.
+Top-level executable statements have semantic `ROOT` capability; ordinary
+function bodies use `NESTED` regardless of placement or call depth. The **one
+explicit exception** is the typed entry function passed to
+`create_mesh_compute_modifier()` or selected through Local/Examples Add Node
+Group for a Mesh Compute modifier: this function is compiled with `ROOT`
+capability into a newly allocated, private modifier-owned GeometryNodeTree.
+Functions it calls remain `NESTED`, including any attempted Mesh Compute
+callback. Nested use of a root-only Mesh Compute callback is rejected before
+Blender publication. The initial user-owned base-tree composition operation
+continues to reject physical Extension API v2 implementations; it cannot
+provide the private modifier ownership or rollback required by Mesh Compute.
 
-Unsupported combinations are errors; the old generated-root modifier/compiler route is not restored.
+The removed generated-root `input_*()` / `output()` source contract is **not**
+restored.
 
 ## Mesh Compute compatibility
 
-Root-only Mesh Compute callbacks require a modifier installation contract that
-the initial base-tree composition operation does not provide. Their implementation
-and generated-resource transaction infrastructure remain in NodeForge, but the
-existing root-only workflow and the bundled erosion example must be migrated
-separately before they can be used with the unified `.nf` language.
+Mesh Compute is installed through an explicitly selected **typed function**.
+Its first parameter must be a required `Geometry` input; the function must
+return exactly one `Geometry` value. Other inputs use ordinary typed function
+parameters and defaults, which become Geometry Nodes modifier sockets.
+The source must have exactly one entry function and cannot contain executable
+root statements. Unused Python runtime imports do not install a modifier.
+
+```python
+from local import shift
+
+def modifier(geometry: Geometry["Geometry"], amount: Float["Amount"] = 2.0) -> Geometry:
+    return shift(geometry, amount=amount)
+```
+
+`shift` here is a separately registered Local Python callback decorated with
+`@mesh_compute`. Use `create_mesh_compute_modifier(source, mesh_object)` or
+**Install Mesh Compute** for a selected Text block, or select the `.nf` entry
+under Local/Examples and choose **Add Node Group** with a Mesh Object active.
+These operations create or reuse only an empty modifier and install a private
+runtime root. Subsequent changes use **Reload Compute**, retaining the existing
+transactional modifier-input and callback cutover. A saved `.blend` does not
+persist trusted Python execution: reload the source after reopening.
+
+**Compile Script** still targets an existing user-owned GeometryNodeTree
+and never installs Mesh Compute implicitly; ordinary nested function groups
+cannot contain root-only callbacks.

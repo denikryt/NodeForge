@@ -49,5 +49,5 @@ def test_backend_raw_source_routes_cannot_bypass_legacy_prohibition():
         backend.prepare_source_compilation(_OLD, compilation_identity=identity)
     with pytest.raises(CompileError, match='Raw-source backend compilation'):
         backend.compile_group_callback(_OLD)
-    with pytest.raises(CompileError, match='Generated-root source compilation'):
-        compiler._prepare_root_build(backend, _OLD, name='Blocked')
+    with pytest.raises(CompileError, match='legacy .nf interface'):
+        compiler._prepare_mesh_compute_root(backend, _OLD, name='Blocked')

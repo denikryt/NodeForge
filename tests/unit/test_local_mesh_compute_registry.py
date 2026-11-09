@@ -117,15 +117,15 @@ def test_managed_runtime_available_without_grant_or_execution(library):
     assert not marker.exists()
 
 
-@pytest.mark.xfail(reason="Root-only Mesh Compute migration is tracked separately from Issue #48", strict=True)
 def test_star_import_excludes_python_and_inherited_explicit_import_is_rejected(library):
     """Legacy wildcard Local calls keep `.nf` behavior without leaking Python exports."""
     _write(library)
 
     view = environment_resolution._make_compilation_environment()
-    _prepare('from local import *\nresult = cube(1)', view)
+    with pytest.raises(CompileError, match='star imports are unsupported'):
+        _prepare('from local import *\nresult = cube(1)', view)
     assert not view.extension_registry._families
-    with pytest.raises(CompileError, match='explicit import'):
+    with pytest.raises(CompileError, match='root-only Mesh Compute'):
         _prepare('from local import erosion\n'
                  'source_geo = cube(1)\ndef nested():\n    return erosion(source_geo)\n'
                  'result = nested()', environment_resolution._make_compilation_environment())

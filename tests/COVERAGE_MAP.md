@@ -94,16 +94,21 @@ Record both suites separately. The pre-Issue-#48 baseline is not validation of t
 new language. Do not require selective reconciliation of previously inserted
 level-0 nodes or repeated direct-composition semantics: both are excluded from #48.
 
-## Deferred root-only Mesh Compute follow-up
+## Root-only Mesh Compute follow-up
 
-The unified compiler rejects Mesh Compute root-only callbacks in nested functions and
-does not install a modifier runtime during direct level-0 composition. Legacy UI tests for the former modifier route remain in the suite as
-strict expected failures (`xfail`); additional historical modifier lifecycle
-regressions still fail under the removed route pending a separate Mesh Compute
-follow-up. Neither category constitutes passing new runtime tests. This does
-not affect the existing runtime backend/resource tests, which remain active.
-The old erosion example remains a legacy fixture and is not documented as a
-working unified `.nf` example.
+The explicit private modifier installation path now prepares exactly one typed
+function entry with `ROOT` semantic capability. Other function bodies remain
+`NESTED`, and direct level-0 compilation into user-owned base trees continues
+to reject Mesh Compute. The removed generated-root `input_*()` / `output()`
+source route is not restored. Runtime resource publication, rollback, session
+lifecycle, Reload, and modifier input migration use their existing backends.
+
+`tests/blender/test_mesh_compute_modifier_binding.py`,
+`test_mesh_compute_reload.py`, `test_mesh_compute_ui.py`,
+`test_examples_mesh_compute.py`, and the other Mesh Compute integration tests
+exercise the restored typed-entry path. The bundled erosion source now has a
+typed root entry; full numerical use requires the separate NodeForge Math
+package and installed Python dependencies.
 
 The previously observed Blender add-on double-unregister failure was fixed by
 Rev2 F11. The full **non-Mesh Compute** Blender suite now includes this

@@ -240,11 +240,9 @@ def test_frame_pre_resolves_animated_integer_and_boolean_inputs(configured_local
         '{"height": [value] * mesh.vertex_count}}\n', encoding='utf-8',
     )
     script = ('from local import toggle\n'
-              'geo = input_geometry("Geometry")\n'
-              'amount = input_int("Amount", default=2)\n'
-              'enabled = input_bool("Enabled", default=True)\n'
-              'geo = toggle(geo, amount=amount, enabled=enabled)\n'
-              'output("Geometry", geo)\n')
+              'def modifier(geometry: Geometry["Geometry"], amount: Int["Amount"] = 2, '
+              'enabled: Bool["Enabled"] = True) -> Geometry:\n'
+              '    return toggle(geometry, amount=amount, enabled=enabled)\n')
     current = bpy.context.scene.frame_current
     try:
         group = create_mesh_compute_modifier(script, mesh_object)

@@ -144,9 +144,8 @@ def test_reload_rejects_removed_scalar_declaration_without_touching_geometry(con
     before = _evaluated_positions(mesh_object)
     original = runtime.get_modifier_binding(mesh_object)
     replacement_source = ('from local import shift\n'
-                          'geo = input_geometry("Geometry")\n'
-                          'geo = shift(geo, amount=2.0)\n'
-                          'output("Geometry", geo)\n')
+                          'def modifier(geometry: Geometry["Geometry"]) -> Geometry:\n'
+                          '    return shift(geometry, amount=2.0)\n')
     with pytest.raises(Exception, match='removed or changed a declared scalar'):
         update_mesh_compute_modifier(replacement_source, mesh_object)
     assert runtime.get_modifier_binding(mesh_object) is original

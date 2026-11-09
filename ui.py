@@ -387,6 +387,35 @@ def _report_mesh_compute_evaluation(operator, context, group):
         operator.report({'INFO'}, f"Mesh Compute modifier ready: {group.name}")
 
 
+class NODEFORGE_OT_install_mesh_compute_modifier(Operator):
+    """Explicitly install a typed .nf Mesh Compute function as a private modifier."""
+
+    bl_idname = "nodeforge.install_mesh_compute_modifier"
+    bl_label = "Install Mesh Compute"
+    bl_description = "Compile the Text block's typed Mesh Compute entry into a private modifier"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        owner = getattr(context, "active_object", None)
+        props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
+        return bool(owner is not None and owner.type == "MESH"
+                    and props is not None and props.text_block is not None)
+
+    def execute(self, context):
+        from .compiler import create_mesh_compute_modifier
+
+        try:
+            group = create_mesh_compute_modifier(
+                _source_from_props(context.scene.gn_script_mvp), context.active_object,
+            )
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        _report_mesh_compute_evaluation(self, context, group)
+        return {'FINISHED'}
+
+
 class NODEFORGE_OT_reload_mesh_compute_modifier(Operator):
     """Recompile the current runtime root with atomic socket/FCurve cutover."""
 
@@ -1073,13 +1102,18 @@ class GNSCRIPT_MVP_PT_panel(Panel):
         """Function `draw` used by the NodeForge addon."""
         layout = self.layout
         props = context.scene.gn_script_mvp
-        layout.label(text="NF source → existing base Geometry Nodes tree")
+        layout.label(text="Compile Script → base Geometry Nodes tree")
         layout.prop(props, "text_block")
         if props.text_block is None:
             layout.label(text="Select a Blender Text datablock", icon='INFO')
         op = layout.operator(GNSCRIPT_MVP_OT_compile_expression.bl_idname, text="Compile Script")
         op.expression = ""
         owner = getattr(context, "active_object", None)
+        if owner is not None and getattr(owner, "type", None) == "MESH":
+            row = layout.row()
+            row.enabled = props.text_block is not None
+            row.operator(NODEFORGE_OT_install_mesh_compute_modifier.bl_idname,
+                         text="Install Mesh Compute", icon='NODETREE')
         if owner is not None and getattr(owner, "type", None) == "MESH" and owner.modifiers:
             from .blender.mesh_compute_runtime import get_modifier_binding
             try:
@@ -1256,6 +1290,7 @@ classes = (
     NODEFORGE_UL_function_library,
     NODEFORGE_UL_packages,
     GNSCRIPT_MVP_OT_compile_expression,
+    NODEFORGE_OT_install_mesh_compute_modifier,
     NODEFORGE_OT_reload_mesh_compute_modifier,
     NODEFORGE_OT_detach_selected_source_owner,
     NODEFORGE_OT_reload_selected_library_group,

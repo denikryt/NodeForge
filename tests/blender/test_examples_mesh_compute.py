@@ -65,7 +65,6 @@ def _select_source(nf):
     return props
 
 
-@pytest.mark.xfail(reason="Root-only Mesh Compute migration is tracked separately from Issue #48", strict=True)
 def test_selected_examples_compiles_modifier_and_removed_owner_fails_closed(
         selected_examples, registered_ui, mesh_object):
     """Examples compile without grants and invalidate when the source disappears."""
@@ -114,7 +113,6 @@ def test_examples_python_cannot_be_published_as_regular_library_group(selected_e
         create_examples_source_group(str(nf.with_name('shift.py')))
 
 
-@pytest.mark.xfail(reason="Root-only Mesh Compute migration is tracked separately from Issue #48", strict=True)
 def test_examples_add_node_group_reuses_blender_empty_modifier(
         selected_examples, registered_ui, mesh_object):
     """Examples runtime scripts use the same already-present blank GN modifier."""

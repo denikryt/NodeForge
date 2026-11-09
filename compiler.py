@@ -55,12 +55,66 @@ def _new_group_backend(resolved_environment: ResolvedEnvironment | None = None):
     )
 
 
-def _prepare_root_build(backend, source: str, *, name: str, existing_group=None):
-    """Reject the removed generated-root compilation contract."""
-    raise CompileError(
-        'Generated-root source compilation is removed; '
-        'use the unified function frontend or direct composition'
+def _prepare_mesh_compute_root(backend, source: str, *, name: str, existing_group=None):
+    """Prepare one typed modifier entry as a physical ROOT, never a nested group.
+
+    An explicitly installed Mesh Compute modifier owns its own GeometryNodeTree.
+    Unlike an ordinary function Node Group it can therefore host root-only
+    Extension API callbacks, while every function it calls remains NESTED.
+    """
+    from .compiler_identities import ModuleId, module_definition_function_id
+    from .semantic.source_modules import (
+        parse_source_module, resolve_source_module, resolve_source_call_graph,
     )
+    from .semantic.function_signatures import compile_function_signature
+    from .semantic.source_callables import serialize_local_signature
+    from .semantic.runtime_capabilities import RuntimeRole
+    from .nf_types import NFType
+
+    identity = backend.resolve_root_compilation_identity(existing_group)
+    module_id = ModuleId("ROOT_TEXT", f"mesh-compute:{identity.root_owner_id}")
+    snapshot = parse_source_module(source, module_id)
+    resolved = resolve_source_module(snapshot)
+    if resolved.has_executable_statements:
+        raise CompileError(
+            "Mesh Compute modifier requires a typed function entry; "
+            "executable top-level statements and old input_*()/output() are unsupported"
+        )
+    graph = resolve_source_call_graph(resolved)
+    if len(graph.entries) != 1:
+        raise CompileError(
+            f"Mesh Compute modifier requires exactly one entry function; found {len(graph.entries)}"
+        )
+    definition = graph.entries[0]
+    fn = snapshot.definitions[definition.name]
+    session = backend.new_source_callable_session()
+    environment, compile_time_values = session.callable_environment_for_module(snapshot)
+    signature = compile_function_signature(
+        fn, owner_scope=identity.owner_scope,
+        declaration_owner=identity.declaration_owner,
+        compile_time_values=compile_time_values,
+    )
+    types = {item.target_name: item.typ for item in signature.declarations}
+    function_id = module_definition_function_id(
+        definition, serialize_local_signature([arg.arg for arg in fn.args.args], types),
+    )
+    prepared = session.prepare_definition(
+        function_id=function_id, identity=identity, fn=fn,
+        callable_environment=environment, compile_time_values=compile_time_values,
+        source_module=snapshot, helper_namespace=name,
+        runtime_role=RuntimeRole.ROOT,
+    ).group
+    inputs, outputs = prepared.interface.inputs, prepared.interface.outputs
+    if _requires_mesh_compute(prepared) and (
+            not inputs or inputs[0].typ is not NFType.GEOMETRY
+            or inputs[0].has_default
+            or any(item.typ is NFType.GEOMETRY for item in inputs[1:])
+            or len(outputs) != 1 or outputs[0].typ is not NFType.GEOMETRY):
+        raise CompileError(
+            "Mesh Compute modifier entry must accept a required first Geometry parameter "
+            "and return exactly one Geometry value"
+        )
+    return prepared, session
 
 
 def create_expression_group(source: str, name: str = "NodeForge Group"):
@@ -215,8 +269,6 @@ def create_selected_library_group_auto(namespace: str, source_origin: str, owner
             and record.kind == "script"):
         if _path_key(record.source_path) != record.source_origin:
             raise CompileError(f"Selected {namespace} module changed identity during compilation")
-        if not editor_available:
-            raise CompileError("Open a Geometry Nodes editor to add a module function")
         from .semantic.source_modules import parse_source_module, resolve_source_module, resolve_source_call_graph
         from .compiler_identities import ModuleId
 
@@ -229,8 +281,24 @@ def create_selected_library_group_auto(namespace: str, source_origin: str, owner
                 f"Selected {namespace} module has {len(graph.entries)} entry definitions; "
                 "Add a specific function from a script instead of guessing its entry"
             )
+        backend = _new_group_backend(environment)
+        session = backend.new_source_callable_session()
+        bindings, _compile_time = session.callable_environment_for_module(snapshot)
+        if any(getattr(getattr(binding, "record", None), "kind", None) == "runtime"
+               for binding in bindings.imported_functions.values()):
+            prepared, runtime_session = _prepare_mesh_compute_root(
+                backend, source, name=record.name,
+            )
+            if _requires_mesh_compute(prepared):
+                if getattr(owner, "type", None) != "MESH":
+                    raise CompileError("Mesh Compute requires a selected Mesh Object")
+                return _install_prepared_mesh_compute_modifier(
+                    backend, prepared, runtime_session, owner, name=record.name,
+                ), True
+        if not editor_available:
+            raise CompileError("Open a Geometry Nodes editor to add a module function")
         return _materialize_standalone_module_definition(
-            snapshot, graph.entries[0], _new_group_backend(environment),
+            snapshot, graph.entries[0], backend,
         ), False
     if not editor_available:
         raise CompileError("Open a Geometry Nodes editor to add a library node group")
@@ -530,7 +598,7 @@ def create_mesh_compute_modifier(source: str, owner, name: str = "NodeForge Mesh
         raise CompileError("Mesh Compute requires a selected Mesh Object")
     _blank_mesh_compute_modifier(owner)
     backend = _new_group_backend(resolved_environment)
-    prepared, session = _prepare_root_build(backend, source, name=name)
+    prepared, session = _prepare_mesh_compute_root(backend, source, name=name)
     if not _requires_mesh_compute(prepared):
         raise CompileError("Mesh Compute modifier requires an imported Mesh Compute function")
     return _install_prepared_mesh_compute_modifier(backend, prepared, session, owner, name=name)
@@ -673,13 +741,10 @@ def update_mesh_compute_modifier(source: str, owner):
         backend = _new_group_backend()
         # Keep the durable root owner ID but build a *new* provisional physical
         # Tree; do not mutate the authoritative group or its actual mesh output.
-        session = backend.new_source_callable_session()
-        identity = backend.resolve_root_compilation_identity(old_group)
-        prepared = backend.prepare_source_compilation(
-            source, compilation_identity=identity, helper_namespace=old_group.name,
-            source_callable_session=session,
+        prepared, session = _prepare_mesh_compute_root(
+            backend, source, name=old_group.name, existing_group=old_group,
         )
-        if not any(key and key[0] in {"local-runtime", "examples-runtime"} for key, _ in prepared.extension_dependencies):
+        if not _requires_mesh_compute(prepared):
             raise CompileError("Reload Compute requires an imported Mesh Compute function")
 
         def finalize(new_group):

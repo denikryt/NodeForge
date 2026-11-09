@@ -34,6 +34,7 @@ def compile_function_definition(
     compile_time_values: Mapping[str, object] | None = None,
     source_callable_session=None,
     helper_namespace: str = "Function",
+    runtime_role=None,
 ):
     """Compile one nested function body without synthesizing textual DSL.
 
@@ -122,7 +123,7 @@ def compile_function_definition(
         extension_dependency_sink=dependencies,
         terminal_return_shape=shape,
         geometry_mode=False,
-        runtime_role=RuntimeRole.NESTED,
+        runtime_role=RuntimeRole.NESTED if runtime_role is None else RuntimeRole(runtime_role),
         lexical_owned_names=inventory.owned_names,
         lexical_callable_aliases=frozenset(
             name for name in inventory.source_aliases

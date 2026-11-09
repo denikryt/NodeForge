@@ -235,6 +235,7 @@ class SourceCallableSession:
         helper_namespace: str,
         source_record=None,
         source_module=None,
+        runtime_role=None,
     ) -> PreparedSourceCallable:
         """Compile one FunctionDef AST directly under its physical shared/unique owner."""
         import ast
@@ -266,6 +267,7 @@ class SourceCallableSession:
                 compile_time_values=compile_time_values,
                 source_callable_session=self,
                 helper_namespace=helper_namespace,
+                runtime_role=runtime_role,
             )
         finally:
             popped = self._active_stack.pop()

@@ -58,19 +58,18 @@ def test_ast_only_discovery_executes_no_unselected_python(example_root):
     assert not marker.exists()
 
 
-@pytest.mark.xfail(reason="Root-only Mesh Compute migration is tracked separately from Issue #48", strict=True)
 def test_nested_examples_dsl_and_python_share_one_directory_snapshot(example_root):
     """Keep nested DSL calls and explicit Python runtimes selectable in one catalog."""
     runtime = write_python(example_root)
     script = example_root / 'terrain' / 'offset.nf'
-    script.write_text('x = input_float("X")\noutput(x + 1.0)\n', encoding='utf-8')
+    script.write_text('def offset(value: Float) -> Float:\n    return value + 1.0\n', encoding='utf-8')
 
     view = environment_resolution._make_compilation_environment()
     examples = view.catalog('examples')
     assert examples.names() == frozenset()
     assert examples.select_import('examples.terrain', 'erosion').source_path == runtime.resolve()
     assert examples.select_import('examples.terrain', 'offset').source_path == script.resolve()
-    _prepare('from examples import terrain\nresult = offset(1.0)\n', view)
+    _prepare('from examples.terrain.offset import offset\nresult = offset(1.0)\n', view)
 
     _prepare(root_code(), environment_resolution._make_compilation_environment())
 
@@ -85,7 +84,6 @@ def test_examples_owner_requires_real_core_root(example_root, tmp_path):
     assert not runtime_source_active('examples', path, 'vendor.other')
 
 
-@pytest.mark.xfail(reason="Root-only Mesh Compute migration is tracked separately from Issue #48", strict=True)
 def test_directory_alias_is_not_executable_and_nonroot_import_fails(example_root):
     """Only explicit from examples.<dir> import foo at root is executable."""
     write_python(example_root)
@@ -93,7 +91,7 @@ def test_directory_alias_is_not_executable_and_nonroot_import_fails(example_root
     with pytest.raises(CompileError, match='explicit from examples'):
         _prepare('from examples import terrain as t\ngeo = cube(1)\n'
                  'result = t.erosion(geo)\n', environment_resolution._make_compilation_environment())
-    with pytest.raises(CompileError, match='explicit import'):
+    with pytest.raises(CompileError, match='root-only Mesh Compute'):
         _prepare('from examples.terrain import erosion\n'
                  'geo = cube(1)\n'
                  'def inner():\n    return erosion(geo)\n'
