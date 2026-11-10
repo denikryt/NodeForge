@@ -17,6 +17,7 @@ from .call_resolution import (
 )
 from ..errors import CompileError
 from .analysis import ExpressionAnalysis, SemanticConstant
+from .consteval import _const_eval, is_negative_numeric_literal
 from .values import (
     RuntimeResultShape,
     StructuralArrayId,
@@ -411,6 +412,9 @@ def lower_analyzed_expression(expr, analysis, *, dependency_sources=None):
             return builder.emit(IRBinary(result, depth, node_fact.operation, left, right))
 
         if isinstance(node, ast.UnaryOp):
+            if is_negative_numeric_literal(node):
+                result = builder.new_value(runtime_type(node_fact))
+                return builder.emit(IRLiteral(result, depth, _const_eval(node, {})))
             if node_fact.operation == "SIGNED_INT_LITERAL":
                 result = builder.new_value(runtime_type(node_fact))
                 return builder.emit(IRLiteral(result, depth, node_fact.literal_value))

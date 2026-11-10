@@ -261,3 +261,46 @@ def test_numeric_semantics_power_remains_runtime_capable():
     """POWER stays runtime-capable even though canonical numeric CTFE intentionally declines it."""
     actual = _evaluated_x("2.0 ** 3.0", "NFTest_numeric_semantics_power_runtime")
     check(actual == 8.0, f"runtime POWER returned {actual!r}")
+
+
+def test_negative_literals_in_source_calls_use_socket_defaults_not_math_nodes():
+    """The actual source-function call path must not build 0 - 2.0 for -2.0."""
+    from NodeForge import compiler
+
+    source = '''
+def move_x(geometry: Geometry, x_shift: Float["X Shift"] = 0.0) -> Geometry:
+    return transform(geometry, translation=vector(x_shift, 0, 0))
+
+def move(geometry: Geometry, x: Float, y: Float) -> Geometry:
+    left = move_x(cube(1.0), -2.0)
+    right = move_x(cube(1.0), 2.0)
+    combined = join([left, right])
+    return combined
+'''
+    root = bpy.data.node_groups.new("NFTest_negative_literal_root", "GeometryNodeTree")
+    try:
+        compiler.compose_source_initial(source, root)
+        move_node = next(node for node in root.nodes
+                         if node.bl_idname == "GeometryNodeGroup" and node.node_tree
+                         and node.node_tree.get("nodeforge_module_name") == "move")
+        move = move_node.node_tree
+        calls = [node for node in move.nodes if node.bl_idname == "GeometryNodeGroup"]
+        check(len(calls) == 2, "expected two move_x calls")
+        check(not _nodes(move, "ShaderNodeMath", "SUBTRACT"), "literal -2 created Subtract")
+        check(not _nodes(move, "ShaderNodeValue"), "literal -2 created Value nodes")
+        actual = sorted(round(node.inputs["X Shift"].default_value, 4) for node in calls)
+        check(actual == [-2.0, 2.0], f"wrong signed socket defaults: {actual}")
+    finally:
+        bpy.data.node_groups.remove(root, do_unlink=True)
+
+
+def test_negative_runtime_float_still_creates_subtraction_node():
+    group = compile_group(
+        "def negative(x: Float) -> Float:\n    return -x\n",
+        "NFTest_negative_runtime_float",
+    )
+    try:
+        check(len(_nodes(group, "ShaderNodeMath", "SUBTRACT")) == 1,
+              "runtime negation lost its Subtract")
+    finally:
+        bpy.data.node_groups.remove(group, do_unlink=True)
