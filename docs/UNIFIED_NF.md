@@ -45,7 +45,7 @@ def translate(geo: Geometry, by: Vector["Offset"] = vector(0, 0, 1)) -> Geometry
 moved = translate(cube(1), by=vector(1, 0, 0))
 ```
 
-Use a final `return` in each `def`. It may return one value or a nonempty flat tuple. For a single returned identifier, the output name is derived from that identifier (`return final_geometry` creates `Final Geometry`); a single expression without a returned identifier uses `Value`. Flat tuples use the same identifier naming and indexed `Value N` fallback, with duplicate-name disambiguation. An explicit scalar return annotation can override the output label with `Type["Socket Label"]`; this takes precedence over the returned variable name, and the return value must still match the annotated type. Nested tuples and missing/multiple nonterminal returns are rejected.
+Use a final `return` in each `def`. It may return one value or a nonempty flat tuple. For a single returned identifier, the output name is derived from that identifier (`return final_geometry` creates `Final Geometry`); a single expression without a returned identifier uses `Value`. Flat tuples use the same identifier naming and indexed `Value N` fallback, with duplicate-name disambiguation. An explicit scalar return annotation can override the output label with `Type["Socket Label"]`; this takes precedence over the returned variable name, and the return value must still match the annotated type. Blender node socket labels must fit in 63 UTF-8 bytes: an overlong explicit label is rejected, while an overlong inferred single-variable label falls back to `Value` for compatibility. Nested tuples and missing/multiple nonterminal returns are rejected.
 
 ```python
 def move(geometry: Geometry) -> Geometry["Moved Geometry"]:

@@ -108,6 +108,10 @@ def analyze_local_return_shape(fn: ast.FunctionDef, *, output_label: str | None 
     for index, expression in enumerate(expressions):
         base = (_display_name(expression.id) if isinstance(expression, ast.Name)
                 else "Value" if len(expressions) == 1 else f"Value {index + 1}")
+        # The old scalar contract used Value. Preserve its compilability when
+        # an inferred variable label exceeds Blender's physical socket limit.
+        if len(expressions) == 1 and len(base.encode("utf-8")) > 63:
+            base = "Value"
         count = used.get(base, 0) + 1
         used[base] = count
         socket_name = base if count == 1 else f"{base} {count}"
@@ -115,6 +119,15 @@ def analyze_local_return_shape(fn: ast.FunctionDef, *, output_label: str | None 
     if output_label is not None:
         element = elements[0]
         elements[0] = LocalReturnElement(0, output_label, "return:0", element.expression)
+    # Blender's interface item keeps long names, but its instantiated node
+    # sockets truncate names beyond 63 UTF-8 bytes. Reject such names here
+    # instead of failing with an uncontrolled KeyError during graph assembly.
+    for element in elements:
+        if len(element.socket_name.encode("utf-8")) > 63:
+            raise CompileError(
+                f"Local function {fn.name}() output socket label "
+                f"{element.socket_name!r} exceeds Blender's 63-byte UTF-8 limit"
+            )
     return LocalReturnShape(tuple(elements))
 
 

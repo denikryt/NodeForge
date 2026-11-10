@@ -59,3 +59,25 @@ def move():
     check(all([socket.name for socket in node.outputs] == ['Geometry'] for node in shift_calls),
           f'nested outputs: {[[socket.name for socket in node.outputs] for node in shift_calls]}')
     check(shift_calls[0].node_tree is shift_calls[1].node_tree, 'same function should reuse one group')
+
+
+@pytest.mark.parametrize("label", ["L" * 64, "Г" * 32])
+def test_overlong_output_label_fails_preflight_without_blender_keyerror(label):
+    source = f"def named() -> Float[{label!r}]:\n    return 1.0\n"
+    with pytest.raises(CompileError, match="63-byte UTF-8"):
+        compile_group(source, "NFTest_ReturnOverlong")
+
+
+def test_63_byte_explicit_output_label_is_physical_node_socket_name():
+    label = "Г" * 31 + "X"
+    group = compile_group(f"def named() -> Float[{label!r}]:\n    return 1.0\n", "NFTest_Return63Bytes")
+    check(_output_names(group) == [label], f"incorrect interface output name: {_output_names(group)}")
+    output = next(node for node in group.nodes if node.bl_idname == "NodeGroupOutput")
+    check(output.inputs[0].name == label, "physical socket name differs from interface label")
+
+
+def test_overlong_auto_output_name_preserves_old_value_fallback():
+    identifier = "geometry_reconstructed_from_multiple_complex_transformation_stages_exceeding_limit"
+    source = f"def named():\n    {identifier} = cube(1)\n    return {identifier}\n"
+    group = compile_group(source, "NFTest_ReturnOverlongAutomatic")
+    check(_output_names(group) == ["Value"], "overlong inferred name should use existing Value fallback")

@@ -76,3 +76,34 @@ def test_local_signature_serialization_preserves_historical_identity():
     """Canonical in-memory types retain the exact local helper signature bytes."""
     module = _source_callables()
     assert module.serialize_local_signature(("a", "b"), {"a": NFType.FLOAT, "b": NFType.VECTOR}) == "a:FLOAT,b:VECTOR"
+
+
+@pytest.mark.parametrize("label", ["X" * 64, "Г" * 32])
+def test_scalar_explicit_output_label_above_blender_socket_limit_is_rejected(label):
+    module = _source_callables()
+    fn = _function("def f():\n    return 1.0\n")
+    with pytest.raises(CompileError, match="63-byte UTF-8"):
+        module.analyze_local_return_shape(fn, output_label=label)
+
+
+def test_output_label_limit_is_utf8_bytes_not_characters():
+    module = _source_callables()
+    fn = _function("def f():\n    return 1.0\n")
+    assert module.analyze_local_return_shape(fn, output_label="X" * 63).elements[0].socket_name == "X" * 63
+    assert module.analyze_local_return_shape(fn, output_label="Г" * 31).elements[0].socket_name == "Г" * 31
+
+
+def test_automatic_output_label_above_blender_socket_limit_falls_back_to_value():
+    module = _source_callables()
+    identifier = "many_very_long_words_in_a_single_result_variable_that_exceeds_socket_capacity"
+    fn = _function(f"def f():\n    return {identifier}\n")
+    shape = module.analyze_local_return_shape(fn)
+    assert shape.elements[0].socket_name == "Value"
+
+
+def test_suffixing_a_duplicate_tuple_output_must_obey_same_limit():
+    module = _source_callables()
+    identifier = "x" * 62
+    fn = _function(f"def f():\n    return {identifier}, {identifier}\n")
+    with pytest.raises(CompileError, match="63-byte UTF-8"):
+        module.analyze_local_return_shape(fn)
