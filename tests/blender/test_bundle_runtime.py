@@ -116,7 +116,7 @@ def nf_fixture(state: Bundle['State']):
     return (state,)
 ''', "NFTest_bundle_interface")
     inp = _interface_socket(group, "State", "INPUT")
-    out = _interface_socket(group, "Value", "OUTPUT")
+    out = _interface_socket(group, "State", "OUTPUT")
     check(inp.socket_type == "NodeSocketBundle", f"input_bundle type mismatch: {inp.socket_type}")
     check(out.socket_type == "NodeSocketBundle", f"Bundle output type mismatch: {out.socket_type}")
     check(getattr(inp, "parent", None) is not None and inp.parent.name == "State Panel", "Bundle input was not placed in panel")

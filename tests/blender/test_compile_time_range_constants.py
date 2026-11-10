@@ -20,7 +20,7 @@ def nf_fixture():
     group = compile_group(source, "NFTest_compile_time_range_constants")
 
     assert "MAX_SEGMENTS" not in group.interface.items_tree
-    assert "Value" in group.interface.items_tree
+    assert "Geometry" in group.interface.items_tree
 
 
 def test_compile_time_range_accepts_unary_integer_bounds_and_step():
@@ -41,7 +41,7 @@ def nf_fixture():
     assert "START" not in group.interface.items_tree
     assert "STOP" not in group.interface.items_tree
     assert "STEP" not in group.interface.items_tree
-    assert "Value" in group.interface.items_tree
+    assert "Geometry" in group.interface.items_tree
 
 
 def test_compile_time_range_rejects_invalid_arguments_in_blender_path():

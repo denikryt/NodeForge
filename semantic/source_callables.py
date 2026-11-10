@@ -83,7 +83,7 @@ def _display_name(name: str) -> str:
     return " ".join(part.capitalize() for part in name.split("_")) or "Value"
 
 
-def analyze_local_return_shape(fn: ast.FunctionDef) -> LocalReturnShape:
+def analyze_local_return_shape(fn: ast.FunctionDef, *, output_label: str | None = None) -> LocalReturnShape:
     """Validate and describe the existing single-final-return local function contract."""
     returns = [stmt for stmt in fn.body if isinstance(stmt, ast.Return)]
     nested_returns = [node for stmt in fn.body for node in ast.walk(stmt) if isinstance(node, ast.Return)]
@@ -101,17 +101,20 @@ def analyze_local_return_shape(fn: ast.FunctionDef) -> LocalReturnShape:
         raise CompileError(f"Local function {fn.name}() does not support starred return elements")
     if any(isinstance(item, (ast.Tuple, ast.List)) for item in expressions):
         raise CompileError(f"Local function {fn.name}() does not support nested tuple returns")
+    if output_label is not None and len(expressions) != 1:
+        raise CompileError(f"Local function {fn.name}() cannot label a tuple return")
     used: dict[str, int] = {}
     elements: list[LocalReturnElement] = []
     for index, expression in enumerate(expressions):
-        base = _display_name(expression.id) if isinstance(expression, ast.Name) else f"Value {index + 1}"
+        base = (_display_name(expression.id) if isinstance(expression, ast.Name)
+                else "Value" if len(expressions) == 1 else f"Value {index + 1}")
         count = used.get(base, 0) + 1
         used[base] = count
         socket_name = base if count == 1 else f"{base} {count}"
         elements.append(LocalReturnElement(index, socket_name, f"return:{index}", expression))
-    if len(elements) == 1:
+    if output_label is not None:
         element = elements[0]
-        elements[0] = LocalReturnElement(0, "Value", "return:0", element.expression)
+        elements[0] = LocalReturnElement(0, output_label, "return:0", element.expression)
     return LocalReturnShape(tuple(elements))
 
 

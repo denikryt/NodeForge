@@ -38,7 +38,7 @@ def test_scalar_function_compiles_direct_original_ast_and_typed_output():
     assert not group.geometry_mode
     assert [item.source_name for item in group.interface.inputs] == ['value', 'scale']
     assert [item.has_default for item in group.interface.inputs] == [False, True]
-    assert [item.display_name for item in group.interface.outputs] == ['Value']
+    assert [item.display_name for item in group.interface.outputs] == ['Amount']
     assert [item.typ for item in group.interface.outputs] == [NFType.FLOAT]
     assert group.body.statements[0].declaration_id == InputDeclarationId('decl', 'value', 0)
     assert isinstance(group.body.statements[0], IRInputDeclaration)
@@ -110,7 +110,7 @@ def test_singleton_tuple_return_remains_a_valid_single_value():
     """A flat nonempty tuple of one element is an ordinary valid return."""
     group = _compile('def fn(x: Float):\n    return (x,)')
     assert [item.typ for item in group.interface.outputs] == [NFType.FLOAT]
-    assert [item.display_name for item in group.interface.outputs] == ['Value']
+    assert [item.display_name for item in group.interface.outputs] == ['X']
 
 
 @pytest.mark.parametrize('call_name', ['range', 'repeat_range'])
@@ -123,3 +123,43 @@ def test_explicit_float_loop_count_remains_float_and_is_rejected(call_name):
         value = value + 1.0
     return value
 """)
+
+
+def test_scalar_return_expression_keeps_value_fallback():
+    group = _compile('def fn(x: Float) -> Float:\n    return x + 1.0')
+    assert [item.display_name for item in group.interface.outputs] == ['Value']
+
+
+def test_scalar_return_annotation_overrides_variable_and_expression_names():
+    for expression in ('x', 'x + 1.0'):
+        group = _compile(f'def fn(x: Float) -> Float["Custom Result"]:\n    return {expression}')
+        assert [item.display_name for item in group.interface.outputs] == ['Custom Result']
+        assert group.body.statements[-1].name == 'Custom Result'
+
+
+def test_scalar_geometry_return_annotation_accepts_custom_label():
+    group = _compile('def fn(geo: Geometry) -> Geometry["Modified Geometry"]:\n    return transform(geo)')
+    assert group.interface.outputs[0].typ is NFType.GEOMETRY
+    assert group.interface.outputs[0].display_name == 'Modified Geometry'
+
+
+@pytest.mark.parametrize('return_type', [
+    'Float[""]',
+    'Float["  "]',
+    'Float[1]',
+    'Float["First", "Second"]',
+    'Float[label]',
+])
+def test_invalid_scalar_output_labels_are_rejected(return_type):
+    with pytest.raises(CompileError, match='label'):
+        _compile(f'def fn(x: Float) -> {return_type}:\n    return x')
+
+
+def test_scalar_label_is_rejected_for_multi_output_tuple():
+    with pytest.raises(CompileError, match='tuple|scalar return annotation'):
+        _compile('def fn(x: Float) -> Float["Named"]:\n    return x, x')
+
+
+def test_custom_output_label_does_not_suppress_return_type_validation():
+    with pytest.raises(CompileError, match='returns'):
+        _compile('def fn(x: Float) -> Vector["Name"]:\n    return x')

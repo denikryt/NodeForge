@@ -33,13 +33,14 @@ def validate_source_definition_contract(
             fn, owner_scope=owner_scope, declaration_owner=declaration_owner,
             compile_time_values=compile_time_values,
         )
-        shape = analyze_local_return_shape(fn)
+        output_label = None
         if fn.returns is not None:
-            declared_type, label = resolve_parameter_annotation(fn.returns)
-            if declared_type is None or label is not None:
-                raise CompileError("scalar return annotation must be one unlabelled runtime type")
-            if len(shape.elements) != 1:
-                raise CompileError("scalar return annotation cannot annotate tuple results")
+            declared_type, output_label = resolve_parameter_annotation(fn.returns)
+            if declared_type is None:
+                raise CompileError("scalar return annotation must be one runtime type")
+        shape = analyze_local_return_shape(fn, output_label=output_label)
+        if fn.returns is not None and len(shape.elements) != 1:
+            raise CompileError("scalar return annotation cannot annotate tuple results")
         obsolete = set(INPUT_DECLARATION_BUILTIN_NAMES) | {"output"}
         for statement in fn.body:
             for node in ast.walk(statement):

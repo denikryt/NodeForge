@@ -84,7 +84,7 @@ def nf_fixture():
 ''', "NFTest_raw_string_output")
     raw = _one_node(group, "FunctionNodeInputString")
     check(raw.string == "Weight_A", "raw String node property mismatch")
-    check(_interface_socket(group, "Value", "OUTPUT").socket_type == "NodeSocketString", "raw String output interface mismatch")
+    check(_interface_socket(group, "Text", "OUTPUT").socket_type == "NodeSocketString", "raw String output interface mismatch")
 
 
 def test_runtime_string_wires_raw_named_attribute_and_store_named_attribute():
@@ -164,7 +164,7 @@ def nf_fixture(name: String['Name'] = 'B'):
     group_output = wrapper.nodes.new("NodeGroupOutput")
     group_node = wrapper.nodes.new("GeometryNodeGroup")
     group_node.node_tree = group
-    wrapper.links.new(group_node.outputs["Value"], group_output.inputs["Name"])
+    wrapper.links.new(group_node.outputs[0], group_output.inputs["Name"])
 
     compiler.update_expression_group(group, after)
     check(group_node.inputs["Name"].default_value == "B", "new String script default did not reach non-overridden instance")

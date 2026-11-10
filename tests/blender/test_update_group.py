@@ -116,14 +116,14 @@ def nf_fixture(count: Int['Count'] = 4):
     group_output = wrapper.nodes.new('NodeGroupOutput')
     group_node = wrapper.nodes.new('GeometryNodeGroup')
     group_node.node_tree = group
-    wrapper.links.new(group_node.outputs['Value'], group_output.inputs['Geometry'])
+    wrapper.links.new(group_node.outputs[0], group_output.inputs['Geometry'])
 
     compiler.update_expression_group(group, source)
 
     output_names = [socket.name for socket in group_node.outputs]
-    check('Value' in output_names, f'updated group node outputs missing instance_points: {output_names}')
+    check('Instance Points' in output_names, f'updated group node outputs missing instance_points: {output_names}')
     link_names = [(link.from_socket.name, link.to_socket.name) for link in wrapper.links]
-    check(('Value', 'Geometry') in link_names, f'instance_points external link was not preserved: {link_names}')
+    check(('Instance Points', 'Geometry') in link_names, f'instance_points external link was not preserved: {link_names}')
 
     repeat_outputs = [node for node in group.nodes if node.bl_idname == 'GeometryNodeRepeatOutput']
     check(len(repeat_outputs) == 1, 'expected one Repeat Output after update')
@@ -171,7 +171,7 @@ def nf_fixture(radius: Float['Radius'] = 0.2, segments: Int['Segments'] = 12):
     group_node = wrapper.nodes.new("GeometryNodeGroup")
     group_node.node_tree = group
     wrapper.links.new(wrapper_input.outputs["External Segments"], group_node.inputs["Segments"])
-    wrapper.links.new(group_node.outputs["Value"], wrapper_output.inputs["Result"])
+    wrapper.links.new(group_node.outputs[0], wrapper_output.inputs["Result"])
     group_node.inputs["Radius"].default_value = 0.33
 
     compiler.update_expression_group(group, source_after)
@@ -271,9 +271,9 @@ def nf_fixture(x: Float['X'] = 10.0, y: Float['Y'] = 20.0, z: Float['Z'] = 30.0)
     leaf_3.inputs["Z"].default_value = 3.3
 
     wrapper_a.links.new(driver.outputs["Driver"], leaf_1.inputs["Y"])
-    wrapper_a.links.new(leaf_2.outputs["Value"], leaf_1.inputs["X"])
-    wrapper_a.links.new(leaf_1.outputs["Value"], output.inputs["Result"])
-    wrapper_b.links.new(leaf_3.outputs["Value"], math.inputs[0])
+    wrapper_a.links.new(leaf_2.outputs[0], leaf_1.inputs["X"])
+    wrapper_a.links.new(leaf_1.outputs[0], output.inputs["Result"])
+    wrapper_b.links.new(leaf_3.outputs[0], math.inputs[0])
 
     compiler.update_expression_group(group, source_after)
 
@@ -292,9 +292,9 @@ def nf_fixture(x: Float['X'] = 10.0, y: Float['Y'] = 20.0, z: Float['Z'] = 30.0)
     links_a = [(link.from_node, link.from_socket.name, link.to_node, link.to_socket.name) for link in wrapper_a.links]
     links_b = [(link.from_node, link.from_socket.name, link.to_node, link.to_socket.name) for link in wrapper_b.links]
     check(links_a.count((driver, "Driver", leaf_1, "Y")) == 1, "stable-to-affected link was not restored exactly once")
-    check(links_a.count((leaf_2, "Value", leaf_1, "X")) == 1, "affected-to-affected link was not restored exactly once")
-    check(links_a.count((leaf_1, "Value", output, "Result")) == 1, "affected-to-stable link was not restored exactly once")
-    check(links_b.count((leaf_3, "Value", math, "Value")) == 1, "cross-tree affected link was not restored exactly once")
+    check(links_a.count((leaf_2, "Result", leaf_1, "X")) == 1, "affected-to-affected link was not restored exactly once")
+    check(links_a.count((leaf_1, "Result", output, "Result")) == 1, "affected-to-stable link was not restored exactly once")
+    check(links_b.count((leaf_3, "Result", math, "Value")) == 1, "cross-tree affected link was not restored exactly once")
 
     blender_group_backend._TEST_CUTOVER_FAIL_AFTER_RESET = True
     try:
@@ -310,9 +310,9 @@ def nf_fixture(x: Float['X'] = 10.0, y: Float['Y'] = 20.0, z: Float['Z'] = 30.0)
     links_a = [(link.from_node, link.from_socket.name, link.to_node, link.to_socket.name) for link in wrapper_a.links]
     links_b = [(link.from_node, link.from_socket.name, link.to_node, link.to_socket.name) for link in wrapper_b.links]
     check(links_a.count((driver, "Driver", leaf_1, "Y")) == 1, "rollback lost stable-to-affected link")
-    check(links_a.count((leaf_2, "Value", leaf_1, "X")) == 1, "rollback lost affected-to-affected link")
-    check(links_a.count((leaf_1, "Value", output, "Result")) == 1, "rollback lost affected-to-stable link")
-    check(links_b.count((leaf_3, "Value", math, "Value")) == 1, "rollback lost cross-tree affected link")
+    check(links_a.count((leaf_2, "Result", leaf_1, "X")) == 1, "rollback lost affected-to-affected link")
+    check(links_a.count((leaf_1, "Result", output, "Result")) == 1, "rollback lost affected-to-stable link")
+    check(links_b.count((leaf_3, "Result", math, "Value")) == 1, "rollback lost cross-tree affected link")
     leaked = [
         item.name
         for item in bpy.data.node_groups
@@ -357,7 +357,7 @@ def test_update_group_drops_removed_and_incompatible_socket_state_without_positi
     group_node.inputs['Keep'].default_value = 1.5
     group_node.inputs['Changed'].default_value = 3.5
     math = wrapper.nodes.new('ShaderNodeMath')
-    wrapper.links.new(group_node.outputs['Value'], math.inputs[0])
+    wrapper.links.new(group_node.outputs[0], math.inputs[0])
     previous_links = tuple((link.from_socket.name, link.to_socket.name) for link in wrapper.links)
     with pytest.raises(CompileError, match='specialization'):
         compiler.update_expression_group(group, after)
@@ -422,7 +422,7 @@ def nf_fixture(x: Float['X'] = 3.0):
     group_node.node_tree = group
     blender_update._apply_group_defaults_to_node(group_node)
     group_node.inputs["X"].default_value = 1.5
-    wrapper.links.new(group_node.outputs["Value"], output.inputs["X"])
+    wrapper.links.new(group_node.outputs[0], output.inputs["X"])
 
     transaction = blender_group_backend.BlenderGroupBuildTransaction()
     prepared_create_or_update(second, group.name, existing_group=group, build_options={"local_helper_transaction": transaction})
@@ -561,7 +561,7 @@ def nf_fixture():
     group_output = wrapper.nodes.new("NodeGroupOutput")
     group_node = wrapper.nodes.new("GeometryNodeGroup")
     group_node.node_tree = group
-    wrapper.links.new(group_node.outputs["Value"], group_output.inputs["Geometry"])
+    wrapper.links.new(group_node.outputs[0], group_output.inputs["Geometry"])
 
     compiler.update_expression_group(group, source)
 
@@ -579,7 +579,7 @@ def nf_fixture():
         check("x" in output_names, f"nested Repeat Output lost x output socket: {output_names}")
 
     link_names = [(link.from_socket.name, link.to_socket.name) for link in wrapper.links]
-    check(("Value", "Geometry") in link_names, f"nested update lost external Geometry link: {link_names}")
+    check(("Geometry", "Geometry") in link_names, f"nested update lost external Geometry link: {link_names}")
     check(
         _evaluate_group_geometry_vertices(group, "NFTest_update_nested_repeat_eval") == [(6.0, 0.0, 0.0)],
         "nested Repeat result changed after transactional cutover",
@@ -668,7 +668,7 @@ def nf_fixture(radius: Float['Radius'] = 0.1, segments: Int['Segments'] = 8):
         group_node = wrapper.nodes.new("GeometryNodeGroup")
         group_node.node_tree = group
         wrapper.links.new(wrapper_input.outputs["External Segments"], group_node.inputs["Segments"])
-        wrapper.links.new(group_node.outputs["Value"], wrapper_output.inputs["Result"])
+        wrapper.links.new(group_node.outputs[0], wrapper_output.inputs["Result"])
         group_node.inputs["Radius"].default_value = 0.33
 
         second_wrapper = bpy.data.node_groups.new("NFTest_library_reload_state_second_wrapper", "GeometryNodeTree")
@@ -677,7 +677,7 @@ def nf_fixture(radius: Float['Radius'] = 0.1, segments: Int['Segments'] = 8):
         blender_update._apply_group_defaults_to_node(second_node)
         second_node.inputs["Radius"].default_value = 0.44
         math = second_wrapper.nodes.new("ShaderNodeMath")
-        second_wrapper.links.new(second_node.outputs["Value"], math.inputs[0])
+        second_wrapper.links.new(second_node.outputs[0], math.inputs[0])
 
         source.write_text(
             '''
@@ -695,7 +695,7 @@ def nf_fixture(radius: Float['Radius'] = 0.2, segments: Int['Segments'] = 12):
         check(abs(float(second_node.inputs["Radius"].default_value) - 0.44) < 1e-6, "library reload lost another instance override")
         check(int(second_node.inputs["Segments"].default_value) == 12, "library reload did not apply new default to another instance")
         incoming = [link for link in wrapper.links if link.to_node == group_node and link.to_socket.name == "Segments"]
-        outgoing = [link for link in wrapper.links if link.from_node == group_node and link.from_socket.name == "Value"]
+        outgoing = [link for link in wrapper.links if link.from_node == group_node and link.from_socket.name == "Radius"]
         check(len(incoming) == 1, "library reload lost incoming external link")
         check(len(outgoing) == 1, "library reload lost outgoing external link")
         check(any(link.from_node == second_node and link.to_node == math for link in second_wrapper.links), "library reload lost another tree's link")
@@ -948,3 +948,59 @@ def test_update_group_preserves_branch_input_declaration_identity_overrides_and_
     check(abs(float(group_node.inputs['B'].default_value) - 22.0) < 1e-6, 'B override was not restored')
     incoming = [link for link in wrapper.links if link.to_node == group_node and link.to_socket.name == 'B']
     check(len(incoming) == 1 and incoming[0].from_socket.name == 'External B', 'external B link was not restored')
+
+
+def test_single_return_label_update_preserves_existing_external_link():
+    """A scalar output's display rename must not disconnect pre-existing Blender users."""
+    original = '''
+def nf_fixture() -> Geometry["Value"]:
+    result = cube(1.0)
+    return result
+'''
+    renamed = '''
+def nf_fixture() -> Geometry:
+    result = cube(1.0)
+    return result
+'''
+    group = compile_group(original, 'NFTest_scalar_label_migration')
+    wrapper = bpy.data.node_groups.new('NFTest_scalar_label_migration_wrapper', 'GeometryNodeTree')
+    wrapper.interface.new_socket(name='Geometry', in_out='OUTPUT', socket_type='NodeSocketGeometry')
+    group_node = wrapper.nodes.new('GeometryNodeGroup')
+    group_node.node_tree = group
+    output = wrapper.nodes.new('NodeGroupOutput')
+    wrapper.links.new(group_node.outputs['Value'], output.inputs['Geometry'])
+
+    compiler.update_expression_group(group, renamed)
+    check([sock.name for sock in group_node.outputs] == ['Result'], 'label rename was not published')
+    check([(link.from_socket.name, link.to_socket.name) for link in wrapper.links] ==
+          [('Result', 'Geometry')], 'scalar output link was lost on label rename')
+
+    compiler.update_expression_group(group, original)
+    check([(link.from_socket.name, link.to_socket.name) for link in wrapper.links] ==
+          [('Value', 'Geometry')], 'scalar output link was lost on reverse rename')
+
+
+def test_multi_return_label_change_does_not_guess_external_correspondence():
+    """Ambiguous output changes must not restore an unrelated external connection."""
+    before = '''
+def nf_fixture(x: Float):
+    first = x
+    second = x + 1
+    return first, second
+'''
+    after = '''
+def nf_fixture(x: Float):
+    left = x
+    right = x + 1
+    return left, right
+'''
+    group = compile_group(before, 'NFTest_multi_output_migration')
+    wrapper = bpy.data.node_groups.new('NFTest_multi_output_migration_wrapper', 'GeometryNodeTree')
+    math = wrapper.nodes.new('ShaderNodeMath')
+    node = wrapper.nodes.new('GeometryNodeGroup')
+    node.node_tree = group
+    wrapper.links.new(node.outputs['First'], math.inputs[0])
+
+    compiler.update_expression_group(group, after)
+    check([sock.name for sock in node.outputs] == ['Left', 'Right'], 'updated multi-output labels missing')
+    check(len(wrapper.links) == 0, 'ambiguous multi-output rename reconnected unrelated output')

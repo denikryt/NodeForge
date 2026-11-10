@@ -140,9 +140,9 @@ def compile_function_definition(
         if len(outputs) != 1:
             raise CompileError(f"{fn.name}() scalar return annotation is incompatible with tuple return")
         from .function_signatures import resolve_parameter_annotation
-        declared, label = resolve_parameter_annotation(fn.returns)
-        if declared is None or label is not None:
-            raise CompileError(f"{fn.name}() return annotation must be an unlabelled runtime type")
+        declared, _ = resolve_parameter_annotation(fn.returns)
+        if declared is None:
+            raise CompileError(f"{fn.name}() return annotation must be one runtime type")
         if not source_argument_type_matches(declared, outputs[0].typ):
             raise CompileError(f"{fn.name}() returns {outputs[0].typ}, not declared {declared}")
     # Parameter declarations are body IR so the normal Blender group lowering

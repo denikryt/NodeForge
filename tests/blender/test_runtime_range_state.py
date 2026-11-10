@@ -235,7 +235,7 @@ def _evaluated_vertices(group, name, input_values=None):
             int_node = wrapper.nodes.new("FunctionNodeInputInt")
             int_node.integer = int(value)
             wrapper.links.new(int_node.outputs["Integer"], group_node.inputs[socket_name])
-        wrapper.links.new(group_node.outputs["Value"], group_output.inputs["Geometry"])
+        wrapper.links.new(group_node.outputs[0], group_output.inputs["Geometry"])
         eval_group = wrapper
     modifier.node_group = eval_group
     obj.update_tag()

@@ -50,7 +50,7 @@ def nf_fixture(a: Float['A'], b: Float['B']):
     check(len(calls) == 1, f"expected one IRBody lowering session, got {len(calls)}")
     check(calls[0][2] == 1, f"body expression base depth changed: {calls[0][2]}")
     outputs = _interface_sockets(group, "OUTPUT")
-    check([item.name for item in outputs] == ["Value"], f"unexpected final-expression output interface: {[item.name for item in outputs]}")
+    check([item.name for item in outputs] == ["X"], f"unexpected final-expression output interface: {[item.name for item in outputs]}")
     math_nodes = [node for node in group.nodes if getattr(node, "bl_idname", "") == "ShaderNodeMath"]
     check([node.operation for node in math_nodes] == ["ADD", "MULTIPLY"], "assignment topology/order changed")
     check(tuple(math_nodes[0].location) == (240.0, -90.0), f"ADD placement changed: {tuple(math_nodes[0].location)}")
@@ -328,7 +328,7 @@ def nf_fixture(x: Float['X'] = 1.0):
     outputs = [node for node in group.nodes if getattr(node, "bl_idname", "") == "NodeGroupOutput"]
     result_links = [
         link for link in group.links
-        if link.to_node in outputs and link.to_socket.name == "Value"
+        if link.to_node in outputs and link.to_socket.name == "X"
     ]
     check(len(result_links) == 1, f"expected one X output link, found {len(result_links)}")
     check(result_links[0].from_node == adds[0], "literal-if output is not driven by the reachable ADD")

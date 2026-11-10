@@ -21,11 +21,11 @@ def _function(source):
     return ast.parse(source).body[0]
 
 
-def test_scalar_return_shape_preserves_value_name():
+def test_scalar_return_shape_uses_returned_variable_name():
     module = _source_callables()
     shape = module.analyze_local_return_shape(_function("def f(x):\n    return x\n"))
     assert len(shape.elements) == 1
-    assert shape.elements[0].socket_name == "Value"
+    assert shape.elements[0].socket_name == "X"
 
 
 def test_tuple_return_names_and_order():
@@ -69,7 +69,7 @@ def test_return_shape_metadata_serializes_historical_type_tokens(monkeypatch):
     monkeypatch.setitem(sys.modules, "bpy", types.SimpleNamespace(data=types.SimpleNamespace(node_groups={})))
     sys.modules.pop("NodeForge.blender.local_functions", None)
     from NodeForge.blender import local_functions
-    assert local_functions._serialize_return_shape(shape, (NFType.FLOAT,)) == '[{"key":"return:0","name":"Value","type":"FLOAT"}]'
+    assert local_functions._serialize_return_shape(shape, (NFType.FLOAT,)) == '[{"key":"return:0","name":"X","type":"FLOAT"}]'
 
 
 def test_local_signature_serialization_preserves_historical_identity():

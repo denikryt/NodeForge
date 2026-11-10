@@ -400,7 +400,7 @@ def nf_fixture(value: Vector['Euler']):
             for item in group.interface.items_tree
             if getattr(item, "item_type", None) == "SOCKET"
             and getattr(item, "in_out", None) == "OUTPUT"
-            and item.name == "Value"
+            and item.name == "Result"
         )
         assert output.socket_type == "NodeSocketRotation"
 

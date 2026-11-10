@@ -271,7 +271,7 @@ def nf_fixture(a: Float['A'] = 2.0):
     result_links = [
         link
         for link in group.links
-        if _pointer(link.to_node) == _pointer(outputs[0]) and link.to_socket.name == "Value"
+        if _pointer(link.to_node) == _pointer(outputs[0]) and link.to_socket.name == "Result"
     ]
     check(len(result_links) == 1, "Result output is not linked exactly once")
     check(
@@ -1081,7 +1081,7 @@ def nf_fixture(a: Float['A'], b: Float['B']):
         "NFTest_complete_ir_array_identity",
     )
     output = _nodes(group, "NodeGroupOutput")[0]
-    selected = next(socket for socket in output.inputs if socket.name == "Value")
+    selected = next(socket for socket in output.inputs if socket.name == "Selected")
     link = _link_to_socket(group, selected)
     check(link.from_node.bl_idname == "NodeGroupInput", "array selection no longer returns the existing binding socket")
     check(link.from_socket.name == "A", "unary-plus array selection changed selected socket identity")

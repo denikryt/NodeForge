@@ -67,7 +67,7 @@ def _curve_to_mesh_wrapper(group, name):
     for item in getattr(group.interface, "items_tree", []):
         if getattr(item, "item_type", None) == "SOCKET" and getattr(item, "in_out", None) == "INPUT":
             wrapper.links.new(group_input.outputs[item.name], group_node.inputs[item.name])
-    wrapper.links.new(group_node.outputs["Value"], curve_to_mesh.inputs["Curve"])
+    wrapper.links.new(group_node.outputs[0], curve_to_mesh.inputs["Curve"])
     wrapper.links.new(curve_to_mesh.outputs["Mesh"], group_output.inputs["Geometry"])
     return wrapper
 

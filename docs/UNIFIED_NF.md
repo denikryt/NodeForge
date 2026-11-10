@@ -45,7 +45,13 @@ def translate(geo: Geometry, by: Vector["Offset"] = vector(0, 0, 1)) -> Geometry
 moved = translate(cube(1), by=vector(1, 0, 0))
 ```
 
-Use a final `return` in each `def`. It may return one value or a nonempty flat tuple. For a single value, the output is named `Value`; for tuple values, output names derive from returned identifiers or indexed `Value N` labels, with duplicate-name disambiguation. A scalar return annotation is checked against its resulting type. Nested tuples and missing/multiple nonterminal returns are rejected.
+Use a final `return` in each `def`. It may return one value or a nonempty flat tuple. For a single returned identifier, the output name is derived from that identifier (`return final_geometry` creates `Final Geometry`); a single expression without a returned identifier uses `Value`. Flat tuples use the same identifier naming and indexed `Value N` fallback, with duplicate-name disambiguation. An explicit scalar return annotation can override the output label with `Type["Socket Label"]`; this takes precedence over the returned variable name, and the return value must still match the annotated type. Nested tuples and missing/multiple nonterminal returns are rejected.
+
+```python
+def move(geometry: Geometry) -> Geometry["Moved Geometry"]:
+    result = transform(geometry, translation=vector(1, 0, 0))
+    return result  # Blender output: Moved Geometry (explicit label wins)
+```
 
 `panel([parameter_name, ...], name="Settings", collapsed=True)` is permitted in the initial declarative prefix of a function body. It changes physical layout, not parameter identity, logical positional order or keyword spelling.
 

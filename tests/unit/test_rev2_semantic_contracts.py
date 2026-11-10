@@ -285,7 +285,7 @@ x = f()"""
     ("def broken(x: Int):\n    return ()", "empty tuple"),
     ("def broken(x: Int):\n    output('Value', x)\n    return x", "obsolete group interface"),
     ("def broken(x: Int):\n    x = x + 1\n    panel([x], name='P')\n    return x", "precede executable statements"),
-    ("def broken(x: Int) -> Vector['Label']:\n    return x", "unlabelled runtime type"),
+    ("def broken(x: Int) -> Vector['']:\n    return x", "non-empty string literal"),
 ])
 def test_pure_declaration_contract_rejects_invalid_source_without_backend(body, expected):
     import ast
@@ -299,6 +299,16 @@ def test_pure_declaration_contract_rejects_invalid_source_without_backend(body, 
     assert "broken()" in str(caught.value)
     assert "line" in str(caught.value)
     assert "some/module.nf" in str(caught.value)
+
+
+def test_pure_contract_accepts_labeled_scalar_return_without_eager_body_type_check():
+    import ast
+    from NodeForge.semantic.source_definition_contract import validate_source_definition_contract
+    fn = ast.parse('def f(x: Int) -> Vector["Custom Name"]:\n    return x').body[0]
+    signature, shape = validate_source_definition_contract(
+        fn, owner_scope='s', declaration_owner='d',
+    )
+    assert shape.elements[0].socket_name == 'Custom Name'
 
 
 def test_pure_contract_does_not_eagerly_check_runtime_body_operations():

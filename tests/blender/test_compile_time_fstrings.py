@@ -21,7 +21,7 @@ def nf_fixture(a: Float["Result Value"] = 1.0):
     return (result_output,)
 ''', "NFTest_compile_time_fstring_io")
     check("Result Value" in _socket_names(group, "INPUT"), "evaluated input name missing")
-    check("Value" in _socket_names(group, "OUTPUT"), "single function return output missing")
+    check("Result Output" in _socket_names(group, "OUTPUT"), "single function return output missing")
     check("prefix" not in _socket_names(group, "INPUT"), "string fragment became implicit input")
     check("input_suffix" not in _socket_names(group, "INPUT"), "f-string suffix became implicit input")
 
