@@ -178,6 +178,29 @@ def compose_source_initial(source: str, target, *, resolved_environment=None,
     return compose_prepared_initial(prepared, target, backend, session, source_module=snapshot)
 
 
+def update_source_in_tree(source: str, target, *, module_context: str | None = None):
+    """Replace ordinary nodes of an eligible base GeometryNodeTree in place.
+
+    Returns ``RootUpdateResult`` with the number of skipped old boundary links.
+    A ``RootUpdateError.may_have_mutated`` flag distinguishes errors that require
+    an Undo step from preflight or fully cleaned staging failures.
+    """
+    from .blender.root_update import (
+        validate_base_target, reject_node_local_animation, replace_prepared_root,
+    )
+
+    validate_base_target(target)
+    if not isinstance(source, str) or not source.strip():
+        raise CompileError('Update Script requires a nonblank selected Text source')
+    reject_node_local_animation(target)
+    prepared, backend, session, snapshot = _prepare_direct_source(
+        source, target, module_context=module_context,
+    )
+    return replace_prepared_root(
+        prepared, target, backend, session, source_module=snapshot,
+    )
+
+
 def _requires_mesh_compute(prepared) -> bool:
     """Classify used runtime dependencies after semantic resolution, not import text."""
     return any(owner and owner[0] in {"local-runtime", "examples-runtime"}
