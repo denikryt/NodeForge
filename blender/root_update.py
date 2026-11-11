@@ -1,14 +1,20 @@
-"""Invocation-local direct root staging and local cutover helpers.
+"""Invocation-local, one-pass replacement of ordinary base Geometry Nodes nodes.
 
-Ordinary nodes are staged into the authoritative root; nested transactions
-remain caller-owned until successful cutover.
+The authoritative root and its structural I/O are never copied on success.
+The one native root backup is used only for best-effort late failure recovery.
 """
 
 from __future__ import annotations
+
+from collections import Counter
 from dataclasses import dataclass
+import re
+
 import bpy
+
 from ..errors import CompileError
-from .group_authority import mark_transaction_private
+from ..function_instances import FUNCTION_ROOT_OWNER_ID_PROP
+from .group_authority import is_authority_ineligible_group, mark_transaction_private
 from .group_backend import (
     BlenderGroupBuildTransaction, _copy_node_properties, _sync_curve_mapping_state,
     _sync_capture_attribute_dynamic_items, _sync_repeat_zone_dynamic_items,
@@ -16,7 +22,17 @@ from .group_backend import (
 )
 from . import raw_nodes
 
+
 _IO_TYPES = frozenset({'NodeGroupInput', 'NodeGroupOutput'})
+_NODE_PATH = re.compile(r'''(?:^|\.)nodes\[(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)')\]''')
+
+
+@dataclass(frozen=True)
+class RootUpdateResult:
+    """Successful in-place update and the count of discarded old I/O edges."""
+
+    target: object
+    skipped_boundary_links: int
 
 
 class RootUpdateError(CompileError):
@@ -28,32 +44,52 @@ class RootUpdateError(CompileError):
         self.may_have_mutated = may_have_mutated
 
 
-@dataclass(frozen=True)
-class RootUpdateResult:
-    """Successful in-place update and the count of discarded old I/O edges."""
+def validate_base_target(target):
+    """Reject ineligible roots at the earliest boundary shared by UI/API."""
+    if getattr(target, 'bl_idname', None) != 'GeometryNodeTree':
+        raise CompileError('Open a base Geometry Nodes tree in the Node Editor')
+    if (getattr(target, 'library', None) is not None
+            or getattr(target, 'is_library_indirect', False)
+            or not getattr(target, 'is_editable', True)):
+        raise CompileError('The base Geometry Nodes tree is linked or read-only')
+    if is_authority_ineligible_group(target):
+        raise CompileError('Transaction-private or provisional node groups cannot be used as a base tree')
+    if target.get(FUNCTION_ROOT_OWNER_ID_PROP) or target.get('nodeforge_function_definition_owner'):
+        raise CompileError('An authoritative NodeForge function group cannot be used as a base tree')
+    if target.get('nodeforge_mesh_compute_stage_v1'):
+        raise CompileError('Mesh Compute-managed private roots cannot be used as a base tree')
+    return target
 
-    target: object
-    skipped_boundary_links: int
+
+def _animation_paths(tree):
+    """Yield legacy and layered-action FCurve paths plus driver paths."""
+    animation = tree.animation_data
+    if animation is None:
+        return
+    for curve in animation.drivers:
+        yield curve.data_path
+    action = animation.action
+    if action is None:
+        return
+    # Blender 5.2 actions may store curves in slotted channelbags.
+    for curve in getattr(action, 'fcurves', ()):
+        yield curve.data_path
+    for layer in getattr(action, 'layers', ()):
+        for strip in layer.strips:
+            for bag in getattr(strip, 'channelbags', ()):
+                for curve in bag.fcurves:
+                    yield curve.data_path
 
 
-@dataclass
-class RootUpdateStage:
-    """Invocation-owned snapshot, native backup and uncommitted nested transaction."""
-
-    target: object
-    old: tuple
-    old_ptrs: set
-    preexisting_ptrs: set
-    io_nodes: tuple
-    io_positions: dict
-    io_active: dict
-    interface_before: tuple
-    root_pointer: int
-    root_name: str
-    boundary: tuple
-    transaction: object
-    backup: object
-    new: tuple
+def reject_node_local_animation(tree):
+    """Disallow ordinary-node FCurves and drivers before any root mutation."""
+    for path in _animation_paths(tree):
+        for match in _NODE_PATH.finditer(path):
+            node_name = match[1] if match[1] is not None else match[2]
+            node_name = node_name.replace('\\"', '"').replace("\\'", "'").replace('\\\\', '\\')
+            node = tree.nodes.get(node_name)
+            if node is not None and node.bl_idname not in _IO_TYPES:
+                raise CompileError(f'Root node animation/driver path targets ordinary node {node_name!r}')
 
 
 def _ordinary(tree):
@@ -82,6 +118,44 @@ def _place_absolute(node, position):
         node.location = tuple(a - b for a, b in zip(position, origin))
     else:
         node.location = position
+
+
+
+def _parent_depth(node):
+    """Return Frame nesting depth so layout parents move before children."""
+    depth = 0
+    parent = node.parent
+    while parent is not None:
+        depth += 1
+        parent = parent.parent
+    return depth
+
+
+def _shape(node):
+    """Identify a conservative physical node/function counterpart for layout."""
+    group = getattr(node, 'node_tree', None) if node.bl_idname == 'GeometryNodeGroup' else None
+    if group is not None:
+        function = (group.get('nodeforge_function_definition_owner'),
+                    group.get('nodeforge_module_name'),
+                    group.get('nodeforge_function_instance_key'))
+        key = function if any(function) else ('manual', group.as_pointer())
+    else:
+        key = None
+    return (node.bl_idname, key, getattr(node, 'operation', None),
+            getattr(node, 'data_type', None))
+
+
+def _matches(old, new):
+    """Match ordered identical shapes, otherwise only individually unique shapes."""
+    old_shapes = [_shape(node) for node in old]
+    new_shapes = [_shape(node) for node in new]
+    if old_shapes == new_shapes:
+        return {a.as_pointer(): b for a, b in zip(old, new)}
+    old_counts, new_counts = Counter(old_shapes), Counter(new_shapes)
+    unique = {shape: node for node, shape in zip(new, new_shapes) if new_counts[shape] == 1}
+    return {node.as_pointer(): unique[shape]
+            for node, shape in zip(old, old_shapes)
+            if old_counts[shape] == 1 and shape in unique}
 
 
 def _socket_ref(node, socket, *, output):
@@ -133,6 +207,33 @@ def _interface_signature(tree):
                           getattr(item, 'in_out', None), getattr(item, 'socket_type', None),
                           default))
     return tuple(signature)
+
+
+def _reconnect_boundary(tree, records, matched):
+    """Restore best-effort I/O edges only for matched nodes and compatible sockets."""
+    skipped = 0
+    io_by_pointer = {node.as_pointer(): node for node in tree.nodes if node.bl_idname in _IO_TYPES}
+    for old_pointer, ordinary_ref, io_pointer, io_ref, ordinary_first in records:
+        target_node = matched.get(old_pointer)
+        io = io_by_pointer.get(io_pointer)
+        if target_node is None or io is None:
+            skipped += 1
+            continue
+        regular_socket = _resolve_socket(target_node, ordinary_ref, output=ordinary_first)
+        io_socket = _resolve_socket(io, io_ref, output=not ordinary_first)
+        if regular_socket is None or io_socket is None:
+            skipped += 1
+            continue
+        # Never replace an existing input or guess between competing old edges.
+        dest = io_socket if ordinary_first else regular_socket
+        if not getattr(dest, 'is_multi_input', False) and dest.is_linked:
+            skipped += 1
+            continue
+        if ordinary_first:
+            tree.links.new(regular_socket, io_socket)
+        else:
+            tree.links.new(io_socket, regular_socket)
+    return skipped
 
 
 def _copy_missing_old_nodes(tree, backup, old_ptrs):
@@ -211,99 +312,76 @@ def _fail(error, failures, *, possible_change):
     raise RootUpdateError(summary, may_have_mutated=possible_change or bool(failures)) from error
 
 
-def stage_prepared_root(prepared, target, backend, session, *, source_module):
-    """Stage ordinary nodes once alongside the old graph without publishing it.
-
-    On failure, only staged nodes are removed and nested rollback is attempted.
-    A successful result owns an uncommitted transaction and private root copy;
-    its caller must complete cutover or explicitly clean these resources.
-    """
+def replace_prepared_root(prepared, target, backend, session, *, source_module):
+    """Stage exactly once into `target`, cut over and commit nested groups last."""
     from .direct_composition import compose_prepared_initial, validate_prepared_direct
 
+    validate_base_target(target)
+    reject_node_local_animation(target)
     validate_prepared_direct(prepared, target)
+    root_pointer, root_name = target.as_pointer(), target.name
+    interface_before = _interface_signature(target)
     old = _ordinary(target)
     old_ptrs = {node.as_pointer() for node in old}
     preexisting_ptrs = {node.as_pointer() for node in target.nodes}
+    old_positions = {node.as_pointer(): _point(node) for node in old}
     io_nodes = tuple(node for node in target.nodes if node.bl_idname in _IO_TYPES)
     io_positions = {node.as_pointer(): _point(node) for node in io_nodes}
     io_active = {node.as_pointer(): getattr(node, 'is_active_output', False) for node in io_nodes
                  if node.bl_idname == 'NodeGroupOutput'}
-    state = RootUpdateStage(
-        target=target, old=old, old_ptrs=old_ptrs, preexisting_ptrs=preexisting_ptrs,
-        io_nodes=io_nodes, io_positions=io_positions, io_active=io_active,
-        interface_before=_interface_signature(target), root_pointer=target.as_pointer(),
-        root_name=target.name, boundary=_boundary(target, old),
-        transaction=BlenderGroupBuildTransaction(), backup=None, new=(),
-    )
-    try:
-        state.backup = target.copy()
-        mark_transaction_private(state.backup)
-        compose_prepared_initial(prepared, target, backend, session,
-                                 source_module=source_module, transaction=state.transaction)
-        state.new = tuple(node for node in target.nodes if node.as_pointer() not in preexisting_ptrs)
-        if any(node.bl_idname in _IO_TYPES for node in state.new):
-            raise CompileError('Direct Update cannot insert new structural Group Input/Output nodes')
-        return state
-    except Exception as exc:
-        possible_change = bool(state.transaction.updated_groups)
-        errors = _remove_staged(target, preexisting_ptrs)
-        try:
-            state.transaction.rollback()
-        except Exception as rollback_error:
-            errors.append(f'nested-group rollback: {rollback_error}')
-        try:
-            _remove_backup(state.backup)
-        except Exception as cleanup_error:
-            errors.append(f'backup cleanup: {cleanup_error}')
-        _fail(exc, errors, possible_change=possible_change)
-
-
-def cutover_staged_root(stage):
-    """Publish a previously staged root without guessing I/O links or positions.
-
-    The complete compatibility transfer is introduced by the public Update API
-    at the next checkpoint. This primitive owns final cleanup and commit.
-    """
-    tree = stage.target
+    boundary = _boundary(target, old)
+    transaction = BlenderGroupBuildTransaction()
+    backup = None
     cutover_started = False
-    backup = stage.backup
     try:
-        for io in stage.io_nodes:
-            if io.parent is not None and io.parent.as_pointer() in stage.old_ptrs:
-                absolute = stage.io_positions[io.as_pointer()]
-                io.parent = None
-                _place_absolute(io, absolute)
-        for node in stage.old:
+        backup = target.copy()
+        mark_transaction_private(backup)
+        compose_prepared_initial(prepared, target, backend, session,
+                                 source_module=source_module, transaction=transaction)
+        created = tuple(node for node in target.nodes if node.as_pointer() not in preexisting_ptrs)
+        if any(node.bl_idname in _IO_TYPES for node in created):
+            raise CompileError('Direct Update cannot insert new structural Group Input/Output nodes')
+        new = created
+        matched = _matches(old, new)
+        for node in io_nodes:
+            if node.parent is not None and node.parent.as_pointer() in old_ptrs:
+                absolute = io_positions[node.as_pointer()]
+                node.parent = None
+                _place_absolute(node, absolute)
+        for node in old:
             cutover_started = True
-            tree.nodes.remove(node)
-        if (tree.as_pointer() != stage.root_pointer or tree.name != stage.root_name
-                or _interface_signature(tree) != stage.interface_before
-                or any(not any(n.as_pointer() == io.as_pointer() for n in tree.nodes)
-                       for io in stage.io_nodes)
-                or any(_point(n) != stage.io_positions[n.as_pointer()] for n in stage.io_nodes)
-                or any(getattr(n, 'is_active_output', False) != stage.io_active[n.as_pointer()]
-                       for n in stage.io_nodes if n.bl_idname == 'NodeGroupOutput')):
+            target.nodes.remove(node)
+        skipped = _reconnect_boundary(target, boundary, matched)
+        for pointer, node in sorted(matched.items(), key=lambda item: _parent_depth(item[1])):
+            _place_absolute(node, old_positions[pointer])
+        if (target.as_pointer() != root_pointer or target.name != root_name
+                or _interface_signature(target) != interface_before
+                or any(not any(n.as_pointer() == io.as_pointer() for n in target.nodes) for io in io_nodes)
+                or any(_point(n) != io_positions[n.as_pointer()] for n in io_nodes)
+                or any(getattr(n, 'is_active_output', False) != io_active[n.as_pointer()]
+                       for n in io_nodes if n.bl_idname == 'NodeGroupOutput')):
             raise RuntimeError('Update changed root identity, interface or structural I/O')
-        if {node.as_pointer() for node in _ordinary(tree)} != {node.as_pointer() for node in stage.new}:
+        if {node.as_pointer() for node in _ordinary(target)} != {node.as_pointer() for node in new}:
             raise RuntimeError('Update left old ordinary nodes or lost staged nodes')
         _remove_backup(backup)
         backup = None
-        stage.transaction.commit()
-        return RootUpdateResult(tree, len(stage.boundary))
+        transaction.commit()
+        return RootUpdateResult(target, skipped)
     except Exception as exc:
-        possible_change = cutover_started or bool(stage.transaction.updated_groups)
-        errors = _remove_staged(tree, stage.preexisting_ptrs)
+        # A nested group may have been modified even before a root-node cutover.
+        possible_change = cutover_started or bool(transaction.updated_groups)
+        errors = _remove_staged(target, preexisting_ptrs)
         try:
-            stage.transaction.rollback()
+            transaction.rollback()
         except Exception as rollback_error:
             errors.append(f'nested-group rollback: {rollback_error}')
         if cutover_started and backup is not None:
             try:
-                _copy_missing_old_nodes(tree, backup, stage.old_ptrs)
-                for io in stage.io_nodes:
-                    _place_absolute(io, stage.io_positions[io.as_pointer()])
+                _copy_missing_old_nodes(target, backup, old_ptrs)
+                for io in io_nodes:
+                    _place_absolute(io, io_positions[io.as_pointer()])
                     if io.bl_idname == 'NodeGroupOutput':
-                        io.is_active_output = stage.io_active[io.as_pointer()]
+                        io.is_active_output = io_active[io.as_pointer()]
             except Exception as restore_error:
                 errors.append(f'root restoration: {restore_error}')
         elif cutover_started:
@@ -312,4 +390,6 @@ def cutover_staged_root(stage):
             _remove_backup(backup)
         except Exception as cleanup_error:
             errors.append(f'backup cleanup: {cleanup_error}')
+        if any(node.as_pointer() not in preexisting_ptrs for node in target.nodes):
+            possible_change = True
         _fail(exc, errors, possible_change=possible_change)
