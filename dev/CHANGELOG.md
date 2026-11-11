@@ -698,3 +698,9 @@ lifecycle.
 - Reject root ordinary-node animation referenced by NLA strip Actions, including when no active Action is assigned.
 - Restore structural Group I/O Frame parents and positions on root Update failure where possible; classify incomplete restoration as Undo-requiring.
 - Add Blender 5.2 regressions for NLA guards, pre-cutover I/O detachment failures, late Frame recovery and UI Undo signalling.
+
+## 0.90.2
+
+- Use Blender-generated node RNA paths to detect root ordinary-node animation without custom name parsing.
+- Record and reconnect root boundary links in their original output-to-input direction, retaining compatibility and occupied-input checks.
+- Cover escaped node names, structural-node path isolation, and directed boundary-link conflicts with Blender regressions.

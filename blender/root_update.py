@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-import re
 
 import bpy
 
@@ -24,7 +23,6 @@ from . import raw_nodes
 
 
 _IO_TYPES = frozenset({'NodeGroupInput', 'NodeGroupOutput'})
-_NODE_PATH = re.compile(r'''(?:^|\.)nodes\[(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)')\]''')
 
 
 @dataclass(frozen=True)
@@ -91,13 +89,16 @@ def _animation_paths(tree):
 
 def reject_node_local_animation(tree):
     """Disallow ordinary-node FCurves and drivers before any root mutation."""
-    for path in _animation_paths(tree):
-        for match in _NODE_PATH.finditer(path):
-            node_name = match[1] if match[1] is not None else match[2]
-            node_name = node_name.replace('\\"', '"').replace("\\'", "'").replace('\\\\', '\\')
-            node = tree.nodes.get(node_name)
-            if node is not None and node.bl_idname not in _IO_TYPES:
-                raise CompileError(f'Root node animation/driver path targets ordinary node {node_name!r}')
+    paths = tuple(_animation_paths(tree))
+    if not paths:
+        return
+    for node in _ordinary(tree):
+        # Blender owns RNA escaping; the separator prevents partial name matches.
+        prefix = node.path_from_id()
+        if any(path.startswith((prefix + '.', prefix + '[')) for path in paths):
+            raise CompileError(
+                f'Root node animation/driver path targets ordinary node {node.name!r}'
+            )
 
 
 def _ordinary(tree):
@@ -186,18 +187,15 @@ def _resolve_socket(node, ref, *, output):
     return None
 
 
-def _boundary(tree, old):
-    """Record old I/O-facing edges without retaining mutable node/socket handles."""
-    old_ptrs = {node.as_pointer() for node in old}
+def _boundary(tree):
+    """Record pre-stage I/O-facing links in native output-to-input direction."""
     edges = []
     for link in tree.links:
         source, dest = link.from_node, link.to_node
-        if source.as_pointer() in old_ptrs and dest.bl_idname in _IO_TYPES:
-            edges.append((source.as_pointer(), _socket_ref(source, link.from_socket, output=True),
-                          dest.as_pointer(), _socket_ref(dest, link.to_socket, output=False), True))
-        elif dest.as_pointer() in old_ptrs and source.bl_idname in _IO_TYPES:
-            edges.append((dest.as_pointer(), _socket_ref(dest, link.to_socket, output=False),
-                          source.as_pointer(), _socket_ref(source, link.from_socket, output=True), False))
+        if (source.bl_idname in _IO_TYPES) == (dest.bl_idname in _IO_TYPES):
+            continue
+        edges.append((source.as_pointer(), _socket_ref(source, link.from_socket, output=True),
+                      dest.as_pointer(), _socket_ref(dest, link.to_socket, output=False)))
     return tuple(edges)
 
 
@@ -218,29 +216,25 @@ def _interface_signature(tree):
 
 
 def _reconnect_boundary(tree, records, matched):
-    """Restore best-effort I/O edges only for matched nodes and compatible sockets."""
+    """Restore compatible, unambiguous pre-stage I/O links in original direction."""
     skipped = 0
     io_by_pointer = {node.as_pointer(): node for node in tree.nodes if node.bl_idname in _IO_TYPES}
-    for old_pointer, ordinary_ref, io_pointer, io_ref, ordinary_first in records:
-        target_node = matched.get(old_pointer)
-        io = io_by_pointer.get(io_pointer)
-        if target_node is None or io is None:
+    for source_pointer, output_ref, target_pointer, input_ref in records:
+        source = matched.get(source_pointer) or io_by_pointer.get(source_pointer)
+        target = matched.get(target_pointer) or io_by_pointer.get(target_pointer)
+        if source is None or target is None:
             skipped += 1
             continue
-        regular_socket = _resolve_socket(target_node, ordinary_ref, output=ordinary_first)
-        io_socket = _resolve_socket(io, io_ref, output=not ordinary_first)
-        if regular_socket is None or io_socket is None:
+        output = _resolve_socket(source, output_ref, output=True)
+        input_ = _resolve_socket(target, input_ref, output=False)
+        if output is None or input_ is None:
             skipped += 1
             continue
-        # Never replace an existing input or guess between competing old edges.
-        dest = io_socket if ordinary_first else regular_socket
-        if not getattr(dest, 'is_multi_input', False) and dest.is_linked:
+        # Never replace a newly staged input or guess between competing old edges.
+        if not getattr(input_, 'is_multi_input', False) and input_.is_linked:
             skipped += 1
             continue
-        if ordinary_first:
-            tree.links.new(regular_socket, io_socket)
-        else:
-            tree.links.new(io_socket, regular_socket)
+        tree.links.new(output, input_)
     return skipped
 
 
@@ -353,7 +347,7 @@ def replace_prepared_root(prepared, target, backend, session, *, source_module):
                  if node.bl_idname == 'NodeGroupOutput'}
     io_parent_names = {node.as_pointer(): node.parent.name for node in io_nodes
                        if node.parent is not None and node.parent.as_pointer() in old_ptrs}
-    boundary = _boundary(target, old)
+    boundary = _boundary(target)
     transaction = BlenderGroupBuildTransaction()
     backup = None
     cutover_started = False

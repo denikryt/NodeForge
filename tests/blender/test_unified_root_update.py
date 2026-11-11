@@ -245,6 +245,54 @@ def test_node_driver_is_rejected_while_root_interface_driver_is_allowed():
     assert len([n for n in tree.nodes if n.bl_idname == 'GeometryNodeMeshCube']) == 1
 
 
+@pytest.mark.parametrize('node_name', [
+    'Odd"Name', r'Back\\slash', 'Point.name', "It's",
+    'Bracket[nodes["Inner"]]',
+])
+def test_node_driver_guard_uses_blender_escaped_paths(node_name):
+    """Ordinary nodes with escaped RNA names reject driver-backed replacement."""
+    tree, _, outlet = _root('NFR5_escaped_node_path')
+    node = tree.nodes.new('GeometryNodeMeshCube')
+    node.name = node_name
+    tree.links.new(node.outputs['Mesh'], outlet.inputs['Geometry'])
+    node.driver_add('location', 0)
+    assert node.path_from_id() in tree.animation_data.drivers[0].data_path
+    before = {item.as_pointer() for item in tree.nodes}
+    with pytest.raises(CompileError, match='animation/driver'):
+        compiler.update_source_in_tree('a = cube(2)', tree)
+    assert {item.as_pointer() for item in tree.nodes} == before
+    assert tree.animation_data.drivers[0].data_path.startswith(node.path_from_id() + '.')
+
+
+def test_structural_driver_does_not_match_similar_ordinary_node_prefix():
+    """A structural node named like an ordinary one does not block Update."""
+    tree, inlet, _ = _root('NFR5_io_prefix')
+    ordinary = tree.nodes.new('GeometryNodeMeshCube')
+    ordinary.name = 'Node'
+    inlet.name = 'Node.001'
+    inlet.driver_add('location', 0)
+    assert inlet.path_from_id().startswith('nodes[')
+    compiler.update_source_in_tree('a = cube(3)', tree)
+    assert sum(node.bl_idname == 'GeometryNodeMeshCube' for node in tree.nodes) == 1
+
+
+def test_directed_boundary_preserves_output_and_skips_occupied_input():
+    """Only the old incoming I/O edge conflicts with a new compiler-owned input."""
+    tree, inlet, outlet = _root('NFR5_directed_boundary')
+    old = tree.nodes.new('GeometryNodeTransform')
+    tree.links.new(inlet.outputs['Geometry'], old.inputs['Geometry'])
+    tree.links.new(old.outputs['Geometry'], outlet.inputs['Geometry'])
+    result = compiler.update_source_in_tree('a = cube(1)\nb = transform(a)', tree)
+    transform, = (n for n in tree.nodes if n.bl_idname == 'GeometryNodeTransform')
+    assert result.skipped_boundary_links == 1
+    assert any(link.from_node.bl_idname == 'GeometryNodeMeshCube'
+               and link.to_node.as_pointer() == transform.as_pointer() for link in tree.links)
+    assert any(link.from_node.as_pointer() == transform.as_pointer()
+               and link.to_node.as_pointer() == outlet.as_pointer() for link in tree.links)
+    assert not any(link.from_node.as_pointer() == inlet.as_pointer()
+                   and link.to_node.as_pointer() == transform.as_pointer() for link in tree.links)
+
+
 def test_layout_identical_shapes_reuses_ordered_duplicate_positions():
     """Positional duplicate mapping is valid only when the entire old/new shape agrees."""
     tree, _, _ = _root('NFR5_ordered_duplicate')
