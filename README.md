@@ -47,12 +47,33 @@ See the [Get Started guide](https://denikryt.github.io/NodeForgeDocs/latest/GET_
 A module can mix function definitions, imports and ordinary executable statements:
 
 ```python
-def move_x(geometry: Geometry, x_shift: Float["X Shift"] = 0.0) -> Geometry:
+def move_x(
+    geometry: Geometry,
+    x_shift: Float["X Shift"] = 0.0
+) -> Geometry["Geometry"]:
     return transform(geometry, translation=vector(x_shift, 0, 0))
 
-left = move_x(cube(1.0), -2.0)
-right = move_x(cube(1.0), 2.0)
-combined = join([left, right])
+def cube_pair(
+    left: Float["Left"] = -2.0,
+    right: Float["Right"] = 2.0
+) -> Geometry['Cube Pair']:
+    left_cube = move_x(cube(1.0), left)
+    right_cube = move_x(cube(1.0), right)
+
+    pair = join([left_cube, right_cube])
+    return pair
+
+pair = cube_pair()
+
+sub_pair = node(
+    "GeometryNodeSubdivisionSurface",
+    inputs={"Mesh": pair, "Level": 2},
+    output="Mesh",
+    typ=Geometry,
+)
+
+center = cube(0.5)
+combined = join([sub_pair, center])
 ```
 
 Declarations are visible before their textual definition. Parameters use exact Python identifiers as keyword names; `Float["X Shift"]` changes the Blender display label, not the keyword `x_shift`. Every parameter must have an explicit type annotation, even if it has a default. Function-local assignments shadow same-named module definitions and constants; a local read or call before assignment is an error. A parameter without `=` is required in explicit calls, while omitted optional parameters use their declared defaults.
