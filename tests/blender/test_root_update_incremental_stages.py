@@ -107,3 +107,40 @@ def test_stage_failure_restores_old_root_and_removes_private_copy(monkeypatch):
     assert {n.as_pointer() for n in tree.nodes} == preexisting
     assert len(tree.links) == 1
     assert {g.as_pointer() for g in bpy.data.node_groups} == before_groups
+
+
+
+def test_cutover_replaces_manual_group_node_and_preserves_io():
+    """Successful cutover removes ordinary nodes while retaining physical root I/O."""
+    tree, old, outlet = _new_root('NFR5_stage3_positive')
+    sub = bpy.data.node_groups.new('NFR5_manual_stage3', 'GeometryNodeTree')
+    sub.interface.new_socket(name='Geometry', in_out='INPUT', socket_type='NodeSocketGeometry')
+    group = tree.nodes.new('GeometryNodeGroup')
+    group.node_tree = sub
+    old_ids = {old.as_pointer(), group.as_pointer()}
+    io_id = outlet.as_pointer()
+    root_id = tree.as_pointer()
+    prepared, backend, session, snapshot = compiler._prepare_direct_source('a = cube(3)', tree)
+    stage = root_update.stage_prepared_root(prepared, tree, backend, session, source_module=snapshot)
+    assert old_ids.issubset({n.as_pointer() for n in tree.nodes})
+    result = root_update.cutover_staged_root(stage)
+    assert result.target is tree and tree.as_pointer() == root_id
+    assert outlet.as_pointer() == io_id
+    assert not old_ids.intersection(n.as_pointer() for n in tree.nodes)
+    assert len([n for n in tree.nodes if n.bl_idname == 'GeometryNodeMeshCube']) == 1
+
+
+def test_cutover_failure_attempts_recovery(monkeypatch):
+    """After deletion starts, a late exception triggers best-effort restoration."""
+    tree, old, outlet = _new_root('NFR5_stage3_negative')
+    prepared, backend, session, snapshot = compiler._prepare_direct_source('a = cube(3)', tree)
+    stage = root_update.stage_prepared_root(prepared, tree, backend, session, source_module=snapshot)
+    original = root_update._interface_signature
+    def invalid_signature(target):
+        """Cause the post-cutover contract check to fail."""
+        return ('injected mismatch',)
+    monkeypatch.setattr(root_update, '_interface_signature', invalid_signature)
+    with pytest.raises(root_update.RootUpdateError, match='Update changed root identity') as info:
+        root_update.cutover_staged_root(stage)
+    assert info.value.may_have_mutated
+    assert len([n for n in tree.nodes if n.bl_idname == 'GeometryNodeMeshCube']) == 1
