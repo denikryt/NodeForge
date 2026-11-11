@@ -140,18 +140,13 @@ def create_expression_group(source: str, name: str = "NodeForge Group"):
     return group
 
 
-def compose_source_initial(source: str, target, *, resolved_environment=None,
+def _prepare_direct_source(source: str, target, *, resolved_environment=None,
                            module_context: str | None = None):
-    """Compile one `.nf` revision directly into an existing base node tree.
-
-    This internal entry does not create a root datablock or change its sockets.
-    It must not be exposed through UI until the initial-attempt journal and
-    physical extension preflight are installed.
-    """
+    """Prepare typed root statements once, without materializing Blender nodes."""
     from .compiler_identities import GroupCompilationIdentity, ModuleId
     from .function_instances import function_group_owner_scope
     from .semantic.source_modules import parse_source_module
-    from .blender.direct_composition import compose_prepared_initial
+    from .blender.direct_composition import validate_prepared_direct
 
     if getattr(target, "bl_idname", None) != "GeometryNodeTree":
         raise CompileError("Direct composition requires an existing base GeometryNodeTree")
@@ -167,7 +162,43 @@ def compose_source_initial(source: str, target, *, resolved_environment=None,
         source_callable_session=session, source_module=snapshot,
         direct_composition=True,
     )
+    validate_prepared_direct(prepared, target)
+    return prepared, backend, session, snapshot
+
+
+def compose_source_initial(source: str, target, *, resolved_environment=None,
+                           module_context: str | None = None):
+    """Append one typed `.nf` composition directly to an existing base tree."""
+    from .blender.direct_composition import compose_prepared_initial
+
+    prepared, backend, session, snapshot = _prepare_direct_source(
+        source, target, resolved_environment=resolved_environment,
+        module_context=module_context,
+    )
     return compose_prepared_initial(prepared, target, backend, session, source_module=snapshot)
+
+
+def update_source_in_tree(source: str, target, *, module_context: str | None = None):
+    """Replace ordinary nodes of an eligible base GeometryNodeTree in place.
+
+    Returns ``RootUpdateResult`` with the number of skipped old boundary links.
+    A ``RootUpdateError.may_have_mutated`` flag distinguishes errors that require
+    an Undo step from preflight or fully cleaned staging failures.
+    """
+    from .blender.root_update import (
+        validate_base_target, reject_node_local_animation, replace_prepared_root,
+    )
+
+    validate_base_target(target)
+    if not isinstance(source, str) or not source.strip():
+        raise CompileError('Update Script requires a nonblank selected Text source')
+    reject_node_local_animation(target)
+    prepared, backend, session, snapshot = _prepare_direct_source(
+        source, target, module_context=module_context,
+    )
+    return replace_prepared_root(
+        prepared, target, backend, session, source_module=snapshot,
+    )
 
 
 def _requires_mesh_compute(prepared) -> bool:
