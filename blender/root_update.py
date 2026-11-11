@@ -61,16 +61,8 @@ def validate_base_target(target):
     return target
 
 
-def _animation_paths(tree):
-    """Yield legacy and layered-action FCurve paths plus driver paths."""
-    animation = tree.animation_data
-    if animation is None:
-        return
-    for curve in animation.drivers:
-        yield curve.data_path
-    action = animation.action
-    if action is None:
-        return
+def _action_paths(action):
+    """Yield FCurve paths from a legacy or layered Blender Action."""
     # Blender 5.2 actions may store curves in slotted channelbags.
     for curve in getattr(action, 'fcurves', ()):
         yield curve.data_path
@@ -79,6 +71,22 @@ def _animation_paths(tree):
             for bag in getattr(strip, 'channelbags', ()):
                 for curve in bag.fcurves:
                     yield curve.data_path
+
+
+def _animation_paths(tree):
+    """Yield driver and active/NLA Action paths, including inactive NLA strips."""
+    animation = tree.animation_data
+    if animation is None:
+        return
+    for curve in animation.drivers:
+        yield curve.data_path
+    if animation.action is not None:
+        yield from _action_paths(animation.action)
+    # NLA strips can own Actions even when no active Action is assigned.
+    for track in animation.nla_tracks:
+        for strip in track.strips:
+            if strip.action is not None:
+                yield from _action_paths(strip.action)
 
 
 def reject_node_local_animation(tree):
@@ -283,6 +291,20 @@ def _copy_missing_old_nodes(tree, backup, old_ptrs):
     return mapped
 
 
+def _restore_structural_io(tree, io_nodes, positions, active_outputs, parent_names):
+    """Restore physical I/O Frame parenting and locations after failed cutover."""
+    for node in io_nodes:
+        parent_name = parent_names.get(node.as_pointer())
+        if parent_name is not None:
+            parent = tree.nodes.get(parent_name)
+            if parent is None or parent.bl_idname != 'NodeFrame':
+                raise RuntimeError(f'Cannot restore structural I/O Frame {parent_name!r}')
+            node.parent = parent
+        _place_absolute(node, positions[node.as_pointer()])
+        if node.bl_idname == 'NodeGroupOutput':
+            node.is_active_output = active_outputs[node.as_pointer()]
+
+
 def _remove_staged(tree, preexisting_ptrs):
     """Remove all attempt-created nodes, including unexpected structural ones."""
     failures = []
@@ -329,10 +351,13 @@ def replace_prepared_root(prepared, target, backend, session, *, source_module):
     io_positions = {node.as_pointer(): _point(node) for node in io_nodes}
     io_active = {node.as_pointer(): getattr(node, 'is_active_output', False) for node in io_nodes
                  if node.bl_idname == 'NodeGroupOutput'}
+    io_parent_names = {node.as_pointer(): node.parent.name for node in io_nodes
+                       if node.parent is not None and node.parent.as_pointer() in old_ptrs}
     boundary = _boundary(target, old)
     transaction = BlenderGroupBuildTransaction()
     backup = None
     cutover_started = False
+    io_detach_started = False
     try:
         backup = target.copy()
         mark_transaction_private(backup)
@@ -346,6 +371,7 @@ def replace_prepared_root(prepared, target, backend, session, *, source_module):
         for node in io_nodes:
             if node.parent is not None and node.parent.as_pointer() in old_ptrs:
                 absolute = io_positions[node.as_pointer()]
+                io_detach_started = True
                 node.parent = None
                 _place_absolute(node, absolute)
         for node in old:
@@ -378,14 +404,19 @@ def replace_prepared_root(prepared, target, backend, session, *, source_module):
         if cutover_started and backup is not None:
             try:
                 _copy_missing_old_nodes(target, backup, old_ptrs)
-                for io in io_nodes:
-                    _place_absolute(io, io_positions[io.as_pointer()])
-                    if io.bl_idname == 'NodeGroupOutput':
-                        io.is_active_output = io_active[io.as_pointer()]
+                _restore_structural_io(target, io_nodes, io_positions, io_active, io_parent_names)
             except Exception as restore_error:
                 errors.append(f'root restoration: {restore_error}')
         elif cutover_started:
             errors.append('root restoration: native root backup unavailable')
+        elif io_detach_started:
+            # Ordinary nodes were not deleted, but changing a physical I/O parent
+            # is already a mutation. CANCELLED is safe only if we restore it.
+            try:
+                _restore_structural_io(target, io_nodes, io_positions, io_active, io_parent_names)
+            except Exception as restore_error:
+                errors.append(f'structural I/O restoration: {restore_error}')
+                possible_change = True
         try:
             _remove_backup(backup)
         except Exception as cleanup_error:

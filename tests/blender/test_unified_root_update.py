@@ -484,3 +484,144 @@ def test_unexpected_staged_structural_io_is_rejected_and_removed(monkeypatch):
         compiler.update_source_in_tree('a = cube(1)', root)
     assert not info.value.may_have_mutated
     assert {n.as_pointer() for n in root.nodes} == before
+
+
+def _nla_strip_for_node(tree, node):
+    """Create an NLA-owned Action with no active Action on the root."""
+    assert node.keyframe_insert(data_path='location', index=0, frame=1)
+    animation = tree.animation_data
+    action = animation.action
+    assert action is not None
+    track = animation.nla_tracks.new()
+    strip = track.strips.new('Root NLA', 1, action)
+    animation.action = None
+    assert animation.action is None and strip.action is action
+    return action, strip
+
+
+def test_update_rejects_ordinary_node_nla_animation_without_active_action():
+    """S07: inactive NLA Action still protects its ordinary node path."""
+    tree, _, outlet = _root('NFR5_nla_ordinary')
+    cube = tree.nodes.new('GeometryNodeMeshCube')
+    cube.name = 'NLA Cube'
+    tree.links.new(cube.outputs['Mesh'], outlet.inputs['Geometry'])
+    action, strip = _nla_strip_for_node(tree, cube)
+    assert any('nodes["NLA Cube"]' in path for path in root_update._animation_paths(tree))
+    before = {n.as_pointer() for n in tree.nodes}
+    links = tuple((link.from_node.as_pointer(), link.to_node.as_pointer()) for link in tree.links)
+    with pytest.raises(CompileError, match='animation/driver'):
+        compiler.update_source_in_tree('a = cube(2)', tree)
+    assert before == {n.as_pointer() for n in tree.nodes}
+    assert links == tuple((link.from_node.as_pointer(), link.to_node.as_pointer()) for link in tree.links)
+    assert strip.action is action and tree.animation_data.action is None
+
+
+def test_update_accepts_structural_io_nla_animation_without_active_action():
+    """S07: preserved Group Input/Output animation is not blocked by NLA scan."""
+    tree, inlet, outlet = _root('NFR5_nla_io')
+    action, strip = _nla_strip_for_node(tree, inlet)
+    old_io = (inlet.as_pointer(), outlet.as_pointer())
+    compiler.update_source_in_tree('a = cube(2)', tree)
+    assert old_io == (inlet.as_pointer(), outlet.as_pointer())
+    assert strip.action is action
+
+
+def _old_frame_with_io(name):
+    """Return a root where old ordinary Frame owns both physical I/O nodes."""
+    tree, inlet, outlet = _root(name)
+    frame = tree.nodes.new('NodeFrame')
+    frame.name = 'Old Frame'
+    frame.location = (105, 65)
+    for node, position in ((inlet, (-400, 30)), (outlet, (400, -30))):
+        node.parent = frame
+        node.location = position
+    cube = tree.nodes.new('GeometryNodeMeshCube')
+    cube.parent = frame
+    cube.location = (0, 5)
+    tree.links.new(cube.outputs['Mesh'], outlet.inputs['Geometry'])
+    return tree, frame, inlet, outlet
+
+
+def test_predetach_failure_restores_structural_io_parents_and_allows_clean_cancel(monkeypatch):
+    """S08/S10: a one-shot detach exception restores the original I/O state."""
+    tree, frame, inlet, outlet = _old_frame_with_io('NFR5_predetach_recovered')
+    before = {node.as_pointer() for node in tree.nodes}
+    positions = {node.as_pointer(): root_update._point(node) for node in (inlet, outlet)}
+    original = root_update._place_absolute
+    calls = 0
+
+    def fail_once(node, position):
+        """Fail immediately after the first structural I/O parent was detached."""
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError('NFR5 detach once')
+        return original(node, position)
+
+    monkeypatch.setattr(root_update, '_place_absolute', fail_once)
+    with pytest.raises(root_update.RootUpdateError, match='NFR5 detach once') as info:
+        compiler.update_source_in_tree('a = cube(3)', tree)
+    assert not info.value.may_have_mutated
+    assert before == {node.as_pointer() for node in tree.nodes}
+    assert inlet.parent.as_pointer() == frame.as_pointer() and outlet.parent.as_pointer() == frame.as_pointer()
+    assert {node.as_pointer(): root_update._point(node) for node in (inlet, outlet)} == positions
+    assert len(tree.links) == 1
+
+
+def test_predetach_unrestorable_failure_requires_undo(monkeypatch):
+    """S08/S10: failed I/O restoration is reported as potentially mutating."""
+    tree, frame, inlet, outlet = _old_frame_with_io('NFR5_predetach_unrestored')
+
+    def fail_position(*args):
+        """Also fail restoration so the Frame parent remains detached."""
+        raise RuntimeError('NFR5 blocked I/O placement')
+
+    monkeypatch.setattr(root_update, '_place_absolute', fail_position)
+    with pytest.raises(root_update.RootUpdateError, match='structural I/O restoration') as info:
+        compiler.update_source_in_tree('a = cube(3)', tree)
+    assert info.value.may_have_mutated
+    assert inlet.parent.as_pointer() == frame.as_pointer()  # The restore attempt reattaches before placement.
+    assert outlet.parent.as_pointer() == frame.as_pointer()
+    assert any(node.bl_idname == 'NodeFrame' for node in tree.nodes)
+
+
+def test_late_failure_restores_io_parent_frames_with_recreated_old_graph(monkeypatch):
+    """S08: after cutover, both I/O nodes reattach to reconstructed old Frame."""
+    tree, frame, inlet, outlet = _old_frame_with_io('NFR5_late_frame_restore')
+    positions = {node.as_pointer(): root_update._point(node) for node in (inlet, outlet)}
+    original_frame_pointer = frame.as_pointer()
+
+    def fail_boundary(*args):
+        """Trigger recovery after old ordinary Frames have been removed."""
+        raise RuntimeError('NFR5 late frame restore')
+
+    monkeypatch.setattr(root_update, '_reconnect_boundary', fail_boundary)
+    with pytest.raises(root_update.RootUpdateError, match='NFR5 late frame restore') as info:
+        compiler.update_source_in_tree('a = cube(4)', tree)
+    assert info.value.may_have_mutated
+    restored_frame = tree.nodes.get('Old Frame')
+    assert restored_frame is not None and restored_frame.bl_idname == 'NodeFrame'
+    assert restored_frame.as_pointer() != original_frame_pointer
+    assert (inlet.parent.as_pointer() == restored_frame.as_pointer()
+            and outlet.parent.as_pointer() == restored_frame.as_pointer())
+    assert {node.as_pointer(): root_update._point(node) for node in (inlet, outlet)} == positions
+    assert len(tree.links) == 1 and tree.links[0].to_node.as_pointer() == outlet.as_pointer()
+    assert 'root restoration:' not in str(info.value)
+
+
+def test_late_failure_reports_structural_io_parent_restoration_error(monkeypatch):
+    """S08: recoverable hierarchy failure must appear in recovery diagnostics."""
+    tree, _, inlet, _ = _old_frame_with_io('NFR5_late_frame_diagnostic')
+    def fail_boundary(*args):
+        """Trigger restoration after the old Frame was deleted."""
+        raise RuntimeError('NFR5 late frame failure')
+
+    def fail_io_restore(*args):
+        """Simulate an inaccessible parent during local recovery."""
+        raise RuntimeError('parent Frame unavailable')
+
+    monkeypatch.setattr(root_update, '_reconnect_boundary', fail_boundary)
+    monkeypatch.setattr(root_update, '_restore_structural_io', fail_io_restore)
+    with pytest.raises(root_update.RootUpdateError, match='root restoration: parent Frame unavailable') as info:
+        compiler.update_source_in_tree('a = cube(3)', tree)
+    assert info.value.may_have_mutated
