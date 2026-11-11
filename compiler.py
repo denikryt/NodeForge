@@ -140,18 +140,13 @@ def create_expression_group(source: str, name: str = "NodeForge Group"):
     return group
 
 
-def compose_source_initial(source: str, target, *, resolved_environment=None,
+def _prepare_direct_source(source: str, target, *, resolved_environment=None,
                            module_context: str | None = None):
-    """Compile one `.nf` revision directly into an existing base node tree.
-
-    This internal entry does not create a root datablock or change its sockets.
-    It must not be exposed through UI until the initial-attempt journal and
-    physical extension preflight are installed.
-    """
+    """Prepare typed root statements once, without materializing Blender nodes."""
     from .compiler_identities import GroupCompilationIdentity, ModuleId
     from .function_instances import function_group_owner_scope
     from .semantic.source_modules import parse_source_module
-    from .blender.direct_composition import compose_prepared_initial
+    from .blender.direct_composition import validate_prepared_direct
 
     if getattr(target, "bl_idname", None) != "GeometryNodeTree":
         raise CompileError("Direct composition requires an existing base GeometryNodeTree")
@@ -166,6 +161,19 @@ def compose_source_initial(source: str, target, *, resolved_environment=None,
         resolved_environment=session.resolved_environment,
         source_callable_session=session, source_module=snapshot,
         direct_composition=True,
+    )
+    validate_prepared_direct(prepared, target)
+    return prepared, backend, session, snapshot
+
+
+def compose_source_initial(source: str, target, *, resolved_environment=None,
+                           module_context: str | None = None):
+    """Append one typed `.nf` composition directly to an existing base tree."""
+    from .blender.direct_composition import compose_prepared_initial
+
+    prepared, backend, session, snapshot = _prepare_direct_source(
+        source, target, resolved_environment=resolved_environment,
+        module_context=module_context,
     )
     return compose_prepared_initial(prepared, target, backend, session, source_module=snapshot)
 

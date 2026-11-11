@@ -13,12 +13,8 @@ from .group_backend import BlenderGroupBuildTransaction
 from .ir_lowering import BlenderIRLoweringContext, lower_body
 
 
-def compose_prepared_initial(prepared, target, backend, session, *, source_module):
-    """Lower executable top-level IR without changing the base tree interface.
-
-    No user-facing operator calls this internal entry until both the failure
-    journal and direct-extension safety preflight are in place.
-    """
+def validate_prepared_direct(prepared, target):
+    """Reject unsupported direct-root contracts before any node/group mutation."""
     if getattr(target, 'bl_idname', None) != 'GeometryNodeTree':
         raise CompileError('Direct composition requires an existing base GeometryNodeTree')
     if prepared.geometry_mode or prepared.interface.inputs or prepared.interface.outputs:
@@ -30,11 +26,20 @@ def compose_prepared_initial(prepared, target, backend, session, *, source_modul
         raise CompileError('Mesh Compute requires a supported root modifier contract; '
                            'direct base-tree installation is unavailable')
 
-    # Journal only the nodes introduced in this initial attempt. These are the
-    # only level-zero objects eligible for failure cleanup; existing user nodes
-    # and their links are never removed or reconciled.
+
+def compose_prepared_initial(prepared, target, backend, session, *, source_module,
+                             transaction=None):
+    """Lower prepared source in place; a supplied nested transaction remains caller-owned.
+
+    Every attempt cleans up only its own newly inserted root nodes. An
+    internally created transaction is committed or rolled back here; an
+    externally supplied one is neither committed nor rolled back here.
+    """
+    validate_prepared_direct(prepared, target)
     preexisting_nodes = {node.as_pointer() for node in target.nodes}
-    transaction = BlenderGroupBuildTransaction()
+    own_transaction = transaction is None
+    if transaction is None:
+        transaction = BlenderGroupBuildTransaction()
     cache = {}
     trace = FunctionCompilationTrace()
     context = BlenderIRLoweringContext(
@@ -56,10 +61,9 @@ def compose_prepared_initial(prepared, target, backend, session, *, source_modul
             lower_body(context, prepared.body, {}, base_depth=1)
         else:
             _place_definition_entries(prepared, context, source_module)
-        transaction.commit()
+        if own_transaction:
+            transaction.commit()
     except Exception as error:
-        # Remove attempt-local Group Nodes before their referenced backing
-        # groups can be rolled back/destroyed by the nested transaction.
         cleanup_failure = None
         for node in tuple(target.nodes):
             if node.as_pointer() not in preexisting_nodes:
@@ -68,13 +72,14 @@ def compose_prepared_initial(prepared, target, backend, session, *, source_modul
                 except Exception as exc:
                     if cleanup_failure is None:
                         cleanup_failure = exc
-        try:
-            transaction.rollback()
-        except Exception as exc:
-            if cleanup_failure is None:
-                cleanup_failure = exc
+        if own_transaction:
+            try:
+                transaction.rollback()
+            except Exception as exc:
+                if cleanup_failure is None:
+                    cleanup_failure = exc
         if cleanup_failure is not None:
-            error.add_note(f"Initial-composition rollback also failed: {cleanup_failure}")
+            error.add_note(f"Direct-composition node cleanup or rollback also failed: {cleanup_failure}")
             raise error from cleanup_failure
         raise
     return target
