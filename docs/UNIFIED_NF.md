@@ -2,7 +2,7 @@
 
 ## Compile Script
 
-Open a Geometry Nodes editor with an existing base `GeometryNodeTree`, select a Text datablock, and use **Compile Script**. The target is `space.node_tree`, including when the editor is viewing a nested group. The operation inserts nodes into the existing tree; it does not create a root node group, change root interface sockets or connect Group Input/Output automatically.
+Open a Geometry Nodes editor with an existing base `GeometryNodeTree`, select a Text datablock, and use **Compile Script**. The target is `space.node_tree`, including a pinned editable base tree. Return to the base level before compiling; editing a nested group blocks both script actions. The operation appends nodes to the existing tree; it does not create a root group, change root interface sockets or connect Group Input/Output automatically. Linked/read-only roots, authoritative NodeForge function groups, transaction-private groups and Mesh Compute-managed private roots are not eligible.
 
 Executable statements materialize ordinary Geometry Nodes at level 0. Calls to declared functions materialize `GeometryNodeGroup` instances at level 0; their implementations live in nested `GeometryNodeTree` datablocks. All declarations are collected before runtime lowering, so calls may precede their definitions.
 
@@ -14,6 +14,18 @@ def move(geometry: Geometry, offset: Vector["Offset"] = vector(0, 0, 1)) -> Geom
 ```
 
 The `move` declaration does **not** generate a second standalone level-0 instance when executable statements are present.
+
+## Update Script
+
+Open the eligible **base** Geometry Nodes tree in a Geometry Nodes editor, select the replacement Text datablock in **Text Script**, and choose **Update Script** beside **Compile Script**. The selected Text is read at each invocation. Any nonblank `.nf` source supported by direct composition can replace an existing root graph; Text selection is not persisted on the tree.
+
+The operation retains the **physical** root `GeometryNodeTree`, its interface items, socket identifiers, defaults, unrelated custom properties, modifiers and external Group Node references. Existing physical `NodeGroupInput`/`NodeGroupOutput` nodes, their locations and direct links between structural I/O nodes also remain. All other root nodes are replaced, including manually created Group Nodes, their ordinary-to-ordinary links and their Frame hierarchy. A valid source with only compile-time statements and no ordinary output clears the old ordinary graph; a definition-only source inserts the same entry Group Nodes as Compile. Subsequent Updates replace instead of accumulating; **Compile Script** continues to append.
+
+Update reconnects compatible **unambiguous** edges between structural I/O sockets and matching replacement nodes. When the complete ordered ordinary node shape is compatible, matching nodes inherit previous locations. With changed shapes, only individually unique node-type/function counterparts inherit locations. Other boundary edges and ambiguous layouts are skipped and left at the freshly compiled node layout. Update reports the number of skipped I/O edges; it does not migrate arbitrary manual ordinary links or automatically wire root outputs.
+
+New ordinary nodes are staged once in the existing root alongside the old graph, then old ordinary nodes are removed. Invalid syntax, failed typing/preflight and an empty Text leave root nodes unchanged. After staging begins, nested function-group materialization may have changed shared datablocks; the existing nested-group transaction attempts rollback but does not guarantee restoration of every external link after a function signature change. Late root-cutover errors attempt local recovery using a temporary native root copy; recovery is best effort and may require Blender **Undo**. Root ordinary-node animation/drivers are not migrated: Update rejects a root whose active or NLA-strip Action FCurves or drivers address ordinary `nodes[...]` paths; animation of retained root-interface state is permitted.
+
+Manual nested Group datablocks with no remaining users may be purged by Blender when saving and reopening a `.blend`. Update does not retain orphan groups.
 
 ## Definition-only modules
 
@@ -176,7 +188,7 @@ only when that definition is demanded.
 
 A function's source module, name and declared input-type signature determine its canonical definition identity. Ordinary repeated calls share a backing `GeometryNodeTree` when the existing ownership policy allows it. `__unique__=True` chooses a distinct function-instance owner. Updating a canonical Function Node Group recompiles it **in place**, retaining the datablock pointer and compatible links/default overrides of its Group Node users.
 
-**Make Single User** in Blender creates an independent datablock but copies NodeForge's authoritative source-owner metadata. If the copy and original have identical metadata, both automatic canonical lookup and explicitly selected source Reload reject the ambiguity before changing either. Select the user-created copy and click **Detach Selected Copy**. This removes only the authoritative lookup attributes; the copy's graph and generated-resource provenance are retained. The original can then be updated canonically. A detached copy is no longer an eligible canonical source Reload target. Distinct `__unique__` instance keys are not conflicting owners.
+**Make Single User** in Blender creates an independent datablock but copies NodeForge's authoritative source-owner metadata. If the copy and original have identical metadata, both automatic canonical lookup and explicitly selected source Reload reject the ambiguity before changing either. Select the user-created copy and call the registered recovery operator `bpy.ops.nodeforge.detach_selected_source_owner()` from Blender Python. The panel does not display a Detach button. This removes only the authoritative lookup attributes; the copy's graph and generated-resource provenance are retained. The original can then be updated canonically. A detached copy is no longer an eligible canonical source Reload target. Distinct `__unique__` instance keys are not conflicting owners.
 
 **Reload Function from Source** updates an eligible selected source-owned Function Node Group in place, preserving its complete canonical definition, declared input-type signature, instance key, owner scope and datablock pointer. Local/Examples owners use the current file at their canonical origin; package functions use the package's resolved export snapshot. A function created from a Text datablock can be reloaded automatically only while its original uniquely identified Text still exists. An arbitrary string source requires an explicit replacement source and unchanged module context. A changed or missing definition, ambiguous copy or incompatible specialization fails without modifying the selected group. This operation is distinct from Compile Script and does not selectively recompile previously placed level-0 node occurrences.
 
@@ -190,7 +202,7 @@ generated resources that remain referenced by the user's scene.
 
 ## Initial-attempt safety and capability limits
 
-An initial direct composition is guarded by an ephemeral journal of the nodes created during that attempt plus the existing nested-group/resource transaction. On a pre-commit error the new level-0 nodes are removed **first**, followed by rollback of nested groups and generated resources; user-existing nodes, links and root interfaces are preserved. After successful commit the new nodes become ordinary user-managed nodes. NodeForge does not track, match or selectively update earlier inserted level-0 instances, and no repeated direct-compilation policy is defined.
+An initial direct composition is guarded by an ephemeral journal of the nodes created during that attempt plus the existing nested-group/resource transaction. On a pre-commit error the new level-0 nodes are removed **first**, followed by rollback of nested groups and generated resources; user-existing nodes, links and root interfaces are preserved. After successful commit the new nodes become ordinary user-managed nodes. Compile does not track earlier level-0 instances. Update Script provides separate whole-ordinary-root replacement, with an invocation-local backup and a deferred nested materialization transaction.
 
 Top-level executable statements have semantic `ROOT` capability; ordinary
 function bodies use `NESTED` regardless of placement or call depth. The **one
@@ -200,8 +212,8 @@ Group for a Mesh Compute modifier: this function is compiled with `ROOT`
 capability into a newly allocated, private modifier-owned GeometryNodeTree.
 Functions it calls remain `NESTED`, including any attempted Mesh Compute
 callback. Nested use of a root-only Mesh Compute callback is rejected before
-Blender publication. The initial user-owned base-tree composition operation
-continues to reject physical Extension API v2 implementations; it cannot
+Blender publication. The user-owned base-tree Compose and Update operations
+continue to reject physical Extension API v2 implementations; it cannot
 provide the private modifier ownership or rollback required by Mesh Compute.
 
 The removed generated-root `input_*()` / `output()` source contract is **not**

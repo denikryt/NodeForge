@@ -8,6 +8,7 @@ from bpy.props import StringProperty, PointerProperty, CollectionProperty, IntPr
 
 from .compiler import (
     compose_source_initial,
+    update_source_in_tree,
     create_selected_library_group_auto,
     update_mesh_compute_modifier,
     create_library_catalog_group,
@@ -57,10 +58,27 @@ def _active_gn_tree(context):
 def _base_gn_tree(context):
     """Resolve only the base Geometry Nodes tree from the editor, never edit_tree."""
     space = getattr(context, "space_data", None)
-    if space is None or getattr(space, "type", None) != 'NODE_EDITOR':
+    if (space is None or getattr(space, "type", None) != 'NODE_EDITOR'
+            or getattr(space, 'tree_type', 'GeometryNodeTree') != 'GeometryNodeTree'):
         return None
     target = getattr(space, "node_tree", None)
     return target if getattr(target, "bl_idname", None) == 'GeometryNodeTree' else None
+
+
+
+def _eligible_base_gn_tree(context):
+    """Validate the currently opened editable base, excluding nested edit mode."""
+    from .blender.root_update import validate_base_target
+    from .errors import CompileError
+
+    target = _base_gn_tree(context)
+    space = getattr(context, 'space_data', None)
+    if target is None:
+        raise CompileError('Open a base Geometry Nodes tree in the Node Editor')
+    edited = getattr(space, 'edit_tree', None)
+    if edited is not None and edited.as_pointer() != target.as_pointer():
+        raise CompileError('Return to the base Geometry Nodes tree before running Compile or Update')
+    return validate_base_target(target)
 
 
 def _selected_group_node(context):
@@ -358,11 +376,8 @@ class GNSCRIPT_MVP_OT_compile_expression(Operator):
         """Compile into space.node_tree and let the compiler own rollback on error."""
         props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
         source = self.expression or _source_from_props(props)
-        target = _base_gn_tree(context)
-        if target is None:
-            self.report({'ERROR'}, "Open a base Geometry Nodes tree in the Node Editor")
-            return {'CANCELLED'}
         try:
+            target = _eligible_base_gn_tree(context)
             from .compiler import ensure_source_text_context
             text = None if self.expression else getattr(props, 'text_block', None)
             module_context = ensure_source_text_context(text) if text is not None else None
@@ -374,6 +389,64 @@ class GNSCRIPT_MVP_OT_compile_expression(Operator):
         self.report({'INFO'}, f"Compiled script into: {target.name}")
         return {'FINISHED'}
 
+
+
+class GNSCRIPT_MVP_OT_update_expression(Operator):
+    """Replace all ordinary nodes in the current base tree using selected Text."""
+
+    bl_idname = 'gn_script_mvp.update_expression'
+    bl_label = 'Update Script'
+    bl_description = 'Replace all ordinary root nodes (including manual Group Nodes) using selected Text'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        """Leave the action available for precise eligibility diagnostics."""
+        return getattr(context, 'scene', None) is not None
+
+    def execute(self, context):
+        """Update current base root and retain Undo for possibly partial failures."""
+        from .compiler import ensure_source_text_context
+        from .compiler_identities import TEXT_MODULE_CONTEXT_PROP
+        from .blender.root_update import RootUpdateError
+
+        text = None
+        context_added = False
+        module_context = None
+        try:
+            target = _eligible_base_gn_tree(context)
+            props = getattr(context.scene, 'gn_script_mvp', None)
+            text = getattr(props, 'text_block', None)
+            if text is None:
+                raise ValueError('Select a Text datablock for Update Script')
+            source = _source_from_props(props)
+            if not source.strip():
+                raise ValueError('Update Script requires a nonblank selected Text source')
+            context_added = TEXT_MODULE_CONTEXT_PROP not in text
+            module_context = ensure_source_text_context(text)
+            result = update_source_in_tree(source, target, module_context=module_context)
+        except Exception as exc:
+            traceback.print_exc()
+            might_have_changed = isinstance(exc, RootUpdateError) and exc.may_have_mutated
+            message = str(exc)
+            # The existing nested-function identity helper stamps Text IDs. On
+            # a fully rejected attempt, undo that otherwise unnecessary change
+            # before returning CANCELLED without an Undo history entry.
+            if not might_have_changed and context_added and text is not None:
+                try:
+                    if module_context is None or text.get(TEXT_MODULE_CONTEXT_PROP) == module_context:
+                        del text[TEXT_MODULE_CONTEXT_PROP]
+                except Exception as cleanup_error:
+                    might_have_changed = True
+                    message += f'; Text identity cleanup: {cleanup_error}'
+            self.report({'ERROR'}, message)
+            return {'FINISHED'} if might_have_changed else {'CANCELLED'}
+
+        if result.skipped_boundary_links:
+            self.report({'WARNING'}, f'Updated {target.name}; skipped {result.skipped_boundary_links} incompatible or ambiguous boundary link(s)')
+        else:
+            self.report({'INFO'}, f'Updated script in: {target.name}')
+        return {'FINISHED'}
 
 def _report_mesh_compute_evaluation(operator, context, group):
     """Evaluate a committed runtime modifier and report nonfatal callback failure."""
@@ -1102,12 +1175,14 @@ class GNSCRIPT_MVP_PT_panel(Panel):
         """Function `draw` used by the NodeForge addon."""
         layout = self.layout
         props = context.scene.gn_script_mvp
-        layout.label(text="Compile Script → base Geometry Nodes tree")
+        layout.label(text="Scripts → base Geometry Nodes tree")
         layout.prop(props, "text_block")
         if props.text_block is None:
             layout.label(text="Select a Blender Text datablock", icon='INFO')
-        op = layout.operator(GNSCRIPT_MVP_OT_compile_expression.bl_idname, text="Compile Script")
+        row = layout.row(align=True)
+        op = row.operator(GNSCRIPT_MVP_OT_compile_expression.bl_idname, text="Compile Script")
         op.expression = ""
+        row.operator(GNSCRIPT_MVP_OT_update_expression.bl_idname, text="Update Script")
         owner = getattr(context, "active_object", None)
         if owner is not None and getattr(owner, "type", None) == "MESH":
             row = layout.row()
@@ -1138,10 +1213,6 @@ class GNSCRIPT_MVP_PT_panel(Panel):
         row = layout.row()
         row.enabled = selected_group is not None
         row.operator(NODEFORGE_OT_reload_selected_library_group.bl_idname, text="Reload Function from Source", icon='FILE_REFRESH')
-        row = layout.row()
-        row.enabled = selected_group is not None
-        row.operator(NODEFORGE_OT_detach_selected_source_owner.bl_idname,
-                     text="Detach Selected Copy", icon='UNLINKED')
         embedded_source = _extract_group_source(selected_group.node_tree) if selected_group is not None else ""
         row = layout.row()
         row.enabled = bool(embedded_source)
@@ -1290,6 +1361,7 @@ classes = (
     NODEFORGE_UL_function_library,
     NODEFORGE_UL_packages,
     GNSCRIPT_MVP_OT_compile_expression,
+    GNSCRIPT_MVP_OT_update_expression,
     NODEFORGE_OT_install_mesh_compute_modifier,
     NODEFORGE_OT_reload_mesh_compute_modifier,
     NODEFORGE_OT_detach_selected_source_owner,
