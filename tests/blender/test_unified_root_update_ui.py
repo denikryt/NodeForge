@@ -174,3 +174,36 @@ def test_operator_invalid_semantics_does_not_leave_new_text_identity(root_editor
             bpy.ops.gn_script_mvp.update_expression()
     assert TEXT_MODULE_CONTEXT_PROP not in text
     assert len(tree.nodes) == 1 and tree.nodes[0].as_pointer() == old.as_pointer()
+
+
+def test_operator_predetach_unrestored_error_keeps_undo_result(root_editor, monkeypatch):
+    """S10: failing after I/O detach cannot return unsafe CANCELLED."""
+    area, root, text = root_editor
+    text.write('a = cube(2)')
+    frame = root.nodes.new('NodeFrame')
+    output = root.nodes.new('NodeGroupOutput')
+    output.parent = frame
+    root.nodes.new('GeometryNodeMeshCube')
+
+    def fail_position(*args):
+        """Stop after I/O is detached, and fail to restore its position."""
+        raise RuntimeError('NFR5 UI detach failure')
+
+    monkeypatch.setattr(root_update, '_place_absolute', fail_position)
+
+    class OperatorReport:
+        """Capture error reports without Blender raising for bpy.ops ERROR."""
+
+        def __init__(self):
+            """Initialize report capture."""
+            self.messages = []
+
+        def report(self, levels, message):
+            """Record diagnostic and classification."""
+            self.messages.append((levels, message))
+
+    operator = OperatorReport()
+    with bpy.context.temp_override(area=area):
+        assert ui.GNSCRIPT_MVP_OT_update_expression.execute(operator, bpy.context) == {'FINISHED'}
+    assert output.parent.as_pointer() == frame.as_pointer()
+    assert any('structural I/O restoration:' in message for _, message in operator.messages)

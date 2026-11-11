@@ -692,3 +692,9 @@ lifecycle.
 - Reused typed direct-composition preparation/lowering with caller-owned nested group transactions; staged new root nodes once before destructive cutover, with conservative boundary-link and layout transfer and invocation-local best-effort recovery.
 - Added Blender UI/Undo-safe error reporting, nested editor and private/authoritative root guards, and ordinary root-node animation rejection. Kept both Reload actions and the registered Detach recovery operator, removing its panel button.
 - Added real Blender 5.2 root replacement, error-injection, API and editor regression coverage.
+
+## 0.90.1
+
+- Reject root ordinary-node animation referenced by NLA strip Actions, including when no active Action is assigned.
+- Restore structural Group I/O Frame parents and positions on root Update failure where possible; classify incomplete restoration as Undo-requiring.
+- Add Blender 5.2 regressions for NLA guards, pre-cutover I/O detachment failures, late Frame recovery and UI Undo signalling.
