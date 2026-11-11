@@ -685,3 +685,10 @@ lifecycle.
 - Removed unreachable generated-local callable preparation mode, retaining the active library and source-definition preparation paths and cache/recursion checks.
 - Removed unused name-only catalog materialization wrappers; public compiler selection continues to resolve exact owner records before group construction.
 - Removed unreferenced Blender generated-ID kind guessing; explicit kind validation, rollback and resource ownership remain unchanged, with additional positive/negative Blender regression tests.
+
+## 0.90.0
+
+- Added Update Script for the currently opened eligible base Geometry Nodes tree, replacing all ordinary root nodes in place while retaining the physical root, interface and structural I/O. Compile remains append-only.
+- Reused typed direct-composition preparation/lowering with caller-owned nested group transactions; staged new root nodes once before destructive cutover, with conservative boundary-link and layout transfer and invocation-local best-effort recovery.
+- Added Blender UI/Undo-safe error reporting, nested editor and private/authoritative root guards, and ordinary root-node animation rejection. Kept both Reload actions and the registered Detach recovery operator, removing its panel button.
+- Added real Blender 5.2 root replacement, error-injection, API and editor regression coverage.
