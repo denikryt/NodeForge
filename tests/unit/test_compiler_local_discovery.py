@@ -114,137 +114,14 @@ def source_calls(value):
     return result
 
 
-@pytest.mark.parametrize('bad', ['registry', 'layout', 'file_root', 'io'])
-def test_local_free_frontend_ignores_local_failures(inputs, counters, monkeypatch, bad):
-    """Local-free roots succeed; requesting Local reports the same deferred failure."""
-    root, registry = inputs
-    if bad == 'registry':
-        registry.write_text('{"version":999,"roots":[]}')
-        error, message = CompileError, 'registry format'
-    elif bad == 'layout':
-        write(root, 'source.nf')
-        error, message = CompileError, 'Unsupported local source layout'
-    elif bad == 'file_root':
-        root.rmdir()
-        root.write_text('not a directory')
-        error, message = FileExistsError, 'File exists'
-    else:
-        def denied(*args, **kwargs):
-            """Inject an authoritative inaccessible-tree failure."""
-            kwargs['onerror'](PermissionError(13, 'denied', str(root)))
-        monkeypatch.setattr(catalog.os, 'walk', denied)
-        error, message = PermissionError, 'denied'
-    view = resolution._make_compilation_environment()
-    prepare('output("Value", 1.0)', view)
-    assert counters == dict(inputs=0, discovery=0, index=0)
-    with pytest.raises(error, match=message):
-        prepare('from local import *\noutput(1.0)', view)
-    captured = view.catalog('local')
-    with pytest.raises(error, match=message):
-        captured.names()
-    assert view.catalog('local') is captured
-    assert counters['inputs'] == 1 and counters['index'] == 0
 
 
-@pytest.mark.parametrize('text', [
-    'from local import noise\noutput(noise(1.0))',
-    'from local.terrain import noise\noutput(noise(1.0))',
-    'from local import terrain as t\noutput(t.noise(1.0))',
-    'from local import terrain\noutput(noise(1.0))',
-    'from local import *\noutput("Value", 1.0)',
-    'from local import noise as a\nfrom local.terrain import noise as b\noutput(a(1.0) + b(2.0))',
-    'from local import terrain as t\ndef helper(x: Float):\n    return t.noise(x)\noutput(helper(1.0))',
-    'from local import terrain\ndef helper(x: Float):\n    return noise(x)\noutput(helper(1.0))',
-])
-def test_semantic_imports_capture_once_and_preserve_origin(inputs, counters, text):
-    """Direct/qualified/star/inherited selections share one exact captured inventory."""
-    root, _ = inputs
-    path = write(root, 'terrain/noise.nf')
-    view = resolution._make_compilation_environment()
-    group, session = prepare(text, view)
-    selected = view.catalog('local')
-    assert view.catalog('local') is selected
-    assert counters == dict(inputs=1, discovery=1, index=1)
-    assert selected.find('noise').source_origin == catalog._path_key(path)
-    for prepared in session.prepared.values():
-        for call in source_calls(prepared.group.body):
-            if call.target.function_id.namespace == 'local':
-                assert call.target.function_id.source_origin == catalog._path_key(path)
-    for call in source_calls(group.body):
-        if call.target.function_id.namespace == 'local':
-            assert call.target.function_id.source_origin == catalog._path_key(path)
-    assert session.resolved_environment is view
-    with pytest.raises(CompileError, match='Unknown library catalog: bogus'):
-        view.catalog('bogus')
-    assert counters == dict(inputs=1, discovery=1, index=1)
 
 
-def test_star_collision_is_checked_even_when_unused(inputs, counters):
-    """Unused star members remain validated; unique qualified imports still work."""
-    root, _ = inputs
-    write(root, 'terrain/noise.nf')
-    write(root, 'procedural/noise.nf')
-    view = resolution._make_compilation_environment()
-    with pytest.raises(CompileError, match="Ambiguous callable 'noise'"):
-        prepare('from local import *\noutput(1.0)', view)
-    prepare('from local.terrain import noise\noutput(noise(1.0))', view)
-    assert counters == dict(inputs=1, discovery=1, index=1)
 
 
-@pytest.mark.parametrize('selected', [False, True])
-def test_only_selected_package_source_demands_local(inputs, counters, tmp_path, selected):
-    """Recursive selected source imports demand Local; untouched source/helpers do not."""
-    root, registry = inputs
-    write(root, 'noise.nf')
-    uses_local = 'from local import noise\nx = input_float("X")\noutput(noise(x))\n'
-    install(tmp_path, {'plain': 'x = input_float("X")\noutput(x)\n',
-                       'first': uses_local, 'second': uses_local})
-    if not selected:
-        registry.write_text('{"version":999,"roots":[]}')
-    view = resolution._make_compilation_environment()
-    text = ('from packages import p\noutput(p.first(1.0) + p.second(2.0))' if selected else
-            'from packages import p\ndef unused(x: Float):\n    return p.first(x)\noutput(p.plain(1.0))')
-    group, session = prepare(text, view)
-    assert source_calls(group.body)
-    assert counters == {key: int(selected) for key in counters}
-    if selected:
-        local_ids = [call.target.function_id for item in session.prepared.values()
-                     for call in source_calls(item.group.body)
-                     if call.target.function_id.namespace == 'local']
-        assert len(local_ids) == 2 and local_ids[0] == local_ids[1]
-        assert len(session.source_snapshots) == 3
-    else:
-        assert len(session.source_snapshots) == 1
-    assert session.resolved_environment is view
 
 
-def test_first_demand_freshness_inventory_freeze_and_separate_text_snapshot(inputs, counters):
-    """Inventory freezes on demand; source text freezes only on first preparation."""
-    root, _ = inputs
-    view = resolution._make_compilation_environment()
-    early = write(root, 'terrain/early.nf')
-    selected = view.catalog('local')
-    assert selected.names() == {'early'}
-    # Contents have not been read by discovery: a first preparation sees new text.
-    early.write_text('x = input_float("X")\noutput(x + 1.0)\n')
-    _, session = prepare('from local.terrain import early\noutput(early(1.0))', view)
-    snapshot = next(iter(session.source_snapshots.values()))
-    assert 'x + 1.0' in snapshot
-    early.write_text('invalid new contents')
-    prepare('from local import early\noutput(early(2.0))', view, session)
-    assert tuple(session.source_snapshots.values()) == (snapshot,)
-    early.rename(root / 'renamed.nf')
-    write(root, 'late.nf')
-    (root / 'empty').mkdir()
-    assert selected.names() == {'early'}
-    assert selected.local_index.resolve_directory(('terrain',))
-    with pytest.raises(CompileError, match='Unknown Local directory'):
-        selected.local_index.resolve_directory(('empty',))
-    next_view = resolution._make_compilation_environment()
-    assert next_view.catalog('local').names() == {'renamed', 'late'}
-    assert next_view.catalog('local') is not selected
-    assert next_view.catalog('local').local_index.resolve_directory(('empty',))
-    assert counters == dict(inputs=2, discovery=2, index=2)
 
 
 def test_empty_and_missing_roots_are_real_captured_results(inputs, counters):
@@ -328,131 +205,12 @@ def compiler_with_fake_bpy(monkeypatch):
     return compiler
 
 
-def test_compiler_root_create_update_and_callback_lifetimes(inputs, counters, monkeypatch):
-    """Real facade paths preserve sessions and create fresh views for each root attempt."""
-    compiler = compiler_with_fake_bpy(monkeypatch)
-    from NodeForge.blender.group_backend import BlenderGroupBackend
-    published = []
-    def publish(self, request):
-        """Observe the actual build request without simulating native Blender lowering."""
-        published.append(request)
-        return request
-    monkeypatch.setattr(BlenderGroupBackend, 'create_or_update', publish)
-    monkeypatch.setattr(BlenderGroupBackend, 'resolve_root_compilation_identity',
-                        lambda *args: GroupCompilationIdentity(None, 'ROOT', 'ROOT', 'ROOT'))
-    compiler.create_expression_group('output(1.0)')
-    compiler.update_expression_group(SimpleNamespace(name='existing'), 'output(2.0)')
-    backend = compiler._new_group_backend()
-    backend.compile_group_callback('output(3.0)')
-    backend.compile_group_callback('output(4.0)', source_callable_session=None)
-    assert counters == dict(inputs=0, discovery=0, index=0)
-    views = [r.source_callable_session.resolved_environment for r in published]
-    assert len({id(v) for v in views}) == 4
-    supplied = backend.new_source_callable_session()
-    backend.compile_group_callback('output(5.0)', source_callable_session=supplied)
-    assert published[-1].source_callable_session is supplied
-    write(inputs[0], 'noise.nf')
-    backend.compile_group_callback('from local import noise\noutput(noise(1.0))', source_callable_session=supplied)
-    first = supplied.resolved_environment.catalog('local')
-    write(inputs[0], 'new.nf')
-    backend.compile_group_callback('from local import *\noutput(1.0)')
-    assert 'new' not in first.names()
-    assert 'new' in published[-1].source_callable_session.resolved_environment.catalog('local').names()
-    assert counters == dict(inputs=2, discovery=2, index=2)
-    eager = resolution.resolve_environment()
-    seeded = compiler._new_group_backend(eager)
-    assert seeded.new_source_callable_session().resolved_environment is eager
-    assert seeded.new_source_callable_session().resolved_environment is eager
-    with pytest.raises(CompileError, match='does not match supplied resolved environment'):
-        seeded.compile_group_callback('output(1.0)', source_callable_session=supplied)
-    seeded.compile_group_callback('output(1.0)')
-    assert published[-1].source_callable_session.resolved_environment is eager
-    assert counters == dict(inputs=3, discovery=3, index=3)
 
 
-@pytest.mark.parametrize('eager', [False, True])
-def test_package_extension_lifecycle_and_capture_phase(inputs, counters, tmp_path, monkeypatch, eager):
-    """Both resolver paths retain one owner snapshot/normalization and package read sequence."""
-    from NodeForge.extensions import registry
-    install(tmp_path, {'plain': 'x=input_float("X")\noutput(x)\n'}, extension=True)
-    write(inputs[0], 'noise.nf')
-    events = []
-    def wrap(owner, name, event):
-        """Observe production lifecycle operations after installation has completed."""
-        original = getattr(owner, name)
-        def observed(*args, **kwargs):
-            """Record one lifecycle event and retain production behavior."""
-            events.append(event)
-            return original(*args, **kwargs)
-        monkeypatch.setattr(owner, name, observed)
-    wrap(packages, 'active_package_manifest_snapshot', 'manifests')
-    wrap(packages, 'validate_package_root', 'manifest_read')
-    wrap(registry, 'capture_owner_code_snapshot', 'owner')
-    wrap(registry, 'normalize_interface_module', 'normalize')
-    wrap(resolution, '_capture_local_catalog', 'local')
-    view = resolution.resolve_environment() if eager else resolution._make_compilation_environment()
-    assert events == (['manifests', 'manifest_read', 'local', 'owner', 'normalize'] if eager else
-                      ['manifests', 'manifest_read', 'owner', 'normalize'])
-    selected_registry = view.extension_registry
-    namespace = view.package_by_import_name('p')
-    native_id = namespace.find('identity').extension_callable_id
-    assert selected_registry.contains(native_id)
-    # Avoid a runtime call to the native owner: preparation of package source is sufficient.
-    prepare('from packages import p\noutput(p.plain(1.0))', view)
-    before_demand = list(events)
-    prepare('from local import noise\noutput(noise(1.0))', view)
-    assert view.extension_registry is selected_registry
-    assert view.package_by_import_name('p') is namespace
-    assert events == before_demand + ([] if eager else ['local'])
-    assert counters == dict(inputs=1, discovery=1, index=1)
 
 
-def test_invalid_package_and_broken_examples_keep_independent_diagnostics(inputs, counters, tmp_path, monkeypatch):
-    """Deferred Local does not change rejected packages or mandatory Examples errors."""
-    installed = install(tmp_path, {'plain': 'output(1.0)\n'}, extension=True)
-    (installed.root / 'systems/native/interface.py').write_text('EXTENSION_API=2\nEXTENSIONS={}\n')
-    view = resolution._make_compilation_environment()
-    assert view.package_by_import_name('p') is None
-    with pytest.raises(CompileError, match='Unknown package'):
-        prepare('from packages import p\noutput(1.0)', view)
-    assert counters == dict(inputs=0, discovery=0, index=0)
-    original = catalog.candidate_records_from_inputs
-    def broken_examples(namespace, **kwargs):
-        """Fail Examples discovery independently of Local state."""
-        if namespace == 'examples':
-            raise CompileError('broken examples')
-        return original(namespace, **kwargs)
-    monkeypatch.setattr(catalog, 'candidate_records_from_inputs', broken_examples)
-    broken_view = resolution._make_compilation_environment()
-    with pytest.raises(CompileError, match='broken examples'):
-        prepare('output(1.0)', broken_view)
-    assert counters == dict(inputs=0, discovery=0, index=0)
 
 
-def test_inherited_alias_uses_exact_lazy_index_and_rejects_foreign_snapshot(inputs, counters, monkeypatch):
-    """Inherited directory binding validation uses the root slot's canonical index identity."""
-    from NodeForge.semantic import group as frontend
-    root, _ = inputs
-    write(root, 'terrain/noise.nf')
-    view = resolution._make_compilation_environment()
-    original = frontend._validate_import_bindings
-    seen = []
-    def observe(*args, **kwargs):
-        """Retain inherited bindings observed at the authoritative semantic boundary."""
-        result = original(*args, **kwargs)
-        seen.extend((kwargs.get('directory_bindings') or {}).values())
-        return result
-    monkeypatch.setattr(frontend, '_validate_import_bindings', observe)
-    prepare('from local import terrain as t\ndef helper(x: Float):\n    return t.noise(x)\noutput(helper(1.0))', view)
-    captured = view.catalog('local')
-    assert seen and all(binding.index_snapshot is captured.local_index for binding in seen)
-    assert counters == dict(inputs=1, discovery=1, index=1)
-    other = resolution._make_compilation_environment()
-    binding = seen[0]
-    with pytest.raises(CompileError, match='inherited Local namespace'):
-        frontend._validate_import_bindings(
-            (), (), {}, other, inherited_local_namespaces={binding.source_name: binding})
-    assert counters == dict(inputs=2, discovery=2, index=2)
 
 
 def test_registry_changes_before_demand_and_frozen_failure_after_repair(inputs, counters, tmp_path):

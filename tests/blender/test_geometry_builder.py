@@ -13,12 +13,14 @@ def _repeat_output(group):
 
 def test_geometry_builder_compile_time_accumulation_and_loop_preprocess():
     group = compile_group(
-        """
-builder = geometry_builder()
-for size in [1, 2, 3]:
-    builder.add(cube(size))
-output("Geometry", builder.geometry)
-""",
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    for size in [1, 2, 3]:
+        builder.add(cube(size))
+    geometry = builder.geometry
+    return (geometry,)
+''',
         "NFTest_geometry_builder_compile_time_loop",
     )
     check(len(_nodes(group, "GeometryNodeRepeatInput")) == 0, "compile-time builder loop created Repeat Input")
@@ -28,57 +30,66 @@ output("Geometry", builder.geometry)
 
 def test_geometry_builder_compile_time_empty_single_extend_and_snapshot():
     empty_group = compile_group(
-        """
-builder = geometry_builder()
-output("Geometry", builder.geometry)
-""",
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    geometry = builder.geometry
+    return (geometry,)
+''',
         "NFTest_geometry_builder_empty",
     )
     check(len(_nodes(empty_group, "GeometryNodeJoinGeometry")) == 0, "empty builder should not create Join Geometry")
 
     single_group = compile_group(
-        """
-builder = geometry_builder()
-builder.add(cube(1))
-output("Geometry", builder.geometry)
-""",
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    builder.add(cube(1))
+    geometry = builder.geometry
+    return (geometry,)
+''',
         "NFTest_geometry_builder_single",
     )
     check(len(_nodes(single_group, "GeometryNodeJoinGeometry")) == 0, "single builder add should use join identity")
 
     multi_group = compile_group(
-        """
-builder = geometry_builder()
-builder.add(cube(1))
-builder.extend([cube(2), cube(3)])
-output("Geometry", builder.geometry)
-""",
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    builder.add(cube(1))
+    builder.extend([cube(2), cube(3)])
+    geometry = builder.geometry
+    return (geometry,)
+''',
         "NFTest_geometry_builder_extend",
     )
     check(len(_nodes(multi_group, "GeometryNodeJoinGeometry")) == 1, "expected one Join Geometry for three parts")
 
     compile_group(
-        """
-builder = geometry_builder()
-builder.add(cube(1))
-first = builder.geometry
-builder.add(cube(2))
-output("First", first)
-output("Geometry", builder.geometry)
-""",
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    builder.add(cube(1))
+    first = builder.geometry
+    builder.add(cube(2))
+    first = first
+    geometry = builder.geometry
+    return (first, geometry,)
+''',
         "NFTest_geometry_builder_snapshot",
     )
 
 
 def test_geometry_builder_repeat_zone_builder_only_and_extend():
     group = compile_group(
-        """
-builder = geometry_builder()
-count = input_int("Count", default=3)
-for i in repeat_range(count):
-    builder.add(transform(cube(0.1), translation=vector(i, 0, 0)))
-output("Geometry", builder.geometry)
-""",
+        '''
+def nf_fixture(count: Int['Count'] = 3):
+    builder = geometry_builder()
+    for i in repeat_range(count):
+        builder.add(transform(cube(0.1), translation=vector(i, 0, 0)))
+    geometry = builder.geometry
+    return (geometry,)
+''',
         "NFTest_geometry_builder_repeat_only",
     )
     check(len(_nodes(group, "GeometryNodeRepeatInput")) == 1, "expected one Repeat Input")
@@ -89,31 +100,33 @@ output("Geometry", builder.geometry)
     check(socket_types == ["GEOMETRY"], f"unexpected repeat item types: {socket_types}")
 
     compile_group(
-        """
-builder = geometry_builder()
-count = input_int("Count", default=2)
-for i in repeat_range(count):
-    builder.extend([cube(0.1), cube(0.2)])
-output("Geometry", builder.geometry)
-""",
+        '''
+def nf_fixture(count: Int['Count'] = 2):
+    builder = geometry_builder()
+    for i in repeat_range(count):
+        builder.extend([cube(0.1), cube(0.2)])
+    geometry = builder.geometry
+    return (geometry,)
+''',
         "NFTest_geometry_builder_repeat_extend",
     )
 
 
 def test_geometry_builder_repeat_mixed_state_order_and_post_loop_add():
     group = compile_group(
-        """
-builder = geometry_builder()
-pos = vector(0, 0, 0)
-count = input_int("Count", default=3)
-for i in repeat_range(count):
-    next_pos = pos + vector(1, 0, 0)
-    builder.add(line(pos, next_pos))
-    builder.add(transform(cube(0.1), translation=pos))
-    pos = next_pos
-output("Geometry", builder.geometry)
-output("Position", pos)
-""",
+        '''
+def nf_fixture(count: Int['Count'] = 3):
+    builder = geometry_builder()
+    pos = vector(0, 0, 0)
+    for i in repeat_range(count):
+        next_pos = pos + vector(1, 0, 0)
+        builder.add(line(pos, next_pos))
+        builder.add(transform(cube(0.1), translation=pos))
+        pos = next_pos
+    geometry = builder.geometry
+    final_position = pos
+    return (geometry, final_position,)
+''',
         "NFTest_geometry_builder_repeat_mixed",
     )
     repeat_output = _repeat_output(group)
@@ -122,47 +135,49 @@ output("Position", pos)
     check("next_pos" not in names, "loop temporary became repeat state")
 
     compile_group(
-        """
-builder = geometry_builder()
-builder.add(cube(1))
-count = input_int("Count", default=2)
-for i in repeat_range(count):
-    builder.add(cube(0.1))
-builder.add(cube(2))
-output("Geometry", builder.geometry)
-""",
+        '''
+def nf_fixture(count: Int['Count'] = 2):
+    builder = geometry_builder()
+    builder.add(cube(1))
+    for i in repeat_range(count):
+        builder.add(cube(0.1))
+    builder.add(cube(2))
+    geometry = builder.geometry
+    return (geometry,)
+''',
         "NFTest_geometry_builder_repeat_pre_post",
     )
 
 
 def test_geometry_builder_runtime_snapshot_and_branch_isolation():
     compile_group(
-        """
-builder = geometry_builder()
-count = input_int("Count", default=2)
-for i in repeat_range(count):
-    builder.add(cube(0.1))
-    snapshot = builder.geometry
-    builder.add(snapshot)
-output("Geometry", builder.geometry)
-""",
+        '''
+def nf_fixture(count: Int['Count'] = 2):
+    builder = geometry_builder()
+    for i in repeat_range(count):
+        builder.add(cube(0.1))
+        snapshot = builder.geometry
+        builder.add(snapshot)
+    geometry = builder.geometry
+    return (geometry,)
+''',
         "NFTest_geometry_builder_repeat_snapshot",
     )
 
     group = compile_group(
-        """
-builder = geometry_builder()
-flag = input_bool("Flag", default=True)
-count = input_int("Count", default=3)
-for i in repeat_range(count):
-    if flag:
-        builder.add(cube(0.1))
-        flag = False
-    else:
-        flag = flag
-output("Geometry", builder.geometry)
-output("Flag", flag)
-""",
+        '''
+def nf_fixture(flag: Bool['Flag'] = True, count: Int['Count'] = 3):
+    builder = geometry_builder()
+    for i in repeat_range(count):
+        if flag:
+            builder.add(cube(0.1))
+            flag = False
+        else:
+            flag = flag
+    geometry = builder.geometry
+    flag = flag
+    return (geometry, flag,)
+''',
         "NFTest_geometry_builder_repeat_branch_merge",
     )
     switch_types = [getattr(node, "input_type", None) for node in _nodes(group, "GeometryNodeSwitch")]
@@ -170,17 +185,17 @@ output("Flag", flag)
     check("BOOLEAN" in switch_types, f"missing Boolean switch in {switch_types}")
 
     group = compile_group(
-        """
-builder = geometry_builder()
-flag = input_bool("Flag", default=True)
-count = input_int("Count", default=3)
-for i in repeat_range(count):
-    if flag:
-        builder.add(cube(0.1))
-    else:
-        flag = flag
-output("Geometry", builder.geometry)
-""",
+        '''
+def nf_fixture(flag: Bool['Flag'] = True, count: Int['Count'] = 3):
+    builder = geometry_builder()
+    for i in repeat_range(count):
+        if flag:
+            builder.add(cube(0.1))
+        else:
+            flag = flag
+    geometry = builder.geometry
+    return (geometry,)
+''',
         "NFTest_geometry_builder_repeat_branch_isolation",
     )
     switch_types = [getattr(node, "input_type", None) for node in _nodes(group, "GeometryNodeSwitch")]
@@ -221,13 +236,15 @@ def _same_positions(left, right, epsilon=1e-4):
 
 def test_geometry_builder_evaluated_snapshot_semantics():
     compile_time_group = compile_group(
-        """
-builder = geometry_builder()
-builder.add(point(vector(0, 0, 0)))
-snapshot = transform(builder.geometry, translation=vector(10, 0, 0))
-builder.add(snapshot)
-output("Geometry", builder.geometry)
-""",
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    builder.add(point(vector(0, 0, 0)))
+    snapshot = transform(builder.geometry, translation=vector(10, 0, 0))
+    builder.add(snapshot)
+    geometry = builder.geometry
+    return (geometry,)
+''',
         "NFTest_geometry_builder_eval_compile_time_snapshot",
     )
     vertices, edges, polygons = _evaluated_mesh(compile_time_group, "NFTest_geometry_builder_eval_compile_time_snapshot")
@@ -236,15 +253,16 @@ output("Geometry", builder.geometry)
     check(polygons == [], f"compile-time snapshot should create no polygons: {polygons}")
 
     runtime_group = compile_group(
-        """
-builder = geometry_builder()
-count = input_int("Count", default=2)
-for i in repeat_range(count):
-    builder.add(point(vector(i, 0, 0)))
-    snapshot = transform(builder.geometry, translation=vector((i + 1) * 10, 0, 0))
-    builder.add(snapshot)
-output("Geometry", builder.geometry)
-""",
+        '''
+def nf_fixture(count: Int['Count'] = 2):
+    builder = geometry_builder()
+    for i in repeat_range(count):
+        builder.add(point(vector(i, 0, 0)))
+        snapshot = transform(builder.geometry, translation=vector((i + 1) * 10, 0, 0))
+        builder.add(snapshot)
+    geometry = builder.geometry
+    return (geometry,)
+''',
         "NFTest_geometry_builder_eval_runtime_snapshot",
     )
     vertices, edges, polygons = _evaluated_mesh(runtime_group, "NFTest_geometry_builder_eval_runtime_snapshot")
@@ -256,22 +274,112 @@ output("Geometry", builder.geometry)
 
 def test_geometry_builder_negative_usage_errors_are_controlled():
     cases = [
-        "builder = geometry_builder(1)\noutput(\"Geometry\", empty_geometry())",
-        "builder = geometry_builder(foo=1)\noutput(\"Geometry\", empty_geometry())",
-        "builder = geometry_builder()\nbuilder.add(1)\noutput(\"Geometry\", builder.geometry)",
-        "builder = geometry_builder()\nbuilder.extend(cube(1))\noutput(\"Geometry\", builder.geometry)",
-        "builder = geometry_builder()\nbuilder.extend([cube(1), 1])\noutput(\"Geometry\", builder.geometry)",
-        "builder = geometry_builder()\noutput(\"Geometry\", builder)",
-        "builder = geometry_builder()\nother = builder\noutput(\"Geometry\", empty_geometry())",
-        "builder = geometry_builder()\nbuilder = empty_geometry()\noutput(\"Geometry\", builder)",
-        "builder = geometry_builder()\nx = builder.add(cube(1))\noutput(\"Geometry\", builder.geometry)",
-        "builder = geometry_builder()\nbuilder.foo\noutput(\"Geometry\", builder.geometry)",
-        "builder = geometry_builder()\nbuilder.foo(cube(1))\noutput(\"Geometry\", builder.geometry)",
-        "builder = geometry_builder()\noutput(\"Geometry\", join(builder))",
-        "builder = geometry_builder()\ngeo = transform(builder, translation=vector(1, 0, 0))\noutput(\"Geometry\", geo)",
+        '''
+def nf_fixture():
+    builder = geometry_builder(1)
+    geometry = empty_geometry()
+    return (geometry,)
+''',
+        '''
+def nf_fixture():
+    builder = geometry_builder(foo=1)
+    geometry = empty_geometry()
+    return (geometry,)
+''',
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    builder.add(1)
+    geometry = builder.geometry
+    return (geometry,)
+''',
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    builder.extend(cube(1))
+    geometry = builder.geometry
+    return (geometry,)
+''',
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    builder.extend([cube(1), 1])
+    geometry = builder.geometry
+    return (geometry,)
+''',
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    geometry = builder
+    return (geometry,)
+''',
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    other = builder
+    geometry = empty_geometry()
+    return (geometry,)
+''',
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    builder = empty_geometry()
+    geometry = builder
+    return (geometry,)
+''',
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    x = builder.add(cube(1))
+    geometry = builder.geometry
+    return (geometry,)
+''',
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    builder.foo
+    geometry = builder.geometry
+    return (geometry,)
+''',
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    builder.foo(cube(1))
+    geometry = builder.geometry
+    return (geometry,)
+''',
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    geometry = join(builder)
+    return (geometry,)
+''',
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    geo = transform(builder, translation=vector(1, 0, 0))
+    geometry = geo
+    return (geometry,)
+''',
         "builder = geometry_builder()\ndef f():\n    return builder\noutput(\"x\", f())",
-        "items = []\ncount = input_int(\"Count\", default=2)\nfor i in repeat_range(count):\n    items.add(cube(1))\noutput(\"Geometry\", empty_geometry())",
-        "builder = geometry_builder()\nflag = input_bool(\"Flag\", default=True)\nif flag:\n    builder.add(cube(1))\nelse:\n    builder.add(cube(2))\noutput(\"Geometry\", builder.geometry)",
+        '''
+def nf_fixture(count: Int['Count'] = 2):
+    items = []
+    for i in repeat_range(count):
+        items.add(cube(1))
+    geometry = empty_geometry()
+    return (geometry,)
+''',
+        '''
+def nf_fixture(flag: Bool['Flag'] = True):
+    builder = geometry_builder()
+    if flag:
+        builder.add(cube(1))
+    else:
+        builder.add(cube(2))
+    geometry = builder.geometry
+    return (geometry,)
+''',
     ]
     for index, source in enumerate(cases):
         expect_compile_error(source, f"NFTest_geometry_builder_error_{index}")
@@ -279,14 +387,16 @@ def test_geometry_builder_negative_usage_errors_are_controlled():
 
 def test_geometry_builder_nested_repeat_uses_current_outer_snapshot():
     group = compile_group(
-        """
-builder = geometry_builder()
-for i in repeat_range(2):
-    builder.add(point(vector(i * 10, 0, 0)))
-    for j in repeat_range(3):
-        builder.add(point(vector(i * 10 + j + 1, 0, 0)))
-output("Geometry", builder.geometry)
-""",
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    for i in repeat_range(2):
+        builder.add(point(vector(i * 10, 0, 0)))
+        for j in repeat_range(3):
+            builder.add(point(vector(i * 10 + j + 1, 0, 0)))
+    geometry = builder.geometry
+    return (geometry,)
+''',
         "NFTest_geometry_builder_nested_repeat_snapshot",
     )
 
@@ -300,15 +410,17 @@ output("Geometry", builder.geometry)
 
 def test_geometry_builder_nested_repeat_geometry_read_uses_nearest_frame():
     group = compile_group(
-        """
-builder = geometry_builder()
-for i in repeat_range(1):
-    builder.add(point(vector(0, 0, 0)))
-    for j in repeat_range(1):
-        snapshot = transform(builder.geometry, translation=vector(1, 0, 0))
-        builder.add(snapshot)
-output("Geometry", builder.geometry)
-""",
+        '''
+def nf_fixture():
+    builder = geometry_builder()
+    for i in repeat_range(1):
+        builder.add(point(vector(0, 0, 0)))
+        for j in repeat_range(1):
+            snapshot = transform(builder.geometry, translation=vector(1, 0, 0))
+            builder.add(snapshot)
+    geometry = builder.geometry
+    return (geometry,)
+''',
         "NFTest_geometry_builder_nested_repeat_geometry_read",
     )
 
@@ -320,16 +432,17 @@ output("Geometry", builder.geometry)
 
 def test_geometry_builder_runtime_if_branch_local_constructor_preserves_legacy_scope():
     group = compile_group(
-        """
-flag = input_bool("Flag", default=True)
-if flag:
-    local = geometry_builder()
-    local.add(cube(1.0))
-    geometry = local.geometry
-else:
-    geometry = cube(2.0)
-output("Geometry", geometry)
-""",
+        '''
+def nf_fixture(flag: Bool['Flag'] = True):
+    if flag:
+        local = geometry_builder()
+        local.add(cube(1.0))
+        geometry = local.geometry
+    else:
+        geometry = cube(2.0)
+    geometry = geometry
+    return (geometry,)
+''',
         "NFTest_geometry_builder_runtime_if_branch_local",
     )
     check(len(_nodes(group, "GeometryNodeJoinGeometry")) == 0, "single branch-local builder add should remain identity topology")
@@ -338,19 +451,19 @@ output("Geometry", geometry)
 
 def test_geometry_builder_runtime_if_one_sided_replacement_restores_parent_builder():
     group = compile_group(
-        """
-builder = geometry_builder()
-builder.add(cube(1.0))
-flag = input_bool("Flag", default=True)
-value = input_float("Value", default=0.0)
-if flag:
+        '''
+def nf_fixture(flag: Bool['Flag'] = True, value: Float['Value'] = 0.0):
     builder = geometry_builder()
-    builder.add(cube(2.0))
-    value = value + 1.0
-else:
-    value = value + 0.0
-output("Geometry", builder.geometry)
-""",
+    builder.add(cube(1.0))
+    if flag:
+        builder = geometry_builder()
+        builder.add(cube(2.0))
+        value = value + 1.0
+    else:
+        value = value + 0.0
+    geometry = builder.geometry
+    return (geometry,)
+''',
         "NFTest_geometry_builder_runtime_if_replacement_restore",
     )
     check(len(_nodes(group, "GeometryNodeMeshCube")) == 2, "branch-local replacement should still evaluate its branch-local cube")
@@ -360,14 +473,16 @@ output("Geometry", builder.geometry)
 def test_geometry_builder_branch_local_identity_assignment_uses_semantic_runtime_if():
     """Exact coordinator case stays Semantic Body-owned and emits one ordinary runtime-if Switch."""
     group = compile_group(
-        'value = input_float("Value", default=0.0)\n'
-        'flag = input_bool("Flag", default=True)\n'
-        'if flag:\n'
-        '    value = value + 1\n'
-        '    unused = geometry_builder()\n'
-        'else:\n'
-        '    value = value\n'
-        'output("Value", value)',
+        '''
+def nf_fixture(value: Float['Value'] = 0.0, flag: Bool['Flag'] = True):
+    if flag:
+        value = value + 1
+        unused = geometry_builder()
+    else:
+        value = value
+    value = value
+    return (value,)
+''',
         "NFTest_geometry_builder_branch_local_identity_assignment",
     )
     check(len(_nodes(group, "GeometryNodeSwitch")) == 1, "expected one ordinary runtime-if Switch")

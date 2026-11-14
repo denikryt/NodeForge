@@ -459,18 +459,6 @@
     ]
   },
   {
-    "id": "local_call_array_argument",
-    "outcome": "compile_error",
-    "description": "Local function array argument preserves current controlled rejection",
-    "tags": [
-      "call",
-      "local",
-      "array",
-      "failure",
-      "targeted"
-    ]
-  },
-  {
     "id": "local_call_mixed_array_index",
     "outcome": "graph",
     "description": "Local function call receives an indexed runtime array expression and composes with root arithmetic",
@@ -480,7 +468,8 @@
       "array",
       "subscript",
       "legacy-boundary",
-      "targeted"
+      "targeted",
+      "top-level"
     ]
   },
   {
@@ -556,31 +545,158 @@
     ]
   },
   {
-    "id": "imported_local_unique_sharing",
-    "outcome": "graph",
-    "description": "Imported Local aliases: private True, shared default/False and shallow nested sharing",
+    "id": "top_level_forward_mixed",
+    "description": "Root ordinary nodes and a forward-declared function call; unused definition is not placed",
     "tags": [
-      "imported_local",
-      "unique"
-    ]
+      "top-level",
+      "mixed",
+      "forward",
+      "unused"
+    ],
+    "outcome": "graph"
   },
   {
-    "id": "imported_local_unique_invalid_modifier",
-    "outcome": "compile_error",
-    "description": "Imported Local unique modifier rejects an Int before graph publication",
+    "id": "top_level_definition_chain",
+    "description": "Definition-only A to B to C chain and separate root entry with required sockets unlinked",
     "tags": [
-      "imported_local",
-      "unique"
-    ]
+      "top-level",
+      "definition-only",
+      "nested",
+      "entry"
+    ],
+    "outcome": "graph"
   },
   {
-    "id": "local_directory_unqualified_ambiguity",
-    "description": "Bare directory calls reject different .nf origins and offer qualified calls",
-    "outcome": "compile_error",
+    "id": "top_level_shared_entries",
+    "description": "Two automatic entries reuse one nested underscore-prefixed helper group",
     "tags": [
-      "imported_local",
+      "top-level",
+      "definition-only",
+      "sharing",
+      "nested"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "top_level_import_multi",
+    "description": "Module namespace import exports two functions, with nested intra-module call and no imported top-level side effects",
+    "tags": [
+      "top-level",
+      "local",
+      "module",
+      "import",
+      "nested"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "top_level_import_alias_identity",
+    "description": "Directory-qualified module and member aliases reuse one canonical function datablock",
+    "tags": [
+      "top-level",
+      "local",
       "directory",
-      "ambiguity"
-    ]
+      "alias",
+      "sharing"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "top_level_import_shared_unique",
+    "description": "Two imported shared calls and one unique call retain distinct physical ownership",
+    "tags": [
+      "top-level",
+      "local",
+      "unique",
+      "sharing"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "top_level_panel_defaults",
+    "description": "Definition-only panel layout reorders two labeled Float inputs with source defaults",
+    "tags": [
+      "top-level",
+      "definition-only",
+      "panel",
+      "defaults"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "top_level_tuple_outputs",
+    "description": "Top-level tuple destructuring wires both outputs of one nested function into arithmetic",
+    "tags": [
+      "top-level",
+      "tuple",
+      "return",
+      "links"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "top_level_lexical_shadowing",
+    "description": "Parameter named like a module function is copied and used as data, without materializing shadowed callable",
+    "tags": [
+      "top-level",
+      "shadowing",
+      "binding",
+      "unused"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "top_level_static_loop",
+    "description": "Compile-time static root loop produces three ordinary nodes and no function group",
+    "tags": [
+      "top-level",
+      "static-loop",
+      "root"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "failure_top_level_missing_required",
+    "description": "A missing required argument in a top-level function call raises controlled error",
+    "tags": [
+      "top-level",
+      "failure",
+      "required"
+    ],
+    "outcome": "compile_error"
+  },
+  {
+    "id": "failure_top_level_recursion",
+    "description": "A cycle through two module definitions raises controlled error before publication",
+    "tags": [
+      "top-level",
+      "failure",
+      "recursion"
+    ],
+    "outcome": "compile_error"
+  },
+  {
+    "id": "top_level_preserve_user_link",
+    "description": "Direct composition retains two pre-existing user Math nodes and their link",
+    "tags": [
+      "top-level",
+      "pre-existing",
+      "root",
+      "links"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "top_level_reachable_subgraph",
+    "description": "Mixed root nodes and A→B→C plus direct C reuse; unused standalone and B-calling definitions produce no groups",
+    "tags": [
+      "top-level",
+      "mixed",
+      "nested",
+      "sharing",
+      "unused",
+      "reachability"
+    ],
+    "outcome": "graph"
   }
 ]

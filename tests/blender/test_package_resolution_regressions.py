@@ -39,42 +39,16 @@ def test_python_example_import_materializes_through_registry(tmp_path):
     (owner / 'backend.py').write_text('def build(context, value):\n    return value\n')
     packages.install_package_directory(root)
     group = compile_group(
-        'from examples import review_example\nx = input_float("X")\noutput("Value", review_example(x))\n',
+        'from examples import review_example\ndef nf_fixture(x: Float["X"]):\n    return review_example(x)\n',
         'NFTest_review_python_example',
     )
     check(group is not None, 'Python Example failed physical materialization')
     expect_compile_error(
-        'from packages import review\nx = input_float("X")\noutput(review.review_example(x))\n',
+        'from packages import review\ndef nf_fixture(x: Float["X"]):\n    return review.review_example(x)\n',
         'NFTest_review_example_not_export',
     )
 
 
-def test_functions_reload_uses_one_environment_without_live_rediscovery(tmp_path, monkeypatch):
-    root = tmp_path / 'function-package'
-    _package(root, 'vendor.review', 'functions')
-    source = root / 'functions' / 'foo.nf'
-    source.write_text('x = input_float("X")\noutput("Value", x + 1)\n')
-    installed = packages.install_package_directory(root)
-    group = compiler.create_package_function_group('vendor.review', 'foo')
-    (installed.root / 'functions' / 'foo.nf').write_text(
-        'x = input_float("X")\noutput("Value", x + 2)\n'
-    )
-    snapshot = resolve_environment()
-    calls = []
-    def one_snapshot():
-        calls.append(snapshot)
-        assert len(calls) == 1
-        return snapshot
-    def forbidden(*args, **kwargs):
-        pytest.fail('Reload repeated live catalog discovery')
-    monkeypatch.setattr(compiler, 'resolve_environment', one_snapshot)
-    monkeypatch.setattr(catalog, 'candidate_records_from_inputs', forbidden)
-    updated = compiler.update_library_catalog_group(group, 'functions', 'foo')
-    check(updated is group, 'Reload replaced the selected group identity')
-    check(group.get('nodeforge_package_id') == 'vendor.review', 'Reload lost canonical owner')
-    assert calls == [snapshot]
-    with pytest.raises(CompileError, match='belongs to'):
-        library_groups.resolve_reloadable_library_entry(group, 'functions', 'other', resolved_environment=snapshot)
 
 
 @pytest.mark.parametrize('style', ['bare', 'qualified', 'local'])
@@ -90,65 +64,19 @@ def test_native_function_materializes_source_calls(tmp_path, style):
     )
     (owner / 'backend.py').write_text('def build(context, value):\n    return value\n')
     packages.install_package_directory(root)
-    source = 'from packages import review\nx=input_float("X")\n'
+    source = 'from packages import review\n'
     if style == 'local':
-        source += 'def helper(x):\n    return review.native_value(x)\noutput(helper(x))\n'
+        source += 'def helper(x: Float) -> Float:\n    return review.native_value(x)\ndef nf_fixture(x: Float):\n    return helper(x)\n'
     else:
         callee = 'native_value' if style == 'bare' else 'review.native_value'
-        source += f'output({callee}(x))\n'
-    assert compile_group(source, 'NFTest_native_function_' + style) is not None
+        source += f'def nf_fixture(x: Float):\n    return {callee}(x)\n'
+    if style == 'local':
+        group = compile_entry_group(source, 'NFTest_native_function_' + style, 'nf_fixture')
+    else:
+        group = compile_group(source, 'NFTest_native_function_' + style)
+    assert group is not None
 
 
-@pytest.mark.parametrize('namespace', ['functions', 'examples'])
-@pytest.mark.parametrize('missing_owner', [False, True])
-def test_ui_reload_uses_one_snapshot_and_preserves_owner(tmp_path, monkeypatch, namespace, missing_owner):
-    from types import SimpleNamespace
-    from NodeForge import ui
-    root = tmp_path / 'ui-package'
-    _package(root, 'vendor.review', namespace)
-    (root / namespace / 'foo.nf').write_text('x=input_float("X")\noutput("Value", x+1)\n')
-    installed = packages.install_package_directory(root)
-    if namespace == 'functions':
-        group = compiler.create_package_function_group('vendor.review', 'foo')
-        other = tmp_path / 'other-package'
-        _package(other, 'vendor.other', namespace)
-        (other / namespace / 'foo.nf').write_text('output("Value", 99)\n')
-        packages.install_package_directory(other)
-    else:
-        group = compiler.create_library_catalog_group(namespace, 'foo')
-    group.name = 'NFTest_custom_name'
-    old_name = group.name
-    if missing_owner:
-        (installed.root / namespace / 'foo.nf').unlink()
-    else:
-        (installed.root / namespace / 'foo.nf').write_text('x=input_float("X")\noutput("Value", x+2)\n')
-    snapshot = resolve_environment()
-    calls = []
-    def one_snapshot():
-        calls.append(snapshot)
-        assert len(calls) == 1
-        return snapshot
-    def forbidden(*args, **kwargs):
-        pytest.fail('UI reload performed preliminary live discovery')
-    reports = []
-    node = SimpleNamespace(node_tree=group, name='')
-    operator = SimpleNamespace(report=lambda level, message: reports.append((level, message)))
-    monkeypatch.setattr(compiler, 'resolve_environment', one_snapshot)
-    monkeypatch.setattr(catalog, 'candidate_records_from_inputs', forbidden)
-    monkeypatch.setattr(ui, '_selected_group_node', lambda context: node)
-    result = ui.NODEFORGE_OT_reload_selected_library_group.execute(operator, SimpleNamespace())
-    assert calls == [snapshot]
-    assert node.node_tree is group
-    assert group.name == old_name
-    assert group.get('nodeforge_package_id') == 'vendor.review'
-    if missing_owner:
-        assert result == {'CANCELLED'}
-        assert reports[-1][0] == {'ERROR'}
-        assert 'unavailable' in reports[-1][1]
-    else:
-        assert result == {'FINISHED'}
-        assert node.name == old_name
-        assert reports[-1][0] == {'INFO'}
 
 
 @pytest.fixture
@@ -247,54 +175,3 @@ def test_save_to_local_scene_and_operator_rna_have_no_source_selector():
     finally:
         if not was_registered:
             NodeForge.unregister()
-
-
-@pytest.mark.parametrize('selected_local', [False, True])
-def test_package_source_transitivity_and_native_owner_do_not_rescan_local(tmp_path, monkeypatch, selected_local):
-    """Native package/source materialization keeps Local demand in selected frontend preparation."""
-    from NodeForge import environment_resolution as resolution
-    from NodeForge.blender.group_backend import BlenderGroupBackend
-    root = tmp_path / 'demand-package'
-    _package(root, 'vendor.demand', 'functions', python=True)
-    (root / 'functions/plain.nf').write_text('x=input_float("X")\noutput("Value", x)\n')
-    (root / 'functions/selected.nf').write_text(
-        'from local import noise\nx=input_float("X")\noutput("Value", noise(x))\n')
-    owner = root / 'functions/native'
-    owner.mkdir()
-    (owner / 'interface.py').write_text(
-        'from typing import Annotated\nfrom NodeForge import Float, EvaluationMode\n'
-        'EXTENSION_API=2\nEXTENSIONS={"native": ".backend:build"}\n'
-        'def native(x: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...\n')
-    (owner / 'backend.py').write_text('def build(context, x):\n    return x\n')
-    packages.install_package_directory(root)
-    local = tmp_path / 'Local'
-    local.mkdir()
-    (local / 'noise.nf').write_text('x=input_float("X")\noutput("Value", x+1.0)\n')
-    registry = tmp_path / 'registry.json'
-    monkeypatch.setattr(local_sources, '_default_local_catalog_dir', lambda: local)
-    monkeypatch.setattr(local_sources, '_local_sources_registry_path', lambda: registry)
-    if not selected_local:
-        registry.write_text('{"version":999,"roots":[]}')
-    count = []
-    original_capture = resolution._capture_local_catalog
-    def capture():
-        """Count frontend demand in the real native package build."""
-        count.append(True)
-        return original_capture()
-    monkeypatch.setattr(resolution, '_capture_local_catalog', capture)
-    original_publish = BlenderGroupBackend.create_or_update
-    def publish(self, request, **kwargs):
-        """Require materialization to consume the previously prepared session."""
-        def forbidden():
-            """Refuse a backend-initiated Local inventory scan."""
-            pytest.fail('Local capture during package materialization')
-        with monkeypatch.context() as guarded:
-            guarded.setattr(resolution, '_capture_local_catalog', forbidden)
-            return original_publish(self, request, **kwargs)
-    monkeypatch.setattr(BlenderGroupBackend, 'create_or_update', publish)
-    callee = 'selected' if selected_local else 'plain'
-    text = f'from packages import demand\noutput("Value", demand.native(demand.{callee}(1.0)))'
-    group = compile_group(text, 'NFTest_package_local_demand')
-    assert group is not None and len(count) == int(selected_local)
-    compiler.update_expression_group(group, text)
-    assert len(count) == 2 * int(selected_local)

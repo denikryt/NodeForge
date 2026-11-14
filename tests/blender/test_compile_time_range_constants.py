@@ -5,15 +5,17 @@ pytestmark = pytest.mark.blender
 
 
 def test_compile_time_range_accepts_integer_constant_assignments():
-    source = """
-BASE_SEGMENTS = 4
-EXTRA_SEGMENTS = 2
-MAX_SEGMENTS = BASE_SEGMENTS + EXTRA_SEGMENTS
-parts = []
-for i in range(MAX_SEGMENTS):
-    parts.append(cube(1))
-output("Geometry", join(parts))
-"""
+    source = '''
+def nf_fixture():
+    BASE_SEGMENTS = 4
+    EXTRA_SEGMENTS = 2
+    MAX_SEGMENTS = BASE_SEGMENTS + EXTRA_SEGMENTS
+    parts = []
+    for i in range(MAX_SEGMENTS):
+        parts.append(cube(1))
+    geometry = join(parts)
+    return (geometry,)
+'''
 
     group = compile_group(source, "NFTest_compile_time_range_constants")
 
@@ -22,15 +24,17 @@ output("Geometry", join(parts))
 
 
 def test_compile_time_range_accepts_unary_integer_bounds_and_step():
-    source = """
-START = -2
-STOP = +3
-STEP = 2
-parts = []
-for i in range(START, STOP, STEP):
-    parts.append(cube(1))
-output("Geometry", join(parts))
-"""
+    source = '''
+def nf_fixture():
+    START = -2
+    STOP = +3
+    STEP = 2
+    parts = []
+    for i in range(START, STOP, STEP):
+        parts.append(cube(1))
+    geometry = join(parts)
+    return (geometry,)
+'''
 
     group = compile_group(source, "NFTest_compile_time_range_unary_integer_constants")
 
@@ -42,31 +46,33 @@ output("Geometry", join(parts))
 
 def test_compile_time_range_rejects_invalid_arguments_in_blender_path():
     with pytest.raises(CompileError, match=r"range\(\) arguments must be compile-time integers"):
-        compiler.create_expression_group(
-            'for i in range(2.5):\n    output("x", i)\n',
+        compile_group(
+            'def nf_fixture():\n    x = 0\n    for i in range(2.5):\n        x = x + i\n    return x\n',
             "NFTest_compile_time_range_float_rejected",
         )
 
     with pytest.raises(CompileError, match=r"range\(\) arguments must be compile-time integers"):
-        compiler.create_expression_group(
-            'for i in range(True):\n    output("x", i)\n',
+        compile_group(
+            'def nf_fixture():\n    x = 0\n    for i in range(True):\n        x = x + i\n    return x\n',
             "NFTest_compile_time_range_bool_rejected",
         )
 
     with pytest.raises(CompileError, match=r"range\(\) step must not be zero"):
-        compiler.create_expression_group(
-            'for i in range(0, 4, 0):\n    output("x", i)\n',
+        compile_group(
+            'def nf_fixture():\n    x = 0\n    for i in range(0, 4, 0):\n        x = x + i\n    return x\n',
             "NFTest_compile_time_range_zero_step_rejected",
         )
 
 
 def test_compile_time_range_pure_arithmetic_is_folded_before_node_generation():
-    source = """
-x = 0
-for i in range(8):
-    x = x + i
-output("x", x)
-"""
+    source = '''
+def nf_fixture():
+    x = 0
+    for i in range(8):
+        x = x + i
+    x = x
+    return (x,)
+'''
 
     group = compile_group(source, "NFTest_compile_time_range_pure_arithmetic_folded")
 
@@ -78,19 +84,20 @@ output("x", x)
 
 def test_compile_time_range_is_late_consumed_after_runtime_if_join():
     """Equal runtime-if exits restore CT knowledge for a later compile-time-owned range."""
-    source = """
-n = 2
-flag = input_bool("Flag")
-if flag:
+    source = '''
+def nf_fixture(flag: Bool['Flag']):
     n = 2
-else:
-    n = 2
-xs = range(n)
-parts = []
-for i in xs:
-    parts.append(cube(1))
-output("Geometry", join(parts))
-"""
+    if flag:
+        n = 2
+    else:
+        n = 2
+    xs = range(n)
+    parts = []
+    for i in xs:
+        parts.append(cube(1))
+    geometry = join(parts)
+    return (geometry,)
+'''
 
     group = compile_group(source, "NFTest_compile_time_range_late_after_runtime_if")
 

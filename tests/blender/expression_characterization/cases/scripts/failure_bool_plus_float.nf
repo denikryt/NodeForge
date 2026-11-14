@@ -1,2 +1,2 @@
-flag = input_bool("Flag", default=True)
-output("Result", flag + 1.0)
+def nf_fixture(flag: Bool['Flag']=True):
+    return flag + 1.0

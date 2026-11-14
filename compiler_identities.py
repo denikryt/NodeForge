@@ -13,8 +13,10 @@ from dataclasses import dataclass
 from typing import TypeAlias
 
 CORE_PACKAGE_ID = "__nodeforge_core__"
+TEXT_MODULE_CONTEXT_PROP = "nodeforge_source_text_context_v1"
 _LOCAL_FUNCTION_KIND = "LOCAL_DEF"
 _LIBRARY_FUNCTION_KIND = "LIBRARY"
+_MODULE_DEFINITION_KIND = "MODULE_DEF"
 
 
 def _canonical_json(value) -> str:
@@ -25,6 +27,53 @@ def _canonical_json(value) -> str:
 def normalize_library_package_id(package_id: str | None) -> str:
     """Return the durable package identifier used by imported function identity."""
     return str(package_id or CORE_PACKAGE_ID)
+
+
+@dataclass(frozen=True)
+class ModuleId:
+    """Identity of a source module, independent of its source text revision.
+
+    The origin is an absolute canonical origin for Local/Examples, a relative
+    module filename for a package, or a non-file context for ROOT_TEXT.
+    """
+
+    kind: str
+    origin: str
+    package_id: str = ""
+
+    def __post_init__(self) -> None:
+        """Reject ambiguous module identity forms at construction."""
+        if self.kind not in {"LOCAL", "EXAMPLES", "PACKAGE", "ROOT_TEXT"}:
+            raise ValueError(f"Unsupported module origin: {self.kind!r}")
+        if not isinstance(self.origin, str) or not self.origin.strip():
+            raise ValueError("ModuleId.origin must be a non-empty source origin")
+        if self.kind == "PACKAGE" and not self.package_id:
+            raise ValueError("Package module identity requires a package_id")
+        if self.kind != "PACKAGE" and self.package_id:
+            raise ValueError("Only package module identity may carry package_id")
+
+    def stable_key(self) -> str:
+        """Return a deterministic owner-independent module key."""
+        return _canonical_json({"kind": self.kind, "origin": self.origin, "package_id": self.package_id})
+
+
+@dataclass(frozen=True)
+class SourceDefinitionRef:
+    """Identify a declared function within one canonical module."""
+
+    module: ModuleId
+    name: str
+
+    def __post_init__(self) -> None:
+        """Require a valid module and source function identifier."""
+        if not isinstance(self.module, ModuleId):
+            raise TypeError("SourceDefinitionRef.module must be ModuleId")
+        if not isinstance(self.name, str) or not self.name.isidentifier():
+            raise ValueError("SourceDefinitionRef.name must be a valid identifier")
+
+    def stable_key(self) -> str:
+        """Return a deterministic module-qualified definition key."""
+        return _canonical_json({"module": self.module.stable_key(), "name": self.name})
 
 
 @dataclass(frozen=True)
@@ -103,18 +152,24 @@ class FunctionId:
     name: str = ""
     signature: str = ""
     source_origin: str = ""
+    module: ModuleId | None = None
 
     def __post_init__(self):
         """Reject mixed field combinations outside the supported identity forms."""
         if self.kind == _LOCAL_FUNCTION_KIND:
-            if not self.definition_owner or not self.name or self.namespace or self.package_id or self.source_origin:
+            if not self.definition_owner or not self.name or self.namespace or self.package_id or self.source_origin or self.module is not None:
                 raise ValueError("Invalid local FunctionId")
             return
         if self.kind == _LIBRARY_FUNCTION_KIND:
-            if not self.namespace or not self.package_id or not self.name or self.definition_owner or self.signature:
+            if not self.namespace or not self.package_id or not self.name or self.definition_owner or self.signature or self.module is not None:
                 raise ValueError("Invalid library FunctionId")
             if self.source_origin and self.namespace not in {"local", "examples"}:
                 raise ValueError("Only Local and nested Examples identities may carry source_origin")
+            return
+        if self.kind == _MODULE_DEFINITION_KIND:
+            if (not isinstance(self.module, ModuleId) or not self.name.isidentifier()
+                    or self.definition_owner or self.namespace or self.package_id or self.source_origin):
+                raise ValueError("Invalid module-definition FunctionId")
             return
         raise ValueError(f"Unsupported FunctionId kind: {self.kind!r}")
 
@@ -126,6 +181,11 @@ class FunctionId:
                 "definition_owner": self.definition_owner,
                 "name": self.name,
                 "signature": self.signature,
+            })
+        if self.kind == _MODULE_DEFINITION_KIND:
+            return _canonical_json({
+                "kind": self.kind, "module": self.module.stable_key(),
+                "name": self.name, "signature": self.signature,
             })
         fields = {
             "kind": self.kind, "namespace": self.namespace,
@@ -150,6 +210,42 @@ class CallSiteId:
             raise TypeError("CallSiteId.callee must be a FunctionId")
         if not isinstance(self.ordinal, int) or isinstance(self.ordinal, bool) or self.ordinal < 0:
             raise ValueError("CallSiteId.ordinal must be a non-negative integer")
+
+
+def module_definition_function_id(definition: SourceDefinitionRef, signature: str) -> FunctionId:
+    """Identify an independently compiled definition and its resolved input types."""
+    if not isinstance(definition, SourceDefinitionRef):
+        raise TypeError("Module function identity needs a canonical SourceDefinitionRef")
+    return FunctionId(kind=_MODULE_DEFINITION_KIND, module=definition.module,
+                      name=definition.name, signature=str(signature))
+
+
+def parse_module_definition_function_id(value: str) -> FunctionId:
+    """Recover one complete MODULE_DEF owner from canonical Blender ID properties.
+
+    Names of Blender datablocks and catalog entries are never used for lookup.
+    Malformed or noncanonical metadata is rejected before source discovery.
+    """
+    from .errors import CompileError
+
+    try:
+        raw = json.loads(value)
+        if not isinstance(raw, dict) or set(raw) != {'kind', 'module', 'name', 'signature'}:
+            raise ValueError('Invalid module definition fields')
+        module_raw = json.loads(raw['module'])
+        if not isinstance(module_raw, dict) or set(module_raw) != {'kind', 'origin', 'package_id'}:
+            raise ValueError('Invalid module identity fields')
+        module = ModuleId(**module_raw)
+        if raw['kind'] != _MODULE_DEFINITION_KIND:
+            raise ValueError('Not a source module definition')
+        function_id = module_definition_function_id(
+            SourceDefinitionRef(module, raw['name']), raw['signature'],
+        )
+        if function_id.stable_key() != value:
+            raise ValueError('Noncanonical module definition identity')
+        return function_id
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise CompileError('Selected group has invalid MODULE_DEF source identity') from exc
 
 
 def local_function_id(definition_owner: str, name: str, signature: str) -> FunctionId:
@@ -213,6 +309,8 @@ __all__ = [
     "GroupCompilationIdentity",
     "InputDeclarationId",
     "InterfaceInputOrigin",
+    "ModuleId",
+    "SourceDefinitionRef",
     "library_function_id",
     "library_function_id_for_record",
     "local_function_id",

@@ -9,9 +9,8 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 
-from .constants import TYPE_INT
 from ..errors import CompileError
-from .compile_time import CompileTimeState
+from .compile_time import CompileTimeSnapshot, CompileTimeState
 from .consteval import (
     NOT_FOLDABLE,
     ConstEvalUnavailable,
@@ -61,6 +60,7 @@ class PreprocessedBody:
     trailing_effects: tuple[CompileTimeEffect, ...]
     initial_compile_time: object
     final_compile_time: object
+    compile_time_before: tuple[object, ...] = ()
 
 
 class _PreprocessRecorder:
@@ -336,9 +336,23 @@ def _flat_assignment_names(target):
     return ()
 
 
-def _repeat_range_state_names(stmts):
+def _repeat_range_state_names(stmts, *, runtime_range_names=()):
     """Names initialized before repeat_range loops that must remain GN values."""
     preserve = set()
+    runtime_range_names = frozenset(runtime_range_names)
+
+    def is_runtime_repeat(stmt):
+        if _is_repeat_range_for(stmt):
+            return True
+        return (
+            isinstance(stmt, ast.For)
+            and isinstance(stmt.iter, ast.Call)
+            and isinstance(stmt.iter.func, ast.Name)
+            and stmt.iter.func.id == 'range'
+            and len(stmt.iter.args) == 1
+            and isinstance(stmt.iter.args[0], ast.Name)
+            and stmt.iter.args[0].id in runtime_range_names
+        )
 
     def assigned_names(sub_stmts):
         """Collect repeat-visible assignment targets through valid nested control flow."""
@@ -349,59 +363,52 @@ def _repeat_range_state_names(stmts):
             elif isinstance(sub, ast.If):
                 names |= assigned_names(sub.body)
                 names |= assigned_names(sub.orelse)
-            elif _is_repeat_range_for(sub):
+            elif is_runtime_repeat(sub):
                 names |= assigned_names(sub.body)
         return names
 
     before = set()
     for stmt in stmts:
-        if _is_repeat_range_for(stmt):
+        if is_runtime_repeat(stmt):
             preserve |= (assigned_names(stmt.body) & before)
         if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
             before.update(_flat_assignment_names(stmt.targets[0]))
     return preserve
 
 
-def _preprocess_compile_time(stmts):
-    """Return residual source plus erased compile-time effects in source order."""
-    state = CompileTimeState()
+def _preprocess_compile_time(stmts, *, initial_compile_time=None, shadowed_names=(), runtime_range_names=(), preserve_names=(), append_journal=None):
+    """Residualize against inherited constants, recording each statement's CT state.
+
+    Parameter bindings shadow module constants before any body preprocessing.
+    Per-statement states let graph analysis inspect the same reachable source
+    without incorrectly using the function's *final* compile-time values.
+    """
+    state = CompileTimeState(
+        initial_compile_time.values if isinstance(initial_compile_time, CompileTimeSnapshot)
+        else initial_compile_time
+    )
+    for name in shadowed_names:
+        state.discard(name)
     initial = state.snapshot()
     recorder = _PreprocessRecorder()
-    preserve = _repeat_range_state_names(stmts)
+    preserve = _repeat_range_state_names(stmts, runtime_range_names=runtime_range_names) | set(preserve_names)
+    per_statement = []
     for stmt in stmts:
+        before = state.snapshot()
+        retained = len(recorder.statements)
         _handle_compile_time_stmt(
-            stmt,
-            state,
-            recorder,
-            preserve,
+            stmt, state, recorder, preserve, list_append_journal=append_journal,
         )
+        if len(recorder.statements) != retained:
+            per_statement.append(before)
     return PreprocessedBody(
         statements=tuple(recorder.statements),
         effects_before=tuple(recorder.effects_before),
         trailing_effects=tuple(recorder.pending_effects),
         initial_compile_time=initial,
         final_compile_time=state.snapshot(),
+        compile_time_before=tuple(per_statement),
     )
-
-
-def _infer_input_types(stmts):
-    """Infer implicit input types required by runtime repeat counts at any depth."""
-    result = {}
-
-    def visit(sub_stmts):
-        for stmt in sub_stmts:
-            if _is_repeat_range_for(stmt):
-                arg = stmt.iter.args[0]
-                if isinstance(arg, ast.Name):
-                    result[arg.id] = TYPE_INT
-                visit(stmt.body)
-            elif isinstance(stmt, ast.If):
-                visit(stmt.body)
-                visit(stmt.orelse)
-
-    visit(stmts)
-    return result
-
 
 
 __all__ = [
@@ -412,5 +419,4 @@ __all__ = [
     "_PreprocessRecorder",
     "_handle_compile_time_stmt",
     "_preprocess_compile_time",
-    "_infer_input_types",
 ]

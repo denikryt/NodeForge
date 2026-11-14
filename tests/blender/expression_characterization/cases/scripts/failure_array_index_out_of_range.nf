@@ -1,2 +1,2 @@
-a = input_float("A", default=1.0)
-output("Result", [a][2])
+def nf_fixture(a: Float['A']=1.0):
+    return [a][2]

@@ -57,42 +57,6 @@ def _id_collection(kind: str):
     return None
 
 
-def _kind_for_id(id_obj) -> str | None:
-    if id_obj is None:
-        return None
-    if getattr(id_obj, "bl_rna", None) is not None:
-        ident = getattr(id_obj.bl_rna, "identifier", "")
-        if ident == "Curve":
-            return "CURVE"
-        if ident == "Mesh":
-            return "MESH"
-        if ident == "Object":
-            return "OBJECT"
-        if ident == "GeometryNodeTree":
-            return "NODE_GROUP"
-    try:
-        if bpy.data.curves.get(id_obj.name) is id_obj:
-            return "CURVE"
-    except Exception:
-        pass
-    try:
-        if bpy.data.meshes.get(id_obj.name) is id_obj:
-            return "MESH"
-    except Exception:
-        pass
-    try:
-        if bpy.data.node_groups.get(id_obj.name) is id_obj:
-            return "NODE_GROUP"
-    except Exception:
-        pass
-    try:
-        if bpy.data.objects.get(id_obj.name) is id_obj:
-            return "OBJECT"
-    except Exception:
-        pass
-    return None
-
-
 @dataclass(frozen=True)
 class GeneratedResourceRef:
     """Persistent reference to one NodeForge-generated Blender ID."""

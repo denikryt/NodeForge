@@ -7,10 +7,10 @@ from bpy.types import Operator, Panel, PropertyGroup, UIList, AddonPreferences
 from bpy.props import StringProperty, PointerProperty, CollectionProperty, IntProperty, BoolProperty
 
 from .compiler import (
-    compile_script_auto,
+    compose_source_initial,
+    update_source_in_tree,
     create_selected_library_group_auto,
     update_mesh_compute_modifier,
-    update_expression_group,
     create_library_catalog_group,
     create_package_function_group,
     update_library_catalog_group,
@@ -54,6 +54,32 @@ def _active_gn_tree(context):
         if tree and getattr(tree, "bl_idname", None) == "GeometryNodeTree":
             return tree
     return None
+
+def _base_gn_tree(context):
+    """Resolve only the base Geometry Nodes tree from the editor, never edit_tree."""
+    space = getattr(context, "space_data", None)
+    if (space is None or getattr(space, "type", None) != 'NODE_EDITOR'
+            or getattr(space, 'tree_type', 'GeometryNodeTree') != 'GeometryNodeTree'):
+        return None
+    target = getattr(space, "node_tree", None)
+    return target if getattr(target, "bl_idname", None) == 'GeometryNodeTree' else None
+
+
+
+def _eligible_base_gn_tree(context):
+    """Validate the currently opened editable base, excluding nested edit mode."""
+    from .blender.root_update import validate_base_target
+    from .errors import CompileError
+
+    target = _base_gn_tree(context)
+    space = getattr(context, 'space_data', None)
+    if target is None:
+        raise CompileError('Open a base Geometry Nodes tree in the Node Editor')
+    edited = getattr(space, 'edit_tree', None)
+    if edited is not None and edited.as_pointer() != target.as_pointer():
+        raise CompileError('Return to the base Geometry Nodes tree before running Compile or Update')
+    return validate_base_target(target)
+
 
 def _selected_group_node(context):
     """Function `_selected_group_node` used by the NodeForge addon."""
@@ -333,45 +359,94 @@ class GNSCRIPT_MVP_Properties(PropertyGroup):
     local_overwrite: BoolProperty(name="Overwrite", default=False)
 
 class GNSCRIPT_MVP_OT_compile_expression(Operator):
-    """Class `GNSCRIPT_MVP_OT_compile_expression` used by the NodeForge addon."""
+    """Compose unified NF source once in the existing base Geometry Nodes tree."""
     bl_idname = "gn_script_mvp.compile_expression"
-    bl_label = "Compile NodeForge Group"
-    bl_description = "Compile a NodeForge group or install a root Mesh Compute modifier"
+    bl_label = "Compile Script"
+    bl_description = "Insert NF statements or definition entries into the existing base node tree"
     bl_options = {'REGISTER', 'UNDO'}
 
     expression: StringProperty(default="")
-    insert_node: bpy.props.BoolProperty(default=True)
 
     @classmethod
     def poll(cls, context):
-        """Function `poll` used by the NodeForge addon."""
-        return True
+        """Keep the action available so execute can provide a useful target diagnostic."""
+        return getattr(context, "scene", None) is not None
 
     def execute(self, context):
-        """Function `execute` used by the NodeForge addon."""
-        props = getattr(context.scene, "gn_script_mvp", None)
+        """Compile into space.node_tree and let the compiler own rollback on error."""
+        props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
         source = self.expression or _source_from_props(props)
         try:
-            group, installed_modifier = compile_script_auto(source, context.active_object)
+            target = _eligible_base_gn_tree(context)
+            from .compiler import ensure_source_text_context
+            text = None if self.expression else getattr(props, 'text_block', None)
+            module_context = ensure_source_text_context(text) if text is not None else None
+            compose_source_initial(source, target, module_context=module_context)
         except Exception as exc:
             traceback.print_exc()
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
-
-        tree = _active_gn_tree(context)
-        if self.insert_node and not installed_modifier and tree is not None:
-            node = tree.nodes.new("GeometryNodeGroup")
-            node.node_tree = group
-            _apply_group_defaults_to_node(node)
-            node.location = (0, 0)
-            tree.nodes.active = node
-            node.select = True
-        if installed_modifier:
-            _report_mesh_compute_evaluation(self, context, group)
-        else:
-            self.report({'INFO'}, f"Created node group: {group.name}")
+        self.report({'INFO'}, f"Compiled script into: {target.name}")
         return {'FINISHED'}
 
+
+
+class GNSCRIPT_MVP_OT_update_expression(Operator):
+    """Replace all ordinary nodes in the current base tree using selected Text."""
+
+    bl_idname = 'gn_script_mvp.update_expression'
+    bl_label = 'Update Script'
+    bl_description = 'Replace all ordinary root nodes (including manual Group Nodes) using selected Text'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        """Leave the action available for precise eligibility diagnostics."""
+        return getattr(context, 'scene', None) is not None
+
+    def execute(self, context):
+        """Update current base root and retain Undo for possibly partial failures."""
+        from .compiler import ensure_source_text_context
+        from .compiler_identities import TEXT_MODULE_CONTEXT_PROP
+        from .blender.root_update import RootUpdateError
+
+        text = None
+        context_added = False
+        module_context = None
+        try:
+            target = _eligible_base_gn_tree(context)
+            props = getattr(context.scene, 'gn_script_mvp', None)
+            text = getattr(props, 'text_block', None)
+            if text is None:
+                raise ValueError('Select a Text datablock for Update Script')
+            source = _source_from_props(props)
+            if not source.strip():
+                raise ValueError('Update Script requires a nonblank selected Text source')
+            context_added = TEXT_MODULE_CONTEXT_PROP not in text
+            module_context = ensure_source_text_context(text)
+            result = update_source_in_tree(source, target, module_context=module_context)
+        except Exception as exc:
+            traceback.print_exc()
+            might_have_changed = isinstance(exc, RootUpdateError) and exc.may_have_mutated
+            message = str(exc)
+            # The existing nested-function identity helper stamps Text IDs. On
+            # a fully rejected attempt, undo that otherwise unnecessary change
+            # before returning CANCELLED without an Undo history entry.
+            if not might_have_changed and context_added and text is not None:
+                try:
+                    if module_context is None or text.get(TEXT_MODULE_CONTEXT_PROP) == module_context:
+                        del text[TEXT_MODULE_CONTEXT_PROP]
+                except Exception as cleanup_error:
+                    might_have_changed = True
+                    message += f'; Text identity cleanup: {cleanup_error}'
+            self.report({'ERROR'}, message)
+            return {'FINISHED'} if might_have_changed else {'CANCELLED'}
+
+        if result.skipped_boundary_links:
+            self.report({'WARNING'}, f'Updated {target.name}; skipped {result.skipped_boundary_links} incompatible or ambiguous boundary link(s)')
+        else:
+            self.report({'INFO'}, f'Updated script in: {target.name}')
+        return {'FINISHED'}
 
 def _report_mesh_compute_evaluation(operator, context, group):
     """Evaluate a committed runtime modifier and report nonfatal callback failure."""
@@ -383,6 +458,35 @@ def _report_mesh_compute_evaluation(operator, context, group):
         operator.report({'WARNING'}, f"Compiled {group.name}; runtime error: {exc}")
     else:
         operator.report({'INFO'}, f"Mesh Compute modifier ready: {group.name}")
+
+
+class NODEFORGE_OT_install_mesh_compute_modifier(Operator):
+    """Explicitly install a typed .nf Mesh Compute function as a private modifier."""
+
+    bl_idname = "nodeforge.install_mesh_compute_modifier"
+    bl_label = "Install Mesh Compute"
+    bl_description = "Compile the Text block's typed Mesh Compute entry into a private modifier"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        owner = getattr(context, "active_object", None)
+        props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
+        return bool(owner is not None and owner.type == "MESH"
+                    and props is not None and props.text_block is not None)
+
+    def execute(self, context):
+        from .compiler import create_mesh_compute_modifier
+
+        try:
+            group = create_mesh_compute_modifier(
+                _source_from_props(context.scene.gn_script_mvp), context.active_object,
+            )
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        _report_mesh_compute_evaluation(self, context, group)
+        return {'FINISHED'}
 
 
 class NODEFORGE_OT_reload_mesh_compute_modifier(Operator):
@@ -428,44 +532,40 @@ class NODEFORGE_OT_reload_mesh_compute_modifier(Operator):
         return {'FINISHED'}
 
 
-class GNSCRIPT_MVP_OT_update_selected_group(Operator):
-    """Class `GNSCRIPT_MVP_OT_update_selected_group` used by the NodeForge addon."""
-    bl_idname = "gn_script_mvp.update_selected_group"
-    bl_label = "Update Selected NodeGroup"
-    bl_description = "Recompile the current script into the selected Geometry Node Group, preserving the group datablock and name"
+class NODEFORGE_OT_detach_selected_source_owner(Operator):
+    """Explicitly remove authoritative source stamps from a selected user copy."""
+    bl_idname = "nodeforge.detach_selected_source_owner"
+    bl_label = "Detach Source Ownership"
+    bl_description = "Detach the selected single-user copy from canonical NodeForge source updates"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
-        """Function `poll` used by the NodeForge addon."""
+        """Only a selected Group Node can nominate the exact copy to detach."""
         return _selected_group_node(context) is not None
 
     def execute(self, context):
-        """Function `execute` used by the NodeForge addon."""
-        props = getattr(context.scene, "gn_script_mvp", None)
-        source = _source_from_props(props)
+        """Fail closed if the selected datablock is not an eligible user copy."""
+        from .blender.group_authority import detach_selected_source_owner
+
         node = _selected_group_node(context)
         if node is None:
-            self.report({'ERROR'}, "Select exactly one Geometry Node Group node to update")
+            self.report({'ERROR'}, "Select one Geometry Node Group copy")
             return {'CANCELLED'}
-        old_name = node.node_tree.name
         try:
-            update_expression_group(node.node_tree, source)
+            detach_selected_source_owner(node.node_tree)
         except Exception as exc:
-            traceback.print_exc()
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
-        node.node_tree.name = old_name
-        node.name = node.name or old_name
-        self.report({'INFO'}, f"Updated node group: {old_name}")
+        self.report({'INFO'}, f"Detached source ownership: {node.node_tree.name}")
         return {'FINISHED'}
 
 
 class NODEFORGE_OT_reload_selected_library_group(Operator):
-    """Reload the selected library-backed group from its current catalog source."""
+    """Reload a selected source-backed Function Node Group in place."""
     bl_idname = "nodeforge.reload_selected_library_group"
     bl_label = "Reload from Source"
-    bl_description = "Rebuild the selected NodeForge library group from its current catalog source while preserving the group datablock and node state"
+    bl_description = "Rebuild the selected NodeForge function from its current source while retaining the group datablock"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -481,6 +581,8 @@ class NODEFORGE_OT_reload_selected_library_group(Operator):
             return False
         group = node.node_tree
         try:
+            if str(group.get('nodeforge_module_definition') or ''):
+                return True
             namespace = str(group.get("nodeforge_library_namespace") or "")
             name = str(group.get("nodeforge_library_name") or "")
         except Exception:
@@ -1073,14 +1175,20 @@ class GNSCRIPT_MVP_PT_panel(Panel):
         """Function `draw` used by the NodeForge addon."""
         layout = self.layout
         props = context.scene.gn_script_mvp
-        layout.label(text="Python-like script → Node Group")
+        layout.label(text="Scripts → base Geometry Nodes tree")
         layout.prop(props, "text_block")
         if props.text_block is None:
             layout.label(text="Select a Blender Text datablock", icon='INFO')
-        op = layout.operator(GNSCRIPT_MVP_OT_compile_expression.bl_idname, text="Compile Script")
+        row = layout.row(align=True)
+        op = row.operator(GNSCRIPT_MVP_OT_compile_expression.bl_idname, text="Compile Script")
         op.expression = ""
-        op.insert_node = True
+        row.operator(GNSCRIPT_MVP_OT_update_expression.bl_idname, text="Update Script")
         owner = getattr(context, "active_object", None)
+        if owner is not None and getattr(owner, "type", None) == "MESH":
+            row = layout.row()
+            row.enabled = props.text_block is not None
+            row.operator(NODEFORGE_OT_install_mesh_compute_modifier.bl_idname,
+                         text="Install Mesh Compute", icon='NODETREE')
         if owner is not None and getattr(owner, "type", None) == "MESH" and owner.modifiers:
             from .blender.mesh_compute_runtime import get_modifier_binding
             try:
@@ -1101,12 +1209,10 @@ class GNSCRIPT_MVP_PT_panel(Panel):
                                 text="Reload Compute", icon='FILE_REFRESH')
                 if stage.last_error:
                     layout.label(text=stage.last_error[:100], icon='ERROR')
-        row = layout.row()
         selected_group = _selected_group_node(context)
-        row.enabled = selected_group is not None
-        row.operator(GNSCRIPT_MVP_OT_update_selected_group.bl_idname, text="Update Selected NodeGroup")
         row = layout.row()
-        row.operator(NODEFORGE_OT_reload_selected_library_group.bl_idname, text="Reload from Source", icon='FILE_REFRESH')
+        row.enabled = selected_group is not None
+        row.operator(NODEFORGE_OT_reload_selected_library_group.bl_idname, text="Reload Function from Source", icon='FILE_REFRESH')
         embedded_source = _extract_group_source(selected_group.node_tree) if selected_group is not None else ""
         row = layout.row()
         row.enabled = bool(embedded_source)
@@ -1240,12 +1346,11 @@ class NODEFORGE_PT_library_packages(Panel):
 def menu_func(self, context):
     """Function `menu_func` used by the NodeForge addon."""
     space = getattr(context, "space_data", None)
-    tree = getattr(space, "edit_tree", None) if space else None
-    if tree and getattr(tree, "bl_idname", None) == "GeometryNodeTree":
+    tree = _base_gn_tree(context)
+    if tree is not None:
         self.layout.separator()
-        op = self.layout.operator(GNSCRIPT_MVP_OT_compile_expression.bl_idname, text="NodeForge: Compile Group")
+        op = self.layout.operator(GNSCRIPT_MVP_OT_compile_expression.bl_idname, text="NodeForge: Compile Script")
         op.expression = ""
-        op.insert_node = True
 
 classes = (
     NODEFORGE_OT_reload_addon,
@@ -1256,8 +1361,10 @@ classes = (
     NODEFORGE_UL_function_library,
     NODEFORGE_UL_packages,
     GNSCRIPT_MVP_OT_compile_expression,
+    GNSCRIPT_MVP_OT_update_expression,
+    NODEFORGE_OT_install_mesh_compute_modifier,
     NODEFORGE_OT_reload_mesh_compute_modifier,
-    GNSCRIPT_MVP_OT_update_selected_group,
+    NODEFORGE_OT_detach_selected_source_owner,
     NODEFORGE_OT_reload_selected_library_group,
     GNSCRIPT_MVP_OT_load_selected_group_source,
     NODEFORGE_OT_refresh_function_library,
@@ -1302,52 +1409,85 @@ def _refresh_startup_browser_items():
     return None  # One-shot timer; every activation schedules a fresh refresh.
 
 
+# A process-local ledger covers only registrations made by this UI module;
+# Blender datablocks are never add-on lifecycle ownership records.
+_REGISTERED_CLASSES: list[type] = []
+_SCENE_PROP_REGISTERED = False
+_ADD_MENU_REGISTERED = False
+_RUNTIME_LOAD_REGISTERED = False
+_EDITOR_REGISTRATION_ATTEMPTED = False
+_UI_ENABLED = False
+
+
 def register():
-    """Register UI and install included ordinary Packages on activation."""
-    generated_resources.cleanup_restart_orphans_deferred()
-    from .blender.mesh_compute_runtime import register_runtime_load_handler
-    register_runtime_load_handler()
-    for cls in classes:
-        bpy.utils.register_class(cls)
-    bpy.types.Scene.gn_script_mvp = PointerProperty(type=GNSCRIPT_MVP_Properties)
-    bpy.types.NODE_MT_add.append(menu_func)
-    global _PACKAGE_BOOTSTRAP_ERRORS
+    """Install NodeForge UI once, undoing successful partial steps on failure."""
+    global _PACKAGE_BOOTSTRAP_ERRORS, _SCENE_PROP_REGISTERED
+    global _ADD_MENU_REGISTERED, _RUNTIME_LOAD_REGISTERED
+    global _EDITOR_REGISTRATION_ATTEMPTED, _UI_ENABLED
+    if _UI_ENABLED:
+        return
     try:
-        _PACKAGE_BOOTSTRAP_ERRORS = packages.install_included_packages(Path(__file__).resolve().parent)
-    except Exception as exc:
-        _PACKAGE_BOOTSTRAP_ERRORS = (str(exc),)
-    for message in _PACKAGE_BOOTSTRAP_ERRORS:
-        print(f"NodeForge package initialization: {message}")
-    # Blender restricts bpy.data while add-ons register. Populate the Scene
-    # collections on the next event-loop tick instead of touching bpy.data here.
-    if not bpy.app.timers.is_registered(_refresh_startup_browser_items):
-        bpy.app.timers.register(_refresh_startup_browser_items, first_interval=0.0)
-    from .editor import blender_ui
-    blender_ui.register()
+        generated_resources.cleanup_restart_orphans_deferred()
+        from .blender.mesh_compute_runtime import register_runtime_load_handler
+        register_runtime_load_handler()
+        _RUNTIME_LOAD_REGISTERED = True
+        for cls in classes:
+            bpy.utils.register_class(cls)
+            _REGISTERED_CLASSES.append(cls)
+        bpy.types.Scene.gn_script_mvp = PointerProperty(type=GNSCRIPT_MVP_Properties)
+        _SCENE_PROP_REGISTERED = True
+        bpy.types.NODE_MT_add.append(menu_func)
+        _ADD_MENU_REGISTERED = True
+        try:
+            _PACKAGE_BOOTSTRAP_ERRORS = packages.install_included_packages(Path(__file__).resolve().parent)
+        except Exception as exc:
+            _PACKAGE_BOOTSTRAP_ERRORS = (str(exc),)
+        for message in _PACKAGE_BOOTSTRAP_ERRORS:
+            print(f"NodeForge package initialization: {message}")
+        # Browser data is unavailable in some Blender registration contexts.
+        if not bpy.app.timers.is_registered(_refresh_startup_browser_items):
+            bpy.app.timers.register(_refresh_startup_browser_items, first_interval=0.0)
+        from .editor import blender_ui
+        _EDITOR_REGISTRATION_ATTEMPTED = True
+        blender_ui.register()
+        _UI_ENABLED = True
+    except BaseException:
+        unregister()
+        raise
+
 
 def unregister():
-    """Unregister NodeForge UI and operators without mutating generated node-group data."""
+    """Release only our UI registration state; preserve generated datablocks."""
+    global _SCENE_PROP_REGISTERED, _ADD_MENU_REGISTERED
+    global _RUNTIME_LOAD_REGISTERED, _EDITOR_REGISTRATION_ATTEMPTED, _UI_ENABLED
+    if not (_UI_ENABLED or _REGISTERED_CLASSES or _SCENE_PROP_REGISTERED
+            or _ADD_MENU_REGISTERED or _RUNTIME_LOAD_REGISTERED
+            or _EDITOR_REGISTRATION_ATTEMPTED):
+        return
+    _UI_ENABLED = False
     if bpy.app.timers.is_registered(_refresh_startup_browser_items):
         bpy.app.timers.unregister(_refresh_startup_browser_items)
-    from .blender.mesh_compute_runtime import (
-        shutdown_runtime_bindings, unregister_runtime_load_handler,
-    )
-    shutdown_runtime_bindings()
-    unregister_runtime_load_handler()
-    try:
+    if _EDITOR_REGISTRATION_ATTEMPTED:
+        from .editor import blender_ui
+        blender_ui.unregister()
+        _EDITOR_REGISTRATION_ATTEMPTED = False
+    if _ADD_MENU_REGISTERED:
         bpy.types.NODE_MT_add.remove(menu_func)
-    except Exception:
-        pass
-    if hasattr(bpy.types.Scene, "gn_script_mvp"):
+        _ADD_MENU_REGISTERED = False
+    if _SCENE_PROP_REGISTERED:
         del bpy.types.Scene.gn_script_mvp
-    from .editor import blender_ui
-    blender_ui.unregister()
-    for cls in reversed(classes):
-        try:
-            bpy.utils.unregister_class(cls)
-        except RuntimeError as exc:
-            if "missing bl_rna attribute" not in str(exc):
-                raise
+        _SCENE_PROP_REGISTERED = False
+    while _REGISTERED_CLASSES:
+        cls = _REGISTERED_CLASSES[-1]
+        bpy.utils.unregister_class(cls)
+        _REGISTERED_CLASSES.pop()
+    if _RUNTIME_LOAD_REGISTERED:
+        from .blender.mesh_compute_runtime import (
+            shutdown_runtime_bindings, unregister_runtime_load_handler,
+        )
+        shutdown_runtime_bindings()
+        unregister_runtime_load_handler()
+        _RUNTIME_LOAD_REGISTERED = False
 
 if __name__ == "__main__":
     register()

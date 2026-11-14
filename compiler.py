@@ -28,10 +28,11 @@ class _ResolvedEnvironmentBoundBackend(BlenderGroupBackend):
         return SourceCallableSession(resolved_environment=self._resolved_environment_for_session())
 
     def compile_group_callback(self, source: str, name: str = "NodeForge Group", **kwargs):
-        """Ensure public package builds share one source-call session across both phases."""
-        if kwargs.get("source_callable_session") is None:
-            kwargs["source_callable_session"] = self.new_source_callable_session()
-        return super().compile_group_callback(source, name=name, **kwargs)
+        """Reject the removed raw-source backend entry point."""
+        raise CompileError(
+            'Raw-source backend compilation is unsupported; '
+            'supply prepared typed IR via BlenderGroupBuildRequest'
+        )
 
 
 def _new_group_backend(resolved_environment: ResolvedEnvironment | None = None):
@@ -41,17 +42,10 @@ def _new_group_backend(resolved_environment: ResolvedEnvironment | None = None):
         return resolved_environment if resolved_environment is not None else _make_compilation_environment()
 
     def prepare(source, *, compilation_identity, source_callable_session=None, **kwargs):
-        session = source_callable_session or SourceCallableSession(resolved_environment=environment_for_session())
-        if resolved_environment is not None and session.resolved_environment is not resolved_environment:
-            raise CompileError("Source callable session does not match supplied resolved environment")
-        return analyze_group_source(
-            source,
-            compilation_identity=compilation_identity,
-            resolved_environment=session.resolved_environment,
-            inherited_local_functions=kwargs.get("inherited_local_functions"),
-            inherited_imported_library_functions=kwargs.get("inherited_imported_library_functions"),
-            helper_namespace=kwargs.get("helper_namespace") or "NodeForge Group",
-            source_callable_session=session,
+        """Raw-source backend compilation no longer has a supported root contract."""
+        raise CompileError(
+            'Raw-source backend preparation is unsupported; '
+            'compile an individual def to typed IR before Blender publication'
         )
 
     return _ResolvedEnvironmentBoundBackend(
@@ -61,29 +55,150 @@ def _new_group_backend(resolved_environment: ResolvedEnvironment | None = None):
     )
 
 
-def _prepare_root_build(backend, source: str, *, name: str, existing_group=None):
-    """Resolve final root identity and semantic compilation before Blender mutation."""
-    session = backend.new_source_callable_session()
-    identity = backend.resolve_root_compilation_identity(existing_group)
-    prepared = backend.prepare_source_compilation(
-        source,
-        compilation_identity=identity,
-        helper_namespace=name,
-        source_callable_session=session,
+def _prepare_mesh_compute_root(backend, source: str, *, name: str, existing_group=None):
+    """Prepare one typed modifier entry as a physical ROOT, never a nested group.
+
+    An explicitly installed Mesh Compute modifier owns its own GeometryNodeTree.
+    Unlike an ordinary function Node Group it can therefore host root-only
+    Extension API callbacks, while every function it calls remains NESTED.
+    """
+    from .compiler_identities import ModuleId, module_definition_function_id
+    from .semantic.source_modules import (
+        parse_source_module, resolve_source_module, resolve_source_call_graph,
     )
+    from .semantic.function_signatures import compile_function_signature
+    from .semantic.source_callables import serialize_local_signature
+    from .semantic.runtime_capabilities import RuntimeRole
+    from .nf_types import NFType
+
+    identity = backend.resolve_root_compilation_identity(existing_group)
+    module_id = ModuleId("ROOT_TEXT", f"mesh-compute:{identity.root_owner_id}")
+    snapshot = parse_source_module(source, module_id)
+    resolved = resolve_source_module(snapshot)
+    if resolved.has_executable_statements:
+        raise CompileError(
+            "Mesh Compute modifier requires a typed function entry; "
+            "executable top-level statements and old input_*()/output() are unsupported"
+        )
+    graph = resolve_source_call_graph(resolved)
+    if len(graph.entries) != 1:
+        raise CompileError(
+            f"Mesh Compute modifier requires exactly one entry function; found {len(graph.entries)}"
+        )
+    definition = graph.entries[0]
+    fn = snapshot.definitions[definition.name]
+    session = backend.new_source_callable_session()
+    environment, compile_time_values = session.callable_environment_for_module(snapshot)
+    signature = compile_function_signature(
+        fn, owner_scope=identity.owner_scope,
+        declaration_owner=identity.declaration_owner,
+        compile_time_values=compile_time_values,
+    )
+    types = {item.target_name: item.typ for item in signature.declarations}
+    function_id = module_definition_function_id(
+        definition, serialize_local_signature([arg.arg for arg in fn.args.args], types),
+    )
+    prepared = session.prepare_definition(
+        function_id=function_id, identity=identity, fn=fn,
+        callable_environment=environment, compile_time_values=compile_time_values,
+        source_module=snapshot, helper_namespace=name,
+        runtime_role=RuntimeRole.ROOT,
+    ).group
+    inputs, outputs = prepared.interface.inputs, prepared.interface.outputs
+    if _requires_mesh_compute(prepared) and (
+            not inputs or inputs[0].typ is not NFType.GEOMETRY
+            or inputs[0].has_default
+            or any(item.typ is NFType.GEOMETRY for item in inputs[1:])
+            or len(outputs) != 1 or outputs[0].typ is not NFType.GEOMETRY):
+        raise CompileError(
+            "Mesh Compute modifier entry must accept a required first Geometry parameter "
+            "and return exactly one Geometry value"
+        )
     return prepared, session
 
 
 def create_expression_group(source: str, name: str = "NodeForge Group"):
-    """Create a new Geometry Nodes group from one prepared NodeForge compilation."""
-    backend = _new_group_backend()
-    prepared, session = _prepare_root_build(backend, source, name=name)
-    return backend.create_or_update(BlenderGroupBuildRequest(
-        prepared_compilation=prepared,
-        name=name,
-        source_callable_session=session,
-        helper_namespace=name,
-    ))
+    """Materialize exactly one standalone unified `.nf` definition.
+
+    This API no longer accepts a generated-root script or implicit root I/O.
+    Use ``compose_source_initial`` for executable top-level composition.
+    """
+    from uuid import uuid4
+    from .compiler_identities import ModuleId
+    from .semantic.source_modules import parse_source_module, resolve_source_module
+
+    snapshot = parse_source_module(source, ModuleId("ROOT_TEXT", f"standalone:{uuid4().hex}"))
+    resolved = resolve_source_module(snapshot)
+    if resolved.has_executable_statements or len(snapshot.definitions) != 1:
+        raise CompileError(
+            "Creating a standalone Function Node Group requires exactly one def "
+            "and no executable top-level statements; use direct composition otherwise"
+        )
+    definition = snapshot.definition_ref(next(iter(snapshot.definitions)))
+    group = _materialize_standalone_module_definition(snapshot, definition, _new_group_backend())
+    group.name = name
+    return group
+
+
+def _prepare_direct_source(source: str, target, *, resolved_environment=None,
+                           module_context: str | None = None):
+    """Prepare typed root statements once, without materializing Blender nodes."""
+    from .compiler_identities import GroupCompilationIdentity, ModuleId
+    from .function_instances import function_group_owner_scope
+    from .semantic.source_modules import parse_source_module
+    from .blender.direct_composition import validate_prepared_direct
+
+    if getattr(target, "bl_idname", None) != "GeometryNodeTree":
+        raise CompileError("Direct composition requires an existing base GeometryNodeTree")
+    backend = _new_group_backend(resolved_environment)
+    session = backend.new_source_callable_session()
+    module_id = ModuleId("ROOT_TEXT", module_context or f"base-tree:{target.name}")
+    snapshot = parse_source_module(source, module_id)
+    owner_scope = function_group_owner_scope("COMPOSITION", module_id.stable_key())
+    identity = GroupCompilationIdentity(None, owner_scope, owner_scope, owner_scope)
+    prepared = analyze_group_source(
+        source, compilation_identity=identity,
+        resolved_environment=session.resolved_environment,
+        source_callable_session=session, source_module=snapshot,
+        direct_composition=True,
+    )
+    validate_prepared_direct(prepared, target)
+    return prepared, backend, session, snapshot
+
+
+def compose_source_initial(source: str, target, *, resolved_environment=None,
+                           module_context: str | None = None):
+    """Append one typed `.nf` composition directly to an existing base tree."""
+    from .blender.direct_composition import compose_prepared_initial
+
+    prepared, backend, session, snapshot = _prepare_direct_source(
+        source, target, resolved_environment=resolved_environment,
+        module_context=module_context,
+    )
+    return compose_prepared_initial(prepared, target, backend, session, source_module=snapshot)
+
+
+def update_source_in_tree(source: str, target, *, module_context: str | None = None):
+    """Replace ordinary nodes of an eligible base GeometryNodeTree in place.
+
+    Returns ``RootUpdateResult`` with the number of skipped old boundary links.
+    A ``RootUpdateError.may_have_mutated`` flag distinguishes errors that require
+    an Undo step from preflight or fully cleaned staging failures.
+    """
+    from .blender.root_update import (
+        validate_base_target, reject_node_local_animation, replace_prepared_root,
+    )
+
+    validate_base_target(target)
+    if not isinstance(source, str) or not source.strip():
+        raise CompileError('Update Script requires a nonblank selected Text source')
+    reject_node_local_animation(target)
+    prepared, backend, session, snapshot = _prepare_direct_source(
+        source, target, module_context=module_context,
+    )
+    return replace_prepared_root(
+        prepared, target, backend, session, source_module=snapshot,
+    )
 
 
 def _requires_mesh_compute(prepared) -> bool:
@@ -93,25 +208,78 @@ def _requires_mesh_compute(prepared) -> bool:
 
 
 def compile_script_auto(source: str, owner=None, name: str = "NodeForge Group"):
-    """Compile ordinary source as a group, or a used Mesh Compute root as a modifier.
+    """Compile top-level `.nf` only into the explicitly supplied base node tree.
 
-    Return (group, installed_modifier). No target is needed to prepare or
-    classify ordinary scripts; runtime-only target validation happens later.
+    ``name`` is retained for callers, not used to create a generated root.
+    Mesh Object/modifier installation belongs to the separate Mesh Compute
+    runtime contract and is not an implicit fallback for this operation.
     """
-    backend = _new_group_backend()
-    prepared, session = _prepare_root_build(backend, source, name=name)
-    if _requires_mesh_compute(prepared):
-        group = _install_prepared_mesh_compute_modifier(backend, prepared, session, owner, name=name)
-        return group, True
-    group = backend.create_or_update(BlenderGroupBuildRequest(
-        prepared_compilation=prepared, name=name, source_callable_session=session,
-        helper_namespace=name,
-    ))
-    return group, False
+    if getattr(owner, 'bl_idname', None) != 'GeometryNodeTree':
+        raise CompileError(
+            'Unified Compile Script requires an existing base GeometryNodeTree; '
+            'generated-root and modifier compilation are unsupported'
+        )
+    compose_source_initial(source, owner)
+    return owner, False
+
+
+def _materialize_standalone_module_definition(snapshot, definition, backend):
+    """Build one selected `.nf` definition through the shared nested-group owner.
+
+    This is a user-requested Add, not a module import or initial base-tree
+    composition. Executable top-level source statements are never evaluated.
+    """
+    from .compiler_identities import GroupCompilationIdentity, module_definition_function_id
+    from .function_instances import function_materialization_owner_scope
+    from .semantic.function_signatures import compile_function_signature
+    from .semantic.source_callables import serialize_local_signature
+    from .semantic.ir import IRFunctionMaterialization, IRFunctionMaterializationMode
+    from .blender.function_materializer import (
+        FunctionMaterializer, FunctionMaterializationContext,
+    )
+    from .blender.group_backend import BlenderGroupBuildTransaction
+    from .function_instances import FunctionCompilationTrace
+
+    fn = snapshot.definitions[definition.name]
+    session = backend.new_source_callable_session()
+    environment, compile_time = session.callable_environment_for_module(snapshot)
+    signature = compile_function_signature(
+        fn, owner_scope=definition.stable_key(),
+        declaration_owner=definition.stable_key(),
+        compile_time_values=compile_time,
+    )
+    types = {item.target_name: item.typ for item in signature.declarations}
+    function_id = module_definition_function_id(
+        definition, serialize_local_signature([arg.arg for arg in fn.args.args], types),
+    )
+    materialization = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.SHARED)
+    owner_scope = function_materialization_owner_scope(materialization)
+    identity = GroupCompilationIdentity(None, owner_scope, definition.stable_key(), function_id.stable_key())
+    prepared = session.prepare_definition(
+        function_id=function_id, identity=identity, fn=fn,
+        callable_environment=environment, compile_time_values=compile_time,
+        source_module=snapshot, helper_namespace=fn.name,
+    )
+    tx = BlenderGroupBuildTransaction()
+    context = FunctionMaterializationContext(
+        function_group_cache={}, function_group_transaction=tx,
+        function_compilation_trace=FunctionCompilationTrace(),
+        source_callable_session=session,
+    )
+    try:
+        materialized = FunctionMaterializer(group_backend=backend).materialize_module(
+            prepared, materialization, context,
+        )
+        tx.commit()
+    except Exception:
+        tx.rollback()
+        raise
+    return materialized.group
 
 
 def create_selected_library_group_auto(namespace: str, source_origin: str, owner=None,
-                                       package_id: str = "", *, editor_available: bool = True):
+                                       package_id: str = "", *, editor_available: bool = True,
+                                       resolved_environment=None):
     """Compile the exact selected Local/Examples root without guessing its owner.
 
     Ordinary catalog entries keep their existing reusable materialization path;
@@ -120,7 +288,7 @@ def create_selected_library_group_auto(namespace: str, source_origin: str, owner
     if namespace not in {"local", "examples"}:
         raise CompileError("Automatic library routing supports Local and Examples only")
     from .catalog import _path_key, load_library_entry_source_for_record
-    environment = _make_compilation_environment()
+    environment = resolved_environment if resolved_environment is not None else _make_compilation_environment()
     catalog = environment.catalog(namespace)
     catalog._raise_if_failed()
     origin = _path_key(source_origin)
@@ -131,15 +299,38 @@ def create_selected_library_group_auto(namespace: str, source_origin: str, owner
     if (record.source_path is not None and record.source_path.suffix == ".nf"
             and record.kind == "script"):
         if _path_key(record.source_path) != record.source_origin:
-            raise CompileError(f"Selected {namespace} root changed identity during compilation")
+            raise CompileError(f"Selected {namespace} module changed identity during compilation")
+        from .semantic.source_modules import parse_source_module, resolve_source_module, resolve_source_call_graph
+        from .compiler_identities import ModuleId
+
         source = load_library_entry_source_for_record(record)
-        backend = _new_group_backend(environment)
-        prepared, session = _prepare_root_build(backend, source, name=record.name)
-        if _requires_mesh_compute(prepared):
-            group = _install_prepared_mesh_compute_modifier(
-                backend, prepared, session, owner, name=record.name,
+        module_id = ModuleId(namespace.upper(), record.source_origin)
+        snapshot = parse_source_module(source, module_id)
+        graph = resolve_source_call_graph(resolve_source_module(snapshot))
+        if len(graph.entries) != 1:
+            raise CompileError(
+                f"Selected {namespace} module has {len(graph.entries)} entry definitions; "
+                "Add a specific function from a script instead of guessing its entry"
             )
-            return group, True
+        backend = _new_group_backend(environment)
+        session = backend.new_source_callable_session()
+        bindings, _compile_time = session.callable_environment_for_module(snapshot)
+        if any(getattr(getattr(binding, "record", None), "kind", None) == "runtime"
+               for binding in bindings.imported_functions.values()):
+            prepared, runtime_session = _prepare_mesh_compute_root(
+                backend, source, name=record.name,
+            )
+            if _requires_mesh_compute(prepared):
+                if getattr(owner, "type", None) != "MESH":
+                    raise CompileError("Mesh Compute requires a selected Mesh Object")
+                return _install_prepared_mesh_compute_modifier(
+                    backend, prepared, runtime_session, owner, name=record.name,
+                ), True
+        if not editor_available:
+            raise CompileError("Open a Geometry Nodes editor to add a module function")
+        return _materialize_standalone_module_definition(
+            snapshot, graph.entries[0], backend,
+        ), False
     if not editor_available:
         raise CompileError("Open a Geometry Nodes editor to add a library node group")
     return materialize_library_entry_group_for_record(record, _new_group_backend(environment)), False
@@ -160,6 +351,13 @@ def create_library_catalog_group(namespace: str, name: str):
         record = environment.catalog(namespace).find(name)
     if record is None:
         raise CompileError(f"Unknown {namespace} library entry: {name}")
+    if (namespace in {"local", "examples"} and record.kind == "script"
+            and record.source_path is not None and record.source_path.suffix == ".nf"):
+        group, _ = create_selected_library_group_auto(
+            namespace, record.source_origin, package_id=record.package_id or "",
+            resolved_environment=environment,
+        )
+        return group
     return materialize_library_entry_group_for_record(record, _new_group_backend(environment))
 
 
@@ -174,6 +372,12 @@ def create_examples_source_group(source_origin: str, package_id: str = ""):
     if (record is None or record.package_id != package_id or record.source_path is None
             or record.kind == "runtime"):
         raise CompileError(f"Current Examples source is unavailable: {source_origin}")
+    if record.kind == "script" and record.source_path.suffix == ".nf":
+        group, _ = create_selected_library_group_auto(
+            "examples", record.source_origin, package_id=package_id,
+            resolved_environment=environment,
+        )
+        return group
     return materialize_library_entry_group_for_record(record, _new_group_backend(environment))
 
 
@@ -205,21 +409,156 @@ def create_local_source_group(source_origin: str):
     record = None if selected.local_index is None else selected.local_index.find_origin(origin)
     if record is None:
         raise CompileError(f"Current Local source is unavailable: {source_origin}")
+    if (record.kind == "script" and record.source_path is not None
+            and record.source_path.suffix == ".nf"):
+        group, _ = create_selected_library_group_auto(
+            "local", record.source_origin, resolved_environment=environment,
+        )
+        return group
     return materialize_library_entry_group_for_record(record, _new_group_backend(environment))
 
 
 def create_package_function_group(package_id: str, name: str):
-    """Create or update one exact package-owned Functions entry."""
+    """Add one exact package function, using its frozen `.nf` definition when present."""
     environment = resolve_environment()
-    record = environment.package_function_record(package_id, name)
-    if record is None:
+    namespace = environment.package_by_id(package_id)
+    export = None if namespace is None else namespace.find(name)
+    if export is None or export.record is None:
         raise CompileError(f"Unknown package function {package_id}/{name}")
-    return materialize_library_entry_group_for_record(record, _new_group_backend(environment))
+    backend = _new_group_backend(environment)
+    if export.definition is not None:
+        return _materialize_standalone_module_definition(
+            export.source_snapshot, export.definition, backend,
+        )
+    return materialize_library_entry_group_for_record(export.record, backend)
 
 
-def update_library_catalog_group(group, namespace: str | None = None, name: str | None = None):
-    """Reload a catalog-backed group using persisted owner identity where required."""
+def ensure_source_text_context(text) -> str:
+    """Return one save/reopen-stable live Text origin for new source definitions.
+
+    The Text ID owns the binding, not the user-managed base node tree. Copied
+    Text IDs inheriting the same property are ambiguous until explicitly fixed.
+    """
+    import bpy
+    import uuid
+    from .compiler_identities import TEXT_MODULE_CONTEXT_PROP
+
+    if text is None or not any(item is text for item in bpy.data.texts):
+        raise CompileError('A live Blender Text is required for source binding')
+    identity = str(text.get(TEXT_MODULE_CONTEXT_PROP) or '')
+    if not identity:
+        identity = 'text:' + uuid.uuid4().hex
+        text[TEXT_MODULE_CONTEXT_PROP] = identity
+    if not identity.startswith('text:') or sum(
+        str(candidate.get(TEXT_MODULE_CONTEXT_PROP) or '') == identity
+        for candidate in bpy.data.texts
+    ) != 1:
+        raise CompileError('Source Text identity is duplicated or invalid')
+    return identity
+
+
+def _reload_selected_module_definition(
+    group, backend, *, explicit_source=None, module_context=None,
+):
+    """Reload an exact MODULE_DEF specialization into its selected datablock."""
+    from .compiler_identities import (
+        GroupCompilationIdentity, parse_module_definition_function_id,
+    )
+    from .semantic.source_callables import deserialize_module_parameter_signature
+    from .semantic.function_signatures import compile_function_signature
+    from .semantic.ir import IRFunctionMaterialization, IRFunctionMaterializationMode
+    from .function_instances import (
+        FUNCTION_DEFINITION_OWNER_PROP, FUNCTION_INSTANCE_KEY_PROP,
+        FunctionCompilationTrace, module_definition_owner_scope,
+    )
+    from .blender.group_authority import find_unique_authoritative_group
+    from .blender.function_materializer import (
+        FunctionMaterializer, FunctionMaterializationContext,
+    )
+    from .blender.group_backend import BlenderGroupBuildTransaction
+
+    if getattr(group, 'bl_idname', None) != 'GeometryNodeTree':
+        raise CompileError('Select an existing GeometryNodeTree function')
+    stored_definition = str(group.get('nodeforge_module_definition') or '')
+    function_id = parse_module_definition_function_id(stored_definition)
+    instance_key = str(group.get(FUNCTION_INSTANCE_KEY_PROP) or '')
+    if (str(group.get(FUNCTION_DEFINITION_OWNER_PROP) or '') != stored_definition
+            or group.get('nodeforge_module_origin') != function_id.module.stable_key()
+            or group.get('nodeforge_module_name') != function_id.name
+            or (instance_key and (len(instance_key) != 32
+                                  or any(ch not in '0123456789abcdef' for ch in instance_key)))):
+        raise CompileError('Selected MODULE_DEF metadata is incomplete, detached or inconsistent')
+    # This lookup is the authoritative pre-source boundary, including user ID copies.
+    find_unique_authoritative_group(
+        lambda candidate: (
+            candidate.get(FUNCTION_DEFINITION_OWNER_PROP) == stored_definition
+            and str(candidate.get(FUNCTION_INSTANCE_KEY_PROP) or '') == instance_key
+        ),
+        description=f'MODULE_DEF {function_id.name} / {instance_key or "SHARED"}',
+        selected=group,
+    )
+
+    session = backend.new_source_callable_session()
+    snapshot = session.snapshot_for_selected_definition(
+        function_id, explicit_source=explicit_source, module_context=module_context,
+    )
+    fn = snapshot.definitions[function_id.name]
+    signature_items = deserialize_module_parameter_signature(function_id.signature)
+    if tuple(arg.arg for arg in fn.args.args) != tuple(name for name, _ in signature_items):
+        raise CompileError('Selected module function signature is incompatible with saved specialization')
+    types = dict(signature_items)
+    environment, compile_time = session.callable_environment_for_module(snapshot)
+    owner_scope = module_definition_owner_scope(function_id, instance_key=instance_key)
+    identity = GroupCompilationIdentity(
+        None, owner_scope, snapshot.definition_ref(function_id.name).stable_key(),
+        function_id.stable_key(),
+    )
+    verified = compile_function_signature(
+        fn, owner_scope=owner_scope, declaration_owner=function_id.stable_key(),
+        compile_time_values=compile_time,
+    )
+    if any(item.typ is not types[item.target_name] for item in verified.declarations):
+        raise CompileError('Selected module function types are incompatible with saved specialization')
+    prepared = session.prepare_definition(
+        function_id=function_id, identity=identity, fn=fn,
+        callable_environment=environment,
+        compile_time_values=compile_time, source_module=snapshot,
+        helper_namespace=fn.name,
+    )
+    transaction = BlenderGroupBuildTransaction()
+    context = FunctionMaterializationContext(
+        function_group_cache={}, function_group_transaction=transaction,
+        function_compilation_trace=FunctionCompilationTrace(),
+        source_callable_session=session,
+    )
+    materialization = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.SHARED)
+    try:
+        result = FunctionMaterializer(group_backend=backend).materialize_module(
+            prepared, materialization, context,
+            selected_group=group, selected_instance_key=instance_key,
+        )
+        if result.group is not group or result.owner_scope != owner_scope:
+            raise CompileError('Selected module Reload changed physical group ownership')
+        transaction.commit()
+    except Exception:
+        transaction.rollback()
+        raise
+    return group
+
+
+def update_library_catalog_group(group, namespace: str | None = None, name: str | None = None,
+                                 *, source: str | None = None, module_context: str | None = None):
+    """Reload the exact selected source function, retaining its physical identity."""
     environment = resolve_environment()
+    if str(group.get('nodeforge_module_definition') or ''):
+        if namespace is not None or name is not None:
+            raise CompileError('MODULE_DEF Reload uses its canonical source definition, not a catalog name')
+        return _reload_selected_module_definition(
+            group, _new_group_backend(environment),
+            explicit_source=source, module_context=module_context,
+        )
+    if source is not None or module_context is not None:
+        raise CompileError('Explicit source Reload is supported only for MODULE_DEF groups')
     record = resolve_reloadable_library_entry(
         group, namespace, name, resolved_environment=environment
     )
@@ -229,17 +568,23 @@ def update_library_catalog_group(group, namespace: str | None = None, name: str 
 
 
 def update_expression_group(group, source: str):
-    """Rebuild an existing Geometry Nodes group from one prepared compilation."""
-    name = getattr(group, "name", "NodeForge Group")
-    backend = _new_group_backend()
-    prepared, session = _prepare_root_build(backend, source, name=name, existing_group=group)
-    return backend.create_or_update(BlenderGroupBuildRequest(
-        prepared_compilation=prepared,
-        name=name,
-        existing_group=group,
-        source_callable_session=session,
-        helper_namespace=name,
-    ))
+    """Update a selected standalone Function Node Group from unified source.
+
+    Updating generated-root scripts is deliberately unsupported. Canonical
+    module definitions instead use the same selected in-place Reload boundary.
+    """
+    if not str(group.get('nodeforge_module_definition') or ''):
+        raise CompileError(
+            'Update requires a canonical MODULE_DEF Function Node Group; '
+            'legacy generated-root scripts are unsupported'
+        )
+    from .compiler_identities import parse_module_definition_function_id
+    function_id = parse_module_definition_function_id(group['nodeforge_module_definition'])
+    if function_id.module.kind != 'ROOT_TEXT':
+        raise CompileError('Use source Reload for Local, Examples and package definitions')
+    return update_library_catalog_group(
+        group, source=source, module_context=function_id.module.origin,
+    )
 
 
 def _blank_mesh_compute_modifier(owner):
@@ -284,7 +629,7 @@ def create_mesh_compute_modifier(source: str, owner, name: str = "NodeForge Mesh
         raise CompileError("Mesh Compute requires a selected Mesh Object")
     _blank_mesh_compute_modifier(owner)
     backend = _new_group_backend(resolved_environment)
-    prepared, session = _prepare_root_build(backend, source, name=name)
+    prepared, session = _prepare_mesh_compute_root(backend, source, name=name)
     if not _requires_mesh_compute(prepared):
         raise CompileError("Mesh Compute modifier requires an imported Mesh Compute function")
     return _install_prepared_mesh_compute_modifier(backend, prepared, session, owner, name=name)
@@ -427,13 +772,10 @@ def update_mesh_compute_modifier(source: str, owner):
         backend = _new_group_backend()
         # Keep the durable root owner ID but build a *new* provisional physical
         # Tree; do not mutate the authoritative group or its actual mesh output.
-        session = backend.new_source_callable_session()
-        identity = backend.resolve_root_compilation_identity(old_group)
-        prepared = backend.prepare_source_compilation(
-            source, compilation_identity=identity, helper_namespace=old_group.name,
-            source_callable_session=session,
+        prepared, session = _prepare_mesh_compute_root(
+            backend, source, name=old_group.name, existing_group=old_group,
         )
-        if not any(key and key[0] in {"local-runtime", "examples-runtime"} for key, _ in prepared.extension_dependencies):
+        if not _requires_mesh_compute(prepared):
             raise CompileError("Reload Compute requires an imported Mesh Compute function")
 
         def finalize(new_group):

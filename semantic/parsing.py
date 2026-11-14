@@ -86,10 +86,10 @@ def _validate_no_type_token_bindings(stmts):
         visit_stmt(stmt)
 
 
-def _parse_source(source: str):
-    """Function `_parse_source` used by the NodeForge addon."""
-    source = (source or "").strip()
-    if not source:
+def _parse_source_tree(source: str) -> ast.Module:
+    """Parse and validate one source without losing original source offsets."""
+    source = source if source is not None else ""
+    if not source.strip():
         raise CompileError("Script is empty")
     try:
         tree = ast.parse(source, mode="exec")
@@ -136,7 +136,12 @@ def _parse_source(source: str):
                     raise CompileError("Imports must use simple names")
                 if alias.asname is not None and not alias.asname:
                     raise CompileError("Import aliases must be non-empty names")
-    return tree.body
+    return tree
+
+
+def _parse_source(source: str):
+    """Return validated top-level statements with original source locations."""
+    return _parse_source_tree(source).body
 
 
 def _extract_function_imports(stmts):

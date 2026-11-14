@@ -36,7 +36,7 @@ from NodeForge.semantic.analysis import (
     build_semantic_constant_snapshot,
 )
 from NodeForge.semantic.lowering import lower_analyzed_expression
-from NodeForge.semantic.ir import IRBinary, IRLiteral
+from NodeForge.semantic.ir import IRBinary, IRLiteral, IRUnary
 
 
 pytestmark = pytest.mark.unit
@@ -348,6 +348,46 @@ def test_semantic_frontend_owns_direct_numeric_types(source, typ):
     }
     _, analysis = _analyze(source, bindings=bindings)
     assert _root_type(analysis) is typ
+
+
+@pytest.mark.parametrize(
+    "source,expected,typ",
+    [
+        ("-2", -2, TYPE_INT),
+        ("-2.0", -2.0, TYPE_FLOAT),
+        (str(INT_MIN), INT_MIN, TYPE_INT),
+    ],
+)
+def test_negative_numeric_leaf_lowers_to_one_literal(source, expected, typ):
+    expr, analysis = _analyze(source)
+    program = lower_analyzed_expression(expr, analysis)
+    assert len(program.operations) == 1
+    literal, = program.operations
+    assert isinstance(literal, IRLiteral)
+    assert literal.value == expected
+    assert literal.result.typ is typ
+    assert try_runtime_fold(expr, {}) == expected
+
+
+def test_negative_runtime_expression_is_not_folded_to_literal():
+    expr, analysis = _analyze("-amount", bindings={"amount": TYPE_FLOAT})
+    program = lower_analyzed_expression(expr, analysis)
+    assert any(isinstance(operation, IRUnary) for operation in program.operations)
+    assert try_runtime_fold(expr, {}) is NOT_FOLDABLE
+
+
+def test_negative_float_zero_preserves_existing_runtime_subtraction_semantics():
+    expr, analysis = _analyze("-0.0")
+    program = lower_analyzed_expression(expr, analysis)
+    assert any(isinstance(operation, IRUnary) for operation in program.operations)
+    assert try_runtime_fold(expr, {}) is NOT_FOLDABLE
+
+
+def test_nested_numeric_expressions_remain_runtime_operations():
+    expr, analysis = _analyze("-(1.0 + 2.0)")
+    program = lower_analyzed_expression(expr, analysis)
+    assert any(isinstance(operation, IRUnary) for operation in program.operations)
+    assert try_runtime_fold(expr, {}) is NOT_FOLDABLE
 
 
 def test_exact_int_min_literal_is_lowered_without_materializing_positive_out_of_range_operand():
@@ -967,14 +1007,14 @@ def test_unrelated_new_vector_operators_remain_rejected():
 
 
 def test_backend_unary_minus_selects_integer_math_only_for_int():
-    int_group, int_result = _materialize_numeric_source("-1")
+    int_group, int_result = _materialize_bound_numeric_source("-i", {"i": TYPE_INT})
     assert any(
         node.bl_idname == "FunctionNodeIntegerMath" and node.operation == "NEGATE"
         for node in int_group.nodes
     )
     assert int_result.typ is TYPE_INT
 
-    float_group, float_result = _materialize_numeric_source("-1.0")
+    float_group, float_result = _materialize_bound_numeric_source("-f", {"f": TYPE_FLOAT})
     assert any(
         node.bl_idname == "ShaderNodeMath" and node.operation == "SUBTRACT"
         for node in float_group.nodes

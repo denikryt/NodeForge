@@ -437,10 +437,20 @@ def run_case(case):
     source = load_case_source(case_id)
     before = _group_pointer_set()
     actual_outcome = None
+    harness_target_pointer = None
     try:
         try:
             with _case_local_sources(case_id) as has_local:
-                group = compiler.create_expression_group(source, f"NFChar_{case_id}")
+                if "top-level" in case["tags"]:
+                    group = bpy.data.node_groups.new(f"NFChar_{case_id}", "GeometryNodeTree")
+                    harness_target_pointer = group.as_pointer()
+                    if "pre-existing" in case["tags"]:
+                        first = group.nodes.new("ShaderNodeMath")
+                        second = group.nodes.new("ShaderNodeMath")
+                        group.links.new(first.outputs[0], second.inputs[0])
+                    compiler.compose_source_initial(source, group)
+                else:
+                    group = compiler.create_expression_group(source, f"NFChar_{case_id}")
         except CompileError as exc:
             actual_outcome = "compile_error"
             result = {
@@ -452,22 +462,28 @@ def run_case(case):
             actual_outcome = "graph"
             result = {
                 "kind": "graph",
-                "graph": group_snapshot(group, include_dependencies=has_local),
+                "graph": group_snapshot(
+                    group, include_dependencies=has_local or "top-level" in case["tags"],
+                ),
             }
         _assert_json_native(result)
         if actual_outcome != expected_outcome:
             raise AssertionError(
                 f"characterization case {case_id} expected outcome {expected_outcome!r}, "
-                f"got {actual_outcome!r}"
+                f"got {actual_outcome!r}; actual={result!r}"
             )
         return result
     finally:
         fresh_before_cleanup = _group_pointer_set() - before
         _remove_fresh_groups(before)
-        if actual_outcome == "compile_error" and fresh_before_cleanup:
+        # The existing base tree is owned by this harness, not by compilation.
+        leaked = fresh_before_cleanup - (
+            {harness_target_pointer} if harness_target_pointer is not None else set()
+        )
+        if actual_outcome == "compile_error" and leaked:
             raise AssertionError(
                 f"compile failure leaked fresh node groups for case {case_id}: "
-                f"{len(fresh_before_cleanup)} group(s)"
+                f"{len(leaked)} group(s)"
             )
 
 def _pretty_json(value):

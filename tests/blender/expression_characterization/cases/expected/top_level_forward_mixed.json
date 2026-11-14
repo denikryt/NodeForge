@@ -1,0 +1,132 @@
+{
+  "graph": {
+    "interface": [],
+    "links": [
+      {
+        "from": [
+          "n0",
+          "Mesh"
+        ],
+        "to": [
+          "n2",
+          "Socket_0"
+        ]
+      },
+      {
+        "from": [
+          "n1",
+          "Vector"
+        ],
+        "to": [
+          "n2",
+          "Socket_1"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "bl_idname": "GeometryNodeMeshCube",
+        "id": "n0",
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeCombineXYZ",
+        "defaults": {
+          "X": 0.0,
+          "Y": 0.0,
+          "Z": 2.0
+        },
+        "id": "n1",
+        "properties": {}
+      },
+      {
+        "bl_idname": "GeometryNodeGroup",
+        "group": {
+          "graph": {
+            "interface": [
+              {
+                "in_out": "OUTPUT",
+                "name": "Value",
+                "socket_type": "NodeSocketGeometry"
+              },
+              {
+                "in_out": "INPUT",
+                "name": "geometry",
+                "socket_type": "NodeSocketGeometry"
+              },
+              {
+                "default": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "in_out": "INPUT",
+                "name": "offset",
+                "socket_type": "NodeSocketVector"
+              }
+            ],
+            "links": [
+              {
+                "from": [
+                  "n0",
+                  "Socket_0"
+                ],
+                "to": [
+                  "n2",
+                  "Geometry"
+                ]
+              },
+              {
+                "from": [
+                  "n0",
+                  "Socket_1"
+                ],
+                "to": [
+                  "n2",
+                  "Translation"
+                ]
+              },
+              {
+                "from": [
+                  "n2",
+                  "Geometry"
+                ],
+                "to": [
+                  "n1",
+                  "Socket_2"
+                ]
+              }
+            ],
+            "nodes": [
+              {
+                "bl_idname": "NodeGroupInput",
+                "id": "n0",
+                "properties": {}
+              },
+              {
+                "bl_idname": "NodeGroupOutput",
+                "id": "n1",
+                "properties": {}
+              },
+              {
+                "bl_idname": "GeometryNodeTransform",
+                "id": "n2",
+                "properties": {}
+              }
+            ]
+          },
+          "id": "g1",
+          "unique": false
+        },
+        "id": "n2",
+        "properties": {}
+      },
+      {
+        "bl_idname": "GeometryNodeMeshCube",
+        "id": "n3",
+        "properties": {}
+      }
+    ]
+  },
+  "kind": "graph"
+}

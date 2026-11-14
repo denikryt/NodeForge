@@ -1,7 +1,6 @@
-def identity(value):
+def identity(value: Float):
     return value
 
-a = input_float("A")
-b = input_float("B")
-result = identity([a, b][0]) + b
-output("Result", result)
+def nf_fixture(a: Float['A'], b: Float['B']):
+    result = identity([a, b][0]) + b
+    return result

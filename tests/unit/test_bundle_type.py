@@ -1,7 +1,5 @@
 """Unit coverage for the public runtime Bundle semantic type."""
 
-import ast
-
 import pytest
 
 from NodeForge.semantic.builtin_calls import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
@@ -9,7 +7,6 @@ from NodeForge.blender import bundle, raw_nodes
 from NodeForge.semantic.constants import TYPE_BUNDLE, TYPE_TOKEN_NAMES, TYPE_VECTOR
 from NodeForge.nf_types import NFType
 from NodeForge.errors import CompileError
-from NodeForge.semantic.source_callables import input_call_for_type, resolve_local_parameter_annotation, value_type_for_const
 from NodeForge.blender.nodes import _socket_type_for
 from NodeForge.semantic.callable_contracts import source_argument_type_matches
 
@@ -30,15 +27,6 @@ def test_bundle_is_not_registered_through_deleted_executable_builtin_modules():
     assert not hasattr(registry, "compile_call")
     assert not hasattr(registry, "_HANDLERS")
     assert "bundle" in registry.CALLABLE_BUILTIN_NAMES
-
-
-def test_local_function_bundle_parameter_is_runtime_only():
-    assert input_call_for_type("state", TYPE_BUNDLE) == "state = input_bundle('state')"
-    annotation = ast.parse("Bundle", mode="eval").body
-    assert resolve_local_parameter_annotation(annotation) == TYPE_BUNDLE
-    assert source_argument_type_matches(TYPE_BUNDLE, TYPE_BUNDLE)
-    with pytest.raises(CompileError):
-        value_type_for_const({"x": 1})
 
 
 def test_bundle_backend_socket_mapping_is_explicit_and_rejects_unknown_type():

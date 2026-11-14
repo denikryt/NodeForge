@@ -47,7 +47,7 @@ def write_package(root, package_id, *, import_name='shared', examples=False):
         'permissions': {'python': examples},
     }))
     if not examples:
-        (root / catalog / 'foo.nf').write_text('output(value=1)\n')
+        (root / catalog / 'foo.nf').write_text('def foo() -> Float:\n    return 1.0\n')
     return root
 
 
@@ -74,7 +74,10 @@ def test_broken_callable_inventory_keeps_manifest_import_reservation(tmp_path, r
     )
     assert [m.package_id for m in packages.active_package_manifest_snapshot()] == ['vendor.old']
     environment = resolve_environment()
-    assert environment.package_by_id('vendor.old') is None
+    failed_namespace = environment.package_by_id('vendor.old')
+    assert failed_namespace is not None
+    with pytest.raises(CompileError, match='EXTENSIONS'):
+        failed_namespace.find('system_value')
     candidate = write_package(tmp_path / 'new', 'vendor.old' if replacement else 'vendor.new')
     if replacement:
         packages.install_package_directory(candidate, replace=True)
@@ -103,7 +106,7 @@ def write_example(root, name='review_example'):
 
 def compile_example(environment):
     return analyze_group_source(
-        'from examples import review_example\nx = input_float("X")\noutput(review_example(x))\n',
+        'from examples import review_example\nx = index() * 1.0\nresult = review_example(x)\n',
         compilation_identity=GroupCompilationIdentity(None, 'ROOT/review', 'definition', 'decl'),
         resolved_environment=environment,
     )
@@ -152,7 +155,7 @@ def test_invalid_python_example_is_deferred_catalog_failure(tmp_path, corruption
 def reload_environment(tmp_path, namespace, *, owner_present=True):
     from NodeForge.catalog import LibraryEntryRecord
     path = tmp_path / 'foo.nf'
-    path.write_text('output(value=1)\n')
+    path.write_text('def foo() -> Float:\n    return 1.0\n')
     record = LibraryEntryRecord(namespace, 'foo', 'source', path, source_path=path,
                                 package_id='vendor.old', package_version='1.0.0',
                                 source_origin=os.path.normcase(str(path)) if namespace == 'local' else '')
@@ -240,7 +243,7 @@ def test_examples_are_not_exposed_as_package_members(tmp_path):
     environment = resolve_environment()
     with pytest.raises(CompileError, match="has no callable member 'review_example'"):
         analyze_group_source(
-            'from packages import shared\nx = input_float("X")\noutput(shared.review_example(x))\n',
+            'from packages import shared\nx = index() * 1.0\nresult = shared.review_example(x)\n',
             compilation_identity=GroupCompilationIdentity(None, 'ROOT/review', 'definition', 'decl'),
             resolved_environment=environment,
         )
@@ -301,7 +304,7 @@ def test_native_function_publishes_exact_callable_id(tmp_path):
     assert export.extension_callable_id == callable_id
     assert environment.extension_registry.contains(callable_id)
     analyze_group_source(
-        'from packages import shared\nx=input_float("X")\noutput(shared.native_value(x))\n',
+        'from packages import shared\nx=index() * 1.0\nresult=shared.native_value(x)\n',
         compilation_identity=GroupCompilationIdentity(None, 'ROOT/native', 'definition', 'decl'),
         resolved_environment=environment,
     )

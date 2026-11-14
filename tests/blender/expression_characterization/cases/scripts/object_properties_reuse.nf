@@ -1,5 +1,2 @@
-obj = input_object("Source")
-output("Geometry", obj.geometry)
-output("Location", obj.location)
-output("Rotation", obj.rotation)
-output("Scale", obj.scale)
+def nf_fixture(obj: Object['Source']):
+    return (obj.geometry, obj.location, obj.rotation, obj.scale)

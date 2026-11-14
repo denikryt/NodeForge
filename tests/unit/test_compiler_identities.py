@@ -108,3 +108,22 @@ def test_body_identity_allocator_owns_monotonic_source_call_occurrence_sequence(
 def test_interface_input_origin_is_exact_binding_or_input_declaration_union():
     """Panel provenance reuses existing physical declaration identities without another allocator."""
     assert InterfaceInputOrigin == (BindingId | InputDeclarationId)
+
+
+def test_module_definition_metadata_roundtrips_and_rejects_forged_identifiers():
+    from NodeForge.compiler_identities import (
+        ModuleId, SourceDefinitionRef, module_definition_function_id,
+        parse_module_definition_function_id,
+    )
+    from NodeForge.errors import CompileError
+    import json
+    source = ModuleId('PACKAGE', 'functions/shapes.nf', package_id='vendor.shapes')
+    function = module_definition_function_id(SourceDefinitionRef(source, 'grow'), 'x:FLOAT')
+    assert parse_module_definition_function_id(function.stable_key()) == function
+    for invalid in ('', '[]', '{"kind":"LIBRARY"}', function.stable_key() + ' '):
+        with pytest.raises(CompileError, match='invalid MODULE_DEF'):
+            parse_module_definition_function_id(invalid)
+    owner = json.loads(function.stable_key())
+    owner['name'] = 'not valid python'
+    with pytest.raises(CompileError, match='invalid MODULE_DEF'):
+        parse_module_definition_function_id(json.dumps(owner))

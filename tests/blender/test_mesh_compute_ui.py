@@ -40,7 +40,7 @@ def test_unified_compile_operator_evaluates_real_gn(registered_ui, configured_lo
         text.from_string(SOURCE)
         bpy.context.scene.gn_script_mvp.text_block = text
         _select(mesh_object)
-        assert bpy.ops.gn_script_mvp.compile_expression() == {'FINISHED'}
+        assert bpy.ops.nodeforge.install_mesh_compute_modifier() == {'FINISHED'}
         assert len(mesh_object.modifiers) == 1
         binding = runtime.get_modifier_binding(mesh_object)
         assert binding.status == "READY"
@@ -59,7 +59,7 @@ def test_unified_compile_rejects_removed_local_source(registered_ui, configured_
         (configured_local / 'shift.py').unlink()
         before_groups = {x.as_pointer() for x in bpy.data.node_groups}
         with pytest.raises(RuntimeError):
-            bpy.ops.gn_script_mvp.compile_expression()
+            bpy.ops.nodeforge.install_mesh_compute_modifier()
         assert not mesh_object.modifiers
         assert {x.as_pointer() for x in bpy.data.node_groups} == before_groups
     finally:
@@ -76,24 +76,25 @@ def test_local_python_source_uses_registered_owner_not_permission(registered_ui,
     assert not hasattr(ui, 'NODEFORGE_OT_set_local_python_permission')
 
 
-def test_unified_compile_rejects_occupied_modifier_only_for_runtime(
+def test_explicit_modifier_install_rejects_occupied_modifier_without_affecting_direct_composition(
         registered_ui, configured_local, mesh_object):
-    """Used Python rejects a foreign modifier; ordinary DSL remains compilable."""
-    from NodeForge.compiler import compile_script_auto
+    """Mesh Compute needs an exclusive private modifier; regular direct composition does not."""
+    from NodeForge.compiler import create_mesh_compute_modifier, compose_source_initial
     from NodeForge.errors import CompileError
 
     _select(mesh_object)
     modifier = mesh_object.modifiers.new('User Bevel', 'BEVEL')
+    tree = bpy.data.node_groups.new('User-owned base tree', 'GeometryNodeTree')
     try:
         with pytest.raises(CompileError, match='without previous modifiers'):
-            compile_script_auto(SOURCE, mesh_object)
+            create_mesh_compute_modifier(SOURCE, mesh_object)
         assert mesh_object.modifiers[0].as_pointer() == modifier.as_pointer()
-        group, installed = compile_script_auto('output("Value", 1.0)\n', mesh_object)
-        assert not installed
-        assert group is not modifier
+        assert compose_source_initial('geometry = cube(1)\n', tree) is tree
+        assert any(node.bl_idname == 'GeometryNodeMeshCube' for node in tree.nodes)
         assert len(mesh_object.modifiers) == 1
     finally:
         mesh_object.modifiers.remove(modifier)
+        bpy.data.node_groups.remove(tree)
 
 
 def test_reload_compute_operator_evaluates_changed_local_source(registered_ui, configured_local, mesh_object):
@@ -104,7 +105,7 @@ def test_reload_compute_operator_evaluates_changed_local_source(registered_ui, c
         text.from_string(SOURCE)
         bpy.context.scene.gn_script_mvp.text_block = text
         _select(mesh_object)
-        assert bpy.ops.gn_script_mvp.compile_expression() == {'FINISHED'}
+        assert bpy.ops.nodeforge.install_mesh_compute_modifier() == {'FINISHED'}
         original_modifier = mesh_object.modifiers[0].as_pointer()
         assert _evaluated_positions(mesh_object)[0] == (2., 3., 4.)
         (configured_local / 'shift.py').write_text(_new_kernel_source())
@@ -128,7 +129,7 @@ def test_reload_compute_operator_denies_unsupported_root_and_no_changes(register
         assert not ui.NODEFORGE_OT_reload_mesh_compute_modifier.poll(bpy.context)
         assert len(mesh_object.modifiers) == 1
         mesh_object.modifiers.clear()
-        assert bpy.ops.gn_script_mvp.compile_expression() == {'FINISHED'}
+        assert bpy.ops.nodeforge.install_mesh_compute_modifier() == {'FINISHED'}
         bpy.context.scene.gn_script_mvp.text_block = None
         assert not ui.NODEFORGE_OT_reload_mesh_compute_modifier.poll(bpy.context)
     finally:
@@ -142,7 +143,7 @@ def test_reload_operator_recovers_missing_saved_runtime(registered_ui, configure
         text.from_string(SOURCE)
         bpy.context.scene.gn_script_mvp.text_block = text
         _select(mesh_object)
-        assert bpy.ops.gn_script_mvp.compile_expression() == {'FINISHED'}
+        assert bpy.ops.nodeforge.install_mesh_compute_modifier() == {'FINISHED'}
         previous = runtime.get_modifier_binding(mesh_object)
         old_source, old_scene = previous.source_object, previous.source_scene
         runtime.on_file_load_post()
@@ -252,7 +253,7 @@ def test_local_normal_nf_keeps_group_route(registered_ui, configured_local, mesh
     from NodeForge.compiler import create_selected_library_group_auto
 
     script = configured_local / 'normal_group.nf'
-    script.write_text('output("Value", 1.0)\n', encoding='utf-8')
+    script.write_text('def plain() -> Float:\n    return 1.0\n', encoding='utf-8')
     group, installed = create_selected_library_group_auto('local', str(script), mesh_object)
     assert not installed
     assert group.bl_idname == 'GeometryNodeTree'
@@ -334,7 +335,7 @@ def test_local_mesh_compute_compiles_adjacent_python_from_nested_folder(
                       .replace('def shift(', 'def erosion('), encoding='utf-8')
     script = nested / 'erosion_numpy.nf'
     script.write_text(SOURCE.replace('from local import shift', 'from local import erosion')
-                      .replace('geo = shift(', 'geo = erosion('), encoding='utf-8')
+                      .replace('shift(geometry', 'erosion(geometry'), encoding='utf-8')
     props = bpy.context.scene.gn_script_mvp
     _select(mesh_object)
     _select_local_script(props, nested, script)
@@ -347,22 +348,26 @@ def test_unused_runtime_import_stays_detached(registered_ui, configured_local, m
     """Only used runtime callable identities select the modifier route."""
     from NodeForge.compiler import compile_script_auto
 
-    group, installed = compile_script_auto(
-        'from local import shift\noutput("Value", 2.0)\n', mesh_object,
+    from NodeForge.compiler import create_expression_group
+    group = create_expression_group(
+        'from local import shift\ndef passthrough(geometry: Geometry) -> Geometry:\n'
+        '    return geometry\n',
     )
-    assert not installed
-    assert group.bl_idname == 'GeometryNodeTree'
-    assert not mesh_object.modifiers
+    try:
+        assert group.bl_idname == 'GeometryNodeTree'
+        assert not mesh_object.modifiers
+    finally:
+        bpy.data.node_groups.remove(group, do_unlink=True)
 
 
 def test_runtime_without_mesh_fails_before_publication(configured_local):
     """Runtime cannot downgrade into a detached group when no owner exists."""
-    from NodeForge.compiler import compile_script_auto
+    from NodeForge.compiler import create_mesh_compute_modifier
     from NodeForge.errors import CompileError
 
     existing = {group.as_pointer() for group in bpy.data.node_groups}
     with pytest.raises(CompileError, match='selected Mesh Object'):
-        compile_script_auto(SOURCE, None)
+        create_mesh_compute_modifier(SOURCE, None)
     assert {group.as_pointer() for group in bpy.data.node_groups} == existing
 
 
@@ -371,22 +376,20 @@ def test_removed_modifier_operators_are_unregistered(registered_ui):
     assert ui.GNSCRIPT_MVP_OT_compile_expression in ui.classes
     assert ui.NODEFORGE_OT_create_function_group in ui.classes
     assert ui.NODEFORGE_OT_reload_mesh_compute_modifier in ui.classes
-    assert not any('compile_mesh_compute_modifier' in cls.__name__ for cls in ui.classes)
+    assert ui.NODEFORGE_OT_install_mesh_compute_modifier in ui.classes
 
 
-def test_ordinary_text_compile_inserts_only_group_node(registered_ui, mesh_object, monkeypatch):
-    """Ordinary Text compilation keeps editor insertion even with a Mesh selected."""
+def test_ordinary_text_compile_composes_base_nodes_without_modifier(registered_ui, mesh_object, monkeypatch):
+    """Compile Script continues to compose into the selected user-owned GeometryNodeTree."""
     editor = bpy.data.node_groups.new('OrdinaryCompileEditor', 'GeometryNodeTree')
     text = bpy.data.texts.new('OrdinaryCompileText.nf')
     try:
-        text.from_string('output("Value", 1.0)\n')
+        text.from_string('geometry = cube(1)\n')
         bpy.context.scene.gn_script_mvp.text_block = text
         _select(mesh_object)
-        monkeypatch.setattr(ui, '_active_gn_tree', lambda context: editor)
+        monkeypatch.setattr(ui, '_base_gn_tree', lambda context: editor)
         assert bpy.ops.gn_script_mvp.compile_expression() == {'FINISHED'}
-        groups = [node for node in editor.nodes if node.bl_idname == 'GeometryNodeGroup']
-        assert len(groups) == 1
-        assert groups[0].node_tree is not None
+        assert any(node.bl_idname == 'GeometryNodeMeshCube' for node in editor.nodes)
         assert not mesh_object.modifiers
     finally:
         bpy.data.texts.remove(text)
@@ -403,7 +406,7 @@ def test_runtime_text_compile_does_not_insert_editor_node(
         bpy.context.scene.gn_script_mvp.text_block = text
         _select(mesh_object)
         monkeypatch.setattr(ui, '_active_gn_tree', lambda context: editor)
-        assert bpy.ops.gn_script_mvp.compile_expression() == {'FINISHED'}
+        assert bpy.ops.nodeforge.install_mesh_compute_modifier() == {'FINISHED'}
         assert not any(node.bl_idname == 'GeometryNodeGroup' for node in editor.nodes)
         binding = runtime.get_modifier_binding(mesh_object)
         assert mesh_object.modifiers[0].node_group is binding.group
@@ -420,7 +423,7 @@ def test_local_ordinary_root_without_editor_does_not_publish(
     from NodeForge.errors import CompileError
 
     script = configured_local / 'no_editor_root.nf'
-    script.write_text('output("Value", 1.0)\n', encoding='utf-8')
+    script.write_text('def plain() -> Float:\n    return 1.0\n', encoding='utf-8')
     before = {group.as_pointer() for group in bpy.data.node_groups}
     with pytest.raises(CompileError, match='Open a Geometry Nodes editor'):
         create_selected_library_group_auto(

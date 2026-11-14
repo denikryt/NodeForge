@@ -21,6 +21,7 @@ from ..function_instances import (
     direct_library_owner_scope_for_id,
     FUNCTION_INSTANCE_KEY_PROP,
     function_materialization_owner_scope,
+    module_definition_owner_scope,
     instance_key_for_materialization,
     stamp_function_metadata,
     stored_fingerprint,
@@ -108,6 +109,7 @@ class LibraryFunctionUpdateSpec:
     group: object
     group_name: str
     write_package_metadata: Callable[[object, object], None]
+    instance_key: str = ""
 
     def __post_init__(self):
         """Require one prepared source authority."""
@@ -122,6 +124,98 @@ class FunctionMaterializer:
         """Store the explicit physical GeometryNodeTree backend."""
         self._group_backend = group_backend
 
+
+    def materialize_module(
+        self,
+        prepared_callable,
+        materialization: IRFunctionMaterialization,
+        context: FunctionMaterializationContext,
+        *,
+        selected_group=None,
+        selected_instance_key: str | None = None,
+    ) -> MaterializedFunctionGroup:
+        """Publish a source-module definition through the existing in-place backend.
+
+        A definition has one canonical source identity and one inferred type
+        specialization. Its physical owner additionally includes the optional
+        unique occurrence key; no module-specific backing generation is made.
+        """
+        import bpy
+        from .group_authority import find_unique_authoritative_group
+
+        function_id = materialization.callee
+        if function_id.kind != "MODULE_DEF" or prepared_callable.contract.function_id != function_id:
+            raise CompileError("Module definition materialization identity mismatch")
+        if selected_group is not None:
+            if selected_instance_key is None:
+                raise CompileError("Selected module Reload requires its preserved instance key")
+            instance_key = selected_instance_key
+            owner_scope = module_definition_owner_scope(function_id, instance_key=instance_key)
+        else:
+            instance_key = instance_key_for_materialization(materialization)
+            owner_scope = function_materialization_owner_scope(materialization)
+        prepared = prepared_callable.group
+        if prepared.identity.owner_scope != owner_scope:
+            raise CompileError("Prepared module definition has a different physical owner")
+        cache_key = ("module-def", function_id, instance_key or "SHARED")
+        cache = context.function_group_cache
+        group = cache.get(cache_key)
+        if group is not None and selected_group is None:
+            self._record_dependency(context.function_compilation_trace, materialization, group)
+            return MaterializedFunctionGroup(group, instance_key, owner_scope)
+        from ..function_instances import FUNCTION_DEFINITION_OWNER_PROP, FUNCTION_INSTANCE_KEY_PROP
+        existing = find_unique_authoritative_group(
+            lambda candidate: (
+                candidate.get(FUNCTION_DEFINITION_OWNER_PROP) == function_id.stable_key()
+                and str(candidate.get(FUNCTION_INSTANCE_KEY_PROP) or "") == instance_key
+            ),
+            description=f"module {function_id.module.stable_key()}::{function_id.name} "
+                        f"specialization {function_id.signature} instance {instance_key or 'SHARED'}",
+            selected=selected_group,
+            transaction=context.function_group_transaction,
+        )
+        if selected_group is not None and existing is None:
+            raise CompileError("Selected module definition is not an authoritative source owner")
+        own_inputs = {
+            "kind": "module-def", "definition": function_id.stable_key(),
+            "source": normalized_source(prepared.source),
+        }
+
+        def finalize(group):
+            stamp_function_metadata(
+                group, instance_key=instance_key,
+                definition_owner=function_id.stable_key(),
+                fingerprint=stored_fingerprint(group),
+            )
+            group["nodeforge_module_definition"] = function_id.stable_key()
+            group["nodeforge_module_name"] = function_id.name
+            group["nodeforge_module_origin"] = function_id.module.stable_key()
+            group["nodeforge_library_source"] = prepared.source
+            if selected_group is not None:
+                if (group is not selected_group
+                        or group.get(FUNCTION_DEFINITION_OWNER_PROP) != function_id.stable_key()
+                        or group.get("nodeforge_module_definition") != function_id.stable_key()
+                        or str(group.get(FUNCTION_INSTANCE_KEY_PROP) or "") != instance_key
+                        or prepared.identity.owner_scope != module_definition_owner_scope(
+                            function_id, instance_key=instance_key)):
+                    raise CompileError("Selected module Reload changed its canonical owner identity")
+
+        request = BlenderGroupBuildRequest(
+            prepared_compilation=prepared,
+            name=f"NodeForge.fn.{function_id.name}", existing_group=existing,
+            function_group_cache=cache,
+            function_group_transaction=context.function_group_transaction,
+            function_compilation_trace=context.function_compilation_trace,
+            function_compilation_inputs=own_inputs,
+            function_instance_key=instance_key,
+            source_callable_session=context.source_callable_session,
+            preserve_if_equivalent=existing is not None,
+        )
+        group = self._group_backend.create_or_update(request, finalize_before_commit=finalize)
+        cache[cache_key] = group
+        if selected_group is None:
+            self._record_dependency(context.function_compilation_trace, materialization, group)
+        return MaterializedFunctionGroup(group, instance_key, owner_scope)
 
     def materialize_local(
         self,
@@ -339,12 +433,11 @@ class FunctionMaterializer:
     def update_library_group(self, spec: LibraryFunctionUpdateSpec):
         """Update one provenance-validated catalog root from prepared semantics."""
         stable_function_id = spec.function_id.stable_key()
-        # Selected Local reloads retain the caller's occurrence identity. Its
-        # fingerprint inputs match call materialization for unchanged updates.
-        instance_key = (
-            str(spec.group.get(FUNCTION_INSTANCE_KEY_PROP) or "")
-            if spec.namespace == "local" else None
-        )
+        # The selected physical instance is authoritative; never regenerate or
+        # silently reinterpret a unique occurrence as the shared instance.
+        instance_key = str(spec.instance_key or "")
+        if str(spec.group.get(FUNCTION_INSTANCE_KEY_PROP) or "") != instance_key:
+            raise CompileError("Selected library group instance identity changed before Reload")
         expected_owner_scope = direct_library_owner_scope_for_id(spec.function_id, instance_key=instance_key)
         expected_definition_owner = (
             direct_library_owner_scope_for_id(spec.function_id) if spec.namespace == "local" else stable_function_id
@@ -374,9 +467,21 @@ class FunctionMaterializer:
             preserve_if_equivalent=True,
         )
 
+        original_pointer = (spec.group.as_pointer() if hasattr(spec.group, "as_pointer") else id(spec.group))
+
         def finalize_before_commit(group):
             spec.write_package_metadata(group, spec.record)
+            stamp_function_metadata(
+                group, instance_key=instance_key,
+                definition_owner=stable_function_id,
+                fingerprint=stored_fingerprint(group),
+            )
             group["nodeforge_library_source"] = spec.prepared_compilation.source
+            if (group is not spec.group or (group.as_pointer() if hasattr(group, "as_pointer") else id(group)) != original_pointer
+                    or str(group.get(FUNCTION_INSTANCE_KEY_PROP) or "") != instance_key
+                    or group.get("nodeforge_function_definition_owner") != stable_function_id
+                    or spec.prepared_compilation.identity.owner_scope != expected_owner_scope):
+                raise CompileError("Selected library Reload changed canonical owner identity before commit")
 
         return self._group_backend.create_or_update(
             request,

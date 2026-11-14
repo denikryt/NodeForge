@@ -8,25 +8,21 @@ from dataclasses import dataclass
 from .builtin_calls import INPUT_DECLARATION_BUILTIN_NAMES, IR_CAPABLE_BUILTIN_NAMES
 from . import builtin_registry
 from .call_resolution import CallableEnvironment
-from .callable_contracts import (
-    GroupInputContract,
-    GroupInterfaceContract,
-    GroupOutputContract,
-    canonicalize_group_input_default,
-    project_group_input_layout,
-)
-from ..compiler_identities import BindingId, GroupCompilationIdentity
-from .constants import TYPE_FLOAT, TYPE_INT, TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
-from .residualization import _infer_input_types, _preprocess_compile_time
+from .callable_contracts import GroupInterfaceContract
+from ..compiler_identities import GroupCompilationIdentity, ModuleId
+from .constants import TYPE_TOKEN_NAMES, _ALLOWED_CONSTS
 from ..errors import CompileError
-from ..nf_types import NFType
 from ..extensions.contracts import ExtensionCallableId
-from .source_bindings import LibraryBinding, PackageNamespaceBinding, LocalDirectoryNamespaceBinding
+from .source_bindings import (
+    LibraryBinding, PackageNamespaceBinding, LocalDirectoryNamespaceBinding,
+    SourceModuleNamespaceBinding, SourceDefinitionBinding,
+)
 from ..extensions.registry import library_owner_key
-from .parsing import _assigned_names, _binding_names, _collect_inputs, _extract_function_imports, _needs_geometry_io, _parse_source, normalized_statements
-from .runtime_bindings import RuntimeBindingSymbol, allows_existing_top_level_shadow, format_reserved_binding_label
-from .body import BasicBodyCompilation, lower_basic_body
-from .ir import IRBody, IRIf, IRInputDeclaration, IRPanelDeclaration, IRRepeat
+from .parsing import _assigned_names, _binding_names, _extract_function_imports, normalized_statements
+from .source_modules import SourceModuleSnapshot, SourceCallGraph, parse_source_module, resolve_source_module, resolve_source_call_graph
+from .runtime_bindings import allows_existing_top_level_shadow, format_reserved_binding_label
+from .body import lower_basic_body
+from .ir import IRBody
 
 
 @dataclass(frozen=True)
@@ -40,6 +36,7 @@ class SemanticGroupCompilation:
     interface: GroupInterfaceContract
     geometry_mode: bool
     extension_dependencies: tuple[tuple[tuple[str, ...], str], ...] = ()
+    source_call_graph: SourceCallGraph | None = None
 
     def __post_init__(self) -> None:
         """Freeze owner-independent metadata and reject backend objects by construction."""
@@ -77,9 +74,10 @@ def _validate_import_bindings(
     inherited_local_namespaces=None,
     directory_bindings=None,
     allow_local_runtime=True,
+    source_callable_session=None,
 ):
     """Validate and return source-local namespace-aware catalog bindings."""
-    imported: dict[str, LibraryBinding] = {}
+    imported: dict[str, LibraryBinding | SourceDefinitionBinding] = {}
     directories = {}
     local_bindings = _binding_names(body_stmts)
     reserved_names = (
@@ -96,10 +94,52 @@ def _validate_import_bindings(
         catalog = resolved_environment.catalog(base_namespace)
         catalog._raise_if_failed()
         index = catalog.local_index if base_namespace == "local" else catalog.examples_index
+        source_member = None
         if inherited_record is not None and index is not None:
             record = index.find_origin(inherited_record.source_origin)
+        elif base_namespace == "local" and index is not None:
+            path = tuple(namespace.split(".")[1:])
+            try:
+                selected = index.resolve_path(path + (canonical_name,) if not path else path)
+            except CompileError:
+                # Explicitly linked runtime Python owners are index-addressable
+                # even when not located inside a scanned Local root directory.
+                runtime = index.find_flat_function(canonical_name) if not path else None
+                if getattr(runtime, "kind", None) != "runtime":
+                    raise
+                selected = runtime
+            from ..local_index import LocalDirectoryCandidate
+            if path and not isinstance(selected, LocalDirectoryCandidate):
+                # The module itself is a file; the imported name selects a def.
+                record = selected
+                source_member = canonical_name
+            elif path:
+                record = index.resolve_path(path + (canonical_name,))
+            else:
+                record = selected
         elif base_namespace == "examples" and index is not None:
-            record = catalog.select_import(namespace, canonical_name, flat_only=flat_only)
+            path = tuple(namespace.split(".")[1:])
+            if not path:
+                record = catalog.select_import(namespace, canonical_name, flat_only=flat_only)
+            else:
+                # An Examples extension owner can occupy a file and directory
+                # position simultaneously. Explicit directory-member imports
+                # resolve the directory; a file-qualified member resolves the
+                # module only when the path is not a directory.
+                from ..local_index import LocalDirectoryCandidate
+                try:
+                    directory = index.resolve_directory(path)
+                except CompileError:
+                    directory = None
+                if directory is not None:
+                    record = index.resolve_member(directory, canonical_name)
+                else:
+                    selected = index.resolve_path(path)
+                    if isinstance(selected, LocalDirectoryCandidate):
+                        record = index.resolve_member(selected, canonical_name)
+                    else:
+                        record = selected
+                        source_member = canonical_name
         elif index is not None:
             if namespace == "local":
                 record = index.find_flat_function(canonical_name) if flat_only else index.resolve_root_import(canonical_name)
@@ -115,6 +155,28 @@ def _validate_import_bindings(
         if inherited_record is not None and inherited_record is not record:
             raise CompileError("Internal error: inherited library binding does not match resolved environment")
         from ..local_index import LocalDirectoryCandidate
+        if (base_namespace in {"local", "examples"}
+                and getattr(record, "source_path", None) is not None
+                and record.source_path.suffix == ".nf"):
+
+            if source_callable_session is None:
+                from .source_callable_session import SourceCallableSession
+                capture_session = SourceCallableSession(resolved_environment=resolved_environment)
+            else:
+                capture_session = source_callable_session
+            snapshot = capture_session.capture_source_module(record)
+            capture_session.preflight_module_contracts(snapshot)
+            if source_member is None:
+                binding = SourceModuleNamespaceBinding(exposed_name, record, snapshot, namespace=base_namespace)
+                if exposed_name in imported or exposed_name in directories or exposed_name in local_bindings or exposed_name in local_function_defs or exposed_name in reserved_names:
+                    raise CompileError(f"{base_namespace.title()} module import alias {exposed_name!r} conflicts with an existing binding")
+                directories[exposed_name] = binding
+            else:
+                binding = SourceDefinitionBinding(base_namespace, source_member, record, snapshot.definition_ref(source_member), snapshot)
+                if exposed_name in imported or exposed_name in directories or exposed_name in local_bindings or exposed_name in local_function_defs or exposed_name in reserved_names:
+                    raise CompileError(f"{base_namespace.title()} function import alias {exposed_name!r} conflicts with an existing binding")
+                imported[exposed_name] = binding
+            return
         if isinstance(record, LocalDirectoryCandidate):
             if exposed_name in imported or exposed_name in directories:
                 raise CompileError(f"Duplicate function import name: {exposed_name}")
@@ -123,10 +185,13 @@ def _validate_import_bindings(
             if exposed_name in reserved_names:
                 raise CompileError(f"Directory import name conflicts with reserved name: {exposed_name}")
             directories[exposed_name] = LocalDirectoryNamespaceBinding(
-                exposed_name, index, record, expose_unqualified=not has_explicit_alias,
+                exposed_name, index, record, expose_unqualified=False,
                 namespace=base_namespace,
             )
             return
+        if (base_namespace == "local" and getattr(record, "source_path", None) is not None
+                and record.source_path.suffix == ".nodeforge"):
+            raise CompileError("Legacy .nodeforge modules are unsupported; use .nf")
         namespace = base_namespace
         extension_callable_id = None
         if getattr(record, "kind", None) == "runtime":
@@ -156,6 +221,8 @@ def _validate_import_bindings(
     for import_request in import_pairs:
         namespace = import_request.module
         if import_request.is_star:
+            if namespace.split(".")[0] == "local":
+                raise CompileError("Local star imports are unsupported; select a file module or an explicit function member")
             for library_name in sorted(resolved_environment.catalog(namespace).names(), key=str.lower):
                 if namespace == "local":
                     flat = resolved_environment.catalog("local").local_index.flat_candidates.get(library_name, ())
@@ -167,7 +234,11 @@ def _validate_import_bindings(
             validate_pair(namespace, import_request.canonical_name, import_request.exposed_name,
                           has_explicit_alias=import_request.has_explicit_alias)
     for exposed_name, inherited_binding in dict(inherited_imports or {}).items():
-        if isinstance(inherited_binding, LibraryBinding):
+        if isinstance(inherited_binding, SourceDefinitionBinding):
+            if exposed_name in imported or exposed_name in directories or exposed_name in local_function_defs:
+                raise CompileError(f"Inherited Local function {exposed_name!r} conflicts with a source declaration")
+            imported[exposed_name] = inherited_binding
+        elif isinstance(inherited_binding, LibraryBinding):
             validate_pair(
                 inherited_binding.namespace,
                 inherited_binding.canonical_name,
@@ -178,8 +249,13 @@ def _validate_import_bindings(
         else:
             raise CompileError("Internal error: inherited library binding is not owner-resolved")
     for alias, binding in dict(inherited_local_namespaces or {}).items():
-        if not isinstance(binding, LocalDirectoryNamespaceBinding) or binding.source_name != alias:
+        if not isinstance(binding, (LocalDirectoryNamespaceBinding, SourceModuleNamespaceBinding)) or binding.source_name != alias:
             raise CompileError("Internal error: invalid inherited source namespace")
+        if isinstance(binding, SourceModuleNamespaceBinding):
+            if alias in directories or alias in imported or alias in local_function_defs or alias in reserved_names:
+                raise CompileError(f"Inherited Local module {alias!r} conflicts with an existing binding")
+            directories[alias] = binding
+            continue
         catalog = resolved_environment.catalog(binding.namespace)
         index = catalog.local_index if binding.namespace == "local" else catalog.examples_index
         if binding.index_snapshot is not index:
@@ -269,12 +345,16 @@ def _registered_name_labels(local_function_defs, imported_library_functions, pac
     return labels
 
 
-def _check_registered_binding(name, labels, *, context="assign", allow_existing_shadow=False):
+def _check_registered_binding(name, labels, *, context="assign", allow_existing_shadow=False, in_local_function=False):
     """Reject source bindings that collide with non-shadowable registered names."""
     label = labels.get(name)
     if label is None:
         return
     if allow_existing_shadow and allows_existing_top_level_shadow(label):
+        return
+    if in_local_function and label in {"local function", "imported function", "imported package"}:
+        # A function body owns its parameters and ordinary local targets;
+        # module function/import bindings remain available to other scopes.
         return
     if context == "parameter":
         raise CompileError(f"Local function parameter {name} is {format_reserved_binding_label(label)}")
@@ -285,26 +365,26 @@ def _validate_registered_name_bindings(stmts, labels, *, top_level_function_name
     """Validate raw AST binding sites before preprocessing can erase them."""
     top_level_function_names = set(top_level_function_names or ())
 
-    def check_target(target, *, allow_existing_shadow=False):
+    def check_target(target, *, allow_existing_shadow=False, in_local_function=False):
         """Validate one assignment target against reserved compiler-owned names."""
         if isinstance(target, ast.Name):
-            _check_registered_binding(target.id, labels, allow_existing_shadow=allow_existing_shadow)
+            _check_registered_binding(target.id, labels, allow_existing_shadow=allow_existing_shadow, in_local_function=in_local_function)
         elif isinstance(target, (ast.Tuple, ast.List)):
             for item in target.elts:
-                check_target(item, allow_existing_shadow=allow_existing_shadow)
+                check_target(item, allow_existing_shadow=allow_existing_shadow, in_local_function=in_local_function)
 
     def visit(stmt, *, top_level=False, in_local_function=False):
         """Traverse one statement while preserving top-level/local shadowing rules."""
         allow_existing_shadow = not in_local_function
         if isinstance(stmt, ast.Assign):
             for target in stmt.targets:
-                check_target(target, allow_existing_shadow=allow_existing_shadow)
+                check_target(target, allow_existing_shadow=allow_existing_shadow, in_local_function=in_local_function)
             return
         if isinstance(stmt, ast.AugAssign):
-            check_target(stmt.target, allow_existing_shadow=allow_existing_shadow)
+            check_target(stmt.target, allow_existing_shadow=allow_existing_shadow, in_local_function=in_local_function)
             return
         if isinstance(stmt, ast.For):
-            check_target(stmt.target, allow_existing_shadow=allow_existing_shadow)
+            check_target(stmt.target, allow_existing_shadow=allow_existing_shadow, in_local_function=in_local_function)
             for sub in stmt.body:
                 visit(sub, in_local_function=in_local_function)
             for sub in stmt.orelse:
@@ -322,16 +402,36 @@ def _validate_registered_name_bindings(stmts, labels, *, top_level_function_name
             for arg in list(stmt.args.posonlyargs) + list(stmt.args.args) + list(stmt.args.kwonlyargs):
                 if arg.arg == "__unique__":
                     raise CompileError("Local function parameter __unique__ is reserved by the compiler")
-                _check_registered_binding(arg.arg, labels, context="parameter")
+                _check_registered_binding(arg.arg, labels, context="parameter", in_local_function=True)
             if stmt.args.vararg is not None:
-                _check_registered_binding(stmt.args.vararg.arg, labels, context="parameter")
+                _check_registered_binding(stmt.args.vararg.arg, labels, context="parameter", in_local_function=True)
             if stmt.args.kwarg is not None:
-                _check_registered_binding(stmt.args.kwarg.arg, labels, context="parameter")
+                _check_registered_binding(stmt.args.kwarg.arg, labels, context="parameter", in_local_function=True)
             for sub in stmt.body:
                 visit(sub, in_local_function=True)
 
     for stmt in stmts:
         visit(stmt, top_level=True)
+
+
+def _without_definition_alias_declarations(stmts, resolved):
+    """Exclude only validated alias declarations from reserved-name checking.
+
+    An assignment to an established alias with an unrelated expression must
+    still be rejected; earlier filtering by LHS alone could suppress it.
+    """
+    aliases = resolved.definition_aliases
+    refs = resolved.definition_refs
+    return [
+        statement for statement in stmts
+        if not (
+            isinstance(statement, ast.Assign) and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+            and isinstance(statement.value, ast.Name)
+            and statement.targets[0].id in aliases
+            and refs.get(statement.value.id) == aliases[statement.targets[0].id]
+        )
+    ]
 
 
 def _validate_interface_directive_placement(stmts):
@@ -341,91 +441,53 @@ def _validate_interface_directive_placement(stmts):
         return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "panel"
 
     for stmt in stmts:
+        if isinstance(stmt, ast.FunctionDef):
+            # Function-body panel declarations are validated by its own signature frontend.
+            continue
         direct_call = stmt.value if isinstance(stmt, ast.Expr) and is_panel_call(stmt.value) else None
         for node in ast.walk(stmt):
             if is_panel_call(node) and node is not direct_call:
                 raise CompileError("panel() is a top-level interface declaration")
 
 
-def _walk_body_statements(body: IRBody):
-    """Yield body statements recursively in physical semantic traversal order."""
-    for statement in body.statements:
-        yield statement
-        if isinstance(statement, IRIf):
-            yield from _walk_body_statements(statement.true_body)
-            yield from _walk_body_statements(statement.false_body)
-        elif isinstance(statement, IRRepeat):
-            yield from _walk_body_statements(statement.body)
+def resolve_module_callable_environment(source_module, resolved_environment, source_callable_session):
+    """Build import/definition bindings for a captured module without executing its body.
 
-
-def _build_interface_contract(
-    *,
-    geometry_mode: bool,
-    implicit_inputs,
-    body_compilation: BasicBodyCompilation,
-) -> GroupInterfaceContract:
-    """Infer final callable input/output order from semantic body facts only."""
-    base_inputs: list[GroupInputContract] = []
-    if geometry_mode:
-        base_inputs.append(
-            GroupInputContract(
-                source_name=None,
-                display_name="Geometry",
-                typ=NFType.GEOMETRY,
-                default=None,
-                has_default=False,
-                interface_origin=None,
-            )
-        )
-    for source_name, binding_id, typ, default in implicit_inputs:
-        base_inputs.append(
-            GroupInputContract(
-                source_name=source_name,
-                display_name=source_name,
-                typ=typ,
-                default=canonicalize_group_input_default(typ, default),
-                has_default=True,
-                interface_origin=binding_id,
-            )
-        )
-    panels: list[IRPanelDeclaration] = []
-    for statement in _walk_body_statements(body_compilation.body):
-        if isinstance(statement, IRInputDeclaration):
-            has_default = statement.typ in {NFType.FLOAT, NFType.INT, NFType.BOOL, NFType.VECTOR, NFType.STRING}
-            default = canonicalize_group_input_default(statement.typ, statement.default) if has_default else None
-            base_inputs.append(
-                GroupInputContract(
-                    source_name=statement.target_name,
-                    display_name=statement.display_name,
-                    typ=statement.typ,
-                    default=default,
-                    has_default=has_default,
-                    interface_origin=statement.declaration_id,
-                )
-            )
-        elif isinstance(statement, IRPanelDeclaration):
-            panels.append(statement)
-    final_inputs = project_group_input_layout(tuple(base_inputs), tuple(panels))
-
-    outputs: list[GroupOutputContract] = []
-    used_names = {"Geometry"} if geometry_mode else set()
-    if geometry_mode:
-        outputs.append(GroupOutputContract(0, "Geometry", NFType.GEOMETRY))
-    source_outputs = (
-        body_compilation.output_summary.explicit_outputs
-        if body_compilation.output_summary.explicit_outputs
-        else ((body_compilation.output_summary.auto_output,) if body_compilation.output_summary.auto_output is not None else ())
+    The same import validators as direct source compilation supply the lexical
+    environment for a selected module function. Imported module top-level
+    statements are never lowered or published as a side effect of invocation.
+    """
+    if not isinstance(source_module, SourceModuleSnapshot):
+        raise TypeError("Module callable environment requires a source snapshot")
+    raw_stmts = source_module.tree.body
+    raw_body_stmts, import_pairs, package_imports = _extract_function_imports(raw_stmts)
+    resolved = resolve_source_module(source_module)
+    resolve_source_call_graph(resolved)
+    definitions = dict(source_module.definitions)
+    for alias, ref in resolved.definition_aliases.items():
+        definitions[alias] = definitions[ref.name]
+    package_bindings = _validate_package_import_bindings(
+        package_imports, raw_body_stmts, definitions, resolved_environment,
     )
-    for requested_name, typ in source_outputs:
-        base = requested_name or "out"
-        display = base
-        suffix = 2
-        while display in used_names:
-            display = f"{base}_{suffix}"
-            suffix += 1
-        used_names.add(display)
-        outputs.append(GroupOutputContract(len(outputs), display, typ))
-    return GroupInterfaceContract(tuple(final_inputs), tuple(outputs))
+    namespaces = {}
+    imported = _validate_import_bindings(
+        import_pairs, raw_body_stmts, definitions, resolved_environment,
+        additional_reserved_names=frozenset(package_bindings),
+        directory_bindings=namespaces, source_callable_session=source_callable_session,
+    )
+    _validate_registered_name_bindings(
+        _without_definition_alias_declarations(raw_body_stmts, resolved),
+        _registered_name_labels(definitions, imported, package_bindings),
+        top_level_function_names=definitions,
+    )
+    return CallableEnvironment(
+        callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
+        local_functions=definitions,
+        imported_functions=imported,
+        package_namespaces=package_bindings,
+        local_namespaces=namespaces,
+        local_definition_refs=resolved.definition_refs,
+    ), resolved.preprocessed.final_compile_time.values
 
 
 def analyze_group_source(
@@ -439,22 +501,47 @@ def analyze_group_source(
     inherited_local_namespaces=None,
     helper_namespace: str = "NodeForge Group",
     source_callable_session=None,
+    source_module: SourceModuleSnapshot | None = None,
+    direct_composition: bool = True,
+    runtime_role=None,
 ) -> SemanticGroupCompilation:
     """Compile one source snapshot to typed group IR before any Blender mutation."""
     if not isinstance(compilation_identity, GroupCompilationIdentity):
         raise TypeError("compilation_identity must be GroupCompilationIdentity")
-    raw_stmts = _parse_source(source)
+    if not direct_composition:
+        raise CompileError(
+            'The generated-root DSL is unsupported; compile top-level statements '
+            'directly into an existing base tree or materialize a typed def'
+        )
+    from .runtime_capabilities import RuntimeRole
+    role = RuntimeRole.ROOT if runtime_role is None else RuntimeRole(runtime_role)
+    if source_module is None:
+        source_module = parse_source_module(
+            source, ModuleId("ROOT_TEXT", compilation_identity.definition_owner)
+        )
+    elif source_module.source != source:
+        raise CompileError("Source module snapshot does not match the requested source revision")
+    if source_callable_session is not None:
+        stored = source_callable_session.module_snapshots.setdefault(source_module.module_id, source_module)
+        if stored is not source_module:
+            raise CompileError("Conflicting source module revisions inside one compilation attempt")
+    raw_stmts = source_module.tree.body
     raw_body_stmts, import_pairs, package_imports = _extract_function_imports(raw_stmts)
 
     local_function_defs = dict(inherited_local_functions or {})
-    body_stmts = []
-    for stmt in raw_body_stmts:
-        if isinstance(stmt, ast.FunctionDef):
-            if stmt.name in local_function_defs:
-                raise CompileError(f"Duplicate local function: {stmt.name}")
-            local_function_defs[stmt.name] = stmt
-        else:
-            body_stmts.append(stmt)
+    for name, fn in source_module.definitions.items():
+        if name in local_function_defs:
+            raise CompileError(
+                f"Duplicate function {name!r} at line {fn.lineno}, "
+                f"column {fn.col_offset + 1}"
+            )
+        local_function_defs[name] = fn
+    body_stmts = list(source_module.statements)
+    resolved_source_module = resolve_source_module(source_module, inherited_definitions=inherited_local_functions)
+    for alias, ref in resolved_source_module.definition_aliases.items():
+        if alias in local_function_defs:
+            raise CompileError(f"Source function alias {alias!r} conflicts with a declaration")
+        local_function_defs[alias] = local_function_defs[ref.name]
 
     resolved_environment.catalog("examples").names()
     package_bindings = _validate_package_import_bindings(
@@ -474,55 +561,70 @@ def analyze_group_source(
         additional_reserved_names=frozenset(package_bindings),
         inherited_local_namespaces=inherited_local_namespaces,
         directory_bindings=local_directories,
-        allow_local_runtime=not bool(getattr(source_callable_session, "_active_stack", ())),
+        allow_local_runtime=True,
+        source_callable_session=source_callable_session,
     )
     reserved_name_labels = _registered_name_labels(local_function_defs, imported, package_bindings)
+    binding_validation_stmts = _without_definition_alias_declarations(
+        raw_body_stmts, resolved_source_module,
+    )
     _validate_registered_name_bindings(
-        raw_body_stmts,
+        binding_validation_stmts,
         reserved_name_labels,
         top_level_function_names=local_function_defs,
     )
     _validate_interface_directive_placement(raw_body_stmts)
+    if direct_composition:
+        # The existing user-owned base tree has no implicit root interface.
+        # A source function has its own independent signature/return interface.
+        obsolete = set(INPUT_DECLARATION_BUILTIN_NAMES) | {"output", "panel"}
+        for statement in source_module.statements:
+            for node in ast.walk(statement):
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                        and node.func.id in obsolete):
+                    raise CompileError(
+                        f"Root interface declaration {node.func.id}() is unsupported "
+                        f"in direct composition at line {node.lineno}"
+                    )
 
-    preprocessed = _preprocess_compile_time(body_stmts)
+    preprocessed = resolved_source_module.preprocessed
+    if source_callable_session is not None:
+        source_callable_session.preflight_module_contracts(
+            source_module, preprocessed.final_compile_time.values,
+        )
+    else:
+        from .source_definition_contract import validate_source_definition_contract
+        for name, fn in source_module.definitions.items():
+            owner = source_module.definition_ref(name).stable_key()
+            validate_source_definition_contract(
+                fn, owner_scope=owner, declaration_owner=owner,
+                compile_time_values=preprocessed.final_compile_time.values,
+                module_origin=source_module.module_id.origin,
+            )
+    source_call_graph = resolve_source_call_graph(resolved_source_module)
     stmts = list(preprocessed.statements)
-    callable_names = set(imported) | set(local_function_defs) | set(package_bindings) | set(local_directories)
-    input_names = sorted(
-        set(_collect_inputs(stmts, extra_builtin_names=callable_names, consts=preprocessed.final_compile_time.values))
-        - set(preprocessed.final_compile_time.values.keys())
-    )
-    input_types = _infer_input_types(stmts)
-    geometry_mode = _needs_geometry_io(stmts)
-
-    initial_runtime_bindings: dict[str, RuntimeBindingSymbol] = {}
-    initial_origins = {}
-    implicit_inputs = []
-    for local_id, input_name in enumerate(input_names):
-        typ = input_types.get(input_name, TYPE_FLOAT)
-        binding_id = BindingId(compilation_identity.owner_scope, local_id)
-        initial_runtime_bindings[input_name] = RuntimeBindingSymbol(binding_id, typ)
-        initial_origins[binding_id] = binding_id
-        default = 1 if typ is TYPE_INT and input_name == "iterations" else (0 if typ is TYPE_INT else 0.0)
-        implicit_inputs.append((input_name, binding_id, typ, default))
-
+    # Root statements have no implicit inputs or outputs. Only typed def
+    # signatures and final return values create physical function interfaces.
+    geometry_mode = False
     callable_environment = CallableEnvironment(
         callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),
         local_functions=local_function_defs,
         imported_functions=imported,
         package_namespaces=package_bindings,
         local_namespaces=local_directories,
+        local_definition_refs=resolved_source_module.definition_refs,
     )
     extension_dependencies: dict[tuple[str, ...], str] = {}
     body_compilation = lower_basic_body(
         stmts,
-        initial_runtime_bindings=initial_runtime_bindings,
+        initial_runtime_bindings={},
         initial_compile_time=preprocessed.initial_compile_time,
         reserved_name_labels=reserved_name_labels,
         callable_environment=callable_environment,
         owner_scope=compilation_identity.owner_scope,
         declaration_owner=compilation_identity.declaration_owner,
         geometry_mode=geometry_mode,
-        initial_interface_input_origins=initial_origins,
+        initial_interface_input_origins={},
         compile_time_effects_before=preprocessed.effects_before,
         trailing_compile_time_effects=preprocessed.trailing_effects,
         source_callable_session=source_callable_session,
@@ -530,14 +632,9 @@ def analyze_group_source(
         helper_namespace=helper_namespace,
         extension_registry=resolved_environment.extension_registry,
         extension_dependency_sink=extension_dependencies,
+        runtime_role=role,
     )
-    interface = _build_interface_contract(
-        geometry_mode=geometry_mode,
-        implicit_inputs=tuple(implicit_inputs),
-        body_compilation=body_compilation,
-    )
-    if not geometry_mode and not interface.outputs:
-        raise CompileError("Script produced no output. Use out = ..., output(...), set_position(...), or store(...)")
+    interface = GroupInterfaceContract((), ())
     return SemanticGroupCompilation(
         source=source,
         identity=compilation_identity,
@@ -546,6 +643,7 @@ def analyze_group_source(
         interface=interface,
         geometry_mode=geometry_mode,
         extension_dependencies=tuple(sorted(extension_dependencies.items(), key=lambda row: row[0])),
+        source_call_graph=source_call_graph,
     )
 
 

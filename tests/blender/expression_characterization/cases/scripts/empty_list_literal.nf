@@ -1,2 +1,3 @@
-items = []
-output("Result", 1.0)
+def nf_fixture():
+    items = []
+    return 1.0

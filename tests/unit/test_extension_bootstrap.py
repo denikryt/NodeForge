@@ -118,7 +118,10 @@ def test_invalid_system_suppresses_deferred_broken_library_owner(tmp_path):
 
     environment = resolve_environment()
 
-    assert environment.package_by_id("vendor.atomic") is None
+    failed = environment.package_by_id("vendor.atomic")
+    assert failed is not None and not failed.exports
+    with pytest.raises(CompileError, match="EXTENSIONS"):
+        failed.find("lib_value")
     assert environment.catalog("functions").names() == frozenset()
 
 
@@ -138,5 +141,8 @@ def test_library_snapshot_failure_suppresses_owner_qualified_package_namespace(t
 
     environment = resolve_environment()
 
-    assert environment.package_by_id("vendor.replay") is None
+    failed = environment.package_by_id("vendor.replay")
+    assert failed is not None and not failed.exports
+    with pytest.raises(CompileError, match="symlinked"):
+        failed.find("lib_value")
     assert environment.catalog("functions").names() == frozenset()

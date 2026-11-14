@@ -386,10 +386,6 @@ output("Geometry", geo)
     assert any(isinstance(stmt, ast.For) for stmt in retained)
     assert "count" not in consts
 
-    from NodeForge.semantic.residualization import _infer_input_types
-    from NodeForge.semantic.constants import TYPE_INT
-
-    assert _infer_input_types(retained).get("count") == TYPE_INT
 
 
 def test_preprocess_invalidates_integer_candidate_after_augmented_assignment():
@@ -466,22 +462,20 @@ output("x", x)
     assert "x" not in consts
 
 
-def test_infer_input_types_finds_implicit_nested_repeat_count():
-    from NodeForge.semantic.residualization import _infer_input_types
-    from NodeForge.semantic.constants import TYPE_INT
-    from NodeForge.semantic.parsing import _parse_source
-
-    stmts = _parse_source(
-        """
-x = 0
+def test_nested_repeat_count_is_retained_for_explicit_int_runtime_binding():
+    """Nested Repeat Zone loops remain present for the typed body analyzer."""
+    from NodeForge.semantic.residualization import _preprocess_compile_time
+    source = ast.parse("""x = 0
 for i in repeat_range(2):
     for j in repeat_range(inner_count):
         x = x + 1
-output("x", x)
-"""
-    )
-
-    assert _infer_input_types(stmts).get("inner_count") == TYPE_INT
+""")
+    residual = _preprocess_compile_time(source.body, shadowed_names={'inner_count'})
+    outer = next(stmt for stmt in residual.statements if isinstance(stmt, ast.For))
+    inner = next(stmt for stmt in outer.body if isinstance(stmt, ast.For))
+    assert isinstance(inner.iter, ast.Call)
+    assert isinstance(inner.iter.func, ast.Name) and inner.iter.func.id == 'repeat_range'
+    assert isinstance(inner.iter.args[0], ast.Name) and inner.iter.args[0].id == 'inner_count'
 
 
 def test_preprocess_failed_runtime_loop_trial_retains_original_for_without_partial_ast():

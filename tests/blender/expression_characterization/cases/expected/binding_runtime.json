@@ -3,7 +3,7 @@
     "interface": [
       {
         "in_out": "OUTPUT",
-        "name": "Result",
+        "name": "A",
         "socket_type": "NodeSocketFloat"
       },
       {

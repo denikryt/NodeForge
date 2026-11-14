@@ -374,8 +374,8 @@ def test_reserved_target_validation_is_shared_language_semantics():
         _lower("foo = 1", reserved={"foo": "imported function"})
 
 
-def test_group_semantic_preparation_publishes_entry_binding_identity_through_interface():
-    """Implicit group inputs expose their final owner-scoped BindingId through the canonical interface."""
+def test_group_semantic_preparation_rejects_undeclared_root_inputs():
+    """Top-level source never synthesizes implicit input sockets."""
     from NodeForge.compiler_identities import GroupCompilationIdentity
     from NodeForge.resolved_environment import ResolvedCatalog, ResolvedEnvironment
     from NodeForge.semantic.group import analyze_group_source
@@ -384,18 +384,16 @@ def test_group_semantic_preparation_publishes_entry_binding_identity_through_int
         {name: ResolvedCatalog(name, {}) for name in ("functions", "examples", "local")},
     )
     identity = GroupCompilationIdentity(None, "ROOT/test-owner", "definition", "declaration")
+    with pytest.raises(CompileError, match='Unknown name: x'):
+        analyze_group_source(
+            "result = x\n", compilation_identity=identity, resolved_environment=environment,
+        )
     compilation = analyze_group_source(
-        "output(x)\n",
-        compilation_identity=identity,
-        resolved_environment=environment,
+        "result = cube(1)\n", compilation_identity=identity, resolved_environment=environment,
     )
-    entry_origins = [
-        item.interface_origin
-        for item in compilation.interface.inputs
-        if isinstance(item.interface_origin, BindingId)
-    ]
-    assert entry_origins == [BindingId("ROOT/test-owner", 0)]
-    assert entry_origins[0].owner_scope == compilation.identity.owner_scope
+    assert not compilation.interface.inputs
+    assert not compilation.interface.outputs
+
 
 def test_basic_body_frontend_has_no_backend_dependencies_or_compiler_mutation():
     """The body semantic phase remains pure and cannot publish backend Values."""
@@ -461,19 +459,6 @@ def test_library_duplicate_display_labels_bind_positionally_and_reject_ambiguous
     with pytest.raises(CompileError, match="multiple values for input 'Unique'"):
         bind_imported_source_arguments(parameters, (1.0, 7.0, 9.0), (("Unique", 4.0),), "dup")
 
-def test_generated_local_function_source_prologue_is_basic_body_eligible():
-    """Generated helper input prologues enter IRBody rather than forcing legacy fallback."""
-    from NodeForge.semantic.source_callables import analyze_local_return_shape, local_function_source
-
-    fn = ast.parse("def f(x):\n    doubled = x * 2\n    return doubled\n").body[0]
-    shape = analyze_local_return_shape(fn)
-    source = local_function_source(fn, {"x": NFType.FLOAT}, return_shape=shape)
-    result = _lower(source)
-
-    assert result.body is not None
-    assert isinstance(result.body.statements[0], IRInputDeclaration)
-    assert result.body.statements[0].target_name == "x"
-    assert result.body.statements[0].display_name == "x"
 
 def test_imported_source_call_argument_slots_are_final_interface_positions():
     """Semantic imported-call binding carries physical input positions without socket-name lookup."""

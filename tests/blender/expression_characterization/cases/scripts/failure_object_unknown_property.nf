@@ -1,2 +1,2 @@
-obj = input_object("Source")
-output("Result", obj.foo)
+def nf_fixture(obj: Object['Source']):
+    return obj.foo
