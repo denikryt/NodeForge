@@ -3,7 +3,7 @@
     "interface": [
       {
         "in_out": "OUTPUT",
-        "name": "Geometry",
+        "name": "Value",
         "socket_type": "NodeSocketGeometry"
       }
     ],

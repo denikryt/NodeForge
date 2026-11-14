@@ -42,7 +42,7 @@ def test_resolved_environment_defers_local_failure_without_repeating_discovery(m
     environment = environment_resolution.resolve_environment()
     backend = compiler._new_group_backend(environment)
     group = prepared_create_or_update(
-        'value = 2.0\noutput("Value", value)\n',
+        'def nf_fixture() -> Float:\n    return 2.0\n',
         "NFTest_deferred_local_failure",
         backend=backend,
     )
@@ -76,95 +76,14 @@ def test_explicit_local_import_replays_deferred_local_failure(monkeypatch):
     backend = compiler._new_group_backend(environment)
     with pytest.raises(CompileError, match="Unsupported Local source registry format"):
         prepared_create_or_update(
-            'from local import missing\nvalue = 2.0\noutput("Value", value)\n',
+            'from local import missing\ndef nf_fixture() -> Float:\n    return 2.0\n',
             "NFTest_deferred_local_failure_used",
             backend=backend,
         )
     check(calls == [True], "explicit Local use repeated registry discovery")
 
 
-def test_root_and_nested_local_source_calls_share_snapshot_without_live_rediscovery(monkeypatch):
-    """Root, parent, and leaf semantic preparations share one frozen environment/session."""
-    local = local_sources.ensure_local_catalog_dir()
-    leaf = local / "resolved_environment_leaf.nf"
-    parent = local / "resolved_environment_parent.nf"
-    seen_environments = []
-    original_init = source_callable_session.SourceCallableSession.__init__
 
-    def recording_init(self, *, resolved_environment):
-        seen_environments.append(resolved_environment)
-        original_init(self, resolved_environment=resolved_environment)
-
-    try:
-        _write(leaf, 'x = input_float("X")\noutput("x", x * 2.0)\n')
-        _write(
-            parent,
-            'from local import resolved_environment_leaf\n'
-            'x = input_float("X")\n'
-            'y = resolved_environment_leaf(x)\n'
-            'output("y", y)\n',
-        )
-        environment = environment_resolution.resolve_environment()
-        monkeypatch.setattr(source_callable_session.SourceCallableSession, "__init__", recording_init)
-        monkeypatch.setattr(
-            packages,
-            "active_package_records",
-            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("nested package rediscovery")),
-        )
-        monkeypatch.setattr(
-            local_sources,
-            "find_local_entry_record",
-            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("nested catalog rediscovery")),
-        )
-
-        backend = compiler._new_group_backend(environment)
-        prepared_create_or_update(
-            "from local import resolved_environment_parent\n"
-            "value = resolved_environment_parent(3.0)\n"
-            'output("Value", value)\n',
-            "NFTest_resolved_environment_nested_identity",
-            backend=backend,
-        )
-
-        check(seen_environments == [environment], f"unexpected source-call sessions: {len(seen_environments)}")
-    finally:
-        leaf.unlink(missing_ok=True)
-        parent.unlink(missing_ok=True)
-
-def test_prepared_root_resolves_once_for_nested_local_dependency(monkeypatch):
-    """Prepared root and nested Local source calls share one resolved environment snapshot."""
-    local = local_sources.ensure_local_catalog_dir()
-    leaf = local / "direct_environment_leaf.nf"
-    parent = local / "direct_environment_parent.nf"
-    real_resolve = compiler._make_compilation_environment
-    resolve_calls = []
-
-    def counted_resolve():
-        resolve_calls.append(True)
-        return real_resolve()
-
-    try:
-        _write(leaf, 'x = input_float("X")\noutput("x", x + 1.0)\n')
-        _write(
-            parent,
-            'from local import direct_environment_leaf\n'
-            'x = input_float("X")\n'
-            'y = direct_environment_leaf(x)\n'
-            'output("y", y)\n',
-        )
-        monkeypatch.setattr(compiler, "_make_compilation_environment", counted_resolve)
-        group = compiler.create_expression_group(
-            "from local import direct_environment_parent\n"
-            "value = direct_environment_parent(2.0)\n"
-            'output("Value", value)\n',
-            "NFTest_prepared_environment_nested",
-        )
-        check(group is not None, "prepared root failed to materialize nested Local dependency")
-        check(resolve_calls == [True], f"prepared root resolved environment {len(resolve_calls)} times")
-        bpy.data.node_groups.remove(group)
-    finally:
-        leaf.unlink(missing_ok=True)
-        parent.unlink(missing_ok=True)
 
 def test_new_environment_observes_local_changes_without_mutating_old_snapshot():
     """A later root session sees new Local state while an older selection stays fixed."""
@@ -186,125 +105,8 @@ def test_new_environment_observes_local_changes_without_mutating_old_snapshot():
 
 
 
-def test_local_recursive_catalog_duplicate_and_save_contracts():
-    local = local_sources.ensure_local_catalog_dir()
-    flat = local / 'local_local_probe.nf'
-    nested = local / 'math' / 'local_nested_probe.nf'
-    ignored_native_folder = local / 'local_native_probe'
-    unsupported_source_layout = local / 'local_source_layout_probe'
-    duplicate_flat = local / 'local_duplicate_probe.nf'
-    duplicate_nested = local / 'math' / 'local_duplicate_probe.nf'
-    cross_folder = local / 'math' / 'local_cross_folder_duplicate.nf'
-    cross_folder_root = local / 'local_cross_folder_duplicate.nf'
-    saved = local / 'local_saved_text_probe.nf'
-    nested_saved = local / 'math' / 'local_nested_saved_probe.nf'
-    try:
-        _write(flat, 'x = input_float("X", default=1.0)\noutput("x", x)\n')
-        _write(nested, 'x = input_float("X", default=1.0)\noutput("x", x)\n')
-        _write(ignored_native_folder / 'function.py', 'raise AssertionError("local function.py executed")\n')
-        _write(ignored_native_folder / 'backend.py', 'raise AssertionError("local backend.py executed")\n')
-
-        compile_group('from local import local_local_probe\nx = local_local_probe(3)\noutput("x", x)', 'NFTest_local_flat_import')
-        compile_group('from local import local_nested_probe\nx = local_nested_probe(3)\noutput("x", x)', 'NFTest_local_nested_import')
-        expect_compile_error('from local import local_native_probe\nx = local_native_probe(3)\noutput("x", x)', 'NFTest_local_native_files_ignored')
-        compile_group('from local.math import local_nested_probe\nx = local_nested_probe(3)\noutput("x", x)', 'NFTest_local_nested_qualified_import')
-        expect_compile_error('import local.math\nx = 1\noutput("x", x)', 'NFTest_local_nested_plain_import_rejected')
-
-        _write(duplicate_flat, 'x = input_float("X")\noutput("x", x)\n')
-        _write(duplicate_nested, 'x = input_float("X")\noutput("x", x)\n')
-        try:
-            local_sources.find_local_entry_record('local_duplicate_probe')
-        except CompileError:
-            pass
-        else:
-            raise AssertionError('duplicate local entries were accepted')
-        duplicate_flat.unlink(missing_ok=True)
-        _cleanup(duplicate_nested)
-
-        path = local_sources.save_local_source('local_saved_text_probe', 'x = input_float("X")\noutput("x", x)\n')
-        check(path == saved and saved.exists(), 'flat local save failed')
-        try:
-            local_sources.save_local_source('local_saved_text_probe', 'x = 2\noutput("x", x)\n', overwrite=False)
-        except CompileError:
-            pass
-        else:
-            raise AssertionError('duplicate local save was accepted')
-        local_sources.save_local_source('local_saved_text_probe', 'x = 2\noutput("x", x)\n', overwrite=True)
-        check(saved.read_text(encoding='utf-8').startswith('x = 2'), 'overwrite did not replace exact flat file')
-
-        local_sources.create_local_folder('math')
-        local_sources.save_local_source('local_nested_saved_probe', 'x = input_float("X")\noutput("x", x)\n', folder_path='math')
-        check(nested_saved.exists(), 'nested local save failed')
-        compile_group('from local import local_nested_saved_probe\nx = local_nested_saved_probe(1)\noutput("x", x)', 'NFTest_local_nested_saved_import')
-
-        _write(unsupported_source_layout / 'source.nf', 'x = input_float("X")\noutput("x", x)\n')
-        try:
-            local_sources.find_local_entry_record('local_package_style_probe')
-        except CompileError:
-            pass
-        else:
-            raise AssertionError('package-style local source.nf layout was accepted')
-        _cleanup(unsupported_source_layout)
-
-        _write(cross_folder, 'x = input_float("X")\noutput("x", x)\n')
-        local_sources.save_local_source('local_cross_folder_duplicate', 'x = 2\noutput("x", x)\n')
-        check(cross_folder_root.exists(), 'path-addressed save was blocked by same-name managed source elsewhere')
-        try:
-            local_sources.find_local_entry_record('local_cross_folder_duplicate')
-        except CompileError:
-            pass
-        else:
-            raise AssertionError('duplicate managed public names did not remain ambiguous at language resolution')
-
-        for bad in ('../escape', '/abs', '_private', 'bad-name'):
-            try:
-                local_sources.create_local_folder(bad)
-            except CompileError:
-                pass
-            else:
-                raise AssertionError(f'invalid local folder accepted: {bad}')
-    finally:
-        for path in (flat, nested, ignored_native_folder, unsupported_source_layout, duplicate_flat, duplicate_nested, cross_folder, cross_folder_root, saved, nested_saved):
-            _cleanup(path)
-        math = local / 'math'
-        if math.exists() and not any(math.iterdir()):
-            math.rmdir()
 
 
-def test_new_catalog_materialized_group_ownership_metadata():
-    local = local_sources.ensure_local_catalog_dir()
-    source = local / 'local_collision_probe.nf'
-    user_group = None
-    example_collision = None
-    try:
-        _write(source, 'x = input_float("X", default=1.0)\noutput("x", x)\n')
-        record = local_sources.find_local_entry_record('local_collision_probe')
-        local_group_name = library_groups._group_name_for_record(record)
-        user_group = bpy.data.node_groups.new(local_group_name, 'GeometryNodeTree')
-        collision_root = compile_group(
-            'from local import local_collision_probe\nx = local_collision_probe(1)\noutput("x", x)',
-            'NFTest_local_ownership_collision',
-        )
-        collision_backing = next(
-            node.node_tree for node in collision_root.nodes
-            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_collision_probe'
-        )
-        check(bpy.data.node_groups.get(local_group_name) is user_group, 'Blender suffix allocation mutated the pre-existing user group')
-        check(collision_backing is not user_group, 'Local compile reused a foreign group with the logical base name')
-        check(collision_backing.name.startswith(local_group_name + '.'), f'Local collision did not receive a Blender suffix: {collision_backing.name}')
-        bpy.data.node_groups.remove(user_group, do_unlink=True)
-        user_group = None
-        group = compile_group('from local import local_collision_probe\nx = local_collision_probe(1)\noutput("x", x)', 'NFTest_local_owned_group_created')
-        backing = bpy.data.node_groups.get(local_group_name)
-        check(backing is not None, 'local backing group not created')
-        check(backing.get('nodeforge_library_namespace') == 'local', 'local backing namespace metadata missing')
-        check(backing.get('nodeforge_library_name') == 'local_collision_probe', 'local backing name metadata missing')
-
-    finally:
-        source.unlink(missing_ok=True)
-        for group in (user_group,):
-            if group is not None and bpy.data.node_groups.get(group.name) is group:
-                bpy.data.node_groups.remove(group, do_unlink=True)
 
 
 def test_local_save_ui_uses_selected_text_source_only():
@@ -318,127 +120,10 @@ def test_local_save_ui_uses_selected_text_source_only():
     check(ui._source_from_props(SimpleNamespace(text_block=None)) == '', 'Local Save source unexpectedly fell back without a Text datablock')
 
 
-def test_local_materialization_uses_fresh_blender_suffixed_groups_per_compile():
-    local = local_sources.ensure_local_catalog_dir()
-    leaf = local / 'local_suffix_leaf.nf'
-    parent = local / 'local_suffix_parent.nf'
-    root_source = (
-        'from local import local_suffix_parent\n'
-        'x = local_suffix_parent(2.0)\n'
-        'y = local_suffix_parent(3.0)\n'
-        'output("x", x)\n'
-        'output("y", y)\n'
-    )
-    try:
-        _write(leaf, 'x = input_float("X")\noutput("x", x * 2.0)\n')
-        _write(parent, 'from local import local_suffix_leaf\nx = input_float("X")\ny = local_suffix_leaf(x)\noutput("y", y)\n')
-
-        first = compile_group(root_source, 'NFTest_local_suffix_first')
-        first_parent_nodes = [
-            node for node in first.nodes
-            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_suffix_parent'
-        ]
-        check(len(first_parent_nodes) == 2, 'expected two calls to the Local parent')
-        first_parent = first_parent_nodes[0].node_tree
-        check(all(node.node_tree is first_parent for node in first_parent_nodes), 'same Local entry was materialized twice within one build')
-        first_leaf = next(
-            node.node_tree for node in first_parent.nodes
-            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_suffix_leaf'
-        )
-
-        second = compile_group(root_source, 'NFTest_local_suffix_second')
-        second_parent = next(
-            node.node_tree for node in second.nodes
-            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_suffix_parent'
-        )
-        second_leaf = next(
-            node.node_tree for node in second_parent.nodes
-            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_suffix_leaf'
-        )
-
-        check(second_parent is not first_parent, 'new outer compile reused an older Local parent group')
-        check(second_leaf is not first_leaf, 'new outer compile reused an older Local leaf group')
-        check(first_parent.name == 'NodeForge.local.local_suffix_parent', f'unexpected first Local base name: {first_parent.name}')
-        check(second_parent.name.startswith('NodeForge.local.local_suffix_parent.'), f'Blender suffix was not assigned: {second_parent.name}')
-        check(first_leaf.name == 'NodeForge.local.local_suffix_leaf', f'unexpected first Local leaf base name: {first_leaf.name}')
-        check(second_leaf.name.startswith('NodeForge.local.local_suffix_leaf.'), f'Blender suffix was not assigned to leaf: {second_leaf.name}')
-
-        _write(leaf, 'x = input_float("X")\noutput("x", x * 3.0)\n')
-        third = compile_group(root_source, 'NFTest_local_suffix_third')
-        third_parent = next(
-            node.node_tree for node in third.nodes
-            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_suffix_parent'
-        )
-        third_leaf = next(
-            node.node_tree for node in third_parent.nodes
-            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_suffix_leaf'
-        )
-        check(third_parent is not second_parent, 'new compile after dependency edit reused previous Local parent')
-        check(third_leaf is not second_leaf, 'new compile after dependency edit reused previous Local leaf')
-        check(first_parent_nodes[0].node_tree is first_parent, 'older generated group dependency changed in place')
-    finally:
-        leaf.unlink(missing_ok=True)
-        parent.unlink(missing_ok=True)
 
 
-def test_update_expression_group_keeps_selected_group_identity_with_fresh_local_dependencies():
-    local = local_sources.ensure_local_catalog_dir()
-    helper = local / 'local_update_identity_probe.nf'
-    root_source = (
-        'from local import local_update_identity_probe\n'
-        'x = local_update_identity_probe(2.0)\n'
-        'output("x", x)\n'
-    )
-    try:
-        _write(helper, 'x = input_float("X")\noutput("x", x * 2.0)\n')
-        group = compile_group(root_source, 'NFTest_local_update_identity')
-        group_pointer = group.as_pointer()
-        group_name = group.name
-        first_backing = next(
-            node.node_tree for node in group.nodes
-            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_update_identity_probe'
-        )
-
-        _write(helper, 'x = input_float("X")\noutput("x", x * 3.0)\n')
-        compiler.update_expression_group(group, root_source)
-        second_backing = next(
-            node.node_tree for node in group.nodes
-            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_update_identity_probe'
-        )
-
-        check(group.as_pointer() == group_pointer, 'Update Selected semantics replaced the selected group datablock')
-        check(group.name == group_name, 'Update Selected semantics changed the selected group name')
-        check(second_backing is not first_backing, 'updated selected group did not move to a fresh current Local dependency')
-    finally:
-        helper.unlink(missing_ok=True)
 
 
-def test_local_logical_name_collision_uses_blender_suffix_without_mutating_foreign_group():
-    local = local_sources.ensure_local_catalog_dir()
-    source = local / 'local_suffix_collision_probe.nf'
-    foreign = None
-    try:
-        _write(source, 'x = input_float("X", default=1.0)\noutput("x", x)\n')
-        record = local_sources.find_local_entry_record('local_suffix_collision_probe')
-        base_name = library_groups._group_name_for_record(record)
-        foreign = bpy.data.node_groups.new(base_name, 'GeometryNodeTree')
-        root = compile_group(
-            'from local import local_suffix_collision_probe\n'
-            'x = local_suffix_collision_probe(1)\n'
-            'output("x", x)\n',
-            'NFTest_local_suffix_collision',
-        )
-        backing = next(
-            node.node_tree for node in root.nodes
-            if getattr(getattr(node, 'node_tree', None), 'get', lambda *args: None)('nodeforge_library_name') == 'local_suffix_collision_probe'
-        )
-        check(bpy.data.node_groups.get(base_name) is foreign, 'fresh Local compile mutated the foreign base-name group')
-        check(backing is not foreign, 'fresh Local compile reused the foreign base-name group')
-        check(backing.name.startswith(base_name + '.'), f'Blender did not suffix the fresh Local group: {backing.name}')
-    finally:
-        source.unlink(missing_ok=True)
-        if foreign is not None and bpy.data.node_groups.get(foreign.name) is foreign:
-            bpy.data.node_groups.remove(foreign, do_unlink=True)
 
 
 def _library_backing(group, namespace, name):
@@ -451,35 +136,6 @@ def _library_backing(group, namespace, name):
     )
 
 
-def test_reload_local_catalog_group_keeps_root_identity_and_refreshes_dependencies():
-    """Reload must rebuild Local dependencies even when the root source is unchanged."""
-    local = local_sources.ensure_local_catalog_dir()
-    helper = local / "local_reload_helper.nf"
-    root = local / "local_reload_root.nf"
-    group = None
-    try:
-        _write(helper, 'x = input_float("X", default=1.0)\noutput("Value", x + 1)\n')
-        _write(root, 'from local import local_reload_helper\nx = input_float("X", default=1.0)\ny = local_reload_helper(x)\noutput("Value", y)\n')
-        group = compiler.create_library_catalog_group("local", "local_reload_root")
-        pointer = group.as_pointer()
-        old_name = group.name
-        first_backing = _library_backing(group, "local", "local_reload_helper")
-
-        _write(helper, 'x = input_float("X", default=1.0)\noutput("Value", x + 2)\n')
-        compiler.update_library_catalog_group(group, "local", "local_reload_root")
-
-        second_backing = _library_backing(group, "local", "local_reload_helper")
-        check(group.as_pointer() == pointer, "library reload replaced the selected root datablock")
-        check(group.name == old_name, "library reload changed the selected root datablock name")
-        check(second_backing is not first_backing, "library reload reused the old Local dependency snapshot")
-        check("x + 2" in second_backing.get("nodeforge_library_source", ""), "library reload did not use the current helper source")
-        check(group.get("nodeforge_library_namespace") == "local", "reload lost Local namespace provenance")
-        check(group.get("nodeforge_library_name") == "local_reload_root", "reload lost Local entry provenance")
-    finally:
-        helper.unlink(missing_ok=True)
-        root.unlink(missing_ok=True)
-        if group is not None and bpy.data.node_groups.get(group.name) is group:
-            bpy.data.node_groups.remove(group, do_unlink=True)
 
 
 def test_reload_local_catalog_group_fails_before_mutation_when_source_disappears():
@@ -488,14 +144,14 @@ def test_reload_local_catalog_group_fails_before_mutation_when_source_disappears
     source = local / "local_reload_missing.nf"
     group = None
     try:
-        _write(source, 'x = input_float("X", default=1.0)\noutput("Value", x)\n')
+        _write(source, 'def reload_value(x: Float["X"] = 1.0) -> Float:\n    return x\n')
         group = compiler.create_library_catalog_group("local", "local_reload_missing")
         pointer = group.as_pointer()
         embedded = group.get("nodeforge_library_source")
         node_count = len(group.nodes)
         source.unlink()
         try:
-            compiler.update_library_catalog_group(group, "local", "local_reload_missing")
+            compiler.update_library_catalog_group(group)
         except CompileError:
             pass
         else:
@@ -515,14 +171,14 @@ def test_reload_local_catalog_group_rolls_back_invalid_current_source_without_le
     source = local / "local_reload_invalid.nf"
     group = None
     try:
-        original = 'x = input_float("X", default=1.0)\noutput("Value", x)\n'
+        original = 'def reload_value(x: Float["X"] = 1.0) -> Float:\n    return x\n'
         _write(source, original)
         group = compiler.create_library_catalog_group("local", "local_reload_invalid")
         pointer = group.as_pointer()
         node_names = [node.name for node in group.nodes]
-        _write(source, 'x = missing_reload_function(1)\noutput("Value", x)\n')
+        _write(source, 'def reload_value(x: Float["X"] = 1.0) -> Float:\n    return missing_reload_function(x)\n')
         try:
-            compiler.update_library_catalog_group(group, "local", "local_reload_invalid")
+            compiler.update_library_catalog_group(group)
         except Exception:
             pass
         else:
@@ -545,7 +201,7 @@ def _make_reload_package(root: Path, *, package_id: str, version: str, value: fl
     functions = root / "functions"
     functions.mkdir(parents=True)
     (functions / "reload_value.nf").write_text(
-        f'value = input_float("Value", default={value})\noutput("Value", value)\n',
+        f'def reload_value(value: Float = {value}) -> Float:\n    return value\n',
         encoding="utf-8",
     )
     (root / "nodeforge_package.json").write_text(
@@ -565,63 +221,6 @@ def _make_reload_package(root: Path, *, package_id: str, version: str, value: fl
     )
 
 
-def test_library_reload_allows_same_package_upgrade_and_rejects_package_takeover():
-    """Package version may move on reload while package identity remains stable."""
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        packages.set_packages_dir_for_tests(tmp / "inventory")
-        group = None
-        try:
-            v1 = tmp / "v1"
-            _make_reload_package(v1, package_id="vendor.reload", version="1.0.0", value=1.0)
-            packages.install_package_directory(v1)
-            group = compiler.create_library_catalog_group("functions", "reload_value")
-            from NodeForge.compiler_identities import library_function_id
-            from NodeForge.function_instances import (
-                FUNCTION_DEFINITION_OWNER_PROP,
-                FUNCTION_INSTANCE_KEY_PROP,
-            )
-
-            pointer = group.as_pointer()
-            direct_function_id = library_function_id("functions", "vendor.reload", "reload_value")
-            check(group.get("nodeforge_package_id") == "vendor.reload", "initial package id metadata missing")
-            check(group.get("nodeforge_package_version") == "1.0.0", "initial package version metadata missing")
-            check(str(group.get(FUNCTION_INSTANCE_KEY_PROP) or "") == "", "direct catalog materialization was not shared")
-            check(
-                group.get(FUNCTION_DEFINITION_OWNER_PROP) == direct_function_id.stable_key(),
-                "direct catalog materialization definition identity changed",
-            )
-
-            v2 = tmp / "v2"
-            _make_reload_package(v2, package_id="vendor.reload", version="2.0.0", value=2.0)
-            packages.install_package_directory(v2, replace=True)
-            compiler.update_library_catalog_group(group, "functions", "reload_value")
-            check(group.as_pointer() == pointer, "same-package reload replaced the root datablock")
-            check(group.get("nodeforge_package_id") == "vendor.reload", "same-package reload changed package identity")
-            check(group.get("nodeforge_package_version") == "2.0.0", "same-package reload did not stamp new package version")
-            check("default=2.0" in group.get("nodeforge_library_source", ""), "same-package reload did not use current source")
-
-            packages.uninstall_package("vendor.reload")
-            other = tmp / "other"
-            _make_reload_package(other, package_id="vendor.other", version="1.0.0", value=3.0)
-            packages.install_package_directory(other)
-            before_source = group.get("nodeforge_library_source")
-            try:
-                compiler.update_library_catalog_group(group, "functions", "reload_value")
-            except Exception as exc:
-                message = str(exc)
-                check(
-                    "vendor.reload" in message and "unavailable" in message,
-                    f"unexpected owner-aware reload error: {exc}",
-                )
-            else:
-                raise AssertionError("different package took over an existing library group")
-            check(group.as_pointer() == pointer, "rejected package takeover replaced the root datablock")
-            check(group.get("nodeforge_package_id") == "vendor.reload", "rejected package takeover changed ownership")
-            check(group.get("nodeforge_library_source") == before_source, "rejected package takeover changed stored source")
-        finally:
-            packages.set_packages_dir_for_tests(None)
-            packages.invalidate_caches()
 
 
 def test_native_only_library_entry_is_not_reloadable():

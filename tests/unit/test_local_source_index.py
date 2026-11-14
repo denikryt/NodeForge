@@ -357,11 +357,11 @@ def test_local_browser_and_selected_source_ui_keep_duplicate_paths(storage, monk
     calls = []
     namespace = {'resolve_environment': lambda: env, 'CompileError': CompileError,
                  '_new_group_backend': lambda selected: selected,
-                 'materialize_library_entry_group_for_record': lambda record, backend: calls.append((record, backend))}
+                 'materialize_library_entry_group_for_record': lambda record, backend: calls.append((record, backend)),
+                 'create_selected_library_group_auto': lambda namespace, origin, **kw: (calls.append((namespace, origin, kw['resolved_environment'])), False)}
     exec(compile(ast.Module(body=[method], type_ignores=[]), 'compiler.selected_source', 'exec'), namespace)
     namespace['create_local_source_group'](str(a))
-    assert calls[0][0].source_origin == origin(a)
-    assert calls[0][1] is env
+    assert calls[0] == ('local', origin(a), env)
     with pytest.raises(CompileError, match='unavailable'):
         namespace['create_local_source_group'](str(managed / 'missing.nf'))
     assert len(calls) == 1

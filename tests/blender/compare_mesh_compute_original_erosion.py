@@ -8,6 +8,8 @@ Each invocation runs one configuration in a fresh Blender 5.2 process:
     --side 16 --steps 35 --preset outlet --output /tmp/parity.json
 
 Inputs are external test artifacts and are *not* bundled in the addon.
+Legacy single-output GN roots are adapted into typed functions only in this
+test harness, without changing the production compiler.
 Times are one-shot compilation and first evaluation, NOT median performance.
 """
 
@@ -15,8 +17,9 @@ from argparse import ArgumentParser
 from array import array
 from pathlib import Path
 from time import perf_counter
+import ast
 import json
-import re
+import textwrap
 import shutil
 import sys
 import tempfile
@@ -54,19 +57,124 @@ PRESETS = {
 }
 
 
+def _declaration_defaults(source: str):
+    """Locate legacy root inputs and typed function parameters without regex edits."""
+    tree = ast.parse(source)
+    for statement in tree.body:
+        if isinstance(statement, ast.Assign) and isinstance(statement.value, ast.Call):
+            call = statement.value
+            if (isinstance(call.func, ast.Name) and call.func.id.startswith("input_")
+                    and call.args and isinstance(call.args[0], ast.Constant)
+                    and isinstance(call.args[0].value, str)):
+                default = next((kw.value for kw in call.keywords if kw.arg == "default"), None)
+                if default is not None:
+                    yield call.args[0].value, call.func.id.removeprefix("input_"), default
+        elif isinstance(statement, ast.FunctionDef):
+            defaults = [None] * (len(statement.args.args) - len(statement.args.defaults)) + list(statement.args.defaults)
+            for argument, default in zip(statement.args.args, defaults):
+                ann = argument.annotation
+                if (default is not None and isinstance(ann, ast.Subscript)
+                        and isinstance(ann.value, ast.Name) and isinstance(ann.slice, ast.Constant)
+                        and isinstance(ann.slice.value, str)):
+                    yield ann.slice.value, ann.value.id.lower(), default
+
+
 def edited_source(source: str, side: int, steps: int, preset: str) -> str:
-    """Change exact declared defaults, rejecting ambiguous source fixtures."""
+    """Edit exact interface defaults in either old root or typed function sources.
+
+    AST spans preserve the rest of the script byte-for-byte (including nested
+    expressions and comments), instead of matching up to an arbitrary ')'.
+    """
     edits = {
         "Resolution": ("int", str(side)),
         "Steps": ("int", str(steps)),
         **PRESETS[preset],
     }
-    for name, (kind, value) in edits.items():
-        pattern = rf'(input_{kind}\("{re.escape(name)}", default=)[^)]+'
-        source, count = re.subn(pattern, lambda match: match.group(1) + value, source)
-        if count != 1:
-            raise AssertionError(f"Expected one {name!r} declaration, found {count}")
+    offsets = [0]
+    for line in source.splitlines(keepends=True):
+        offsets.append(offsets[-1] + len(line))
+    declarations = tuple(_declaration_defaults(source))
+    replacements = []
+    for label, (kind, value) in edits.items():
+        matching = [(declared_kind, node) for declared_label, declared_kind, node
+                    in declarations if declared_label == label]
+        if len(matching) != 1:
+            raise AssertionError(f"Expected one {label!r} declaration, found {len(matching)}")
+        declared_kind, node = matching[0]
+        if declared_kind != kind:
+            raise AssertionError(f"{label!r} should be {kind}, found {declared_kind}")
+        start = offsets[node.lineno - 1] + node.col_offset
+        end = offsets[node.end_lineno - 1] + node.end_col_offset
+        replacements.append((start, end, value))
+    for start, end, value in sorted(replacements, reverse=True):
+        source = source[:start] + value + source[end:]
     return source
+
+
+def typed_reference_source(source: str) -> str:
+    """Adapt an external *single-output* legacy GN root for the new frontend.
+
+    This is a test-fixture conversion only. Production compilation does not
+    regain support for root input_*/output(). Unsupported shapes fail loudly.
+    """
+    tree = ast.parse(source)
+    input_statements = [statement for statement in tree.body
+                        if isinstance(statement, ast.Assign)
+                        and isinstance(statement.value, ast.Call)
+                        and isinstance(statement.value.func, ast.Name)
+                        and statement.value.func.id.startswith("input_")]
+    if not input_statements:
+        return source  # Already a typed reference.
+
+    output_statements = [statement for statement in tree.body
+                         if isinstance(statement, ast.Expr)
+                         and isinstance(statement.value, ast.Call)
+                         and isinstance(statement.value.func, ast.Name)
+                         and statement.value.func.id == "output"]
+    if len(output_statements) != 1:
+        raise ValueError("Legacy GN reference must declare exactly one Geometry output")
+    if tree.body[-1] is not output_statements[0]:
+        raise ValueError("Legacy GN reference Geometry output must be the last root statement")
+    output_call = output_statements[0].value
+    if (len(output_call.args) != 2 or not isinstance(output_call.args[0], ast.Constant)
+            or output_call.args[0].value != "Geometry"):
+        raise ValueError("Legacy GN reference must declare output('Geometry', value)")
+
+    params = []
+    for statement in input_statements:
+        if len(statement.targets) != 1 or not isinstance(statement.targets[0], ast.Name):
+            raise ValueError("Legacy GN reference must use simple named input assignments")
+        call = statement.value
+        declared_type = {
+            "input_geometry": "Geometry", "input_float": "Float",
+            "input_int": "Int", "input_bool": "Bool",
+            "input_vector": "Vector", "input_string": "String",
+        }.get(call.func.id)
+        if declared_type is None or len(call.args) != 1:
+            raise ValueError(f"Unsupported legacy GN reference input: {call.func.id}")
+        label = ast.literal_eval(call.args[0])
+        default = next((kw.value for kw in call.keywords if kw.arg == "default"), None)
+        default_text = f" = {ast.unparse(default)}" if default is not None else ""
+        params.append(f"    {statement.targets[0].id}: {declared_type}[{label!r}]{default_text},")
+
+    # Keep original source statements (including comments) instead of unparse
+    # reformatting or changing the reference algorithm.
+    lines = source.splitlines(keepends=True)
+    exclude = set()
+    imports = []
+    for statement in tree.body:
+        if isinstance(statement, (ast.Import, ast.ImportFrom, ast.FunctionDef)):
+            imports.append(''.join(lines[statement.lineno - 1:statement.end_lineno]))
+            exclude.update(range(statement.lineno, statement.end_lineno + 1))
+        elif statement in input_statements or statement in output_statements:
+            exclude.update(range(statement.lineno, statement.end_lineno + 1))
+    body = ''.join(line for i, line in enumerate(lines, 1) if i not in exclude)
+    body = textwrap.indent(body.strip('\n'), '    ', predicate=lambda _: True)
+    return_statement = f"    return {ast.unparse(output_call.args[1])}\n"
+    return ('\n'.join(imports) + '\n\ndef original_reference(\n'
+            + '\n'.join(params) + '\n) -> Geometry:\n'
+            + body + ('\n' if body and not body.endswith('\n') else '')
+            + return_statement)
 
 
 def evaluated_output(owner):
@@ -166,7 +274,7 @@ def run(args):
         try:
 
             bpy.data.materials.new('Erosion Terrain')
-            source_gn = edited_source(args.reference_nf.read_text(), args.side, args.steps, args.preset)
+            source_gn = typed_reference_source(edited_source(args.reference_nf.read_text(), args.side, args.steps, args.preset))
             source_numpy = edited_source((EXAMPLES / 'erosion_numpy.nf').read_text(), args.side, args.steps, args.preset)
             num, num_t = evaluate_one('NumPy', source_numpy, True)
             ref, ref_t = evaluate_one('NativeGN', source_gn, False)

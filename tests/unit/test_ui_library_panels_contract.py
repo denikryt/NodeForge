@@ -63,7 +63,7 @@ def test_reload_from_source_is_main_panel_action_only():
     main_start = source.index("class GNSCRIPT_MVP_PT_panel(Panel):")
     main_end = source.index("class NODEFORGE_PT_library(Panel):", main_start)
     main_block = source[main_start:main_end]
-    assert 'text="Reload from Source"' in main_block
+    assert 'text="Reload Function from Source"' in main_block
     assert "NODEFORGE_OT_reload_selected_library_group.poll(context)" not in main_block
 
     catalog_start = source.index("def _draw_library_catalog_panel")

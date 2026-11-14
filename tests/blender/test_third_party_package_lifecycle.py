@@ -1,6 +1,8 @@
 """Blender integration coverage for third-party package lifecycle operations."""
 
 from helpers import compile_group, expect_compile_error, has_package_function
+from NodeForge import compiler
+import bpy
 
 import json
 import tempfile
@@ -14,7 +16,7 @@ def _make_package(root: Path, *, version: str = "1.0.0", value: float = 1.0) -> 
     functions = root / "functions"
     functions.mkdir(parents=True)
     (functions / "vendor_value.nf").write_text(
-        f'value = input_float("Value", default={value})\noutput("Value", value)\n',
+        f'def vendor_value(value: Float = {value}) -> Float:\n    return value\n',
         encoding="utf-8",
     )
     (root / "nodeforge_package.json").write_text(
@@ -45,10 +47,9 @@ def test_directory_zip_replace_uninstall_and_reinstall_lifecycle():
             installed = packages.install_package_directory(source_v1)
             assert installed.package_id == "vendor.lifecycle"
             assert has_package_function("vendor_value")
-            compile_group(
-                'from packages import lifecycle\nx = vendor_value(2.0)\noutput("Value", x)',
-                "NFTest_vendor_lifecycle_directory",
-            )
+            tree = bpy.data.node_groups.new("NFTest_vendor_lifecycle_directory", "GeometryNodeTree")
+            compiler.compose_source_initial('from packages import lifecycle\nx = lifecycle.vendor_value(2.0)\n', tree)
+            assert any(node.bl_idname == "GeometryNodeGroup" for node in tree.nodes)
 
             source_v2 = tmp / "source_v2"
             _make_package(source_v2, version="2.0.0", value=2.0)
@@ -64,7 +65,7 @@ def test_directory_zip_replace_uninstall_and_reinstall_lifecycle():
             packages.uninstall_package("vendor.lifecycle")
             assert not has_package_function("vendor_value")
             expect_compile_error(
-                'from packages import lifecycle\nx = vendor_value(2.0)\noutput("Value", x)',
+                'from packages import lifecycle\nx = lifecycle.vendor_value(2.0)\n',
                 "NFTest_vendor_lifecycle_uninstalled",
             )
 

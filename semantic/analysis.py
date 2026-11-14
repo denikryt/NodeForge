@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import copy
 import inspect
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -13,6 +12,7 @@ from ..compiler_identities import (
     BindingId,
     GroupCompilationIdentity,
     local_function_id,
+    module_definition_function_id,
 )
 from .call_resolution import (
     AnalyzedCall,
@@ -62,7 +62,7 @@ from .constants import (
     _COMPARE_OPS,
 )
 from .consteval import NOT_FOLDABLE, ConstEvalUnavailable, _const_eval, try_runtime_fold
-from .compile_time import CompileTimeSnapshot, _is_const_vector
+from .compile_time import CompileTimeSnapshot, detached_compile_time_mapping, _is_const_vector
 from ..errors import CompileError
 from ..nf_types import NFType, NUMERIC_NF_TYPES
 from .numeric_semantics import (
@@ -76,7 +76,8 @@ from .runtime_bindings import RuntimeBindingSymbol
 from .group_context import GroupContextSlot
 from .callable_contracts import (
     bind_imported_source_arguments,
-    bind_local_source_arguments,
+    bind_unified_source_arguments,
+    SourceCallableParameter,
     canonicalize_group_input_default,
     source_argument_type_matches,
 )
@@ -103,11 +104,6 @@ from ..extensions.values import (
     type_spec_accepts_nf,
 )
 from .source_callables import (
-    analyze_local_captures,
-    analyze_local_return_shape,
-    local_binding_names,
-    local_function_source,
-    resolve_local_parameter_annotation,
     serialize_local_signature,
     has_source_value_binding,
 )
@@ -184,6 +180,9 @@ class SemanticEnvironment:
     source_call_site_allocator: object | None = None
     helper_namespace: str = "Group"
     extension_registry: object | None = None
+    runtime_role: object = None
+    lexical_owned_names: frozenset[str] = frozenset()
+    lexical_callable_aliases: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -315,12 +314,6 @@ def _validate_compare(left_typ, right_typ):
     raise CompileError("Comparison inputs must both be numeric, both Bool, or both Vector")
 
 
-class _UnsupportedConstEvalValue:
-    """Frontend-owned fail-closed placeholder for non-detachable compile-time values."""
-
-
-
-
 def _normalize_semantic_constant_inner(value, active):
     """Return one semantic constant plus whether its container graph contains a cycle."""
     if type(value) is bool:
@@ -371,33 +364,6 @@ def _normalize_semantic_constant(value):
     return constant
 
 
-def _seed_const_eval_copy_memo(value, memo, visited):
-    """Pre-seed deepcopy replacements while preserving supported container graph identity."""
-    if _is_const_vector(value):
-        memo[id(value)] = tuple(normalize_float_constant(item) for item in value)
-        return
-    if isinstance(value, (bool, int, float, str, type(None))):
-        return
-    if isinstance(value, (list, tuple)):
-        identity = id(value)
-        if identity in visited:
-            return
-        visited.add(identity)
-        for item in value:
-            _seed_const_eval_copy_memo(item, memo, visited)
-        return
-    memo[id(value)] = _UnsupportedConstEvalValue()
-
-
-def _detached_const_eval_mapping(constants):
-    """Copy the complete const mapping while preserving cycles, aliasing, and container kinds."""
-    memo = {}
-    visited = set()
-    for value in constants.values():
-        _seed_const_eval_copy_memo(value, memo, visited)
-    return copy.deepcopy(dict(constants), memo)
-
-
 def build_semantic_constant_snapshot(compile_time: CompileTimeSnapshot):
     """Build detached semantic and const-eval mappings from one compile-time snapshot."""
     if not isinstance(compile_time, CompileTimeSnapshot):
@@ -407,7 +373,7 @@ def build_semantic_constant_snapshot(compile_time: CompileTimeSnapshot):
         name: _normalize_semantic_constant(value)
         for name, value in values.items()
     }
-    const_eval_values = _detached_const_eval_mapping(values)
+    const_eval_values = detached_compile_time_mapping(values)
     return MappingProxyType(semantic), MappingProxyType(const_eval_values)
 
 
@@ -977,6 +943,9 @@ def build_semantic_environment(
     source_call_site_allocator=None,
     helper_namespace="Group",
     extension_registry=None,
+    runtime_role=None,
+    lexical_owned_names=frozenset(),
+    lexical_callable_aliases=frozenset(),
 ):
     """Build one immutable expression environment from detached compiler-owned snapshots."""
     structural_bindings = {} if structural_bindings is None else dict(structural_bindings)
@@ -1020,7 +989,12 @@ def build_semantic_environment(
             elif binding_id in object_ids:
                 raise CompileError("Internal error: non-Object binding has ObjectSemanticId")
     semantic_constants, const_eval_values = build_semantic_constant_snapshot(compile_time)
+    from .runtime_capabilities import RuntimeRole
+    role = RuntimeRole.ROOT if runtime_role is None else RuntimeRole(runtime_role)
     return SemanticEnvironment(
+        runtime_role=role,
+        lexical_owned_names=frozenset(lexical_owned_names),
+        lexical_callable_aliases=frozenset(lexical_callable_aliases),
         runtime_bindings=MappingProxyType(runtime_bindings),
         constants=semantic_constants,
         const_eval_values=const_eval_values,
@@ -1121,9 +1095,11 @@ def analyze_expression(expr, environment):
         if isinstance(node, ast.Name):
             if node.id in TYPE_TOKEN_NAMES:
                 raise CompileError(f"Type token {node.id} may only be used in node(...) type declarations")
-            if node.id in environment.callable_environment.local_namespaces and node.id not in environment.runtime_bindings and node.id not in environment.const_eval_values:
+            if (node.id in environment.callable_environment.local_namespaces
+                    and node.id not in environment.lexical_owned_names
+                    and node.id not in environment.runtime_bindings and node.id not in environment.const_eval_values):
                 raise CompileError(f"Local directory namespace {node.id!r} cannot be used as a value")
-            if node.id in environment.callable_environment.package_namespaces:
+            if node.id in environment.callable_environment.package_namespaces and node.id not in environment.lexical_owned_names:
                 raise CompileError(f"Package namespace {node.id!r} cannot be used as a value")
             if node.id in environment.runtime_bindings:
                 symbol = environment.runtime_bindings[node.id]
@@ -1174,6 +1150,11 @@ def analyze_expression(expr, environment):
                         _semantic_result_shape(payload.type_spec, payload.value),
                         semantic_payload=payload,
                     ),
+                )
+            if node.id in environment.lexical_owned_names and node.id not in environment.constants:
+                raise CompileError(
+                    f"Local name {node.id!r} used before assignment "
+                    f"at line {node.lineno}, column {node.col_offset + 1}"
                 )
             if node.id in environment.constants:
                 constant = environment.constants[node.id]
@@ -1520,6 +1501,7 @@ def analyze_expression(expr, environment):
                     isinstance(node.func.value, ast.Attribute)
                     and isinstance(receiver_root, ast.Name)
                     and receiver_root.id in environment.callable_environment.local_namespaces
+                    and receiver_root.id not in environment.lexical_owned_names
                     and receiver_root.id not in environment.runtime_bindings
                     and receiver_root.id not in environment.const_eval_values
                 ):
@@ -1527,6 +1509,7 @@ def analyze_expression(expr, environment):
                 if (
                     isinstance(node.func.value, ast.Name)
                     and node.func.value.id in environment.callable_environment.local_namespaces
+                    and node.func.value.id not in environment.lexical_owned_names
                     and node.func.value.id not in environment.runtime_bindings
                     and node.func.value.id not in environment.const_eval_values
                 ):
@@ -1537,6 +1520,7 @@ def analyze_expression(expr, environment):
                 elif (
                     isinstance(node.func.value, ast.Name)
                     and node.func.value.id in environment.callable_environment.package_namespaces
+                    and node.func.value.id not in environment.lexical_owned_names
                 ):
                     package_alias = node.func.value.id
                     name = f"{package_alias}.{node.func.attr}"
@@ -1606,6 +1590,29 @@ def analyze_expression(expr, environment):
                     )
             elif isinstance(node.func, ast.Name):
                 name = node.func.id
+                outer_callable_shadowed = (
+                    (name in environment.runtime_bindings or name in environment.const_eval_values)
+                    and (name in environment.callable_environment.local_functions
+                         or name in environment.callable_environment.imported_functions
+                         or name in environment.callable_environment.package_namespaces
+                         or name in environment.callable_environment.local_namespaces)
+                )
+                if outer_callable_shadowed or (name in environment.lexical_owned_names and (
+                    name not in environment.lexical_callable_aliases
+                    or name in environment.runtime_bindings
+                    or name in environment.const_eval_values
+                )):
+                    raise CompileError(
+                        f"Cannot call {name!r}: local source value is not callable "
+                        f"at line {node.lineno}, column {node.col_offset + 1}"
+                    )
+                if (name in environment.callable_environment.local_namespaces
+                        and name not in environment.runtime_bindings
+                        and name not in environment.const_eval_values):
+                    raise CompileError(
+                        f"Local module/directory {name!r} is not callable; "
+                        "import its .nf definition or call module.definition(...)"
+                    )
                 if name in environment.callable_environment.package_namespaces:
                     raise CompileError(
                         f"Package namespace {name!r} cannot be called directly; use {name}.<member>(...)"
@@ -1720,6 +1727,112 @@ def analyze_expression(expr, environment):
                         call_operand_nodes=tuple(runtime_nodes),
                     ),
                 )
+            if resolved.kind is CallableKind.LOCAL_FUNCTION and name in environment.callable_environment.local_definition_refs:
+                # A top-level declaration belongs to a canonical source module,
+                # even when invoked before its text or through a local alias.
+                from .source_bindings import SourceDefinitionBinding
+                ref = environment.callable_environment.local_definition_refs[name]
+                session = environment.source_callable_session
+                snapshot = None if session is None else session.module_snapshots.get(ref.module)
+                if snapshot is None:
+                    raise CompileError("Internal error: local module function has no authoritative source snapshot")
+                binding = SourceDefinitionBinding("module", ref.name, None, ref, snapshot)
+                resolved = ResolvedCallable(CallableKind.MODULE_DEFINITION, name, binding)
+
+            if resolved.kind is CallableKind.MODULE_DEFINITION:
+                session = environment.source_callable_session
+                if session is None or not callable(environment.source_call_site_allocator):
+                    raise CompileError("Internal error: module call requires source session and occurrence allocator")
+                binding = resolved.target
+                snapshot = binding.snapshot
+                fn = snapshot.definitions[binding.definition.name]
+                from .function_signatures import compile_function_signature
+                if fn.args.posonlyargs or fn.args.vararg or fn.args.kwarg or fn.args.kwonlyargs or fn.args.kw_defaults:
+                    raise CompileError(f"{name}() accepts only ordinary named parameters")
+                parameters = tuple(arg.arg for arg in fn.args.args)
+                default_offset = len(parameters) - len(fn.args.defaults)
+                # The authoritative signature precedes argument binding and uses
+                # the defining module's own compile-time values, not the caller's.
+                if binding.definition.module in environment.callable_environment.local_definition_refs.values():
+                    module_callable_environment = environment.callable_environment
+                    module_values = session.defining_module_compile_time(snapshot)
+                else:
+                    module_callable_environment, module_values = session.callable_environment_for_module(snapshot)
+                definition_owner = binding.definition.stable_key()
+                initial_signature = compile_function_signature(
+                    fn, owner_scope=definition_owner, declaration_owner=definition_owner,
+                    compile_time_values=module_values,
+                )
+                declarations = {item.target_name: item.typ for item in initial_signature.declarations}
+                templates = tuple(SourceCallableParameter(
+                    input_index=i, source_name=arg.arg, display_name=arg.arg,
+                    keyword_key=arg.arg, typ=declarations[arg.arg],
+                    public=True, has_default=i >= default_offset,
+                ) for i, arg in enumerate(fn.args.args))
+                bound_pairs = bind_unified_source_arguments(
+                    templates, tuple(cleaned_call.args),
+                    tuple((item.arg, item.value) for item in cleaned_call.keywords), name,
+                )
+                bound_nodes: dict[str, ast.expr] = {}
+                for parameter, child in bound_pairs:
+                    child_fact = analyze(child)
+                    if child_fact.semantic_payload is not None or isinstance(child_fact.result_shape, ArrayResultShape):
+                        raise CompileError(f"{name}() arguments must have supported runtime types")
+                    actual = _require_runtime_type(child_fact, "module definition argument")
+                    declared = declarations[parameter.source_name]
+                    if not source_argument_type_matches(declared, actual):
+                        raise CompileError(f"{name}() parameter {parameter.source_name!r} expects {declared}, got {actual}")
+                    bound_nodes[parameter.source_name] = child
+                types_by_name = {item.target_name: item.typ for item in initial_signature.declarations}
+                function_id = module_definition_function_id(
+                    binding.definition, serialize_local_signature(parameters, types_by_name)
+                )
+                materialization = IRFunctionMaterialization(
+                    function_id, IRFunctionMaterializationMode.UNIQUE if modifiers.unique else IRFunctionMaterializationMode.SHARED,
+                    environment.source_call_site_allocator(function_id) if modifiers.unique else None,
+                )
+                owner_scope = function_materialization_owner_scope(materialization)
+                identity = GroupCompilationIdentity(None, owner_scope, definition_owner, function_id.stable_key())
+                # Imported source modules have independent lexical imports and
+                # constants; never inherit caller bindings or run imported body.
+                prepared = session.prepare_definition(
+                    function_id=function_id, identity=identity, fn=fn,
+                    callable_environment=module_callable_environment,
+                    compile_time_values=module_values,
+                    helper_namespace=fn.name,
+                    source_record=binding.record, source_module=snapshot,
+                )
+                physical_parameters = {parameter.source_name: parameter for parameter in prepared.contract.parameters}
+                runtime_nodes = []
+                runtime_operands = []
+                static_operands = []
+                for parameter_name in parameters:
+                    if parameter_name not in bound_nodes:
+                        continue
+                    parameter = physical_parameters[parameter_name]
+                    child = bound_nodes[parameter_name]
+                    actual = _require_runtime_type(facts[child], "module definition argument")
+                    if not source_argument_type_matches(parameter.typ, actual):
+                        raise CompileError(f"{name}() parameter {parameter_name!r} expects {parameter.typ}, got {actual}")
+                    folded = try_runtime_fold(child, environment.const_eval_values)
+                    if folded is NOT_FOLDABLE:
+                        runtime_nodes.append(child)
+                        runtime_operands.append(AnalyzedCallOperand(parameter_name, actual, parameter.input_index))
+                    else:
+                        static_operands.append(AnalyzedStaticCallOperand(parameter.input_index, folded))
+                result_types = tuple(output.typ for output in prepared.contract.outputs)
+                if not result_types:
+                    raise CompileError(f"{name}() definition has no return values")
+                result_spec = RuntimeCallResult(result_types[0]) if len(result_types) == 1 else TupleCallResult(result_types)
+                return record(node, ExpressionFact(
+                    call_result_shape(result_spec),
+                    analyzed_call=AnalyzedCall(
+                        target=resolved, runtime_operands=tuple(runtime_operands), options=(),
+                        result=result_spec, source_function_id=function_id,
+                        materialization=materialization, static_operands=tuple(static_operands),
+                    ), call_operand_nodes=tuple(runtime_nodes),
+                ))
+
             if resolved.kind is CallableKind.LOCAL_FUNCTION:
                 session = environment.source_callable_session
                 if session is None or not callable(environment.source_call_site_allocator):
@@ -1727,60 +1840,49 @@ def analyze_expression(expr, environment):
                 fn = environment.callable_environment.local_functions[name]
                 if not isinstance(fn, ast.FunctionDef):
                     raise CompileError(f"Internal error: local function {name!r} is not an AST definition")
-                if fn.args.posonlyargs or fn.args.vararg or fn.args.kwarg or fn.args.kwonlyargs or fn.args.defaults or fn.args.kw_defaults:
-                    raise CompileError("Local functions currently support only plain positional parameters without defaults")
-                for arg in fn.args.args:
-                    if arg.arg == "__unique__":
-                        raise CompileError("Local function parameter __unique__ is reserved by the compiler")
-                params = [arg.arg for arg in fn.args.args]
-                declared = {arg.arg: resolve_local_parameter_annotation(arg.annotation) for arg in fn.args.args}
-                bound_nodes: dict[str, ast.expr] = {}
-                bound_types: dict[str, NFType] = {}
-                bound_arguments = bind_local_source_arguments(
-                    tuple(params),
-                    tuple(cleaned_call.args),
-                    tuple((keyword.arg, keyword.value) for keyword in cleaned_call.keywords),
-                    name,
-                )
-                for param_name, child in bound_arguments:
-                    child_fact = analyze(child)
-                    if child_fact.semantic_payload is not None:
-                        raise CompileError(
-                            f"{name}() source function arguments cannot be package semantic values"
-                        )
-                    if isinstance(child_fact.result_shape, ArrayResultShape):
-                        raise CompileError(
-                            "Local function constant arguments must be numbers, booleans, strings or vectors"
-                        )
-                    actual_type = _require_runtime_type(child_fact, "script-local function argument")
-                    expected = declared[param_name]
-                    if expected is not None and not source_argument_type_matches(expected, actual_type):
-                        raise CompileError(
-                            f"{name}() parameter {param_name!r} expects {expected}, got {actual_type}"
-                        )
-                    bound_nodes[param_name] = child
-                    bound_types[param_name] = expected or actual_type
-
-                captures = analyze_local_captures(
-                    fn,
-                    local_functions=environment.callable_environment.local_functions,
-                    runtime_bindings=environment.runtime_bindings,
-                    compile_time_values=environment.const_eval_values,
-                    reserved_name_labels=environment.reserved_name_labels,
-                    structural_binding_names=environment.structural_bindings,
-                    structural_array_names=environment.structural_arrays.bindings,
-                    builder_binding_names=environment.builder_bindings,
-                    extension_binding_names=environment.extension_bindings,
-                    callable_environment=environment.callable_environment,
-                )
-                for capture in captures:
-                    bound_types[capture.name] = capture.typ
-                signature_names = tuple(params) + tuple(capture.name for capture in captures)
-                signature = serialize_local_signature(signature_names, bound_types)
+                from .function_signatures import compile_function_signature
+                if fn.args.posonlyargs or fn.args.vararg or fn.args.kwarg or fn.args.kwonlyargs or fn.args.kw_defaults:
+                    raise CompileError(f"{name}() accepts only ordinary named parameters")
+                params = tuple(argument.arg for argument in fn.args.args)
+                offset = len(params) - len(fn.args.defaults)
                 definition_owner = environment.source_definition_owner or environment.source_owner_scope
                 if not definition_owner:
-                    raise CompileError("Internal error: local source call has no definition owner")
-                function_id = local_function_id(definition_owner, name, signature)
+                    raise CompileError("Internal error: source call has no definition owner")
+                preliminary_signature = compile_function_signature(
+                    fn, owner_scope=definition_owner, declaration_owner=definition_owner,
+                    compile_time_values=environment.const_eval_values,
+                )
+                declared = {item.target_name: item.typ for item in preliminary_signature.declarations}
+                templates = tuple(
+                    SourceCallableParameter(
+                        input_index=index, source_name=param, display_name=param,
+                        keyword_key=param, typ=declared[param],
+                        public=True, has_default=index >= offset,
+                    )
+                    for index, param in enumerate(params)
+                )
+                bound_pairs = bind_unified_source_arguments(
+                    templates, tuple(cleaned_call.args),
+                    tuple((keyword.arg, keyword.value) for keyword in cleaned_call.keywords), name,
+                )
+                bound_nodes: dict[str, ast.expr] = {}
+                for parameter, child in bound_pairs:
+                    child_fact = analyze(child)
+                    if child_fact.semantic_payload is not None:
+                        raise CompileError(f"{name}() arguments cannot be package semantic values")
+                    if isinstance(child_fact.result_shape, ArrayResultShape):
+                        raise CompileError(f"{name}() arguments must have supported runtime types")
+                    actual_type = _require_runtime_type(child_fact, "source function argument")
+                    expected = declared[parameter.source_name]
+                    if not source_argument_type_matches(expected, actual_type):
+                        raise CompileError(
+                            f"{name}() parameter {parameter.source_name!r} expects {expected}, got {actual_type}"
+                        )
+                    bound_nodes[parameter.source_name] = child
+
+                signature_types = {item.target_name: item.typ for item in preliminary_signature.declarations}
+                signature = serialize_local_signature(params, signature_types)
+                function_id = local_function_id(definition_owner, fn.name, signature)
                 if modifiers.unique:
                     call_site = environment.source_call_site_allocator(function_id)
                     materialization = IRFunctionMaterialization(
@@ -1797,37 +1899,21 @@ def analyze_expression(expr, environment):
                     definition_owner=function_id.definition_owner,
                     declaration_owner=function_id.stable_key(),
                 )
-                return_shape = analyze_local_return_shape(fn)
-                generated_source = local_function_source(
-                    fn,
-                    bound_types,
-                    hidden_captures=tuple(capture.name for capture in captures),
-                    return_shape=return_shape,
-                )
-                local_names = local_binding_names(fn)
-                inherited_package_namespaces = {
-                    alias: binding
-                    for alias, binding in environment.callable_environment.package_namespaces.items()
-                    if alias not in local_names
-                }
-                prepared = session.prepare_local(
+                prepared = session.prepare_definition(
                     function_id=function_id,
                     identity=identity,
-                    generated_source=generated_source,
-                    explicit_parameter_names=tuple(params),
-                    hidden_capture_names=tuple(capture.name for capture in captures),
-                    local_functions=environment.callable_environment.local_functions,
-                    imported_library_functions=environment.callable_environment.imported_functions,
-                    package_namespaces=inherited_package_namespaces,
-                    local_namespaces={alias: binding for alias, binding in environment.callable_environment.local_namespaces.items() if alias not in local_names},
+                    fn=fn,
+                    callable_environment=environment.callable_environment,
+                    compile_time_values=environment.const_eval_values,
                     helper_namespace=environment.helper_namespace,
-                    return_shape=return_shape,
                 )
                 contract_by_name = {parameter.source_name: parameter for parameter in prepared.contract.parameters}
                 runtime_nodes = []
                 runtime_operands = []
                 static_operands = []
                 for param in params:
+                    if param not in bound_nodes:
+                        continue
                     parameter = contract_by_name.get(param)
                     if parameter is None:
                         raise CompileError(f"Internal error: local semantic contract lost parameter {param!r}")
@@ -1841,22 +1927,6 @@ def analyze_expression(expr, environment):
                         runtime_operands.append(AnalyzedCallOperand(param, actual_type, parameter.input_index))
                     else:
                         static_operands.append(AnalyzedStaticCallOperand(parameter.input_index, folded))
-                for capture in captures:
-                    parameter = contract_by_name.get(capture.name)
-                    if parameter is None:
-                        raise CompileError(f"Internal error: local semantic contract lost capture {capture.name!r}")
-                    if capture.runtime:
-                        child = ast.copy_location(ast.Name(id=capture.name, ctx=ast.Load()), node)
-                        capture_fact = analyze(child)
-                        actual_type = _require_runtime_type(capture_fact, "script-local function capture")
-                        runtime_nodes.append(child)
-                        runtime_operands.append(
-                            AnalyzedCallOperand(capture.name, actual_type, parameter.input_index)
-                        )
-                    else:
-                        static_operands.append(
-                            AnalyzedStaticCallOperand(parameter.input_index, capture.compile_time_value)
-                        )
                 result_types = tuple(output.typ for output in prepared.contract.outputs)
                 if not result_types:
                     raise CompileError(f"Local function {name}() has no outputs")
@@ -1879,6 +1949,13 @@ def analyze_expression(expr, environment):
                     ),
                 )
             if resolved.kind is CallableKind.EXTENSION:
+                from .runtime_capabilities import RuntimeRole
+                if (environment.runtime_role is RuntimeRole.NESTED
+                        and resolved.target.owner[0] in {"local-runtime", "examples-runtime"}):
+                    raise CompileError(
+                        f"{name}() is a root-only Mesh Compute callback "
+                        "and cannot run inside a nested function group"
+                    )
                 extension_fact = _analyze_extension_call(
                     node,
                     cleaned_call,

@@ -56,6 +56,23 @@ def compile_group(source, name):
     check(getattr(group, "bl_idname", None) == "GeometryNodeTree", name)
     return group
 
+def compile_entry_group(source, name, entry_name):
+    """Compose a definition-only module and return its named entry's function tree.
+
+    This exercises level-0 automatic entry placement instead of treating a
+    multi-definition source as one legacy standalone function.
+    """
+    target = bpy.data.node_groups.new(name + "_base", "GeometryNodeTree")
+    compiler.compose_source_initial(source, target)
+    entries = [
+        node.node_tree for node in target.nodes
+        if node.bl_idname == "GeometryNodeGroup" and node.node_tree is not None
+        and node.node_tree.get("nodeforge_module_name") == entry_name
+    ]
+    check(len(entries) == 1, f"expected exactly one {entry_name!r} entry in {name}")
+    return entries[0]
+
+
 def _math_keyword_expr(name, params):
     """Build one keyword-call expression for a table-driven math builtin."""
     values = {
@@ -86,28 +103,76 @@ def _math_keyword_expr(name, params):
     return f"{name}({args})"
 
 def prepared_create_or_update(source, name, *, existing_group=None, build_options=None, backend=None):
-    """Exercise the permanent prepared-only backend boundary from Blender regression tests."""
+    """Compile typed FunctionDef IR before testing the physical Blender transaction.
+
+    This is a semantic preparation fixture, not the removed root-language
+    source compiler: it requires exactly one new-DSL definition and never
+    synthesizes legacy input_*/output() declarations.
+    """
+    from uuid import uuid4
+    from NodeForge.compiler_identities import (
+        ModuleId, GroupCompilationIdentity, module_definition_function_id,
+        parse_module_definition_function_id,
+    )
+    from NodeForge.function_instances import module_definition_owner_scope
+    from NodeForge.semantic.source_modules import parse_source_module, resolve_source_module
+    from NodeForge.semantic.function_signatures import compile_function_signature
+    from NodeForge.semantic.source_callables import serialize_local_signature
+
     backend = backend or compiler._new_group_backend()
-    prepared, session = compiler._prepare_root_build(
-        backend, source, name=name, existing_group=existing_group
+    session = backend.new_source_callable_session()
+    function_id = None
+    if existing_group is not None:
+        function_key = existing_group.get('nodeforge_module_definition')
+        if not function_key:
+            # Standalone FunctionDef groups do not use the catalog's source-owner
+            # marker. Their durable interface declaration owner is still the
+            # actual MODULE_DEF FunctionId, not the physical group display name.
+            from NodeForge.blender.interface import _get_group_input_declarations
+            declarations = _get_group_input_declarations(existing_group)
+            if declarations:
+                function_key = next(iter(declarations.values()))['declaration_id'].owner_scope
+        if function_key:
+            function_id = parse_module_definition_function_id(str(function_key))
+    module_id = function_id.module if function_id is not None else ModuleId(
+        'ROOT_TEXT', f'test-prepared:{uuid4().hex}'
+    )
+    snapshot = parse_source_module(source, module_id)
+    if len(snapshot.definitions) != 1 or resolve_source_module(snapshot).has_executable_statements:
+        raise CompileError('Prepared backend fixture requires exactly one unified def')
+    definition = snapshot.definition_ref(next(iter(snapshot.definitions)))
+    fn = snapshot.definitions[definition.name]
+    env, ct = session.callable_environment_for_module(snapshot)
+    if function_id is None:
+        sig = compile_function_signature(fn, owner_scope='TEST/signature',
+                                         declaration_owner=definition.stable_key(), compile_time_values=ct)
+        types = {item.target_name: item.typ for item in sig.declarations}
+        function_id = module_definition_function_id(
+            definition, serialize_local_signature([arg.arg for arg in fn.args.args], types))
+    instance_key = str(existing_group.get('nodeforge_function_instance_key') or '') if existing_group is not None else ''
+    owner_scope = module_definition_owner_scope(function_id, instance_key=instance_key)
+    identity = GroupCompilationIdentity(None, owner_scope, definition.stable_key(), function_id.stable_key())
+    prepared = session.prepare_definition(
+        function_id=function_id, identity=identity, fn=fn,
+        callable_environment=env, compile_time_values=ct,
+        helper_namespace=definition.name, source_module=snapshot,
     )
     options = dict(build_options or {})
-    function_tx = options.pop("function_group_transaction", None) or options.pop("local_helper_transaction", None)
+    function_tx = options.pop('function_group_transaction', None) or options.pop('local_helper_transaction', None)
     request = BlenderGroupBuildRequest(
-        prepared_compilation=prepared,
+        prepared_compilation=prepared.group,
         name=name,
         existing_group=existing_group,
-        helper_namespace=options.pop("helper_namespace", name),
-        function_group_cache=options.pop("function_group_cache", None),
+        helper_namespace=options.pop('helper_namespace', name),
+        function_group_cache=options.pop('function_group_cache', None),
         function_group_transaction=function_tx,
-        function_compilation_trace=options.pop("function_compilation_trace", None),
-        function_compilation_inputs=options.pop("function_compilation_inputs", None),
-        function_instance_key=options.pop("function_instance_key", None),
-        source_callable_session=options.pop("source_callable_session", session),
+        function_compilation_trace=options.pop('function_compilation_trace', None),
+        function_compilation_inputs=options.pop('function_compilation_inputs', None),
+        function_instance_key=options.pop('function_instance_key', None),
+        source_callable_session=options.pop('source_callable_session', session),
     )
-    check(not options, f"unsupported prepared backend test options: {sorted(options)}")
+    check(not options, f'unsupported prepared backend test options: {sorted(options)}')
     return backend.create_or_update(request)
-
 
 def expect_compile_error(source, name, exc_type=CompileError, **kwargs):
     """Compile one source and require a controlled error type."""

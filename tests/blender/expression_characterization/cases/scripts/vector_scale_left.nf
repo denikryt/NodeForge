@@ -1,3 +1,2 @@
-v = input_vector("V", default=(1, 2, 3))
-a = input_float("A", default=2.0)
-output("Result", a * v)
+def nf_fixture(v: Vector['V']=(1, 2, 3), a: Float['A']=2.0):
+    return a * v

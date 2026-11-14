@@ -7,7 +7,7 @@ from enum import Enum, auto
 from types import MappingProxyType
 from typing import Mapping, TYPE_CHECKING
 
-from ..compiler_identities import FunctionId, library_function_id, library_function_id_for_record
+from ..compiler_identities import FunctionId, SourceDefinitionRef, library_function_id, library_function_id_for_record
 from ..errors import CompileError
 from .group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
 from ..extensions.contracts import ExtensionCallableId, TypeSpec, validate_extension_argument_positions
@@ -24,6 +24,7 @@ class CallableKind(Enum):
     BUILTIN = auto()
     LOCAL_FUNCTION = auto()
     LIBRARY = auto()
+    MODULE_DEFINITION = auto()
     EXTENSION = auto()
     TOP_LEVEL_ONLY = auto()
     OBJECT_INFO = auto()
@@ -47,6 +48,10 @@ class ResolvedCallable:
         if self.kind is CallableKind.LIBRARY:
             if self.target is None or not isinstance(self.library_function_id, FunctionId):
                 raise ValueError("library call resolution requires binding and FunctionId")
+        elif self.kind is CallableKind.MODULE_DEFINITION:
+            from .source_bindings import SourceDefinitionBinding
+            if not isinstance(self.target, SourceDefinitionBinding) or self.library_function_id is not None:
+                raise TypeError("module source call requires an exact SourceDefinitionBinding")
         elif self.kind is CallableKind.EXTENSION:
             if not isinstance(self.target, ExtensionCallableId):
                 raise TypeError("extension call resolution requires ExtensionCallableId target")
@@ -65,21 +70,29 @@ class CallableEnvironment:
     imported_functions: Mapping[str, object]
     package_namespaces: Mapping[str, object] = field(default_factory=dict)
     local_namespaces: Mapping[str, object] = field(default_factory=dict)
+    local_definition_refs: Mapping[str, SourceDefinitionRef] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Defensively freeze all name collections for one analysis invocation."""
         object.__setattr__(self, "callable_builtins", frozenset(self.callable_builtins))
         object.__setattr__(self, "local_functions", MappingProxyType(dict(self.local_functions)))
         object.__setattr__(self, "imported_functions", MappingProxyType(dict(self.imported_functions)))
+        refs = dict(self.local_definition_refs)
+        if not set(refs).issubset(self.local_functions) or any(
+            not isinstance(ref, SourceDefinitionRef) or getattr(self.local_functions[name], "name", None) != ref.name
+            for name, ref in refs.items()
+        ):
+            raise TypeError("local_definition_refs must identify registered source definitions")
+        object.__setattr__(self, "local_definition_refs", MappingProxyType(refs))
         package_namespaces = dict(self.package_namespaces)
         for alias, binding in package_namespaces.items():
             if not isinstance(alias, str) or not alias or getattr(binding, "source_name", None) != alias:
                 raise TypeError("package_namespaces must map source aliases to package bindings")
         object.__setattr__(self, "package_namespaces", MappingProxyType(package_namespaces))
-        from .source_bindings import LocalDirectoryNamespaceBinding
+        from .source_bindings import LocalDirectoryNamespaceBinding, SourceModuleNamespaceBinding
         local_namespaces = dict(self.local_namespaces)
         for alias, binding in local_namespaces.items():
-            if not isinstance(binding, LocalDirectoryNamespaceBinding) or binding.source_name != alias:
+            if not isinstance(binding, (LocalDirectoryNamespaceBinding, SourceModuleNamespaceBinding)) or binding.source_name != alias:
                 raise TypeError("local_namespaces must map aliases to Local directory bindings")
         object.__setattr__(self, "local_namespaces", MappingProxyType(local_namespaces))
 
@@ -260,7 +273,7 @@ class AnalyzedCall:
             raise TypeError("runtime_operands must contain AnalyzedCallOperand records")
         if not all(isinstance(item, AnalyzedStaticCallOperand) for item in self.static_operands):
             raise TypeError("static_operands must contain AnalyzedStaticCallOperand records")
-        if self.target.kind in {CallableKind.LOCAL_FUNCTION, CallableKind.LIBRARY}:
+        if self.target.kind in {CallableKind.LOCAL_FUNCTION, CallableKind.LIBRARY, CallableKind.MODULE_DEFINITION}:
             if not isinstance(self.source_function_id, FunctionId):
                 raise TypeError("source-backed analyzed call requires FunctionId")
             if self.materialization is not None and self.materialization.callee != self.source_function_id:
@@ -323,6 +336,9 @@ UNRESOLVED = _UnresolvedCallable()
 
 def _resolved_from_library_binding(source_name: str, binding) -> ResolvedCallable:
     """Build the existing canonical call target for one exact library binding."""
+    from .source_bindings import SourceDefinitionBinding
+    if isinstance(binding, SourceDefinitionBinding):
+        return ResolvedCallable(CallableKind.MODULE_DEFINITION, source_name, binding)
     extension_callable_id = getattr(binding, "extension_callable_id", None)
     if extension_callable_id is not None:
         return ResolvedCallable(CallableKind.EXTENSION, source_name, target=extension_callable_id)
@@ -346,6 +362,10 @@ def _resolved_from_package_export(source_name: str, export) -> ResolvedCallable:
         return ResolvedCallable(CallableKind.EXTENSION, source_name, target=extension_callable_id)
     if record is None:
         raise ValueError("package export has no semantic target")
+    if getattr(export, "definition", None) is not None:
+        from .source_bindings import SourceDefinitionBinding
+        binding = SourceDefinitionBinding("functions", export.name, record, export.definition, export.source_snapshot)
+        return ResolvedCallable(CallableKind.MODULE_DEFINITION, source_name, binding)
     from .source_bindings import LibraryBinding
 
     binding = LibraryBinding("functions", export.name, record, None)
@@ -400,7 +420,7 @@ def local_directory_candidates_for_unqualified(name, environment):
         return ()
     candidates = {}
     for alias, namespace in sorted(environment.local_namespaces.items()):
-        if not namespace.expose_unqualified:
+        if not getattr(namespace, "expose_unqualified", False):
             continue
         record = namespace.index_snapshot.resolve_member(
             namespace.directory, name, source_extensions=(".nf",),
@@ -478,11 +498,16 @@ def resolve_local_callable(alias, member, environment):
     from ..local_index import LocalDirectoryCandidate
 
     binding = environment.local_namespaces[alias]
+    from .source_bindings import SourceModuleNamespaceBinding
+    if isinstance(binding, SourceModuleNamespaceBinding):
+        return ResolvedCallable(CallableKind.MODULE_DEFINITION, f"{alias}.{member}", binding.member(member))
     record = binding.index_snapshot.resolve_member(binding.directory, member)
     if record is None:
         raise CompileError(f"{binding.namespace.title()} directory {binding.directory.physical_directory_origin!r} has no callable member {member!r}")
     if isinstance(record, LocalDirectoryCandidate):
-        raise CompileError(f"Local directory {member!r} is not callable; import it explicitly with a directory alias")
+        raise CompileError(f"Local directory {member!r} is not callable; import a specific .nf file and function")
+    if getattr(record, "source_path", None) is not None and record.source_path.suffix == ".nf":
+        raise CompileError(f"Local file {member!r} is a module, not a callable; import a function from that file")
     return _resolved_from_library_binding(f"{alias}.{member}", LibraryBinding(binding.namespace, record.name, record))
 
 
@@ -530,7 +555,10 @@ def resolve_simple_callable(name: str, environment: CallableEnvironment):
             raise error
         raise ambiguous_callable_error(name, labels, package=True)
     if is_local:
-        return ResolvedCallable(CallableKind.LOCAL_FUNCTION, name, target=name)
+        return ResolvedCallable(
+            CallableKind.LOCAL_FUNCTION, name,
+            target=environment.local_definition_refs.get(name, name),
+        )
     if binding is not None:
         return _resolved_from_library_binding(name, binding)
     if local_candidates:

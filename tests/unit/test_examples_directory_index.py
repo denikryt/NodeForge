@@ -22,7 +22,7 @@ def write(root, relative, value='x'):
     """Write an importable single-argument .nf example at a chosen path."""
     path = root / relative
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f'x = input_float("X")\noutput({value})\n', encoding='utf8')
+    path.write_text(f'def foo(x: Float) -> Float:\n    return {value}\n', encoding='utf8')
     return path
 
 
@@ -70,59 +70,38 @@ def call_ids(value):
     return identities
 
 
-def test_qualified_flat_alias_and_deep_examples_share_exact_selection(tmp_path):
-    """A nested source is accessible through flat, dotted and directory aliases."""
-    write(tmp_path, 'terrain/erosion.nf')
-    write(tmp_path, 'terrain/tools/slope.nf', 'x + 1')
-    env = selected(tmp_path)
-    result, session = compile_source('''from examples import erosion as erosion_alias
-from examples.terrain import erosion as direct
-from examples import terrain as t
-from examples.terrain.tools import slope
-output(erosion_alias(1.0) + direct(2.0) + t.erosion(3.0) + slope(4.0))
-''', env)
-    ids = call_ids(result.body)
-    assert len(ids) == 4
-    assert ids[0] == ids[1] == ids[2]
-    assert ids[3] != ids[0]
-    assert len(session.prepared) == 2
-    assert env.catalog('examples').find('erosion') is None  # Legacy projection unchanged.
-    assert set(env.catalog('examples').names()) == set()
 
 
 def test_root_owner_precedence_and_nested_logical_identity(tmp_path):
-    """Adding a nested basename cannot change the old direct owner or FunctionId."""
+    """Physical Examples owners retain distinct canonical relative identities."""
     write(tmp_path, 'foo.nf')
     write(tmp_path, 'terrain/foo.nf', 'x + 1')
     env = selected(tmp_path)
-    root_owner = env.catalog('examples').entries['foo']
-    assert library_function_id_for_record(root_owner).source_origin == ''
-    result, _ = compile_source('''from examples import foo
-from examples.terrain import foo as nested
-output(foo(1.0) + nested(1.0))
-''', env)
-    ids = call_ids(result.body)
-    assert len(ids) == 2 and ids[0] != ids[1]
-    assert ids[0] == library_function_id_for_record(root_owner)
-    assert ids[1].source_origin == 'terrain/foo.nf'
+    view = env.catalog('examples')
+    root = view.entries['foo']
+    nested = next(record for record in view.records() if record.folder_path == 'terrain')
+    assert library_function_id_for_record(root).source_origin == ''
+    assert library_function_id_for_record(nested).source_origin == 'terrain/foo.nf'
+    assert library_function_id_for_record(root) != library_function_id_for_record(nested)
+    # File selection is not a call to a function defined inside the file.
+    with pytest.raises(CompileError, match='module/directory.*not callable'):
+        compile_source('from examples import foo\nresult = foo(1.0)', env)
 
 
 def test_nested_only_flat_ambiguity_and_qualified_disambiguation(tmp_path):
-    """The shared index does not silently select the first basename."""
+    """Ambiguous flat Examples names never choose an arbitrary physical owner."""
     write(tmp_path, 'a/foo.nf')
     write(tmp_path, 'b/foo.nf')
     env = selected(tmp_path)
     with pytest.raises(CompileError, match='Ambiguous callable.*foo'):
-        compile_source('from examples import foo\noutput(foo(1.0))', env)
-    group, _ = compile_source('''from examples.a import foo
-from examples.b import foo as other
-output(foo(1.0) + other(1.0))
-''', env)
-    assert {x.source_origin for x in call_ids(group.body)} == {'a/foo.nf', 'b/foo.nf'}
+        compile_source('from examples import foo\nresult = cube(1)', env)
+    result, _ = compile_source('from examples.a import foo\nfrom examples.b import foo as other\nresult=cube(1)', env)
+    assert not call_ids(result.body)
+    assert {r.source_path.relative_to(tmp_path).as_posix() for r in env.catalog('examples').records()} == {'a/foo.nf','b/foo.nf'}
 
 
 def test_legacy_star_names_and_owners_do_not_change(tmp_path):
-    """Wildcard exports preserve direct .nf and directory source.nf owners only."""
+    """Catalog owner precedence is independent of removed file-call syntax."""
     write(tmp_path, 'root.nf')
     write(tmp_path, 'legacy/source.nf')
     write(tmp_path, 'terrain/erosion.nf')
@@ -136,29 +115,19 @@ def test_legacy_star_names_and_owners_do_not_change(tmp_path):
     assert view.select_import('examples', 'root') is view.entries['root']
     assert view.select_import('examples.legacy', 'source') is None
     assert isinstance(view.select_import('examples', 'terrain'), LocalDirectoryCandidate)
-    group, _ = compile_source('from examples import *\noutput(root(1.0) + legacy(2.0))', env)
-    assert {x.name for x in call_ids(group.body)} == {'root', 'legacy'}
 
 
-def test_unaliased_directory_exposes_nf_bare_and_alias_does_not(tmp_path):
-    """Directory bare-call admission is explicit and tracks alias status."""
-    write(tmp_path, 'terrain/erosion.nf')
-    env = selected(tmp_path)
-    group, _ = compile_source('from examples import terrain\noutput(erosion(1.0))', env)
-    assert call_ids(group.body)[0].source_origin == 'terrain/erosion.nf'
-    with pytest.raises(CompileError):
-        compile_source('from examples import terrain as t\noutput(erosion(1.0))', env)
 
 
 def test_directory_member_missing_star_and_invalid_member(tmp_path):
-    """Unknown directories/members and directory wildcards fail at import validation."""
+    """Missing directory members and unsupported wildcards fail before lowering."""
     write(tmp_path, 'terrain/erosion.nf')
     env = selected(tmp_path)
     for source, error in (
-        ('from examples.missing import erosion\noutput(1)', 'Unknown Examples directory'),
-        ('from examples.terrain import missing\noutput(1)', 'Unknown examples.terrain import'),
-        ('from examples.terrain import *\noutput(1)', 'star imports'),
-        ('from examples import terrain as output\noutput(1)', 'reserved name'),
+        ('from examples.missing import erosion\nresult=cube(1)', 'Unknown Examples source path'),
+        ('from examples.terrain import missing\nresult=cube(1)', 'Unknown examples.terrain import'),
+        ('from examples.terrain import *\nresult=cube(1)', 'star imports'),
+        ('from examples import terrain as output\nresult=cube(1)', 'reserved name'),
     ):
         with pytest.raises(CompileError, match=error):
             compile_source(source, env)
@@ -223,19 +192,18 @@ def install_examples_package(tmp_path, package_id, entries, *, python=False):
 
 
 def test_real_installed_package_nested_examples_imports_and_collisions(tmp_path, isolated_packages):
-    """Only admitted package inventories join the frozen Examples source index."""
+    """Installed Examples files are indexed by their selected physical module paths."""
     from NodeForge.environment_resolution import _make_compilation_environment
-    text = 'x = input_float("X")\noutput(x)\n'
+    text = 'def erosion(x: Float) -> Float:\n    return x\n'
     install_examples_package(tmp_path, 'vendor.alpha', {'alpha/erosion.nf': text})
     install_examples_package(tmp_path, 'vendor.beta', {'beta/erosion.nf': text})
     env = _make_compilation_environment()
-    group, _ = compile_source('''from examples.alpha import erosion
-from examples.beta import erosion as second
-output(erosion(1.0) + second(2.0))
-''', env)
-    assert len({id.source_origin for id in call_ids(group.body)}) == 2
+    compile_source('from examples.alpha import erosion\nfrom examples.beta import erosion as second\nresult=cube(1)', env)
+    selected_paths = {r.source_path.as_posix() for r in env.catalog('examples').records()}
+    assert any(path.endswith('/alpha/erosion.nf') for path in selected_paths)
+    assert any(path.endswith('/beta/erosion.nf') for path in selected_paths)
     with pytest.raises(CompileError, match='Ambiguous callable'):
-        compile_source('from examples import erosion\noutput(erosion(1.0))', env)
+        compile_source('from examples import erosion\nresult=cube(1)', env)
 
 
 def test_real_installer_rejects_duplicate_top_level_examples_directories(tmp_path, isolated_packages):
@@ -248,12 +216,12 @@ def test_real_installer_rejects_duplicate_top_level_examples_directories(tmp_pat
 
 
 def test_authorized_native_example_owner_and_nested_script_are_both_selected(tmp_path, isolated_packages):
-    """Existing trusted interface owner retains its registry and dotted children."""
+    """Trusted Example extension owners coexist with nested source file index entries."""
     from NodeForge.environment_resolution import _make_compilation_environment
     from NodeForge.extensions.registry import library_owner_key
     from NodeForge.extensions.contracts import ExtensionCallableId
     native = 'review_native'
-    source = 'x = input_float("X")\noutput(x)\n'
+    source = 'def child(x: Float) -> Float:\n    return x\n'
     interface = (
         'from typing import Annotated\n'
         'from NodeForge import Float, EvaluationMode\n'
@@ -273,8 +241,8 @@ def test_authorized_native_example_owner_and_nested_script_are_both_selected(tmp
     assert env.catalog('examples').select_import('examples', native) is record
     child = env.catalog('examples').select_import(f'examples.{native}', 'child')
     assert child.folder_path == native and child.kind == 'script'
-    result, _ = compile_source(f'from examples.{native} import child\noutput(child(1.0))', env)
-    assert call_ids(result.body)[0].source_origin == f'{native}/child.nf'
+    result, _ = compile_source(f'from examples.{native} import child\nresult=cube(1)', env)
+    assert not call_ids(result.body)
 
 
 def test_owner_symlink_escape_is_rejected_before_snapshot(tmp_path):
@@ -289,12 +257,32 @@ def test_owner_symlink_escape_is_rejected_before_snapshot(tmp_path):
 
 
 def test_mixed_suffixes_and_valid_directory_name_contract(tmp_path):
-    """Dotted `.nodeforge` works while non-public identifiers cannot bind."""
+    """Legacy .nodeforge owners remain visible in the index, but not as callable .nf files."""
     source = write(tmp_path, 'terrain/slope.nodeforge')
     write(tmp_path, 'terrain/class/foo.nf')
     env = selected(tmp_path)
-    group, _ = compile_source('from examples.terrain import slope\noutput(slope(1.0))', env)
-    assert call_ids(group.body)[0].source_origin == 'terrain/slope.nodeforge'
+    result, _ = compile_source('from examples.terrain import slope\nresult=cube(1)', env)
+    assert not call_ids(result.body)
     with pytest.raises(CompileError):
-        compile_source('from examples.terrain.class import foo\noutput(foo(1.0))', env)
+        compile_source('from examples.terrain.class import foo\nresult=cube(1)', env)
     assert source.name == 'slope.nodeforge'
+
+
+def test_examples_module_member_import_uses_exact_source_definition(tmp_path):
+    """An Examples file exports individual defs without callable-file fallback."""
+    write(tmp_path, 'terrain/erosion.nf', 'x + 1')
+    env = selected(tmp_path)
+    qualified, _ = compile_source(
+        'from examples.terrain.erosion import foo as smooth\n'
+        'result = smooth(1.0)\n', env,
+    )
+    namespaced, _ = compile_source(
+        'from examples.terrain import erosion\n'
+        'result = erosion.foo(1.0)\n', env,
+    )
+    qualified_ids = call_ids(qualified.body)
+    namespaced_ids = call_ids(namespaced.body)
+    assert len(qualified_ids) == len(namespaced_ids) == 1
+    assert qualified_ids == namespaced_ids
+    with pytest.raises(CompileError, match='does not declare|Unknown|no definition'):
+        compile_source('from examples.terrain.erosion import missing\nresult=cube(1)', env)

@@ -1,4 +1,4 @@
-a = input_float("A", default=1.0)
-items = [a]
-items.append(a, ignored=missing)
-output("Result", items[1])
+def nf_fixture(a: Float['A']=1.0):
+    items = [a]
+    items.append(a, ignored=missing)
+    return items[1]

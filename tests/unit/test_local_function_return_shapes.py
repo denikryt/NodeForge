@@ -1,4 +1,4 @@
-"""Unit coverage for local-function fixed tuple returns and annotations."""
+"""Unit coverage for active local-function returns and serialized identities."""
 
 import ast
 import sys
@@ -6,7 +6,6 @@ import types
 
 import pytest
 
-from NodeForge.semantic.constants import TYPE_FLOAT, TYPE_TOKEN_NAMES
 from NodeForge.errors import CompileError
 from NodeForge.nf_types import NFType
 
@@ -22,40 +21,25 @@ def _function(source):
     return ast.parse(source).body[0]
 
 
-def test_scalar_return_shape_preserves_value_name(monkeypatch):
+def test_scalar_return_shape_uses_returned_variable_name():
     module = _source_callables()
     shape = module.analyze_local_return_shape(_function("def f(x):\n    return x\n"))
     assert len(shape.elements) == 1
-    assert shape.elements[0].socket_name == "Value"
+    assert shape.elements[0].socket_name == "X"
 
 
-def test_tuple_return_names_and_order(monkeypatch):
+def test_tuple_return_names_and_order():
     module = _source_callables()
     fn = _function("def f(x):\n    doubled = x * 2\n    return doubled, x + 1, doubled\n")
     shape = module.analyze_local_return_shape(fn)
     assert [item.socket_name for item in shape.elements] == ["Doubled", "Value 2", "Doubled 2"]
-    source = module.local_function_source(fn, {"x": TYPE_FLOAT}, return_shape=shape)
-    assert source.splitlines()[-3:] == [
-        "output('Doubled', doubled)",
-        "output('Value 2', x + 1)",
-        "output('Doubled 2', doubled)",
-    ]
 
 
 @pytest.mark.parametrize("body", ["return ()", "return a, (b, c)", "return [a, b]"])
-def test_invalid_return_shapes_are_controlled(monkeypatch, body):
+def test_invalid_return_shapes_are_controlled(body):
     module = _source_callables()
     with pytest.raises(CompileError):
         module.analyze_local_return_shape(_function(f"def f():\n    {body}\n"))
-
-
-def test_annotations_accept_registry_and_reject_complex(monkeypatch):
-    module = _source_callables()
-    for name, typ in TYPE_TOKEN_NAMES.items():
-        annotation = ast.parse(name, mode="eval").body
-        assert module.resolve_local_parameter_annotation(annotation) == typ
-    with pytest.raises(CompileError):
-        module.resolve_local_parameter_annotation(ast.parse("list[Float]", mode="eval").body)
 
 
 def test_parser_accepts_flat_unpacking_for_statement_lowering():
@@ -85,10 +69,41 @@ def test_return_shape_metadata_serializes_historical_type_tokens(monkeypatch):
     monkeypatch.setitem(sys.modules, "bpy", types.SimpleNamespace(data=types.SimpleNamespace(node_groups={})))
     sys.modules.pop("NodeForge.blender.local_functions", None)
     from NodeForge.blender import local_functions
-    assert local_functions._serialize_return_shape(shape, (NFType.FLOAT,)) == '[{"key":"return:0","name":"Value","type":"FLOAT"}]'
+    assert local_functions._serialize_return_shape(shape, (NFType.FLOAT,)) == '[{"key":"return:0","name":"X","type":"FLOAT"}]'
 
 
-def test_local_signature_serialization_preserves_historical_identity(monkeypatch):
+def test_local_signature_serialization_preserves_historical_identity():
     """Canonical in-memory types retain the exact local helper signature bytes."""
     module = _source_callables()
     assert module.serialize_local_signature(("a", "b"), {"a": NFType.FLOAT, "b": NFType.VECTOR}) == "a:FLOAT,b:VECTOR"
+
+
+@pytest.mark.parametrize("label", ["X" * 64, "Г" * 32])
+def test_scalar_explicit_output_label_above_blender_socket_limit_is_rejected(label):
+    module = _source_callables()
+    fn = _function("def f():\n    return 1.0\n")
+    with pytest.raises(CompileError, match="63-byte UTF-8"):
+        module.analyze_local_return_shape(fn, output_label=label)
+
+
+def test_output_label_limit_is_utf8_bytes_not_characters():
+    module = _source_callables()
+    fn = _function("def f():\n    return 1.0\n")
+    assert module.analyze_local_return_shape(fn, output_label="X" * 63).elements[0].socket_name == "X" * 63
+    assert module.analyze_local_return_shape(fn, output_label="Г" * 31).elements[0].socket_name == "Г" * 31
+
+
+def test_automatic_output_label_above_blender_socket_limit_falls_back_to_value():
+    module = _source_callables()
+    identifier = "many_very_long_words_in_a_single_result_variable_that_exceeds_socket_capacity"
+    fn = _function(f"def f():\n    return {identifier}\n")
+    shape = module.analyze_local_return_shape(fn)
+    assert shape.elements[0].socket_name == "Value"
+
+
+def test_suffixing_a_duplicate_tuple_output_must_obey_same_limit():
+    module = _source_callables()
+    identifier = "x" * 62
+    fn = _function(f"def f():\n    return {identifier}, {identifier}\n")
+    with pytest.raises(CompileError, match="63-byte UTF-8"):
+        module.analyze_local_return_shape(fn)

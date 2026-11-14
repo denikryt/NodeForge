@@ -94,6 +94,8 @@ class SourceCallableParameter:
     keyword_key: str | None
     typ: NFType
     public: bool
+    has_default: bool = False
+    interface_origin: InterfaceInputOrigin | None = None
 
     def __post_init__(self) -> None:
         """Validate the callable-position and source-facing metadata."""
@@ -107,8 +109,10 @@ class SourceCallableParameter:
             raise TypeError("SourceCallableParameter.keyword_key must be a string or None")
         if not isinstance(self.typ, NFType):
             raise TypeError("SourceCallableParameter.typ must be an NFType")
-        if not isinstance(self.public, bool):
-            raise TypeError("SourceCallableParameter.public must be bool")
+        if not isinstance(self.public, bool) or not isinstance(self.has_default, bool):
+            raise TypeError("SourceCallableParameter public and has_default must be bool")
+        if self.interface_origin is not None and not isinstance(self.interface_origin, (BindingId, InputDeclarationId)):
+            raise TypeError("SourceCallableParameter.interface_origin must be an input declaration identity")
         if not self.public and self.keyword_key is not None:
             raise ValueError("Hidden source-call parameter cannot expose a caller keyword")
 
@@ -177,36 +181,39 @@ def canonicalize_group_input_default(typ: NFType, value: object) -> object:
     raise CompileError(f"{typ} does not own a semantic group input default")
 
 
-
-def bind_local_source_arguments(
-    parameter_names: tuple[str, ...],
+def bind_unified_source_arguments(
+    parameters: tuple[SourceCallableParameter, ...],
     positional_values: tuple[object, ...],
     keyword_values: tuple[tuple[str | None, object], ...],
     function_name: str,
-) -> tuple[tuple[str, object], ...]:
-    """Bind one local source call using the established Python-like plain-parameter rules."""
-    names = tuple(parameter_names)
-    if len(positional_values) > len(names):
+) -> tuple[tuple[SourceCallableParameter, object], ...]:
+    """Bind declarations in logical order, independent of physical panel order.
+
+    Keywords are exact parameter identifiers. Display labels and Blender native
+    defaults never satisfy a required DSL argument. Omitted optional inputs do
+    not produce operands and therefore retain their declared socket defaults.
+    """
+    public = tuple(parameter for parameter in parameters if parameter.public)
+    by_name = {item.source_name: item for item in public}
+    if any(item.source_name is None for item in public) or len(by_name) != len(public):
+        raise CompileError("Internal error: unified source signature must expose distinct parameter names")
+    if len(positional_values) > len(public):
         raise CompileError(f"{function_name}() got too many positional arguments")
     bound: dict[str, object] = {}
-    source_order: list[tuple[str, object]] = []
-    for index, value in enumerate(positional_values):
-        name = names[index]
-        bound[name] = value
-        source_order.append((name, value))
+    for parameter, value in zip(public, positional_values):
+        bound[parameter.source_name] = value
     for keyword_name, value in keyword_values:
         if keyword_name is None:
             raise CompileError(f"{function_name}() does not support **kwargs")
-        if keyword_name not in names:
+        if keyword_name not in by_name:
             raise CompileError(f"{function_name}() got unknown keyword argument {keyword_name!r}")
         if keyword_name in bound:
             raise CompileError(f"{function_name}() got multiple values for argument {keyword_name!r}")
         bound[keyword_name] = value
-        source_order.append((keyword_name, value))
-    missing = [name for name in names if name not in bound]
+    missing = [item.source_name for item in public if not item.has_default and item.source_name not in bound]
     if missing:
-        raise CompileError(f"{function_name}() missing arguments: {', '.join(missing)}")
-    return tuple(source_order)
+        raise CompileError(f"{function_name}() missing required arguments: {', '.join(missing)}")
+    return tuple((item, bound[item.source_name]) for item in public if item.source_name in bound)
 
 
 def bind_imported_source_arguments(
@@ -287,7 +294,7 @@ __all__ = [
     "SourceCallableContract",
     "SourceCallableParameter",
     "bind_imported_source_arguments",
-    "bind_local_source_arguments",
+    "bind_unified_source_arguments",
     "canonicalize_group_input_default",
     "normalize_callable_keyword",
     "project_group_input_layout",

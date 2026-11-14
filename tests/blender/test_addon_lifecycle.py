@@ -111,3 +111,92 @@ def test_addon_unregister_preserves_live_generated_resources_and_geometry():
         if bpy.data.node_groups.get(group.name) is group:
             bpy.data.node_groups.remove(group)
         generated_resources.cleanup_restart_orphans()
+
+
+def test_addon_double_register_is_noop_for_owned_classes_and_handlers():
+    """Repeated activation never duplicates UI classes, menu or editor callbacks."""
+    from NodeForge import ui
+    from NodeForge.editor import blender_ui
+    was_active = ui._UI_ENABLED
+    if was_active:
+        NodeForge.unregister()
+    try:
+        NodeForge.register()
+        assert ui._UI_ENABLED and blender_ui._ENABLED
+        original_classes = tuple(ui._REGISTERED_CLASSES)
+        original_editor = tuple(blender_ui._REGISTERED_CLASSES)
+        assert len(original_classes) == len(ui.classes)
+        assert len(original_editor) == 2
+        NodeForge.register()
+        assert tuple(ui._REGISTERED_CLASSES) == original_classes
+        assert tuple(blender_ui._REGISTERED_CLASSES) == original_editor
+        assert ui._ADD_MENU_REGISTERED and blender_ui._HEADER_REGISTERED
+        NodeForge.unregister()
+        NodeForge.unregister()
+        assert not ui._REGISTERED_CLASSES and not blender_ui._REGISTERED_CLASSES
+        assert not ui._ADD_MENU_REGISTERED and not blender_ui._HEADER_REGISTERED
+    finally:
+        NodeForge.unregister()
+        if was_active:
+            NodeForge.register()
+
+
+def test_failed_class_registration_rolls_back_only_owned_ui(monkeypatch):
+    """A failure midway through Blender class registration leaves a clean restart."""
+    from NodeForge import ui
+    from NodeForge.editor import blender_ui
+    was_active = ui._UI_ENABLED
+    if was_active:
+        NodeForge.unregister()
+    try:
+        register_class = bpy.utils.register_class
+        fail_class = ui.classes[3]
+        with monkeypatch.context() as patch:
+            def fail_once(cls):
+                if cls is fail_class:
+                    raise RuntimeError('injected class registration error')
+                return register_class(cls)
+
+            patch.setattr(bpy.utils, 'register_class', fail_once)
+            with pytest.raises(RuntimeError, match='injected class registration error'):
+                NodeForge.register()
+        assert not ui._REGISTERED_CLASSES and not ui._UI_ENABLED
+        assert not ui._ADD_MENU_REGISTERED and not ui._SCENE_PROP_REGISTERED
+        assert not blender_ui._REGISTERED_CLASSES
+        NodeForge.register()
+        assert ui._UI_ENABLED and blender_ui._ENABLED
+        NodeForge.unregister()
+    finally:
+        NodeForge.unregister()
+        if was_active:
+            NodeForge.register()
+
+
+def test_failed_editor_registration_cleans_header_and_partial_class_list(monkeypatch):
+    """Only the editor-owned classes installed before a failure are unregistered."""
+    from NodeForge import ui
+    from NodeForge.editor import blender_ui
+    was_active = ui._UI_ENABLED
+    if was_active:
+        NodeForge.unregister()
+    try:
+        register_class = bpy.utils.register_class
+        fail_class = blender_ui.NODEFORGE_OT_refresh_editor_symbols
+        with monkeypatch.context() as patch:
+            def fail_editor(cls):
+                if cls is fail_class:
+                    raise RuntimeError('injected editor class error')
+                return register_class(cls)
+
+            patch.setattr(bpy.utils, 'register_class', fail_editor)
+            with pytest.raises(RuntimeError, match='injected editor class error'):
+                NodeForge.register()
+        assert not ui._UI_ENABLED and not ui._REGISTERED_CLASSES
+        assert not blender_ui._REGISTERED_CLASSES and not blender_ui._HEADER_REGISTERED
+        assert not blender_ui._PROPERTY_REGISTERED and blender_ui._DRAW_HANDLE is None
+        NodeForge.register()
+        NodeForge.unregister()
+    finally:
+        NodeForge.unregister()
+        if was_active:
+            NodeForge.register()

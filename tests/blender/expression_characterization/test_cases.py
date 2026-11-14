@@ -140,3 +140,84 @@ def test_harness_validates_minimal_baseline_document_shape():
             {"kind": "compile_error", "exception": "CompileError", "message": "boom", "extra": 1},
             "synthetic_error",
         )
+
+
+def test_top_level_baselines_pin_sharing_and_import_side_effects():
+    """Prevent re-recording snapshots that silently lose shared/unique identity."""
+    shared = load_case_baseline("top_level_import_shared_unique")["graph"]
+    references = [node["group"] for node in shared["nodes"]]
+    assert references[0]["id"] == references[1]["id"]
+    assert references[0]["id"] != references[2]["id"]
+    assert [ref["unique"] for ref in references] == [False, False, True]
+
+    aliases = load_case_baseline("top_level_import_alias_identity")["graph"]
+    assert aliases["nodes"][0]["group"]["id"] == aliases["nodes"][1]["group"]["id"]
+
+    imported = load_case_baseline("top_level_import_multi")["graph"]
+    assert [node["bl_idname"] for node in imported["nodes"]] == [
+        "GeometryNodeGroup", "GeometryNodeGroup",
+    ]
+    stretch = imported["nodes"][1]["group"]["graph"]
+    nested = [node["group"]["id"] for node in stretch["nodes"] if "group" in node]
+    assert nested == [imported["nodes"][0]["group"]["id"]]
+
+
+def test_top_level_baselines_pin_nesting_and_absent_unused_functions():
+    """A definition chain materializes three levels; shadowed defs remain unused."""
+    definitions = load_case_baseline("top_level_definition_chain")["graph"]
+    assert len(definitions["nodes"]) == 2
+    entry_graph = definitions["nodes"][0]["group"]["graph"]
+    middle = next(node["group"]["graph"] for node in entry_graph["nodes"] if "group" in node)
+    leaf = next(node["group"]["graph"] for node in middle["nodes"] if "group" in node)
+    assert any(node["bl_idname"] == "ShaderNodeMath" for node in leaf["nodes"])
+
+    shadowed = load_case_baseline("top_level_lexical_shadowing")["graph"]
+    assert len(shadowed["nodes"]) == 1
+    assert all(node["bl_idname"] != "GeometryNodeGroup"
+               for node in shadowed["nodes"][0]["group"]["graph"]["nodes"])
+
+
+def test_top_level_baselines_pin_interface_outputs_and_existing_links():
+    """Check semantic details that can be lost by blindly regenerating JSON baselines."""
+    panel = load_case_baseline("top_level_panel_defaults")["graph"]
+    interface = panel["nodes"][0]["group"]["graph"]["interface"]
+    assert [(item["name"], item["default"]) for item in interface if item["in_out"] == "INPUT"] == [
+        ("Bias", 3.0), ("Amount", 2.0),
+    ]
+
+    outputs = load_case_baseline("top_level_tuple_outputs")["graph"]
+    interface = outputs["nodes"][0]["group"]["graph"]["interface"]
+    assert [item["name"] for item in interface if item["in_out"] == "OUTPUT"] == [
+        "Twice", "Plus One",
+    ]
+    assert len(outputs["links"]) == 2
+
+    preserved = load_case_baseline("top_level_preserve_user_link")["graph"]
+    assert [node["bl_idname"] for node in preserved["nodes"]] == [
+        "ShaderNodeMath", "ShaderNodeMath", "GeometryNodeMeshCube",
+    ]
+    assert preserved["links"] == [{"from": ["n0", "Value"], "to": ["n1", "Value"]}]
+
+
+def test_top_level_baseline_pins_only_reachable_function_groups():
+    """A→B→C and direct C share one leaf; D and E→B stay unmaterialized."""
+    graph = load_case_baseline("top_level_reachable_subgraph")["graph"]
+    root_nodes = graph["nodes"]
+    assert [node["bl_idname"] for node in root_nodes] == [
+        "GeometryNodeMeshCube", "GeometryNodeGroup",
+        "GeometryNodeGroup", "GeometryNodeMeshCube",
+    ]
+    assert graph["links"] == [
+        {"from": ["n0", "Mesh"], "to": ["n1", "Socket_0"]},
+        {"from": ["n0", "Mesh"], "to": ["n2", "Socket_0"]},
+    ]
+
+    a = root_nodes[1]["group"]
+    b = next(node["group"] for node in a["graph"]["nodes"] if "group" in node)
+    c = next(node["group"] for node in b["graph"]["nodes"] if "group" in node)
+    direct_c = root_nodes[2]["group"]
+    assert len({a["id"], b["id"], c["id"]}) == 3
+    assert direct_c == {"id": c["id"], "unique": False}
+    assert [node["bl_idname"] for node in c["graph"]["nodes"]] == [
+        "NodeGroupInput", "NodeGroupOutput", "GeometryNodeTransform",
+    ]

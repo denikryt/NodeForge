@@ -71,10 +71,8 @@ def mesh_object():
 
 
 SOURCE = ('from local import shift\n'
-          'geo = input_geometry("Geometry")\n'
-          'amount = input_float("Amount", default=2.0)\n'
-          'geo = shift(geo, amount=amount)\n'
-          'output("Geometry", geo)\n')
+          'def modifier(geometry: Geometry["Geometry"], amount: Float["Amount"] = 2.0) -> Geometry:\n'
+          '    return shift(geometry, amount=amount)\n')
 
 
 def _evaluated_positions(obj):
@@ -194,3 +192,59 @@ def test_cutover_side_effects_rollback_with_group_savepoint():
     )
     next_tx.commit()
     assert state["commit"]
+
+
+@pytest.mark.parametrize('source, reason', [
+    ('from local import shift\ngeo = input_geometry("Geometry")\n'
+     'output("Geometry", shift(geo))\n', 'legacy'),
+    ('from local import shift\n'
+     'def modifier(geometry: Geometry) -> Geometry:\n'
+     '    return geometry\n', 'requires an imported'),
+    ('from local import shift\n'
+     'def modifier(amount: Float = 2.0) -> Geometry:\n'
+     '    return shift(cube(1), amount=amount)\n', 'required first Geometry'),
+    ('from local import shift\n'
+     'def modifier(geometry: Geometry) -> Float:\n'
+     '    result = shift(geometry)\n'
+     '    return 1.0\n', 'return exactly one Geometry'),
+    ('from local import shift\n'
+     'def modifier(geometry: Geometry) -> Geometry:\n'
+     '    return helper(geometry)\n'
+     'def helper(geometry: Geometry) -> Geometry:\n'
+     '    return shift(geometry)\n', 'root-only Mesh Compute'),
+    ('from local import shift\n'
+     'def one(geometry: Geometry) -> Geometry:\n'
+     '    return shift(geometry)\n'
+     'def two(geometry: Geometry) -> Geometry:\n'
+     '    return shift(geometry)\n', 'exactly one entry function'),
+])
+def test_typed_modifier_rejects_unsupported_source_before_blender_mutation(
+        configured_local, mesh_object, source, reason):
+    """Old interface syntax, wrong typed contracts and hidden runtime stages fail closed."""
+    from NodeForge.errors import CompileError
+
+    before_groups = {item.as_pointer() for item in bpy.data.node_groups}
+    before_scenes = {item.as_pointer() for item in bpy.data.scenes}
+    with pytest.raises(CompileError, match=reason):
+        create_mesh_compute_modifier(source, mesh_object)
+    assert not mesh_object.modifiers
+    assert {item.as_pointer() for item in bpy.data.node_groups} == before_groups
+    assert {item.as_pointer() for item in bpy.data.scenes} == before_scenes
+
+
+def test_typed_root_uses_final_compile_time_default_and_nests_plain_helpers(configured_local, mesh_object):
+    """ROOT privilege is limited to the chosen entry; ordinary helper calls stay nested."""
+    source = ('from local import shift\n'
+              'DEFAULT_AMOUNT = 3.0\n'
+              'def raise_geometry(geometry: Geometry) -> Geometry:\n'
+              '    return transform(geometry, translation=vector(0, 0, 1))\n'
+              'def modifier(geometry: Geometry["Geometry"], '
+              'amount: Float["Amount"] = DEFAULT_AMOUNT) -> Geometry:\n'
+              '    lifted = raise_geometry(geometry)\n'
+              '    return shift(lifted, amount=amount)\n')
+    group = create_mesh_compute_modifier(source, mesh_object)
+    binding = runtime.get_modifier_binding(mesh_object)
+    assert binding.group is group
+    assert any(node.bl_idname == 'GeometryNodeGroup' for node in group.nodes)
+    runtime.evaluate_modifier_binding(mesh_object)
+    assert _evaluated_positions(mesh_object) == ((4., 5., 6.), (3., 3., 3.), 1)

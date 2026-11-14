@@ -504,6 +504,10 @@ def lower_basic_body(
     helper_namespace: str = "Group",
     extension_registry=None,
     extension_dependency_sink=None,
+    terminal_return_shape=None,
+    runtime_role=None,
+    lexical_owned_names=frozenset(),
+    lexical_callable_aliases=frozenset(),
 ):
     """Lower one whole eligible source body to compiler-owned structured Semantic IR."""
     validate_input_declaration_placement(stmts)
@@ -1085,7 +1089,9 @@ def lower_basic_body(
         materialize_literal: bool = False,
     ):
         """Bind one compile-time/structural iteration item and return optional runtime publication IR."""
-        validate_runtime_binding_target(name, reserved_name_labels)
+        validate_runtime_binding_target(
+            name, reserved_name_labels, temporary_loop_target=True,
+        )
         if materialize_literal and isinstance(item, (bool, int, float, str)):
             # Builder-loop literal materialization follows the canonical numeric literal
             # contract while preserving the existing node-emission behavior of this narrow path.
@@ -1168,6 +1174,9 @@ def lower_basic_body(
             source_call_site_allocator=identities.allocate_call_site_id,
             helper_namespace=helper_namespace,
             extension_registry=extension_registry,
+            runtime_role=runtime_role,
+            lexical_owned_names=lexical_owned_names,
+            lexical_callable_aliases=lexical_callable_aliases,
         )
         analysis = analyze_expression(expr, environment)
         if analysis.object_semantics is None:
@@ -1423,6 +1432,24 @@ def lower_basic_body(
             is_final = root and index == len(source_stmts) - 1
 
             if isinstance(stmt, ast.If):
+                try:
+                    static_condition = _const_eval(stmt.test, active_compile_time.values)
+                except (ConstEvalUnavailable, CompileError):
+                    static_condition = None
+                if terminal_return_shape is not None and type(static_condition) is bool:
+                    # Reachability must agree with source call-graph analysis.
+                    # Do not generate runtime IF nodes for compile-time branches.
+                    chosen = stmt.body if static_condition else stmt.orelse
+                    selected_body = lower_statements(
+                        chosen, active, active_compile_time,
+                        control_policy=control_policy,
+                        repeat_merge_ids=repeat_merge_ids,
+                        repeat_merge_symbols=repeat_merge_symbols,
+                        runtime_if_builder_baseline=runtime_if_builder_baseline,
+                        root=False,
+                    )
+                    emit_many(selected_body.statements)
+                    continue
                 policy = control_policy or BranchMergePolicy.TOP_LEVEL
                 if policy is BranchMergePolicy.TOP_LEVEL:
                     branch_region = tuple(stmt.body) + tuple(stmt.orelse)
@@ -1522,6 +1549,22 @@ def lower_basic_body(
 
             if isinstance(stmt, ast.For):
                 parsed = parse_repeat_range_for(stmt)
+                if parsed is None and terminal_return_shape is not None:
+                    # A one-argument range over a runtime parameter uses the
+                    # existing Repeat Zone contract; static ranges still unroll.
+                    iterator = stmt.iter
+                    if (isinstance(iterator, ast.Call)
+                            and isinstance(iterator.func, ast.Name)
+                            and iterator.func.id == 'range'
+                            and len(iterator.args) == 1 and not iterator.keywords
+                            and not stmt.orelse and isinstance(stmt.target, ast.Name)
+                            and isinstance(iterator.args[0], ast.Name)
+                            and iterator.args[0].id in active.runtime_bindings
+                            # A constant proven at this exact source point must
+                            # keep ordinary range() unrolling, even if its
+                            # assignment also has a runtime binding.
+                            and not (type(active_compile_time.get(iterator.args[0].id)) is int)):
+                        parsed = iterator.args[0], stmt.body, stmt.target.id
                 if parsed is None:
                     unpacking_target_names = _unpacking_loop_target_names(
                         stmt.target, stmt.body,
@@ -1530,7 +1573,9 @@ def lower_basic_body(
                     iterable_items = _iterable_items(stmt.iter, active, active_compile_time)
                     target_names = unpacking_target_names or _ordinary_for_target_names(stmt.target)
                     for name in target_names:
-                        validate_runtime_binding_target(name, reserved_name_labels)
+                        validate_runtime_binding_target(
+                            name, reserved_name_labels, temporary_loop_target=True,
+                        )
                         if name in active.builder_states:
                             raise CompileError("Cannot assign over geometry_builder binding")
 
@@ -1617,8 +1662,14 @@ def lower_basic_body(
                                 identities.ordinary_reservations[name] = previous
                     continue
                 iterations_expr, repeat_body, iteration_name = parsed
-                validate_runtime_binding_target(iteration_name, reserved_name_labels)
+                validate_runtime_binding_target(
+                    iteration_name, reserved_name_labels, temporary_loop_target=True,
+                )
                 repeat_compile_time = active_compile_time.fork()
+                # The index is a runtime lexical binding inside the Repeat Zone.
+                # In particular, a module constant with this name must not fold
+                # conditions in the loop body before runtime expression analysis.
+                repeat_compile_time.discard(iteration_name)
                 try:
                     repeat_count_constant = _const_eval(iterations_expr, repeat_compile_time.values)
                 except ConstEvalUnavailable:
@@ -1721,6 +1772,13 @@ def lower_basic_body(
                     require_repeat_state_assignment(record.source_name, record.typ, exit_symbol.typ)
                 repeat = IRRepeat(iterations.program, iteration_binding_id, iteration_name, tuple(state_records), repeat_ir_body)
                 emit(repeat)
+                # The runtime index exists only in the loop's lexical scope.
+                # Publish other body CT effects while restoring the enclosing
+                # binding (including a module constant of the same name).
+                if active_compile_time.contains(iteration_name):
+                    repeat_compile_time.bind(iteration_name, active_compile_time.get(iteration_name))
+                else:
+                    repeat_compile_time.discard(iteration_name)
                 active_compile_time.replace(repeat_compile_time)
                 for record in state_records:
                     if not record.publish_to_parent:
@@ -1793,6 +1851,9 @@ def lower_basic_body(
                                 display_name=input_semantics.display_name,
                                 typ=input_semantics.typ,
                                 default=input_semantics.default,
+                                has_default=input_semantics.typ in {
+                                    NFType.FLOAT, NFType.INT, NFType.BOOL, NFType.VECTOR, NFType.STRING,
+                                },
                             )
                         )
                         continue
@@ -2132,6 +2193,16 @@ def lower_basic_body(
                         raise CompileError("Named multi-output results are structural and cannot be used in final expression")
                     raise CompileError("final expression requires a runtime value")
                 emit(IRFinalExpression(analyzed.program))
+                continue
+
+            if isinstance(stmt, ast.Return):
+                if not root or terminal_return_shape is None or not is_final:
+                    raise CompileError("return is permitted only as a function's final statement")
+                for element in terminal_return_shape.elements:
+                    analyzed = accept_expression(element.expression, active, active_compile_time, statements)
+                    if not isinstance(analyzed.result_shape, RuntimeResultShape) or not isinstance(analyzed.program.result, IRValue):
+                        raise CompileError(f"return element {element.index + 1} must produce one runtime value")
+                    emit(IROutput(element.socket_name, analyzed.program))
                 continue
 
             raise CompileError("Unsupported statement")

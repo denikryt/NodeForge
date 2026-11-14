@@ -24,15 +24,17 @@ def _output_socket(group, name):
 def test_sample_index_preserves_supported_value_types_and_uses_one_node_per_call():
     group = compile_group(
         '''
-geo = grid(3, 3)
-f = sample_index(geo, position().x, 0)
-i = sample_index(geo, index(), 1)
-b = sample_index(geo, index() > 0, 2)
-v = sample_index(geo, position(), 3)
-output("Float", f)
-output("Int", i)
-output("Bool", b)
-output("Vector", v)
+def nf_fixture():
+    geo = grid(3, 3)
+    f = sample_index(geo, position().x, 0)
+    i = sample_index(geo, index(), 1)
+    b = sample_index(geo, index() > 0, 2)
+    v = sample_index(geo, position(), 3)
+    float = f
+    int = i
+    bool = b
+    sampled_vector = v
+    return (float, int, bool, sampled_vector,)
 ''',
         "NFTest_sample_index_types",
     )
@@ -47,7 +49,7 @@ output("Vector", v)
         "Float": "NodeSocketFloat",
         "Int": "NodeSocketInt",
         "Bool": "NodeSocketBool",
-        "Vector": "NodeSocketVector",
+        "Sampled Vector": "NodeSocketVector",
     }
     for name, socket_type in expected_outputs.items():
         check(_output_socket(group, name).socket_type == socket_type, f"{name} result type changed")
@@ -56,12 +58,13 @@ output("Vector", v)
 def test_sample_index_constant_and_runtime_index_use_distinct_existing_representations():
     group = compile_group(
         '''
-geo = grid(3, 3)
-runtime_index = input_int("Index", default=1)
-constant_sample = sample_index(geo, position().x, 3)
-runtime_sample = sample_index(geo, position().x, runtime_index)
-output("Constant", constant_sample)
-output("Runtime", runtime_sample)
+def nf_fixture(runtime_index: Int['Index'] = 1):
+    geo = grid(3, 3)
+    constant_sample = sample_index(geo, position().x, 3)
+    runtime_sample = sample_index(geo, position().x, runtime_index)
+    constant = constant_sample
+    runtime = runtime_sample
+    return (constant, runtime,)
 ''',
         "NFTest_sample_index_index_modes",
     )
@@ -77,11 +80,13 @@ output("Runtime", runtime_sample)
 def test_sample_index_domain_and_clamp_are_frontend_normalized_configuration():
     group = compile_group(
         '''
-geo = grid(3, 3)
-a = sample_index(geo, position().x, 0)
-b = sample_index(geo, position().x, 1, domain="face", clamp=True)
-output("A", a)
-output("B", b)
+def nf_fixture():
+    geo = grid(3, 3)
+    a = sample_index(geo, position().x, 0)
+    b = sample_index(geo, position().x, 1, domain="face", clamp=True)
+    a = a
+    b = b
+    return (a, b,)
 ''',
         "NFTest_sample_index_static_options",
     )
@@ -96,9 +101,11 @@ def test_sample_index_creates_no_generated_blender_resources_and_failure_publish
     before = _owned_generated_id_keys()
     group = compile_group(
         '''
-geo = grid(2, 2)
-value = sample_index(geo, position().x, 0)
-output("Value", value)
+def nf_fixture():
+    geo = grid(2, 2)
+    value = sample_index(geo, position().x, 0)
+    value = value
+    return (value,)
 ''',
         "NFTest_sample_index_no_resources",
     )
@@ -107,9 +114,11 @@ output("Value", value)
 
     expect_compile_error(
         '''
-geo = grid(2, 2)
-value = sample_index(geo, geo, 0)
-output("Value", value)
+def nf_fixture():
+    geo = grid(2, 2)
+    value = sample_index(geo, geo, 0)
+    value = value
+    return (value,)
 ''',
         "NFTest_sample_index_rejected_type_no_resources",
     )

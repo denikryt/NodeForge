@@ -67,7 +67,7 @@ def _curve_to_mesh_wrapper(group, name):
     for item in getattr(group.interface, "items_tree", []):
         if getattr(item, "item_type", None) == "SOCKET" and getattr(item, "in_out", None) == "INPUT":
             wrapper.links.new(group_input.outputs[item.name], group_node.inputs[item.name])
-    wrapper.links.new(group_node.outputs["Geometry"], curve_to_mesh.inputs["Curve"])
+    wrapper.links.new(group_node.outputs[0], curve_to_mesh.inputs["Curve"])
     wrapper.links.new(curve_to_mesh.outputs["Mesh"], group_output.inputs["Geometry"])
     return wrapper
 
@@ -132,8 +132,10 @@ def _input_socket(node, name, index):
 
 def test_empty_geometry_compiles_to_zero_count_mesh_line():
     group = compile_group('''
-geo = empty_geometry()
-output("Geometry", geo)
+def nf_fixture():
+    geo = empty_geometry()
+    geometry = geo
+    return (geometry,)
 ''', 'NFTest_empty_geometry_identity')
 
     mesh_lines = _nodes(group, "GeometryNodeMeshLine")
@@ -144,11 +146,15 @@ output("Geometry", geo)
 def test_join_empty_arrays_return_identity_without_join_node_and_evaluate_empty():
     for source, name in (
         ('''
-output("Geometry", join([]))
+def nf_fixture():
+    geometry = join([])
+    return (geometry,)
 ''', 'NFTest_join_empty_literal'),
         ('''
-items = []
-output("Geometry", join(items))
+def nf_fixture():
+    items = []
+    geometry = join(items)
+    return (geometry,)
 ''', 'NFTest_join_empty_variable'),
     ):
         group = compile_group(source, name)
@@ -161,39 +167,48 @@ output("Geometry", join(items))
 
 def test_join_existing_single_and_multi_argument_behaviour():
     single = compile_group('''
-geo = join(cube(1))
-output("Geometry", geo)
+def nf_fixture():
+    geo = join(cube(1))
+    geometry = geo
+    return (geometry,)
 ''', 'NFTest_join_single_geometry')
     check(not _nodes(single, "GeometryNodeJoinGeometry"), "join(geo) should remain node-free")
 
     list_join = compile_group('''
-geo = join([cube(1), cube(2)])
-output("Geometry", geo)
+def nf_fixture():
+    geo = join([cube(1), cube(2)])
+    geometry = geo
+    return (geometry,)
 ''', 'NFTest_join_list_geometry')
     check(len(_nodes(list_join, "GeometryNodeJoinGeometry")) == 1, "join([geo, geo]) should allocate one Join Geometry")
 
     variadic_join = compile_group('''
-geo = join(cube(1), cube(2))
-output("Geometry", geo)
+def nf_fixture():
+    geo = join(cube(1), cube(2))
+    geometry = geo
+    return (geometry,)
 ''', 'NFTest_join_variadic_geometry')
     check(len(_nodes(variadic_join, "GeometryNodeJoinGeometry")) == 1, "join(geo, geo) should allocate one Join Geometry")
 
 
 def test_empty_geometry_composes_with_cube_and_repeat_state():
     composed = compile_group('''
-geo = empty_geometry()
-geo = join(geo, cube(1))
-output("Geometry", geo)
+def nf_fixture():
+    geo = empty_geometry()
+    geo = join(geo, cube(1))
+    geometry = geo
+    return (geometry,)
 ''', 'NFTest_empty_geometry_join_cube')
     check(len(_nodes(composed, "GeometryNodeJoinGeometry")) == 1, "empty geometry plus cube should join normally")
 
     repeat_group = compile_group('''
-geo = empty_geometry()
-count = input_int("Count", default=3)
-for i in repeat_range(count):
-    piece = transform(cube(0.1), translation=vector(i, 0, 0))
-    geo = join(geo, piece)
-output("Geometry", geo)
+def nf_fixture(count: Int['Count'] = 3):
+    geo = empty_geometry()
+    for i in repeat_range(count):
+        piece = transform(cube(0.1), translation=vector(i, 0, 0))
+        geo = join(geo, piece)
+    geometry = geo
+    return (geometry,)
 ''', 'NFTest_empty_geometry_repeat_accumulator')
     check(len(_nodes(repeat_group, "GeometryNodeRepeatInput")) == 1, "expected one Repeat Input")
     repeat_outputs = _nodes(repeat_group, "GeometryNodeRepeatOutput")
@@ -206,8 +221,10 @@ output("Geometry", geo)
 
 def test_point_static_and_runtime_position_forms():
     static_group = compile_group('''
-geo = point(vector(1, 2, 3))
-output("Geometry", geo)
+def nf_fixture():
+    geo = point(vector(1, 2, 3))
+    geometry = geo
+    return (geometry,)
 ''', 'NFTest_point_static_position')
     vertices, edges, polygons = _evaluated_mesh(static_group, "NFTestPointStaticEval")
     check(_same_positions(vertices, [(1, 2, 3)]), f"point() evaluated vertices were {vertices}")
@@ -215,8 +232,10 @@ output("Geometry", geo)
     check(polygons == [], "point() should not create polygons")
 
     runtime_group = compile_group('''
-geo = point(position())
-output("Geometry", geo)
+def nf_fixture():
+    geo = point(position())
+    geometry = geo
+    return (geometry,)
 ''', 'NFTest_point_runtime_position')
     check(_nodes(runtime_group, "GeometryNodeMeshLine"), "point(position()) should create a Mesh Line source")
     set_positions = _nodes(runtime_group, "GeometryNodeSetPosition")
@@ -226,8 +245,10 @@ output("Geometry", geo)
 
 def test_line_static_and_runtime_endpoint_forms():
     static_group = compile_group('''
-geo = line(vector(0, 0, 0), vector(1, 2, 3))
-output("Geometry", geo)
+def nf_fixture():
+    geo = line(vector(0, 0, 0), vector(1, 2, 3))
+    geometry = geo
+    return (geometry,)
 ''', 'NFTest_line_static_endpoints')
     curve_lines = _nodes(static_group, "GeometryNodeCurvePrimitiveLine")
     check(len(curve_lines) == 1, "line() should create one Curve Primitive Line")
@@ -237,10 +258,10 @@ output("Geometry", geo)
     check(polygons == [], "line() should not create polygons")
 
     runtime_group = compile_group('''
-start = input_vector("Start", default=(0, 0, 0))
-end = input_vector("End", default=(1, 0, 0))
-geo = line(start, end)
-output("Geometry", geo)
+def nf_fixture(start: Vector['Start'] = (0, 0, 0), end: Vector['End'] = (1, 0, 0)):
+    geo = line(start, end)
+    geometry = geo
+    return (geometry,)
 ''', 'NFTest_line_runtime_endpoints')
     curve_line = _nodes(runtime_group, "GeometryNodeCurvePrimitiveLine")[0]
     check(_socket_has_link(runtime_group, _input_socket(curve_line, "Start", 0)), "runtime line start should be linked")
@@ -249,8 +270,10 @@ output("Geometry", geo)
 
 def test_point_and_line_join_together():
     group = compile_group('''
-geo = join(point(vector(0, 0, 0)), line(vector(0, 0, 0), vector(0, 0, 1)))
-output("Geometry", geo)
+def nf_fixture():
+    geo = join(point(vector(0, 0, 0)), line(vector(0, 0, 0), vector(0, 0, 1)))
+    geometry = geo
+    return (geometry,)
 ''', 'NFTest_point_line_join')
     check(len(_nodes(group, "GeometryNodeJoinGeometry")) == 1, "point + line should join through Join Geometry")
     check(_nodes(group, "GeometryNodeSetPosition"), "point constructor should feed the join")
@@ -260,9 +283,10 @@ output("Geometry", geo)
 
 def test_point_runtime_vector_input_evaluates_and_updates():
     group = compile_group('''
-pos = input_vector("Pos", default=(1, 2, 3))
-geo = point(pos)
-output("Geometry", geo)
+def nf_fixture(pos: Vector['Pos'] = (1, 2, 3)):
+    geo = point(pos)
+    geometry = geo
+    return (geometry,)
 ''', 'NFTest_point_runtime_vector_input_eval')
     obj, modifier = _evaluated_mesh_object(group, "NFTestPointRuntimeInputEval")
     vertices, edges, polygons = _snapshot_mesh_object(obj)
@@ -279,10 +303,10 @@ output("Geometry", geo)
 
 def test_line_runtime_vector_inputs_evaluate_and_update():
     group = compile_group('''
-start = input_vector("Start", default=(0, 0, 1))
-end = input_vector("End", default=(1, 2, 3))
-geo = line(start, end)
-output("Geometry", geo)
+def nf_fixture(start: Vector['Start'] = (0, 0, 1), end: Vector['End'] = (1, 2, 3)):
+    geo = line(start, end)
+    geometry = geo
+    return (geometry,)
 ''', 'NFTest_line_runtime_vector_input_eval')
     wrapper = _curve_to_mesh_wrapper(group, "NFTestLineRuntimeInputEval")
     obj, modifier = _evaluated_mesh_object(wrapper, "NFTestLineRuntimeInputEval")
@@ -301,36 +325,52 @@ output("Geometry", geo)
 def test_empty_geometry_point_line_negative_cases():
     error_sources = [
         '''
-geo = empty_geometry(1)
-output("Geometry", geo)
+def nf_fixture():
+    geo = empty_geometry(1)
+    geometry = geo
+    return (geometry,)
 ''',
         '''
-geo = empty_geometry(foo=1)
-output("Geometry", geo)
+def nf_fixture():
+    geo = empty_geometry(foo=1)
+    geometry = geo
+    return (geometry,)
 ''',
         '''
-geo = point()
-output("Geometry", geo)
+def nf_fixture():
+    geo = point()
+    geometry = geo
+    return (geometry,)
 ''',
         '''
-geo = point(1)
-output("Geometry", geo)
+def nf_fixture():
+    geo = point(1)
+    geometry = geo
+    return (geometry,)
 ''',
         '''
-geo = line(vector(0, 0, 0))
-output("Geometry", geo)
+def nf_fixture():
+    geo = line(vector(0, 0, 0))
+    geometry = geo
+    return (geometry,)
 ''',
         '''
-geo = line(vector(0, 0, 0), 1)
-output("Geometry", geo)
+def nf_fixture():
+    geo = line(vector(0, 0, 0), 1)
+    geometry = geo
+    return (geometry,)
 ''',
         '''
-geo = join([cube(1), 1])
-output("Geometry", geo)
+def nf_fixture():
+    geo = join([cube(1), 1])
+    geometry = geo
+    return (geometry,)
 ''',
         '''
-geo = join()
-output("Geometry", geo)
+def nf_fixture():
+    geo = join()
+    geometry = geo
+    return (geometry,)
 ''',
     ]
     for index, source in enumerate(error_sources):

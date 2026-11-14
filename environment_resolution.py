@@ -137,6 +137,32 @@ def _resolve_environment_parts(*, capture_local: bool):
             if snapshot_failure is not None:
                 raise snapshot_failure
 
+            # Freeze every package source before discovering or validating any
+            # export; members and later semantic preparation use this revision.
+            from .compiler_identities import ModuleId
+            from .semantic.source_modules import parse_source_module
+            frozen_sources = {}
+            functions_root = manifest.root_for("functions")
+            for record in functions_by_package.get(package_id, ()):
+                source_path = getattr(record, "source_path", None)
+                if source_path is None:
+                    continue
+                if getattr(record, "interface_path", None) is not None:
+                    raise CompileError(f"Unsupported mixed source.nf and interface.py owner: {package_id}/{record.name}")
+                if source_path.suffix != ".nf":
+                    raise CompileError(f"Unsupported legacy package source suffix: {source_path.name}")
+                if functions_root is None:
+                    raise CompileError(f"Package {package_id} has no Functions source root")
+                physical = source_path.resolve()
+                try:
+                    relative = physical.relative_to(functions_root.resolve())
+                except ValueError as exc:
+                    raise CompileError(f"Package Functions source escapes its declared root: {physical}") from exc
+                module_id = ModuleId("PACKAGE", relative.as_posix(), package_id)
+                frozen_sources[record] = parse_source_module(
+                    source_path.read_text(encoding="utf-8"), module_id
+                )
+
             exports: dict[str, PackageCallableExport] = {}
             package_sessions: list[ExtensionOwnerSession] = []
 
@@ -151,6 +177,23 @@ def _resolve_environment_parts(*, capture_local: bool):
                     exports[name] = PackageCallableExport(package_id, name, extension_callable_id=callable_id)
 
             for record in functions_by_package.get(package_id, ()):
+                source_snapshot = frozen_sources.get(record)
+                if source_snapshot is not None:
+                    for name in source_snapshot.definitions:
+                        previous = exports.get(name)
+                        if previous is not None:
+                            prior_record = previous.record
+                            prior_owner = str(prior_record.source_path) if prior_record is not None else str(previous.extension_callable_id)
+                            raise CompileError(
+                                f"Package {package_id} callable {name!r} is exported by both "
+                                f"{prior_owner} and {record.source_path}"
+                            )
+                        exports[name] = PackageCallableExport(
+                            package_id, name, record=record,
+                            definition=source_snapshot.definition_ref(name),
+                            source_snapshot=source_snapshot,
+                        )
+                    continue
                 name = record.name
                 if name in exports:
                     raise CompileError(f"Duplicate package callable {name!r} inside {package_id}")
@@ -185,7 +228,14 @@ def _resolve_environment_parts(*, capture_local: bool):
                 package_version=manifest.version,
                 exports=exports,
             )
-        except (CompileError, OSError, packages.PackageError):
+        except (CompileError, OSError, packages.PackageError) as exc:
+            # Preserve the manifest import reservation. Explicit access to this
+            # package surfaces the captured error instead of "unknown package".
+            package_namespaces[package_id] = ResolvedPackageNamespace(
+                package_id=package_id, import_name=manifest.import_name,
+                package_name=manifest.name, package_version=manifest.version,
+                exports={}, failure=_resolved_failure_from_exception(exc),
+            )
             continue
 
         package_namespaces[package_id] = namespace

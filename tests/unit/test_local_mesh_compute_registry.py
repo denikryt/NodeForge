@@ -69,9 +69,9 @@ def test_explicit_import_creates_canonical_extension_ir_without_user_execution(l
 
     view = environment_resolution._make_compilation_environment()
     source = ('from local import erosion as erosion_alias\n'
-              'geo = input_geometry("Geometry")\n'
+              'geo = cube(1)\n'
               'geo = erosion_alias(geo, amount=2.0)\n'
-              'output("Geometry", geo)\n')
+              'result = geo\n')
     group = _prepare(source, view)
     candidates = [call for call in _all_calls(group.body) if call.target.kind is IRCallableKind.EXTENSION]
     assert len(candidates) == 1
@@ -88,7 +88,7 @@ def test_captured_backend_invokes_exact_source_only_during_trusted_phase(library
     file = _write(library)
 
     view = environment_resolution._make_compilation_environment()
-    group = _prepare('from local import erosion\nsource_geo = input_geometry("Geometry")\ngeo = erosion(source_geo)\noutput("Geometry", geo)', view)
+    group = _prepare('from local import erosion\nsource_geo = cube(1)\ngeo = erosion(source_geo)\nresult = geo', view)
     target = ExtensionCallableId(('local-runtime', catalog._path_key(file)), 'erosion')
     seen = []
 
@@ -111,8 +111,8 @@ def test_managed_runtime_available_without_grant_or_execution(library):
     marker = library / 'executed'
     _write(library, marker=marker)
     view = environment_resolution._make_compilation_environment()
-    _prepare('from local import erosion\ngeo = input_geometry("Geometry")\n'
-             'output(erosion(geo))', view)
+    _prepare('from local import erosion\ngeo = cube(1)\n'
+             'result = erosion(geo)', view)
     assert view.extension_registry._families
     assert not marker.exists()
 
@@ -122,12 +122,13 @@ def test_star_import_excludes_python_and_inherited_explicit_import_is_rejected(l
     _write(library)
 
     view = environment_resolution._make_compilation_environment()
-    _prepare('from local import *\noutput(1.0)', view)
+    with pytest.raises(CompileError, match='star imports are unsupported'):
+        _prepare('from local import *\nresult = cube(1)', view)
     assert not view.extension_registry._families
-    with pytest.raises(CompileError, match='explicit import'):
+    with pytest.raises(CompileError, match='root-only Mesh Compute'):
         _prepare('from local import erosion\n'
-                 'source_geo = input_geometry("Geometry")\ndef nested():\n    return erosion(source_geo)\n'
-                 'output(nested())', environment_resolution._make_compilation_environment())
+                 'source_geo = cube(1)\ndef nested():\n    return erosion(source_geo)\n'
+                 'result = nested()', environment_resolution._make_compilation_environment())
 
 
 def test_selected_owner_snapshots_do_not_import_other_python_sources(library):
@@ -137,7 +138,7 @@ def test_selected_owner_snapshots_do_not_import_other_python_sources(library):
     _write(library, name='other', marker=marker)
 
     env = environment_resolution._make_compilation_environment()
-    _prepare('from local import erosion\nsource_geo = input_geometry("Geometry")\noutput(erosion(source_geo))', env)
+    _prepare('from local import erosion\nsource_geo = cube(1)\nresult = erosion(source_geo)', env)
     assert len(env.extension_registry._sessions) == 1
     assert not marker.exists()
     assert not (library / 'other.py').with_suffix('.pyc').exists()
@@ -148,12 +149,12 @@ def test_recompile_captures_modified_source_without_reusing_implementation(libra
     file = _write(library)
 
     before = environment_resolution._make_compilation_environment()
-    _prepare('from local import erosion\nsource_geo = input_geometry("Geometry")\noutput(erosion(source_geo))', before)
+    _prepare('from local import erosion\nsource_geo = cube(1)\nresult = erosion(source_geo)', before)
     owner = ('local-runtime', catalog._path_key(file))
     old = before.extension_registry.owner_fingerprint(owner)
     file.write_text(file.read_text().replace('2.0', '3.0'))
     after = environment_resolution._make_compilation_environment()
-    _prepare('from local import erosion\nsource_geo = input_geometry("Geometry")\noutput(erosion(source_geo))', after)
+    _prepare('from local import erosion\nsource_geo = cube(1)\nresult = erosion(source_geo)', after)
     assert after.extension_registry.owner_fingerprint(owner) != old
     assert before.extension_registry.owner_fingerprint(owner) == old
 
@@ -166,8 +167,8 @@ def test_qualified_local_python_import_uses_same_canonical_identity(library):
 
     view = environment_resolution._make_compilation_environment()
     group = _prepare('from local.terrain import erosion as terrain_erosion\n'
-                     'geo = input_geometry("Geometry")\n'
-                     'output(terrain_erosion(geo))', view)
+                     'geo = cube(1)\n'
+                     'result = terrain_erosion(geo)', view)
     owner = ('local-runtime', catalog._path_key(file))
     assert group.extension_dependencies[0][0] == owner
     assert view.extension_registry.contains(ExtensionCallableId(owner, 'erosion'))
@@ -180,8 +181,8 @@ def test_member_call_through_directory_alias_rejects_runtime_without_source_lowe
     _write(directory)
 
     with pytest.raises(CompileError, match='explicit from local'):
-        _prepare('from local import terrain as t\ngeo = input_geometry("Geometry")\n'
-                 'output(t.erosion(geo))', environment_resolution._make_compilation_environment())
+        _prepare('from local import terrain as t\ngeo = cube(1)\n'
+                 'result = t.erosion(geo)', environment_resolution._make_compilation_environment())
 
 
 def test_individually_linked_file_requires_registration(library, tmp_path):
@@ -191,8 +192,8 @@ def test_individually_linked_file_requires_registration(library, tmp_path):
         {'path': str(linked), 'label': 'External', 'kind': 'file'},
     ])
     view = environment_resolution._make_compilation_environment()
-    _prepare('from local import erosion\ngeo = input_geometry("Geometry")\n'
-             'output(erosion(geo))', view)
+    _prepare('from local import erosion\ngeo = cube(1)\n'
+             'result = erosion(geo)', view)
     from NodeForge.local_runtime import runtime_source_active
     assert runtime_source_active('local', linked)
     local_sources.unlink_local_source_file(linked)

@@ -17,13 +17,12 @@ def editor_index(tmp_path, monkeypatch):
     local = tmp_path / "local"
     (local / "terrain").mkdir(parents=True)
     (local / "terrain" / "move.nf").write_text(
-        'scale = input_float("Scale XY", default=2.0)\n'
-        'geometry = input_geometry("Geometry")\n'
-        'output("Geometry", geometry)\n', encoding="utf-8"
+        'def move(geometry: Geometry, scale_xy: Float["Scale XY"] = 2.0) -> Geometry:\n'
+        '    return transform(geometry, scale=scale_xy)\n', encoding="utf-8"
     )
     (local / "simple.nf").write_text(
-        'radius = input_float("Radius", default=1.0)\n'
-        'output("Radius", radius)\n', encoding="utf-8"
+        'def radius(radius: Float = 1.0) -> Float:\n'
+        '    return radius\n', encoding="utf-8"
     )
     monkeypatch.setattr("NodeForge.local_sources._catalog_input_paths", lambda: ((local,), ()))
     packages.set_packages_dir_for_tests(tmp_path / "packages")
@@ -42,20 +41,20 @@ def help_at_caret(source, index):
 def test_directory_members_and_import_alias(editor_index):
     """Local directory aliases expose selected members, not arbitrary flat names."""
     index, _ = editor_index
-    hint = help_at_caret('from local import terrain as t\nx = t.mo|', index)
+    hint = help_at_caret('from local import terrain as t\nx = t.move.mo|', index)
     assert [c.label for c in hint.candidates] == ["move"]
-    hint = help_at_caret('from local.terrain import move as go\nx = go(|', index)
+    hint = help_at_caret('from local.terrain.move import move as go\nx = go(|', index)
     assert hint.signatures[0].name == "go"
-    assert [p.keyword for p in hint.signatures[0].parameters] == ["scale_xy", "geometry"]
+    assert [p.keyword for p in hint.signatures[0].parameters] == ["geometry", "scale_xy"]
     assert "scale_xy=" in [c.insert for c in hint.candidates]
 
 
 def test_local_flat_keywords_and_active_parameter(editor_index):
     """Imported Local source labels supply public keywords and call position."""
     index, _ = editor_index
-    hint = help_at_caret('from local import simple\nx = simple(ra|', index)
+    hint = help_at_caret('from local.simple import radius\nx = radius(ra|', index)
     assert [c.insert for c in hint.candidates] == ["radius="]
-    hint = help_at_caret('from local import simple\nx = simple(radius=|', index)
+    hint = help_at_caret('from local.simple import radius\nx = radius(radius=|', index)
     assert hint.active_parameter == 0
     assert not hint.candidates
 
@@ -114,9 +113,9 @@ def test_import_statement_completions(editor_index):
 def test_keyword_accounting_and_string_context(editor_index):
     """Nested keyword arguments cannot mark outer call inputs as already used."""
     index, _ = editor_index
-    hint = help_at_caret('from local import simple\nx = simple(radius=vector(x=1), |', index)
+    hint = help_at_caret('from local.simple import radius\nx = radius(radius=vector(x=1), |', index)
     assert hint.signatures and not hint.candidates
-    hint = help_at_caret('from local import simple\nx = simple("cu|', index)
+    hint = help_at_caret('from local.simple import radius\nx = radius("cu|', index)
     assert not hint.signatures and not hint.candidates
 
 
@@ -133,33 +132,31 @@ def test_typed_single_and_multiple_local_outputs(editor_index):
     """Use semantic output contracts for the selected call, including output order."""
     index, tmp_path = editor_index
     (tmp_path / 'local' / 'two_outputs.nf').write_text(
-        'geo = input_geometry("Geometry")\n'
-        'weight = input_float("Weight", default=2.0)\n'
-        'output("Shape", geo)\n'
-        'output("Weight", weight)\n', encoding='utf-8'
+        'def both(geo: Geometry, weight: Float = 2.0):\n'
+        '    return geo, weight\n', encoding='utf-8'
     )
     index = SymbolIndex(resolve_environment())
-    hint = help_at_caret('from local import two_outputs\nx = two_outputs(|', index)
+    hint = help_at_caret('from local.two_outputs import both\nx = both(|', index)
     assert [(item.name, item.typ) for item in hint.signatures[0].outputs] == [
-        ('Shape', 'Geometry'), ('Weight', 'Float')
+        ('Geo', '?'), ('Weight', '?')
     ]
-    # Repeated requests must reuse the semantic result rather than prepare again.
-    assert len(index._typed_cache) == 1
-    help_at_caret('from local import two_outputs\nx = two_outputs(ge|', index)
-    assert len(index._typed_cache) == 1
+    # Cached snapshots key on the source path and selected definition.
+    assert len(index._source_cache) == 1
+    help_at_caret('from local.two_outputs import both\nx = both(ge|', index)
+    assert len(index._source_cache) == 1
 
 
 def test_source_fallback_keeps_named_outputs_if_analysis_fails(editor_index):
     """Broken source dependencies must not suppress the signature and output labels."""
     index, tmp_path = editor_index
     (tmp_path / 'local' / 'broken.nf').write_text(
-        'x = input_float("X")\noutput("First", non_existing_function(x))\n'
-        'output("Second", x)\n', encoding='utf-8'
+        'def broken(x: Float):\n'
+        '    return non_existing_function(x), x\n', encoding='utf-8'
     )
     index = SymbolIndex(resolve_environment())
-    hint = help_at_caret('from local import broken\nx = broken(|', index)
+    hint = help_at_caret('from local.broken import broken\nx = broken(|', index)
     assert [(item.name, item.typ) for item in hint.signatures[0].outputs] == [
-        ('First', '?'), ('Second', '?')
+        ('Value 1', '?'), ('X', '?')
     ]
 
 

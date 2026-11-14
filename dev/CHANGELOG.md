@@ -537,3 +537,170 @@ lifecycle.
 - Added focused pure-Python and Blender 5.2 UI/insertion regression checks.
 - Refined Text Editor popup: one vertical row per parameter, bounded layout, active argument, and typed results including multiple outputs; source output types reuse semantic callable preparation on demand.
 - Include Text Editor modules in the Extension release ZIP and adapt package-backed completion tests to the current package installer.
+
+## 0.73.1
+
+- Introduced single-revision `.nf` module snapshots with canonical module/definition identities, declaration collection, and preserved source offsets for semantic preparation.
+
+## 0.73.2
+
+- Resolve source-module declarations and forward function identities before runtime lowering; preserve compile-time residualization as the authority for effective executable statements.
+
+## 0.74.0
+
+- Added direct AST compilation of typed function parameters with labels, compile-time defaults, requiredness, stable socket identities and prefix panel projection. Typed Semantic IR now distinguishes absent defaults from native socket fallback values.
+
+## 0.75.0
+
+- Compiled local FunctionDef bodies directly from AST into typed IR and nested group interface declarations, with mandatory terminal return, deterministic multi-output names, checked return annotations and no implicit function geometry interface.
+- Reused the existing semantic lowering engine with typed initial parameter bindings rather than generating and reparsing input/output DSL.
+
+## 0.76.0
+
+- Added one logical source parameter binder for local and imported module calls, with exact parameter-keywords, declared requiredness, optional omitted inputs and physical-panel index independence.
+- Source-local calls now use declared optional defaults and typed signature specialization with AST-based function interfaces.
+
+## 0.77.0
+
+- Added canonical source-definition alias bindings and a resolved intra-module call graph for entry selection, forward calls, compile-time-pruned branches and direct/mutual recursion diagnostics.
+- Reused canonical lexical identities for aliased source calls in the semantic frontend, including function-local aliases.
+
+## 0.78.0
+
+- Added file-module and exact definition-member imports for Local .nf sources, including qualified directories, aliases, one per-attempt source snapshot and early member diagnostics.
+- Removed file-as-callable and Local star-import semantics while retaining explicitly selected Local Mesh Compute Python runtime imports.
+
+## 0.79.0
+
+- Freeze package `.nf` file-module snapshots before function export discovery and expose every top-level function, including underscore-prefixed declarations, as a separate member of the package Functions namespace.
+- Resolve exported module definitions through immutable source identities, reject collisions with other modules or Extension API v2 owners, and surface failed package discovery on explicit member access.
+
+## 0.80.0
+
+- Added canonical `MODULE_DEF` function identity and physical shared/unique owner scope for individual `.nf` definitions.
+- Connected local and imported package function calls to direct AST semantic preparation and the existing transaction-backed Blender `FunctionMaterializer`; nested groups update in-place.
+- Added module-local lexical compilation for imported functions, reusing captured `.nf` source snapshots without executing imported top-level statements.
+
+## 0.81.0
+
+- Centralized canonical function-group candidate lookup for module definitions, local helpers and library entries with strict duplicate-owner rejection.
+- Validate explicitly selected source-reload targets against all live eligible groups of the same full source/instance identity before compilation or mutation.
+- Preserve legal distinct `__unique__` instance owner keys; copied Blender ID metadata is ambiguous until explicitly detached.
+
+## 0.82.0
+
+- Added an explicit backend action to detach a user-selected Blender single-user function-group copy from NodeForge canonical source ownership.
+- Detachment strips only lookup identity properties for module, library and local-helper owners; graph content, other provenance and resource-safety metadata are preserved across `.blend` reopen.
+- Require a second eligible group retaining the same complete owner identity so detachment cannot inadvertently act on a lone canonical group.
+
+## 0.82.1
+
+- Preserve the full source owner and unique instance key through selected library Reload of Local, Examples, and package Functions groups, including in-place publication and unchanged-source updates.
+- Validate prepared owner scope, definition identity, instance key and physical datablock pointer before transaction commit, preventing unique instances from being inadvertently reclassified as shared.
+
+## 0.83.0
+
+- Added an internal unified initial-composition route that lowers a single source-module snapshot directly into an existing base GeometryNodeTree, without creating an intermediary root or changing user-owned interfaces.
+- Executable top-level statements can call forward-declared typed functions and create ordinary level-zero nodes beside nested reusable function group nodes.
+- Rejected legacy root input/output declarations and implicit parameter creation during direct composition; deferred public exposure until attempt-local rollback and runtime safety checks.
+
+## 0.84.0
+
+- Place every zero-incoming source definition as an ordinary Group Node in the existing base tree when effective module composition is empty.
+- Materialize transitive nested definitions through shared backend ownership; unconnected required entry inputs are retained, while executable sources suppress automatic entries.
+- Reuse the final compile-time constant snapshot for independently prepared definition-only functions.
+
+## 0.85.0
+
+- Made one initial direct-composition attempt failure-atomic: newly inserted base-tree nodes are removed before rolling back nested group updates and generated resources through the existing transaction.
+- Preserved exact preexisting level-zero nodes, links and interface during late failures in mixed source and definition-only entry placement.
+- Kept cleanup ephemeral to one attempt without introducing managed level-zero node ownership, reconciliation or repeated-compilation semantics.
+
+## 0.86.0
+
+- Introduced explicit ROOT and NESTED semantic runtime roles: all source function bodies are NESTED regardless of call-stack depth; used root-only Mesh Compute callbacks are rejected there while unused imports remain lazy.
+- Added preflight of effective level-zero IR that rejects all physical Extension API v2 calls before their potentially destructive backend runs against an existing user graph.
+- Retained nested physical extensions inside transaction-owned Function Node Groups; direct Mesh Compute installation without a root modifier contract is rejected.
+
+## 0.87.0
+
+- Routed Compile Script into the existing base Geometry Nodes tree through the unified direct-composition operation; removed the legacy root-group UI compilation/update action.
+- Added explicit Detach Selected Copy for eligible NodeForge-managed Function Node Group copies and retained source Reload for catalog-backed functions.
+- Updated the editor index for module-qualified definitions, exact signature keywords, annotation labels/defaults, and per-definition package exports.
+
+## 0.87.1
+
+- Completed unified `.nf` catalog Add routing and final source/definition regression coverage for Issue #48.
+- Migrated active package lifecycle and frontend tests away from obsolete file-as-function assumptions; retained Blender interface and transaction tests with new typed function coverage.
+- Documented unified compilation, source-owner detachment, in-place function updates, and the root-only Mesh Compute follow-up boundary.
+
+## 0.88.0
+
+- Made explicit `NFType` annotations mandatory for all `.nf` function parameters, including unused definitions and parameters with compile-time defaults; removed parameter inference from bodies, defaults and arguments.
+- Preserved typed `range(count)` Repeat Zone lowering and declaration-stable shared function identity, with captured defining-module defaults and source-located annotation errors.
+- Unified module compile-time state for reachability, repaired selected `MODULE_DEF` Reload identity and rollback, and retired public legacy generated-root compilation.
+- Migrated source/catalog and Blender regression fixtures to the unified DSL; Local/Examples Add now resolves exact function definitions and reuses the selected environment.
+- Retained the separate unresolved root-only Mesh Compute migration and existing Blender addon lifecycle baseline failure.
+
+## 0.88.1
+
+- Include effective typed function IR in reusable-group freshness fingerprints so changes to used module constants update existing groups in place without rebuilding for unrelated source edits.
+- Track source-ordered compile-time state through nested conditionals in function call-graph analysis, aligning entry placement and recursion detection with reachable function bodies.
+- Add focused Python and Blender regressions for constant-only reload, shared-group reuse, nested reachability and runtime loop-state preservation.
+
+## 0.88.2
+
+- Respect lexical loop-index bindings over same-named module compile-time constants during call-graph analysis and Repeat Zone lowering.
+- Analyze retained compile-time loops with their actual iteration values, matching physical unrolling and restoring the enclosing binding after the loop.
+- Add semantic and Blender execution regressions for runtime and compile-time loop shadowing, including nested loops and source-owner independent entry selection.
+
+## 0.88.3
+
+- Carry compile-time assignments from one statically unrolled loop iteration to the next when resolving intra-module function call edges and definition-only entries.
+- Preserve the loop index's lexical binding and pass the final compile-time state to following statements, matching function-body lowering.
+- Add positive and negative semantic/Blender regressions for cross-iteration calls, nested static loops, recursion, unreachable callees, and numerical evaluation.
+
+## 0.89.0
+
+- Isolated supported mutable compile-time state per function and speculative runtime control-flow path; analysis of unknown loops accounts for zero and multiple iterations while static loops continue sequentially.
+- Made parameter defaults use the defining module's final captured compile-time revision and validated every selected source definition before initial composition or source Reload, without eagerly materializing unused groups.
+- Unified lexical function scope across call-graph analysis and runtime lowering: local parameters/targets shadow outer functions/imports/constants; read-before-assignment and non-callable local calls fail with source locations; loop indices retain temporary scope.
+- Added physical Blender regressions for source isolation, declaration preflight, group identity and final defaults, including local/shared/unique Reload.
+- Made NodeForge add-on/editor registration and unregistration idempotent with partial-registration rollback, while preserving generated user resources.
+- Kept root-only Mesh Compute migration and level-zero selective reconciliation outside this change.
+
+## 0.89.1
+
+- Resolve function-local source aliases using lexical ownership: copying a numeric parameter or ordinary local cannot silently become a reference to an identically named module function.
+- Keep validated source-function aliases and forward definitions working; reject calls to copied non-callable locals before Blender publication. Add physical value/rollback and call-graph regression coverage.
+
+
+## 0.89.2
+
+- Replace the source-module call-graph's bespoke recursion DFS with standard-library `graphlib.TopologicalSorter` cycle detection while preserving source-level caller-to-callee diagnostics and definition-only entry selection.
+- Add a directed three-function recursion regression to guard the displayed call-chain orientation.
+
+## 0.89.3
+
+- Removed unreachable generated-local callable preparation mode, retaining the active library and source-definition preparation paths and cache/recursion checks.
+- Removed unused name-only catalog materialization wrappers; public compiler selection continues to resolve exact owner records before group construction.
+- Removed unreferenced Blender generated-ID kind guessing; explicit kind validation, rollback and resource ownership remain unchanged, with additional positive/negative Blender regression tests.
+
+## 0.90.0
+
+- Added Update Script for the currently opened eligible base Geometry Nodes tree, replacing all ordinary root nodes in place while retaining the physical root, interface and structural I/O. Compile remains append-only.
+- Reused typed direct-composition preparation/lowering with caller-owned nested group transactions; staged new root nodes once before destructive cutover, with conservative boundary-link and layout transfer and invocation-local best-effort recovery.
+- Added Blender UI/Undo-safe error reporting, nested editor and private/authoritative root guards, and ordinary root-node animation rejection. Kept both Reload actions and the registered Detach recovery operator, removing its panel button.
+- Added real Blender 5.2 root replacement, error-injection, API and editor regression coverage.
+
+## 0.90.1
+
+- Reject root ordinary-node animation referenced by NLA strip Actions, including when no active Action is assigned.
+- Restore structural Group I/O Frame parents and positions on root Update failure where possible; classify incomplete restoration as Undo-requiring.
+- Add Blender 5.2 regressions for NLA guards, pre-cutover I/O detachment failures, late Frame recovery and UI Undo signalling.
+
+## 0.90.2
+
+- Use Blender-generated node RNA paths to detect root ordinary-node animation without custom name parsing.
+- Record and reconnect root boundary links in their original output-to-input direction, retaining compatibility and occupied-input checks.
+- Cover escaped node names, structural-node path isolation, and directed boundary-link conflicts with Blender regressions.

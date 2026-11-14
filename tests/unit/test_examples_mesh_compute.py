@@ -40,7 +40,7 @@ def write_python(root, relative='terrain/erosion.py', *, marker=None):
 
 
 def root_code(namespace='examples.terrain'):
-    return f'from {namespace} import erosion\ngeo = input_geometry("Geometry")\noutput(erosion(geo))\n'
+    return f'from {namespace} import erosion\ngeo = cube(1)\nresult = erosion(geo)\n'
 
 
 def test_ast_only_discovery_executes_no_unselected_python(example_root):
@@ -62,14 +62,14 @@ def test_nested_examples_dsl_and_python_share_one_directory_snapshot(example_roo
     """Keep nested DSL calls and explicit Python runtimes selectable in one catalog."""
     runtime = write_python(example_root)
     script = example_root / 'terrain' / 'offset.nf'
-    script.write_text('x = input_float("X")\noutput(x + 1.0)\n', encoding='utf-8')
+    script.write_text('def offset(value: Float) -> Float:\n    return value + 1.0\n', encoding='utf-8')
 
     view = environment_resolution._make_compilation_environment()
     examples = view.catalog('examples')
     assert examples.names() == frozenset()
     assert examples.select_import('examples.terrain', 'erosion').source_path == runtime.resolve()
     assert examples.select_import('examples.terrain', 'offset').source_path == script.resolve()
-    _prepare('from examples import terrain\noutput(offset(1.0))\n', view)
+    _prepare('from examples.terrain.offset import offset\nresult = offset(1.0)\n', view)
 
     _prepare(root_code(), environment_resolution._make_compilation_environment())
 
@@ -89,15 +89,15 @@ def test_directory_alias_is_not_executable_and_nonroot_import_fails(example_root
     write_python(example_root)
 
     with pytest.raises(CompileError, match='explicit from examples'):
-        _prepare('from examples import terrain as t\ngeo = input_geometry("Geometry")\n'
-                 'output(t.erosion(geo))\n', environment_resolution._make_compilation_environment())
-    with pytest.raises(CompileError, match='explicit import'):
+        _prepare('from examples import terrain as t\ngeo = cube(1)\n'
+                 'result = t.erosion(geo)\n', environment_resolution._make_compilation_environment())
+    with pytest.raises(CompileError, match='root-only Mesh Compute'):
         _prepare('from examples.terrain import erosion\n'
-                 'geo = input_geometry("Geometry")\n'
+                 'geo = cube(1)\n'
                  'def inner():\n    return erosion(geo)\n'
-                 'output(inner())\n', environment_resolution._make_compilation_environment())
+                 'result = inner()\n', environment_resolution._make_compilation_environment())
     env = environment_resolution._make_compilation_environment()
-    _prepare('from examples import *\noutput(1.0)\n', env)
+    _prepare('from examples import *\nresult = cube(1)\n', env)
     assert not env.extension_registry._families
 
 
@@ -133,7 +133,7 @@ def test_source_edit_and_removal_use_fresh_root_snapshots(example_root):
 def test_top_level_python_is_explicit_only_not_legacy_wildcard(example_root):
     """A root-level Python declaration never grows or shadows legacy star exports."""
     file = write_python(example_root, relative='erosion.py')
-    (example_root / 'noise.nf').write_text('output(1.0)\n', encoding='utf8')
+    (example_root / 'noise.nf').write_text('result = cube(1)\n', encoding='utf8')
     view = environment_resolution._make_compilation_environment()
     selected = view.catalog('examples')
     assert selected.names() == frozenset({'noise'})
@@ -141,7 +141,7 @@ def test_top_level_python_is_explicit_only_not_legacy_wildcard(example_root):
 
     _prepare(root_code('examples'), environment_resolution._make_compilation_environment())
     with pytest.raises(CompileError, match='Unknown|not importable|not defined|Unsupported'):
-        _prepare('from examples import *\ngeo = input_geometry("Geometry")\noutput(erosion(geo))\n',
+        _prepare('from examples import *\ngeo = cube(1)\nresult = erosion(geo)\n',
                  environment_resolution._make_compilation_environment())
 
 

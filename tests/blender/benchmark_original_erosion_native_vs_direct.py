@@ -26,7 +26,7 @@ from NodeForge.blender import mesh_compute_runtime as rt
 from NodeForge.blender.mesh_compute_runtime import EvaluatedMeshCompute
 from NodeForge.blender.mesh_compute_transports import direct_mesh_update
 from NodeForge.tests.blender.compare_mesh_compute_original_erosion import (
-    EXAMPLES, edited_source, create_owner, evaluated_output, LAYERS, parity_violations, compare_outputs,
+    EXAMPLES, edited_source, typed_reference_source, create_owner, evaluated_output, LAYERS, parity_violations, compare_outputs,
 )
 
 
@@ -115,7 +115,7 @@ def run(args):
 
             bpy.data.materials.new('Erosion Terrain')
             source = edited_source((EXAMPLES / 'erosion_numpy.nf').read_text(), args.side, args.steps, args.preset)
-            reference_source = edited_source(args.reference_nf.read_text(), args.side, args.steps, args.preset)
+            reference_source = typed_reference_source(edited_source(args.reference_nf.read_text(), args.side, args.steps, args.preset))
             if args.mode == 'native_gn':
                 owner = create_owner('Original GN erosion')
                 compile_start = perf_counter_ns()

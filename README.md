@@ -4,7 +4,7 @@
 
 > **Disclaimer:** NodeForge is a vibe-coded project.
 
-NodeForge is a Blender add-on for describing Geometry Nodes logic in a Python-like language. The source is compiled into a native Geometry Nodes group, so the result inside Blender is an ordinary node graph with the expected sockets, links and parameters.
+NodeForge is a Blender add-on for describing Geometry Nodes logic in a Python-like language. Executable statements create ordinary nodes directly in the current base Geometry Nodes tree. User-defined functions compile to reusable nested Geometry Nodes groups with typed inputs and outputs.
 
 ## Installation
 
@@ -25,61 +25,66 @@ If you used the earlier ZIP add-on, disable it before enabling the Extension. Yo
 1. Select a mesh object and open the **Geometry Node Editor**.
 2. Click **New** to create a Geometry Nodes modifier and node tree for the object.
 3. Press `N` and open the **NodeForge** tab in the sidebar.
-4. Open a **Text Editor**, click **New**, and enter this script:
+4. Open a **Text Editor**, click **New**, and enter this `.nf` script:
 
 ```python
-size = input_float("Size", default=2.0)
-geo = cube(size=size)
-output("Geometry", geo)
+def make_cube(size: Float["Size"] = 2.0) -> Geometry:
+    return cube(size)
 ```
 
 5. Return to the NodeForge sidebar and select the new text in **Text Script**.
-6. Click **Compile Script**. NodeForge adds the generated group node to the current Geometry Nodes tree.
-7. Connect the generated node's **Geometry** output to the **Group Output** node to display the cube.
+6. Click **Compile Script**. NodeForge places a `make_cube` Group Node in the existing base Geometry Nodes tree; its implementation lives in a nested node group.
+7. Connect the Group Node's **Value** output to the existing **Group Output** geometry input.
 
-To change the generated group, edit the text, select the generated group node, and click **Update Selected NodeGroup**. NodeForge recompiles the script into the same node group and preserves compatible links and input values.
+To compose nodes directly instead, write executable top-level expressions such as `geo = cube(2)`. Calls to declared functions create Group Nodes alongside ordinary nodes. **Compile Script** appends nodes to the open base tree. **Update Script** compiles the currently selected Text and replaces all ordinary nodes in that same root, including manually created Group Nodes. The physical root, interface, Group Input/Output nodes and modifier references remain intact. Neither action automatically connects root inputs or outputs.
+
+To update an existing root, open its base tree in the Geometry Nodes editor (or pin an editable base tree), select the new Text in **Text Script**, and click **Update Script**. Each invocation uses the currently selected Text; there is no saved Text-to-root association. Update carries over compatible, unambiguous links to structural Group Input/Output and node positions when shapes match. Ambiguous or incompatible boundary edges are skipped and reported. Other manual links between ordinary nodes are replaced by the compiled graph. Repeated Update replaces rather than accumulates nodes. A nested group being edited must be closed before either script action runs.
+
+Update stages new nodes in the existing root and removes the old ordinary graph after compilation. Failures after nested materialization use local, best-effort recovery; shared nested function-group changes are not guaranteed to roll back completely. Ordinary root-node animation, including FCurves stored in NLA strips, blocks Update; structural Group Input/Output animation remains allowed. When recovery fails to restore the structural I/O Frame hierarchy, Update reports incomplete restoration and retains an Undo step. A manual nested Group datablock left without users can disappear after saving and reopening the `.blend`.
+
+An existing generated function group is updated in place when its canonical source definition is rebuilt. To make an independent copy, use Blender **Make Single User** and select the copied Group Node. The registered recovery operator `bpy.ops.nodeforge.detach_selected_source_owner()` can then remove its copied source ownership metadata; the Detach button is not shown in the N-panel.
 
 See the [Get Started guide](https://denikryt.github.io/NodeForgeDocs/latest/GET_STARTED/) for the complete beginner workflow.
 
 ## The language at a glance
 
-A small script can mix group inputs, ordinary expressions, built-in Geometry Nodes wrappers, local functions, and direct access to Blender nodes:
+A module can mix function definitions, imports and ordinary executable statements:
 
 ```python
-size = input_float("Size", default=1.0)
-gap = input_float("Gap", default=0.0)
+def move_x(
+    geometry: Geometry,
+    x_shift: Float["X Shift"] = 0.0
+) -> Geometry["Geometry"]:
+    return transform(geometry, translation=vector(x_shift, 0, 0))
 
-half_spacing = (size + gap) / 2.0
+def cube_pair(
+    left: Float["Left"] = -2.0,
+    right: Float["Right"] = 2.0
+) -> Geometry['Cube Pair']:
+    left_cube = move_x(cube(1.0), left)
+    right_cube = move_x(cube(1.0), right)
 
-def move_x(geometry: Geometry, x_shift: Float):
-    return transform(
-        geometry,
-        translation=vector(x_shift, 0, 0),
-    )
+    pair = join([left_cube, right_cube])
+    return pair
 
-left = move_x(cube(size=size), -half_spacing)
-right = move_x(cube(size=size), half_spacing)
+pair = cube_pair()
 
-geometry = join([left, right])
-
-geometry = node(
-    "GeometryNodeMergeByDistance",
-    inputs={
-        "Geometry": geometry,
-        "Distance": 0.001,
-    },
-    output="Geometry",
+sub_pair = node(
+    "GeometryNodeSubdivisionSurface",
+    inputs={"Mesh": pair, "Level": 2},
+    output="Mesh",
     typ=Geometry,
 )
 
-output("Geometry", geometry)
+center = cube(0.5)
+combined = join([sub_pair, center])
 ```
 
-`input_*` declarations become node-group input sockets and return values that can be used like variables. Operators such as `+`, `/`, and unary `-` are type-checked and materialized as native Geometry Nodes operations. Built-ins such as `cube(...)`, `join(...)`, and `transform(...)` provide compact wrappers around common Geometry Nodes functionality.
+Declarations are visible before their textual definition. Parameters use exact Python identifiers as keyword names; `Float["X Shift"]` changes the Blender display label, not the keyword `x_shift`. Every parameter must have an explicit type annotation, even if it has a default. Function-local assignments shadow same-named module definitions and constants; a local read or call before assignment is an error. A parameter without `=` is required in explicit calls, while omitted optional parameters use their declared defaults.
 
-A script-local `def` is compiled as a reusable function Node Group. In the example above, both calls to `move_x(...)` use that function group while the two cubes move symmetrically away from the world origin as `Gap` increases.
+When a module has no executable top-level statements, **Compile Script** automatically places the functions that are not called by other definitions in that same module. All functions, including names beginning with `_`, remain importable.
 
-`node(...)` is the universal low-level form for Blender nodes that do not have a dedicated NodeForge wrapper. Here it creates **Merge by Distance** directly while the rest of the script stays in the higher-level DSL.
+`node(...)` is the universal low-level form for Blender nodes without a dedicated NodeForge wrapper. It creates an ordinary Blender node, which can be combined with typed function calls and other expressions.
 
 The language is intended to make procedural logic easier to express and maintain as the graph grows. Mathematical relationships can be written directly as expressions, while Geometry Nodes operations remain visible through functions that fit naturally into Python-like code. 
 
@@ -96,18 +101,19 @@ Installed package APIs are imported through the package namespace:
 ```python
 from packages import math
 
-angle = input_float("Angle", default=0.0)
-value = math.sin(angle)
-output("Value", value)
+def sine(x: Float) -> Float:
+    return math.sin(x)
 ```
 
 Reusable `.nf` files from the Local library, including folders added from disk with **Add Folder...**, can be imported and called from other scripts:
 
 ```python
 from local import erosion
+# erosion.nf exposes declarations, for example:
+# result = erosion.apply(geometry)
 ```
 
-See [Local imports](https://denikryt.github.io/NodeForgeDocs/latest/SYNTAX/#local) for the supported import forms.
+See [Unified `.nf` source reference](docs/UNIFIED_NF.md) for current source syntax, Local imports, function ownership and direct-composition semantics.
 
 ## Coverage
 
@@ -130,7 +136,7 @@ typed Semantic IR
     ↓
 Blender lowering and materialization
     ↓
-GeometryNodeTree
+existing base GeometryNodeTree + nested function GeometryNodeTrees
 ```
 
 ### Learn more in the documentation:

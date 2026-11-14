@@ -13,21 +13,21 @@ def _repeat_output(group):
 
 def test_repeat_range_mixed_geometry_vector_float_state_order():
     group = compile_group(
-        """
-geo = cube(0.1)
-pos = vector(0, 0, 0)
-angle = input_float("Angle", default=45)
-count = input_int("Count", default=4)
-for i in repeat_range(count):
-    next_pos = pos + vector(1, 0, 0)
-    piece = transform(cube(0.05), translation=next_pos)
-    geo = join(geo, piece)
-    pos = next_pos
-    angle = -angle
-output("Geometry", geo)
-output("Position", pos)
-output("Angle", angle)
-""",
+        '''
+def nf_fixture(angle: Float['Angle'] = 45, count: Int['Count'] = 4):
+    geo = cube(0.1)
+    pos = vector(0, 0, 0)
+    for i in repeat_range(count):
+        next_pos = pos + vector(1, 0, 0)
+        piece = transform(cube(0.05), translation=next_pos)
+        geo = join(geo, piece)
+        pos = next_pos
+        angle = -angle
+    geometry = geo
+    final_position = pos
+    angle = angle
+    return (geometry, final_position, angle,)
+''',
         "NFTest_repeat_range_mixed_state",
     )
 
@@ -48,20 +48,20 @@ output("Angle", angle)
 
 def test_repeat_range_geometry_branch_merge_uses_geometry_switch():
     group = compile_group(
-        """
-geo = cube(0.1)
-flag = input_bool("Flag", default=True)
-count = input_int("Count", default=3)
-for i in repeat_range(count):
-    if flag:
-        geo = transform(geo, translation=vector(1, 0, 0))
-        flag = False
-    else:
-        geo = geo
-        flag = flag
-output("Geometry", geo)
-output("Flag", flag)
-""",
+        '''
+def nf_fixture(flag: Bool['Flag'] = True, count: Int['Count'] = 3):
+    geo = cube(0.1)
+    for i in repeat_range(count):
+        if flag:
+            geo = transform(geo, translation=vector(1, 0, 0))
+            flag = False
+        else:
+            geo = geo
+            flag = flag
+    geometry = geo
+    flag = flag
+    return (geometry, flag,)
+''',
         "NFTest_repeat_range_geometry_branch",
     )
 
@@ -72,27 +72,31 @@ output("Flag", flag)
 
 def test_repeat_range_existing_scalar_vector_bool_still_compile():
     compile_group(
-        """
-x = 0
-for i in repeat_range(5):
-    if x < 3:
-        x = x + 1
-    else:
-        x = x
-output("x", x)
-""",
+        '''
+def nf_fixture():
+    x = 0
+    for i in repeat_range(5):
+        if x < 3:
+            x = x + 1
+        else:
+            x = x
+    x = x
+    return (x,)
+''',
         "NFTest_repeat_range_scalar_existing",
     )
 
 
 def test_compile_time_range_with_existing_state_does_not_create_repeat_zone():
     group = compile_group(
-        """
-geo = cube(1)
-for i in range(3):
-    geo = transform(geo, translation=vector(0.1, 0, 0))
-output("Geometry", geo)
-""",
+        '''
+def nf_fixture():
+    geo = cube(1)
+    for i in range(3):
+        geo = transform(geo, translation=vector(0.1, 0, 0))
+    geometry = geo
+    return (geometry,)
+''',
         "NFTest_compile_time_range_existing_geometry_state",
     )
     check(len(_nodes(group, "GeometryNodeRepeatInput")) == 0, "compile-time range unexpectedly created Repeat Input")
@@ -100,79 +104,94 @@ output("Geometry", geo)
 
 
 def test_range_with_runtime_count_points_to_repeat_range():
-    expect_compile_error(
-        """
-geo = cube(1)
-steps = input_int("Steps", default=3)
-for i in range(steps):
-    geo = transform(geo, translation=vector(0.1, 0, 0))
-output("Geometry", geo)
-""",
-        "NFTest_range_runtime_count_error",
+    group = compile_group(
+        '''
+def nf_fixture(steps: Int['Steps'] = 3):
+    geo = cube(1)
+    for i in range(steps):
+        geo = transform(geo, translation=vector(0.1, 0, 0))
+    geometry = geo
+    return (geometry,)
+''',
+        "NFTest_range_runtime_count_int",
     )
+    check(len(_nodes(group, "GeometryNodeRepeatInput")) == 1,
+          "runtime range(Int) should lower to a Repeat Zone")
 
 
 def test_repeat_range_state_type_errors_are_controlled():
     expect_compile_error(
-        """
-geo = cube(1)
-for i in repeat_range(3):
-    geo = 1
-output("Geometry", geo)
-""",
+        '''
+def nf_fixture():
+    geo = cube(1)
+    for i in repeat_range(3):
+        geo = 1
+    geometry = geo
+    return (geometry,)
+''',
         "NFTest_repeat_range_geometry_to_float_error",
     )
     expect_compile_error(
-        """
-x = 1
-for i in repeat_range(3):
-    x = cube(1)
-output("x", x)
-""",
+        '''
+def nf_fixture():
+    x = 1
+    for i in repeat_range(3):
+        x = cube(1)
+    x = x
+    return (x,)
+''',
         "NFTest_repeat_range_float_to_geometry_error",
     )
 
 
 def test_repeat_range_rejects_repeat_socket_name_collisions():
     expect_compile_error(
-        """
-Iteration = 0
-for i in repeat_range(3):
-    Iteration = Iteration + 1
-output("Iteration", Iteration)
-""",
+        '''
+def nf_fixture():
+    Iteration = 0
+    for i in repeat_range(3):
+        Iteration = Iteration + 1
+    iteration = Iteration
+    return (iteration,)
+''',
         "NFTest_repeat_range_iteration_socket_collision",
     )
     expect_compile_error(
-        """
-Iterations = 0
-for i in repeat_range(3):
-    Iterations = Iterations + 1
-output("Iterations", Iterations)
-""",
+        '''
+def nf_fixture():
+    Iterations = 0
+    for i in repeat_range(3):
+        Iterations = Iterations + 1
+    iterations = Iterations
+    return (iterations,)
+''',
         "NFTest_repeat_range_iterations_socket_collision",
     )
 
 
 def test_repeat_range_rejects_index_name_as_state():
     expect_compile_error(
-        """
-i = 0
-for i in repeat_range(3):
-    i = i + 1
-output("i", i)
-""",
+        '''
+def nf_fixture():
+    i = 0
+    for i in repeat_range(3):
+        i = i + 1
+    i = i
+    return (i,)
+''',
         "NFTest_repeat_range_index_state_collision",
     )
 
 def test_repeat_range_rejects_index_repeat_socket_name_collision():
     expect_compile_error(
-        """
-x = 0
-for Iteration in repeat_range(3):
-    x = Iteration
-output("x", x)
-""",
+        '''
+def nf_fixture():
+    x = 0
+    for Iteration in repeat_range(3):
+        x = Iteration
+    x = x
+    return (x,)
+''',
         "NFTest_repeat_range_index_iteration_socket_collision",
     )
 
@@ -216,7 +235,7 @@ def _evaluated_vertices(group, name, input_values=None):
             int_node = wrapper.nodes.new("FunctionNodeInputInt")
             int_node.integer = int(value)
             wrapper.links.new(int_node.outputs["Integer"], group_node.inputs[socket_name])
-        wrapper.links.new(group_node.outputs["Geometry"], group_output.inputs["Geometry"])
+        wrapper.links.new(group_node.outputs[0], group_output.inputs["Geometry"])
         eval_group = wrapper
     modifier.node_group = eval_group
     obj.update_tag()
@@ -235,14 +254,16 @@ def _evaluated_vertices(group, name, input_values=None):
 
 def test_nested_repeat_range_scalar_evaluation_and_zone_count():
     group = compile_group(
-        """
-x = 0
-for i in repeat_range(2):
-    for j in repeat_range(3):
-        x = x + 1
-output("Geometry", point(vector(x, 0, 0)))
-output("x", x)
-""",
+        '''
+def nf_fixture():
+    x = 0
+    for i in repeat_range(2):
+        for j in repeat_range(3):
+            x = x + 1
+    geometry = point(vector(x, 0, 0))
+    x = x
+    return (geometry, x,)
+''',
         "NFTest_nested_repeat_scalar",
     )
 
@@ -255,13 +276,15 @@ output("x", x)
 
 def test_nested_repeat_range_geometry_state_propagates_across_outer_iterations():
     group = compile_group(
-        """
-geo = point(vector(0, 0, 0))
-for i in repeat_range(2):
-    for j in repeat_range(3):
-        geo = transform(geo, translation=vector(1, 0, 0))
-output("Geometry", geo)
-""",
+        '''
+def nf_fixture():
+    geo = point(vector(0, 0, 0))
+    for i in repeat_range(2):
+        for j in repeat_range(3):
+            geo = transform(geo, translation=vector(1, 0, 0))
+    geometry = geo
+    return (geometry,)
+''',
         "NFTest_nested_repeat_geometry",
     )
 
@@ -270,46 +293,51 @@ output("Geometry", geo)
 
 def test_nested_repeat_range_indices_and_runtime_if_scoping():
     group = compile_group(
-        """
-x = 0
-flag = input_bool("Flag", default=True)
-for i in repeat_range(2):
-    for j in repeat_range(3):
-        if flag:
-            x = x + i * 10 + j
-        else:
-            x = x
-    x = x + i
-output("Geometry", point(vector(x, 0, 0)))
-""",
+        '''
+def nf_fixture(flag: Bool['Flag'] = True):
+    x = 0
+    for i in repeat_range(2):
+        for j in repeat_range(3):
+            if flag:
+                x = x + i * 10 + j
+            else:
+                x = x
+        x = x + i
+    geometry = point(vector(x, 0, 0))
+    return (geometry,)
+''',
         "NFTest_nested_repeat_indices_if",
     )
 
     check(_evaluated_vertices(group, "NFTest_nested_repeat_indices_if_eval") == [(37.0, 0.0, 0.0)], "nested index/runtime-if result changed")
 
     expect_compile_error(
-        """
-x = 0
-for i in repeat_range(2):
-    for j in repeat_range(3):
-        x = x + 1
-    x = x + j
-output("x", x)
-""",
+        '''
+def nf_fixture():
+    x = 0
+    for i in repeat_range(2):
+        for j in repeat_range(3):
+            x = x + 1
+        x = x + j
+    x = x
+    return (x,)
+''',
         "NFTest_nested_repeat_inner_index_escape",
     )
 
 
 def test_nested_repeat_range_restores_enclosing_index_after_inner_assignment():
     group = compile_group(
-        """
-x = 0
-for i in repeat_range(2):
-    for j in repeat_range(1):
-        i = i + 10
-    x = x + i
-output("Geometry", point(vector(x, 0, 0)))
-""",
+        '''
+def nf_fixture():
+    x = 0
+    for i in repeat_range(2):
+        for j in repeat_range(1):
+            i = i + 10
+        x = x + i
+    geometry = point(vector(x, 0, 0))
+    return (geometry,)
+''',
         "NFTest_nested_repeat_outer_index_restore",
     )
 
@@ -321,18 +349,19 @@ output("Geometry", point(vector(x, 0, 0)))
 
 def test_nested_repeat_range_restores_branch_local_enclosing_index():
     group = compile_group(
-        """
-x = 0
-flag = input_bool("Flag", default=True)
-for i in repeat_range(2):
-    if flag:
-        for j in repeat_range(1):
-            i = i + 10
-        x = x + i
-    else:
-        x = x + i
-output("Geometry", point(vector(x, 0, 0)))
-""",
+        '''
+def nf_fixture(flag: Bool['Flag'] = True):
+    x = 0
+    for i in repeat_range(2):
+        if flag:
+            for j in repeat_range(1):
+                i = i + 10
+            x = x + i
+        else:
+            x = x + i
+    geometry = point(vector(x, 0, 0))
+    return (geometry,)
+''',
         "NFTest_nested_repeat_branch_outer_index_restore",
     )
 
@@ -342,15 +371,17 @@ output("Geometry", point(vector(x, 0, 0)))
     )
 
 
-def test_nested_repeat_range_implicit_count_is_int_and_evaluates():
+def test_nested_repeat_range_typed_count_is_int_and_evaluates():
     group = compile_group(
-        """
-x = 0
-for i in repeat_range(2):
-    for j in repeat_range(inner_count):
-        x = x + 1
-output("Geometry", point(vector(x, 0, 0)))
-""",
+        '''
+def nf_fixture(inner_count: Int['inner_count'] = 3):
+    x = 0
+    for i in repeat_range(2):
+        for j in repeat_range(inner_count):
+            x = x + 1
+    geometry = point(vector(x, 0, 0))
+    return (geometry,)
+''',
         "NFTest_nested_repeat_implicit_count",
     )
 
@@ -368,34 +399,39 @@ output("Geometry", point(vector(x, 0, 0)))
 
 def test_nested_repeat_range_controlled_diagnostics():
     expect_compile_error(
-        """
-x = 0
-count = input_float("Count", default=3)
-for i in repeat_range(2):
-    for j in repeat_range(count):
-        x = x + 1
-output("x", x)
-""",
+        '''
+def nf_fixture(count: Float['Count'] = 3):
+    x = 0
+    for i in repeat_range(2):
+        for j in repeat_range(count):
+            x = x + 1
+    x = x
+    return (x,)
+''',
         "NFTest_nested_repeat_float_count_error",
     )
     expect_compile_error(
-        """
-x = 0
-for i in repeat_range(2):
-    for Iteration in repeat_range(3):
-        x = x + 1
-output("x", x)
-""",
+        '''
+def nf_fixture():
+    x = 0
+    for i in repeat_range(2):
+        for Iteration in repeat_range(3):
+            x = x + 1
+    x = x
+    return (x,)
+''',
         "NFTest_nested_repeat_index_socket_collision",
     )
     expect_compile_error(
-        """
-x = 0
-for i in repeat_range(2):
-    for j in repeat_range(3):
-        x = cube(1)
-output("x", x)
-""",
+        '''
+def nf_fixture():
+    x = 0
+    for i in repeat_range(2):
+        for j in repeat_range(3):
+            x = cube(1)
+    x = x
+    return (x,)
+''',
         "NFTest_nested_repeat_state_type_error",
     )
 
@@ -403,12 +439,14 @@ output("x", x)
 def test_ordinary_repeat_range_uses_permanent_ir_backend():
     """An ordinary Repeat materializes exactly one permanent Repeat Zone."""
     group = compile_group(
-        """
-x = 0
-for i in repeat_range(2):
-    x = x + 1
-output("x", x)
-""",
+        '''
+def nf_fixture():
+    x = 0
+    for i in repeat_range(2):
+        x = x + 1
+    x = x
+    return (x,)
+''',
         "NFTest_repeat_ir_route",
     )
     check(len(_nodes(group, "GeometryNodeRepeatInput")) == 1, "IR Repeat did not create one Repeat Input")
@@ -421,11 +459,12 @@ def test_repeat_int_state_keeps_exact_int_type_and_downstream_integer_arithmetic
     """Int Repeat state remains Int physically, semantically, and for downstream arithmetic."""
     group = compile_group(
         '''
-x = input_int("X", default=1)
-for i in repeat_range(2):
-    x = x + 1
-y = x + 1
-output("y", y)
+def nf_fixture(x: Int['X'] = 1):
+    for i in repeat_range(2):
+        x = x + 1
+    y = x + 1
+    y = y
+    return (y,)
 ''',
         "NFTest_repeat_int_exact_state",
     )
@@ -451,13 +490,15 @@ def test_nested_repeat_enclosing_iteration_is_carried_inside_but_not_published_a
     """Inner Repeat carries enclosing i internally while outer lexical Iteration survives inner exit."""
     group = compile_group(
         '''
-x = 0
-for i in repeat_range(2):
-    for j in repeat_range(2):
-        i = i + 10
+def nf_fixture():
+    x = 0
+    for i in repeat_range(2):
+        for j in repeat_range(2):
+            i = i + 10
+            x = x + i
         x = x + i
-    x = x + i
-output("Geometry", point(vector(x, 0, 0)))
+    geometry = point(vector(x, 0, 0))
+    return (geometry,)
 ''',
         "NFTest_nested_repeat_internal_i_restore",
     )

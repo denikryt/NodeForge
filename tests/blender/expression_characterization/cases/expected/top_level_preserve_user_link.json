@@ -1,0 +1,39 @@
+{
+  "graph": {
+    "interface": [],
+    "links": [
+      {
+        "from": [
+          "n0",
+          "Value"
+        ],
+        "to": [
+          "n1",
+          "Value"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "bl_idname": "ShaderNodeMath",
+        "id": "n0",
+        "properties": {
+          "operation": "ADD"
+        }
+      },
+      {
+        "bl_idname": "ShaderNodeMath",
+        "id": "n1",
+        "properties": {
+          "operation": "ADD"
+        }
+      },
+      {
+        "bl_idname": "GeometryNodeMeshCube",
+        "id": "n2",
+        "properties": {}
+      }
+    ]
+  },
+  "kind": "graph"
+}

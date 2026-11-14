@@ -1,0 +1,24 @@
+{
+  "graph": {
+    "interface": [],
+    "links": [],
+    "nodes": [
+      {
+        "bl_idname": "GeometryNodeMeshCube",
+        "id": "n0",
+        "properties": {}
+      },
+      {
+        "bl_idname": "GeometryNodeMeshCube",
+        "id": "n1",
+        "properties": {}
+      },
+      {
+        "bl_idname": "GeometryNodeMeshCube",
+        "id": "n2",
+        "properties": {}
+      }
+    ]
+  },
+  "kind": "graph"
+}

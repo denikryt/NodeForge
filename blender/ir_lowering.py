@@ -583,7 +583,13 @@ def _lower_source_call(context, operation, operands, x, y):
         if result.typ is not output.typ:
             raise CompileError("Internal error: source-call result type changed before Blender lowering")
 
-    if function_id.kind == "LOCAL_DEF":
+    if function_id.kind == "MODULE_DEF":
+        if operation.materialization is None:
+            raise CompileError("Module definition call requires a shared/unique materialization policy")
+        materialized_group = materializer.materialize_module(
+            prepared_callable, operation.materialization, materialization_context,
+        )
+    elif function_id.kind == "LOCAL_DEF":
         if operation.materialization is None:
             raise CompileError("Internal error: script-local function call requires materialization policy")
         from .local_functions import build_prepared_local_materialization_spec

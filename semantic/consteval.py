@@ -252,6 +252,17 @@ def _is_compile_time_owned_assignment_rhs(expr: ast.AST) -> bool:
     )
 
 
+def is_negative_numeric_literal(expr):
+    """Recognize a signed numeric leaf, excluding Float -0.0 (0 - 0 is +0)."""
+    return (
+        isinstance(expr, ast.UnaryOp)
+        and isinstance(expr.op, ast.USub)
+        and isinstance(expr.operand, ast.Constant)
+        and type(expr.operand.value) in {int, float}
+        and not (type(expr.operand.value) is float and expr.operand.value == 0.0)
+    )
+
+
 def try_runtime_fold(expr, env):
     """Return a proven runtime replacement or ``NOT_FOLDABLE``.
 
@@ -261,6 +272,8 @@ def try_runtime_fold(expr, env):
     if isinstance(expr, ast.Constant) and type(expr.value) in {bool, int, float, str}:
         return _const_eval(expr, env)
     if isinstance(expr, ast.Name) and expr.id in _ALLOWED_CONSTS:
+        return _const_eval(expr, env)
+    if is_negative_numeric_literal(expr):
         return _const_eval(expr, env)
     if isinstance(expr, (ast.BinOp, ast.Compare)) or (
         isinstance(expr, ast.UnaryOp) and isinstance(expr.op, (ast.UAdd, ast.USub))

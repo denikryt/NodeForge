@@ -131,6 +131,24 @@ def _validate_group_external_state_for_replacement(replacement_group, state):
                 references.append(reference)
     for reference in references:
         reference["new_socket_key"] = _resolve_replacement_input_reference(reference, replacement_group)
+
+    # A scalar return has exactly one output: a display-label change cannot
+    # make its connection ambiguous when the physical socket type is unchanged.
+    new_outputs = [item for item in replacement_group.interface.items_tree
+                   if item.item_type == "SOCKET" and item.in_out == "OUTPUT"]
+    if len(new_outputs) == 1:
+        new_output = new_outputs[0]
+        for link in state.get("links", []):
+            for endpoint in (link.get("from", {}), link.get("to", {})):
+                if endpoint.get("kind") != "group_node_socket" or endpoint.get("direction") != "OUTPUT":
+                    continue
+                old_key = endpoint["socket_key"]
+                old_group = endpoint["node"].node_tree
+                old_outputs = [item for item in old_group.interface.items_tree
+                               if item.item_type == "SOCKET" and item.in_out == "OUTPUT"]
+                if (len(old_outputs) == 1 and old_key[1] == old_outputs[0].name
+                        and old_key[2] == old_outputs[0].socket_type == new_output.socket_type):
+                    endpoint["new_socket_key"] = ("OUTPUT", new_output.name, old_key[2], 0)
     return state
 
 
@@ -289,7 +307,7 @@ def _resolve_endpoint(endpoint, *, strict):
     if reference is not None:
         key = reference.get("old_socket_key") if strict else reference.get("new_socket_key")
     else:
-        key = endpoint.get("socket_key")
+        key = endpoint.get("socket_key") if strict else endpoint.get("new_socket_key", endpoint.get("socket_key"))
     socket = _resolve_socket(node, direction, key)
     if socket is None and strict:
         raise CompileError(

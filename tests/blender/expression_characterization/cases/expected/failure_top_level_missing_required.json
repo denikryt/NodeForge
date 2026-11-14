@@ -1,5 +1,5 @@
 {
   "exception": "CompileError",
   "kind": "compile_error",
-  "message": "curve() __unique__ must be a compile-time Bool"
+  "message": "scale() missing required arguments: factor"
 }

@@ -383,10 +383,9 @@ def test_regular_group_compile_rejects_unbound_local_python_before_blender_mutat
     monkeypatch.setattr(local_sources, "_local_sources_registry_path", lambda: tmp_path / "local_sources.json")
 
     source = ('from local import zlift\n'
-              'geo = input_geometry("Geometry")\n'
-              'geo = zlift(geo, amount=2.0)\n'
-              'output("Geometry", geo)\n')
+              'def modifier(geometry: Geometry) -> Geometry:\n'
+              '    return zlift(geometry, amount=2.0)\n')
     existing = {group.as_pointer() for group in bpy.data.node_groups}
-    with pytest.raises(CompileError, match="requires a root modifier"):
+    with pytest.raises(CompileError, match="root-only Mesh Compute"):
         create_expression_group(source)
     assert {group.as_pointer() for group in bpy.data.node_groups} == existing

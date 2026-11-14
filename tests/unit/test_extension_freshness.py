@@ -64,7 +64,7 @@ def test_semantic_use_records_one_deduplicated_owner_dependency(tmp_path):
     """Repeated accepted extension calls freeze one deterministic owner/fingerprint row."""
     session, environment, identity = _fixture(tmp_path)
     compilation = analyze_group_source(
-        "from packages import demo\na = foo(x)\nb = foo(a)\noutput(b)\n",
+        "from packages import demo\na = foo(1.0)\nb = foo(a)\nresult = b\n",
         compilation_identity=identity,
         resolved_environment=environment,
     )
@@ -78,7 +78,7 @@ def test_discovered_but_unused_extension_owner_records_no_dependency(tmp_path):
     """Registry discovery alone does not contaminate reusable-group freshness."""
     _session, environment, identity = _fixture(tmp_path)
     compilation = analyze_group_source(
-        "output(x)\n",
+        "value = cube(1)\n",
         compilation_identity=identity,
         resolved_environment=environment,
     )

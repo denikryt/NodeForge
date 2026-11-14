@@ -33,6 +33,9 @@ _RUNNING_AREAS: set[int] = set()
 _SYMBOLS: SymbolIndex | None = None
 _DRAW_HANDLE = None
 _ENABLED = False
+_REGISTERED_CLASSES: list[type] = []
+_HEADER_REGISTERED = False
+_PROPERTY_REGISTERED = False
 
 
 def _refresh_state(area) -> None:
@@ -328,32 +331,55 @@ def _draw_header(self, context):
 
 
 def register():
-    """Register Text Editor UI without replacing any global editing keymaps."""
-    global _ENABLED, _DRAW_HANDLE
-    bpy.types.WindowManager.nodeforge_assist_enabled = bpy.props.BoolProperty(
-        name='NodeForge Completion', description='Show NodeForge call and argument suggestions', default=False)
-    bpy.utils.register_class(NODEFORGE_OT_editor_session)
-    bpy.utils.register_class(NODEFORGE_OT_refresh_editor_symbols)
-    bpy.types.TEXT_HT_header.append(_draw_header)
-    _DRAW_HANDLE = bpy.types.SpaceTextEditor.draw_handler_add(_draw_overlay, (), 'WINDOW', 'POST_PIXEL')
-    _ENABLED = True
-    if not bpy.app.background:
-        bpy.app.timers.register(_editor_tick, first_interval=0.2)
+    """Register only NodeForge-owned editor UI, rolling back partial setups."""
+    global _ENABLED, _DRAW_HANDLE, _HEADER_REGISTERED, _PROPERTY_REGISTERED
+    if _ENABLED:
+        return
+    try:
+        if not _PROPERTY_REGISTERED:
+            bpy.types.WindowManager.nodeforge_assist_enabled = bpy.props.BoolProperty(
+                name='NodeForge Completion',
+                description='Show NodeForge call and argument suggestions', default=False,
+            )
+            _PROPERTY_REGISTERED = True
+        for cls in (NODEFORGE_OT_editor_session, NODEFORGE_OT_refresh_editor_symbols):
+            if cls not in _REGISTERED_CLASSES:
+                bpy.utils.register_class(cls)
+                _REGISTERED_CLASSES.append(cls)
+        if not _HEADER_REGISTERED:
+            bpy.types.TEXT_HT_header.append(_draw_header)
+            _HEADER_REGISTERED = True
+        if _DRAW_HANDLE is None:
+            _DRAW_HANDLE = bpy.types.SpaceTextEditor.draw_handler_add(
+                _draw_overlay, (), 'WINDOW', 'POST_PIXEL',
+            )
+        _ENABLED = True
+        if not bpy.app.background and not bpy.app.timers.is_registered(_editor_tick):
+            bpy.app.timers.register(_editor_tick, first_interval=0.2)
+    except BaseException:
+        unregister()
+        raise
 
 
 def unregister():
-    """Remove handlers, timer and runtime state when disabling NodeForge."""
-    global _ENABLED, _DRAW_HANDLE, _SYMBOLS
+    """Undo only the editor registrations this module successfully owns."""
+    global _ENABLED, _DRAW_HANDLE, _SYMBOLS, _HEADER_REGISTERED, _PROPERTY_REGISTERED
     _ENABLED = False
     if bpy.app.timers.is_registered(_editor_tick):
         bpy.app.timers.unregister(_editor_tick)
     if _DRAW_HANDLE is not None:
         bpy.types.SpaceTextEditor.draw_handler_remove(_DRAW_HANDLE, 'WINDOW')
         _DRAW_HANDLE = None
-    bpy.types.TEXT_HT_header.remove(_draw_header)
-    bpy.utils.unregister_class(NODEFORGE_OT_refresh_editor_symbols)
-    bpy.utils.unregister_class(NODEFORGE_OT_editor_session)
-    del bpy.types.WindowManager.nodeforge_assist_enabled
+    if _HEADER_REGISTERED:
+        bpy.types.TEXT_HT_header.remove(_draw_header)
+        _HEADER_REGISTERED = False
+    while _REGISTERED_CLASSES:
+        cls = _REGISTERED_CLASSES[-1]
+        bpy.utils.unregister_class(cls)
+        _REGISTERED_CLASSES.pop()
+    if _PROPERTY_REGISTERED:
+        del bpy.types.WindowManager.nodeforge_assist_enabled
+        _PROPERTY_REGISTERED = False
     _STATES.clear()
     _RUNNING_AREAS.clear()
     _SYMBOLS = None

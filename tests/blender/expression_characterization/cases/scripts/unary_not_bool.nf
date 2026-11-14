@@ -1,2 +1,2 @@
-flag = input_bool("Flag", default=True)
-output("Result", not flag)
+def nf_fixture(flag: Bool['Flag']=True):
+    return not flag

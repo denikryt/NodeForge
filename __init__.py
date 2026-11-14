@@ -1,13 +1,13 @@
 """NodeForge Blender addon package."""
 
-NODEFORGE_VERSION = (0, 73, 0)
+NODEFORGE_VERSION = (0, 90, 2)
 
 bl_info = {
     "name": "NodeForge",
     "author": "nachitima",
     "version": NODEFORGE_VERSION,
     "blender": (5, 2, 0),
-    "location": "Geometry Nodes Editor > Sidebar > NodeForge; Add Menu > Script > Compile Group",
+    "location": "Geometry Nodes Editor > Sidebar > NodeForge > Compile/Update Script; Add Menu > Script > Compile Group",
     "description": "Compile a Python-like DSL into Geometry Nodes node groups. Catalog library: reusable functions, bundled examples, and user-owned local DSL scripts.",
     "category": "Node",
 }

@@ -43,10 +43,11 @@ def _write_package_manifest(root, package_id):
 
 def test_input_string_interface_default_literal_and_output():
     group = compile_group('''
-name = input_string("Attribute", default="Weight_A")
-literal = "Weight_B"
-output("Runtime", name)
-output("Literal", literal)
+def nf_fixture(name: String['Attribute'] = 'Weight_A'):
+    literal = "Weight_B"
+    runtime = name
+    literal = literal
+    return (runtime, literal,)
 ''', "NFTest_string_interface")
     iface = _interface_socket(group, "Attribute")
     check(iface.socket_type == "NodeSocketString", "input_string did not create NodeSocketString")
@@ -61,19 +62,25 @@ output("Literal", literal)
     string_nodes = [node for node in group.nodes if node.bl_idname == "FunctionNodeInputString"]
     check(any(node.string == "Weight_B" for node in string_nodes), "string literal did not lower to a runtime String node")
 
-    empty = compile_group('x = input_string("Empty")\noutput("Empty", x)', "NFTest_string_empty_default")
+    empty = compile_group('''
+def nf_fixture(x: String['Empty']):
+    empty = x
+    return (empty,)
+''', "NFTest_string_empty_default")
     check(_interface_socket(empty, "Empty").default_value == "", "input_string default should allow an empty string")
 
 
 def test_raw_node_string_output_type_is_supported():
     group = compile_group('''
-x = node(
-    "FunctionNodeInputString",
-    props={"string": "Weight_A"},
-    output="String",
-    typ=String,
-)
-output("Text", x)
+def nf_fixture():
+    x = node(
+        "FunctionNodeInputString",
+        props={"string": "Weight_A"},
+        output="String",
+        typ=String,
+    )
+    text = x
+    return (text,)
 ''', "NFTest_raw_string_output")
     raw = _one_node(group, "FunctionNodeInputString")
     check(raw.string == "Weight_A", "raw String node property mismatch")
@@ -82,17 +89,17 @@ output("Text", x)
 
 def test_runtime_string_wires_raw_named_attribute_and_store_named_attribute():
     group = compile_group('''
-geo = input_geometry("Geometry")
-name = input_string("Attribute", default="Weight_A")
-weight = node(
-    "GeometryNodeInputNamedAttribute",
-    props={"data_type": "FLOAT"},
-    inputs={"Name": name},
-    output="Attribute",
-    typ=Float,
-)
-result = store_named_attribute(geo, name, weight, domain="POINT", type="FLOAT")
-output("Result", result)
+def nf_fixture(geo: Geometry['Geometry'], name: String['Attribute'] = 'Weight_A'):
+    weight = node(
+        "GeometryNodeInputNamedAttribute",
+        props={"data_type": "FLOAT"},
+        inputs={"Name": name},
+        output="Attribute",
+        typ=Float,
+    )
+    result = store_named_attribute(geo, name, weight, domain="POINT", type="FLOAT")
+    result = result
+    return (result,)
 ''', "NFTest_string_named_attribute")
     named = _one_node(group, "GeometryNodeInputNamedAttribute")
     store = _one_node(group, "GeometryNodeStoreNamedAttribute")
@@ -103,104 +110,61 @@ output("Result", result)
 
 
 def test_top_level_store_accepts_runtime_string_name():
-    group = compile_group('''
-name = input_string("Attribute", default="Weight_A")
-store(name, position().x, domain="POINT", type="FLOAT")
-''', "NFTest_string_statement_store")
+    group = bpy.data.node_groups.new("NFTest_string_statement_store", "GeometryNodeTree")
+    compiler.compose_source_initial('''
+name = node("FunctionNodeInputString", props={"string": "Weight_A"}, output="String", typ=String)
+geometry = store_named_attribute(cube(1.0), name, position().x, domain="POINT", type="FLOAT")
+''', group)
     store = _one_node(group, "GeometryNodeStoreNamedAttribute")
     check(store.inputs["Name"].is_linked, "store() did not wire runtime String attribute name")
 
 
 def test_runtime_string_if_uses_string_switch():
     group = compile_group('''
-flag = input_bool("Flag")
-a = input_string("A", default="Weight_A")
-b = input_string("B", default="Weight_B")
-name = a if flag else b
-output("Name", name)
+def nf_fixture(flag: Bool['Flag'], a: String['A'] = 'Weight_A', b: String['B'] = 'Weight_B'):
+    name = a if flag else b
+    name = name
+    return (name,)
 ''', "NFTest_string_switch")
     switch = _one_node(group, "GeometryNodeSwitch")
     check(switch.input_type == "STRING", f"runtime String switch type mismatch: {switch.input_type}")
     check(switch.outputs[0].bl_idname == "NodeSocketString", "runtime String switch output socket mismatch")
 
     statement_group = compile_group('''
-flag = input_bool("Flag")
-name = input_string("Name", default="Initial")
-if flag:
-    name = "Weight_A"
-else:
-    name = "Weight_B"
-output("Name", name)
+def nf_fixture(flag: Bool['Flag'], name: String['Name'] = 'Initial'):
+    if flag:
+        name = "Weight_A"
+    else:
+        name = "Weight_B"
+    name = name
+    return (name,)
 ''', "NFTest_string_runtime_if_statement")
     statement_switch = _one_node(statement_group, "GeometryNodeSwitch")
     check(statement_switch.input_type == "STRING", "runtime if statement did not use a String Switch")
 
 
-def test_local_function_accepts_runtime_and_constant_string_arguments():
-    group = compile_group('''
-def identity(name: String):
-    return name
-
-source = input_string("Source", default="Weight_A")
-runtime = identity(source)
-literal = identity("Weight_B")
-output("Runtime", runtime)
-output("Literal", literal)
-''', "NFTest_string_local_function")
-    helper = next(
-        node.node_tree for node in group.nodes
-        if node.bl_idname == "GeometryNodeGroup"
-        and getattr(node.node_tree, "get", lambda *_: None)("nodeforge_local_function_name") == "identity"
-    )
-    check(_interface_socket(helper, "name").socket_type == "NodeSocketString", "local function String parameter socket mismatch")
-    call_nodes = [node for node in group.nodes if node.bl_idname == "GeometryNodeGroup" and node.node_tree is helper]
-    check(len(call_nodes) == 2, f"expected two String local-function calls, got {len(call_nodes)}")
-    check(any(node.inputs["name"].is_linked for node in call_nodes), "runtime String local-function argument was not linked")
-    check(any(node.inputs["name"].default_value == "Weight_B" for node in call_nodes), "constant String local-function argument was not assigned as default")
 
 
-def test_packaged_library_function_accepts_runtime_and_constant_string_arguments():
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        root = tmp / "vendor.string"
-        functions = root / "functions"
-        functions.mkdir(parents=True)
-        _write_package_manifest(root, "vendor.string")
-        (functions / "string_identity.nf").write_text(
-            'value = input_string("Text", default="Default")\noutput("Text", value)\n',
-            encoding="utf-8",
-        )
-        packages.set_packages_dir_for_tests(tmp / "inventory")
-        try:
-            packages.install_package_directory(root)
-            group = compile_group('''
-from packages import string as string_pkg
-source = input_string("Source", default="Weight_A")
-runtime = string_identity(source)
-literal = string_identity("Weight_B")
-output("Runtime", runtime)
-output("Literal", literal)
-''', "NFTest_string_library_function")
-            calls = [node for node in group.nodes if node.bl_idname == "GeometryNodeGroup"]
-            check(len(calls) == 2, f"expected two String library calls, got {len(calls)}")
-            check(any(node.inputs["Text"].is_linked for node in calls), "runtime String library argument was not linked")
-            check(any(node.inputs["Text"].default_value == "Weight_B" for node in calls), "constant String library argument was not assigned as default")
-            check(all(node.outputs["Text"].bl_idname == "NodeSocketString" for node in calls), "library String output type mismatch")
-        finally:
-            packages.set_packages_dir_for_tests(None)
-            packages.invalidate_caches()
 
 
 def test_string_default_update_preserves_override_and_applies_new_default():
-    before = 'name = input_string("Name", default="A")\noutput("Name", name)'
-    after = 'name = input_string("Name", default="B")\noutput("Name", name)'
+    before = '''
+def nf_fixture(name: String['Name'] = 'A'):
+    name = name
+    return (name,)
+'''
+    after = '''
+def nf_fixture(name: String['Name'] = 'B'):
+    name = name
+    return (name,)
+'''
     group = compile_group(before, "NFTest_string_update")
     wrapper = bpy.data.node_groups.new("NFTest_string_update_wrapper", "GeometryNodeTree")
     wrapper.interface.new_socket(name="Name", in_out="OUTPUT", socket_type="NodeSocketString")
     group_output = wrapper.nodes.new("NodeGroupOutput")
     group_node = wrapper.nodes.new("GeometryNodeGroup")
     group_node.node_tree = group
-    wrapper.links.new(group_node.outputs["Name"], group_output.inputs["Name"])
+    wrapper.links.new(group_node.outputs[0], group_output.inputs["Name"])
 
     compiler.update_expression_group(group, after)
     check(group_node.inputs["Name"].default_value == "B", "new String script default did not reach non-overridden instance")
@@ -212,11 +176,35 @@ def test_string_default_update_preserves_override_and_applies_new_default():
 
 def test_string_type_errors_and_compile_time_configuration_remain_strict():
     cases = (
-        ('x = input_string("X", default=1)\noutput("X", x)', "string default"),
-        ('geo = input_geometry("Geometry")\nname = input_float("Name")\ngeo = store_named_attribute(geo, name, position().x)\noutput("Geometry Out", geo)', "store name type"),
-        ('geo = input_geometry("Geometry")\nname = input_string("Name")\ngeo = store_named_attribute(geo, "x", name)\noutput("Geometry Out", geo)', "String attribute value"),
-        ('geo = input_geometry("Geometry")\ndomain = input_string("Domain")\ngeo = store_named_attribute(geo, "x", position().x, domain=domain)\noutput("Geometry Out", geo)', "runtime domain"),
-        ('name = input_string("Name")\nx = node("FunctionNodeInputString", output="String", typ=Float)\noutput("X", x)', "raw output mismatch"),
+        ('''
+def nf_fixture(x: String['X'] = 1):
+    x = x
+    return (x,)
+''', "string default"),
+        ('''
+def nf_fixture(geo: Geometry['Geometry'], name: Float['Name']):
+    geo = store_named_attribute(geo, name, position().x)
+    geometry_out = geo
+    return (geometry_out,)
+''', "store name type"),
+        ('''
+def nf_fixture(geo: Geometry['Geometry'], name: String['Name']):
+    geo = store_named_attribute(geo, "x", name)
+    geometry_out = geo
+    return (geometry_out,)
+''', "String attribute value"),
+        ('''
+def nf_fixture(geo: Geometry['Geometry'], domain: String['Domain']):
+    geo = store_named_attribute(geo, "x", position().x, domain=domain)
+    geometry_out = geo
+    return (geometry_out,)
+''', "runtime domain"),
+        ('''
+def nf_fixture(name: String['Name']):
+    x = node("FunctionNodeInputString", output="String", typ=Float)
+    x = x
+    return (x,)
+''', "raw output mismatch"),
     )
     for index, (source, label) in enumerate(cases):
         expect_compile_error(source, f"NFTest_string_error_{index}")

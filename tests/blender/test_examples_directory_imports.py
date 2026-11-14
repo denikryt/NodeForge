@@ -19,7 +19,7 @@ def example_catalog(tmp_path, monkeypatch):
     for folder in ('terrain', 'water'):
         path = root / folder / 'erosion.nf'
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text('geo = input_geometry("Geometry")\noutput("Geometry", geo)\n', encoding='utf8')
+        path.write_text('def erosion(geo: Geometry) -> Geometry:\n    return geo\n', encoding='utf8')
     original = catalog.catalog_dir
     monkeypatch.setattr(catalog, 'catalog_dir', lambda ns: root if ns == 'examples' else original(ns))
     return root
@@ -27,9 +27,9 @@ def example_catalog(tmp_path, monkeypatch):
 
 def test_dotted_examples_import_materializes_real_node_group(example_catalog):
     """Qualified Examples source calls yield distinct materialized Blender GN owners."""
-    text = ('from examples.terrain import erosion\n'
-            'geo = input_geometry("Geometry")\n'
-            'output("Geometry", erosion(geo))\n')
+    text = ('from examples.terrain.erosion import erosion\n'
+            'def nf_fixture(geo: Geometry) -> Geometry:\n'
+            '    return erosion(geo)\n')
     group = create_expression_group(text)
     assert group.bl_idname == 'GeometryNodeTree'
     assert any(node.bl_idname == 'GeometryNodeGroup' for node in group.nodes)

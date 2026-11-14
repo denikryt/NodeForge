@@ -348,30 +348,42 @@ def test_source_call_migration_removes_v1_extension_execution_and_keeps_v2_bound
 
 
 def test_source_callable_session_uses_exact_resolved_record_without_live_discovery(tmp_path):
-    """Pure imported source preparation consumes the exact record captured by the environment."""
-    from NodeForge.compiler_identities import GroupCompilationIdentity
+    """Local module preparation reuses the exact indexed source snapshot during one attempt."""
+    from NodeForge.catalog import LibraryEntryRecord
+    from NodeForge.compiler_identities import ModuleId, GroupCompilationIdentity, module_definition_function_id
+    from NodeForge.local_index import LocalSourceIndex
+    from NodeForge.resolved_environment import ResolvedCatalog, ResolvedEnvironment
     from NodeForge.semantic.source_callable_session import SourceCallableSession
+    from NodeForge.semantic.call_resolution import CallableEnvironment
+    from NodeForge.semantic.builtin_registry import BUILTIN_NAMES
 
-    source_path = tmp_path / "selected.nf"
-    source_path.write_text('x = input_float("X")\noutput("X", x)\n', encoding="utf-8")
-    record = types.SimpleNamespace(
-        namespace="functions",
-        name="selected",
-        source_path=source_path,
-        module_path=None,
-        package_id="vendor.selected",
-        package_version="2.0.0",
+    source_path = tmp_path / 'selected.nf'
+    source_path.write_text('def selected(x: Float) -> Float:\n    return x\n', encoding='utf-8')
+    from NodeForge.local_sources import _path_key
+    record = LibraryEntryRecord('local', 'selected', 'source', source_path,
+                                source_path=source_path, source_origin=_path_key(source_path))
+    environment = ResolvedEnvironment({
+        'functions': ResolvedCatalog('functions', {}),
+        'examples': ResolvedCatalog('examples', {}),
+        'local': ResolvedCatalog('local', {}, local_index=LocalSourceIndex.from_discovery((record,))),
+    })
+    session = SourceCallableSession(resolved_environment=environment)
+    snapshot = session.capture_local_module(record)
+    assert snapshot.module_id == ModuleId('LOCAL', record.source_origin)
+    source_path.write_text('def selected(x: Float) -> Float:\n    return x + 2.0\n', encoding='utf-8')
+    assert session.capture_local_module(record) is snapshot
+    fid = module_definition_function_id(snapshot.definition_ref('selected'), '[]')
+    identity = GroupCompilationIdentity(None, 'OWNER/test', fid.stable_key(), fid.stable_key())
+    env = CallableEnvironment(frozenset(BUILTIN_NAMES), dict(snapshot.definitions), {},
+                              local_definition_refs={'selected': snapshot.definition_ref('selected')})
+    compiled = session.prepare_definition(
+        function_id=fid, identity=identity, fn=snapshot.definitions['selected'],
+        callable_environment=env, compile_time_values={},
+        helper_namespace='selected', source_record=record, source_module=snapshot,
     )
-    environment = ResolvedEnvironment(_catalogs(functions={"selected": record}))
-    function_id = library_function_id("functions", record.package_id, record.name)
-    identity = GroupCompilationIdentity(None, "LIBRARY/test", function_id.stable_key(), function_id.stable_key())
-    prepared = SourceCallableSession(resolved_environment=environment).prepare_library(
-        function_id=function_id,
-        identity=identity,
-        record=record,
-    )
-    assert prepared.contract.function_id == function_id
-    assert prepared.group.source == source_path.read_text(encoding="utf-8")
+    assert compiled.contract.function_id == fid
+    assert 'return x + 2.0' not in compiled.group.source
+    assert session.module_snapshots[snapshot.module_id] is snapshot
 
 
 

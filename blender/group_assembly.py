@@ -1,6 +1,7 @@
 """Physical Blender group assembly for prepared semantic compilations."""
 
 from contextlib import nullcontext
+import hashlib
 
 from ..semantic.constants import TYPE_GEOMETRY
 from ..errors import CompileError
@@ -143,6 +144,12 @@ def _populate_group(
     if request.function_compilation_inputs is not None and request.function_compilation_trace is not None:
         own_inputs = dict(request.function_compilation_inputs)
         own_inputs["lowered_source"] = prepared.normalized_lowered_source
+        # Source text alone cannot capture changed constants baked into typed IR.
+        # Frozen IR records have deterministic value-based representations, so
+        # this digest tracks effective operations without hashing unrelated siblings.
+        own_inputs["semantic_ir"] = hashlib.sha256(
+            repr(prepared.body).encode("utf-8")
+        ).hexdigest()
         trace_context = request.function_compilation_trace.group(identity.declaration_owner, own_inputs)
 
     with trace_context as frame:

@@ -82,7 +82,10 @@ def direct_library_owner_scope_for_id(function_id, *, instance_key: str | None =
             "LIBRARY", "local", "", function_id.name, function_id.source_origin,
             instance_key=instance_key,
         )
-    return direct_library_owner_scope(function_id.namespace, function_id.package_id, function_id.name)
+    return function_group_owner_scope(
+        "LIBRARY", function_id.namespace, function_id.package_id, function_id.name,
+        instance_key=instance_key,
+    )
 
 
 def instance_key_for(call_site: CallSiteId) -> str:
@@ -106,6 +109,16 @@ def instance_key_for_materialization(materialization: IRFunctionMaterialization)
     return instance_key_for(materialization.call_site)
 
 
+def module_definition_owner_scope(function_id, *, instance_key: str = "") -> str:
+    """Derive one MODULE_DEF physical scope from its exact stored instance key."""
+    if function_id.kind != "MODULE_DEF":
+        raise ValueError("Module owner requires a MODULE_DEF FunctionId")
+    return function_group_owner_scope(
+        "MODULE_DEF", function_id.module.stable_key(), function_id.name,
+        function_id.signature, instance_key=instance_key or None,
+    )
+
+
 def function_materialization_owner_scope(
     materialization: IRFunctionMaterialization,
 ) -> str:
@@ -123,6 +136,8 @@ def function_materialization_owner_scope(
             callee.signature,
             instance_key=instance_key,
         )
+    if callee.kind == "MODULE_DEF":
+        return module_definition_owner_scope(callee, instance_key=instance_key)
     if callee.kind == "LIBRARY":
         if callee.namespace == "local":
             return direct_library_owner_scope_for_id(callee, instance_key=instance_key or None)
@@ -299,6 +314,7 @@ __all__ = [
     "direct_library_owner_scope",
     "direct_library_owner_scope_for_id",
     "function_materialization_owner_scope",
+    "module_definition_owner_scope",
     "instance_key_for",
     "instance_key_for_materialization",
     "new_root_owner_id",
