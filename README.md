@@ -36,7 +36,7 @@ def make_cube(size: Float["Size"] = 2.0) -> Geometry:
 6. Click **Compile Script**. NodeForge places a `make_cube` Group Node in the existing base Geometry Nodes tree; its implementation lives in a nested node group.
 7. Connect the Group Node's **Value** output to the existing **Group Output** geometry input.
 
-See the [Get Started guide](https://denikryt.github.io/NodeForgeDocs/latest/GET_STARTED/) for the complete beginner workflow.
+See the [Get Started guide](https://denikryt.github.io/NodeForge/docs/latest/GET_STARTED/) for the complete beginner workflow.
 
 ## The language at a glance
 
@@ -106,13 +106,11 @@ from local import erosion
 result = erosion.apply(geometry)
 ```
 
-See [Unified `.nf` source reference](docs/UNIFIED_NF.md) for current source syntax, Local imports, function ownership and direct-composition semantics.
-
 ## Coverage
 
 The syntax follows Python as closely as the Geometry Nodes model allows. The built-in function library covers only part of Geometry Nodes. When a dedicated NodeForge function is not available, `node(...)` can create the Blender node directly.
 
-See the [Geometry Nodes coverage](https://denikryt.github.io/NodeForgeDocs/latest/GEOMETRY_NODES_COVERAGE/) page for the current feature matrix and the [Core DSL Built-ins](https://denikryt.github.io/NodeForgeDocs/latest/BUILTINS/) reference for the complete `node(...)` syntax.
+See the [Geometry Nodes coverage](https://denikryt.github.io/NodeForge/docs/latest/GEOMETRY_NODES_COVERAGE/) page for the current feature matrix and the [Core DSL Built-ins](https://denikryt.github.io/NodeForge/docs/latest/BUILTINS/) reference for the complete `node(...)` syntax.
 
 ### How the compiler works
 
@@ -133,7 +131,7 @@ existing base GeometryNodeTree + nested function GeometryNodeTrees
 ```
 
 ### Learn more in the documentation:
-https://denikryt.github.io/NodeForgeDocs/
+https://denikryt.github.io/NodeForge/docs/
 
 ### Support the developer:
 https://www.patreon.com/c/nachitima

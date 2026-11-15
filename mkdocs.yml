@@ -1,0 +1,46 @@
+site_name: NodeForge Documentation
+site_description: Documentation for NodeForge, a Blender add-on that compiles a Python-like DSL into Geometry Nodes.
+site_url: https://denikryt.github.io/NodeForge/docs/
+repo_url: https://github.com/denikryt/NodeForge
+repo_name: denikryt/NodeForge
+
+docs_dir: docs
+site_dir: site
+
+use_directory_urls: true
+
+copyright: Copyright &copy; 2026 denikryt
+
+theme:
+  name: readthedocs
+
+nav:
+  - Home: index.md
+  - Get Started: GET_STARTED.md
+  - DSL:
+      - Core Concepts: CORE_CONCEPTS.md
+      - Modules: MODULES.md
+      - Syntax: SYNTAX.md
+      - Built-ins: BUILTINS.md
+      - Writing Functions: WRITING_FUNCTIONS.md
+      - Mesh Compute (Experimental): MESH_COMPUTE.md
+      - Package Guide: PACKAGES.md
+      - Extension API Reference: EXTENSION_API.md
+      - Geometry Nodes Coverage: GEOMETRY_NODES_COVERAGE.md
+  - Libraries:
+      - Math:
+          - Methods: MATH_METHODS.md
+          - Functions: FUNCTIONS.md
+          - Examples: MATH_EXAMPLES.md
+      - LSystem:
+          - Guide: LSYSTEMS_SCRIPTING.md
+          - Reference: LSYSTEMS.md
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
