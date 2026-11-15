@@ -704,3 +704,7 @@ lifecycle.
 - Use Blender-generated node RNA paths to detect root ordinary-node animation without custom name parsing.
 - Record and reconnect root boundary links in their original output-to-input direction, retaining compatibility and occupied-input checks.
 - Cover escaped node names, structural-node path isolation, and directed boundary-link conflicts with Blender regressions.
+
+## 0.90.3
+
+- Moved the versioned documentation into the NodeForge repository and combined its GitHub Pages deployment with the Blender Extension repository.
