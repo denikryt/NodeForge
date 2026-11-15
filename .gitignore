@@ -9,3 +9,5 @@ local/**/*.nodeforge
 !local/.gitignore
 .pytest_cache/
 plans/
+# Generated documentation
+/site/
