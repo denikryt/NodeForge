@@ -147,14 +147,6 @@ jobs:
           path: public/
           if-no-files-found: error
           retention-days: 30
-      # Create this once in build, not in deploy-pages: retrying a failed Pages
-      # deployment must reuse the same artifact, never re-upload it.
-      - name: Preserve built Pages artifact
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: public/
-          retention-days: 30
 
   test-extension:
     name: Test built Extension in Blender 5.2
@@ -217,9 +209,57 @@ jobs:
           set -euo pipefail
           gh release create "$TAG_NAME" public/*.zip --generate-notes --verify-tag
 
-  deploy-pages:
-    name: Deploy Blender Extensions repository
+  build-pages:
+    name: Build versioned documentation and Pages artifact
     needs: [build, publish-release]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Install documentation dependencies
+        run: pip install mkdocs pymdown-extensions mike
+      - name: Validate documentation
+        run: mkdocs build --strict
+      - name: Publish versioned documentation history
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]
+          version="${BASH_REMATCH[1]}"
+          latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n 1)"
+          git fetch origin gh-pages:gh-pages || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [[ "$RELEASE_TAG" == "$latest_tag" ]]; then
+            mike deploy --push --alias-type=redirect --update-aliases "$version" latest
+            mike set-default --push latest
+          else
+            mike deploy --push --alias-type=redirect "$version"
+          fi
+          mkdir -p combined/docs
+          git archive gh-pages | tar -x -C combined/docs
+      - name: Retrieve verified extension repository
+        uses: actions/download-artifact@v4
+        with:
+          name: nodeforge-release-public
+          path: combined/
+      - name: Preserve combined Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: combined/
+          retention-days: 30
+
+  deploy-pages:
+    name: Deploy documentation and Blender Extensions repository
+    needs: build-pages
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
@@ -229,7 +269,5 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      # deploy-pages consumes the already uploaded Pages artifact from build.
-      # Rerun only this failed job after a Pages outage; never rerun release creation.
       - id: deployment
         uses: actions/deploy-pages@v4
