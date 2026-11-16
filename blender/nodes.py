@@ -1,6 +1,7 @@
 """Low-level helpers for creating and wiring Blender nodes."""
 
 from ..semantic.constants import *
+from ..type_capabilities import SWITCH_INPUT_TYPES
 from .socket_types import socket_type_for_nf_type
 from ..errors import CompileError
 from ..semantic.numeric_semantics import normalize_float_constant, normalize_int_constant
@@ -154,15 +155,7 @@ def _switch(group, cond, false_val, true_val, x=0, y=0):
     if false_val.typ != true_val.typ:
         raise CompileError("select() true/false values must have same type")
     node = _new_node(group, "GeometryNodeSwitch", x, y)
-    node.input_type = {
-        TYPE_FLOAT: "FLOAT",
-        TYPE_INT: "INT",
-        TYPE_VECTOR: "VECTOR",
-        TYPE_BOOL: "BOOLEAN",
-        TYPE_GEOMETRY: "GEOMETRY",
-        TYPE_STRING: "STRING",
-        TYPE_BUNDLE: "BUNDLE",
-    }[false_val.typ]
+    node.input_type = SWITCH_INPUT_TYPES[false_val.typ]
     group.links.new(cond.socket, node.inputs[0])
     group.links.new(false_val.socket, node.inputs[1])
     group.links.new(true_val.socket, node.inputs[2])

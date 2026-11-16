@@ -107,6 +107,7 @@ from .source_callables import (
     serialize_local_signature,
     has_source_value_binding,
 )
+from ..type_capabilities import SWITCH_INPUT_TYPES
 from .values import (
     ArrayResultShape,
     ExtensionResultShape,
@@ -132,15 +133,6 @@ _RESERVED_VALUE_LABELS = {
     "backend helper",
     "embedded-system constructor",
     "reserved helper",
-}
-_SWITCH_TYPES = {
-    TYPE_FLOAT,
-    TYPE_INT,
-    TYPE_VECTOR,
-    TYPE_BOOL,
-    TYPE_GEOMETRY,
-    TYPE_STRING,
-    TYPE_BUNDLE,
 }
 
 
@@ -1488,7 +1480,7 @@ def analyze_expression(expr, environment):
                 raise CompileError("select(cond, true, false): cond must be Bool")
             if false_typ != true_typ:
                 raise CompileError("select() true/false values must have same type")
-            if false_typ not in _SWITCH_TYPES:
+            if false_typ not in SWITCH_INPUT_TYPES:
                 raise CompileError("select() result type is not supported")
             return record(node, runtime_fact(true_typ, operation="select"))
 

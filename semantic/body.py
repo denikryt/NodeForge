@@ -22,6 +22,7 @@ from .builtin_calls import (
 )
 from ..compiler_identities import BindingId, CallSiteId, FunctionId, InputDeclarationId, InterfaceInputOrigin
 from .constants import TYPE_OBJECT
+from ..type_capabilities import REPEAT_ITEM_TYPES
 from .consteval import (
     ConstEvalUnavailable,
     _const_eval,
@@ -1720,7 +1721,7 @@ def lower_basic_body(
                     symbol = entry_symbols.get(name)
                     if symbol is None:
                         continue
-                    if symbol.typ not in {NFType.GEOMETRY, NFType.VECTOR, NFType.FLOAT, NFType.INT, NFType.BOOL, NFType.BUNDLE}:
+                    if symbol.typ not in REPEAT_ITEM_TYPES:
                         raise CompileError(f"repeat_range state {name!r} has unsupported type {symbol.typ}")
                     state_records.append(
                         IRRepeatState(

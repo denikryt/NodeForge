@@ -1,6 +1,7 @@
 """Generic geometry helpers such as cube(), transform(), join(), and polyline()."""
 
 from ..semantic.constants import *
+from ..type_capabilities import ATTRIBUTE_DATA_TYPES, CAPTURE_ITEM_TYPES
 from ..semantic.attribute_domains import normalize_attribute_domain
 from ..errors import CompileError
 from .values import Value
@@ -24,12 +25,7 @@ _ALLOWED_STORE_TYPES = {
 }
 def _attribute_data_type(typ):
     """Map one supported NodeForge field type to Blender attribute data type."""
-    return {
-        TYPE_FLOAT: "FLOAT",
-        TYPE_INT: "INT",
-        TYPE_VECTOR: "FLOAT_VECTOR",
-        TYPE_BOOL: "BOOLEAN",
-    }.get(typ)
+    return ATTRIBUTE_DATA_TYPES.get(typ)
 
 
 def _store_named_attribute(
@@ -467,19 +463,8 @@ def _capture_attribute_geometry(group, geometry, value, *, selection, domain, da
         raise CompileError("capture_attribute() expects Geometry")
     if not isinstance(value, Value):
         raise CompileError("capture_attribute() value must be a runtime field")
-    value_type_to_socket_type = {
-        TYPE_FLOAT: "FLOAT",
-        TYPE_INT: "INT",
-        TYPE_BOOL: "BOOLEAN",
-        TYPE_VECTOR: "VECTOR",
-    }
-    socket_type_to_value_type = {
-        "FLOAT": TYPE_FLOAT,
-        "INT": TYPE_INT,
-        "BOOLEAN": TYPE_BOOL,
-        "VECTOR": TYPE_VECTOR,
-    }
-    socket_type = (data_type.upper() if data_type else value_type_to_socket_type.get(value.typ))
+    socket_type_to_value_type = {token: typ for typ, token in CAPTURE_ITEM_TYPES.items()}
+    socket_type = (data_type.upper() if data_type else CAPTURE_ITEM_TYPES.get(value.typ))
     if socket_type not in socket_type_to_value_type:
         raise CompileError("capture_attribute() supports Float, Int, Bool and Vector values")
     domain = normalize_attribute_domain(domain, "capture_attribute()")
