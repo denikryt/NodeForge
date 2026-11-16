@@ -277,6 +277,28 @@ class SymbolIndex:
                                            snapshot=export.source_snapshot)
         return ()
 
+    def _package_members(self, namespace, alias, namespaces):
+        """Project a frozen canonical package tree into editor qualifier tables.
+
+        Every namespace prefix is offered as a navigable member. Unique short
+        aliases remain available on the import alias, while ambiguous leaves
+        only appear beneath their exact canonical owner paths.
+        """
+        root = {
+            name: self._export_signatures(export, name)
+            for name, export in namespace.exports.items()
+        }
+        namespaces[alias] = root
+        for prefix in sorted(namespace.namespace_prefixes):
+            parent, _, leaf = prefix.rpartition('.')
+            parent_key = f'{alias}.{parent}' if parent else alias
+            namespaces.setdefault(parent_key, {}).setdefault(leaf, ())
+            namespaces.setdefault(f'{alias}.{prefix}', {})
+        for path, export in sorted(namespace.qualified_exports.items()):
+            parent, _, leaf = path.rpartition('.')
+            key = f'{alias}.{parent}' if parent else alias
+            namespaces.setdefault(key, {})[leaf] = self._export_signatures(export, leaf)
+
     def _directory_members(self, index, directory, alias, namespaces):
         """Expose module and directory members without treating files as callables."""
         from ..local_index import LocalDirectoryCandidate
@@ -321,13 +343,9 @@ class SymbolIndex:
             if module == "packages":
                 for item in statement.names:
                     namespace = env.package_by_import_name(item.name)
-                    if namespace is None:
+                    if namespace is None or namespace.failure is not None:
                         continue
-                    alias = item.asname or item.name
-                    namespaces[alias] = {
-                        name: self._export_signatures(export, name)
-                        for name, export in namespace.exports.items()
-                    }
+                    self._package_members(namespace, item.asname or item.name, namespaces)
             elif module == "local" or module.startswith("local."):
                 if local_index is None:
                     continue
