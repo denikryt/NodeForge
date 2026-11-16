@@ -14,7 +14,16 @@ def move(
 
 Positional arguments follow parameter order. Inputs appear in that order until `panel(...)` groups or reorders them. `geometry` is required in an explicit call; `offset` has a default. The parameter identifier `offset` is also its keyword name. `Vector["Translation"]` changes only the Blender socket label. Keywords match parameter identifiers exactly, including case. Every parameter needs an explicit type annotation, including parameters with defaults.
 
-Function parameters support `Geometry`, `Float`, `Int`, `Bool`, `Vector`, `Material`, `Object`, `String`, and `Bundle`. You can declare defaults for `Float`, `Int`, `Bool`, `Vector`, and `String`. Parameters of the other four types are required.
+Function parameters support `Geometry`, `Float`, `Int`, `Bool`, `Vector`, `Color`, `Material`, `Object`, `String`, and `Bundle`. You can declare defaults for `Float`, `Int`, `Bool`, `Vector`, `Color`, and `String`. Parameters of `Geometry`, `Material`, `Object`, and `Bundle` are required.
+
+A `Color` default is `(R, G, B, A)`, with four finite nonnegative numeric components. Blender stores each component as a 32-bit float. Alpha is retained independently; finite HDR values above `1.0` are valid. For example:
+
+```python
+def tint(value: Color = (0.2, 0.3, 0.4, 0.75)) -> Color:
+    return value
+```
+
+`Color` values travel through group sockets and functions. Use `node()` to obtain or connect physical Color sockets; see [Raw Blender node construction](BUILTINS.md#raw-blender-node-construction).
 
 ```python
 result = move(cube(1.0), offset=vector(0, 0, 2))

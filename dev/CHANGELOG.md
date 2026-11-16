@@ -708,3 +708,8 @@ lifecycle.
 ## 0.90.3
 
 - Moved the versioned documentation into the NodeForge repository and combined its GitHub Pages deployment with the Blender Extension repository.
+
+## 0.91.0
+
+- Added `Color` as a typed RGBA runtime value across `.nf` group interfaces/defaults, raw `node()` sockets, Switch/Repeat/Bundle, Capture and attributes, and Python Extension API v2 runtime/static/mixed arguments.
+- Consolidated operation capability mappings and repaired Capture item reconstruction during transactional updates, preserving existing explicit `type=` conversions.

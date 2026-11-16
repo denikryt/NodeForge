@@ -262,3 +262,68 @@ def test_color_capture_override_errors_do_not_reject_valid_conversions():
     geo=grid(2,2)
     return capture_attribute(geo,color,type='NOT_A_TYPE')[1]
 ''')
+
+
+def test_color_compile_update_lifecycle_and_failure_restore_capture_and_external_links():
+    """Color defaults and linked/unlinked Capture items survive update, rollback, and raw metadata."""
+    import bpy
+    from NodeForge import compiler
+    from NodeForge.blender import group_backend
+    from NodeForge.blender.raw_nodes import raw_node_spec
+
+    before='''def color_capture(tint: Color = (0.1,0.2,0.3,0.4)):
+    geo=grid(2,2)
+    geo,unused=capture_attribute(geo,position().x,type='VECTOR')
+    geo,captured=capture_attribute(geo,tint)
+    red=node('FunctionNodeSeparateColor',inputs={'Color':captured},output='Red',typ=Float)
+    return (captured,red)
+'''
+    after=before.replace('(0.1,0.2,0.3,0.4)', '(0.4,0.3,0.2,0.9)')
+    group=compiler.create_expression_group(before,'NFTest_Color_UpdateLifecycle')
+    pointer=group.as_pointer()
+    wrapper=bpy.data.node_groups.new('NFTest_Color_UpdateCaller','GeometryNodeTree')
+    wrapper.interface.new_socket(name='Tint',in_out='INPUT',socket_type='NodeSocketColor')
+    wrapper.interface.new_socket(name='Output',in_out='OUTPUT',socket_type='NodeSocketColor')
+    inlet=wrapper.nodes.new('NodeGroupInput')
+    outlet=wrapper.nodes.new('NodeGroupOutput')
+    call=wrapper.nodes.new('GeometryNodeGroup')
+    call.node_tree=group
+    wrapper.links.new(inlet.outputs['Tint'],call.inputs['tint'])
+    wrapper.links.new(call.outputs[0],outlet.inputs['Output'])
+
+    def snapshot():
+        """Read all externally observable Color/Capture contracts at this cutover."""
+        declared=[x for x in group.interface.items_tree if getattr(x,'item_type',None)=='SOCKET' and x.in_out=='INPUT']
+        captures=[n for n in group.nodes if n.bl_idname=='GeometryNodeCaptureAttribute']
+        raw=next(n for n in group.nodes if n.bl_idname=='FunctionNodeSeparateColor')
+        return {
+            'declared':[(x.name,x.socket_type,tuple(x.default_value)) for x in declared],
+            'items':sorted(tuple((item.name,item.data_type) for item in n.capture_items) for n in captures),
+            'valid':all(link.is_valid for link in group.links),
+            'raw':raw_node_spec(raw)['schema_version'],
+            'caller_links':[(x.from_socket.bl_idname,x.to_socket.bl_idname,x.is_valid) for x in wrapper.links],
+        }
+
+    assert snapshot()['items']==[(('Value','FLOAT_COLOR'),),(('Value','FLOAT_VECTOR'),)]
+    assert snapshot()['valid']
+    compiler.update_expression_group(group,after)
+    assert group.as_pointer()==pointer
+    current=snapshot()
+    assert current['declared'][0][2]==pytest.approx((0.4,0.3,0.2,0.9))
+    assert current['items']==[(('Value','FLOAT_COLOR'),),(('Value','FLOAT_VECTOR'),)]
+    assert current['valid'] and current['raw']==2
+    assert all(x[2] for x in current['caller_links'])
+
+    # A malformed Color default fails during semantic preparation, preserving the compiled tree.
+    with pytest.raises(CompileError):
+        compiler.update_expression_group(group,after.replace('(0.4,0.3,0.2,0.9)', '(0.4,-0.3,0.2,0.9)'))
+    assert snapshot()==current and group.as_pointer()==pointer
+
+    # A cutover failure restores the previous authoritative graph, including both Capture items.
+    group_backend._TEST_CUTOVER_FAIL_AFTER_RESET=True
+    try:
+        with pytest.raises(RuntimeError,match='Injected NodeForge cutover failure'):
+            compiler.update_expression_group(group,before)
+    finally:
+        group_backend._TEST_CUTOVER_FAIL_AFTER_RESET=False
+    assert snapshot()==current and group.as_pointer()==pointer
