@@ -12,6 +12,7 @@ from ..semantic.callable_contracts import canonicalize_group_input_default, sour
 from ..errors import CompileError
 from ..evaluation_modes import EvaluationMode
 from ..extension_annotations import MARKER_TO_NF_TYPE
+from .values import static_nf_type
 from .contracts import (
     ExtensionCallableId,
     ExtensionCallableSpec,
@@ -339,27 +340,14 @@ def _normalize_result_annotation(
     return result
 
 
-def _infer_detached_default_type(value: object) -> NFType:
-    """Infer the canonical source type of one supported detached Python default."""
-    if type(value) is bool:
-        return NFType.BOOL
-    if type(value) is int:
-        canonicalize_group_input_default(NFType.INT, value)
-        return NFType.INT
-    if type(value) is float:
-        canonicalize_group_input_default(NFType.FLOAT, value)
-        return NFType.FLOAT
-    if isinstance(value, str):
-        return NFType.STRING
-    if isinstance(value, (tuple, list)):
-        canonicalize_group_input_default(NFType.VECTOR, value)
-        return NFType.VECTOR
-    raise CompileError(f"Unsupported extension parameter default: {value!r}")
-
-
 def _normalize_default(value: object, type_spec: TypeSpec, *, context: str) -> tuple[object, NFType]:
     """Canonicalize one detached default against a direct ``NF_SET`` declaration."""
-    actual = _infer_detached_default_type(value)
+    try:
+        actual = static_nf_type(value, declared=type_spec)
+    except CompileError as exc:
+        if str(exc).startswith("Unsupported detached NodeForge value"):
+            raise CompileError(f"Unsupported extension parameter default: {value!r}") from exc
+        raise
     if actual in type_spec.nf_types:
         selected = actual
     else:

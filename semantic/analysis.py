@@ -472,6 +472,18 @@ def _analyze_extension_backend_call(
             )
         required_modes[id(source_node)] = next(iter(modes))
 
+    # A four-component literal denotes Color only where a declared extension
+    # parameter can accept Color; structural tuples retain their own contracts.
+    color_argument_ids: set[int] = set()
+    for _index, candidate, bound in candidates:
+        parameter_by_name = {parameter.name: parameter for parameter in candidate.parameters}
+        for parameter_name, value in bound.arguments.items():
+            parameter = parameter_by_name[parameter_name]
+            if NFType.COLOR not in parameter.type_spec.nf_types:
+                continue
+            occurrences = tuple(value) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else (value,)
+            color_argument_ids.update(id(item) for item in occurrences if isinstance(item, ast.AST))
+
     # Each explicit source occurrence is acquired exactly once before type-based
     # candidate selection. Defaults are already detached contract data.
     acquired: dict[int, tuple[str, object, NFType]] = {}
@@ -482,7 +494,11 @@ def _analyze_extension_backend_call(
         except ConstEvalUnavailable as exc:
             raise CompileError(f"{name}() argument must be available at compile time") from exc
         if isinstance(selection, CompileTimeSelection):
-            actual_type = static_nf_type(selection.value)
+            declared_color = (
+                TypeSpec("NF_SET", frozenset({NFType.COLOR}))
+                if id(source_node) in color_argument_ids else None
+            )
+            actual_type = static_nf_type(selection.value, declared=declared_color)
             acquired[id(source_node)] = ("static", selection.value, actual_type)
             continue
         if not isinstance(selection, RuntimeRequired):
@@ -773,7 +789,7 @@ def _analyze_extension_semantic_call(
                 except ConstEvalUnavailable as exc:
                     raise CompileError(f"{name}() argument must be available at compile time") from exc
                 if isinstance(selection, CompileTimeSelection):
-                    actual_type = static_nf_type(selection.value)
+                    actual_type = static_nf_type(selection.value, declared=type_spec)
                     if not type_spec_accepts_nf(type_spec, actual_type):
                         raise CompileError(f"{name}() argument type {actual_type} is not accepted by its extension contract")
                     expected_type = select_declared_nf_type(type_spec, actual_type)

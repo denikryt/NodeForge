@@ -44,11 +44,15 @@ EXTENSIONS = {
     "identity_color": ".operations:identity_color",
     "union_component": ".operations:union_component",
     "bad_color_result": ".operations:bad_color_result",
+    "emit_static_color": ".operations:emit_color",
+    "emit_mixed_color": ".operations:emit_color",
 }
 def make_color(factor: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Color: ...
 def identity_color(value: Annotated[Color, EvaluationMode.RUNTIME_ONLY]) -> Color: ...
 def union_component(value: Annotated[Color | Vector, EvaluationMode.RUNTIME_ONLY]) -> Float: ...
 def bad_color_result(factor: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Color: ...
+def emit_static_color(tint: Annotated[Color, EvaluationMode.COMPILE_TIME_ONLY] = (2.0,0.2,0.3,0.5)) -> Color: ...
+def emit_mixed_color(tint: Annotated[Color, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = (0.1,0.2,0.3,0.4)) -> Color: ...
 ''', encoding='utf-8')
     (owner / 'operations.py').write_text('''
 from NodeForge.extension_api import ExtensionBackendValue, NFType
@@ -69,6 +73,20 @@ def union_component(context, value):
     context.group.links.new(value.socket, node.inputs[0])
     name = 'Red' if value.typ is NFType.COLOR else 'X'
     return context.value(node.outputs[name], NFType.FLOAT)
+
+def emit_color(context, tint):
+    node = context.group.nodes.new('GeometryNodeSwitch')
+    node.input_type = 'RGBA'
+    node.inputs['Switch'].default_value = True
+    if isinstance(tint, ExtensionBackendValue):
+        if tint.typ is not NFType.COLOR:
+            raise AssertionError('mixed runtime tint lost Color identity')
+        context.group.links.new(tint.socket, node.inputs['True'])
+    else:
+        if not isinstance(tint, tuple) or len(tint) != 4:
+            raise AssertionError('static Color was not detached as RGBA tuple')
+        node.inputs['True'].default_value = tint
+    return context.value(node.outputs[0], NFType.COLOR)
 
 def bad_color_result(context, factor):
     node = context.group.nodes.new('ShaderNodeValToRGB')
@@ -163,3 +181,48 @@ def test_context_value_validates_color_output_type_direction_and_owner():
     finally:
         bpy.data.node_groups.remove(group)
         bpy.data.node_groups.remove(foreign)
+
+
+def test_color_compile_time_and_mixed_extension_use_canonical_rgba_or_typed_runtime_socket():
+    """An extension sees detached RGBA tuples and exact runtime Color wrappers in separate invocations."""
+    with tempfile.TemporaryDirectory() as tmp:
+        source = Path(tmp) / 'package'
+        _write_color_extension(source)
+        packages.install_package_directory(source)
+        group = compile_group('''from packages import color_runtime
+
+def outputs(tint: Color):
+    a = emit_static_color()
+    b = emit_static_color((3.0,0.1,0.2,0.6))
+    c = emit_mixed_color()
+    d = emit_mixed_color((0.2,0.3,0.4,0.5))
+    runtime_color = emit_mixed_color(tint)
+    return (a,b,c,d,runtime_color)
+''', 'NFTest_ColorExt_StaticMixed')
+        switches=[n for n in group.nodes if n.bl_idname=='GeometryNodeSwitch']
+        assert len(switches)==5
+        assert all(n.input_type=='RGBA' for n in switches)
+        assert sum(n.inputs['True'].is_linked for n in switches)==1
+        assert any(tuple(n.inputs['True'].default_value)==pytest.approx((3.0,0.1,0.2,0.6)) for n in switches)
+        assert all(l.is_valid for l in group.links)
+
+
+@pytest.mark.parametrize('rgba', [
+    '(0.1,0.2,0.3)',
+    '(0.1,0.2,0.3,0.4,0.5)',
+    '(True,0.2,0.3,0.4)',
+    '(0.1,-0.2,0.3,0.4)',
+    '(1e100,0.2,0.3,0.4)',
+])
+def test_invalid_static_color_arguments_fail_in_compiler(rgba):
+    """Static RGBA requires the declared four-component finite nonnegative Color contract."""
+    with tempfile.TemporaryDirectory() as tmp:
+        source=Path(tmp)/'package'
+        _write_color_extension(source)
+        packages.install_package_directory(source)
+        with pytest.raises(CompileError):
+            compile_group(f'''from packages import color_runtime
+
+def bad() -> Color:
+    return emit_static_color({rgba})
+''', 'NFTest_ColorExt_BadStatic')
