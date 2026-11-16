@@ -161,3 +161,83 @@ def test_same_canonical_source_declaration_rejects_package_atomically(tmp_path):
             namespace.find('cube')
     finally:
         packages.set_packages_dir_for_tests(None)
+
+
+def test_nested_dsl_root_alias_and_source_function_calls(tmp_path):
+    """Dotted paths resolve into the same frozen module definition as short calls."""
+    from NodeForge.environment_resolution import resolve_environment
+    from NodeForge.compiler_identities import GroupCompilationIdentity
+    from NodeForge.semantic.group import analyze_group_source
+    from NodeForge.semantic.source_callable_session import SourceCallableSession
+    from NodeForge.semantic.call_resolution import CallableEnvironment, resolve_package_callable
+    from NodeForge.semantic.source_bindings import PackageNamespaceBinding
+    try:
+        _install_namespace_package(tmp_path, {
+            'mesh/primitives.nf': 'def cube(x: Float) -> Float:\n    return x * 2\n',
+        })
+        env = resolve_environment()
+        ns = env.package_by_import_name('nested')
+        bindings = CallableEnvironment(
+            frozenset(), {}, {}, package_namespaces={'n': PackageNamespaceBinding('n', ns)},
+        )
+        long = resolve_package_callable('n', 'mesh.primitives.cube', bindings)
+        short = resolve_package_callable('n', 'cube', bindings)
+        assert long.target.definition == short.target.definition
+        identity = GroupCompilationIdentity(None, 'ROOT/NESTED', 'ROOT/NESTED', 'ROOT/NESTED')
+        for source in [
+            'from packages import nested as n\nx = n.mesh.primitives.cube(2.0)\n',
+            'from packages import nested\nx = nested.cube(2.0)\n',
+            'from packages import nested as n\n\ndef call(x: Float) -> Float:\n    return n.mesh.primitives.cube(x)\n\nv = call(1.0)\n',
+        ]:
+            group = analyze_group_source(source, compilation_identity=identity,
+                                         resolved_environment=env,
+                                         source_callable_session=SourceCallableSession(resolved_environment=env))
+            assert group is not None
+        for member, message in [('unknown.cube', 'no namespace'),
+                                ('mesh.unknown.cube', 'no namespace'),
+                                ('mesh.primitives.unknown', 'no callable member')]:
+            with pytest.raises(CompileError, match=message):
+                resolve_package_callable('n', member, bindings)
+        with pytest.raises(CompileError, match='not callable'):
+            resolve_package_callable('n', 'mesh.primitives', bindings)
+    finally:
+        packages.set_packages_dir_for_tests(None)
+
+
+def test_ambiguous_short_dsl_call_has_explicit_working_alternatives(tmp_path):
+    """Ambiguous aliases never bind to whichever module appears first on disk."""
+    from NodeForge.environment_resolution import resolve_environment
+    from NodeForge.compiler_identities import GroupCompilationIdentity
+    from NodeForge.semantic.group import analyze_group_source
+    from NodeForge.semantic.source_callable_session import SourceCallableSession
+    try:
+        _install_namespace_package(tmp_path, {
+            'mesh/primitives.nf': 'def cube(x: Float) -> Float:\n    return x\n',
+            'curve/primitives.nf': 'def cube(x: Float) -> Float:\n    return x\n',
+        })
+        env = resolve_environment()
+        identity = GroupCompilationIdentity(None, 'ROOT/NESTED', 'ROOT/NESTED', 'ROOT/NESTED')
+        with pytest.raises(CompileError, match='Ambiguous callable') as raised:
+            analyze_group_source('from packages import nested as n\ny = n.cube(1.0)\n',
+                                 compilation_identity=identity, resolved_environment=env,
+                                 source_callable_session=SourceCallableSession(resolved_environment=env))
+        assert 'n.mesh.primitives.cube' in str(raised.value)
+        assert 'n.curve.primitives.cube' in str(raised.value)
+        analyze_group_source('from packages import nested as n\ny = n.mesh.primitives.cube(1.0)\n',
+                             compilation_identity=identity, resolved_environment=env,
+                             source_callable_session=SourceCallableSession(resolved_environment=env))
+    finally:
+        packages.set_packages_dir_for_tests(None)
+
+
+def test_core_builtin_declarations_remain_reserved_in_root_sources(tmp_path):
+    """Package-qualified names do not relax root-script DSL binding rules."""
+    from NodeForge.compiler_identities import GroupCompilationIdentity
+    from NodeForge.semantic.group import analyze_group_source
+    from NodeForge.resolved_environment import ResolvedCatalog, ResolvedEnvironment
+    env = ResolvedEnvironment({name: ResolvedCatalog(name, {})
+                               for name in ('functions', 'examples', 'local')})
+    identity = GroupCompilationIdentity(None, 'ROOT/NESTED', 'ROOT/NESTED', 'ROOT/NESTED')
+    with pytest.raises(CompileError, match='reserved by DSL builtin'):
+        analyze_group_source('def cube(x: Float) -> Float:\n    return x\n',
+                             compilation_identity=identity, resolved_environment=env)
