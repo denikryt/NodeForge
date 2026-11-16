@@ -113,3 +113,39 @@ def test_nested_native_backend_symlink_is_rejected_before_execution(tmp_path):
     assert not ns.qualified_exports
     with pytest.raises(CompileError, match='symlink'):
         ns.find('smooth')
+
+
+def test_same_stem_source_module_cannot_hide_invalid_native_owner(tmp_path):
+    """Every physical owner is validated even when canonical owner stems coincide."""
+    pkg = tmp_path / 'same_stem'; functions = pkg / 'functions'
+    _owner(functions / 'primitives', 'primitives')
+    (functions / 'primitives.nf').write_text('def cube(x: Float) -> Float:\n    return x\n')
+    interface = functions / 'primitives' / 'interface.py'
+    interface.write_text(interface.read_text().replace('"primitives":', '"other":').replace('def primitives(', 'def other('))
+    (pkg / 'nodeforge_package.json').write_text(json.dumps({
+        'schema_version': 1, 'id': 'vendor.same_stem', 'import_name': 'same_stem',
+        'name': 'Same Stem', 'version': '1.0.0', 'author': 'Review',
+        'description': 'owner collision', 'nodeforge_min_version': '0.65.0',
+        'contents': {'functions': 'functions'}, 'permissions': {'python': True},
+    }))
+    with pytest.raises(packages.PackageError, match='must declare exactly one EXTENSIONS'):
+        packages.install_package_directory(pkg)
+
+
+def test_system_terminal_and_source_namespace_prefix_can_coexist(tmp_path):
+    """A source namespace may share a prefix with a root Systems callable."""
+    pkg = tmp_path / 'system_prefix'; functions = pkg / 'functions'
+    source = functions / 'primitives'; source.mkdir(parents=True)
+    (source / 'source.nf').write_text('def cube(x: Float) -> Float:\n    return x\n')
+    _owner(pkg / 'systems' / 'owner', 'primitives')
+    (pkg / 'nodeforge_package.json').write_text(json.dumps({
+        'schema_version': 1, 'id': 'vendor.prefix', 'import_name': 'prefix',
+        'name': 'Prefix', 'version': '1.0.0', 'author': 'Review',
+        'description': 'owner prefix', 'nodeforge_min_version': '0.65.0',
+        'contents': {'functions': 'functions', 'systems': 'systems'},
+        'permissions': {'python': True},
+    }))
+    packages.install_package_directory(pkg)
+    namespace = resolve_environment().package_by_import_name('prefix')
+    assert namespace.find('primitives').extension_callable_id is not None
+    assert namespace.find_path('primitives.cube').definition is not None

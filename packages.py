@@ -873,10 +873,10 @@ def _zip_package_root_from_manifest_candidates(
 
 @dataclass(frozen=True)
 class _PackageCallableInventory:
-    """Temporary install-validation inventory detached from owner Python objects."""
+    """Temporary install-validation inventory for cross-package Examples collisions."""
 
     systems: dict[str, str]
-    libraries: dict[str, dict[str, Path]]
+    examples: dict[str, Path]
 
 
 def _normalize_package_callable_inventory(
@@ -884,13 +884,14 @@ def _normalize_package_callable_inventory(
     *,
     normalize_native_libraries: bool,
 ) -> _PackageCallableInventory:
-    """Normalize one package's callable inventory exactly once for validation."""
+    """Validate every physical Functions owner and collect Examples collisions."""
     from .extensions.registry import (
         ExtensionOwnerSession,
         capture_owner_code_snapshot,
         library_owner_key,
         system_owner_key,
     )
+    from .package_function_index import scan_package_functions
 
     system_names: dict[str, str] = {}
     try:
@@ -899,8 +900,8 @@ def _normalize_package_callable_inventory(
                 capture_owner_code_snapshot(system_owner_key(record), record.root)
             )
             families, _refs = session.normalize_interface()
-            declared = tuple(callable_id.name for callable_id in families)
-            for name in declared:
+            for callable_id in families:
+                name = callable_id.name
                 if name in system_names:
                     raise PackageError(
                         f"Duplicate system constructor {name!r} inside {manifest.package_id}"
@@ -908,58 +909,50 @@ def _normalize_package_callable_inventory(
                 _validate_public_name(name, "system constructor")
                 system_names[name] = record.system_id
 
-        libraries: dict[str, dict[str, Path]] = {"functions": {}, "examples": {}}
-        for namespace in ("functions", "examples"):
-            root = manifest.root_for(namespace)
-            if root is None:
-                continue
-            if namespace == "functions":
-                from .package_function_index import scan_package_functions
-                owners = scan_package_functions(root)
-                entries = {owner.canonical_owner: owner.path for owner in owners}
-            else:
-                owners = ()
-                entries = _public_entry_entries(root)
-            libraries[namespace] = dict(entries)
-            if not normalize_native_libraries:
-                continue
-            for name, path in entries.items():
-                if not path.is_dir():
-                    continue
-                interface_path = path / "interface.py"
-                if not interface_path.is_file():
-                    continue
+        functions_root = manifest.root_for("functions")
+        function_owners = scan_package_functions(functions_root) if functions_root else ()
+        examples_root = manifest.root_for("examples")
+        examples = _public_entry_entries(examples_root) if examples_root else {}
+
+        if normalize_native_libraries:
+            def validate_native(namespace, name, path, leaf, folder_path):
                 if (path / "source.nf").is_file():
                     raise PackageError(
                         f"V2 hybrid library owner {namespace}/{name} is not supported by this backend-only platform"
                     )
-                owner = next((item for item in owners if item.canonical_owner == name), None)
-                leaf = owner.name if owner is not None else name
                 record = SimpleNamespace(
-                    namespace=namespace,
-                    name=leaf,
-                    folder_path=owner.folder_path if owner is not None else "",
+                    namespace=namespace, name=leaf, folder_path=folder_path,
                     package_id=manifest.package_id,
                 )
                 session = ExtensionOwnerSession(
                     capture_owner_code_snapshot(library_owner_key(record), path.resolve())
                 )
                 families, _refs = session.normalize_interface()
-                names = tuple(callable_id.name for callable_id in families)
-                if names != (leaf,):
+                declared = tuple(callable_id.name for callable_id in families)
+                if declared != (leaf,):
                     raise PackageError(
                         f"Native-only library {namespace}/{name} must declare exactly one EXTENSIONS key equal to {leaf!r}"
                     )
-        for name, system_id in system_names.items():
-            # Only native directory owners occupy a true package-root callable
-            # slot. Root .nf modules expose definitions at module.def paths.
-            function_path = libraries["functions"].get(name)
-            if function_path is not None and function_path.is_dir():
+
+            for owner in function_owners:
+                if owner.interface_path is not None:
+                    validate_native(
+                        "functions", owner.canonical_owner, owner.path,
+                        owner.name, owner.folder_path,
+                    )
+            for name, path in examples.items():
+                if path.is_dir() and (path / "interface.py").is_file():
+                    validate_native("examples", name, path, name, "")
+
+        # Only root native Functions owners occupy the same callable slot as a
+        # systems constructor. Source modules occupy their qualified children.
+        for owner in function_owners:
+            if owner.interface_path is not None and not owner.folder_path and owner.name in system_names:
                 raise PackageError(
-                    f"Public name collision {name!r}: function and constructor both declared by "
-                    f"{manifest.package_id} ({function_path} and system {system_id})"
+                    f"Public name collision {owner.name!r}: function and constructor both declared by "
+                    f"{manifest.package_id} ({owner.path} and system {system_names[owner.name]})"
                 )
-        return _PackageCallableInventory(system_names, libraries)
+        return _PackageCallableInventory(system_names, examples)
     except PackageError:
         raise
     except CompileError as exc:
@@ -1016,8 +1009,8 @@ def _validate_no_package_name_collisions(
     for manifest, inventory in _existing_package_validation_inventories(
         ignore_package_id=ignore_package_id
     ):
-        for name, path in candidate.libraries["examples"].items():
-            other = inventory.libraries["examples"].get(name)
+        for name, path in candidate.examples.items():
+            other = inventory.examples.get(name)
             if other is not None:
                 raise PackageError(
                     f"Duplicate examples library entry {name!r}: "
