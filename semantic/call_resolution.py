@@ -473,8 +473,29 @@ def resolve_package_callable(
     binding = environment.package_namespaces.get(package_alias)
     if binding is None:
         raise CompileError(f"Unknown package namespace: {package_alias}")
-    export = binding.namespace.find(member)
+    namespace = binding.namespace
+    if "." not in member:
+        alternatives = namespace.short_ambiguities.get(member)
+        if alternatives:
+            raise CompileError(
+                f"Ambiguous callable {member!r}: "
+                + ", ".join(f"{package_alias}.{path}(...)" for path in alternatives)
+            )
+        export = namespace.find(member)
+    else:
+        export = namespace.find_path(member)
     if export is None:
+        parts = member.split(".")
+        for index in range(1, len(parts)):
+            prefix = ".".join(parts[:index])
+            if prefix not in namespace.namespace_prefixes:
+                raise CompileError(
+                    f"Package {package_alias!r} has no namespace {prefix!r} in {member!r}"
+                )
+        if member in namespace.namespace_prefixes:
+            raise CompileError(
+                f"Package namespace {package_alias}.{member} is not callable; select a function"
+            )
         raise CompileError(f"Package {package_alias!r} has no callable member {member!r}")
     return _resolved_from_package_export(f"{package_alias}.{member}", export)
 

@@ -361,8 +361,15 @@ def _check_registered_binding(name, labels, *, context="assign", allow_existing_
     raise CompileError(f"Cannot assign to {name}: name is {format_reserved_binding_label(label)}")
 
 
-def _validate_registered_name_bindings(stmts, labels, *, top_level_function_names=None):
-    """Validate raw AST binding sites before preprocessing can erase them."""
+def _validate_registered_name_bindings(stmts, labels, *, top_level_function_names=None,
+                                       qualified_package_definitions=False):
+    """Validate raw AST binding sites before preprocessing can erase them.
+
+    Frozen package definitions are addressed by qualified identity, so their
+    declared name may coincide with a core builtin without changing core
+    lookup precedence at the caller. Root/local declarations keep the usual
+    reservation rule.
+    """
     top_level_function_names = set(top_level_function_names or ())
 
     def check_target(target, *, allow_existing_shadow=False, in_local_function=False):
@@ -397,7 +404,15 @@ def _validate_registered_name_bindings(stmts, labels, *, top_level_function_name
                 visit(sub, in_local_function=in_local_function)
             return
         if isinstance(stmt, ast.FunctionDef):
-            if not (top_level and stmt.name in top_level_function_names and labels.get(stmt.name) == "local function"):
+            package_builtin_definition = (
+                qualified_package_definitions and top_level
+                and stmt.name in top_level_function_names
+                and labels.get(stmt.name) == "DSL builtin"
+            )
+            if not package_builtin_definition and not (
+                top_level and stmt.name in top_level_function_names
+                and labels.get(stmt.name) == "local function"
+            ):
                 _check_registered_binding(stmt.name, labels)
             for arg in list(stmt.args.posonlyargs) + list(stmt.args.args) + list(stmt.args.kwonlyargs):
                 if arg.arg == "__unique__":
@@ -479,6 +494,7 @@ def resolve_module_callable_environment(source_module, resolved_environment, sou
         _without_definition_alias_declarations(raw_body_stmts, resolved),
         _registered_name_labels(definitions, imported, package_bindings),
         top_level_function_names=definitions,
+        qualified_package_definitions=source_module.module_id.kind == "PACKAGE",
     )
     return CallableEnvironment(
         callable_builtins=frozenset(IR_CAPABLE_BUILTIN_NAMES | INPUT_DECLARATION_BUILTIN_NAMES),

@@ -1518,14 +1518,24 @@ def analyze_expression(expr, environment):
                     resolved = resolve_local_callable(alias, node.func.attr, environment.callable_environment)
                     cleaned_call, modifiers = extract_function_call_modifiers(node, name, environment.const_eval_values)
                 elif (
-                    isinstance(node.func.value, ast.Name)
-                    and node.func.value.id in environment.callable_environment.package_namespaces
-                    and node.func.value.id not in environment.lexical_owned_names
+                    isinstance(receiver_root, ast.Name)
+                    and receiver_root.id in environment.callable_environment.package_namespaces
+                    and receiver_root.id not in environment.lexical_owned_names
+                    and receiver_root.id not in environment.runtime_bindings
+                    and receiver_root.id not in environment.const_eval_values
                 ):
-                    package_alias = node.func.value.id
-                    name = f"{package_alias}.{node.func.attr}"
+                    # Resolve the entire physical package namespace in one step.
+                    # Module/directory segments never become DSL runtime values.
+                    package_alias = receiver_root.id
+                    segments = [node.func.attr]
+                    position = node.func.value
+                    while isinstance(position, ast.Attribute):
+                        segments.insert(0, position.attr)
+                        position = position.value
+                    member = ".".join(segments)
+                    name = f"{package_alias}.{member}"
                     resolved = resolve_package_callable(
-                        package_alias, node.func.attr, environment.callable_environment
+                        package_alias, member, environment.callable_environment
                     )
                     cleaned_call, modifiers = extract_function_call_modifiers(
                         node, name, environment.const_eval_values
