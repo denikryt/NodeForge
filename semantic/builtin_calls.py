@@ -1119,7 +1119,7 @@ def _analyze_sample_index_operation(
     value_typ = runtime(expr.args[1], "value", "sample_index() value")
     _require_type(
         value_typ,
-        set(ATTRIBUTE_DATA_TYPES),
+        ATTRIBUTE_DATA_TYPES,
         "sample_index() value supports Float, Int, Bool and Vector (also Color)",
     )
 
