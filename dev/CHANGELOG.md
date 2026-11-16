@@ -708,3 +708,9 @@ lifecycle.
 ## 0.90.3
 
 - Moved the versioned documentation into the NodeForge repository and combined its GitHub Pages deployment with the Blender Extension repository.
+
+## 0.91.0
+
+- Added nested `functions/` namespaces for packages, with exact canonical calls, unique short-name aliases, and ambiguity diagnostics.
+- Added qualified identity for nested Extension API v2 Functions owners and source-backed Library Add/Reload, plus nested completion and signature help in the editor.
+- Preserved existing flat package function calls and generated source-group ownership.

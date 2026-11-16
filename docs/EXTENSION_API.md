@@ -51,7 +51,18 @@ EXTENSIONS = {
 }
 ```
 
-A native owner under `functions/<name>/` or `examples/<name>/` exports exactly one key matching `<name>`. An owner under `systems/<owner>/` may export multiple callables.
+A native owner under `functions/<name>/`, a nested directory such as
+`functions/mesh/<name>/`, or `examples/<name>/` exports exactly one key matching
+`<name>`. A nested Functions owner is called through the package path, for
+example `shapes.mesh.native_value(...)` for
+`functions/mesh/native_value/interface.py`. Two native owners with the same
+leaf name can coexist in separate category directories; their backend code and
+frozen owner snapshots remain independent. An owner under `systems/<owner>/`
+may export multiple callables directly under the package namespace.
+
+Native Functions can be invoked in supported compilation contexts. The
+**Library → Functions** browser lists their full names, while its standalone
+**Add Node Group** and Reload operations apply to source-backed `.nf` functions.
 
 Legacy v1 layouts such as `system.py`, `CONSTRUCTORS`, and native `BACKEND_BUILTINS` are not supported.
 

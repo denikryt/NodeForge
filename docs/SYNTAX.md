@@ -112,7 +112,10 @@ offset = vector(0, 0, 1)
 geometry = transform(base, translation=offset)
 ```
 
-Calls can target a simple callable name or an imported package member such as `math.sin(...)`. Supported method calls are documented in the sections that introduce them. Package namespaces are call qualifiers, not runtime values.
+Calls can target a simple callable name or an imported package member, such
+as `math.sin(...)` or `shapes.mesh.primitives.make_cube(...)`. Intermediate
+package directories and modules are qualifiers, not runtime values. Supported
+method calls are documented in the sections that introduce them.
 
 ## Operators and Expressions
 
@@ -486,7 +489,22 @@ def sine(angle: Float = 0.0) -> Float:
 
 If several imported packages provide the name, the unqualified call is ambiguous. Use a qualified call such as `math.sin(angle)` to select its owner.
 
-Package `.nf` files export their functions under the declared `def` names. See [Package Guide](PACKAGES.md) for package authoring and [Python Extension API v2](EXTENSION_API.md) for Python-backed package callables.
+Package `.nf` functions can also be called by their complete physical module
+paths. For `functions/mesh/primitives.nf` with `def make_cube`, use:
+
+```python
+from packages import shapes
+
+geo = shapes.mesh.primitives.make_cube(2.0)
+```
+
+An unambiguous short alias `shapes.make_cube(...)` resolves to the same
+function. With duplicate short names, NodeForge reports the available full
+paths. Direct imports such as `from packages.shapes.mesh import primitives`
+are unsupported; first import the package with `from packages import shapes`.
+See [Package Guide](PACKAGES.md#importing-package-callables) for category
+paths and collision rules and [Python Extension API v2](EXTENSION_API.md) for
+Python-backed package callables.
 
 Star imports, plain Python `import`, relative imports, imports inside functions, and imports from arbitrary Python modules are unsupported.
 

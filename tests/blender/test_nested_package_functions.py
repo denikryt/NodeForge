@@ -142,3 +142,33 @@ def native(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...
     assert row.member_path=='mesh.native'
     assert row.kind=='extension'
     assert row.materializable is False
+
+
+def test_nested_source_owner_survives_blend_save_reopen_and_exact_reload(tmp_path):
+    """Saved nested groups retain distinct ModuleIds across a native .blend round-trip."""
+    installed = _install_source_package(tmp_path / 'source')
+    mesh = compiler.create_package_function_group('vendor.nested', 'mesh.primitives.shared')
+    curve = compiler.create_package_function_group('vendor.nested', 'curve.primitives.shared')
+    mesh.use_fake_user = True
+    curve.use_fake_user = True
+    identities = {
+        'mesh': (mesh.name, mesh['nodeforge_module_definition']),
+        'curve': (curve.name, curve['nodeforge_module_definition']),
+    }
+    assert identities['mesh'][1] != identities['curve'][1]
+    bpy.ops.wm.save_as_mainfile(filepath=str(tmp_path / 'nested_reload.blend'))
+    bpy.ops.wm.open_mainfile(filepath=str(tmp_path / 'nested_reload.blend'))
+    reloaded_mesh = bpy.data.node_groups[identities['mesh'][0]]
+    reloaded_curve = bpy.data.node_groups[identities['curve'][0]]
+    assert reloaded_mesh['nodeforge_module_definition'] == identities['mesh'][1]
+    assert reloaded_curve['nodeforge_module_definition'] == identities['curve'][1]
+    curve_before = [(n.bl_idname, n.name) for n in reloaded_curve.nodes]
+    mesh_source = installed.root / 'functions/mesh/primitives.nf'
+    mesh_source.write_text('def shared(x: Float) -> Float:\n    return x + 11.0\n', encoding='utf8')
+    saved_ptr = reloaded_mesh.as_pointer()
+    assert compiler.update_library_catalog_group(reloaded_mesh) is reloaded_mesh
+    assert reloaded_mesh.as_pointer() == saved_ptr
+    assert reloaded_mesh['nodeforge_module_definition'] == identities['mesh'][1]
+    assert reloaded_curve['nodeforge_module_definition'] == identities['curve'][1]
+    assert [(n.bl_idname, n.name) for n in reloaded_curve.nodes] == curve_before
+    assert all(l.is_valid for l in reloaded_mesh.links)

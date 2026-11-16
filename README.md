@@ -89,7 +89,9 @@ The Extension includes **NodeForge Math** for math operations and **NodeForge L-
 
 Install or update other libraries from **NodeForge → Packages → Install ZIP**.
 
-Installed package APIs are imported through the package namespace:
+Installed package APIs are imported through the package namespace.
+Packages with nested `functions/` categories expose both their full module
+paths and unambiguous short function names (see the [Package Guide](docs/PACKAGES.md)):
 
 ```python
 from packages import math

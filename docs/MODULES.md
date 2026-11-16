@@ -82,6 +82,10 @@ from local.geometry import lift as raise_geometry
 raised = raise_geometry(cube(1.0), height=1.5)
 ```
 
-Nested files use paths such as `from local.terrain.geometry import lift`. Selected Examples files work the same way through `examples`. Package source functions are exported by their declared names under the package namespace; see [Package Guide](PACKAGES.md).
+Nested files use paths such as `from local.terrain.geometry import lift`. Selected Examples files work the same way through `examples`. Package `.nf` files are exported through their physical module paths. For
+`functions/mesh/primitives.nf` declaring `make_cube`, import the package and
+call `shapes.mesh.primitives.make_cube(...)`. When the declared name is unique,
+`shapes.make_cube(...)` also works. See [Package Guide](PACKAGES.md#importing-package-callables)
+for full-path resolution, short-name precedence and ambiguous-name diagnostics.
 
 Importing `geometry.nf` makes its functions available; its top-level `plain` and `raised` statements do not run in the importing script. The module namespace itself is not callable. An imported function is materialized when called. See [Imports](SYNTAX.md#imports) for the supported import forms.
