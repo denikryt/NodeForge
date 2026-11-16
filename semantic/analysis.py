@@ -472,17 +472,9 @@ def _analyze_extension_backend_call(
             )
         required_modes[id(source_node)] = next(iter(modes))
 
-    # A four-component literal denotes Color only where a declared extension
-    # parameter can accept Color; structural tuples retain their own contracts.
-    color_argument_ids: set[int] = set()
-    for _index, candidate, bound in candidates:
-        parameter_by_name = {parameter.name: parameter for parameter in candidate.parameters}
-        for parameter_name, value in bound.arguments.items():
-            parameter = parameter_by_name[parameter_name]
-            if NFType.COLOR not in parameter.type_spec.nf_types:
-                continue
-            occurrences = tuple(value) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else (value,)
-            color_argument_ids.update(id(item) for item in occurrences if isinstance(item, ast.AST))
+    # Backend overloads use direct NF_SET arguments; candidate matching below
+    # decides whether a detached RGBA literal is accepted as Color.
+    static_color_spec = TypeSpec("NF_SET", frozenset({NFType.COLOR}))
 
     # Each explicit source occurrence is acquired exactly once before type-based
     # candidate selection. Defaults are already detached contract data.
@@ -494,11 +486,7 @@ def _analyze_extension_backend_call(
         except ConstEvalUnavailable as exc:
             raise CompileError(f"{name}() argument must be available at compile time") from exc
         if isinstance(selection, CompileTimeSelection):
-            declared_color = (
-                TypeSpec("NF_SET", frozenset({NFType.COLOR}))
-                if id(source_node) in color_argument_ids else None
-            )
-            actual_type = static_nf_type(selection.value, declared=declared_color)
+            actual_type = static_nf_type(selection.value, declared=static_color_spec)
             acquired[id(source_node)] = ("static", selection.value, actual_type)
             continue
         if not isinstance(selection, RuntimeRequired):
