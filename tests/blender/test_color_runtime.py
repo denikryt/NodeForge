@@ -143,3 +143,66 @@ def test_raw_color_vector_mismatches_fail_before_links():
         _group('''def wrong() -> Vector:
     return node('ShaderNodeVectorMath', inputs={0:(1.0,0.2,0.3,0.4)}, output='Vector', typ=Vector)
 ''')
+
+
+def test_color_runtime_if_switch_and_repeat_carry_use_rgba():
+    """Runtime branch merge and Repeat state retain exact Color socket identities."""
+    branch = _group('''def choose(flag: Bool, left: Color, right: Color) -> Color:
+    value=left
+    if flag:
+        value=left
+    else:
+        value=right
+    return value
+''')
+    switches = [node for node in branch.nodes if node.bl_idname=='GeometryNodeSwitch']
+    assert len(switches)==1
+    assert switches[0].input_type=='RGBA'
+    assert switches[0].outputs[0].bl_idname=='NodeSocketColor'
+    assert all(link.is_valid for link in branch.links)
+
+    repeat = _group('''def carry(left: Color, right: Color) -> Color:
+    value=left
+    for i in repeat_range(2):
+        value=right
+    return value
+''')
+    outputs = [node for node in repeat.nodes if node.bl_idname=='GeometryNodeRepeatOutput']
+    assert len(outputs)==1
+    assert [('value','RGBA')] == [(x.name,x.socket_type) for x in outputs[0].repeat_items]
+    assert all(link.is_valid for link in repeat.links)
+
+
+def test_color_bundle_create_get_set_roundtrip():
+    """Existing Bundle operations carry typed RGBA nodes through their own item map."""
+    group = _group('''def roundtrip(color: Color) -> Color:
+    value = bundle(tint=color)
+    value = bundle_set(value, 'tint', color)
+    return bundle_get(value, 'tint', typ=Color)
+''')
+    combination = next(node for node in group.nodes if node.bl_idname=='NodeCombineBundle')
+    getters = [n for n in group.nodes if n.bl_idname=='NodeGetBundleItem']
+    setters = [n for n in group.nodes if n.bl_idname=='NodeStoreBundleItem']
+    assert [(item.name,item.socket_type) for item in combination.bundle_items] == [('tint','RGBA')]
+    assert [x.socket_type for x in getters] == ['RGBA']
+    assert [x.socket_type for x in setters] == ['RGBA']
+    assert all(link.is_valid for link in group.links)
+
+
+def test_color_branch_type_mismatch_remains_invalid():
+    """Runtime branch merge cannot silently coerce Color to Float."""
+    with pytest.raises(CompileError, match='different types'):
+        _group('''def bad(flag: Bool, left: Color, right: Float):
+    value=left
+    if flag:
+        value=left
+    else:
+        value=right
+    return value
+''')
+    with pytest.raises(CompileError, match='unsupported type STRING'):
+        _group('''def bad(value: String) -> String:
+    for i in repeat_range(2):
+        value='x'
+    return value
+''')
