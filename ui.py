@@ -327,7 +327,7 @@ def _refresh_catalog_items(props, namespace: str):
         if hasattr(item, "root_path"):
             item.root_path = str(record.get("root_path", ""))
             # File rows show their own names; qualify duplicate Examples only.
-            label = record.get("source_label", "")
+            label = record.get("source_label", "") if namespace == "functions" else ""
             if namespace == "examples" and duplicate_names[record.get("name", "")] > 1:
                 label = "/".join(part for part in (record.get("folder_path", ""), record.get("name", "")) if part)
             item.source_label = label

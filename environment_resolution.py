@@ -239,7 +239,7 @@ def _resolve_environment_parts(*, capture_local: bool):
                 if len(options) == 1:
                     exports[name] = options[0]
                 else:
-                    ambiguities[name] = tuple(sorted(e.qualified_name for e in options))
+                    ambiguities[name] = tuple(sorted(e.qualified_name for e in candidates))
 
             namespace = ResolvedPackageNamespace(
                 package_id=package_id,
