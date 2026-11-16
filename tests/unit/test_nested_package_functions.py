@@ -9,6 +9,13 @@ from NodeForge.errors import CompileError
 from NodeForge import catalog, packages
 
 
+@pytest.fixture(autouse=True)
+def _isolated_local_catalog(monkeypatch):
+    """Avoid the Blender-managed Local folder for package-only unit fixtures."""
+    from NodeForge import local_sources
+    monkeypatch.setattr(local_sources, '_catalog_input_paths', lambda: ((), ()))
+
+
 def _tree(root: Path, files: dict[str, str]) -> Path:
     """Create a physical Functions tree from relative fixture paths."""
     root.mkdir(parents=True, exist_ok=True)
@@ -81,3 +88,76 @@ def test_legacy_owner_backends_are_not_publicly_discovered(tmp_path):
         "legacy/hidden.nf": "def hidden():\n    return 1\n",
     })
     assert [owner.canonical_owner for owner in scan_package_functions(root)] == ["legacy", "native"]
+
+
+def _install_namespace_package(tmp_path, files):
+    """Install a source-only package with isolated temporary disk state."""
+    import json
+    packages.set_packages_dir_for_tests(tmp_path / 'state')
+    root = tmp_path / 'pkg'
+    functions = _tree(root / 'functions', files)
+    (root / 'nodeforge_package.json').write_text(json.dumps({
+        'schema_version': 1, 'id': 'vendor.nested', 'import_name': 'nested',
+        'name': 'Nested', 'version': '1.0.0', 'author': 'Test',
+        'description': 'Nested namespace test', 'contents': {'functions': 'functions'},
+        'nodeforge_min_version': '0.65.0',
+    }), encoding='utf8')
+    packages.install_package_directory(root)
+    return functions
+
+
+def test_canonical_and_short_indexes_handle_duplicate_leaves(tmp_path):
+    """All canonical owners survive and an ambiguous shortcut stays invalid."""
+    from NodeForge.environment_resolution import resolve_environment
+    try:
+        _install_namespace_package(tmp_path, {
+            'mesh/primitives.nf': 'def cube(x: Float):\n    return x\n',
+            'curve/primitives.nf': 'def cube(x: Float):\n    return x * 2\n',
+            'geometry.nf': 'def smooth(x: Float):\n    return x\n',
+        })
+        namespace = resolve_environment().package_by_import_name('nested')
+        assert set(namespace.qualified_exports) == {
+            'mesh.primitives.cube', 'curve.primitives.cube', 'geometry.smooth',
+        }
+        assert namespace.find('smooth') is namespace.find_path('geometry.smooth')
+        assert tuple(namespace.short_ambiguities['cube']) == (
+            'curve.primitives.cube', 'mesh.primitives.cube',
+        )
+        with pytest.raises(CompileError, match='Ambiguous callable') as raised:
+            namespace.find('cube')
+        assert 'nested.curve.primitives.cube(...)' in str(raised.value)
+        assert 'nested.mesh.primitives.cube(...)' in str(raised.value)
+        assert namespace.find_path('mesh.primitives.cube') is not None
+    finally:
+        packages.set_packages_dir_for_tests(None)
+
+
+def test_root_source_short_name_precedes_nested_names(tmp_path):
+    """A single directly rooted module definition stays the short winner."""
+    from NodeForge.environment_resolution import resolve_environment
+    try:
+        _install_namespace_package(tmp_path, {
+            'root.nf': 'def cube(x: Float):\n    return x\n',
+            'mesh/primitives.nf': 'def cube(x: Float):\n    return x * 2\n',
+        })
+        namespace = resolve_environment().package_by_import_name('nested')
+        assert namespace.find('cube') is namespace.find_path('root.cube')
+        assert namespace.find_path('mesh.primitives.cube').qualified_name == 'mesh.primitives.cube'
+    finally:
+        packages.set_packages_dir_for_tests(None)
+
+
+def test_same_canonical_source_declaration_rejects_package_atomically(tmp_path):
+    """Different physical owners cannot both publish the same canonical member."""
+    from NodeForge.environment_resolution import resolve_environment
+    try:
+        _install_namespace_package(tmp_path, {
+            'mesh.nf': 'def cube(x: Float):\n    return x\n',
+            'mesh/source.nf': 'def cube(x: Float):\n    return x * 2\n',
+        })
+        namespace = resolve_environment().package_by_import_name('nested')
+        assert not namespace.exports and not namespace.qualified_exports
+        with pytest.raises(CompileError, match='Duplicate package callable'):
+            namespace.find('cube')
+    finally:
+        packages.set_packages_dir_for_tests(None)

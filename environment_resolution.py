@@ -163,40 +163,44 @@ def _resolve_environment_parts(*, capture_local: bool):
                     source_path.read_text(encoding="utf-8"), module_id
                 )
 
-            exports: dict[str, PackageCallableExport] = {}
+            # Every export has one immutable canonical physical identity. Short
+            # aliases are derived only after all declarations are frozen.
+            canonical: dict[str, PackageCallableExport] = {}
             package_sessions: list[ExtensionOwnerSession] = []
+
+            def publish(export: PackageCallableExport) -> None:
+                """Reject the exact canonical target collision at publication."""
+                previous = canonical.get(export.qualified_name)
+                if previous is not None:
+                    raise CompileError(
+                        f"Duplicate package callable {export.qualified_name!r} inside {package_id}: "
+                        f"{previous.record or previous.extension_callable_id} and "
+                        f"{export.record or export.extension_callable_id}"
+                    )
+                canonical[export.qualified_name] = export
 
             for record in systems_by_package.get(package_id, ()):
                 session = system_sessions[system_owner_key(record)]
                 families, _refs = session.normalize_interface()
                 package_sessions.append(session)
                 for callable_id in families:
-                    name = callable_id.name
-                    if name in exports:
-                        raise CompileError(f"Duplicate package callable {name!r} inside {package_id}")
-                    exports[name] = PackageCallableExport(package_id, name, extension_callable_id=callable_id)
+                    publish(PackageCallableExport(
+                        package_id, callable_id.name, extension_callable_id=callable_id,
+                    ))
 
             for record in functions_by_package.get(package_id, ()):
+                owner = ".".join(filter(None, (record.folder_path.replace("/", "."), record.name)))
                 source_snapshot = frozen_sources.get(record)
                 if source_snapshot is not None:
                     for name in source_snapshot.definitions:
-                        previous = exports.get(name)
-                        if previous is not None:
-                            prior_record = previous.record
-                            prior_owner = str(prior_record.source_path) if prior_record is not None else str(previous.extension_callable_id)
-                            raise CompileError(
-                                f"Package {package_id} callable {name!r} is exported by both "
-                                f"{prior_owner} and {record.source_path}"
-                            )
-                        exports[name] = PackageCallableExport(
+                        publish(PackageCallableExport(
                             package_id, name, record=record,
                             definition=source_snapshot.definition_ref(name),
                             source_snapshot=source_snapshot,
-                        )
+                            qualified_name=f"{owner}.{name}",
+                        ))
                     continue
                 name = record.name
-                if name in exports:
-                    raise CompileError(f"Duplicate package callable {name!r} inside {package_id}")
                 extension_callable_id = None
                 if getattr(record, "interface_path", None) is not None and getattr(record, "source_path", None) is None:
                     key = library_owner_key(record)
@@ -214,19 +218,35 @@ def _resolve_environment_parts(*, capture_local: bool):
                         )
                     extension_callable_id = next(iter(families))
                     package_sessions.append(session)
-                exports[name] = PackageCallableExport(
-                    package_id,
-                    name,
-                    record=record,
-                    extension_callable_id=extension_callable_id,
-                )
+                publish(PackageCallableExport(
+                    package_id, name, record=record,
+                    extension_callable_id=extension_callable_id, qualified_name=owner,
+                ))
+
+            leaf_candidates: dict[str, list[PackageCallableExport]] = {}
+            for export in canonical.values():
+                leaf_candidates.setdefault(export.name, []).append(export)
+            exports: dict[str, PackageCallableExport] = {}
+            ambiguities: dict[str, tuple[str, ...]] = {}
+            for name, candidates in sorted(leaf_candidates.items()):
+                # An exact root callable has priority over module-qualified
+                # source exports. Otherwise one root .nf source wins, followed
+                # by the only candidate across the entire package.
+                direct = [e for e in candidates if e.qualified_name == name]
+                root_sources = [e for e in candidates if e.record is not None
+                                and e.definition is not None and not e.record.folder_path]
+                options = direct or root_sources or candidates
+                if len(options) == 1:
+                    exports[name] = options[0]
+                else:
+                    ambiguities[name] = tuple(sorted(e.qualified_name for e in options))
 
             namespace = ResolvedPackageNamespace(
                 package_id=package_id,
                 import_name=manifest.import_name,
                 package_name=manifest.name,
                 package_version=manifest.version,
-                exports=exports,
+                exports=exports, qualified_exports=canonical, short_ambiguities=ambiguities,
             )
         except (CompileError, OSError, packages.PackageError) as exc:
             # Preserve the manifest import reservation. Explicit access to this
