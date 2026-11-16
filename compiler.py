@@ -340,13 +340,19 @@ def create_library_catalog_group(namespace: str, name: str):
     """Create a name-unique catalog group; Functions callers should pass owner identity."""
     environment = resolve_environment()
     if namespace == "functions":
-        matches = [record for record in environment.package_function_records() if record.name == name]
+        matches = [(package_id, export) for package_id, owner in environment.package_namespaces.items()
+                   for export in owner.canonical_records()
+                   if export.qualified_name == name or (
+                       "." not in name and export.name == name
+                   )]
         if len(matches) > 1:
-            owners = ", ".join(sorted(record.package_id for record in matches))
+            owners = ", ".join(sorted(f"{package_id}/{item.qualified_name}" for package_id, item in matches))
             raise CompileError(
                 f"Ambiguous functions library entry {name!r}: {owners}. Select a package owner explicitly."
             )
-        record = matches[0] if matches else None
+        if matches:
+            return create_package_function_group(matches[0][0], matches[0][1].qualified_name)
+        record = None
     else:
         record = environment.catalog(namespace).find(name)
     if record is None:
@@ -422,15 +428,21 @@ def create_package_function_group(package_id: str, name: str):
     """Add one exact package function, using its frozen `.nf` definition when present."""
     environment = resolve_environment()
     namespace = environment.package_by_id(package_id)
-    export = None if namespace is None else namespace.find(name)
+    export = None if namespace is None else (
+        namespace.find_path(name) if "." in name else namespace.find(name)
+    )
     if export is None or export.record is None:
         raise CompileError(f"Unknown package function {package_id}/{name}")
-    backend = _new_group_backend(environment)
-    if export.definition is not None:
-        return _materialize_standalone_module_definition(
-            export.source_snapshot, export.definition, backend,
+    if export.definition is None:
+        raise CompileError(
+            f"Native Extension API v2 callable {package_id}/{name} is callable from "
+            "source but cannot be added as a standalone Library group; "
+            "declare a source-backed .nf wrapper"
         )
-    return materialize_library_entry_group_for_record(export.record, backend)
+    backend = _new_group_backend(environment)
+    return _materialize_standalone_module_definition(
+        export.source_snapshot, export.definition, backend,
+    )
 
 
 def ensure_source_text_context(text) -> str:

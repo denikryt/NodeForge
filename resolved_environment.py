@@ -329,7 +329,7 @@ class ResolvedEnvironment:
         namespace = self.package_by_id(package_id)
         if namespace is None:
             return None
-        export = namespace.find(name)
+        export = namespace.find_path(name) if "." in name else namespace.find(name)
         if export is None:
             return None
         return export.record
@@ -338,7 +338,7 @@ class ResolvedEnvironment:
         """Return all package Functions records without collapsing same-named owners."""
         records = []
         for namespace in self.package_namespaces.values():
-            for export in namespace.exports.values():
+            for export in namespace.canonical_records():
                 record = export.record
                 if record is not None:
                     records.append(record)

@@ -57,10 +57,17 @@ class SourceCallableSession:
         module = function_id.module
         if module.kind == 'PACKAGE':
             package = self.resolved_environment.package_by_id(module.package_id)
-            export = None if package is None else package.find(function_id.name)
-            if export is None or export.definition is None or export.definition.module != module:
+            if package is None:
                 raise CompileError('Selected package module definition is no longer exported')
-            snapshot = export.source_snapshot
+            # Reload uses its saved physical module, never an ambiguous leaf
+            # alias that may now belong to another package module.
+            matches = [export for export in package.canonical_records()
+                       if export.definition is not None
+                       and export.definition.module == module
+                       and export.definition.name == function_id.name]
+            if len(matches) != 1:
+                raise CompileError('Selected package module definition is no longer exported')
+            snapshot = matches[0].source_snapshot
         elif module.kind in {'LOCAL', 'EXAMPLES'}:
             catalog = self.resolved_environment.catalog(module.kind.lower())
             catalog._raise_if_failed()
