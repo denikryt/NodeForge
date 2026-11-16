@@ -15,6 +15,7 @@ SWITCH_INPUT_TYPES = MappingProxyType({
     NFType.GEOMETRY: "GEOMETRY",
     NFType.STRING: "STRING",
     NFType.BUNDLE: "BUNDLE",
+    NFType.COLOR: "RGBA",
 })
 
 REPEAT_ITEM_TYPES = MappingProxyType({
@@ -24,6 +25,7 @@ REPEAT_ITEM_TYPES = MappingProxyType({
     NFType.INT: "INT",
     NFType.BOOL: "BOOLEAN",
     NFType.BUNDLE: "BUNDLE",
+    NFType.COLOR: "RGBA",
 })
 
 CAPTURE_ITEM_TYPES = MappingProxyType({

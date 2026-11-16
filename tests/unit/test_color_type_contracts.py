@@ -28,11 +28,12 @@ def test_supported_operation_tokens_match_pre_color_contract():
         NFType.FLOAT: 'FLOAT', NFType.INT: 'INT', NFType.VECTOR: 'VECTOR',
         NFType.BOOL: 'BOOLEAN', NFType.GEOMETRY: 'GEOMETRY',
         NFType.STRING: 'STRING', NFType.BUNDLE: 'BUNDLE',
+        NFType.COLOR: 'RGBA',
     }
     assert dict(REPEAT_ITEM_TYPES) == {
         NFType.GEOMETRY: 'GEOMETRY', NFType.VECTOR: 'VECTOR',
         NFType.FLOAT: 'FLOAT', NFType.INT: 'INT', NFType.BOOL: 'BOOLEAN',
-        NFType.BUNDLE: 'BUNDLE',
+        NFType.BUNDLE: 'BUNDLE', NFType.COLOR: 'RGBA',
     }
     assert dict(CAPTURE_ITEM_TYPES) == {
         NFType.FLOAT: 'FLOAT', NFType.INT: 'INT', NFType.BOOL: 'BOOLEAN',
