@@ -1494,8 +1494,10 @@ def analyze_expression(expr, environment):
 
         if isinstance(node, ast.Call):
             if isinstance(node.func, ast.Attribute):
-                receiver_root = node.func.value
+                receiver_root = node.func
+                attribute_path = []
                 while isinstance(receiver_root, ast.Attribute):
+                    attribute_path.append(receiver_root.attr)
                     receiver_root = receiver_root.value
                 if (
                     isinstance(node.func.value, ast.Attribute)
@@ -1527,12 +1529,7 @@ def analyze_expression(expr, environment):
                     # Resolve the entire physical package namespace in one step.
                     # Module/directory segments never become DSL runtime values.
                     package_alias = receiver_root.id
-                    segments = [node.func.attr]
-                    position = node.func.value
-                    while isinstance(position, ast.Attribute):
-                        segments.insert(0, position.attr)
-                        position = position.value
-                    member = ".".join(segments)
+                    member = ".".join(reversed(attribute_path))
                     name = f"{package_alias}.{member}"
                     resolved = resolve_package_callable(
                         package_alias, member, environment.callable_environment
