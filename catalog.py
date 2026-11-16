@@ -281,6 +281,18 @@ def candidate_records_from_inputs(
     for root, package_id, package_name, package_version in roots:
         if not root.exists():
             continue
+        if namespace == "functions":
+            from .package_function_index import scan_package_functions
+            for owner in scan_package_functions(root):
+                records.append(LibraryEntryRecord(
+                    namespace="functions", name=owner.name, kind=owner.kind,
+                    path=owner.source_path or owner.interface_path or owner.module_path or owner.path,
+                    source_path=owner.source_path, module_path=owner.module_path,
+                    interface_path=owner.interface_path, folder_path=owner.folder_path,
+                    package_id=package_id, package_name=package_name,
+                    package_version=package_version,
+                ))
+            continue
         root_origin = _canonical_path(root)
         for path in sorted(root.iterdir(), key=lambda p: p.name.lower()):
             if namespace == "examples" and path.is_symlink() and path.is_dir():

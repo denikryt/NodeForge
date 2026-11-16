@@ -388,7 +388,15 @@ def _validate_manifest_relative_path(value: Any, field: str) -> str:
 
 def _validate_root_contents(root: Path, contents: dict[str, str]) -> None:
     """Validate package content-root conventions without loading implementation code."""
-    for namespace in ("functions", "examples"):
+    from .package_function_index import scan_package_functions
+
+    functions_rel = contents.get("functions")
+    if functions_rel:
+        try:
+            scan_package_functions(root / functions_rel)
+        except CompileError as exc:
+            raise PackageError(str(exc)) from exc
+    for namespace in ("examples",):
         rel = contents.get(namespace)
         if not rel:
             continue
@@ -905,7 +913,13 @@ def _normalize_package_callable_inventory(
             root = manifest.root_for(namespace)
             if root is None:
                 continue
-            entries = _public_entry_entries(root)
+            if namespace == "functions":
+                from .package_function_index import scan_package_functions
+                owners = scan_package_functions(root)
+                entries = {owner.canonical_owner: owner.path for owner in owners}
+            else:
+                owners = ()
+                entries = _public_entry_entries(root)
             libraries[namespace] = dict(entries)
             if not normalize_native_libraries:
                 continue
@@ -919,9 +933,12 @@ def _normalize_package_callable_inventory(
                     raise PackageError(
                         f"V2 hybrid library owner {namespace}/{name} is not supported by this backend-only platform"
                     )
+                owner = next((item for item in owners if item.canonical_owner == name), None)
+                leaf = owner.name if owner is not None else name
                 record = SimpleNamespace(
                     namespace=namespace,
-                    name=name,
+                    name=leaf,
+                    folder_path=owner.folder_path if owner is not None else "",
                     package_id=manifest.package_id,
                 )
                 session = ExtensionOwnerSession(
@@ -929,9 +946,9 @@ def _normalize_package_callable_inventory(
                 )
                 families, _refs = session.normalize_interface()
                 names = tuple(callable_id.name for callable_id in families)
-                if names != (name,):
+                if names != (leaf,):
                     raise PackageError(
-                        f"Native-only library {namespace}/{name} must declare exactly one EXTENSIONS key equal to {name!r}"
+                        f"Native-only library {namespace}/{name} must declare exactly one EXTENSIONS key equal to {leaf!r}"
                     )
         for name, system_id in system_names.items():
             function_path = libraries["functions"].get(name)
