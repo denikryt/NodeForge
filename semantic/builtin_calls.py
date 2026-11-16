@@ -441,9 +441,9 @@ def _raw_input_literal(value, context, socket_name):
     if _is_const_vector(value):
         return tuple(float(v) for v in value)
     if isinstance(value, tuple):
-        if len(value) == 3 and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value):
+        if len(value) in {3, 4} and all(type(v) in {int, float} for v in value):
             return tuple(float(v) for v in value)
-        raise CompileError(f"{context}: input {socket_name!r} tuple defaults must be numeric 3-tuples")
+        raise CompileError(f"{context}: input {socket_name!r} tuple defaults must be numeric 3-/4-tuples")
     if isinstance(value, list):
         raise CompileError(f"{context}: input {socket_name!r} list syntax is reserved for multi-input fanout")
     if isinstance(value, (bool, int, float, str)):

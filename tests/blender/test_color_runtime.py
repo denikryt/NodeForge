@@ -69,3 +69,77 @@ def test_color_hdr_and_vector_default_independence():
     assert canonicalize_group_input_default(NFType.VECTOR, (1,2,3)) == (1.0,2.0,3.0)
     with pytest.raises(CompileError):
         canonicalize_group_input_default(NFType.VECTOR, (1,2,3,4))
+
+
+def test_raw_color_output_input_and_named_outputs_preserve_physical_types():
+    """A Color Ramp output links to a Color consumer and named output values."""
+    group = _group('''def colors(factor: Float):
+    sample = node('ShaderNodeValToRGB', inputs={'Factor': factor}, outputs={'Color': Color, 'Alpha': Float})
+    red = node('FunctionNodeSeparateColor', inputs={'Color': sample.Color}, output='Red', typ=Float)
+    return (sample.Color, sample.Alpha, red)
+''')
+    ramp = next(n for n in group.nodes if n.bl_idname == 'ShaderNodeValToRGB')
+    separator = next(n for n in group.nodes if n.bl_idname == 'FunctionNodeSeparateColor')
+    assert ramp.outputs['Color'].bl_idname == 'NodeSocketColor'
+    assert separator.inputs['Color'].is_linked
+    assert [x.socket_type for x in _interfaces(group,'OUTPUT')] == [
+        'NodeSocketColor','NodeSocketFloat','NodeSocketFloat'
+    ]
+    assert all(link.is_valid for link in group.links)
+    from NodeForge.blender.raw_nodes import raw_node_spec, RAW_SCHEMA_VERSION
+    assert raw_node_spec(ramp)['schema_version'] == RAW_SCHEMA_VERSION
+    assert raw_node_spec(ramp)['outputs'][0].socket_type == 'NodeSocketColor'
+
+
+def test_raw_color_literal_metadata_copy_and_validation():
+    """Four-component Color literals keep alpha and their durable physical identity."""
+    import bpy
+    from NodeForge.blender.raw_nodes import copy_raw_node_properties, raw_node_spec, validate_raw_node_after_cutover
+
+    group = _group('''def color_red() -> Float:
+    return node('FunctionNodeSeparateColor', inputs={'Color':(2.0,0.2,0.3,0.4)}, output='Red', typ=Float)
+''')
+    src = next(n for n in group.nodes if n.bl_idname == 'FunctionNodeSeparateColor')
+    assert tuple(src.inputs['Color'].default_value) == pytest.approx((2.0,0.2,0.3,0.4))
+    spec = raw_node_spec(src)
+    assert spec['schema_version'] == 2
+    assert spec['inputs'][0]['socket'].socket_type == 'NodeSocketColor'
+    assert spec['inputs'][0]['default'] == pytest.approx([2.0,0.2,0.3,0.4])
+    dst = group.nodes.new('FunctionNodeSeparateColor')
+    copy_raw_node_properties(src, dst)
+    assert tuple(dst.inputs['Color'].default_value) == pytest.approx((2.0,0.2,0.3,0.4))
+    validate_raw_node_after_cutover(dst, group)
+
+
+@pytest.mark.parametrize('value,part', [
+    ('(0.1,0.2,0.3)', 'Color default'),
+    ('(0.1,0.2,0.3,0.4,0.5)', '3-/4-tuples'),
+    ('(True,0.2,0.3,0.4)', '3-/4-tuples'),
+    ('(-0.1,0.2,0.3,0.4)', 'Color default'),
+])
+def test_raw_color_bad_literals_fail(value, part):
+    """Reject malformed Color literals at the nearest type-aware boundary."""
+    with pytest.raises(CompileError, match=part):
+        _group(f'''def red() -> Float:
+    return node('FunctionNodeSeparateColor', inputs={{'Color':{value}}}, output='Red', typ=Float)
+''')
+
+
+def test_raw_color_vector_mismatches_fail_before_links():
+    """Typed output declarations and input links must match physical socket types."""
+    with pytest.raises(CompileError, match='expects COLOR, got VECTOR'):
+        _group('''def wrong(f: Float) -> Vector:
+    return node('ShaderNodeValToRGB', inputs={'Factor':f}, output='Color', typ=Vector)
+''')
+    with pytest.raises(CompileError, match='expects VECTOR, got COLOR'):
+        _group('''def wrong() -> Color:
+    return node('GeometryNodeInputPosition', output='Position', typ=Color)
+''')
+    with pytest.raises(CompileError, match='expects COLOR, got VECTOR'):
+        _group('''def wrong() -> Float:
+    return node('FunctionNodeSeparateColor', inputs={'Color':position()}, output='Red', typ=Float)
+''')
+    with pytest.raises(CompileError, match='actual Color socket'):
+        _group('''def wrong() -> Vector:
+    return node('ShaderNodeVectorMath', inputs={0:(1.0,0.2,0.3,0.4)}, output='Vector', typ=Vector)
+''')
