@@ -400,8 +400,7 @@ def _sync_capture_attribute_dynamic_items(src_group, node_map):
             raise CompileError(f"Capture copy: missing node or item collection for {src_node.name!r}")
         source_items = [(item.name, item.data_type) for item in src_node.capture_items]
         try:
-            for item in list(dst_node.capture_items):
-                dst_node.capture_items.remove(item)
+            dst_node.capture_items.clear()
         except Exception as exc:
             raise CompileError(f"Capture copy: failed to clear items on {src_node.name!r}: {exc}") from exc
         for item_name, persisted_type in source_items:
