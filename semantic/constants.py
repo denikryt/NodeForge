@@ -10,6 +10,7 @@ from ..nf_types import NFType
 # authorize raw type strings or define a second runtime type vocabulary.
 TYPE_FLOAT = NFType.FLOAT
 TYPE_VECTOR = NFType.VECTOR
+TYPE_COLOR = NFType.COLOR
 TYPE_BOOL = NFType.BOOL
 TYPE_GEOMETRY = NFType.GEOMETRY
 TYPE_INT = NFType.INT
@@ -31,6 +32,7 @@ TYPE_TOKEN_NAMES = {
     "Int": TYPE_INT,
     "Bool": TYPE_BOOL,
     "Vector": TYPE_VECTOR,
+    "Color": TYPE_COLOR,
     "Geometry": TYPE_GEOMETRY,
     "Material": TYPE_MATERIAL,
     "Object": TYPE_OBJECT,

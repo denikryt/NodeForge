@@ -38,7 +38,7 @@ class GroupInputContract:
         ):
             raise TypeError("GroupInputContract.interface_origin must be a compiler input identity or None")
         if self.has_default:
-            if self.typ not in {NFType.FLOAT, NFType.INT, NFType.BOOL, NFType.VECTOR, NFType.STRING}:
+            if self.typ not in {NFType.FLOAT, NFType.INT, NFType.BOOL, NFType.VECTOR, NFType.COLOR, NFType.STRING}:
                 raise ValueError("Only scalar/vector/string group inputs may own semantic defaults")
         elif self.default is not None:
             raise ValueError("Group input without semantic default must store default=None")
@@ -156,6 +156,22 @@ def source_argument_type_matches(expected: NFType, actual: NFType) -> bool:
     return expected is actual
 
 
+def canonicalize_color_components(value: object) -> tuple[float, float, float, float]:
+    """Canonicalize detached RGBA defaults as four finite nonnegative binary32 values."""
+    if type(value) not in {tuple, list} or len(value) != 4:
+        raise CompileError("Color default must contain exactly four numeric RGBA components")
+    components = []
+    for index, item in enumerate(value):
+        if type(item) not in {float, int} or item < 0:
+            raise CompileError(f"Color default component {index} must be finite and nonnegative")
+        try:
+            component = normalize_float_constant(item)
+        except CompileError as exc:
+            raise CompileError(f"Color default component {index}: {exc}") from exc
+        components.append(component)
+    return tuple(components)
+
+
 def canonicalize_group_input_default(typ: NFType, value: object) -> object:
     """Return the detached canonical default used for semantic/physical parity."""
     if typ is NFType.FLOAT:
@@ -166,6 +182,8 @@ def canonicalize_group_input_default(typ: NFType, value: object) -> object:
         if type(value) is not bool:
             raise CompileError("Bool group input default must be Bool")
         return value
+    if typ is NFType.COLOR:
+        return canonicalize_color_components(value)
     if typ is NFType.VECTOR:
         try:
             values = tuple(value)
@@ -296,6 +314,7 @@ __all__ = [
     "bind_imported_source_arguments",
     "bind_unified_source_arguments",
     "canonicalize_group_input_default",
+    "canonicalize_color_components",
     "normalize_callable_keyword",
     "project_group_input_layout",
     "source_argument_type_matches",
