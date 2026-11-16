@@ -20,6 +20,7 @@ _PUBLIC_TYPE_TOKENS = {
     "Int",
     "Bool",
     "Vector",
+    "Color",
     "Geometry",
     "Material",
     "Object",
@@ -47,7 +48,7 @@ def test_explicit_serialization_is_strict_and_stable():
     with pytest.raises(TypeError, match="token must be a string"):
         deserialize_nf_type(NFType.FLOAT)
     with pytest.raises(ValueError, match="Unknown NodeForge type token"):
-        deserialize_nf_type("COLOR")
+        deserialize_nf_type("UNKNOWN_COLOR")
 
 
 def test_source_type_tokens_remain_exact_and_rotation_stays_internal_only():
