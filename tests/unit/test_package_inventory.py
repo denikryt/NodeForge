@@ -403,9 +403,8 @@ def test_current_python_requirement_is_recomputed_on_load(package_inventory, tmp
     (active_root / "functions" / "demo" ).mkdir()
     (active_root / "functions" / "demo" / "function.py").write_text("X = 1\n", encoding="utf-8")
 
-    assert manifest.package_id not in {m.package_id for m in packages.active_package_manifests()}
-    assert any(getattr(item, "package_id", None) == manifest.package_id for item in packages.active_package_manifests(include_invalid=True))
-
+    # A same-stem module and directory are separate valid physical owners.
+    assert manifest.package_id in {m.package_id for m in packages.active_package_manifests()}
 
 
 def test_manifest_version_bounds_are_enforced_before_commit(package_inventory, tmp_path):
@@ -675,17 +674,20 @@ def test_manifest_rejects_dot_and_empty_segments_in_content_roots(package_invent
         assert f"vendor.badpath{index}" not in packages.load_package_state()["packages"]
 
 
-def test_directory_install_rejects_internal_duplicate_function_public_names(package_inventory, tmp_path):
+def test_directory_install_accepts_module_and_directory_with_same_stem(package_inventory, tmp_path):
     source = tmp_path / "dupe_functions"
     (source / "functions" / "foo").mkdir(parents=True)
     (source / "functions" / "foo.nf").write_text("output(value=1)\n", encoding="utf-8")
     (source / "functions" / "foo" / "source.nf").write_text("output(value=2)\n", encoding="utf-8")
     _write_manifest(source, package_id="vendor.dupefunc")
 
-    with pytest.raises(packages.PackageError, match="Duplicate functions library entry"):
-        packages.install_package_directory(source)
-
-    assert "vendor.dupefunc" not in packages.load_package_state()["packages"]
+    installed = packages.install_package_directory(source)
+    assert installed.package_id == "vendor.dupefunc"
+    from NodeForge.package_function_index import scan_package_functions
+    owners = scan_package_functions(installed.root / "functions")
+    assert [(owner.canonical_owner, owner.kind) for owner in owners] == [
+        ("foo", "script"), ("foo", "script"),
+    ]
 
 
 def test_zip_install_rejects_internal_duplicate_example_public_names(package_inventory, tmp_path):
