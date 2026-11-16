@@ -134,6 +134,8 @@ class NODEFORGE_FunctionItem(PropertyGroup):
     package_name: StringProperty(name="Package", default="")
     root_path: StringProperty(name="Source Root", default="")
     source_label: StringProperty(name="Source", default="")
+    member_path: StringProperty(name="Canonical Member", default="")
+    materializable: BoolProperty(name="Source-backed Add", default=True)
     managed: BoolProperty(name="Managed", default=False)
 
 
@@ -178,7 +180,7 @@ class NODEFORGE_UL_function_library(UIList):
             return
         row.label(
             text=getattr(item, "source_label", "") or item.name,
-            icon='CONSOLE' if kind == 'runtime' or item.path.endswith('.py') else 'NODETREE',
+            icon='CONSOLE' if kind in {'runtime', 'extension', 'native'} or item.path.endswith('.py') else 'NODETREE',
         )
         if getattr(item, "package_id", ""):
             row.label(text=item.package_id)
@@ -276,6 +278,9 @@ def _refresh_catalog_items(props, namespace: str):
         old_path = getattr(items[old_index], "path", "")
         old_kind = getattr(items[old_index], "kind", "")
         old_package_id = getattr(items[old_index], "package_id", "")
+    old_member_path = ""
+    if 0 <= old_index < len(items):
+        old_member_path = getattr(items[old_index], "member_path", "")
     items.clear()
     if namespace == "local":
         records = local_browser_records(getattr(props, "local_browser_path", ""))
@@ -284,12 +289,27 @@ def _refresh_catalog_items(props, namespace: str):
         # every Local root (including Python AST parsing) for an unrelated catalog.
         environment = (_make_compilation_environment() if namespace == "examples"
                        else resolve_environment())
-        selected = (
-            environment.package_function_records()
-            if namespace == "functions"
-            else environment.catalog(namespace).records()
-        )
-        records = [record.as_dict() for record in selected]
+        if namespace == "functions":
+            # Library rows use the canonical per-definition index. A single .nf
+            # module can export several named functions and different modules
+            # may legitimately export the same leaf.
+            records = []
+            for package in sorted(environment.package_namespaces.values(),
+                                  key=lambda owner: (owner.import_name.lower(), owner.package_id)):
+                # A broken package retains its import reservation, while other
+                # installed packages remain browsable in Library.
+                if package.failure is not None:
+                    continue
+                for export in package.canonical_records():
+                    if export.record is None:  # Systems are separate from Functions.
+                        continue
+                    record = export.record.as_dict()
+                    record.update(name=export.name, member_path=export.qualified_name,
+                                  source_label=export.qualified_name,
+                                  materializable=export.definition is not None)
+                    records.append(record)
+        else:
+            records = [record.as_dict() for record in environment.catalog(namespace).records()]
     from collections import Counter
     duplicate_names = Counter(record.get("name", "") for record in records) if namespace == "examples" else {}
     for record in records:
@@ -298,13 +318,16 @@ def _refresh_catalog_items(props, namespace: str):
         item.kind = record.get("kind", "")
         item.path = record.get("path", "")
         item.folder_path = record.get("folder_path", "")
+        if namespace == "functions":
+            item.member_path = record["member_path"]
+            item.materializable = record["materializable"]
         if hasattr(item, "package_id"):
             item.package_id = record.get("package_id", "")
             item.package_name = record.get("package_name", "")
         if hasattr(item, "root_path"):
             item.root_path = str(record.get("root_path", ""))
             # File rows show their own names; qualify duplicate Examples only.
-            label = ""
+            label = record.get("source_label", "")
             if namespace == "examples" and duplicate_names[record.get("name", "")] > 1:
                 label = "/".join(part for part in (record.get("folder_path", ""), record.get("name", "")) if part)
             item.source_label = label
@@ -317,7 +340,8 @@ def _refresh_catalog_items(props, namespace: str):
                     setattr(props, index_prop, index)
                     break
             elif namespace == "functions":
-                if item.name == old_name and getattr(item, "package_id", "") == old_package_id:
+                if (getattr(item, "package_id", "") == old_package_id
+                        and item.member_path == old_member_path):
                     setattr(props, index_prop, index)
                     break
             elif (item.name == old_name and item.path == old_path
@@ -785,6 +809,11 @@ class NODEFORGE_OT_create_function_group(Operator):
         if self.namespace == "local" and getattr(item, "kind", "") not in {"script", "linked_script"}:
             self.report({'ERROR'}, "Select a Local script, not a folder")
             return {'CANCELLED'}
+        if self.namespace == "functions" and not getattr(item, "materializable", False):
+            self.report({'ERROR'},
+                "Native Extension API v2 callables are used in .nf scripts; "
+                "Library Add requires a source-backed .nf definition")
+            return {'CANCELLED'}
 
         tree = _active_gn_tree(context)
         if tree is None and self.namespace not in {"local", "examples"}:
@@ -793,7 +822,7 @@ class NODEFORGE_OT_create_function_group(Operator):
 
         try:
             if self.namespace == "functions":
-                group = create_package_function_group(item.package_id, item.name)
+                group = create_package_function_group(item.package_id, item.member_path)
                 installed_modifier = False
             elif self.namespace in {"local", "examples"}:
                 group, installed_modifier = create_selected_library_group_auto(
@@ -1149,7 +1178,10 @@ def _draw_library_catalog_panel(layout, context, namespace: str, collection_name
                        and item.path.endswith(".nf"))
     row.enabled = (item is not None and (editor_ready or selected_script)
                    and not (namespace in {"local", "examples"} and
-                            (item.kind == "runtime" or item.path.endswith(".py"))))
+                            (item.kind == "runtime" or item.path.endswith(".py")))
+                   and not (namespace == "functions" and not getattr(item, "materializable", False)))
+    if namespace == "functions" and item is not None and not item.materializable:
+        layout.label(text="Native callable: use it from an .nf script", icon='INFO')
     op = row.operator(NODEFORGE_OT_create_function_group.bl_idname, text="Add Node Group", icon='NODETREE')
     op.namespace = namespace
     if namespace == "local":

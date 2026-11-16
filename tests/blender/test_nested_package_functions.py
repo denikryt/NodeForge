@@ -81,3 +81,64 @@ def native(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...
     )
     try:assert all(link.is_valid for link in group.links)
     finally:bpy.data.node_groups.remove(group)
+
+
+def test_functions_browser_preserves_exact_canonical_selection(tmp_path):
+    """The UI index exposes both same-named definitions and retains the selected path."""
+    from types import SimpleNamespace
+    from NodeForge import ui
+
+    class Rows(list):
+        """Minimal Blender collection with the UI's add/clear contract."""
+        def add(self):
+            """Append one mutable record as an actual CollectionProperty would."""
+            row=SimpleNamespace(package_id='', package_name='', source_label='', root_path='')
+            self.append(row)
+            return row
+
+    _install_source_package(tmp_path/'source')
+    props=SimpleNamespace(function_items=Rows(), function_index=0)
+    assert ui._refresh_catalog_items(props, 'functions') == 2
+    assert {x.member_path for x in props.function_items} == {
+        'curve.primitives.shared','mesh.primitives.shared',
+    }
+    assert all(x.materializable for x in props.function_items)
+    selected=next(i for i,x in enumerate(props.function_items)
+                  if x.member_path=='mesh.primitives.shared')
+    props.function_index=selected
+    assert ui._refresh_catalog_items(props, 'functions') == 2
+    assert props.function_items[props.function_index].member_path=='mesh.primitives.shared'
+    assert all(x.package_id=='vendor.nested' for x in props.function_items)
+
+
+def test_native_ui_row_is_discoverable_but_non_materializable(tmp_path):
+    """The Function Library retains native rows without advertising Add support."""
+    from types import SimpleNamespace
+    from NodeForge import ui
+
+    source=tmp_path/'source';owner=source/'functions/mesh/native';owner.mkdir(parents=True)
+    (owner/'interface.py').write_text('''from typing import Annotated
+from NodeForge import Float, EvaluationMode
+EXTENSION_API = 2
+EXTENSIONS = {"native": ".backend:build"}
+def native(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...
+''')
+    (owner/'backend.py').write_text('def build(context, value): return value\n')
+    (source/'nodeforge_package.json').write_text(json.dumps({
+        'schema_version':1,'id':'vendor.native','import_name':'native',
+        'name':'Native','version':'1.0.0','author':'Tests',
+        'nodeforge_min_version':'0.65.0', 'contents':{'functions':'functions'},
+        'permissions':{'python':True},
+    }))
+    packages.install_package_directory(source)
+    class Rows(list):
+        """Blender collection stand-in for metadata-only selection tests."""
+        def add(self):
+            """Add one empty row."""
+            row=SimpleNamespace();self.append(row);return row
+    props=SimpleNamespace(function_items=Rows(),function_index=0)
+    assert ui._refresh_catalog_items(props,'functions')==1
+    row=props.function_items[0]
+    assert row.member_path=='mesh.native'
+    assert row.kind=='extension'
+    assert row.materializable is False

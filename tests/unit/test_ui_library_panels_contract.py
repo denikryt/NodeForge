@@ -135,10 +135,10 @@ def test_functions_ui_preserves_and_forwards_package_owner_identity():
     refresh_end = source.index("def _selected_catalog_item", refresh_start)
     refresh_block = source[refresh_start:refresh_end]
     assert 'item.package_id = record.get("package_id", "")' in refresh_block
-    assert 'item.name == old_name and getattr(item, "package_id", "") == old_package_id' in refresh_block
+    assert 'item.member_path == old_member_path' in refresh_block
 
     operator_start = source.index("class NODEFORGE_OT_create_function_group")
     operator_end = source.index("class ", operator_start + 1)
     operator_block = source[operator_start:operator_end]
-    assert "create_package_function_group(item.package_id, item.name)" in operator_block
+    assert "create_package_function_group(item.package_id, item.member_path)" in operator_block
     assert 'create_library_catalog_group("functions", item.name)' not in operator_block
