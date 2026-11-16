@@ -19,7 +19,7 @@ from NodeForge.nf_types import NFType
 pytestmark = pytest.mark.blender
 
 
-def _write_color_extension(root: Path) -> None:
+def _write_color_extension(root: Path, *, source_functions: bool = False) -> None:
     """Install one owner-local package exercising exact and finite-union Color arguments."""
     owner = root / 'systems' / 'color_runtime'
     owner.mkdir(parents=True)
@@ -32,7 +32,7 @@ def _write_color_extension(root: Path) -> None:
         'description': 'Typed Color Extension v2 fixture',
         'nodeforge_min_version': '0.59.0',
         'nodeforge_max_version': None,
-        'contents': {'systems': 'systems'},
+        'contents': {'systems': 'systems', **({'functions': 'functions'} if source_functions else {})},
         'permissions': {'python': True},
     }), encoding='utf-8')
     (owner / 'interface.py').write_text('''
@@ -91,6 +91,20 @@ def emit_color(context, tint):
 def bad_color_result(context, factor):
     node = context.group.nodes.new('ShaderNodeValToRGB')
     return ExtensionBackendValue(node.outputs['Color'], NFType.VECTOR)
+''', encoding='utf-8')
+    if source_functions:
+        functions = root / 'functions'
+        functions.mkdir()
+        (functions / 'color_bridge.nf').write_text('''from packages import color_runtime
+
+def extension_to_raw(factor: Float):
+    tint = make_color(factor)
+    red = node('FunctionNodeSeparateColor', inputs={'Color': tint}, output='Red', typ=Float)
+    return (tint, red)
+
+def raw_to_extension(factor: Float) -> Color:
+    tint = node('ShaderNodeValToRGB', inputs={'Factor': factor}, output='Color', typ=Color)
+    return identity_color(tint)
 ''', encoding='utf-8')
 
 
@@ -226,3 +240,47 @@ def test_invalid_static_color_arguments_fail_in_compiler(rgba):
 def bad() -> Color:
     return emit_static_color({rgba})
 ''', 'NFTest_ColorExt_BadStatic')
+
+
+def test_package_source_color_roundtrips_through_python_and_raw_nodes(tmp_path):
+    """Installed .nf callables bridge Extension API Color in both directions and multi-returns."""
+    from NodeForge import compiler
+    from NodeForge.environment_resolution import resolve_environment
+    packages.set_packages_dir_for_tests(tmp_path / 'installed')
+    try:
+        root=tmp_path/'source'
+        _write_color_extension(root, source_functions=True)
+        packages.install_package_directory(root)
+        wrapper=bpy.data.node_groups.new('NFTest_ColorExt_Root','GeometryNodeTree')
+        compiler.compose_source_initial('''from packages import color_runtime
+
+first = color_runtime.extension_to_raw(0.2)
+second = color_runtime.extension_to_raw(0.3, __unique__=True)
+third = color_runtime.raw_to_extension(0.5)
+''', wrapper)
+        groups=[n.node_tree for n in wrapper.nodes if n.bl_idname=='GeometryNodeGroup']
+        assert len(groups)==3
+        assert groups[0] is not groups[1]
+        assert all(all(link.is_valid for link in group.links) for group in groups)
+        assert any(n.bl_idname=='ShaderNodeValToRGB' for group in groups for n in group.nodes)
+        assert any(n.bl_idname=='FunctionNodeSeparateColor' for group in groups for n in group.nodes)
+        assert any(s.bl_idname=='NodeSocketColor' for n in wrapper.nodes for s in n.outputs)
+
+        # Source Reload replaces only the selected .nf group while retaining external users.
+        target=next(g for g in groups if any(n.bl_idname=='FunctionNodeSeparateColor' for n in g.nodes))
+        pointer=target.as_pointer()
+        external_links=[(l.from_socket.bl_idname,l.to_socket.bl_idname) for l in wrapper.links]
+        record=resolve_environment().package_by_id('vendor.extension.color_runtime').find('extension_to_raw').record
+        path=Path(record.source_path)
+        old=path.read_text(encoding='utf8')
+        path.write_text(old.replace("output='Red'", "output='Green'"),encoding='utf8')
+        try:
+            assert compiler.update_library_catalog_group(target) is target
+            assert target.as_pointer()==pointer
+            assert all(link.is_valid for link in target.links)
+            assert any(n.bl_idname=='FunctionNodeSeparateColor' for n in target.nodes)
+            assert [(l.from_socket.bl_idname,l.to_socket.bl_idname) for l in wrapper.links]==external_links
+        finally:
+            path.write_text(old,encoding='utf8')
+    finally:
+        packages.set_packages_dir_for_tests(None)

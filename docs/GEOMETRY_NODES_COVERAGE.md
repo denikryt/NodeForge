@@ -17,13 +17,13 @@ This document shows the Blender Geometry Nodes areas and domains currently cover
 | Runtime socket: Bool | Yes | `Bool` |
 | Runtime socket: Vector | Yes | `Vector` |
 | Runtime socket: String | Yes | `String` function parameters |
-| Runtime socket: Color | No | Missing type |
+| Runtime socket: Color | Yes | `Color` in `.nf`/raw `node()`, group defaults, Switch/Repeat/Bundle, Capture/attributes, Extension API v2 |
 | Runtime socket: Material | Yes | `Material` function parameters |
 | Runtime socket: Object | Yes | `Object` function parameters |
 | Runtime socket: Bundle | Yes | `Bundle` function parameters |
 | Runtime socket: Collection | No | Missing type |
 | Runtime socket: Image | No | Missing type |
-| Runtime socket: Rotation | No | Missing type |
+| Runtime socket: Rotation | Yes | `Rotation` in typed Blender sockets and Extension API v2 |
 | Runtime socket: Matrix | No | Missing type |
 | Constant input nodes | Partial | Supported types only |
 | Scene input nodes | Partial | Object Info through `Object` properties |
@@ -47,7 +47,7 @@ This document shows the Blender Geometry Nodes areas and domains currently cover
 | Noise texture | Partial | `noise(...)` only |
 | Texture nodes | Partial | Noise only |
 | Image texture | No | No `Image` socket |
-| Color utilities | No | No `Color` socket |
+| Color utilities | Partial | `Color` sockets through `node(...)`; no dedicated color-function library |
 | Runtime String socket | Yes | Typed function, raw-node, and library sockets; runtime attribute names |
 | Compile-time strings | Yes | Names, identifiers, and raw-node declarations |
 | Vector construction | Yes | `vector(x, y, z)` |
@@ -116,8 +116,8 @@ This document shows the Blender Geometry Nodes areas and domains currently cover
 | Local functions | Yes | Typed parameters and single or flat multi-value returns |
 | Reusable library imports | Yes | `from packages import ...`, `from examples import ...`, `from local import ...` |
 | Compile-time `for` loops | Yes | Unrolled graph generation |
-| Runtime repeat loops | Partial | Nested repeat-style loops; supported state types only |
-| Runtime `if` / switch logic | Partial | Compatible Float, Int, Vector, Bool, Geometry, String, and Bundle branch values |
+| Runtime repeat loops | Partial | Nested repeat-style loops; Color carried state supported |
+| Runtime `if` / switch logic | Partial | Compatible Float, Int, Vector, Color, Bool, Geometry, String, and Bundle branch values |
 | Arrays / compile-time lists | Partial | Compile-time structure only |
 | L-systems | Package | `ls.system(...)` from [NodeForge L-System](LSYSTEMS.md) |
 | Raw Blender node creation | Raw only | `node(...)`; NodeForge runtime socket types only |
