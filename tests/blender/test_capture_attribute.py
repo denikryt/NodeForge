@@ -95,3 +95,59 @@ def nf_fixture():
     check(selection is not None, "Store Named Attribute Selection input missing")
     check(not selection.is_linked, "omitted Store selection unexpectedly linked")
     check(bool(selection.default_value) is True, "omitted Store selection is not explicitly True")
+
+
+@pytest.mark.parametrize('constructor,persisted,physical', [
+    ('FLOAT', 'FLOAT', 'NodeSocketFloat'),
+    ('VECTOR', 'FLOAT_VECTOR', 'NodeSocketVector'),
+    ('RGBA', 'FLOAT_COLOR', 'NodeSocketColor'),
+])
+@pytest.mark.parametrize('role', ['backup', 'cutover'])
+@pytest.mark.parametrize('linked', [True, False])
+def test_capture_copy_preserves_linked_and_unlinked_item_contract(
+    constructor, persisted, physical, role, linked
+):
+    """Transactional copies must preserve every dynamic Capture item and its links."""
+    src = bpy.data.node_groups.new('NFTest_capture_copy_source', 'GeometryNodeTree')
+    capture = src.nodes.new('GeometryNodeCaptureAttribute')
+    capture.capture_items.new(constructor, 'Stored')
+    assert capture.capture_items[0].data_type == persisted
+    if linked:
+        src.interface.new_socket(name='Stored',in_out='OUTPUT',socket_type=physical)
+        src_output = src.nodes.new('NodeGroupOutput')
+        src.links.new(capture.outputs['Stored'], src_output.inputs['Stored'])
+        assert all(link.is_valid for link in src.links)
+    dst = bpy.data.node_groups.new('NFTest_capture_copy_target', 'GeometryNodeTree')
+    blender_group_backend._copy_group_contents(src, dst, copy_role=role)
+    restored = next(n for n in dst.nodes if n.bl_idname=='GeometryNodeCaptureAttribute')
+    assert [(item.name,item.data_type) for item in restored.capture_items] == [('Stored',persisted)]
+    assert restored.outputs['Stored'].bl_idname == physical
+    assert len(dst.links) == (1 if linked else 0)
+    assert all(link.is_valid for link in dst.links)
+
+
+def test_capture_copy_fails_on_unknown_data_type_without_modifying_authoritative_source():
+    """An unsupported, unlinked item aborts rather than silently disappearing."""
+    src = bpy.data.node_groups.new('NFTest_capture_bad_source','GeometryNodeTree')
+    cap = src.nodes.new('GeometryNodeCaptureAttribute')
+    cap.capture_items.new('ROTATION','UnsupportedNow')
+    assert cap.capture_items[0].data_type == 'QUATERNION'
+    dst = bpy.data.node_groups.new('NFTest_capture_bad_destination','GeometryNodeTree')
+    with pytest.raises(CompileError, match='unsupported persisted data type'):
+        blender_group_backend._copy_group_contents(src,dst,copy_role='backup')
+    assert len(cap.capture_items)==1
+    assert cap.capture_items[0].data_type == 'QUATERNION'
+
+
+def test_capture_root_update_reconstruction_uses_same_checked_helper():
+    """The shared root-update restoration path preserves unlinked Color items."""
+    from NodeForge.blender import root_update
+    src = bpy.data.node_groups.new('NFTest_capture_root_reconstruct','GeometryNodeTree')
+    old=src.nodes.new('GeometryNodeCaptureAttribute')
+    old.capture_items.new('RGBA','Tint')
+    backup = bpy.data.node_groups.new('NFTest_capture_backup','GeometryNodeTree')
+    cloned=backup.nodes.new('GeometryNodeCaptureAttribute')
+    cloned.name=old.name
+    root_update._sync_capture_attribute_dynamic_items(src, {old.name:cloned})
+    assert [(item.name,item.data_type) for item in cloned.capture_items] == [('Tint','FLOAT_COLOR')]
+    assert cloned.outputs['Tint'].bl_idname == 'NodeSocketColor'
