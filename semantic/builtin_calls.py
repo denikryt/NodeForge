@@ -1120,7 +1120,7 @@ def _analyze_sample_index_operation(
     _require_type(
         value_typ,
         set(ATTRIBUTE_DATA_TYPES),
-        "sample_index() value supports Float, Int, Bool and Vector",
+        "sample_index() value supports Float, Int, Bool and Vector (also Color)",
     )
 
     if runtime_index:
@@ -1154,7 +1154,7 @@ def _capture_result_type(value_typ: NFType, data_type: str | None) -> NFType:
     else:
         result = {token: typ for typ, token in CAPTURE_ITEM_TYPES.items()}.get(data_type.upper())
     if result is None:
-        raise CompileError("capture_attribute() supports Float, Int, Bool and Vector values")
+        raise CompileError("capture_attribute() supports Float, Int, Bool and Vector values (also Color)")
     return result
 
 

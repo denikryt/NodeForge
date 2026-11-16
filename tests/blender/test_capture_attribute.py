@@ -33,21 +33,25 @@ def nf_fixture():
         check(bool(selection.default_value) is True, "omitted Capture Attribute selection is not explicitly True")
 
 
-def test_capture_attribute_rejects_color_until_nodeforge_has_color_type():
-    expect_compile_error('''
-def nf_fixture():
+def test_capture_attribute_color_constructor_and_override():
+    """Color values use RGBA constructors and FLOAT_COLOR persisted item tokens."""
+    group = compile_group('''
+def nf_fixture(color: Color):
     geo = grid(2, 2)
-    geo, captured = capture_attribute(geo, position().x, type="FLOAT_COLOR")
-    geometry = geo
-    return (geometry,)
-''', "NFTest_capture_attribute_color_unsupported")
+    geo, captured = capture_attribute(geo, color, type="RGBA")
+    return (geo, captured)
+''' , "NFTest_capture_attribute_color")
+    nodes = _capture_nodes(group)
+    check(len(nodes)==1, "Color Capture node missing")
+    check(nodes[0].capture_items[0].data_type=='FLOAT_COLOR', "Color persisted type mismatch")
+    check(nodes[0].outputs['Value'].bl_idname=='NodeSocketColor', "Color output socket mismatch")
+    check(all(link.is_valid for link in group.links), "Color Capture has invalid Blender links")
     expect_compile_error('''
-def nf_fixture():
-    geo = grid(2, 2)
-    geo, captured = capture_attribute(geo, position().x, type="RGBA")
-    geometry = geo
-    return (geometry,)
-''', "NFTest_capture_attribute_rgba_socket_unsupported")
+def nf_fixture(color: Color):
+    geo = grid(2,2)
+    geo, captured = capture_attribute(geo, color, type="FLOAT_COLOR")
+    return (geo,captured)
+''' , "NFTest_capture_invalid_constructor_token")
 
 
 def test_capture_attribute_rejects_blender_domains_outside_nodeforge_contract():

@@ -37,11 +37,11 @@ def test_supported_operation_tokens_match_pre_color_contract():
     }
     assert dict(CAPTURE_ITEM_TYPES) == {
         NFType.FLOAT: 'FLOAT', NFType.INT: 'INT', NFType.BOOL: 'BOOLEAN',
-        NFType.VECTOR: 'VECTOR',
+        NFType.VECTOR: 'VECTOR', NFType.COLOR: 'RGBA',
     }
     assert dict(ATTRIBUTE_DATA_TYPES) == {
         NFType.FLOAT: 'FLOAT', NFType.INT: 'INT', NFType.VECTOR: 'FLOAT_VECTOR',
-        NFType.BOOL: 'BOOLEAN',
+        NFType.BOOL: 'BOOLEAN', NFType.COLOR: 'FLOAT_COLOR',
     }
     for typ, token in REPEAT_ITEM_TYPES.items():
         assert _repeat_item_type_for_nf_type(typ) == token
