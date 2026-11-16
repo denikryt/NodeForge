@@ -951,8 +951,10 @@ def _normalize_package_callable_inventory(
                         f"Native-only library {namespace}/{name} must declare exactly one EXTENSIONS key equal to {leaf!r}"
                     )
         for name, system_id in system_names.items():
+            # Only native directory owners occupy a true package-root callable
+            # slot. Root .nf modules expose definitions at module.def paths.
             function_path = libraries["functions"].get(name)
-            if function_path is not None:
+            if function_path is not None and function_path.is_dir():
                 raise PackageError(
                     f"Public name collision {name!r}: function and constructor both declared by "
                     f"{manifest.package_id} ({function_path} and system {system_id})"

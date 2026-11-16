@@ -94,8 +94,6 @@ def test_package_exports_use_one_revision_even_if_source_changes_after_discovery
 
 
 @pytest.mark.parametrize('files, diagnostics', [
-    ({'a.nf': 'def move(x: Float):\n    return x\n',
-      'b.nf': 'def move(x: Float):\n    return x * 2\n'}, ('a.nf', 'b.nf')),
     ({'a.nf': 'def move(:\n    return 1\n'}, ('Syntax',)),
 ])
 def test_invalid_package_exports_remain_visible_as_explicit_access_errors(tmp_path, files, diagnostics):
@@ -119,8 +117,8 @@ def test_unknown_package_function_reports_selected_member_name(tmp_path):
         _resolve_member(resolve_environment(), 'resize')
 
 
-def test_source_definition_collides_with_extension_api_export(tmp_path):
-    """Function declarations cannot shadow physical Extension API v2 members."""
+def test_root_system_callable_precedes_module_qualified_source_alias(tmp_path):
+    """An exact system-root name wins the short alias; the source remains reachable."""
     _install(tmp_path / 'pkg', {
         'geometry.nf': 'def move(x: Float):\n    return x\n',
     })
@@ -149,9 +147,9 @@ def test_source_definition_collides_with_extension_api_export(tmp_path):
     packages.install_package_directory(root, replace=True)
     namespace = resolve_environment().package_by_import_name('shapes')
     assert namespace is not None
-    assert not namespace.exports
-    with pytest.raises(CompileError, match='move'):
-        _resolve_member(resolve_environment(), 'move')
+    assert namespace.exports['move'].extension_callable_id is not None
+    assert namespace.find_path('geometry.move').definition.name == 'move'
+    assert namespace.find_path('move') is namespace.exports['move']
 
 
 def test_imported_package_definition_compiles_from_captured_snapshot(tmp_path):

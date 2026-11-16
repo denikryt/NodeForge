@@ -809,7 +809,7 @@ def test_cross_package_extension_and_function_names_may_overlap_reverse_order(pa
     assert {"vendor.functionowner", "vendor.constructorfunc"} <= set(packages.load_package_state()["packages"])
 
 
-def test_install_rejects_same_package_function_and_constructor_name(package_inventory, tmp_path):
+def test_install_allows_system_name_matching_an_unrelated_module_stem(package_inventory, tmp_path):
     source = tmp_path / "same_package_collision"
     (source / "functions").mkdir(parents=True)
     (source / "functions" / "marker.nf").write_text("output(value=1)\n", encoding="utf-8")
@@ -822,10 +822,9 @@ def test_install_rejects_same_package_function_and_constructor_name(package_inve
     )
     _write_v2_system(source / "systems" / "test", "marker")
 
-    with pytest.raises(packages.PackageError, match="function and constructor"):
-        packages.install_package_directory(source)
-
-    assert "vendor.samecollision" not in packages.load_package_state()["packages"]
+    installed = packages.install_package_directory(source)
+    assert installed.package_id == "vendor.samecollision"
+    assert installed.package_id in packages.load_package_state()["packages"]
 
 
 def test_replace_allows_cross_owner_member_overlap(package_inventory, tmp_path):
