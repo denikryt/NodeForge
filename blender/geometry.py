@@ -40,7 +40,7 @@ def _store_named_attribute(
     else:
         data_type = _attribute_data_type(value.typ)
     if data_type is None:
-        raise CompileError("store(name, value) supports Float, Int, Vector and Bool values")
+        raise CompileError("store(name, value) supports Float, Int, Vector and Bool values (also Color)")
     domain = normalize_attribute_domain(domain, "store()")
     node = _new_node(group, "GeometryNodeStoreNamedAttribute", x, y)
     node.data_type = data_type
@@ -430,7 +430,7 @@ def _sample_index_geometry(group, geometry, value, index, *, domain, clamp, x=0,
         raise CompileError("sample_index() value must be a runtime field")
     data_type = _attribute_data_type(value.typ)
     if data_type is None:
-        raise CompileError("sample_index() value supports Float, Int, Bool and Vector")
+        raise CompileError("sample_index() value supports Float, Int, Bool and Vector (also Color)")
     domain = normalize_attribute_domain(domain, "sample_index()")
     if type(clamp) is not bool:
         raise CompileError("sample_index() clamp= must be a compile-time Bool")
@@ -466,7 +466,7 @@ def _capture_attribute_geometry(group, geometry, value, *, selection, domain, da
     socket_type_to_value_type = {token: typ for typ, token in CAPTURE_ITEM_TYPES.items()}
     socket_type = (data_type.upper() if data_type else CAPTURE_ITEM_TYPES.get(value.typ))
     if socket_type not in socket_type_to_value_type:
-        raise CompileError("capture_attribute() supports Float, Int, Bool and Vector values")
+        raise CompileError("capture_attribute() supports Float, Int, Bool and Vector values (also Color)")
     domain = normalize_attribute_domain(domain, "capture_attribute()")
     if selection is not None and (not isinstance(selection, Value) or selection.typ != TYPE_BOOL):
         raise CompileError("capture_attribute() selection= must be a Bool expression")

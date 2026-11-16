@@ -33,6 +33,7 @@ CAPTURE_ITEM_TYPES = MappingProxyType({
     NFType.INT: "INT",
     NFType.BOOL: "BOOLEAN",
     NFType.VECTOR: "VECTOR",
+    NFType.COLOR: "RGBA",
 })
 
 ATTRIBUTE_DATA_TYPES = MappingProxyType({
@@ -40,6 +41,7 @@ ATTRIBUTE_DATA_TYPES = MappingProxyType({
     NFType.INT: "INT",
     NFType.VECTOR: "FLOAT_VECTOR",
     NFType.BOOL: "BOOLEAN",
+    NFType.COLOR: "FLOAT_COLOR",
 })
 
 __all__ = [

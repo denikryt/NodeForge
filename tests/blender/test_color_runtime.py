@@ -206,3 +206,59 @@ def test_color_branch_type_mismatch_remains_invalid():
         value='x'
     return value
 ''')
+
+
+def test_color_capture_store_and_sample_index_use_distinct_blender_tokens():
+    """Capture takes RGBA constructor tokens; Blender stores FLOAT_COLOR attributes."""
+    source = '''def fields(tint: Color):
+    geo=grid(2,2)
+    geo, captured=capture_attribute(geo,tint)
+    geo=store_named_attribute(geo,'tint',captured)
+    sample=sample_index(geo,captured,1)
+    return (geo,captured,sample)
+'''
+    group = _group(source)
+    capture=next(n for n in group.nodes if n.bl_idname=='GeometryNodeCaptureAttribute')
+    store=next(n for n in group.nodes if n.bl_idname=='GeometryNodeStoreNamedAttribute')
+    sample=next(n for n in group.nodes if n.bl_idname=='GeometryNodeSampleIndex')
+    assert capture.capture_items[0].data_type == 'FLOAT_COLOR'
+    assert capture.outputs['Value'].bl_idname == 'NodeSocketColor'
+    assert store.data_type == sample.data_type == 'FLOAT_COLOR'
+    assert [x.socket_type for x in _interfaces(group,'OUTPUT')] == [
+        'NodeSocketGeometry','NodeSocketColor','NodeSocketColor'
+    ]
+    assert all(link.is_valid for link in group.links)
+
+
+def test_legacy_explicit_capture_and_store_type_overrides_are_retained():
+    """Explicit overrides preserve Blender-supported Float-to-Vector/Color links."""
+    group = _group('''def legacy():
+    geo=grid(2,2)
+    geo, captured=capture_attribute(geo,position().x,type='VECTOR')
+    geo=store_named_attribute(geo,'color',position().x,type='COLOR')
+    return (geo,captured)
+''')
+    capture=next(n for n in group.nodes if n.bl_idname=='GeometryNodeCaptureAttribute')
+    store=next(n for n in group.nodes if n.bl_idname=='GeometryNodeStoreNamedAttribute')
+    assert capture.capture_items[0].data_type == 'FLOAT_VECTOR'
+    assert capture.outputs['Value'].bl_idname=='NodeSocketVector'
+    assert store.data_type == 'FLOAT_COLOR'
+    assert any(l.from_socket.bl_idname=='NodeSocketFloat' and l.to_socket.bl_idname=='NodeSocketColor' for l in group.links)
+    assert all(link.is_valid for link in group.links)
+
+
+def test_color_capture_override_errors_do_not_reject_valid_conversions():
+    """Reject invalid Capture tokens while preserving valid conversions."""
+    group = _group('''def convert_float_to_color():
+    geo=grid(2,2)
+    geo, captured=capture_attribute(geo,position().x,type='RGBA')
+    return captured
+''')
+    capture=next(n for n in group.nodes if n.bl_idname=='GeometryNodeCaptureAttribute')
+    assert capture.capture_items[0].data_type=='FLOAT_COLOR'
+    assert all(l.is_valid for l in group.links)
+    with pytest.raises(CompileError,match=r'capture_attribute\(\) supports'):
+        _group('''def fail(color: Color):
+    geo=grid(2,2)
+    return capture_attribute(geo,color,type='NOT_A_TYPE')[1]
+''')
