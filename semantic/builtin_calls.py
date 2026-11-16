@@ -11,6 +11,7 @@ import ast
 from dataclasses import dataclass
 from typing import Callable
 
+from ..type_capabilities import ATTRIBUTE_DATA_TYPES, CAPTURE_ITEM_TYPES
 from .attribute_domains import normalize_attribute_domain
 from .call_resolution import (
     AnalyzedCallOperand,
@@ -1118,7 +1119,7 @@ def _analyze_sample_index_operation(
     value_typ = runtime(expr.args[1], "value", "sample_index() value")
     _require_type(
         value_typ,
-        {TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR},
+        set(ATTRIBUTE_DATA_TYPES),
         "sample_index() value supports Float, Int, Bool and Vector",
     )
 
@@ -1148,21 +1149,10 @@ def _vector_operation(name):
 
 def _capture_result_type(value_typ: NFType, data_type: str | None) -> NFType:
     """Return Capture Attribute's exact result type or preserve its diagnostic."""
-    value_map = {
-        TYPE_FLOAT: TYPE_FLOAT,
-        TYPE_INT: TYPE_INT,
-        TYPE_BOOL: TYPE_BOOL,
-        TYPE_VECTOR: TYPE_VECTOR,
-    }
     if data_type is None:
-        result = value_map.get(value_typ)
+        result = value_typ if value_typ in CAPTURE_ITEM_TYPES else None
     else:
-        result = {
-            "FLOAT": TYPE_FLOAT,
-            "INT": TYPE_INT,
-            "BOOLEAN": TYPE_BOOL,
-            "VECTOR": TYPE_VECTOR,
-        }.get(data_type.upper())
+        result = {token: typ for typ, token in CAPTURE_ITEM_TYPES.items()}.get(data_type.upper())
     if result is None:
         raise CompileError("capture_attribute() supports Float, Int, Bool and Vector values")
     return result

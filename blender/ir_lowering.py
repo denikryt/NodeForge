@@ -8,6 +8,7 @@ from typing import Mapping
 
 from ..semantic.constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR
 from ..nf_types import NFType
+from ..type_capabilities import REPEAT_ITEM_TYPES
 from ..errors import CompileError
 from ..compiler_identities import BindingId
 from ..semantic.group_context import GroupContextSlot
@@ -77,16 +78,8 @@ from ..semantic.source_callables import SourceCallablePreparationKey
 
 def _repeat_item_type_for_nf_type(typ: NFType) -> str:
     """Map one supported semantic type to the exact Blender Repeat item token."""
-    mapping = {
-        NFType.GEOMETRY: "GEOMETRY",
-        NFType.VECTOR: "VECTOR",
-        NFType.BOOL: "BOOLEAN",
-        NFType.INT: "INT",
-        NFType.BUNDLE: "BUNDLE",
-        NFType.FLOAT: "FLOAT",
-    }
     try:
-        return mapping[typ]
+        return REPEAT_ITEM_TYPES[typ]
     except KeyError as exc:
         raise CompileError(f"repeat_range state has unsupported type {typ}") from exc
 
