@@ -48,13 +48,20 @@ def system_owner_key(record) -> tuple[str, ...]:
 
 
 def library_owner_key(record) -> tuple[str, ...]:
-    """Return the canonical semantic owner key for one native library record."""
-    return (
+    """Identify a native owner by its package and physical Functions directory.
+
+    An existing root Functions/Examples owner keeps its original four-part key.
+    Nested Functions owners append their relative parent directory, so equal
+    owner leaf names in distinct namespaces never share a Python snapshot.
+    """
+    base = (
         "library",
         str(record.namespace),
         normalize_library_package_id(getattr(record, "package_id", "")),
         str(record.name),
     )
+    parent = str(getattr(record, "folder_path", "") or "").replace("\\", "/")
+    return base + (parent,) if record.namespace == "functions" and parent else base
 
 
 def _framed_hash_parts(parts: Iterable[bytes]) -> bytes:
