@@ -241,3 +241,82 @@ def test_core_builtin_declarations_remain_reserved_in_root_sources(tmp_path):
     with pytest.raises(CompileError, match='reserved by DSL builtin'):
         analyze_group_source('def cube(x: Float) -> Float:\n    return x\n',
                              compilation_identity=identity, resolved_environment=env)
+
+
+def test_installed_zip_preserves_real_directories_and_short_aliases(tmp_path):
+    """A release ZIP retains nested module ownership and module/directory overlap."""
+    import json
+    import zipfile
+    from NodeForge.environment_resolution import resolve_environment
+
+    packages.set_packages_dir_for_tests(tmp_path / 'installed')
+    archive = tmp_path / 'nested.zip'
+    manifest = {
+        'schema_version': 1, 'id': 'vendor.nested', 'import_name': 'nested',
+        'name': 'Nested', 'version': '1.0.0', 'author': 'Tests',
+        'nodeforge_min_version': '0.91.0', 'contents': {'functions': 'functions'},
+    }
+    try:
+        with zipfile.ZipFile(archive, 'w') as bundle:
+            bundle.writestr('vendor.nested/nodeforge_package.json', json.dumps(manifest))
+            bundle.writestr('vendor.nested/functions/utilities.nf',
+                            'def identity(x: Float) -> Float:\n    return x\n')
+            bundle.writestr('vendor.nested/functions/utilities/field.nf',
+                            'def accumulate(x: Float) -> Float:\n    return x\n')
+            bundle.writestr('vendor.nested/functions/mesh/primitives.nf',
+                            'def cube(size: Float) -> Float:\n    return size\n')
+        packages.install_package_zip(archive)
+        namespace = resolve_environment().package_by_import_name('nested')
+        assert set(namespace.qualified_exports) == {
+            'utilities.identity', 'utilities.field.accumulate', 'mesh.primitives.cube',
+        }
+        assert 'utilities' in namespace.namespace_prefixes
+        assert 'utilities.field' in namespace.namespace_prefixes
+        assert namespace.find('identity') is namespace.find_path('utilities.identity')
+        assert namespace.find('accumulate') is namespace.find_path('utilities.field.accumulate')
+        assert namespace.find('cube') is namespace.find_path('mesh.primitives.cube')
+        # The source origin is the selected physical module under the package.
+        assert namespace.find('accumulate').record.source_path.parts[-3:] == (
+            'functions', 'utilities', 'field.nf',
+        )
+    finally:
+        packages.set_packages_dir_for_tests(None)
+
+
+def test_incompatible_nested_package_replacement_preserves_active_owner(tmp_path):
+    """An invalid minimum core version cannot replace a compatible package."""
+    import json
+    import zipfile
+    from NodeForge.environment_resolution import resolve_environment
+
+    packages.set_packages_dir_for_tests(tmp_path / 'installed')
+    try:
+        root = tmp_path / 'source'
+        (root / 'functions').mkdir(parents=True)
+        (root / 'functions' / 'entry.nf').write_text(
+            'def identity(x: Float) -> Float:\n    return x\n', encoding='utf-8',
+        )
+        manifest = {
+            'schema_version': 1, 'id': 'vendor.nested', 'import_name': 'nested',
+            'name': 'Nested', 'version': '1.0.0', 'author': 'Tests',
+            'nodeforge_min_version': '0.91.0', 'contents': {'functions': 'functions'},
+        }
+        (root / 'nodeforge_package.json').write_text(json.dumps(manifest))
+        packages.install_package_directory(root)
+        old = packages.active_package_records()[0]
+        candidate = tmp_path / 'future.zip'
+        with zipfile.ZipFile(candidate, 'w') as bundle:
+            manifest.update(version='2.0.0', nodeforge_min_version='0.92.0')
+            bundle.writestr('vendor.nested/nodeforge_package.json', json.dumps(manifest))
+            bundle.writestr('vendor.nested/functions/entry.nf',
+                            'def newer(x: Float) -> Float:\n    return x\n')
+        with pytest.raises(packages.PackageError, match='requires NodeForge 0.92.0'):
+            packages.install_package_zip(candidate, replace=True)
+        current = packages.active_package_records()[0]
+        assert current.manifest.version == old.manifest.version
+        assert current.state_record == old.state_record
+        namespace = resolve_environment().package_by_import_name('nested')
+        assert namespace.find('identity') is not None
+        assert namespace.find('newer') is None
+    finally:
+        packages.set_packages_dir_for_tests(None)

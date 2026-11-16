@@ -17,6 +17,24 @@ vendor.shapes/
     └── ring.nf
 ```
 
+`functions/` supports nested category folders. The file name becomes one segment
+of a fully qualified callable path:
+
+```text
+vendor.shapes/
+└── functions/
+    ├── mesh/
+    │   ├── primitives.nf       # def make_cube(...); def make_sphere(...)
+    │   └── operations.nf       # def bevel(...)
+    └── utilities.nf           # def identity(...)
+```
+
+`functions/mesh/primitives.nf` exports
+`shapes.mesh.primitives.make_cube(...)` and
+`shapes.mesh.primitives.make_sphere(...)`. These functions can also be called
+as `shapes.make_cube(...)` and `shapes.make_sphere(...)` while their short
+names are unambiguous.
+
 Packages may declare these content roots:
 
 | Root | Purpose |
@@ -104,7 +122,24 @@ from packages import shapes as s
 geo = s.ring(2.0, 0.25)
 ```
 
-Prefer qualified calls such as `shapes.ring(...)` in reusable code. They remain unambiguous when different packages export the same member name or when a package member shares a name with a Core DSL callable.
+A full call path includes each category directory, the `.nf` module stem,
+and the declared function name:
+
+```python
+from packages import shapes as s
+
+geo = s.mesh.primitives.make_cube(2.0)
+```
+
+A short `s.make_cube(...)` call selects that same function while its declared
+name is unique in the package. If another module declares `make_cube`, the
+short call is ambiguous and NodeForge reports each valid full call path.
+An exact root `systems` or native Functions owner retains its short spelling;
+otherwise a single direct-root `.nf` definition takes precedence over
+nested functions with the same leaf name. Explicit full paths always select
+the specified owner.
+
+Use full paths to distinguish functions in different categories or packages.
 
 For the supported import forms and aliases, see [Imports](SYNTAX.md#imports).
 
@@ -119,7 +154,7 @@ value = shapes  # invalid
 
 ## Source-backed functions
 
-The `functions` root can contain a top-level `.nf` or `.nodeforge` file:
+The `functions` root can contain `.nf` source files at the root or in nested directories:
 
 ```text
 functions/
@@ -134,7 +169,17 @@ functions/
     └── source.nf
 ```
 
-Every top-level `def` in a source file becomes a package member under its declared function name. A file can export several functions, including names beginning with `_`. Exported names must be unique within the package, including names provided by Python-backed extensions. Function parameters and `return` define the Group Node sockets. Top-level node-building statements in these files are skipped when their functions are imported or added from the Library.
+Every top-level `def` in a source file becomes a package member under its
+full module path and declared function name. A file can export several
+functions, including names beginning with `_`. Functions from different files
+may share a declared name; select those functions with their full paths.
+The same complete path can identify only one callable. A file and directory
+with the same stem can coexist when the exported callable paths differ
+(for example, `utilities.nf` and `utilities/field.nf`).
+
+Function parameters and `return` define the Group Node sockets. Top-level
+node-building statements in package source files are skipped when their
+functions are imported or added from the Library.
 
 ```python
 # functions/scale_cube.nf
@@ -150,7 +195,11 @@ geo = shapes.scale_cube(1.5, factor=3.0)
 
 Keywords use the function's exact parameter identifiers; display labels may be set with `Type["Label"]`. See [Writing Functions](WRITING_FUNCTIONS.md#parameters-and-sockets).
 
-Under **Library → Functions**, select a package function and click **Add Node Group** to place that definition. The package file can contain several exported functions.
+Under **Library → Functions**, select a source-backed package function by
+its full path and click **Add Node Group**. Reload retains the exact source
+module and declared definition, including when other modules declare the same
+function name. Python-backed native Functions appear in the list and remain
+callable from scripts, while their **Add Node Group** action is disabled.
 
 For general reusable-function behavior, including `__unique__=True` where supported, see [Reusable Functions](SYNTAX.md#reusable-functions).
 
@@ -175,13 +224,16 @@ Python-backed examples are also supported; their declaration and implementation 
 
 Use Python only when the required behavior cannot be expressed cleanly as source-backed NodeForge code. Typical cases are custom Blender-node realization or package-defined semantic values.
 
-Python-backed content uses Extension API v2. A native function under `functions` is represented by an owner directory such as:
+Python-backed content uses Extension API v2. A native function under
+`functions` is represented by an owner directory, including nested category
+paths, such as:
 
 ```text
 functions/
-└── native_value/
-    ├── interface.py
-    └── backend.py
+└── mesh/
+    └── native_value/
+        ├── interface.py
+        └── backend.py
 ```
 
 A `systems` owner can export several related callables:
@@ -194,15 +246,29 @@ systems/
     └── backend.py
 ```
 
+The owner above exports `shapes.mesh.native_value(...)` when `EXTENSIONS`
+contains exactly one callable named `native_value`. Native owners under
+`systems/` continue to export names directly under the package import alias.
+
 Python-backed package code runs with normal Python privileges. Install packages only from sources you trust. For `interface.py`, evaluation modes, backend contexts, semantic values, overloads, generated resources, and owner validation rules, continue with the [Extension API Reference](EXTENSION_API.md).
 
 ## Public names
 
-Source-backed package functions are exported by their declared `def` names. Example files appear in the Examples catalog under their file or owner directory names. Python-backed owner directories and systems use their declared public names.
+The canonical callable name is built from the relative `functions/` path
+followed by the declared function name. Native owner directories contribute
+their own directory names; root `systems/` callables retain their names.
+Example files appear in the Examples catalog under their file or owner names.
 
-File and directory entry names must be valid public Python-style identifiers: they cannot begin with `_` or be Python keywords. Files and directories beginning with `__` are not catalog entries. Declared function names follow the function rules in [`.nf` Modules](MODULES.md#define-functions), including names beginning with `_`.
+Public directory and module names must be ASCII identifiers and cannot be
+Python keywords. Paths beginning with `_` or `.` remain private and are not
+exported. Declared function names follow [`.nf` Modules](MODULES.md#define-functions)
+(including names beginning with `_`). Directory symlinks and source paths
+escaping the package root are rejected.
 
-Within one package, exported members must be unique. Different packages may publish the same member name because the package namespace identifies the owner.
+Different canonical paths may declare the same short name. Short calls work
+when there is one eligible owner; ambiguous short calls report their full paths.
+A complete canonical path belongs to one export. Package IDs and import names
+identify owners across different packages.
 
 ## Build the installation ZIP
 
@@ -241,6 +307,7 @@ Check that the package:
 - uses a stable, conflict-free `import_name`;
 - compiles its source-backed functions from a clean Blender file;
 - exposes usable examples through **Library → Examples**;
-- uses qualified `package.member(...)` calls in published examples.
+- uses full `package.category.module.function(...)` paths where the category matters;
+- verifies that short callable names resolve unambiguously.
 
 For Python-backed content, use the validation rules in the [Extension API Reference](EXTENSION_API.md) rather than duplicating them here.
