@@ -132,6 +132,41 @@ def test_canonical_and_short_indexes_handle_duplicate_leaves(tmp_path):
         packages.set_packages_dir_for_tests(None)
 
 
+def test_short_ambiguity_reports_all_root_and_nested_candidates(tmp_path):
+    """Ambiguous shortcuts suggest every callable path, not only root candidates."""
+    from NodeForge.environment_resolution import resolve_environment
+    from NodeForge.semantic.group import analyze_group_source
+    from NodeForge.semantic.source_callable_session import SourceCallableSession
+    from NodeForge.compiler_identities import GroupCompilationIdentity
+
+    try:
+        _install_namespace_package(tmp_path, {
+            'root_A.nf': 'def shared(x: Float) -> Float:\n    return x\n',
+            'root_B.nf': 'def shared(x: Float) -> Float:\n    return x * 2\n',
+            'mesh/primitives.nf': 'def shared(x: Float) -> Float:\n    return x * 3\n',
+            'curve/primitives.nf': 'def shared(x: Float) -> Float:\n    return x * 4\n',
+        })
+        env = resolve_environment()
+        namespace = env.package_by_import_name('nested')
+        expected = (
+            'curve.primitives.shared', 'mesh.primitives.shared',
+            'root_A.shared', 'root_B.shared',
+        )
+        assert tuple(namespace.short_ambiguities['shared']) == expected
+        assert set(namespace.qualified_exports) == set(expected)
+        identity = GroupCompilationIdentity(None, 'ROOT/NESTED', 'ROOT/NESTED', 'ROOT/NESTED')
+        with pytest.raises(CompileError, match='Ambiguous callable') as raised:
+            analyze_group_source(
+                'from packages import nested as n\nx = n.shared(1.0)\n',
+                compilation_identity=identity, resolved_environment=env,
+                source_callable_session=SourceCallableSession(resolved_environment=env),
+            )
+        assert all(f'n.{member}(...)' in str(raised.value) for member in expected)
+        assert all(namespace.find_path(member) is not None for member in expected)
+    finally:
+        packages.set_packages_dir_for_tests(None)
+
+
 def test_root_source_short_name_precedes_nested_names(tmp_path):
     """A single directly rooted module definition stays the short winner."""
     from NodeForge.environment_resolution import resolve_environment
