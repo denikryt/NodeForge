@@ -9,6 +9,7 @@ import pytest
 from NodeForge.blender import ir_lowering as backend
 from NodeForge.blender.values import Value
 from NodeForge.errors import CompileError
+from NodeForge.semantic.ir import IRInputDeclaration
 from NodeForge.nf_types import NFType
 from NodeForge.tests.unit.test_inline_source_calls import _analyze
 
@@ -108,18 +109,26 @@ x = calc(index())
 ''', monkeypatch, (Value(StubSocket(), NFType.VECTOR),))
 
 
-def test_lower_body_requires_explicit_bound_mode_contract(monkeypatch):
-    """BOUND cannot accidentally request Blender group interfaces or omit its map."""
+def test_lower_body_requires_prebound_typed_runtime_input():
+    """Inline declarations must already have a matching typed BindingId value."""
     operation, session = _analyze('''def calc(value: Float, __inline__=True) -> Float:
     return value
 x = calc(3)
 ''')
     prepared = session.get_inline_prepared(operation[0].materialization)
     context = backend.BlenderIRLoweringContext(object(), {})
-    with pytest.raises(ValueError, match='bound body requires'):
-        backend.lower_body(context, prepared.group.body, {}, input_mode='BOUND')
+    declaration, = [item for item in prepared.group.body.statements
+                    if isinstance(item, IRInputDeclaration)]
     with pytest.raises(CompileError, match='prebound inline input'):
-        backend.lower_body(context, prepared.group.body, {}, input_mode='BOUND', bound_inputs={})
+        backend.lower_body(context, prepared.group.body, {})
+    with pytest.raises(CompileError, match='prebound inline input'):
+        backend.lower_body(context, prepared.group.body, {
+            declaration.target_binding_id: Value(StubSocket(), NFType.INT),
+        })
+    result = backend.lower_body(context, prepared.group.body, {
+        declaration.target_binding_id: Value(StubSocket(), NFType.FLOAT),
+    })
+    assert result.explicit_outputs[0][1].typ is NFType.FLOAT
 
 
 def test_inline_object_wrappers_do_not_inherit_previous_info_cache():

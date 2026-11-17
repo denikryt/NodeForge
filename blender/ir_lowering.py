@@ -627,11 +627,14 @@ def _inline_parameter_bindings(context, operation, operands, prepared, x, y):
 
     # Neither the source AST order nor panel visual order is a valid binding key.
     from ..semantic.ir import IRInputDeclaration
-    declared = {statement.declaration_id for statement in prepared.group.body.statements
-                if isinstance(statement, IRInputDeclaration)}
-    if declared != set(bound):
+    declarations = tuple(statement for statement in prepared.group.body.statements
+                         if isinstance(statement, IRInputDeclaration))
+    if len(declarations) != len(bound) or {item.declaration_id for item in declarations} != set(bound):
         raise CompileError("Internal error: inline body input declarations disagree with its interface")
-    return bound
+    runtime_bindings = {item.target_binding_id: bound[item.declaration_id] for item in declarations}
+    if len(runtime_bindings) != len(declarations):
+        raise CompileError("Internal error: inline body has repeated runtime binding identities")
+    return runtime_bindings
 
 
 def _lower_inline_source_call(context, operation, operands, prepared, x, y):
@@ -658,10 +661,7 @@ def _lower_inline_source_call(context, operation, operands, prepared, x, y):
         generated_resource_transaction=context.generated_resource_transaction,
         layout_origin=child_origin,
     )
-    result = lower_body(
-        bound_context, prepared.group.body, {}, base_depth=0,
-        input_mode="BOUND", bound_inputs=inputs,
-    )
+    result = lower_body(bound_context, prepared.group.body, inputs, base_depth=0)
     outputs = result.explicit_outputs if result.explicit_outputs else (
         (result.auto_output,) if result.auto_output is not None else ()
     )
@@ -896,8 +896,6 @@ def _lower_body_internal(
     repeat_origin=None,
     control_depth=0,
     legacy_index_override=None,
-    input_mode="GROUP",
-    bound_inputs=None,
 ):
     """Recursively lower one validated structured IRBody against a detached binding map."""
     runtime_bindings = dict(runtime_bindings)
@@ -906,15 +904,13 @@ def _lower_body_internal(
     for index, statement in enumerate(body.statements):
         layout_index = index if legacy_index_override is None else legacy_index_override
         if isinstance(statement, IRInputDeclaration):
-            if input_mode == "BOUND":
-                value = None if bound_inputs is None else bound_inputs.get(statement.declaration_id)
+            if group_input is None:
+                # Inline parameters are already validated and keyed by BindingId.
+                value = runtime_bindings.get(statement.target_binding_id)
                 if not isinstance(value, Value) or value.typ is not statement.typ:
                     raise CompileError("Internal error: missing or incompatible prebound inline input")
-                runtime_bindings[statement.target_binding_id] = make_value(value.socket, value.typ)
-                auto_output = (statement.target_name, runtime_bindings[statement.target_binding_id])
+                auto_output = (statement.target_name, value)
                 continue
-            if group_input is None:
-                raise CompileError("Internal error: body input declaration requires Group Input context")
             value, _iface = _create_group_input_socket(
                 context.group,
                 group_input,
@@ -962,11 +958,9 @@ def _lower_body_internal(
             auto_output = ("out", value)
             continue
         if isinstance(statement, IRPanelDeclaration):
-            if input_mode == "BOUND":
+            if group_input is None:
                 auto_output = None
                 continue
-            if group_input is None:
-                raise CompileError("Internal error: panel declaration requires Group Input context")
             sockets = []
             for origin in statement.member_origins:
                 iface_item = context.interface_input_items.get(origin)
@@ -986,8 +980,6 @@ def _lower_body_internal(
                 "repeat_origin": repeat_origin,
                 "control_depth": control_depth + 1 if repeat_origin is not None else control_depth,
                 "legacy_index_override": layout_index if repeat_origin is None else None,
-                "input_mode": input_mode,
-                "bound_inputs": bound_inputs,
             }
             true_result = _lower_body_internal(
                 context, statement.true_body, dict(runtime_bindings), base_depth + 1, **branch_kwargs
@@ -1065,8 +1057,6 @@ def _lower_body_internal(
                 group_input=group_input,
                 repeat_origin=(repeat_x, repeat_y),
                 control_depth=0,
-                input_mode=input_mode,
-                bound_inputs=bound_inputs,
             )
             for state in statement.states:
                 try:
@@ -1090,23 +1080,11 @@ def _lower_body_internal(
     )
 
 
-def lower_body(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None, input_mode="GROUP", bound_inputs=None):
-    """Materialize one fully validated structured IRBody without publishing locals to Compiler."""
+def lower_body(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):
+    """Materialize typed IR using supplied bindings or a physical Group Input node."""
     if not isinstance(body, IRBody):
         raise TypeError("body must be an IRBody")
-    if input_mode not in {"GROUP", "BOUND"}:
-        raise ValueError("input_mode must be GROUP or BOUND")
-    if input_mode == "BOUND" and (group_input is not None or bound_inputs is None):
-        raise ValueError("bound body requires explicit inputs and no Group Input node")
-    return _lower_body_internal(
-        context,
-        body,
-        initial_runtime_bindings,
-        base_depth,
-        group_input=group_input,
-        input_mode=input_mode,
-        bound_inputs=bound_inputs,
-    )
+    return _lower_body_internal(context, body, initial_runtime_bindings, base_depth, group_input=group_input)
 
 
 def _materialize_program_result(materialized, result):
