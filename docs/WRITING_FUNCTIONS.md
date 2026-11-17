@@ -12,7 +12,7 @@ def move(
     return transform(geometry, translation=offset)
 ```
 
-Positional arguments follow parameter order. Inputs appear in that order until `panel(...)` groups or reorders them. `geometry` is required in an explicit call; `offset` has a default. The parameter identifier `offset` is also its keyword name. `Vector["Translation"]` changes only the Blender socket label. Keywords match parameter identifiers exactly, including case. Every parameter needs an explicit type annotation, including parameters with defaults.
+Positional arguments follow parameter order. Inputs appear in that order until `panel(...)` groups or reorders them. `geometry` is required in an explicit call; `offset` has a default. The parameter identifier `offset` is also its keyword name. `Vector["Translation"]` changes only the Blender socket label. Keywords match parameter identifiers exactly, including case. Every runtime parameter needs an explicit type annotation, including parameters with defaults. The final compiler-only `__inline__` parameter may infer `Bool` from its default; see [Inline Compilation](SYNTAX.md#inline-compilation).
 
 Function parameters support `Geometry`, `Float`, `Int`, `Bool`, `Vector`, `Color`, `Rotation`, `Material`, `Object`, `String`, and `Bundle`. You can declare defaults for `Float`, `Int`, `Bool`, `Vector`, `Color`, `Rotation`, and `String`. Parameters of `Geometry`, `Material`, `Object`, and `Bundle` are required.
 
@@ -59,11 +59,11 @@ DEFAULT_SIZE = 2.0
 shape = make_cube()
 ```
 
-Omitting an optional argument leaves its socket unlinked, using the declared default. Here, the unlinked `size` input defaults to `2.0`. Constants in the calling module do not replace defaults in an imported function. Defaults cannot refer to function parameters.
+For a grouped call, omitting an optional argument leaves its socket unlinked, using the declared default. An inline call materializes the same default as a typed runtime value in the caller tree. Here, the unlinked `size` input defaults to `2.0`. Constants in the calling module do not replace defaults in an imported function. Defaults cannot refer to function parameters.
 
 Use `panel([geometry, offset], name="Transform", collapsed=True)` at the start of a function body to group its inputs in Blender's interface. Panels change socket layout while positional arguments continue to follow the function declaration. See [Interface Panels](BUILTINS.md#interface-panels).
 
-Parameters use ordinary positional-or-keyword syntax. Positional-only parameters, keyword-only parameters, `*args`, and `**kwargs` are unsupported. Parameter names cannot replace built-ins, type names, constants such as `pi`, or the compiler option `__unique__`.
+Parameters use ordinary positional-or-keyword syntax. Positional-only parameters, keyword-only parameters, `*args`, and `**kwargs` are unsupported. Parameter names cannot replace built-ins, type names, constants such as `pi`, or compiler options `__unique__` and `__inline__`.
 
 ## Return values
 
@@ -86,6 +86,20 @@ The caller can unpack multiple outputs or select one with a compile-time integer
 
 Save the module in Local to reuse its functions in other scripts. See [Import functions](MODULES.md#import-functions).
 
+## Inline wrappers
+
+Set the final `__inline__` default to `True` for functions whose operations should appear in the caller's tree:
+
+```python
+def increment(value: Float, __inline__=True) -> Float:
+    return value + 1.0
+
+a = increment(index())
+b = increment(index(), __inline__=False)
+```
+
+The first call builds a Math node in the current tree; the second creates a Group Node. A wrapper around a single `node(...)` operation can emit that native node directly. For call-site precedence, `__unique__` interaction, and nested-call behavior, see [Inline Compilation](SYNTAX.md#inline-compilation).
+
 ## Refresh a compiled function
 
 Edit the function in its original source, select its Group Node, and click **Reload Function from Source**. Reload reads:
@@ -97,6 +111,8 @@ Edit the function in its original source, select its Group Node, and click **Rel
 The original Text must still exist and have a unique source binding. Selecting another Text under **Text Script** does not change the source used by this action. **Load Script From Selected NodeGroup** copies the stored module source into the selected Text, replacing its contents; this alone does not change the function's source binding.
 
 Reload rebuilds the selected function group in place. All Group Nodes using that shared group receive the change; a `__unique__` group retains its separate instance. Compatible links and user-edited input values are preserved.
+
+Reload also updates inline bodies embedded in the selected grouped function. Inline calls in a base tree are refreshed by **Compile Script** or **Update Script** on their calling script. Explicit standalone creation and Library **Add Node Group** produce editable groups from definitions with `__inline__=True`.
 
 The function name, parameter names, order, and types must match the compiled definition. Removing or renaming the definition, changing those parameters, or losing its source prevents Reload. To compile a changed signature, update the calling script and use **Compile Script** or **Update Script**. For replacement of the base graph, see [Update a script](GET_STARTED.md#update-a-script).
 

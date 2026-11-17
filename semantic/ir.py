@@ -42,6 +42,7 @@ class IRFunctionMaterializationMode(str, Enum):
 
     SHARED = "SHARED"
     UNIQUE = "UNIQUE"
+    INLINE = "INLINE"
 
 
 class IRCallableKind(str, Enum):
@@ -116,9 +117,9 @@ class IRFunctionMaterialization:
             if self.call_site is not None:
                 raise ValueError("shared function materialization cannot carry a CallSiteId")
             return
-        if self.mode is IRFunctionMaterializationMode.UNIQUE:
+        if self.mode in {IRFunctionMaterializationMode.UNIQUE, IRFunctionMaterializationMode.INLINE}:
             if not isinstance(self.call_site, CallSiteId):
-                raise ValueError("unique function materialization requires a CallSiteId")
+                raise ValueError(f"{self.mode.value.lower()} function materialization requires a CallSiteId")
             if self.call_site.callee != self.callee:
                 raise ValueError("function materialization CallSiteId must target the same callee")
             return

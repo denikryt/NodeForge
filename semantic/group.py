@@ -415,6 +415,8 @@ def _validate_registered_name_bindings(stmts, labels, *, top_level_function_name
             ):
                 _check_registered_binding(stmt.name, labels)
             for arg in list(stmt.args.posonlyargs) + list(stmt.args.args) + list(stmt.args.kwonlyargs):
+                if arg.arg == "__inline__":
+                    continue  # Validated by the canonical signature frontend.
                 if arg.arg == "__unique__":
                     raise CompileError("Local function parameter __unique__ is reserved by the compiler")
                 _check_registered_binding(arg.arg, labels, context="parameter", in_local_function=True)

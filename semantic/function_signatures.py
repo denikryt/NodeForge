@@ -33,6 +33,7 @@ class FunctionSignature:
     logical_inputs: tuple[GroupInputContract, ...]
     panels: tuple[IRPanelDeclaration, ...]
     physical_inputs: tuple[GroupInputContract, ...]
+    inline_default: bool = False
 
     def __post_init__(self) -> None:
         """Verify logical and projected inputs have exactly the same origins."""
@@ -105,8 +106,18 @@ def validate_function_parameters(fn: ast.FunctionDef) -> None:
     """
     if fn.args.posonlyargs or fn.args.kwonlyargs or fn.args.vararg or fn.args.kwarg or fn.args.kw_defaults:
         raise CompileError(f"{fn.name}() accepts only ordinary named positional-or-keyword parameters")
-    for arg in fn.args.args:
+    for index, arg in enumerate(fn.args.args):
         name = arg.arg
+        if name == "__inline__":
+            location = f"line {arg.lineno}, column {arg.col_offset + 1}"
+            if index != len(fn.args.args) - 1:
+                raise CompileError(f"{fn.name}() __inline__ must be the final parameter at {location}")
+            if (arg.annotation is not None
+                    and not (isinstance(arg.annotation, ast.Name) and arg.annotation.id == "Bool")):
+                raise CompileError(f"{fn.name}() __inline__ requires Bool annotation at {location}")
+            if not fn.args.defaults:
+                raise CompileError(f"{fn.name}() __inline__ requires a compile-time Bool default at {location}")
+            continue
         location = f"line {arg.lineno}, column {arg.col_offset + 1}"
         if name == "__unique__":
             raise CompileError(f"{fn.name}() cannot declare compiler-reserved __unique__ at {location}")
@@ -118,6 +129,26 @@ def validate_function_parameters(fn: ast.FunctionDef) -> None:
             resolve_parameter_annotation(arg.annotation)
         except CompileError as exc:
             raise CompileError(f"{fn.name}() parameter {name!r} at {location}: {exc}") from exc
+
+
+def resolve_declared_inline_default(
+    fn: ast.FunctionDef, compile_time_values: Mapping[str, object] | None = None,
+) -> bool:
+    """Resolve a function-level compile policy from its defining final CT state."""
+    validate_function_parameters(fn)
+    if not fn.args.args or fn.args.args[-1].arg != "__inline__":
+        return False
+    expression = fn.args.defaults[-1]
+    parameter_names = {arg.arg for arg in fn.args.args[:-1]}
+    if any(isinstance(node, ast.Name) and node.id in parameter_names for node in ast.walk(expression)):
+        raise CompileError(f"{fn.name}() __inline__ default cannot reference a runtime parameter")
+    try:
+        value = _const_eval(expression, compile_time_values or {})
+    except ConstEvalUnavailable as exc:
+        raise CompileError(f"{fn.name}() __inline__ requires a compile-time Bool default") from exc
+    if type(value) is not bool:
+        raise CompileError(f"{fn.name}() __inline__ requires a compile-time Bool default")
+    return value
 
 
 def compile_function_signature(
@@ -136,8 +167,9 @@ def compile_function_signature(
         raise TypeError("Function signature source must be ast.FunctionDef")
     validate_function_parameters(fn)
     values = dict(compile_time_values or {})
-    arguments = fn.args.args
-    default_offset = len(arguments) - len(fn.args.defaults)
+    inline_default = resolve_declared_inline_default(fn, values)
+    arguments = tuple(arg for arg in fn.args.args if arg.arg != "__inline__")
+    default_offset = len(fn.args.args) - len(fn.args.defaults)
     declarations = []
     inputs = []
     origins = {}
@@ -197,7 +229,7 @@ def compile_function_signature(
                 raise CompileError(f"{fn.name}() panel() is permitted only in the initial declarative prefix")
     return FunctionSignature(
         tuple(declarations), tuple(inputs), tuple(panels),
-        project_group_input_layout(tuple(inputs), tuple(panels)),
+        project_group_input_layout(tuple(inputs), tuple(panels)), inline_default,
     )
 
 

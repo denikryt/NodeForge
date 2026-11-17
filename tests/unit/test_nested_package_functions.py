@@ -326,6 +326,7 @@ def test_incompatible_nested_package_replacement_preserves_active_owner(tmp_path
     from NodeForge import NODEFORGE_VERSION
 
     future_min = f'{NODEFORGE_VERSION[0]}.{NODEFORGE_VERSION[1] + 1}.0'
+
     packages.set_packages_dir_for_tests(tmp_path / 'installed')
     try:
         root = tmp_path / 'source'
@@ -355,5 +356,46 @@ def test_incompatible_nested_package_replacement_preserves_active_owner(tmp_path
         namespace = resolve_environment().package_by_import_name('nested')
         assert namespace.find('identity') is not None
         assert namespace.find('newer') is None
+    finally:
+        packages.set_packages_dir_for_tests(None)
+
+
+def test_nested_inline_definitions_keep_exact_module_and_frozen_ct_owners(tmp_path):
+    """Identical leaves inline independently and use each defining file's CT constants."""
+    from NodeForge.environment_resolution import resolve_environment
+    from NodeForge.compiler_identities import GroupCompilationIdentity
+    from NodeForge.semantic.group import analyze_group_source
+    from NodeForge.semantic.ir import IRFunctionMaterializationMode
+    from NodeForge.semantic.source_callable_session import SourceCallableSession
+    try:
+        directory = _install_namespace_package(tmp_path, {
+            'mesh/primitives.nf': (
+                'STEP = 2.0\n'
+                'def scale(x: Float = STEP, __inline__=True) -> Float:\n'
+                '    return x * STEP\nSTEP = 3.0\n'
+                'cube(1)\n'
+            ),
+            'curve/primitives.nf': (
+                'STEP = 7.0\n'
+                'def scale(x: Float = STEP, __inline__=True) -> Float:\n'
+                '    return x * STEP\n'
+            ),
+        })
+        env = resolve_environment()
+        session = SourceCallableSession(resolved_environment=env)
+        group = analyze_group_source(
+            'from packages import nested as n\n'
+            'a = n.mesh.primitives.scale()\n'
+            'b = n.curve.primitives.scale()\n',
+            compilation_identity=GroupCompilationIdentity(None, 'ROOT/INLINE', 'ROOT/INLINE', 'ROOT/INLINE'),
+            resolved_environment=env, source_callable_session=session,
+        )
+        keys = tuple(session.prepared)
+        assert len(keys) == 2
+        assert len({key.function_id.module.origin for key in keys}) == 2
+        assert all(item.group.source.find('cube(1)') == -1 for item in session.prepared.values())
+        assert {prepared.group.interface.inputs[0].default for prepared in session.prepared.values()} == {3.0, 7.0}
+        (directory / 'mesh' / 'primitives.nf').write_text('not valid python!', encoding='utf-8')
+        assert all(session.get_prepared(key).group.source for key in keys)
     finally:
         packages.set_packages_dir_for_tests(None)
