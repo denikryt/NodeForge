@@ -23,11 +23,11 @@ def _nodes(tree, name):
 
 def test_inline_single_raw_wrapper_native_nodes_and_shared_group():
     """Two inline occurrences create native nodes, while False stays grouped."""
-    tree = _compose('''def merge_by_distance(geometry: Geometry, distance: Float = 0.001, __inline__=True) -> Geometry:
-    return node('GeometryNodeMergeByDistance', inputs={'Geometry': geometry, 'Distance': distance}, output='Geometry', typ=Geometry)
+    tree = _compose('''def merge_by_distance(geometry: Geometry, max_distance: Float = 0.001, __inline__=True) -> Geometry:
+    return node('GeometryNodeMergeByDistance', inputs={'Geometry': geometry, 'Distance': max_distance}, output='Geometry', typ=Geometry)
 base = cube(1.0)
 one = merge_by_distance(base)
-two = merge_by_distance(one, distance=0.02)
+two = merge_by_distance(one, max_distance=0.02)
 three = merge_by_distance(two, __inline__=False)
 ''', 'NFTest_Inline_Raw')
     assert len(_nodes(tree, 'GeometryNodeMergeByDistance')) == 2
@@ -80,3 +80,101 @@ z = x + y
     assert not _nodes(tree, 'GeometryNodeGroup')
     assert len(_nodes(tree, 'ShaderNodeMath')) >= 3
     assert all(link.is_valid for link in tree.links)
+
+
+def test_nested_group_outer_contains_native_inline_inner():
+    """A grouped outer keeps its physical boundary, not the inline inner's."""
+    root = _compose('''def inner(value: Float, __inline__=True) -> Float:
+    return value + 1.0
+
+def outer(value: Float) -> Float:
+    return inner(value)
+result = outer(2.0)
+''', 'NFTest_Inline_Group_Outer')
+    assert len(_nodes(root, 'GeometryNodeGroup')) == 1
+    group = _nodes(root, 'GeometryNodeGroup')[0].node_tree
+    assert len(_nodes(group, 'ShaderNodeMath')) == 1
+    assert not _nodes(group, 'GeometryNodeGroup')
+
+
+def test_nested_inline_outer_preserves_grouped_inner():
+    """One inner group remains physically nested under an inline outer call."""
+    root = _compose('''def inner(value: Float) -> Float:
+    return value + 1.0
+
+def outer(value: Float, __inline__=True) -> Float:
+    return inner(value)
+result = outer(2.0)
+''', 'NFTest_Inline_Outer_Group_Inner')
+    assert len(_nodes(root, 'GeometryNodeGroup')) == 1
+    assert len(_nodes(_nodes(root, 'GeometryNodeGroup')[0].node_tree, 'ShaderNodeMath')) == 1
+
+
+def test_nested_inline_inside_inline_never_constructs_helper_group():
+    """Two nested source bodies are lowered to the exact same caller tree."""
+    root = _compose('''def inner(value: Float, __inline__=True) -> Float:
+    return value + 1.0
+
+def outer(value: Float, __inline__=True) -> Float:
+    return inner(value) * 2.0
+result = outer(2.0)
+''', 'NFTest_Inline_Inside_Inline')
+    assert not _nodes(root, 'GeometryNodeGroup')
+    assert len(_nodes(root, 'ShaderNodeMath')) == 2
+
+
+def test_nested_unique_inside_two_inline_occurrences_produces_two_backing_groups():
+    """An inline owner's scope participates in its nested UNIQUE instance key."""
+    root = _compose('''def inner(value: Float) -> Float:
+    return value + 1.0
+
+def outer(value: Float, __inline__=True) -> Float:
+    return inner(value, __unique__=True)
+first = outer(2.0)
+second = outer(3.0)
+''', 'NFTest_Inline_Nested_Unique')
+    nodes = _nodes(root, 'GeometryNodeGroup')
+    assert len(nodes) == 2
+    assert nodes[0].node_tree.as_pointer() != nodes[1].node_tree.as_pointer()
+
+
+def test_inline_repeat_if_and_grid_uv_use_caller_tree_without_context_leaks():
+    """If/Repeat and contextual values lower inside the active physical tree."""
+    root = _compose('''def compute(value: Float, flag: Bool, __inline__=True) -> Float:
+    for i in repeat_range(2):
+        if flag:
+            value = value + 1.0
+        else:
+            value = value + 2.0
+    return value
+
+def make_uv(size: Float, __inline__=True) -> Vector:
+    geo = grid(size, 3.0)
+    return grid_uv()
+result = compute(1.0, True)
+first_uv = make_uv(2.0)
+second_uv = make_uv(3.0)
+''', 'NFTest_Inline_Context_If_Repeat')
+    assert not _nodes(root, 'GeometryNodeGroup')
+    assert len(_nodes(root, 'GeometryNodeRepeatInput')) == 1
+    assert len(_nodes(root, 'GeometryNodeRepeatOutput')) == 1
+    assert len(_nodes(root, 'GeometryNodeSwitch')) >= 1
+    assert len(_nodes(root, 'GeometryNodeMeshGrid')) == 2
+    assert all(link.is_valid for link in root.links)
+
+
+def test_two_inline_object_users_have_private_info_nodes():
+    """Object.info caches belong to each inline invocation, not the source socket."""
+    outer = compile_entry_group('''def read_location(obj: Object, __inline__=True) -> Vector:
+    obj.info(as_instance=False)
+    return obj.location
+
+def grouped_parent(obj: Object) -> Vector:
+    first = read_location(obj)
+    second = read_location(obj)
+    return first + second
+''', 'NFTest_Inline_Object_Info', 'grouped_parent')
+    assert len(_nodes(outer, 'GeometryNodeObjectInfo')) == 2
+    assert not _nodes(outer, 'GeometryNodeGroup')
+    assert all(node.inputs['As Instance'].default_value is False
+               for node in _nodes(outer, 'GeometryNodeObjectInfo'))

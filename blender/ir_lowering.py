@@ -635,10 +635,18 @@ def _inline_parameter_bindings(context, operation, operands, prepared, x, y):
 def _lower_inline_source_call(context, operation, operands, prepared, x, y):
     """Evaluate one typed prepared body directly inside its immediate caller tree."""
     inputs = _inline_parameter_bindings(context, operation, operands, prepared, x, y)
+    materialization = operation.materialization
+    if materialization is None or materialization.call_site is None:
+        raise CompileError("Internal error: inline call has no occurrence identity")
+    ordinal = materialization.call_site.ordinal
+    # Each sibling call receives its own deterministic vertical lane, including
+    # calls reached from another bound region. No ephemeral node group is needed.
+    child_origin = (x + 260, y - 380 - ordinal * 640)
     bound_context = BlenderIRLoweringContext(
         group=context.group,
         runtime_bindings={},
-        group_context_values=context.group_context_values,
+        group_context_values={slot: make_value(value.socket, value.typ)
+                              for slot, value in context.group_context_values.items()},
         interface_input_items={},
         source_callable_session=context.source_callable_session,
         function_materializer=context.function_materializer,
@@ -646,7 +654,7 @@ def _lower_inline_source_call(context, operation, operands, prepared, x, y):
         helper_namespace=context.helper_namespace,
         extension_registry=context.extension_registry,
         generated_resource_transaction=context.generated_resource_transaction,
-        layout_origin=(x + 240, y - 100),
+        layout_origin=child_origin,
     )
     result = lower_body(
         bound_context, prepared.group.body, {}, base_depth=0,
@@ -981,6 +989,8 @@ def _lower_body_internal(
             else:
                 switch_x = repeat_origin[0] + 680 + control_depth * 120
                 switch_y = repeat_origin[1] - 220
+            switch_x += context.layout_origin[0]
+            switch_y += context.layout_origin[1]
             for merge in statement.merges:
                 try:
                     true_value = true_result.runtime_bindings[merge.binding_id]
@@ -1012,6 +1022,8 @@ def _lower_body_internal(
             else:
                 repeat_x = repeat_origin[0] + 360 + control_depth * 180
                 repeat_y = repeat_origin[1] - 500 - control_depth * 280
+            repeat_x += context.layout_origin[0]
+            repeat_y += context.layout_origin[1]
             ri, ro = _create_repeat_zone(
                 context.group,
                 state_specs,

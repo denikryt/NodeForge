@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from NodeForge.blender import ir_lowering as backend
@@ -118,3 +120,66 @@ x = calc(3)
         backend.lower_body(context, prepared.group.body, {}, input_mode='BOUND')
     with pytest.raises(CompileError, match='prebound inline input'):
         backend.lower_body(context, prepared.group.body, {}, input_mode='BOUND', bound_inputs={})
+
+
+def test_inline_object_wrappers_do_not_inherit_previous_info_cache():
+    """An Object source socket is borrowed, but physical info caches are invocation-local."""
+    from NodeForge.blender.values import ObjectValue
+
+    original = ObjectValue(StubSocket())
+    original._object_info_outputs = {'location': Value(StubSocket(), NFType.VECTOR)}
+    original._object_info_cache_config = ('ORIGINAL', True)
+    copied = backend._inline_runtime_value(SimpleNamespace(group=object()), NFType.OBJECT, original, 0, 0)
+    assert isinstance(copied, ObjectValue)
+    assert copied is not original and copied.socket is original.socket
+    assert copied._object_info_outputs is None
+    assert copied._object_info_cache_config is None
+
+
+def test_two_sibling_occurrences_receive_distinct_layout_lanes(monkeypatch):
+    """Repeated calls lower into the same group with distinct physical origins."""
+    source = '''def add(value: Float, __inline__=True) -> Float:
+    return value + 1.0
+x = add(2.0)
+y = add(3.0)
+'''
+    calls, session = _analyze(source)
+    native = []
+    monkeypatch.setattr(backend, '_value', _emit_stub_value(native, 'Float', NFType.FLOAT))
+    monkeypatch.setattr(backend, '_math', _emit_stub_value(native, 'Math', NFType.FLOAT))
+    context = backend.BlenderIRLoweringContext(
+        group=object(), runtime_bindings={}, source_callable_session=session,
+        function_materializer=object(), function_materialization_context=object(),
+    )
+    first = backend._lower_source_call(context, calls[0], (), 0, 0)
+    second = backend._lower_source_call(context, calls[1], (), 0, 0)
+    assert first[0].socket is not second[0].socket
+    math_rows = [args for name, args in native if name == 'Math']
+    assert len(math_rows) == 2
+    assert math_rows[0][-1] != math_rows[1][-1]
+    assert math_rows[0][-1] - math_rows[1][-1] == 640
+
+
+def test_inline_context_map_cannot_mutate_caller(monkeypatch):
+    """Local context writes never replace the caller's context slot or wrapper."""
+    from NodeForge.semantic.group_context import GroupContextSlot
+
+    calls, session = _analyze('''def identity(value: Float, __inline__=True) -> Float:
+    return value
+x = identity(2.0)
+''')
+    monkeypatch.setattr(backend, '_value', _emit_stub_value([], 'Float', NFType.FLOAT))
+    outer = Value(StubSocket(), NFType.VECTOR)
+    context = backend.BlenderIRLoweringContext(
+        group=object(), runtime_bindings={}, group_context_values={GroupContextSlot.GRID_UV: outer},
+        source_callable_session=session, function_materializer=object(), function_materialization_context=object(),
+    )
+    original_lower = backend.lower_body
+    def captured_lower(child, *args, **kwargs):
+        assert child.group_context_values is not context.group_context_values
+        assert child.group_context_values[GroupContextSlot.GRID_UV] is not outer
+        child.group_context_values[GroupContextSlot.GRID_UV] = Value(StubSocket(), NFType.VECTOR)
+        return original_lower(child, *args, **kwargs)
+    monkeypatch.setattr(backend, 'lower_body', captured_lower)
+    backend._lower_source_call(context, calls[0], (), 0, 0)
+    assert context.group_context_values[GroupContextSlot.GRID_UV] is outer
