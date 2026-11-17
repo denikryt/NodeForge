@@ -183,3 +183,49 @@ x = identity(2.0)
     monkeypatch.setattr(backend, 'lower_body', captured_lower)
     backend._lower_source_call(context, calls[0], (), 0, 0)
     assert context.group_context_values[GroupContextSlot.GRID_UV] is outer
+
+
+def test_inline_lowering_records_dependency_on_active_physical_frame(monkeypatch):
+    """Only the current materialized parent traces its inlined semantic body."""
+    from NodeForge.function_instances import FunctionCompilationTrace
+    from NodeForge.compiler_identities import inline_expansion_owner_scope
+
+    calls, session = _analyze('''def leaf(value: Float, __inline__=True) -> Float:
+    return value + 1.0
+result = leaf(2.0)
+''')
+    monkeypatch.setattr(backend, '_value', _emit_stub_value([], 'Float', NFType.FLOAT))
+    monkeypatch.setattr(backend, '_math', _emit_stub_value([], 'Math', NFType.FLOAT))
+    trace = FunctionCompilationTrace()
+    context = backend.BlenderIRLoweringContext(
+        group=object(), runtime_bindings={}, source_callable_session=session,
+        function_materializer=object(),
+        function_materialization_context=SimpleNamespace(function_compilation_trace=trace),
+    )
+    with trace.group('PARENT', {'source': 'unchanged'}) as frame:
+        assert backend._lower_source_call(context, calls[0], (), 0, 0)
+        assert len(frame.child_rows) == 1
+        assert frame.child_rows[0]['owner'] == inline_expansion_owner_scope(
+            calls[0].materialization.call_site)
+        assert frame.finish('interface').fingerprint
+    assert trace.current is None
+
+
+def test_failed_inline_lowering_does_not_report_completed_dependency(monkeypatch):
+    """A failed expansion cannot be fingerprinted as successfully realized."""
+    from NodeForge.function_instances import FunctionCompilationTrace
+
+    calls, session = _analyze('''def leaf(value: Float, __inline__=True) -> Float:
+    return value
+result = leaf(index())
+''')
+    trace = FunctionCompilationTrace()
+    context = backend.BlenderIRLoweringContext(
+        group=object(), runtime_bindings={}, source_callable_session=session,
+        function_materializer=object(),
+        function_materialization_context=SimpleNamespace(function_compilation_trace=trace),
+    )
+    with trace.group('PARENT', {}) as frame:
+        with pytest.raises(CompileError, match='inline argument expects'):
+            backend._lower_source_call(context, calls[0], (Value(StubSocket(), NFType.VECTOR),), 0, 0)
+        assert frame.child_rows == []

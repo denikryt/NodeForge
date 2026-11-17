@@ -73,6 +73,8 @@ from ..function_instances import (
     FUNCTION_INSTANCE_KEY_PROP,
     direct_library_owner_scope_for_id,
     function_materialization_owner_scope,
+    function_group_owner_scope,
+    inline_semantic_fingerprint,
 )
 from .function_materializer import FunctionMaterializationContext, FunctionMaterializer
 from ..semantic.source_callables import SourceCallablePreparationKey
@@ -670,6 +672,16 @@ def _lower_inline_source_call(context, operation, operands, prepared, x, y):
         if value.typ is not output.typ:
             raise CompileError("Internal error: inline return type disagrees with source contract")
         values.append(make_value(value.socket, value.typ))
+    trace = getattr(context.function_materialization_context, "function_compilation_trace", None)
+    frame = getattr(trace, "current", None)
+    if frame is not None:
+        # A region belongs to its currently materialized physical parent, so
+        # nested inline and grouped dependencies share that parent's trace.
+        frame.record_inline_dependency(operation.materialization, inline_semantic_fingerprint(prepared))
+        for owner_key, fingerprint in prepared.group.extension_dependencies:
+            frame.record_dependency_identity(
+                function_group_owner_scope("EXTENSION", *owner_key), fingerprint,
+            )
     return tuple(values)
 
 

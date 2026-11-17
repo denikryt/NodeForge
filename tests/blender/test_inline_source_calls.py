@@ -178,3 +178,78 @@ def grouped_parent(obj: Object) -> Vector:
     assert not _nodes(outer, 'GeometryNodeGroup')
     assert all(node.inputs['As Instance'].default_value is False
                for node in _nodes(outer, 'GeometryNodeObjectInfo'))
+
+
+def test_selected_group_reload_tracks_inline_source_default_and_rolls_back():
+    """An inline dependency rebuilds its real grouped parent without a helper group."""
+    from NodeForge.compiler_identities import parse_module_definition_function_id
+    from NodeForge.function_instances import stored_fingerprint
+
+    source = '''def inline_leaf(value: Float, offset: Float = 2.0, __inline__=True) -> Float:
+    return value + offset
+
+def grouped_parent(value: Float) -> Float:
+    return inline_leaf(value)
+result = grouped_parent(3.0)
+'''
+    root = _compose(source, 'NFTest_Inline_Parent_Reload')
+    parent, = [node.node_tree for node in _nodes(root, 'GeometryNodeGroup')]
+    saved_pointer = parent.as_pointer()
+    saved_fingerprint = stored_fingerprint(parent)
+    assert saved_fingerprint
+    assert len(_nodes(parent, 'ShaderNodeMath')) == 1
+    assert not _nodes(parent, 'GeometryNodeGroup')
+    origin = parse_module_definition_function_id(parent['nodeforge_module_definition']).module.origin
+
+    # Changing only the inline callee's default invalidates this grouped body.
+    changed = source.replace('offset: Float = 2.0', 'offset: Float = 4.0')
+    compiler.update_library_catalog_group(parent, source=changed, module_context=origin)
+    new_fingerprint = stored_fingerprint(parent)
+    assert parent.as_pointer() == saved_pointer
+    assert new_fingerprint != saved_fingerprint
+    assert len(_nodes(parent, 'ShaderNodeMath')) == 1
+    assert not _nodes(parent, 'GeometryNodeGroup')
+
+    compiler.update_library_catalog_group(parent, source=changed, module_context=origin)
+    assert stored_fingerprint(parent) == new_fingerprint
+    assert parent.as_pointer() == saved_pointer
+
+    # A changed nested definition is rejected before publishing candidate nodes.
+    broken = changed.replace('value + offset', 'value + missing_variable')
+    previous_nodes = tuple((node.bl_idname, node.name) for node in parent.nodes)
+    with pytest.raises(CompileError):
+        compiler.update_library_catalog_group(parent, source=broken, module_context=origin)
+    assert stored_fingerprint(parent) == new_fingerprint
+    assert parent.as_pointer() == saved_pointer
+    assert tuple((node.bl_idname, node.name) for node in parent.nodes) == previous_nodes
+
+
+def test_direct_root_update_replaces_inline_expansion_and_staging_failure_rolls_back(monkeypatch):
+    """Root Update owns inline node replacement and its existing rollback boundary."""
+    from NodeForge.blender import ir_lowering
+
+    tree = bpy.data.node_groups.new('NFTest_Inline_Root_Update', 'GeometryNodeTree')
+    compiler.update_source_in_tree('a = cube(1.0)\n', tree)
+    before = {node.as_pointer() for node in tree.nodes}
+    source = '''def inline_leaf(value: Float, __inline__=True) -> Float:
+    return value + 1.0
+result = inline_leaf(index())
+'''
+    compiler.update_source_in_tree(source, tree)
+    assert len(_nodes(tree, 'ShaderNodeMath')) == 1
+    assert not _nodes(tree, 'GeometryNodeGroup')
+    assert not before.intersection(node.as_pointer() for node in tree.nodes)
+    pointers = {node.as_pointer() for node in tree.nodes}
+    group_pointers = {g.as_pointer() for g in bpy.data.node_groups}
+    original = ir_lowering._math
+
+    def injected(*args, **kwargs):
+        """Fail after a native Math node is staged inside an inline expansion."""
+        original(*args, **kwargs)
+        raise RuntimeError('injected inline lowering failure')
+
+    monkeypatch.setattr(ir_lowering, '_math', injected)
+    with pytest.raises(RuntimeError, match='injected inline lowering failure'):
+        compiler.update_source_in_tree(source.replace('1.0', '2.0'), tree)
+    assert pointers == {node.as_pointer() for node in tree.nodes}
+    assert group_pointers == {g.as_pointer() for g in bpy.data.node_groups}

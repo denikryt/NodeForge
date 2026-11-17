@@ -149,3 +149,65 @@ def test_mixed_grouped_inline_recursive_cycle_is_rejected_before_backend(source)
     """Recursive definition detection uses FunctionId, not owner-scope identity."""
     with pytest.raises(CompileError, match='Recursive (module definitions|source function calls)'):
         _analyze(source)
+
+
+def test_inline_dependency_fingerprint_stable_until_semantic_body_or_default_changes():
+    """An inline source change invalidates the physical parent without a new group."""
+    from NodeForge.function_instances import FunctionCompilationTrace, inline_semantic_fingerprint
+
+    original = '''def inner(value: Float, offset: Float = 2.0, __inline__=True) -> Float:
+    return value + offset
+result = inner(3.0)
+'''
+    def fingerprint(source):
+        calls, session = _analyze(source)
+        call = calls[0].materialization
+        prepared = session.get_inline_prepared(call)
+        with FunctionCompilationTrace().group('outer', {'source': 'unchanged'}) as frame:
+            frame.record_inline_dependency(call, inline_semantic_fingerprint(prepared))
+            assert len(frame.child_rows) == 1
+            assert frame.child_rows[0]['owner'] == inline_expansion_owner_scope(call.call_site)
+            return frame.finish('unchanged-interface').fingerprint
+
+    assert fingerprint(original) == fingerprint(original)
+    assert fingerprint(original) != fingerprint(original.replace('value + offset', 'value * offset'))
+    assert fingerprint(original) != fingerprint(original.replace('2.0', '4.0'))
+
+
+def test_inline_dependency_rejects_grouped_or_invalid_materialization():
+    """Trace recording must never create an inline owner for physical SHARED calls."""
+    from NodeForge.function_instances import FunctionCompilationTrace, inline_semantic_fingerprint
+
+    calls, session = _analyze('''def leaf(value: Float, __inline__=True) -> Float:
+    return value
+result = leaf(3.0)
+''')
+    call = calls[0].materialization
+    prepared = session.get_inline_prepared(call)
+    with FunctionCompilationTrace().group('parent', {}) as frame:
+        with pytest.raises(ValueError, match='INLINE materialization'):
+            frame.record_inline_dependency(IRFunctionMaterialization(call.callee, Mode.SHARED), 'abc')
+        with pytest.raises(ValueError, match='INLINE materialization'):
+            frame.record_inline_dependency('bad materialization', 'abc')
+        assert not frame.child_rows
+    with pytest.raises(TypeError, match='PreparedSourceCallable'):
+        inline_semantic_fingerprint(object())
+
+
+def test_inline_fingerprint_includes_extension_revision():
+    """A changed extension digest invalidates the same prepared source body."""
+    from dataclasses import replace
+    from NodeForge.function_instances import inline_semantic_fingerprint
+    from NodeForge.semantic.source_callables import PreparedSourceCallable
+
+    calls, session = _analyze('''def leaf(value: Float, __inline__=True) -> Float:
+    return value
+result = leaf(1.0)
+''')
+    original = session.get_inline_prepared(calls[0].materialization)
+    def variant(digest):
+        group = replace(original.group, extension_dependencies=((('vendor', 'extension'), digest),))
+        return PreparedSourceCallable(original.contract, group, original.source_record)
+
+    assert inline_semantic_fingerprint(variant('revision-A')) == inline_semantic_fingerprint(variant('revision-A'))
+    assert inline_semantic_fingerprint(variant('revision-A')) != inline_semantic_fingerprint(variant('revision-B'))
