@@ -405,6 +405,41 @@ Each marked call uses a separate group. `__unique__` accepts a compile-time `Boo
 
 The separate group is shallow: functions called inside it remain shared unless their own calls also use `__unique__=True`.
 
+### Inline Compilation
+
+Declare an inline `.nf` function with the compiler-only `__inline__` parameter as its final argument. It accepts a compile-time `Bool` default:
+
+```python
+def merge_by_distance(geometry: Geometry, max_distance: Float = 0.001, __inline__=True) -> Geometry:
+    return node(
+        "GeometryNodeMergeByDistance",
+        inputs={"Geometry": geometry, "Distance": max_distance},
+        output="Geometry", typ=Geometry,
+    )
+
+base = cube(1.0)
+flat = merge_by_distance(base)
+wrapped = merge_by_distance(base, __inline__=False)
+```
+
+`flat` creates a native Merge by Distance node in the immediate caller's tree. `wrapped` creates a Group Node referencing a function group. Two inline calls produce separate instances of their native nodes; grouped calls reuse a shared backing group by default.
+
+The declaration also accepts the typed form `__inline__: Bool = True`. Both forms establish the same default policy. Omitting `__inline__` from the declaration selects grouped calls. A declaration must provide a compile-time `Bool` default from the defining module; `__inline__` creates no function input socket and cannot be referenced in the function body.
+
+A call-site keyword overrides the declaration default. Call-site values must be compile-time `Bool` values from the calling module:
+
+```python
+flat = merge_by_distance(base, __inline__=True)
+wrapped = merge_by_distance(base, __inline__=False)
+separate = merge_by_distance(base, __inline__=False, __unique__=True)
+```
+
+An effective `__inline__=True` with `__unique__=True` is an error. `__inline__` is supported for source-backed functions defined in the current module or imported from Local, Examples, or packages, including nested package functions. Core built-ins, raw `node(...)`, and Python extension callables do not accept this modifier.
+
+An inline call emits nodes directly into its immediate caller's tree. A grouped caller contains its inline callee's native nodes inside the caller's group; nested calls independently select their own inline or grouped mode. Inputs and flat-tuple returns retain the normal typed function contract.
+
+**Compile Script** and **Update Script** compile inline calls in a base tree. **Reload Function from Source** recompiles inline callees embedded in a selected grouped function. Explicit **Add Node Group** and standalone function creation continue to create editable groups, even for definitions declaring `__inline__=True`.
+
 ## Imports
 
 Write imports at the top level. NodeForge provides the `local`, `examples`, and `packages` namespaces. Importing a `.nf` module makes its functions available; its top-level node-building statements do not run in the importing script.

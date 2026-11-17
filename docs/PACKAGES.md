@@ -179,7 +179,7 @@ full path and click **Add Node Group**. Reload uses that definition's module
 and function identity. Native Python-backed Functions are listed but cannot be
 added as standalone groups.
 
-For general reusable-function behavior, including `__unique__=True` where supported, see [Reusable Functions](SYNTAX.md#reusable-functions).
+For source function materialization, see [Shared and Unique Groups](SYNTAX.md#shared-and-unique-groups) and [Inline Compilation](SYNTAX.md#inline-compilation).
 
 ## Examples
 

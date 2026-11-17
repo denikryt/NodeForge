@@ -282,18 +282,21 @@ class SourceCallableSession:
                 raise CompileError("Internal error: source function compilation stack was corrupted")
         if group.identity.owner_scope != key.owner_scope:
             raise CompileError("Internal error: function body changed its physical owner")
+        from .ir import IRInputDeclaration
         inputs = {item.source_name: (index, item) for index, item in enumerate(group.interface.inputs)}
         parameters = []
-        for argument in fn.args.args:
-            indexed = inputs.get(argument.arg)
+        for declaration in group.body.statements:
+            if not isinstance(declaration, IRInputDeclaration):
+                continue
+            indexed = inputs.get(declaration.target_name)
             if indexed is None:
-                raise CompileError(f"Internal error: function interface lost parameter {argument.arg!r}")
+                raise CompileError(f"Internal error: function interface lost parameter {declaration.target_name!r}")
             input_index, contract = indexed
             parameters.append(SourceCallableParameter(
                 input_index=input_index,
-                source_name=argument.arg,
+                source_name=declaration.target_name,
                 display_name=contract.display_name,
-                keyword_key=argument.arg,
+                keyword_key=declaration.target_name,
                 typ=contract.typ,
                 public=True,
                 has_default=contract.has_default,
@@ -328,6 +331,20 @@ class SourceCallableSession:
             helper_namespace=getattr(record, "name", function_id.name),
             source_record=record,
         )
+
+    def get_inline_prepared(self, materialization) -> PreparedSourceCallable:
+        """Fetch an INLINE region using its ephemeral occurrence-scoped owner.
+
+        The backend consumes the prepared IR; it must never ask a physical
+        function-group materializer to create or locate an inline group.
+        """
+        from ..compiler_identities import inline_expansion_owner_scope
+        from .ir import IRFunctionMaterialization, IRFunctionMaterializationMode
+        if (not isinstance(materialization, IRFunctionMaterialization)
+                or materialization.mode is not IRFunctionMaterializationMode.INLINE):
+            raise CompileError("Internal error: inline preparation requires an INLINE source call")
+        owner = inline_expansion_owner_scope(materialization.call_site)
+        return self.get_prepared(SourceCallablePreparationKey(materialization.callee, owner))
 
     def get_prepared(self, key: SourceCallablePreparationKey) -> PreparedSourceCallable:
         """Return the exact cached owner-specific artifact required by backend lowering."""

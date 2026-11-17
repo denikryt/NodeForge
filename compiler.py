@@ -96,7 +96,7 @@ def _prepare_mesh_compute_root(backend, source: str, *, name: str, existing_grou
     )
     types = {item.target_name: item.typ for item in signature.declarations}
     function_id = module_definition_function_id(
-        definition, serialize_local_signature([arg.arg for arg in fn.args.args], types),
+        definition, serialize_local_signature(tuple(item.target_name for item in signature.declarations), types),
     )
     prepared = session.prepare_definition(
         function_id=function_id, identity=identity, fn=fn,
@@ -250,7 +250,7 @@ def _materialize_standalone_module_definition(snapshot, definition, backend):
     )
     types = {item.target_name: item.typ for item in signature.declarations}
     function_id = module_definition_function_id(
-        definition, serialize_local_signature([arg.arg for arg in fn.args.args], types),
+        definition, serialize_local_signature(tuple(item.target_name for item in signature.declarations), types),
     )
     materialization = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.SHARED)
     owner_scope = function_materialization_owner_scope(materialization)
@@ -516,8 +516,6 @@ def _reload_selected_module_definition(
     )
     fn = snapshot.definitions[function_id.name]
     signature_items = deserialize_module_parameter_signature(function_id.signature)
-    if tuple(arg.arg for arg in fn.args.args) != tuple(name for name, _ in signature_items):
-        raise CompileError('Selected module function signature is incompatible with saved specialization')
     types = dict(signature_items)
     environment, compile_time = session.callable_environment_for_module(snapshot)
     owner_scope = module_definition_owner_scope(function_id, instance_key=instance_key)
@@ -529,6 +527,8 @@ def _reload_selected_module_definition(
         fn, owner_scope=owner_scope, declaration_owner=function_id.stable_key(),
         compile_time_values=compile_time,
     )
+    if tuple(item.target_name for item in verified.declarations) != tuple(name for name, _ in signature_items):
+        raise CompileError('Selected module function signature is incompatible with saved specialization')
     if any(item.typ is not types[item.target_name] for item in verified.declarations):
         raise CompileError('Selected module function types are incompatible with saved specialization')
     prepared = session.prepare_definition(

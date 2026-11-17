@@ -43,6 +43,32 @@ def _string_value(group, value, x=0, y=0):
     node.string = str(value)
     return Value(node.outputs[0], TYPE_STRING)
 
+def _bool_value(group, value, x=0, y=0):
+    """Create a native Bool constant node for one compile-time Bool input."""
+    if type(value) is not bool:
+        raise CompileError("Bool constant requires a Bool value")
+    node = _new_node(group, "FunctionNodeInputBool", x, y)
+    node.boolean = value
+    return Value(node.outputs[0], TYPE_BOOL)
+
+
+def _color_value(group, rgba, x=0, y=0):
+    """Create a Blender Color input node preserving all four RGBA components."""
+    from ..semantic.callable_contracts import canonicalize_color_components
+
+    node = _new_node(group, "FunctionNodeInputColor", x, y)
+    node.value = canonicalize_color_components(rgba)
+    return Value(node.outputs[0], TYPE_COLOR)
+
+
+def _vector_value(group, components, x=0, y=0):
+    """Create a native Vector value with canonical component defaults."""
+    from ..semantic.callable_contracts import canonicalize_group_input_default
+
+    values = canonicalize_group_input_default(TYPE_VECTOR, components)
+    return _combine_xyz_mixed(group, list(values), x, y)
+
+
 def _is_number_type(typ):
     """Function `_is_number_type` used by the NodeForge addon."""
     return typ in {TYPE_FLOAT, TYPE_INT}
@@ -181,4 +207,4 @@ def _id(group, x=0, y=0):
     node = _new_node(group, "GeometryNodeInputID", x, y)
     return Value(node.outputs[0], TYPE_INT)
 
-__all__ = ['_socket_type_for', '_new_node', '_value', '_string_value', '_int_value', '_is_number_type', '_math', '_integer_math', '_vector_math', '_combine_xyz', '_combine_xyz_mixed', '_separate_xyz', '_compare', '_boolean_math', '_switch', '_position', '_normal', '_index', '_id']
+__all__ = ['_socket_type_for', '_new_node', '_value', '_string_value', '_int_value', '_bool_value', '_color_value', '_vector_value', '_is_number_type', '_math', '_integer_math', '_vector_math', '_combine_xyz', '_combine_xyz_mixed', '_separate_xyz', '_compare', '_boolean_math', '_switch', '_position', '_normal', '_index', '_id']

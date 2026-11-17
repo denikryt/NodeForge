@@ -112,7 +112,7 @@ def _place_definition_entries(prepared, context, snapshot):
         )
         types = {item.target_name: item.typ for item in signature.declarations}
         function_id = module_definition_function_id(
-            reference, serialize_local_signature([arg.arg for arg in fn.args.args], types)
+            reference, serialize_local_signature(tuple(item.target_name for item in signature.declarations), types)
         )
         materialization = IRFunctionMaterialization(function_id, IRFunctionMaterializationMode.SHARED)
         owner_scope = function_materialization_owner_scope(materialization)

@@ -106,6 +106,8 @@ def instance_key_for_materialization(materialization: IRFunctionMaterialization)
         raise TypeError("materialization must be an IRFunctionMaterialization")
     if materialization.mode is IRFunctionMaterializationMode.SHARED:
         return ""
+    if materialization.mode is IRFunctionMaterializationMode.INLINE:
+        raise ValueError("INLINE calls have no persisted physical instance key")
     return instance_key_for(materialization.call_site)
 
 
@@ -149,6 +151,30 @@ def function_materialization_owner_scope(
             instance_key=instance_key or None,
         )
     raise ValueError(f"Unsupported reusable FunctionId kind: {callee.kind!r}")
+
+
+def inline_semantic_fingerprint(prepared) -> str:
+    """Fingerprint one realized inline region independently of its physical caller.
+
+    The body contains owner-scoped typed bindings and folded input defaults;
+    the interface retains physical order and exact type/default contracts. The
+    definition source and extension rows carry other effective dependencies.
+    """
+    from .semantic.source_callables import PreparedSourceCallable
+
+    if not isinstance(prepared, PreparedSourceCallable):
+        raise TypeError("inline fingerprint requires PreparedSourceCallable")
+    group = prepared.group
+    return _digest_payload({
+        "schema": 1,
+        "function": prepared.contract.function_id.stable_key(),
+        "source": group.source,
+        "lowered_source": group.normalized_lowered_source,
+        "body": repr(group.body),
+        "interface": repr(group.interface),
+        "call_contract": repr(prepared.contract),
+        "extensions": group.extension_dependencies,
+    })
 
 
 def new_root_owner_id() -> str:
@@ -256,6 +282,23 @@ class FunctionCompilationFrame:
             fingerprint,
         )
 
+    def record_inline_dependency(
+        self, materialization: IRFunctionMaterialization, fingerprint: str,
+    ) -> None:
+        """Track one source expansion on the current physical parent's trace.
+
+        INLINE owns a semantic call occurrence, never a separate persisted
+        NodeTree. Its nested grouped children record in this same frame.
+        """
+        from .compiler_identities import inline_expansion_owner_scope
+
+        if (not isinstance(materialization, IRFunctionMaterialization)
+                or materialization.mode is not IRFunctionMaterializationMode.INLINE):
+            raise ValueError("inline dependency requires INLINE materialization")
+        self.record_dependency_identity(
+            inline_expansion_owner_scope(materialization.call_site), fingerprint,
+        )
+
     def finish(self, contract: str) -> FunctionCompilationResult:
         """Finalize this frame's effective fingerprint."""
 
@@ -304,6 +347,7 @@ class FunctionCompilationTrace:
 
 
 __all__ = [
+    "inline_semantic_fingerprint",
     "FUNCTION_INSTANCE_KEY_PROP",
     "FUNCTION_DEFINITION_OWNER_PROP",
     "FUNCTION_INTERFACE_CONTRACT_PROP",

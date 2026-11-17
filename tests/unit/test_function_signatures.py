@@ -217,3 +217,37 @@ def test_float_annotation_is_not_changed_by_runtime_count_operations():
     """The declaration remains Float; semantic lowering checks invalid uses."""
     signature = _signature('def fn(count: Float):\n    for i in range(count):\n        x = i\n    return count')
     assert signature.logical_inputs[0].typ is NFType.FLOAT
+
+@pytest.mark.parametrize('declaration', ('__inline__ = True', '__inline__: Bool = True'))
+def test_inline_preference_is_compiler_only_and_preserves_typed_runtime_projection(declaration):
+    """Compilation controls do not consume a parameter, input origin or socket."""
+    signature = _signature(f'def fn(x: Float, y: Int = 3, {declaration}):\n    return x')
+    assert signature.inline_default is True
+    assert tuple(item.target_name for item in signature.declarations) == ('x', 'y')
+    assert tuple(item.source_name for item in signature.physical_inputs) == ('x', 'y')
+    assert signature.declarations[1].has_default
+    assert _signature('def fn(x: Float):\n    return x').inline_default is False
+
+
+@pytest.mark.parametrize('signature, diagnostic', [
+    ('__inline__', 'compile-time Bool default'),
+    ('__inline__: Bool', 'compile-time Bool default'),
+    ('__inline__: Float = True', 'requires Bool annotation'),
+    ('__inline__ = 1', 'compile-time Bool default'),
+    ('__inline__ = NOT_AVAILABLE', 'compile-time Bool default'),
+    ('__inline__ = True, extra: Float = 2', 'final parameter'),
+])
+def test_bad_inline_declarations_fail_at_signature_boundary(signature, diagnostic):
+    """An invalid compiler control cannot leak into public argument binding."""
+    with pytest.raises(CompileError, match=diagnostic):
+        _signature(f'def fn(value: Float, {signature}):\n    return value')
+
+
+def test_inline_preference_uses_final_defining_compile_time_snapshot():
+    """A Bool symbol is resolved in the declaring module, not from caller values."""
+    signature = _signature('def fn(value: Float, __inline__=POLICY):\n    return value',
+                           compile_time_values={'POLICY': True})
+    assert signature.inline_default is True
+    with pytest.raises(CompileError, match='runtime parameter'):
+        _signature('def fn(value: Bool, __inline__=value):\n    return value',
+                   compile_time_values={'value': True})

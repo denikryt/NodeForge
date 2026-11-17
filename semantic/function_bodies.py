@@ -83,7 +83,7 @@ def compile_function_definition(
         body_stmts,
         initial_compile_time=values,
         shadowed_names=inventory.owned_names,
-        runtime_range_names=(arg.arg for arg in fn.args.args),
+        runtime_range_names=(item.target_name for item in signature.declarations),
     )
     if not preprocessed.statements or preprocessed.statements[-1] is not fn.body[-1]:
         raise CompileError(f"{fn.name}() return must remain terminal after preprocessing")

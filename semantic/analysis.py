@@ -44,7 +44,7 @@ from ..function_instances import (
     function_group_owner_scope,
     function_materialization_owner_scope,
 )
-from .call_modifiers import extract_function_call_modifiers, unsupported_unique
+from .call_modifiers import extract_function_call_modifiers, reject_unsupported_modifiers
 from .constants import (
     OBJECT_PROPERTY_TYPES,
     TYPE_BOOL,
@@ -429,8 +429,7 @@ def _analyze_extension_backend_call(
 ):
     """Preserve the reviewed backend-only extension acquisition/overload path."""
     name = resolved.source_name
-    if modifiers.unique_was_explicit:
-        raise unsupported_unique(name)
+    reject_unsupported_modifiers(name, modifiers)
     if any(isinstance(argument, ast.Starred) for argument in cleaned_call.args):
         raise CompileError(f"{name}() does not support caller-side * argument expansion")
     if any(keyword.arg is None for keyword in cleaned_call.keywords):
@@ -700,8 +699,7 @@ def _analyze_extension_semantic_call(
 ):
     """Analyze one non-overloaded semantic-capable extension call without body persistence."""
     name = resolved.source_name
-    if modifiers.unique_was_explicit:
-        raise unsupported_unique(name)
+    reject_unsupported_modifiers(name, modifiers)
     if any(keyword.arg is None for keyword in cleaned_call.keywords):
         raise CompileError(f"{name}() does not support caller-side ** argument expansion")
 
@@ -1009,6 +1007,30 @@ def build_semantic_environment(
         helper_namespace=str(helper_namespace or "Group"),
         extension_registry=extension_registry,
     )
+
+
+def _resolve_source_materialization(
+    function_id, modifiers, declared_inline_default: bool, source_call_site_allocator,
+) -> IRFunctionMaterialization:
+    """Choose an occurrence mode exactly once before source-body preparation."""
+    effective_inline = declared_inline_default if modifiers.inline is None else modifiers.inline
+    if type(effective_inline) is not bool:
+        raise CompileError("Internal error: source inline default is not Bool")
+    if effective_inline and modifiers.unique:
+        raise CompileError("__inline__=True and __unique__=True cannot be combined")
+    mode = (IRFunctionMaterializationMode.INLINE if effective_inline else
+            IRFunctionMaterializationMode.UNIQUE if modifiers.unique else
+            IRFunctionMaterializationMode.SHARED)
+    call_site = source_call_site_allocator(function_id) if mode is not IRFunctionMaterializationMode.SHARED else None
+    return IRFunctionMaterialization(function_id, mode, call_site)
+
+
+def _source_materialization_owner_scope(materialization) -> str:
+    """Keep inline semantic identity out of physical instance-key derivation."""
+    if materialization.mode is IRFunctionMaterializationMode.INLINE:
+        from ..compiler_identities import inline_expansion_owner_scope
+        return inline_expansion_owner_scope(materialization.call_site)
+    return function_materialization_owner_scope(materialization)
 
 
 def analyze_expression(expr, environment):
@@ -1643,18 +1665,17 @@ def analyze_expression(expr, environment):
                 raise CompileError("Only simple or package-qualified function calls are supported")
 
             if resolved is UNRESOLVED:
+                reject_unsupported_modifiers(name, modifiers)
                 if cleaned_call.keywords:
                     raise _unregistered_keyword_error(name)
-                if modifiers.unique_was_explicit:
-                    raise unsupported_unique(name)
                 raise CompileError(f"Unsupported function: {name}")
             if resolved.kind is CallableKind.TOP_LEVEL_ONLY:
+                reject_unsupported_modifiers(name, modifiers)
                 if cleaned_call.keywords:
                     raise _unregistered_keyword_error(name)
                 raise CompileError(f"{name}() is only supported as a top-level call")
             if resolved.kind is CallableKind.BUILTIN:
-                if modifiers.unique_was_explicit:
-                    raise unsupported_unique(name)
+                reject_unsupported_modifiers(name, modifiers)
                 if name in INPUT_DECLARATION_BUILTIN_NAMES:
                     raise CompileError(INPUT_DECLARATION_PLACEMENT_ERROR)
                 if name not in IR_CAPABLE_BUILTIN_NAMES:
@@ -1752,8 +1773,6 @@ def analyze_expression(expr, environment):
                 from .function_signatures import compile_function_signature
                 if fn.args.posonlyargs or fn.args.vararg or fn.args.kwarg or fn.args.kwonlyargs or fn.args.kw_defaults:
                     raise CompileError(f"{name}() accepts only ordinary named parameters")
-                parameters = tuple(arg.arg for arg in fn.args.args)
-                default_offset = len(parameters) - len(fn.args.defaults)
                 # The authoritative signature precedes argument binding and uses
                 # the defining module's own compile-time values, not the caller's.
                 if binding.definition.module in environment.callable_environment.local_definition_refs.values():
@@ -1766,12 +1785,13 @@ def analyze_expression(expr, environment):
                     fn, owner_scope=definition_owner, declaration_owner=definition_owner,
                     compile_time_values=module_values,
                 )
+                parameters = tuple(item.target_name for item in initial_signature.declarations)
                 declarations = {item.target_name: item.typ for item in initial_signature.declarations}
                 templates = tuple(SourceCallableParameter(
-                    input_index=i, source_name=arg.arg, display_name=arg.arg,
-                    keyword_key=arg.arg, typ=declarations[arg.arg],
-                    public=True, has_default=i >= default_offset,
-                ) for i, arg in enumerate(fn.args.args))
+                    input_index=i, source_name=item.target_name, display_name=item.target_name,
+                    keyword_key=item.target_name, typ=item.typ,
+                    public=True, has_default=item.has_default,
+                ) for i, item in enumerate(initial_signature.declarations))
                 bound_pairs = bind_unified_source_arguments(
                     templates, tuple(cleaned_call.args),
                     tuple((item.arg, item.value) for item in cleaned_call.keywords), name,
@@ -1790,11 +1810,11 @@ def analyze_expression(expr, environment):
                 function_id = module_definition_function_id(
                     binding.definition, serialize_local_signature(parameters, types_by_name)
                 )
-                materialization = IRFunctionMaterialization(
-                    function_id, IRFunctionMaterializationMode.UNIQUE if modifiers.unique else IRFunctionMaterializationMode.SHARED,
-                    environment.source_call_site_allocator(function_id) if modifiers.unique else None,
+                materialization = _resolve_source_materialization(
+                    function_id, modifiers, initial_signature.inline_default,
+                    environment.source_call_site_allocator,
                 )
-                owner_scope = function_materialization_owner_scope(materialization)
+                owner_scope = _source_materialization_owner_scope(materialization)
                 identity = GroupCompilationIdentity(None, owner_scope, definition_owner, function_id.stable_key())
                 # Imported source modules have independent lexical imports and
                 # constants; never inherit caller bindings or run imported body.
@@ -1846,8 +1866,6 @@ def analyze_expression(expr, environment):
                 from .function_signatures import compile_function_signature
                 if fn.args.posonlyargs or fn.args.vararg or fn.args.kwarg or fn.args.kwonlyargs or fn.args.kw_defaults:
                     raise CompileError(f"{name}() accepts only ordinary named parameters")
-                params = tuple(argument.arg for argument in fn.args.args)
-                offset = len(params) - len(fn.args.defaults)
                 definition_owner = environment.source_definition_owner or environment.source_owner_scope
                 if not definition_owner:
                     raise CompileError("Internal error: source call has no definition owner")
@@ -1856,13 +1874,14 @@ def analyze_expression(expr, environment):
                     compile_time_values=environment.const_eval_values,
                 )
                 declared = {item.target_name: item.typ for item in preliminary_signature.declarations}
+                params = tuple(item.target_name for item in preliminary_signature.declarations)
                 templates = tuple(
                     SourceCallableParameter(
-                        input_index=index, source_name=param, display_name=param,
-                        keyword_key=param, typ=declared[param],
-                        public=True, has_default=index >= offset,
+                        input_index=index, source_name=item.target_name, display_name=item.target_name,
+                        keyword_key=item.target_name, typ=item.typ,
+                        public=True, has_default=item.has_default,
                     )
-                    for index, param in enumerate(params)
+                    for index, item in enumerate(preliminary_signature.declarations)
                 )
                 bound_pairs = bind_unified_source_arguments(
                     templates, tuple(cleaned_call.args),
@@ -1886,16 +1905,11 @@ def analyze_expression(expr, environment):
                 signature_types = {item.target_name: item.typ for item in preliminary_signature.declarations}
                 signature = serialize_local_signature(params, signature_types)
                 function_id = local_function_id(definition_owner, fn.name, signature)
-                if modifiers.unique:
-                    call_site = environment.source_call_site_allocator(function_id)
-                    materialization = IRFunctionMaterialization(
-                        function_id, IRFunctionMaterializationMode.UNIQUE, call_site
-                    )
-                else:
-                    materialization = IRFunctionMaterialization(
-                        function_id, IRFunctionMaterializationMode.SHARED, None
-                    )
-                owner_scope = function_materialization_owner_scope(materialization)
+                materialization = _resolve_source_materialization(
+                    function_id, modifiers, preliminary_signature.inline_default,
+                    environment.source_call_site_allocator,
+                )
+                owner_scope = _source_materialization_owner_scope(materialization)
                 identity = GroupCompilationIdentity(
                     root_owner_id=None,
                     owner_scope=owner_scope,
@@ -1997,28 +2011,21 @@ def analyze_expression(expr, environment):
                     # Keep the definition owner canonical so unmarked nested
                     # helpers can remain shared across unique occurrences.
                     definition_owner = direct_library_owner_scope_for_id(function_id)
-                    materialization = None
-                    owner_scope = definition_owner
-                    if modifiers.unique:
-                        call_site = environment.source_call_site_allocator(function_id)
-                        materialization = IRFunctionMaterialization(
-                            function_id, IRFunctionMaterializationMode.UNIQUE, call_site
-                        )
-                        owner_scope = function_materialization_owner_scope(materialization)
+                    materialization = _resolve_source_materialization(
+                        function_id, modifiers, False, environment.source_call_site_allocator,
+                    )
+                    owner_scope = (definition_owner if materialization.mode is IRFunctionMaterializationMode.SHARED
+                                   else _source_materialization_owner_scope(materialization))
+                    if materialization.mode is IRFunctionMaterializationMode.SHARED:
+                        materialization = None  # Existing direct Local catalog group ownership.
                     identity = GroupCompilationIdentity(
                         None, owner_scope, definition_owner, function_id.stable_key()
                     )
                 else:
-                    if modifiers.unique:
-                        call_site = environment.source_call_site_allocator(function_id)
-                        materialization = IRFunctionMaterialization(
-                            function_id, IRFunctionMaterializationMode.UNIQUE, call_site
-                        )
-                    else:
-                        materialization = IRFunctionMaterialization(
-                            function_id, IRFunctionMaterializationMode.SHARED, None
-                        )
-                    owner_scope = function_materialization_owner_scope(materialization)
+                    materialization = _resolve_source_materialization(
+                        function_id, modifiers, False, environment.source_call_site_allocator,
+                    )
+                    owner_scope = _source_materialization_owner_scope(materialization)
                     identity = GroupCompilationIdentity(
                         None, owner_scope, function_id.stable_key(), function_id.stable_key()
                     )

@@ -143,6 +143,30 @@ def test_modifier_extraction_uses_detached_constants_and_preserves_explicit_fals
     assert [keyword.arg for keyword in cleaned.keywords] == []
 
 
+@pytest.mark.parametrize(
+    ("keyword", "expected_inline"),
+    [
+        ("", None),
+        (", __inline__=True", True),
+        (", __inline__=False", False),
+        (", __inline__=POLICY", False),
+    ],
+)
+def test_inline_modifier_has_one_tri_state_presence_indicator(keyword, expected_inline):
+    """An explicit False is distinguishable from omission without a second flag."""
+    cleaned, modifiers = extract_function_call_modifiers(
+        _call(f"helper(x{keyword})"), "helper", {"POLICY": False},
+    )
+    assert modifiers.inline is expected_inline
+    assert [item.arg for item in cleaned.keywords] == []
+    from NodeForge.semantic.call_modifiers import reject_unsupported_modifiers
+    if expected_inline is None:
+        reject_unsupported_modifiers("helper", modifiers)
+    else:
+        with pytest.raises(CompileError, match=r"helper\(\) does not support __inline__"):
+            reject_unsupported_modifiers("helper", modifiers)
+
+
 def _analyze_unresolved(source, *, consts=None):
     """Analyze one unresolved call through the production diagnostic ordering."""
     from types import MappingProxyType

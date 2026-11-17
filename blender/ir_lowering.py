@@ -6,13 +6,13 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
-from ..semantic.constants import TYPE_BOOL, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_VECTOR
+from ..semantic.constants import TYPE_BOOL, TYPE_COLOR, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_STRING, TYPE_VECTOR
 from ..nf_types import NFType
 from ..type_capabilities import REPEAT_ITEM_TYPES
 from ..errors import CompileError
-from ..compiler_identities import BindingId
+from ..compiler_identities import BindingId, InputDeclarationId
 from ..semantic.group_context import GroupContextSlot
-from .nodes import _boolean_math, _combine_xyz_mixed, _compare, _int_value, _integer_math, _math, _new_node, _separate_xyz, _string_value, _switch, _value, _vector_math
+from .nodes import _bool_value, _color_value, _vector_value, _boolean_math, _combine_xyz_mixed, _compare, _int_value, _integer_math, _math, _new_node, _separate_xyz, _string_value, _switch, _value, _vector_math
 from .geometry import (
     _capture_attribute_geometry,
     _cube_geometry,
@@ -66,11 +66,15 @@ from ..semantic.ir import (
     IRPanelDeclaration,
 )
 from .values import ObjectValue, Value, make_value
+from ..semantic.callable_contracts import canonicalize_group_input_default, source_argument_type_matches
+from ..semantic.ir import IRFunctionMaterializationMode
 from .interface import _create_group_input_socket, _create_interface_panel, _set_socket_default
 from ..function_instances import (
     FUNCTION_INSTANCE_KEY_PROP,
     direct_library_owner_scope_for_id,
     function_materialization_owner_scope,
+    function_group_owner_scope,
+    inline_semantic_fingerprint,
 )
 from .function_materializer import FunctionMaterializationContext, FunctionMaterializer
 from ..semantic.source_callables import SourceCallablePreparationKey
@@ -142,6 +146,7 @@ class BlenderIRLoweringContext:
     helper_namespace: str = "Group"
     extension_registry: object | None = None
     generated_resource_transaction: object | None = None
+    layout_origin: tuple[float, float] = (0.0, 0.0)
 
     def __post_init__(self):
         """Freeze value bindings while retaining explicit mutable backend-owned maps."""
@@ -154,6 +159,8 @@ class BlenderIRLoweringContext:
         if not isinstance(interface_items, dict):
             raise TypeError("interface_input_items must be a mutable dict")
         object.__setattr__(self, "interface_input_items", interface_items)
+        if len(self.layout_origin) != 2:
+            raise ValueError("layout_origin must be a two-coordinate tuple")
 
 
 def _position(depth):
@@ -547,24 +554,154 @@ def _source_call_owner_scope(operation):
     return direct_library_owner_scope_for_id(function_id)
 
 
+def _inline_constant_value(context, typ, value, x, y):
+    """Materialize a detached call argument/default as one typed runtime socket."""
+    value = canonicalize_group_input_default(typ, value)
+    if typ is TYPE_FLOAT:
+        return _value(context.group, value, x, y)
+    if typ is TYPE_INT:
+        return _int_value(context.group, value, x, y)
+    if typ is TYPE_BOOL:
+        return _bool_value(context.group, value, x, y)
+    if typ is TYPE_STRING:
+        return _string_value(context.group, value, x, y)
+    if typ is TYPE_VECTOR:
+        return _vector_value(context.group, value, x, y)
+    if typ is TYPE_COLOR:
+        return _color_value(context.group, value, x, y)
+    raise CompileError(f"Internal error: unsupported inline default of type {typ}")
+
+
+def _inline_runtime_value(context, expected, actual, x, y):
+    """Detach a runtime Value and realize the only permitted numeric widening."""
+    if not isinstance(actual, Value) or not source_argument_type_matches(expected, actual.typ):
+        raise CompileError(f"Internal error: inline argument expects {expected}, got {getattr(actual, 'typ', None)}")
+    if expected is TYPE_FLOAT and actual.typ is TYPE_INT:
+        return _math(context.group, "ADD", [actual, _value(context.group, 0.0, x, y - 60)], x, y)
+    return make_value(actual.socket, actual.typ)
+
+
+def _inline_parameter_bindings(context, operation, operands, prepared, x, y):
+    """Bind physical interface positions to exact declaration identities once."""
+    contract = prepared.contract
+    interface = prepared.group.interface
+    by_position = {}
+    for parameter in contract.parameters:
+        position = parameter.input_index
+        if position >= len(interface.inputs) or position in by_position:
+            raise CompileError("Internal error: inline callable has an invalid physical input index")
+        origin = interface.inputs[position].interface_origin
+        if origin is None or not isinstance(origin, InputDeclarationId):
+            raise CompileError("Internal error: inline parameter lacks a declaration identity")
+        if parameter.interface_origin is not None and parameter.interface_origin != origin:
+            raise CompileError("Internal error: inline callable parameter declaration identity mismatch")
+        by_position[position] = (parameter, interface.inputs[position], origin)
+
+    specified = {}
+    if len(operation.arguments) != len(operands):
+        raise CompileError("Internal error: inline call runtime operand count changed")
+    for arg, value in zip(operation.arguments, operands):
+        position = arg.parameter_index
+        if position not in by_position or position in specified:
+            raise CompileError("Internal error: inline call has invalid or duplicated runtime input position")
+        specified[position] = ("runtime", value)
+    for arg in operation.static_arguments:
+        position = arg.parameter_index
+        if position not in by_position or position in specified:
+            raise CompileError("Internal error: inline call has invalid or duplicated static input position")
+        specified[position] = ("static", arg.value)
+
+    bound = {}
+    for position, (parameter, interface_input, origin) in by_position.items():
+        mode, arg = specified.get(position, ("default", interface_input.default))
+        if mode == "default" and not interface_input.has_default:
+            raise CompileError(f"Internal error: missing required inline input {parameter.display_name!r}")
+        offset = position * 75
+        if mode == "runtime":
+            value = _inline_runtime_value(context, parameter.typ, arg, x - 180, y - offset)
+        else:
+            value = _inline_constant_value(context, parameter.typ, arg, x - 180, y - offset)
+        if origin in bound:
+            raise CompileError("Internal error: inline declaration was bound more than once")
+        bound[origin] = value
+
+    # Neither the source AST order nor panel visual order is a valid binding key.
+    from ..semantic.ir import IRInputDeclaration
+    declarations = tuple(statement for statement in prepared.group.body.statements
+                         if isinstance(statement, IRInputDeclaration))
+    if len(declarations) != len(bound) or {item.declaration_id for item in declarations} != set(bound):
+        raise CompileError("Internal error: inline body input declarations disagree with its interface")
+    runtime_bindings = {item.target_binding_id: bound[item.declaration_id] for item in declarations}
+    if len(runtime_bindings) != len(declarations):
+        raise CompileError("Internal error: inline body has repeated runtime binding identities")
+    return runtime_bindings
+
+
+def _lower_inline_source_call(context, operation, operands, prepared, x, y):
+    """Evaluate one typed prepared body directly inside its immediate caller tree."""
+    inputs = _inline_parameter_bindings(context, operation, operands, prepared, x, y)
+    materialization = operation.materialization
+    if materialization is None or materialization.call_site is None:
+        raise CompileError("Internal error: inline call has no occurrence identity")
+    ordinal = materialization.call_site.ordinal
+    # Each sibling call receives its own deterministic vertical lane, including
+    # calls reached from another bound region. No ephemeral node group is needed.
+    child_origin = (x + 260, y - 380 - ordinal * 640)
+    bound_context = BlenderIRLoweringContext(
+        group=context.group,
+        runtime_bindings={},
+        group_context_values={slot: make_value(value.socket, value.typ)
+                              for slot, value in context.group_context_values.items()},
+        interface_input_items={},
+        source_callable_session=context.source_callable_session,
+        function_materializer=context.function_materializer,
+        function_materialization_context=context.function_materialization_context,
+        helper_namespace=context.helper_namespace,
+        extension_registry=context.extension_registry,
+        generated_resource_transaction=context.generated_resource_transaction,
+        layout_origin=child_origin,
+    )
+    result = lower_body(bound_context, prepared.group.body, inputs, base_depth=0)
+    outputs = result.explicit_outputs if result.explicit_outputs else (
+        (result.auto_output,) if result.auto_output is not None else ()
+    )
+    if len(outputs) != len(prepared.contract.outputs):
+        raise CompileError("Internal error: inline body result count disagrees with source contract")
+    values = []
+    for (_name, value), output in zip(outputs, prepared.contract.outputs):
+        if value.typ is not output.typ:
+            raise CompileError("Internal error: inline return type disagrees with source contract")
+        values.append(make_value(value.socket, value.typ))
+    trace = getattr(context.function_materialization_context, "function_compilation_trace", None)
+    frame = getattr(trace, "current", None)
+    if frame is not None:
+        # A region belongs to its currently materialized physical parent, so
+        # nested inline and grouped dependencies share that parent's trace.
+        frame.record_inline_dependency(operation.materialization, inline_semantic_fingerprint(prepared))
+        for owner_key, fingerprint in prepared.group.extension_dependencies:
+            frame.record_dependency_identity(
+                function_group_owner_scope("EXTENSION", *owner_key), fingerprint,
+            )
+    return tuple(values)
+
+
 def _lower_source_call(context, operation, operands, x, y):
     """Materialize one prepared source callable and wire a GeometryNodeGroup by positions."""
-    from .library_groups import (
-        _input_sockets as _group_node_inputs,
-        _output_sockets as _group_node_outputs,
-        apply_function_node_display_name,
-        materialize_prepared_library_callable,
-    )
-
     session = context.source_callable_session
     materializer = context.function_materializer
     materialization_context = context.function_materialization_context
     function_id = operation.target.function_id
     if session is None or materializer is None or materialization_context is None or function_id is None:
         raise CompileError("Internal error: source Call IR reached backend without source-call services")
-    owner_scope = _source_call_owner_scope(operation)
-    key = SourceCallablePreparationKey(function_id, owner_scope)
-    prepared_callable = session.get_prepared(key)
+    inline = (operation.materialization is not None
+              and operation.materialization.mode is IRFunctionMaterializationMode.INLINE)
+    if inline:
+        prepared_callable = session.get_inline_prepared(operation.materialization)
+        from ..compiler_identities import inline_expansion_owner_scope
+        owner_scope = inline_expansion_owner_scope(operation.materialization.call_site)
+    else:
+        owner_scope = _source_call_owner_scope(operation)
+        prepared_callable = session.get_prepared(SourceCallablePreparationKey(function_id, owner_scope))
     if prepared_callable.group.identity.owner_scope != owner_scope:
         raise CompileError("Internal error: prepared source callable owner mismatch")
     contract = prepared_callable.contract
@@ -575,6 +712,16 @@ def _lower_source_call(context, operation, operands, x, y):
     for result, output in zip(operation.results, contract.outputs):
         if result.typ is not output.typ:
             raise CompileError("Internal error: source-call result type changed before Blender lowering")
+
+    if inline:
+        return _lower_inline_source_call(context, operation, operands, prepared_callable, x, y)
+
+    from .library_groups import (
+        _input_sockets as _group_node_inputs,
+        _output_sockets as _group_node_outputs,
+        apply_function_node_display_name,
+        materialize_prepared_library_callable,
+    )
 
     if function_id.kind == "MODULE_DEF":
         if operation.materialization is None:
@@ -649,6 +796,8 @@ def _execute_operation(context, operation, materialized, base_depth, runtime_bin
     runtime_bindings = context.runtime_bindings if runtime_bindings is None else runtime_bindings
     effective_depth = base_depth + operation.depth
     x, y = _position(effective_depth)
+    x += context.layout_origin[0]
+    y += context.layout_origin[1]
 
     if isinstance(operation, IRLiteral):
         _lower_literal(context, operation, materialized, x, y)
@@ -756,7 +905,12 @@ def _lower_body_internal(
         layout_index = index if legacy_index_override is None else legacy_index_override
         if isinstance(statement, IRInputDeclaration):
             if group_input is None:
-                raise CompileError("Internal error: body input declaration requires Group Input context")
+                # Inline parameters are already validated and keyed by BindingId.
+                value = runtime_bindings.get(statement.target_binding_id)
+                if not isinstance(value, Value) or value.typ is not statement.typ:
+                    raise CompileError("Internal error: missing or incompatible prebound inline input")
+                auto_output = (statement.target_name, value)
+                continue
             value, _iface = _create_group_input_socket(
                 context.group,
                 group_input,
@@ -805,7 +959,8 @@ def _lower_body_internal(
             continue
         if isinstance(statement, IRPanelDeclaration):
             if group_input is None:
-                raise CompileError("Internal error: panel declaration requires Group Input context")
+                auto_output = None
+                continue
             sockets = []
             for origin in statement.member_origins:
                 iface_item = context.interface_input_items.get(origin)
@@ -838,6 +993,8 @@ def _lower_body_internal(
             else:
                 switch_x = repeat_origin[0] + 680 + control_depth * 120
                 switch_y = repeat_origin[1] - 220
+            switch_x += context.layout_origin[0]
+            switch_y += context.layout_origin[1]
             for merge in statement.merges:
                 try:
                     true_value = true_result.runtime_bindings[merge.binding_id]
@@ -869,6 +1026,8 @@ def _lower_body_internal(
             else:
                 repeat_x = repeat_origin[0] + 360 + control_depth * 180
                 repeat_y = repeat_origin[1] - 500 - control_depth * 280
+            repeat_x += context.layout_origin[0]
+            repeat_y += context.layout_origin[1]
             ri, ro = _create_repeat_zone(
                 context.group,
                 state_specs,
@@ -922,16 +1081,10 @@ def _lower_body_internal(
 
 
 def lower_body(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):
-    """Materialize one fully validated structured IRBody without publishing locals to Compiler."""
+    """Materialize typed IR using supplied bindings or a physical Group Input node."""
     if not isinstance(body, IRBody):
         raise TypeError("body must be an IRBody")
-    return _lower_body_internal(
-        context,
-        body,
-        initial_runtime_bindings,
-        base_depth,
-        group_input=group_input,
-    )
+    return _lower_body_internal(context, body, initial_runtime_bindings, base_depth, group_input=group_input)
 
 
 def _materialize_program_result(materialized, result):

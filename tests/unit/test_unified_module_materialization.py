@@ -83,3 +83,30 @@ def test_unannotated_parameter_is_rejected_before_call_type_specialization():
     """Supplying an Int at a call site never fills a missing source annotation."""
     with pytest.raises(CompileError, match='requires an explicit type annotation'):
         _analyze('def f(value):\n    return value\nresult = f(3)\n')
+
+@pytest.mark.parametrize('modifier', ('__inline__=True', '__inline__: Bool=True'))
+def test_inline_declaration_does_not_affect_grouped_function_identity_or_sockets(modifier):
+    """A signature control does not alter existing physical grouping identity."""
+    base = 'def f(value: Float = 2.0) -> Float:\n    return value\nresult = f(5)\n'
+    with_inline = base.replace('value: Float = 2.0)', f'value: Float = 2.0, {modifier})')
+    regular, session1 = _analyze(base)
+    controlled, session2 = _analyze(with_inline)
+    key1, = session1.prepared
+    key2, = session2.prepared
+    assert key1.function_id == key2.function_id
+    assert len(session1.prepared[key1].contract.parameters) == len(session2.prepared[key2].contract.parameters) == 1
+    assert [p.source_name for p in session2.prepared[key2].contract.parameters] == ['value']
+    assert [p.source_name for p in session2.prepared[key2].group.interface.inputs] == ['value']
+
+
+@pytest.mark.parametrize('source', [
+    'def f(value: Float, __inline__=True) -> Float:\n    return __inline__',
+    'def f(value: Float, __inline__=False) -> Float:\n    return value\n',
+])
+def test_inline_preference_preflight_checks_unused_definitions(source):
+    """A valid unused function is accepted; an illegal body reference is not."""
+    if 'return __inline__' in source:
+        with pytest.raises(CompileError, match='cannot read compiler-only __inline__'):
+            _analyze(source)
+    else:
+        _analyze(source)
