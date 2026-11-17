@@ -721,3 +721,9 @@ lifecycle.
 - Added nested `functions/` namespaces for packages, with exact canonical calls, unique short-name aliases, and ambiguity diagnostics.
 - Added qualified identity for nested Extension API v2 Functions owners and source-backed Library Add/Reload, plus nested completion and signature help in the editor.
 - Preserved existing flat package function calls and generated source-group ownership.
+
+## 0.92.0
+
+- Exposed `Rotation` as a public `.nf` runtime type for typed function interfaces and raw Blender nodes, with finite binary32 XYZ Euler-angle defaults.
+- Added type-directed Rotation defaults and static value/overload selection to Extension API v2, preserving strict Vector/Rotation runtime identity.
+- Preserved representable Rotation group-node overrides across compatible updates while maintaining the existing comparison policy for other socket types.

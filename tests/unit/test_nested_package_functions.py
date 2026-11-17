@@ -323,7 +323,9 @@ def test_incompatible_nested_package_replacement_preserves_active_owner(tmp_path
     import json
     import zipfile
     from NodeForge.environment_resolution import resolve_environment
+    from NodeForge import NODEFORGE_VERSION
 
+    future_min = f'{NODEFORGE_VERSION[0]}.{NODEFORGE_VERSION[1] + 1}.0'
     packages.set_packages_dir_for_tests(tmp_path / 'installed')
     try:
         root = tmp_path / 'source'
@@ -341,11 +343,11 @@ def test_incompatible_nested_package_replacement_preserves_active_owner(tmp_path
         old = packages.active_package_records()[0]
         candidate = tmp_path / 'future.zip'
         with zipfile.ZipFile(candidate, 'w') as bundle:
-            manifest.update(version='2.0.0', nodeforge_min_version='0.92.0')
+            manifest.update(version='2.0.0', nodeforge_min_version=future_min)
             bundle.writestr('vendor.nested/nodeforge_package.json', json.dumps(manifest))
             bundle.writestr('vendor.nested/functions/entry.nf',
                             'def newer(x: Float) -> Float:\n    return x\n')
-        with pytest.raises(packages.PackageError, match='requires NodeForge 0.92.0'):
+        with pytest.raises(packages.PackageError, match=f'requires NodeForge {future_min}'):
             packages.install_package_zip(candidate, replace=True)
         current = packages.active_package_records()[0]
         assert current.manifest.version == old.manifest.version

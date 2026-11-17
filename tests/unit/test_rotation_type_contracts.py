@@ -117,3 +117,17 @@ def test_required_rotation_default_guard_remains_strict():
     assert not required.has_default
     with pytest.raises(ValueError):
         GroupInputContract('value', 'Value', NFType.ROTATION, (0., 0., 0.), False, None)
+
+
+def test_rotation_public_token_does_not_expand_other_operation_capabilities():
+    """Typed Rotation sockets remain distinct from operation-specific supported types."""
+    from NodeForge.type_capabilities import (
+        SWITCH_INPUT_TYPES, REPEAT_ITEM_TYPES, CAPTURE_ITEM_TYPES, ATTRIBUTE_DATA_TYPES,
+    )
+
+    for capability in (SWITCH_INPUT_TYPES, REPEAT_ITEM_TYPES,
+                       CAPTURE_ITEM_TYPES, ATTRIBUTE_DATA_TYPES):
+        assert NFType.ROTATION not in capability
+        assert NFType.VECTOR in capability
+    assert NFType.COLOR in SWITCH_INPUT_TYPES
+    assert NFType.COLOR in ATTRIBUTE_DATA_TYPES

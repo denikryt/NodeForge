@@ -23,7 +23,7 @@ This document shows the Blender Geometry Nodes areas and domains currently cover
 | Runtime socket: Bundle | Yes | `Bundle` function parameters |
 | Runtime socket: Collection | No | Missing type |
 | Runtime socket: Image | No | Missing type |
-| Runtime socket: Rotation | Yes | `Rotation` in typed Blender sockets and Extension API v2 |
+| Runtime socket: Rotation | Yes | Public `.nf` type, `NodeSocketRotation` inputs/outputs, raw `node()` and Extension API v2; XYZ Euler defaults. Operation-specific type support remains separate. |
 | Runtime socket: Matrix | No | Missing type |
 | Constant input nodes | Partial | Supported types only |
 | Scene input nodes | Partial | Object Info through `Object` properties |

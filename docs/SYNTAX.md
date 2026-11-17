@@ -67,6 +67,7 @@ NodeForge supports runtime socket values and compile-time values.
 | `Bool` | Boolean scalar or field. |
 | `Vector` | Three-component vector or field. |
 | `Color` | Four-component linear RGBA socket value or field. |
+| `Rotation` | Blender rotation socket value, distinct from `Vector`. |
 | `Material` | Blender material socket value. |
 | `Object` | Blender object socket value with Object Info properties. |
 | `String` | Blender string socket value. |
@@ -82,6 +83,7 @@ NodeForge supports runtime socket values and compile-time values.
 | String | Text value. |
 | Vector | Three-component value. `vector(...)` is compile-time only when all arguments are compile-time; runtime arguments produce a runtime `Vector`. |
 | Color default | A `Color`-typed function parameter may use an RGBA tuple/list of four finite nonnegative numbers; values are stored as binary32, including Alpha and HDR components above `1.0`. |
+| Rotation default | A `Rotation` parameter may use an XYZ Euler-angle triple in radians; see [Writing Functions](WRITING_FUNCTIONS.md#parameters-and-sockets). |
 | List | Ordered mutable collection. |
 | Tuple | Ordered collection written with parentheses. |
 
