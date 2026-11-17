@@ -1,6 +1,6 @@
 # Get Started with NodeForge
 
-NodeForge turns `.nf` scripts into Blender Geometry Nodes. Executable statements add nodes to an open base tree; typed functions create reusable nested groups. See [Core Concepts](CORE_CONCEPTS.md) and [`.nf` Modules](MODULES.md) for the language model.
+NodeForge turns `.nf` scripts into Blender Geometry Nodes. Executable statements add nodes to an open base tree; typed functions create reusable groups or, with [inline compilation](SYNTAX.md#inline-compilation), native caller-tree nodes. See [Core Concepts](CORE_CONCEPTS.md) and [`.nf` Modules](MODULES.md) for the language model.
 
 ## Install NodeForge
 

@@ -721,3 +721,8 @@ lifecycle.
 - Added nested `functions/` namespaces for packages, with exact canonical calls, unique short-name aliases, and ambiguity diagnostics.
 - Added qualified identity for nested Extension API v2 Functions owners and source-backed Library Add/Reload, plus nested completion and signature help in the editor.
 - Preserved existing flat package function calls and generated source-group ownership.
+
+## 0.92.0
+
+- Added `__inline__` declaration defaults and call-site overrides for source-backed `.nf` functions, materializing native operations in the immediate caller tree while retaining typed inputs, outputs and independent nested-call materialization.
+- Preserved explicit group creation and selected Reload, including compiler-only signature identity; tracked inlined bodies in grouped-parent refresh fingerprints and retained transactional root Update.
