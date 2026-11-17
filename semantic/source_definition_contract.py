@@ -33,6 +33,9 @@ def validate_source_definition_contract(
             fn, owner_scope=owner_scope, declaration_owner=declaration_owner,
             compile_time_values=compile_time_values,
         )
+        if any(isinstance(node, ast.Name) and node.id == "__inline__"
+               for statement in fn.body for node in ast.walk(statement)):
+            raise CompileError(f"{fn.name}() cannot read compiler-only __inline__ in the function body")
         output_label = None
         if fn.returns is not None:
             declared_type, output_label = resolve_parameter_annotation(fn.returns)

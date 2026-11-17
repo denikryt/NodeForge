@@ -433,7 +433,7 @@ def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph
         env = CallableEnvironment(base.callable_builtins, local_functions, {},
                                   local_definition_refs=local_refs)
         initial = detached_compile_time_mapping(resolved.preprocessed.final_compile_time.values)
-        runtime_range_names = tuple(arg.arg for arg in fn.args.args)
+        runtime_range_names = tuple(arg.arg for arg in fn.args.args if arg.arg != "__inline__")
         for local in inventory.owned_names:
             initial.pop(local, None)
         provenance = {}

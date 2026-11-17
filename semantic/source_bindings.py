@@ -158,7 +158,7 @@ def collect_function_lexical_inventory(
     if not isinstance(fn, ast.FunctionDef):
         raise TypeError("Lexical inventory requires one FunctionDef")
     refs = definition_refs or {}
-    parameters = frozenset(arg.arg for arg in fn.args.args)
+    parameters = frozenset(arg.arg for arg in fn.args.args if arg.arg != "__inline__")
     ordinary_locals: set[str] = set()
     loops: dict[int, frozenset[str]] = {}
     # Only unconditional, simple assignments in the function body can declare

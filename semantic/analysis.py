@@ -1752,8 +1752,6 @@ def analyze_expression(expr, environment):
                 from .function_signatures import compile_function_signature
                 if fn.args.posonlyargs or fn.args.vararg or fn.args.kwarg or fn.args.kwonlyargs or fn.args.kw_defaults:
                     raise CompileError(f"{name}() accepts only ordinary named parameters")
-                parameters = tuple(arg.arg for arg in fn.args.args)
-                default_offset = len(parameters) - len(fn.args.defaults)
                 # The authoritative signature precedes argument binding and uses
                 # the defining module's own compile-time values, not the caller's.
                 if binding.definition.module in environment.callable_environment.local_definition_refs.values():
@@ -1766,12 +1764,13 @@ def analyze_expression(expr, environment):
                     fn, owner_scope=definition_owner, declaration_owner=definition_owner,
                     compile_time_values=module_values,
                 )
+                parameters = tuple(item.target_name for item in initial_signature.declarations)
                 declarations = {item.target_name: item.typ for item in initial_signature.declarations}
                 templates = tuple(SourceCallableParameter(
-                    input_index=i, source_name=arg.arg, display_name=arg.arg,
-                    keyword_key=arg.arg, typ=declarations[arg.arg],
-                    public=True, has_default=i >= default_offset,
-                ) for i, arg in enumerate(fn.args.args))
+                    input_index=i, source_name=item.target_name, display_name=item.target_name,
+                    keyword_key=item.target_name, typ=item.typ,
+                    public=True, has_default=item.has_default,
+                ) for i, item in enumerate(initial_signature.declarations))
                 bound_pairs = bind_unified_source_arguments(
                     templates, tuple(cleaned_call.args),
                     tuple((item.arg, item.value) for item in cleaned_call.keywords), name,
@@ -1846,8 +1845,6 @@ def analyze_expression(expr, environment):
                 from .function_signatures import compile_function_signature
                 if fn.args.posonlyargs or fn.args.vararg or fn.args.kwarg or fn.args.kwonlyargs or fn.args.kw_defaults:
                     raise CompileError(f"{name}() accepts only ordinary named parameters")
-                params = tuple(argument.arg for argument in fn.args.args)
-                offset = len(params) - len(fn.args.defaults)
                 definition_owner = environment.source_definition_owner or environment.source_owner_scope
                 if not definition_owner:
                     raise CompileError("Internal error: source call has no definition owner")
@@ -1856,13 +1853,14 @@ def analyze_expression(expr, environment):
                     compile_time_values=environment.const_eval_values,
                 )
                 declared = {item.target_name: item.typ for item in preliminary_signature.declarations}
+                params = tuple(item.target_name for item in preliminary_signature.declarations)
                 templates = tuple(
                     SourceCallableParameter(
-                        input_index=index, source_name=param, display_name=param,
-                        keyword_key=param, typ=declared[param],
-                        public=True, has_default=index >= offset,
+                        input_index=index, source_name=item.target_name, display_name=item.target_name,
+                        keyword_key=item.target_name, typ=item.typ,
+                        public=True, has_default=item.has_default,
                     )
-                    for index, param in enumerate(params)
+                    for index, item in enumerate(preliminary_signature.declarations)
                 )
                 bound_pairs = bind_unified_source_arguments(
                     templates, tuple(cleaned_call.args),
