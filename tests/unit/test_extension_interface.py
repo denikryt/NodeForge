@@ -339,3 +339,43 @@ def foo(value: Annotated[Color, EvaluationMode.COMPILE_TIME_ONLY] = {bad}) -> Co
     )
     with pytest.raises(CompileError):
         session.normalize_interface()
+
+
+@pytest.mark.parametrize('mode', ['COMPILE_TIME_ONLY', 'COMPILE_TIME_OR_RUNTIME'])
+def test_rotation_python_defaults_are_canonical_and_mode_checked(tmp_path, mode):
+    """Python declaration defaults allow finite binary32 integers beyond source Int32."""
+    session = _session(tmp_path, f'''
+from typing import Annotated
+from NodeForge import EvaluationMode, Rotation
+EXTENSION_API = 2
+EXTENSIONS = {{"foo": ".operations:build"}}
+def foo(value: Annotated[Rotation, EvaluationMode.{mode}] = (0.1, -2, 2147483648)) -> Rotation: ...
+''')
+    families, _ = session.normalize_interface()
+    parameter = next(iter(families.values()))[0].parameters[0]
+    assert parameter.default_type is NFType.ROTATION
+    from NodeForge.semantic.numeric_semantics import normalize_float_constant
+    assert parameter.default == (normalize_float_constant(0.1), -2.0, 2147483648.0)
+    assert type(parameter.default) is tuple
+
+
+def test_rotation_ambiguous_python_default_and_runtime_only_rejection(tmp_path):
+    """Same-shape union defaults need a unique declaration; runtime-only has no static default."""
+    ambiguous = _session(tmp_path / 'ambiguous', '''
+from typing import Annotated
+from NodeForge import EvaluationMode, Rotation, Vector
+EXTENSION_API = 2
+EXTENSIONS = {"foo": ".operations:build"}
+def foo(value: Annotated[Rotation | Vector, EvaluationMode.COMPILE_TIME_ONLY] = (0, 0, 0)) -> Rotation: ...
+''')
+    with pytest.raises(CompileError, match='Ambiguous.*Vector and Rotation'):
+        ambiguous.normalize_interface()
+    runtime_only = _session(tmp_path / 'runtime', '''
+from typing import Annotated
+from NodeForge import EvaluationMode, Rotation
+EXTENSION_API = 2
+EXTENSIONS = {"foo": ".operations:build"}
+def foo(value: Annotated[Rotation, EvaluationMode.RUNTIME_ONLY] = (0, 0, 0)) -> Rotation: ...
+''')
+    with pytest.raises(CompileError, match='RUNTIME_ONLY'):
+        runtime_only.normalize_interface()

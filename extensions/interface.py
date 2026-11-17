@@ -347,7 +347,7 @@ def _normalize_default(value: object, type_spec: TypeSpec, *, context: str) -> t
     except CompileError as exc:
         if str(exc).startswith("Unsupported detached NodeForge value"):
             raise CompileError(f"Unsupported extension parameter default: {value!r}") from exc
-        raise
+        raise CompileError(f"{context} default: {exc}") from exc
     try:
         selected = select_declared_nf_type(type_spec, actual)
     except CompileError as exc:
