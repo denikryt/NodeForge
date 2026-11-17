@@ -37,6 +37,12 @@ class Vector(metaclass=_NFAnnotationMeta):
     __nodeforge_nf_type__ = NFType.VECTOR
 
 
+class Color(metaclass=_NFAnnotationMeta):
+    """Annotate one NodeForge Color extension value (runtime RGBA)."""
+
+    __nodeforge_nf_type__ = NFType.COLOR
+
+
 class Geometry(metaclass=_NFAnnotationMeta):
     """Annotate one NodeForge Geometry extension value."""
 
@@ -78,6 +84,7 @@ MARKER_TO_NF_TYPE = {
     Int: NFType.INT,
     Bool: NFType.BOOL,
     Vector: NFType.VECTOR,
+    Color: NFType.COLOR,
     Geometry: NFType.GEOMETRY,
     Material: NFType.MATERIAL,
     Object: NFType.OBJECT,
@@ -90,6 +97,7 @@ MARKER_TO_NF_TYPE = {
 __all__ = [
     "Bool",
     "Bundle",
+    "Color",
     "Float",
     "Geometry",
     "Int",

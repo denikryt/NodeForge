@@ -8,6 +8,7 @@ import pytest
 
 from NodeForge.semantic.call_resolution import CallableEnvironment
 from NodeForge.compiler_identities import BindingId
+from NodeForge.errors import CompileError
 from NodeForge.extensions.registry import ExtensionOwnerSession, ExtensionRegistry, capture_owner_code_snapshot
 from NodeForge.nf_types import NFType
 from NodeForge.semantic.runtime_bindings import RuntimeBindingSymbol
@@ -43,6 +44,31 @@ def select(*args, **kwargs): ...
     return registry, callable_id
 
 
+def _static_color_registry(tmp_path: Path, *, vector_only: bool = False):
+    """Register Color/Vector backend overloads with compile-time detached inputs."""
+    declarations = (
+        "def shade(tint: Annotated[Vector, EvaluationMode.COMPILE_TIME_ONLY]) -> Float: ..."
+        if vector_only else """@overload
+def shade(tint: Annotated[Color, EvaluationMode.COMPILE_TIME_ONLY]) -> Float: ...
+@overload
+def shade(tint: Annotated[Vector, EvaluationMode.COMPILE_TIME_ONLY]) -> Float: ...
+def shade(*args, **kwargs): ..."""
+    )
+    (tmp_path / "interface.py").write_text(
+        "from typing import Annotated, overload\n"
+        "from NodeForge import Color, Vector, Float, EvaluationMode\n"
+        "EXTENSION_API = 2\n"
+        'EXTENSIONS = {"shade": ".operations:shade"}\n' + declarations + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "operations.py").write_text(
+        "def shade(context, tint): return None\n", encoding="utf-8",
+    )
+    session = ExtensionOwnerSession(capture_owner_code_snapshot(("system", "vendor.demo", "color"), tmp_path))
+    registry = ExtensionRegistry((session,))
+    return registry, next(iter(session.normalize_interface()[0]))
+
+
 def _environment(registry, callable_id, branch_type):
     """Build one semantic environment exposing the test extension as a system."""
     runtime = {
@@ -55,7 +81,7 @@ def _environment(registry, callable_id, branch_type):
         "demo",
         "Demo",
         "1.0.0",
-        {"select": PackageCallableExport("vendor.demo", "select", extension_callable_id=callable_id)},
+        {callable_id.name: PackageCallableExport("vendor.demo", callable_id.name, extension_callable_id=callable_id)},
     )
     callables = CallableEnvironment(
         callable_builtins=frozenset(),
@@ -97,6 +123,31 @@ def test_exact_float_overload_is_selected_without_order_tiebreak(tmp_path):
     analyzed = analysis.facts[root].analyzed_call
     assert analyzed.extension_overload_index == 1
     assert analyzed.result.typ is NFType.FLOAT
+
+
+@pytest.mark.parametrize("value, selected_index", [
+    ("(0.1, 0.2, 0.3, 0.4)", 0),
+    ("(0.1, 0.2, 0.3)", 1),
+])
+def test_static_color_vector_overloads_select_by_detached_value(tmp_path, value, selected_index):
+    """Single acquisition uses actual detached Color/Vector type during overload matching."""
+    registry, callable_id = _static_color_registry(tmp_path)
+    root = ast.parse(f"shade({value})", mode="eval").body
+    analysis = analyze_expression(root, _environment(registry, callable_id, NFType.FLOAT))
+    assert analysis.facts[root].analyzed_call.extension_overload_index == selected_index
+
+
+@pytest.mark.parametrize("value, vector_only", [
+    ("(0.1, 0.2, 0.3, 0.4, 0.5)", False),
+    ("(True, 0.2, 0.3, 0.4)", False),
+    ("(0.1, 0.2, 0.3, 0.4)", True),
+])
+def test_static_color_vector_overloads_reject_invalid_shapes(tmp_path, value, vector_only):
+    """Wrong arity/component types and Vector-only RGBA remain invalid."""
+    registry, callable_id = _static_color_registry(tmp_path, vector_only=vector_only)
+    root = ast.parse(f"shade({value})", mode="eval").body
+    with pytest.raises(CompileError):
+        analyze_expression(root, _environment(registry, callable_id, NFType.FLOAT))
 
 
 def test_mixed_source_interface_owner_is_rejected_before_source_preparation(tmp_path):

@@ -46,8 +46,13 @@ class ExtensionValue:
             raise TypeError("ExtensionValue.type_id must be an ExtensionTypeId")
 
 
-def static_nf_type(value: object) -> NFType:
-    """Infer one detached compile-time NodeForge type for extension contract handling."""
+def static_nf_type(value: object, *, declared: TypeSpec | None = None) -> NFType:
+    """Infer detached NodeForge type; RGBA tuples require an explicit Color declaration."""
+    if (declared is not None and declared.kind == "NF_SET"
+            and NFType.COLOR in declared.nf_types
+            and type(value) in {tuple, list} and len(value) == 4):
+        canonicalize_group_input_default(NFType.COLOR, value)
+        return NFType.COLOR
     if type(value) is bool:
         return NFType.BOOL
     if type(value) is int:
@@ -97,7 +102,7 @@ def type_spec_accepts_nf(spec: TypeSpec, actual: NFType, *, exact: bool = False)
 
 def _canonical_static_nf(spec: TypeSpec, value: object) -> object:
     """Canonicalize one static NodeForge value according to its selected declared NF type."""
-    actual = static_nf_type(value)
+    actual = static_nf_type(value, declared=spec)
     selected = select_declared_nf_type(spec, actual)
     canonical = canonicalize_group_input_default(selected, value)
     if selected is NFType.VECTOR:
@@ -246,7 +251,7 @@ def unpack_value(
             select_declared_nf_type(spec, actual_type)
             return value
         # Revalidate detached static state on reconstruction.
-        select_declared_nf_type(spec, static_nf_type(stored))
+        select_declared_nf_type(spec, static_nf_type(stored, declared=spec))
         return stored
     if spec.kind == "RECORD":
         if not isinstance(stored, ExtensionValue):
