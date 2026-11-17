@@ -420,3 +420,39 @@ def test_same_runtime_ref_reused_in_container_keeps_one_dependency_index(tmp_pat
         ExtensionDependencySlot(0, NFType.FLOAT),
         ExtensionDependencySlot(0, NFType.FLOAT),
     )
+
+
+def test_declared_color_static_values_are_typed_rgba_without_reinterpreting_structural_tuples():
+    """The declared Color leaf owns four-component normalization and detached storage."""
+    color_spec = TypeSpec('NF_SET', frozenset({NFType.COLOR}))
+    rgba = [2.0, 0.1, 0.2, 0.75]
+    with pytest.raises(CompileError):
+        static_nf_type(rgba)
+    assert static_nf_type(rgba, declared=color_spec) is NFType.COLOR
+    packed = pack_value(color_spec, rgba, registry=None, active_runtime_refs={})
+    assert type(packed) is tuple and len(packed)==4
+    assert packed[0] == 2.0 and packed[3] == 0.75
+    rgba[0] = 99.0
+    assert packed[0] == 2.0
+    assert unpack_value(color_spec, packed, registry=None, runtime_leaf_resolver=lambda x: None) == packed
+
+    scalar = TypeSpec('NF_SET', frozenset({NFType.FLOAT}))
+    structured = TypeSpec('TUPLE_FIXED', items=(scalar,scalar,scalar,scalar))
+    ordinary = (1.0,2.0,3.0,4.0)
+    assert pack_value(structured, ordinary, registry=None, active_runtime_refs={}) == ordinary
+    assert unpack_value(structured, ordinary, registry=None, runtime_leaf_resolver=lambda x: None) == ordinary
+
+
+@pytest.mark.parametrize('rgba', [
+    (0.1, 0.2, 0.3),
+    (0.1, 0.2, 0.3, 0.4, 0.5),
+    (True,0.2,0.3,0.4),
+    (0.1,-0.2,0.3,0.4),
+    (float('inf'),0.2,0.3,0.4),
+    ('x',0.2,0.3,0.4),
+])
+def test_declared_color_static_value_rejects_invalid_components(rgba):
+    """The Color value boundary requires the exact declared RGBA component contract."""
+    color_spec = TypeSpec('NF_SET', frozenset({NFType.COLOR}))
+    with pytest.raises(CompileError):
+        pack_value(color_spec, rgba, registry=None, active_runtime_refs={})

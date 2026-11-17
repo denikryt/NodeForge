@@ -4,6 +4,7 @@ from contextlib import nullcontext
 import hashlib
 
 from ..semantic.constants import TYPE_GEOMETRY
+from ..nf_types import NFType
 from ..errors import CompileError
 from ..compiler_identities import BindingId
 from .values import Value, make_value
@@ -46,7 +47,9 @@ def _assert_prepared_interface_parity(group, prepared: SemanticGroupCompilation)
         if contract.has_default:
             if not hasattr(physical, "default_value"):
                 raise CompileError("Internal error: semantic input default has no physical default")
-            physical_default = canonicalize_group_input_default(contract.typ, physical.default_value)
+            physical_default = canonicalize_group_input_default(
+                contract.typ, tuple(physical.default_value) if contract.typ is NFType.COLOR else physical.default_value
+            )
             if physical_default != contract.default:
                 raise CompileError("Internal error: physical input default disagrees with semantic interface")
     for physical, contract in zip(physical_outputs, prepared.interface.outputs):

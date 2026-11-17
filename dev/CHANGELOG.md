@@ -711,11 +711,13 @@ lifecycle.
 
 ## 0.91.0
 
-- Added nested `functions/` namespaces for packages, with exact canonical calls, unique short-name aliases, and ambiguity diagnostics.
-- Added qualified identity for nested Extension API v2 Functions owners and source-backed Library Add/Reload, plus nested completion and signature help in the editor.
-- Preserved existing flat package function calls and generated source-group ownership.
+- Preserve Local Library file labels when refreshing catalogs, while retaining qualified Functions labels.
+- Report every canonical callable path for ambiguous package shortcuts, including both root and nested definitions.
+- Added `Color` as a typed RGBA runtime value across `.nf` group interfaces/defaults, raw `node()` sockets, Switch/Repeat/Bundle, Capture and attributes, and Python Extension API v2 runtime/static/mixed arguments.
+- Consolidated operation capability mappings and repaired Capture item reconstruction during transactional updates, preserving existing explicit `type=` conversions.
 
 ## 0.91.1
 
-- Preserve Local Library file labels when refreshing catalogs, while retaining qualified Functions labels.
-- Report every canonical callable path for ambiguous package shortcuts, including both root and nested definitions.
+- Added nested `functions/` namespaces for packages, with exact canonical calls, unique short-name aliases, and ambiguity diagnostics.
+- Added qualified identity for nested Extension API v2 Functions owners and source-backed Library Add/Reload, plus nested completion and signature help in the editor.
+- Preserved existing flat package function calls and generated source-group ownership.

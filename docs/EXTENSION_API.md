@@ -118,6 +118,7 @@ Float
 Int
 Bool
 Vector
+Color
 Geometry
 Material
 Object
@@ -149,7 +150,15 @@ The marker classes are annotation tokens rather than runtime values to instantia
 | `EvaluationMode.RUNTIME_ONLY` | Runtime NodeForge value only; the backend receives an `ExtensionBackendValue`. |
 | `EvaluationMode.COMPILE_TIME_OR_RUNTIME` | Detached data when known at compile time, otherwise the runtime representation. |
 
-`RUNTIME_ONLY` parameters cannot have defaults. Compile-time and mixed parameters may default to detached `Bool`, signed-32 `Int`, `Float`, `String`, or 3-component `Vector` values. Vector defaults may be written as Python lists or tuples and are canonicalized by NodeForge.
+`RUNTIME_ONLY` parameters cannot have defaults. Compile-time and mixed parameters may default to detached `Bool`, signed-32 `Int`, `Float`, `String`, 3-component `Vector`, or 4-component `Color` values. Vector and Color defaults may be written as Python lists or tuples and are canonicalized by NodeForge. Color is linear RGBA `(R, G, B, A)` with finite nonnegative binary32 components, including alpha and valid HDR values. A Color-marked parameter receives an immutable RGBA tuple in its compile-time branch, or an `ExtensionBackendValue` in its runtime branch. Ordinary extension `list` and `tuple` semantic fields remain structural Python values.
+
+```python
+from typing import Annotated
+from NodeForge import Color, EvaluationMode
+
+def tint(value: Annotated[Color, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = (0.2, 0.3, 0.4, 0.75)) -> Color:
+    ...
+```
 
 Use compile-time data for configuration that changes graph shape or node properties. Use runtime values for data that should remain connected as Geometry Nodes sockets or fields.
 

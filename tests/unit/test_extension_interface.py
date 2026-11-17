@@ -291,3 +291,51 @@ def foo(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> Float: ...
         )
         with pytest.raises(CompileError, match=message):
             session.normalize_interface()
+
+
+def test_color_extension_defaults_preserve_exact_rgba_and_mixed_mode(tmp_path):
+    """Color defaults normalize to four floats for static/mixed modes and union declarations."""
+    session = _session(
+        tmp_path,
+        """
+from typing import Annotated
+from NodeForge import Color, Vector, EvaluationMode
+EXTENSION_API=2
+EXTENSIONS={'foo': '.operations:build'}
+def foo(
+    value: Annotated[Color, EvaluationMode.COMPILE_TIME_ONLY] = (2.0,0.2,0.3,0.5),
+    mixed: Annotated[Color | Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = [1,2,3,4],
+) -> Color: ...
+""",
+    )
+    families, _ = session.normalize_interface()
+    params = next(iter(families.values()))[0].parameters
+    assert params[0].default_type is NFType.COLOR
+    assert params[0].default == pytest.approx((2.0,0.2,0.3,0.5))
+    assert params[1].default_type is NFType.COLOR
+    assert params[1].default == (1.0,2.0,3.0,4.0)
+    assert NFType.COLOR in params[1].type_spec.nf_types
+    assert NFType.VECTOR in params[1].type_spec.nf_types
+
+
+@pytest.mark.parametrize('bad', [
+    '(1.0,2.0,3.0)',
+    '(1.0,2.0,3.0,4.0,5.0)',
+    '(True,0.2,0.3,0.4)',
+    '(0.1,-0.2,0.3,0.4)',
+    '(float("nan"),0.2,0.3,0.4)',
+])
+def test_color_extension_default_rejects_invalid_rgba(tmp_path, bad):
+    """Bad compile-time Color declarations fail during interface normalization."""
+    session = _session(
+        tmp_path,
+        f"""
+from typing import Annotated
+from NodeForge import Color, EvaluationMode
+EXTENSION_API=2
+EXTENSIONS={{'foo': '.operations:build'}}
+def foo(value: Annotated[Color, EvaluationMode.COMPILE_TIME_ONLY] = {bad}) -> Color: ...
+""",
+    )
+    with pytest.raises(CompileError):
+        session.normalize_interface()

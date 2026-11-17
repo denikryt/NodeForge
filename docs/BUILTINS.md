@@ -173,7 +173,7 @@ def example(source: Object):
 
 ## Bundles
 
-Bundles carry named runtime values through one Blender socket. Bundle items support `Float`, `Int`, `Bool`, `Vector`, `Geometry`, `Material`, `Object`, `String`, and nested `Bundle` values. Bundles can cross group and reusable-function sockets and can be carried through runtime `if` and `repeat_range(...)` state.
+Bundles carry named runtime values through one Blender socket. Bundle items support `Float`, `Int`, `Bool`, `Vector`, `Color`, `Geometry`, `Material`, `Object`, `String`, and nested `Bundle` values. Bundles can cross group and reusable-function sockets and can be carried through runtime `if` and `repeat_range(...)` state.
 
 ### `bundle(**items)`
 
@@ -447,7 +447,7 @@ Stores a named attribute on geometry.
 | --- | --- | --- | --- |
 | `geometry` | `Geometry` | required | Input geometry. |
 | `name` | compile-time or runtime `String` | required | Attribute name. |
-| `value` | `Float`, `Int`, `Bool`, or `Vector` | required | Attribute value field. Arrays are rejected. |
+| `value` | `Float`, `Int`, `Bool`, `Vector`, or `Color` | required | Attribute value field. Arrays are rejected. |
 | `selection` | `Bool` | `True` | Optional field mask. |
 | `domain` | compile-time `String` | `"POINT"` | `"POINT"`, `"EDGE"`, `"FACE"`, `"CORNER"`, `"CURVE"`, or `"INSTANCE"`. |
 | `type` | compile-time `String` or `None` | `None` | Optional Blender data type override, for example `"FLOAT"`, `"INT"`, `"BOOLEAN"`, `"VECTOR"`, or `"COLOR"`. |
@@ -474,10 +474,10 @@ Captures a field on geometry as an anonymous attribute. The function returns bot
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `geometry` | `Geometry` | required | Geometry on which to capture the field. |
-| `value` | `Float`, `Int`, `Bool`, or `Vector` | required | Field to capture. |
+| `value` | `Float`, `Int`, `Bool`, `Vector`, or `Color` | required | Field to capture. |
 | `selection` | `Bool` | `True` | Optional field mask. |
 | `domain` | compile-time `String` | `"POINT"` | `"POINT"`, `"EDGE"`, `"FACE"`, `"CORNER"`, `"CURVE"`, or `"INSTANCE"`. |
-| `type` | compile-time `String` or `None` | `None` | Optional result type override: `"FLOAT"`, `"INT"`, `"BOOLEAN"`, or `"VECTOR"`. The value type is used when omitted. |
+| `type` | compile-time `String` or `None` | `None` | Optional captured-result type override: `"FLOAT"`, `"INT"`, `"BOOLEAN"`, `"VECTOR"`, or `"RGBA"`. The value type is used when omitted. |
 
 Returns: `(Geometry, captured value)`.
 
@@ -508,7 +508,7 @@ Samples a field from a specific element index of another geometry. The result ha
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `geometry` | `Geometry` | required | Geometry whose selected domain is sampled. |
-| `value` | `Float`, `Int`, `Bool`, or `Vector` | required | Field to evaluate on the sampled geometry. |
+| `value` | `Float`, `Int`, `Bool`, `Vector`, or `Color` | required | Field to evaluate on the sampled geometry. |
 | `index` | compile-time `Int` or runtime `Int` | required | Element index. Compile-time indices use the same signed 32-bit `Int` domain as runtime integer values. |
 | `domain` | compile-time `String` | `"POINT"` | `"POINT"`, `"EDGE"`, `"FACE"`, `"CORNER"`, `"CURVE"`, or `"INSTANCE"`. Matching is case-insensitive and normalized to the canonical token. |
 | `clamp` | compile-time `Bool` | `False` | Sets the Sample Index node's Clamp option. |
@@ -530,6 +530,8 @@ def example(sampled_index: Int = 0):
 ```
 
 `domain` and `clamp` configure the generated node and must therefore be known at compile time. `index` may remain a runtime `Int`.
+
+For Color attributes, `store_named_attribute()` and `sample_index()` use Blender `FLOAT_COLOR`; `capture_attribute()` uses the `RGBA` item-constructor token and returns a `Color` field. The optional `type=` on Capture selects the captured result type, while Store selects the Blender attribute data type. Explicit overrides retain Blender-supported conversions: for example, capturing a `Float` with `type="VECTOR"` returns a `Vector`, and storing a `Float` with `type="COLOR"` writes a Color attribute.
 
 ### `set_material(geometry, material)`
 
@@ -783,7 +785,15 @@ Creates a Blender node directly. Use this for Blender node types that are not ex
 
 `bl_idname`, node properties, socket selectors, output aliases, and type tokens are compile-time declarations. Runtime values are allowed inside `inputs={...}` and are linked to the selected Blender input sockets. `props=` is applied before socket selectors are resolved, so selectors see the node configuration produced by those properties.
 
-Supported type tokens are `Float`, `Int`, `Bool`, `Vector`, `Geometry`, `Material`, `Object`, `String`, and `Bundle`.
+Supported type tokens are `Float`, `Int`, `Bool`, `Vector`, `Color`, `Geometry`, `Material`, `Object`, `String`, and `Bundle`. A `Color`-typed result maps exactly to Blender `NodeSocketColor`; `typ=Color` is a strict output type assertion. Color input sockets accept four-component RGBA tuple literals as defaults.
+
+```python
+def split_color(factor: Float) -> Float:
+    color = node("ShaderNodeValToRGB", inputs={"Factor": factor}, output="Color", typ=Color)
+    return node("FunctionNodeSeparateColor", inputs={"Color": color}, output="Red", typ=Float)
+```
+
+These strict `typ=` declarations are distinct from the explicit Capture/Store `type=` conversions described above.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -873,14 +883,14 @@ Raw-node declarations are validated before defaults, links, or result bindings a
 
 ### `for i in repeat_range(steps): ...`
 
-Updates existing Geometry, Vector, Float, Int, Bool, and Bundle variables inside one Repeat Zone. A carried value must keep exactly the same type on every assignment throughout the loop. The body supports assignments, `geometry_builder` method statements, nested `if` blocks, and nested `repeat_range(...)` loops. It must update at least one existing variable or builder state. Assigned names that did not exist before the loop are iteration-local temporaries rather than Repeat Zone state items.
+Updates existing Geometry, Vector, Color, Float, Int, Bool, and Bundle variables inside one Repeat Zone. A carried value must keep exactly the same type on every assignment throughout the loop. The body supports assignments, `geometry_builder` method statements, nested `if` blocks, and nested `repeat_range(...)` loops. It must update at least one existing variable or builder state. Assigned names that did not exist before the loop are iteration-local temporaries rather than Repeat Zone state items.
 
 State item order follows first assignment in the loop body, including nested branches. Conditional branches preserve omitted state values and merge changed state through Switch nodes. The loop index name cannot also be state, and state names cannot collide with Repeat Zone system socket names such as `Iterations` or `Iteration`.
 
 | Part | Type | Description |
 | --- | --- | --- |
 | `steps` | `Int` | Repeat count. May be an integer literal, compile-time integer, or runtime `Int` value. |
-| state variables | `Geometry`, `Vector`, `Float`, `Int`, `Bool`, or `Bundle` | Existing variables assigned inside the loop. |
+| state variables | `Geometry`, `Vector`, `Color`, `Float`, `Int`, `Bool`, or `Bundle` | Existing variables assigned inside the loop. |
 
 ```python
 def example(n: Int = 8, angle: Float = 45):

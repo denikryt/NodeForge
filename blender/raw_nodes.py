@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from ..semantic.constants import (
     TYPE_BOOL,
+    TYPE_COLOR,
     TYPE_BUNDLE,
     TYPE_FLOAT,
     TYPE_GEOMETRY,
@@ -18,6 +19,7 @@ from ..semantic.constants import (
     TYPE_VECTOR,
 )
 from ..errors import CompileError
+from ..semantic.callable_contracts import canonicalize_color_components
 from .socket_types import runtime_socket_nf_type
 from .nodes import _new_node
 from .values import Value, make_value
@@ -41,6 +43,7 @@ _SUPPORTED_TYPES = {
     TYPE_FLOAT,
     TYPE_INT,
     TYPE_BOOL,
+    TYPE_COLOR,
     TYPE_VECTOR,
     TYPE_GEOMETRY,
     TYPE_MATERIAL,
@@ -150,7 +153,7 @@ def build_materialized_raw_node(
             _validate_materialized_value(value_spec, socket, context, selector_label)
             prepared_inputs.append((socket, socket_ref, INPUT_SINGLE_LINK, value_spec))
         else:
-            normalized = _normalize_input_literal(value_spec, context, selector_label)
+            normalized = _normalize_input_literal(value_spec, context, selector_label, socket=socket)
             if not hasattr(socket, "default_value"):
                 raise CompileError(f"{context}: input {selector_label!r} does not accept literal defaults")
             prepared_inputs.append((socket, socket_ref, INPUT_LITERAL, normalized))
@@ -448,7 +451,7 @@ def _require_multi_input(socket, context, socket_name):
 
 
 def _assign_literal_default(socket, literal, context, socket_name):
-    literal = _normalize_input_literal(literal, context, socket_name)
+    literal = _normalize_input_literal(literal, context, socket_name, socket=socket)
     if not hasattr(socket, "default_value"):
         raise CompileError(f"{context}: input {socket_name!r} does not accept literal defaults")
     try:
@@ -466,11 +469,17 @@ def _assign_literal_default(socket, literal, context, socket_name):
     return normalized
 
 
-def _normalize_input_literal(literal, context, socket_name):
+def _normalize_input_literal(literal, context, socket_name, *, socket=None):
+    """Validate literals against the physical destination after semantic normalization."""
+    is_color = socket is not None and runtime_socket_nf_type(socket) is TYPE_COLOR
     if isinstance(literal, tuple):
-        if len(literal) == 3 and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in literal):
+        if is_color:
+            return canonicalize_color_components(literal)
+        if len(literal) == 3 and all(type(v) in {int, float} for v in literal):
             return tuple(float(v) for v in literal)
-        raise CompileError(f"{context}: input {socket_name!r} tuple defaults must be numeric 3-tuples")
+        raise CompileError(f"{context}: input {socket_name!r} requires a numeric 3-tuple or an actual Color socket for RGBA")
+    if is_color:
+        raise CompileError(f"{context}: input {socket_name!r} Color default must have four RGBA components")
     if isinstance(literal, list):
         raise CompileError(f"{context}: input {socket_name!r} list syntax is reserved for multi-input fanout")
     if isinstance(literal, (bool, int, float, str)):
