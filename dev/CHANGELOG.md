@@ -727,3 +727,8 @@ lifecycle.
 - Exposed `Rotation` as a public `.nf` runtime type for typed function interfaces and raw Blender nodes, with finite binary32 XYZ Euler-angle defaults.
 - Added type-directed Rotation defaults and static value/overload selection to Extension API v2, preserving strict Vector/Rotation runtime identity.
 - Preserved representable Rotation group-node overrides across compatible updates while maintaining the existing comparison policy for other socket types.
+
+## 0.92.1
+
+- Preserve representable user-edited Rotation values on required group inputs during compatible Update Script, including edits smaller than the existing general-purpose float tolerance.
+- Added required-input Rotation regression coverage and the in-repository Rotation implementation plan.
