@@ -8,6 +8,7 @@ class NFType(Enum):
 
     FLOAT = "FLOAT"
     VECTOR = "VECTOR"
+    COLOR = "COLOR"
     BOOL = "BOOL"
     GEOMETRY = "GEOMETRY"
     INT = "INT"

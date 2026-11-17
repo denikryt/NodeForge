@@ -89,7 +89,7 @@ def test_stable_origin_is_not_based_on_label_or_physical_order():
 
 
 @pytest.mark.parametrize('annotation', [
-    'Color', 'float', 'Float[""]', 'Float["  "]', 'Vector[1]',
+    'Color[1]', 'float', 'Float[""]', 'Float["  "]', 'Vector[1]',
     'Float["X", "Y"]', 'Float[prefix]', 'dict[str, str]',
 ])
 def test_invalid_annotations_and_labels_fail_before_materialization(annotation):

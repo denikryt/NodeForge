@@ -11,6 +11,7 @@ import ast
 from dataclasses import dataclass
 from typing import Callable
 
+from ..type_capabilities import ATTRIBUTE_DATA_TYPES, CAPTURE_ITEM_TYPES
 from .attribute_domains import normalize_attribute_domain
 from .call_resolution import (
     AnalyzedCallOperand,
@@ -440,9 +441,9 @@ def _raw_input_literal(value, context, socket_name):
     if _is_const_vector(value):
         return tuple(float(v) for v in value)
     if isinstance(value, tuple):
-        if len(value) == 3 and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value):
+        if len(value) in {3, 4} and all(type(v) in {int, float} for v in value):
             return tuple(float(v) for v in value)
-        raise CompileError(f"{context}: input {socket_name!r} tuple defaults must be numeric 3-tuples")
+        raise CompileError(f"{context}: input {socket_name!r} tuple defaults must be numeric 3-/4-tuples")
     if isinstance(value, list):
         raise CompileError(f"{context}: input {socket_name!r} list syntax is reserved for multi-input fanout")
     if isinstance(value, (bool, int, float, str)):
@@ -1118,8 +1119,8 @@ def _analyze_sample_index_operation(
     value_typ = runtime(expr.args[1], "value", "sample_index() value")
     _require_type(
         value_typ,
-        {TYPE_FLOAT, TYPE_INT, TYPE_BOOL, TYPE_VECTOR},
-        "sample_index() value supports Float, Int, Bool and Vector",
+        ATTRIBUTE_DATA_TYPES,
+        "sample_index() value supports Float, Int, Bool and Vector (also Color)",
     )
 
     if runtime_index:
@@ -1148,23 +1149,12 @@ def _vector_operation(name):
 
 def _capture_result_type(value_typ: NFType, data_type: str | None) -> NFType:
     """Return Capture Attribute's exact result type or preserve its diagnostic."""
-    value_map = {
-        TYPE_FLOAT: TYPE_FLOAT,
-        TYPE_INT: TYPE_INT,
-        TYPE_BOOL: TYPE_BOOL,
-        TYPE_VECTOR: TYPE_VECTOR,
-    }
     if data_type is None:
-        result = value_map.get(value_typ)
+        result = value_typ if value_typ in CAPTURE_ITEM_TYPES else None
     else:
-        result = {
-            "FLOAT": TYPE_FLOAT,
-            "INT": TYPE_INT,
-            "BOOLEAN": TYPE_BOOL,
-            "VECTOR": TYPE_VECTOR,
-        }.get(data_type.upper())
+        result = {token: typ for typ, token in CAPTURE_ITEM_TYPES.items()}.get(data_type.upper())
     if result is None:
-        raise CompileError("capture_attribute() supports Float, Int, Bool and Vector values")
+        raise CompileError("capture_attribute() supports Float, Int, Bool and Vector values (also Color)")
     return result
 
 

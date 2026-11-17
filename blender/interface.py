@@ -8,6 +8,7 @@ from .socket_types import socket_type_for_nf_type
 from ..compiler_identities import InputDeclarationId
 from ..nf_types import NFType, serialize_nf_type
 from .values import make_value
+from ..semantic.callable_contracts import canonicalize_color_components
 
 
 def _json_safe_default(value):
@@ -31,6 +32,16 @@ def _set_socket_default(socket, value):
     """Set a Blender socket/interface default robustly across socket classes."""
     if socket is None or value is None:
         return False
+    socket_type = _interface_socket_type_name(socket)
+    if socket_type in {"NodeSocketColor", "NodeTreeInterfaceSocketColor"}:
+        rgba = canonicalize_color_components(value)
+        try:
+            socket.default_value = rgba
+        except Exception as exc:
+            raise CompileError(f"Failed to assign Color group input default: {exc}") from exc
+        if tuple(socket.default_value) != rgba:
+            raise CompileError("Blender altered the Color group input default")
+        return True
     try:
         if isinstance(value, (tuple, list)):
             try:
@@ -409,7 +420,9 @@ def _create_group_input_socket(
     socket_type = socket_type_for_nf_type(typ)
     iface = group.interface.new_socket(name=display_name, in_out="INPUT", socket_type=socket_type)
     if default is not None:
-        _set_socket_default(iface, default)
+        success = _set_socket_default(iface, default)
+        if not success:
+            raise CompileError(f"Failed to assign {typ.value} group input default")
     if declaration_id is not None:
         _record_group_input_declaration(
             group,

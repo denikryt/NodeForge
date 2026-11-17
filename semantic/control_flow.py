@@ -16,6 +16,7 @@ from ..compiler_identities import BindingId
 from .compile_time import merge_runtime_if_compile_time
 from ..errors import CompileError
 from ..nf_types import NFType
+from ..type_capabilities import SWITCH_INPUT_TYPES
 from .ir import IRBranchMerge, IRIf
 
 
@@ -25,10 +26,6 @@ class BranchMergePolicy(str, Enum):
     TOP_LEVEL = "TOP_LEVEL"
     REPEAT = "REPEAT"
 
-
-_SWITCH_TYPES = frozenset(
-    {NFType.FLOAT, NFType.INT, NFType.VECTOR, NFType.BOOL, NFType.GEOMETRY, NFType.STRING, NFType.BUNDLE}
-)
 
 
 def require_repeat_state_assignment(name: str, expected_type: NFType, assigned_type: NFType) -> None:
@@ -264,7 +261,7 @@ def lower_runtime_if(
             prefix = "repeat_range if" if policy is BranchMergePolicy.REPEAT else "runtime if"
             raise CompileError(f"{prefix} branch values for {name} have different types")
         typ = true_type
-        if typ not in _SWITCH_TYPES:
+        if typ not in SWITCH_INPUT_TYPES:
             raise CompileError("runtime if branches must assign node values")
         merges.append(IRBranchMerge(binding_id, name, typ))
 
