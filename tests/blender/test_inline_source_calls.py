@@ -236,7 +236,7 @@ def test_direct_root_update_replaces_inline_expansion_and_staging_failure_rolls_
 result = inline_leaf(index())
 '''
     compiler.update_source_in_tree(source, tree)
-    assert len(_nodes(tree, 'ShaderNodeMath')) == 1
+    assert len(_nodes(tree, 'ShaderNodeMath')) == 2  # Int-to-Float adapter and inline addition.
     assert not _nodes(tree, 'GeometryNodeGroup')
     assert not before.intersection(node.as_pointer() for node in tree.nodes)
     pointers = {node.as_pointer() for node in tree.nodes}
@@ -249,7 +249,213 @@ result = inline_leaf(index())
         raise RuntimeError('injected inline lowering failure')
 
     monkeypatch.setattr(ir_lowering, '_math', injected)
-    with pytest.raises(RuntimeError, match='injected inline lowering failure'):
+    from NodeForge.blender.root_update import RootUpdateError
+    with pytest.raises(RootUpdateError, match='injected inline lowering failure'):
         compiler.update_source_in_tree(source.replace('1.0', '2.0'), tree)
     assert pointers == {node.as_pointer() for node in tree.nodes}
     assert group_pointers == {g.as_pointer() for g in bpy.data.node_groups}
+
+
+@pytest.mark.parametrize('marker', ('__inline__=True', '__inline__: Bool=True'))
+def test_standalone_and_declaration_only_materialization_ignore_compiler_parameter(marker):
+    """Both syntax forms keep one runtime input and one editable real group."""
+    from NodeForge.function_instances import FUNCTION_DEFINITION_OWNER_PROP
+
+    source = (f'def inline_standalone(value: Float, {marker}) -> Float:\n'
+              '    return value + 2.0\n')
+    standalone = compiler.create_expression_group(source, 'NFTest_Inline_Standalone')
+    assert len([item for item in standalone.interface.items_tree
+                if item.item_type == 'SOCKET' and item.in_out == 'INPUT']) == 1
+    assert not any('__inline__' in item.name for item in standalone.interface.items_tree)
+    assert standalone.get(FUNCTION_DEFINITION_OWNER_PROP)
+    assert len(_nodes(standalone, 'ShaderNodeMath')) == 1
+
+    root = _compose(source, 'NFTest_Inline_Definition_Only')
+    group_node, = _nodes(root, 'GeometryNodeGroup')
+    assert group_node.node_tree.get('nodeforge_module_name') == 'inline_standalone'
+    assert len(group_node.inputs) == 1
+    assert len(_nodes(group_node.node_tree, 'ShaderNodeMath')) == 1
+
+
+@pytest.mark.parametrize('marker', ('__inline__=True', '__inline__: Bool=True'))
+def test_selected_reload_pref_only_edit_retains_group_and_external_links(marker):
+    """Compiler-only policy cannot change persistent signatures or detach group users."""
+    from NodeForge.compiler_identities import parse_module_definition_function_id
+    from NodeForge.function_instances import (
+        FUNCTION_DEFINITION_OWNER_PROP, FUNCTION_INSTANCE_KEY_PROP,
+    )
+
+    initial = (f'def inline_editable(value: Float, {marker}) -> Float:\n'
+               '    return value + 1.0\n')
+    group = compiler.create_expression_group(initial, 'NFTest_Inline_Editable')
+    external = bpy.data.node_groups.new('NFTest_Inline_External_User', 'GeometryNodeTree')
+    reference = external.nodes.new('GeometryNodeGroup')
+    reference.node_tree = group
+    group_ptr = group.as_pointer()
+    identity = group[FUNCTION_DEFINITION_OWNER_PROP]
+    instance = group.get(FUNCTION_INSTANCE_KEY_PROP)
+    signature = parse_module_definition_function_id(group['nodeforge_module_definition']).signature
+    origin = parse_module_definition_function_id(group['nodeforge_module_definition']).module.origin
+    assert '__inline__' not in signature
+
+    changed = initial.replace('True', 'False')
+    assert compiler.update_library_catalog_group(group, source=changed, module_context=origin) is group
+    assert group.as_pointer() == group_ptr
+    assert group[FUNCTION_DEFINITION_OWNER_PROP] == identity
+    assert group.get(FUNCTION_INSTANCE_KEY_PROP) == instance
+    assert reference.node_tree is group and len(reference.inputs) == 1
+    assert all(link.is_valid for link in group.links)
+
+    incompatible = changed.replace('value: Float', 'different: Float').replace(
+        'return value', 'return different')
+    with pytest.raises(CompileError, match='signature is incompatible|types are incompatible'):
+        compiler.update_library_catalog_group(group, source=incompatible, module_context=origin)
+    assert reference.node_tree is group
+    assert group.as_pointer() == group_ptr
+    assert group[FUNCTION_DEFINITION_OWNER_PROP] == identity
+
+
+@pytest.mark.parametrize('marker', ('__inline__=True', '__inline__: Bool=True'))
+def test_mesh_compute_typed_entry_excludes_compiler_only_parameter(marker):
+    """Explicit root Mesh Compute compiles runtime sockets from the canonical signature."""
+    source = (f'def mesh_entry(geometry: Geometry, strength: Float=1.0, {marker}) -> Geometry:\n'
+              '    return geometry\n')
+    backend = compiler._new_group_backend()
+    prepared, _session = compiler._prepare_mesh_compute_root(backend, source, name='mesh_entry')
+    assert tuple(item.source_name for item in prepared.interface.inputs) == ('geometry', 'strength')
+    assert '__inline__' not in repr(prepared.interface)
+
+
+def test_inline_and_grouped_float_outputs_evaluate_equally():
+    """Both materialization policies produce the same numeric Blender field result."""
+    from test_module_compile_time_fingerprints import _evaluate_float_output
+
+    for label, modifier in (('inline', ''), ('grouped', ', __inline__=False')):
+        source = '''def add_two(value: Float, __inline__=True) -> Float:
+    return value + 2.0
+result = add_two(3.0%s)
+''' % modifier
+        tree = _compose(source, f'NFTest_Inline_Evaluate_{label}')
+        if label == 'inline':
+            assert not _nodes(tree, 'GeometryNodeGroup')
+            socket = _nodes(tree, 'ShaderNodeMath')[-1].outputs[0]
+        else:
+            grouped, = _nodes(tree, 'GeometryNodeGroup')
+            socket = grouped.outputs[0]
+        assert _evaluate_float_output(tree, socket) == pytest.approx(5.0, abs=1e-5)
+
+
+def test_inline_color_alpha_survives_evaluated_field_output():
+    """The native Color constant retains its alpha after actual Geometry Nodes evaluation."""
+    from test_module_compile_time_fingerprints import _evaluate_float_output
+
+    tree = _compose('''def rgba(value: Color=(0.1, 0.2, 0.3, 0.4), __inline__=True) -> Color:
+    return value
+result = rgba()
+''', 'NFTest_Inline_Color_Alpha')
+    color, = _nodes(tree, 'FunctionNodeInputColor')
+    separate = tree.nodes.new('FunctionNodeSeparateColor')
+    tree.links.new(color.outputs[0], separate.inputs['Color'])
+    assert _evaluate_float_output(tree, separate.outputs['Alpha']) == pytest.approx(0.4, abs=1e-5)
+
+
+def test_nested_package_inline_identity_and_source_add(tmp_path):
+    """Qualified same-name package exports inline independently and still support Add."""
+    import json
+    from NodeForge import packages
+
+    packages.set_packages_dir_for_tests(tmp_path / 'installed')
+    try:
+        source_root = tmp_path / 'source'
+        for component, amount in (('mesh', 2), ('curve', 3)):
+            directory = source_root / 'functions' / component
+            directory.mkdir(parents=True)
+            (directory / 'ops.nf').write_text(
+                'def shared(value: Float, __inline__=True) -> Float:\n'
+                f'    return value + {amount}.0\n', encoding='utf8',
+            )
+        (source_root / 'nodeforge_package.json').write_text(json.dumps({
+            'schema_version': 1, 'id': 'vendor.inline_regression', 'import_name': 'inlinepkg',
+            'name': 'Inline regression', 'version': '1.0.0', 'author': 'Tests',
+            'nodeforge_min_version': '0.65.0', 'contents': {'functions': 'functions'},
+        }), encoding='utf8')
+        packages.install_package_directory(source_root)
+        tree = _compose('''from packages import inlinepkg
+x = inlinepkg.mesh.ops.shared(1.0)
+y = inlinepkg.curve.ops.shared(1.0)
+''', 'NFTest_Inline_Nested_Namespaces')
+        assert not _nodes(tree, 'GeometryNodeGroup')
+        assert len(_nodes(tree, 'ShaderNodeMath')) == 2
+        a = compiler.create_package_function_group('vendor.inline_regression', 'mesh.ops.shared')
+        b = compiler.create_package_function_group('vendor.inline_regression', 'curve.ops.shared')
+        assert a is not b
+        assert a['nodeforge_module_definition'] != b['nodeforge_module_definition']
+        assert len(_nodes(a, 'ShaderNodeMath')) == 1
+        assert len(_nodes(b, 'ShaderNodeMath')) == 1
+    finally:
+        packages.set_packages_dir_for_tests(None)
+
+
+def test_selected_inline_parent_preserves_owner_across_save_reopen(tmp_path):
+    """Source-backed parent groups containing inlined nodes remain Reloadable in .blend."""
+    source = '''def inc(value: Float, __inline__=True) -> Float:
+    return value + 1.0
+
+def wrapper(value: Float) -> Float:
+    return inc(value)
+result = wrapper(2.0)
+'''
+    root = _compose(source, 'NFTest_Inline_Save_Reopen')
+    group, = [node.node_tree for node in _nodes(root, 'GeometryNodeGroup')]
+    saved_owner = group['nodeforge_module_definition']
+    group_name = group.name
+    from NodeForge.compiler_identities import parse_module_definition_function_id
+    origin = parse_module_definition_function_id(saved_owner).module.origin
+    bpy.ops.wm.save_as_mainfile(filepath=str(tmp_path / 'inline_reload.blend'))
+    bpy.ops.wm.open_mainfile(filepath=str(tmp_path / 'inline_reload.blend'))
+    selected = bpy.data.node_groups[group_name]
+    selected_ptr = selected.as_pointer()
+    assert selected['nodeforge_module_definition'] == saved_owner
+    assert compiler.update_library_catalog_group(selected, source=source, module_context=origin) is selected
+    assert selected.as_pointer() == selected_ptr
+    assert len(_nodes(selected, 'ShaderNodeMath')) == 1
+    assert not _nodes(selected, 'GeometryNodeGroup')
+
+
+def test_selected_group_mid_inline_backend_failure_preserves_published_nodes(monkeypatch):
+    """Physical parent Reload rolls back a fault after staging native inline nodes."""
+    from NodeForge.compiler_identities import parse_module_definition_function_id
+    from NodeForge.function_instances import stored_fingerprint
+    from NodeForge.blender import ir_lowering
+
+    source = '''def inner(value: Float, __inline__=True) -> Float:
+    return value + 1.0
+
+def outer(value: Float) -> Float:
+    return inner(value)
+result = outer(2.0)
+'''
+    base = _compose(source, 'NFTest_Inline_Group_Rollback')
+    target, = [node.node_tree for node in _nodes(base, 'GeometryNodeGroup')]
+    origin = parse_module_definition_function_id(target['nodeforge_module_definition']).module.origin
+    ptr = target.as_pointer()
+    before = stored_fingerprint(target)
+    node_pointers = {node.as_pointer() for node in target.nodes}
+    group_pointers = {group.as_pointer() for group in bpy.data.node_groups}
+    original = ir_lowering._math
+
+    def injected(*args, **kwargs):
+        """Raise after the inline Math node exists on the replacement candidate."""
+        original(*args, **kwargs)
+        raise RuntimeError('injected grouped inline failure')
+
+    monkeypatch.setattr(ir_lowering, '_math', injected)
+    with pytest.raises(RuntimeError, match='injected grouped inline failure'):
+        compiler.update_library_catalog_group(
+            target, source=source.replace('1.0', '4.0'), module_context=origin,
+        )
+    assert target.as_pointer() == ptr
+    assert stored_fingerprint(target) == before
+    assert {node.as_pointer() for node in target.nodes} == node_pointers
+    assert {group.as_pointer() for group in bpy.data.node_groups} == group_pointers
+    assert all(link.is_valid for link in target.links)
