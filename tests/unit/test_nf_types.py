@@ -297,6 +297,53 @@ def test_explicit_declaration_defaults_merge_with_implicit_defaults_for_override
     assert list(update._captured_node_input_overrides(node)) == [(iterations, 0)]
 
 
+
+def test_required_rotation_override_capture_compares_native_zero_exactly(monkeypatch):
+    """Required Rotation sockets retain tiny edits without changing Vector's tolerance."""
+    import importlib
+    import sys
+    import types
+
+    from NodeForge.semantic.numeric_semantics import normalize_float_constant
+
+    monkeypatch.setitem(sys.modules, "bpy", types.SimpleNamespace())
+    interface = importlib.import_module("NodeForge.blender.interface")
+    update = importlib.import_module("NodeForge.blender.update")
+
+    class Group(dict):
+        """Dictionary-backed node group carrying required input declarations."""
+
+    class Socket:
+        """Node socket with physical type, name and a directly readable default."""
+        def __init__(self, name, socket_type, default):
+            self.name = name
+            self.bl_idname = socket_type
+            self.default_value = default
+
+    group = Group()
+    interface._write_group_input_declarations(group, [
+        {"declaration_id": InputDeclarationId("owner", "edited", 0),
+         "display_name": "Edited", "nf_type": "ROTATION", "socket_type": "NodeSocketRotation",
+         "occurrence": 0, "has_default": False, "default": None},
+        {"declaration_id": InputDeclarationId("owner", "untouched", 1),
+         "display_name": "Untouched", "nf_type": "ROTATION", "socket_type": "NodeSocketRotation",
+         "occurrence": 0, "has_default": False, "default": None},
+        {"declaration_id": InputDeclarationId("owner", "vector", 2),
+         "display_name": "Vector", "nf_type": "VECTOR", "socket_type": "NodeSocketVector",
+         "occurrence": 0, "has_default": False, "default": None},
+    ])
+    tiny_edit = (normalize_float_constant(1e-7), 0.0, 0.0)
+    edited = Socket("Edited", "NodeSocketRotation", tiny_edit)
+    untouched = Socket("Untouched", "NodeSocketRotation", (0.0, 0.0, 0.0))
+    vector = Socket("Vector", "NodeSocketVector", tiny_edit)
+    node = SimpleNamespace(node_tree=group, inputs=[edited, untouched, vector], outputs=[])
+    assert list(update._captured_node_input_overrides(node)) == [(edited, tiny_edit)]
+    edited.default_value = (0.0, 0.0, 0.0)
+    assert list(update._captured_node_input_overrides(node)) == []
+    edited.default_value = (normalize_float_constant(1e-5), 0.0, 0.0)
+    assert list(update._captured_node_input_overrides(node)) == [(edited, edited.default_value)]
+
+
 def test_rotation_override_capture_is_binary32_exact_while_vector_tolerance_remains(monkeypatch):
     """Update must retain sub-epsilon Rotation edits without changing other types."""
     import importlib

@@ -1046,6 +1046,42 @@ def test_rotation_update_preserves_binary32_user_edits_and_updates_untouched_def
     assert set(_get_group_input_declarations(group)) == set(declaration_before)
 
 
+
+@pytest.mark.parametrize('changed_angle', [0.0, 1e-7, 1e-5, 0.75])
+def test_required_rotation_update_retains_representable_edits(changed_angle):
+    """Required Rotation inputs detect tiny edits against Blender's native zero default."""
+    from NodeForge.blender.interface import _get_group_input_declarations
+    from NodeForge.semantic.numeric_semantics import normalize_float_constant
+
+    before = "def nf_fixture(angle: Rotation['Angle']) -> Rotation:\n    return angle\n"
+    after = ("def nf_fixture(angle: Rotation['Angle']) -> Rotation:\n"
+             "    rerouted = angle\n    return rerouted\n")
+    group = compile_group(before, 'NFTest_RequiredRotationUpdate')
+    wrapper = bpy.data.node_groups.new('NFTest_RequiredRotationWrapper', 'GeometryNodeTree')
+    edited, untouched = (wrapper.nodes.new('GeometryNodeGroup') for _ in range(2))
+    edited.node_tree = untouched.node_tree = group
+    declarations = _get_group_input_declarations(group)
+    assert len(declarations) == 1
+    record = next(iter(declarations.values()))
+    assert record['nf_type'] == 'ROTATION' and record['has_default'] is False
+    assert record['default'] is None
+    assert edited.inputs['Angle'].bl_idname == 'NodeSocketRotation'
+    assert tuple(untouched.inputs['Angle'].default_value) == (0.0, 0.0, 0.0)
+
+    edited.inputs['Angle'].default_value = (changed_angle, 0.0, 0.0)
+    expected = (normalize_float_constant(changed_angle), 0.0, 0.0)
+    assert tuple(edited.inputs['Angle'].default_value) == expected
+    converter = wrapper.nodes.new('FunctionNodeRotationToEuler')
+    wrapper.links.new(edited.outputs[0], converter.inputs['Rotation'])
+    assert all(link.is_valid for link in wrapper.links)
+
+    compiler.update_expression_group(group, after)
+    assert tuple(edited.inputs['Angle'].default_value) == expected
+    assert tuple(untouched.inputs['Angle'].default_value) == (0.0, 0.0, 0.0)
+    assert len(wrapper.links) == 1 and all(link.is_valid for link in wrapper.links)
+    assert set(_get_group_input_declarations(group)) == set(declarations)
+
+
 def test_rotation_override_compare_rejects_malformed_metadata_and_keeps_other_type_tolerance():
     """Missing/malformed triples are captured conservatively; Float comparison stays tolerant."""
     from NodeForge.blender.update import _rotation_defaults_equal, _defaults_equal

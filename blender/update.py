@@ -243,14 +243,19 @@ def _captured_node_input_overrides(node):
         if value is None:
             continue
         entry = old_defaults.get(key[1:]) if isinstance(old_defaults, dict) else None
-        if isinstance(entry, dict) and entry.get("has_default", True) and "default" in entry:
-            if entry.get("nf_type") == "ROTATION":
-                matches_declared = _rotation_defaults_equal(value, entry.get("default"))
+        if isinstance(entry, dict) and entry.get("nf_type") == "ROTATION":
+            # Required Rotation inputs have no declared default; Blender's native
+            # three-angle default is zero. Compare exactly so even sub-epsilon
+            # user edits survive update, as for declared Rotation defaults.
+            if entry.get("has_default", True) and "default" in entry:
+                baseline = entry["default"]
             else:
-                matches_declared = _defaults_equal(value, entry.get("default"))
-            if matches_declared:
-                continue
-            yield socket, value
+                baseline = (0.0, 0.0, 0.0)
+            if not _rotation_defaults_equal(value, baseline):
+                yield socket, value
+        elif isinstance(entry, dict) and entry.get("has_default", True) and "default" in entry:
+            if not _defaults_equal(value, entry.get("default")):
+                yield socket, value
         elif not _is_zero_like_default(value):
             yield socket, value
 
