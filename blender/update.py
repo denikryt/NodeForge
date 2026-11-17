@@ -1,5 +1,7 @@
 """Helpers for preserving Group-node links and visible input values during updates."""
 
+from math import isfinite
+
 import bpy
 
 from ..errors import CompileError
@@ -198,6 +200,24 @@ def _defaults_equal(a, b, eps=1e-6):
         return a == b
 
 
+def _rotation_defaults_equal(socket_value, stored_value):
+    """Compare the canonical binary32 Rotation triples without epsilon suppression.
+
+    Blender exposes NodeSocketRotation values as Euler components; both the
+    captured socket value and persisted declaration default are binary32.
+    Malformed values count as edited, so update cannot silently lose an edit.
+    """
+    try:
+        if len(socket_value) != 3 or len(stored_value) != 3:
+            return False
+        components = (*socket_value, *stored_value)
+        if any(type(part) not in (float, int) or not isfinite(part) for part in components):
+            return False
+        return all(float(a) == float(b) for a, b in zip(socket_value, stored_value))
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 def _is_zero_like_default(value):
     """Function `_is_zero_like_default` used by the NodeForge addon."""
     if value is None:
@@ -224,7 +244,11 @@ def _captured_node_input_overrides(node):
             continue
         entry = old_defaults.get(key[1:]) if isinstance(old_defaults, dict) else None
         if isinstance(entry, dict) and entry.get("has_default", True) and "default" in entry:
-            if _defaults_equal(value, entry.get("default")):
+            if entry.get("nf_type") == "ROTATION":
+                matches_declared = _rotation_defaults_equal(value, entry.get("default"))
+            else:
+                matches_declared = _defaults_equal(value, entry.get("default"))
+            if matches_declared:
                 continue
             yield socket, value
         elif not _is_zero_like_default(value):

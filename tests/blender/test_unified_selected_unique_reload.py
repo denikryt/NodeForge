@@ -126,3 +126,44 @@ def test_package_unique_reload_keeps_key_after_blend_reopen(tmp_path, monkeypatc
         assert [_identity(group)[:3] for group in groups] == owners
     finally:
         packages.set_packages_dir_for_tests(None)
+
+
+def test_rotation_shared_and_unique_package_reload_keeps_overrides(tmp_path):
+    """Selected Rotation Reload preserves edited instance values and sibling owners."""
+    from NodeForge.blender import update as blender_update
+    from NodeForge.semantic.numeric_semantics import normalize_float_constant
+
+    root = tmp_path / 'rotation_reload'
+    functions = root / 'functions'
+    functions.mkdir(parents=True)
+    fn = functions / 'rotation.nf'
+    before = 'def rotate(angle: Rotation = (0.0, 0.0, 0.0)) -> Rotation:\n    return angle\n'
+    after = 'def rotate(angle: Rotation = (0.25, 0.0, 0.0)) -> Rotation:\n    return angle\n'
+    fn.write_text(before, encoding='utf-8')
+    (root / 'nodeforge_package.json').write_text(json.dumps({
+        'schema_version': 1, 'id': 'vendor.rotation.reload', 'import_name': 'rot_reload',
+        'name': 'Rotation Reload', 'version': '1.0.0', 'author': 'Tests',
+        'nodeforge_min_version': '0.65.0', 'contents': {'functions': 'functions'},
+    }), encoding='utf-8')
+    installed = packages.install_package_directory(root)
+    target = bpy.data.node_groups.new('NFTest_RotationSharedUnique', 'GeometryNodeTree')
+    compiler.compose_source_initial('''from packages import rot_reload
+
+a = rot_reload.rotate()
+b = rot_reload.rotate(__unique__=True)
+''', target)
+    nodes = [node for node in target.nodes if node.bl_idname == 'GeometryNodeGroup']
+    assert len(nodes) == 2
+    shared, unique = nodes
+    assert shared.node_tree != unique.node_tree
+    shared_key = _identity(shared.node_tree)[:3]
+    unique_key = _identity(unique.node_tree)[:3]
+    blender_update._apply_group_defaults_to_node(unique)
+    unique.inputs[0].default_value = (1e-7, 0.0, 0.0)
+    (installed.root / 'functions' / 'rotation.nf').write_text(after, encoding='utf-8')
+    assert compiler.update_library_catalog_group(unique.node_tree) is unique.node_tree
+    assert _identity(shared.node_tree)[:3] == shared_key
+    assert _identity(unique.node_tree)[:3] == unique_key
+    assert tuple(unique.inputs[0].default_value) == (normalize_float_constant(1e-7), 0.0, 0.0)
+    assert all(link.is_valid for link in unique.node_tree.links)
+    assert all(link.is_valid for link in shared.node_tree.links)

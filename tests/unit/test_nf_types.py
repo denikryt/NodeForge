@@ -295,3 +295,47 @@ def test_explicit_declaration_defaults_merge_with_implicit_defaults_for_override
     scale = Socket("Scale", "NodeSocketFloat", 1.0)
     node = SimpleNamespace(node_tree=group, inputs=[iterations, scale], outputs=[])
     assert list(update._captured_node_input_overrides(node)) == [(iterations, 0)]
+
+
+def test_rotation_override_capture_is_binary32_exact_while_vector_tolerance_remains(monkeypatch):
+    """Update must retain sub-epsilon Rotation edits without changing other types."""
+    import importlib
+    import sys
+    import types
+
+    from NodeForge.semantic.numeric_semantics import normalize_float_constant
+
+    monkeypatch.setitem(sys.modules, 'bpy', types.SimpleNamespace())
+    interface = importlib.import_module('NodeForge.blender.interface')
+    update = importlib.import_module('NodeForge.blender.update')
+
+    class Socket:
+        """Fake group-node socket with the same identity fields as Blender."""
+        def __init__(self, name, socket_type, default):
+            self.name = name
+            self.bl_idname = socket_type
+            self.default_value = default
+
+    group = {
+        interface.INPUT_DEFAULTS_PROP: {
+            '0': {'name': 'Edited', 'nf_type': 'ROTATION', 'socket_type': 'NodeSocketRotation',
+                  'occurrence': 0, 'default': [0.0, 0.0, 0.0]},
+            '1': {'name': 'Untouched', 'nf_type': 'ROTATION', 'socket_type': 'NodeSocketRotation',
+                  'occurrence': 0, 'default': [0.0, 0.0, 0.0]},
+            '2': {'name': 'Vector', 'nf_type': 'VECTOR', 'socket_type': 'NodeSocketVector',
+                  'occurrence': 0, 'default': [0.0, 0.0, 0.0]},
+        }
+    }
+    tiny_edit = (normalize_float_constant(1e-7), 0.0, 0.0)
+    edited = Socket('Edited', 'NodeSocketRotation', tiny_edit)
+    untouched = Socket('Untouched', 'NodeSocketRotation', (0.0, 0.0, 0.0))
+    vector = Socket('Vector', 'NodeSocketVector', tiny_edit)
+    node = SimpleNamespace(node_tree=group, inputs=[edited, untouched, vector], outputs=[])
+    assert list(update._captured_node_input_overrides(node)) == [(edited, tiny_edit)]
+
+    group[interface.INPUT_DEFAULTS_PROP]['0']['default'] = [float('nan'), 0.0, 0.0]
+    assert list(update._captured_node_input_overrides(node)) == [(edited, tiny_edit)]
+    edited.default_value = (0.0, 0.0, 0.0)
+    assert list(update._captured_node_input_overrides(node)) == [(edited, (0.0, 0.0, 0.0))]
+    assert not update._rotation_defaults_equal((0.0, 0.0, 0.0), (0.0, 0.0))
+    assert not update._rotation_defaults_equal((0.0, 0.0, 0.0), (False, 0.0, 0.0))
