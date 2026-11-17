@@ -113,3 +113,39 @@ def test_inline_ir_requires_matching_occurrence_identity():
     assert inline_expansion_owner_scope(call.call_site) == inline_expansion_owner_scope(call.call_site)
     with pytest.raises(ValueError, match='no persisted'):
         function_materialization_owner_scope(call)
+
+
+@pytest.mark.parametrize('nested_mode, expected_count', [
+    ('__unique__=True', 2), ('', 1),
+])
+def test_inline_occurrences_prepare_distinct_nested_call_owners(nested_mode, expected_count):
+    """Unique child scopes follow their inlined parent, while shared children reuse."""
+    kw = f', {nested_mode}' if nested_mode else ''
+    calls, session = _analyze(
+        'def leaf(value: Float) -> Float:\n    return value\n'
+        'def outer(value: Float, __inline__=True) -> Float:\n'
+        f'    return leaf(value{kw})\n'
+        'first = outer(2.0)\nsecond = outer(3.0)\n'
+    )
+    outer_keys = [key for key in session.prepared if key.function_id.name == 'outer']
+    leaf_keys = [key for key in session.prepared if key.function_id.name == 'leaf']
+    assert len(outer_keys) == 2
+    assert len(leaf_keys) == expected_count
+    assert len({key.owner_scope for key in leaf_keys}) == expected_count
+    for call in calls:
+        assert session.get_inline_prepared(call.materialization).contract.function_id == call.materialization.callee
+    with pytest.raises(CompileError, match='requires an INLINE source call'):
+        session.get_inline_prepared(IRFunctionMaterialization(
+            calls[0].materialization.callee, Mode.SHARED,
+        ))
+
+
+@pytest.mark.parametrize('source', [
+    'def a(x: Float, __inline__=True) -> Float:\n    return a(x)\nv = a(3)',
+    'def a(x: Float, __inline__=True) -> Float:\n    return b(x, __inline__=False)\n'
+    'def b(x: Float) -> Float:\n    return a(x)\nv = a(3)',
+])
+def test_mixed_grouped_inline_recursive_cycle_is_rejected_before_backend(source):
+    """Recursive definition detection uses FunctionId, not owner-scope identity."""
+    with pytest.raises(CompileError, match='Recursive (module definitions|source function calls)'):
+        _analyze(source)

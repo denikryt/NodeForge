@@ -332,6 +332,20 @@ class SourceCallableSession:
             source_record=record,
         )
 
+    def get_inline_prepared(self, materialization) -> PreparedSourceCallable:
+        """Fetch an INLINE region using its ephemeral occurrence-scoped owner.
+
+        The backend consumes the prepared IR; it must never ask a physical
+        function-group materializer to create or locate an inline group.
+        """
+        from ..compiler_identities import inline_expansion_owner_scope
+        from .ir import IRFunctionMaterialization, IRFunctionMaterializationMode
+        if (not isinstance(materialization, IRFunctionMaterialization)
+                or materialization.mode is not IRFunctionMaterializationMode.INLINE):
+            raise CompileError("Internal error: inline preparation requires an INLINE source call")
+        owner = inline_expansion_owner_scope(materialization.call_site)
+        return self.get_prepared(SourceCallablePreparationKey(materialization.callee, owner))
+
     def get_prepared(self, key: SourceCallablePreparationKey) -> PreparedSourceCallable:
         """Return the exact cached owner-specific artifact required by backend lowering."""
         try:
