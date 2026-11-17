@@ -46,6 +46,10 @@ class ExtensionValue:
             raise TypeError("ExtensionValue.type_id must be an ExtensionTypeId")
 
 
+class AmbiguousStaticNFType(CompileError):
+    """An untyped static value matches multiple declared NF socket types."""
+
+
 def static_nf_type(value: object, *, declared: TypeSpec | None = None) -> NFType:
     """Infer detached NodeForge type, directing ambiguous numeric tuples by declaration."""
     if (declared is not None and declared.kind == "NF_SET"
@@ -57,7 +61,7 @@ def static_nf_type(value: object, *, declared: TypeSpec | None = None) -> NFType
             and type(value) in {tuple, list} and len(value) == 3):
         candidates = declared.nf_types.intersection({NFType.VECTOR, NFType.ROTATION})
         if len(candidates) > 1:
-            raise CompileError("Ambiguous three-component static value: declared Vector and Rotation both match")
+            raise AmbiguousStaticNFType("Ambiguous three-component static value: declared Vector and Rotation both match")
         if NFType.ROTATION in candidates:
             canonicalize_group_input_default(NFType.ROTATION, value)
             return NFType.ROTATION

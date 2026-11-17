@@ -732,3 +732,8 @@ lifecycle.
 
 - Preserve representable user-edited Rotation values on required group inputs during compatible Update Script, including edits smaller than the existing general-purpose float tolerance.
 - Added required-input Rotation regression coverage and the in-repository Rotation implementation plan.
+
+## 0.92.2
+
+- Defer backend Extension API overload ambiguity for declared `Rotation | Vector` static tuples until other candidate parameters have been checked, allowing valid alternative overloads to be selected.
+- Use an explicit internal ambiguity exception instead of branching on diagnostic text, with mixed-overload regression tests.
