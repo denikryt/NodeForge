@@ -11,7 +11,7 @@ from NodeForge.blender import raw_nodes
 from NodeForge.semantic.call_resolution import NamedOutputsCallResult, RuntimeCallResult
 from NodeForge.semantic.constants import (
     TYPE_BOOL, TYPE_BUNDLE, TYPE_COLOR, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT,
-    TYPE_MATERIAL, TYPE_OBJECT, TYPE_STRING, TYPE_TOKEN_NAMES, TYPE_VECTOR,
+    TYPE_MATERIAL, TYPE_OBJECT, TYPE_ROTATION, TYPE_STRING, TYPE_TOKEN_NAMES, TYPE_VECTOR,
 )
 from NodeForge.errors import CompileError
 from NodeForge.semantic.parsing import _collect_inputs, _parse_source
@@ -116,6 +116,7 @@ def test_type_token_names_are_authoritative_runtime_types():
         "Bool": TYPE_BOOL,
         "Vector": TYPE_VECTOR,
         "Color": TYPE_COLOR,
+        "Rotation": TYPE_ROTATION,
         "Geometry": TYPE_GEOMETRY,
         "Material": TYPE_MATERIAL,
         "Object": TYPE_OBJECT,

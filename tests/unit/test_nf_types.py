@@ -21,6 +21,7 @@ _PUBLIC_TYPE_TOKENS = {
     "Bool",
     "Vector",
     "Color",
+    "Rotation",
     "Geometry",
     "Material",
     "Object",
@@ -51,11 +52,11 @@ def test_explicit_serialization_is_strict_and_stable():
         deserialize_nf_type("UNKNOWN_COLOR")
 
 
-def test_source_type_tokens_remain_exact_and_rotation_stays_internal_only():
+def test_source_type_tokens_include_rotation_with_exact_identity():
     """Public source tokens map explicitly to canonical runtime types."""
     assert set(TYPE_TOKEN_NAMES) == _PUBLIC_TYPE_TOKENS
     assert TYPE_TOKEN_NAMES["Float"] is NFType.FLOAT
-    assert "Rotation" not in TYPE_TOKEN_NAMES
+    assert TYPE_TOKEN_NAMES["Rotation"] is NFType.ROTATION
     assert NFType.ROTATION.value == "ROTATION"
     assert OBJECT_PROPERTY_TYPES == {
         "geometry": NFType.GEOMETRY,
