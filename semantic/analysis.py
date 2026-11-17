@@ -472,10 +472,8 @@ def _analyze_extension_backend_call(
             )
         required_modes[id(source_node)] = next(iter(modes))
 
-    # Backend overloads use direct NF_SET arguments; candidate matching below
-    # decides whether a detached RGBA literal is accepted as Color.
-    static_color_spec = TypeSpec("NF_SET", frozenset({NFType.COLOR}))
-
+    # A source expression is evaluated only once; an untyped triple is
+    # interpreted relative to each candidate's declared NF_SET.
     # Each explicit source occurrence is acquired exactly once before type-based
     # candidate selection. Defaults are already detached contract data.
     acquired: dict[int, tuple[str, object, NFType]] = {}
@@ -486,8 +484,7 @@ def _analyze_extension_backend_call(
         except ConstEvalUnavailable as exc:
             raise CompileError(f"{name}() argument must be available at compile time") from exc
         if isinstance(selection, CompileTimeSelection):
-            actual_type = static_nf_type(selection.value, declared=static_color_spec)
-            acquired[id(source_node)] = ("static", selection.value, actual_type)
+            acquired[id(source_node)] = ("static", selection.value, None)
             continue
         if not isinstance(selection, RuntimeRequired):
             raise CompileError("Internal error: extension evaluation selector returned unsupported state")
@@ -507,7 +504,14 @@ def _analyze_extension_backend_call(
                 occurrences = (value,)
             for occurrence in occurrences:
                 if isinstance(occurrence, ast.AST):
-                    actual_type = acquired[id(occurrence)][2]
+                    representation, payload, actual_type = acquired[id(occurrence)]
+                    if representation == "static":
+                        try:
+                            actual_type = static_nf_type(payload, declared=parameter.type_spec)
+                        except CompileError as exc:
+                            if "Ambiguous three-component static value" in str(exc):
+                                raise CompileError(f"{name}() {exc}") from exc
+                            return False
                 else:
                     if parameter.default_type is None:
                         raise CompileError("Internal error: extension bound default lost canonical type")
@@ -548,6 +552,7 @@ def _analyze_extension_backend_call(
                         AnalyzedCallOperand(parameter.name, actual_type, parameter_index, transport_variadic)
                     )
                 else:
+                    actual_type = static_nf_type(payload, declared=parameter.type_spec)
                     expected_type = select_declared_nf_type(parameter.type_spec, actual_type)
                     canonical = canonicalize_group_input_default(expected_type, payload)
                     static_operands.append(
