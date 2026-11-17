@@ -143,6 +143,7 @@ class PackageCallableExport:
     extension_callable_id: object | None = None
     definition: object | None = None
     source_snapshot: object | None = None
+    qualified_name: str = ""
 
     def __post_init__(self) -> None:
         """Validate owner/name provenance without retaining implementation objects."""
@@ -152,6 +153,10 @@ class PackageCallableExport:
             raise ValueError("package callable export requires package_id")
         if not isinstance(self.name, str) or not self.name:
             raise ValueError("package callable export requires a public member name")
+        if not self.qualified_name:
+            object.__setattr__(self, "qualified_name", self.name)
+        if self.qualified_name.split(".")[-1] != self.name:
+            raise ValueError("package callable full path must end with its declared name")
         record = self.record
         extension_id = self.extension_callable_id
         if record is None and extension_id is None:
@@ -195,24 +200,58 @@ class ResolvedPackageNamespace:
     package_version: str
     exports: Mapping[str, PackageCallableExport]
     failure: ResolvedCatalogFailure | None = None
+    qualified_exports: Mapping[str, PackageCallableExport] | None = None
+    short_ambiguities: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Freeze exports and require every member to belong to this package."""
+        """Freeze both callable lookup views from one selected package revision."""
         copied = dict(self.exports)
+        qualified = dict(self.qualified_exports) if self.qualified_exports is not None else {
+            export.qualified_name: export for export in copied.values()
+        }
+        ambiguities = {name: tuple(sorted(paths)) for name, paths in self.short_ambiguities.items()}
         if not self.package_id or not self.import_name:
             raise ValueError("resolved package namespace requires package_id and import_name")
         for name, export in copied.items():
             if name != export.name or export.package_id != self.package_id:
                 raise ValueError("resolved package export key does not match package owner/member")
-        if self.failure is not None and copied:
+        for path, export in qualified.items():
+            if path != export.qualified_name or export.package_id != self.package_id:
+                raise ValueError("resolved canonical path does not match export owner")
+        if self.failure is not None and (copied or qualified or ambiguities):
             raise ValueError("Failed package namespace cannot publish partial exports")
+        if any(name in copied for name in ambiguities):
+            raise ValueError("An ambiguous short alias cannot also be a selected export")
         object.__setattr__(self, "exports", MappingProxyType(copied))
+        object.__setattr__(self, "qualified_exports", MappingProxyType(qualified))
+        object.__setattr__(self, "short_ambiguities", MappingProxyType(ambiguities))
+        prefixes = {".".join(parts[:length]) for path in qualified
+                    for parts in [path.split(".")] for length in range(1, len(parts))}
+        object.__setattr__(self, "namespace_prefixes", frozenset(prefixes))
 
     def find(self, name: str) -> PackageCallableExport | None:
-        """Return one exact public member from this package namespace."""
+        """Resolve an eligible short alias, reporting verified ambiguous owners."""
         if self.failure is not None:
             self.failure.raise_error()
+        alternatives = self.short_ambiguities.get(name)
+        if alternatives:
+            raise CompileError(
+                f"Ambiguous callable {name!r} in package {self.import_name}: "
+                + ", ".join(f"{self.import_name}.{path}(...)" for path in alternatives)
+            )
         return self.exports.get(name)
+
+    def find_path(self, path: str) -> PackageCallableExport | None:
+        """Return only an exact canonical export; never use a short-name fallback."""
+        if self.failure is not None:
+            self.failure.raise_error()
+        return self.qualified_exports.get(path)
+
+    def canonical_records(self) -> tuple[PackageCallableExport, ...]:
+        """Enumerate every canonical callable, including duplicate short leaves."""
+        if self.failure is not None:
+            self.failure.raise_error()
+        return tuple(self.qualified_exports[path] for path in sorted(self.qualified_exports))
 
 
 def _freeze_package_selection(package_namespaces, extension_registry):
@@ -235,7 +274,7 @@ def _freeze_package_selection(package_namespaces, extension_registry):
     if not isinstance(registry, ExtensionRegistry):
         raise TypeError("extension_registry must be an ExtensionRegistry")
     for namespace in namespaces.values():
-        for export in namespace.exports.values():
+        for export in namespace.qualified_exports.values():
             callable_id = export.extension_callable_id
             if callable_id is not None and not registry.contains(callable_id):
                 raise ValueError("Resolved package extension callable is missing from extension registry")
@@ -290,7 +329,7 @@ class ResolvedEnvironment:
         namespace = self.package_by_id(package_id)
         if namespace is None:
             return None
-        export = namespace.find(name)
+        export = namespace.find_path(name) if "." in name else namespace.find(name)
         if export is None:
             return None
         return export.record
@@ -299,7 +338,7 @@ class ResolvedEnvironment:
         """Return all package Functions records without collapsing same-named owners."""
         records = []
         for namespace in self.package_namespaces.values():
-            for export in namespace.exports.values():
+            for export in namespace.canonical_records():
                 record = export.record
                 if record is not None:
                     records.append(record)

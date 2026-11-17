@@ -114,7 +114,10 @@ offset = vector(0, 0, 1)
 geometry = transform(base, translation=offset)
 ```
 
-Calls can target a simple callable name or an imported package member such as `math.sin(...)`. Supported method calls are documented in the sections that introduce them. Package namespaces are call qualifiers, not runtime values.
+Calls can target a simple callable name or an imported package member such as
+`math.sin(...)`. See [Importing package callables](PACKAGES.md#importing-package-callables)
+for package namespace rules. Supported method calls are documented in the
+sections that introduce them.
 
 ## Operators and Expressions
 
@@ -488,7 +491,9 @@ def sine(angle: Float = 0.0) -> Float:
 
 If several imported packages provide the name, the unqualified call is ambiguous. Use a qualified call such as `math.sin(angle)` to select its owner.
 
-Package `.nf` files export their functions under the declared `def` names. See [Package Guide](PACKAGES.md) for package authoring and [Python Extension API v2](EXTENSION_API.md) for Python-backed package callables.
+For nested callable paths, short names, and ambiguity handling, see
+[Importing package callables](PACKAGES.md#importing-package-callables).
+For Python-backed declarations, see [Extension API v2](EXTENSION_API.md).
 
 Star imports, plain Python `import`, relative imports, imports inside functions, and imports from arbitrary Python modules are unsupported.
 

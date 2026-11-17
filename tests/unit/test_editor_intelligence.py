@@ -190,3 +190,90 @@ def test_selected_math_source_return_type(editor_index):
     assert [(item.name, item.typ) for item in hint.signatures[0].outputs] == [
         ('Geometry', 'Geometry')
     ]
+
+
+def _install_nested_editor_package(tmp_path):
+    """Publish an isolated frozen package with duplicate leaves and a shared prefix."""
+    import json
+
+    root = tmp_path / 'nested_editor_pkg'
+    files = {
+        'mesh/primitives.nf': (
+            'def cube(size: Float, bevel: Float = 0.0) -> Float:\n'
+            '    return size + bevel\n'
+        ),
+        'curve/primitives.nf': (
+            'def cube(radius: Float = 1.0) -> Float:\n'
+            '    return radius\n'
+        ),
+        'mesh/operations.nf': (
+            'def smooth(geometry: Geometry, iterations: Int = 2) -> Geometry:\n'
+            '    return geometry\n'
+        ),
+        'utilities.nf': (
+            'def identity(value: Float) -> Float:\n'
+            '    return value\n'
+        ),
+        'utilities/field.nf': (
+            'def accumulate(value: Float, group_id: Int = 0) -> Float:\n'
+            '    return value\n'
+        ),
+    }
+    for relative, content in files.items():
+        path = root / 'functions' / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding='utf-8')
+    (root / 'nodeforge_package.json').write_text(json.dumps({
+        'schema_version': 1, 'id': 'vendor.editor', 'import_name': 'nodes',
+        'name': 'Nested Editor', 'version': '1.0.0', 'author': 'Test',
+        'description': 'Nested completion fixture',
+        'nodeforge_min_version': '0.65.0',
+        'contents': {'functions': 'functions'},
+    }), encoding='utf-8')
+    packages.install_package_directory(root)
+    return root
+
+
+def test_nested_package_completion_uses_canonical_owners_and_short_index(editor_index):
+    """Every namespace segment completes; ambiguous leaves need exact paths."""
+    _, tmp_path = editor_index
+    _install_nested_editor_package(tmp_path)
+    index = SymbolIndex(resolve_environment())
+    prefix = 'from packages import nodes as n\nx = '
+    symbols = index.symbols(prefix)
+    assert {'mesh', 'curve', 'utilities', 'identity', 'smooth', 'accumulate'} <= set(symbols['n'])
+    assert 'cube' not in symbols['n']
+    assert {'primitives', 'operations'} <= set(symbols['n.mesh'])
+    assert 'cube' in symbols['n.mesh.primitives']
+    assert 'cube' in symbols['n.curve.primitives']
+    assert 'field' in symbols['n.utilities']
+    assert 'accumulate' in symbols['n.utilities.field']
+    assert [candidate.label for candidate in help_at_caret(prefix + 'n.me|', index).candidates] == ['mesh']
+    assert [candidate.label for candidate in help_at_caret(prefix + 'n.mesh.pr|', index).candidates] == ['primitives']
+    assert [candidate.label for candidate in help_at_caret(prefix + 'n.mesh.primitives.cu|', index).candidates] == ['cube']
+    assert 'cube' not in [item.label for item in help_at_caret(prefix + 'n.cu|', index).candidates]
+    assert [item.label for item in help_at_caret(prefix + 'n.utilities.fi|', index).candidates] == ['field']
+
+
+def test_nested_package_signatures_are_owner_exact_and_frozen(editor_index):
+    """Qualified overloads and unique shortcuts use their distinct saved source."""
+    _, tmp_path = editor_index
+    root = _install_nested_editor_package(tmp_path)
+    index = SymbolIndex(resolve_environment())
+    prefix = 'from packages import nodes as n\nx = '
+    mesh = help_at_caret(prefix + 'n.mesh.primitives.cube(be|', index)
+    assert [p.name for p in mesh.signatures[0].parameters] == ['size', 'bevel']
+    assert 'bevel=' in [item.insert for item in mesh.candidates]
+    curve = help_at_caret(prefix + 'n.curve.primitives.cube(ra|', index)
+    assert [p.name for p in curve.signatures[0].parameters] == ['radius']
+    assert 'radius=' in [item.insert for item in curve.candidates]
+    shortcut = help_at_caret(prefix + 'n.smooth(it|', index)
+    qualified = help_at_caret(prefix + 'n.mesh.operations.smooth(it|', index)
+    assert shortcut.signatures == qualified.signatures
+    assert [p.keyword for p in qualified.signatures[0].parameters] == ['geometry', 'iterations']
+    assert help_at_caret(prefix + 'n.cube(|', index).signatures == ()
+    # Environment source was frozen on selection: disk edits cannot change hints.
+    (root / 'functions/mesh/primitives.nf').write_text('def cube(changed: Float):\n    return changed\n')
+    again = help_at_caret(prefix + 'n.mesh.primitives.cube(be|', index)
+    assert [p.name for p in again.signatures[0].parameters] == ['size', 'bevel']
+    assert 'bevel=' in [item.insert for item in again.candidates]

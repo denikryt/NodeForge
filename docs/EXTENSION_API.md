@@ -51,7 +51,13 @@ EXTENSIONS = {
 }
 ```
 
-A native owner under `functions/<name>/` or `examples/<name>/` exports exactly one key matching `<name>`. An owner under `systems/<owner>/` may export multiple callables.
+A native owner under `functions/<name>/`, a nested directory such as
+`functions/mesh/<name>/`, or `examples/<name>/` exports exactly one key matching
+`<name>`. Owners in different category directories have independent backend
+modules and frozen owner snapshots. An owner under `systems/<owner>/` may
+export multiple callables. For the resulting public names and Library behavior,
+see [Package Guide](PACKAGES.md#importing-package-callables) and
+[Source-backed functions](PACKAGES.md#source-backed-functions).
 
 Legacy v1 layouts such as `system.py`, `CONSTRUCTORS`, and native `BACKEND_BUILTINS` are not supported.
 
