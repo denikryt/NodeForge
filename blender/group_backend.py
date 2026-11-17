@@ -379,30 +379,50 @@ def _sync_bundle_dynamic_items(src_group, node_map):
 
 
 def _sync_capture_attribute_dynamic_items(src_group, node_map):
-    """Recreate Capture Attribute items before restoring copied links.
+    """Rebuild and verify Capture items before transactional link restoration.
 
-    Capture items define dynamic input/output sockets and are not copied by
-    ordinary RNA property assignment. Rebuild them on the destination node so
-    anonymous-attribute links survive transactional group cutover.
+    Blender's persisted ``data_type`` tokens differ from the tokens accepted
+    by ``capture_items.new``. A failed reconstruction must abort publishing,
+    including when the missing item has no associated link.
     """
+    constructor_types = {
+        "FLOAT": "FLOAT",
+        "INT": "INT",
+        "BOOLEAN": "BOOLEAN",
+        "FLOAT_VECTOR": "VECTOR",
+        "FLOAT_COLOR": "RGBA",
+    }
     for src_node in src_group.nodes:
         if getattr(src_node, "bl_idname", None) != "GeometryNodeCaptureAttribute":
             continue
         dst_node = node_map.get(src_node.name)
         if dst_node is None or not hasattr(src_node, "capture_items") or not hasattr(dst_node, "capture_items"):
-            continue
+            raise CompileError(f"Capture copy: missing node or item collection for {src_node.name!r}")
+        source_items = [(item.name, item.data_type) for item in src_node.capture_items]
         try:
-            for item in list(dst_node.capture_items):
-                dst_node.capture_items.remove(item)
-        except Exception:
-            pass
-        for item in list(src_node.capture_items):
+            dst_node.capture_items.clear()
+        except Exception as exc:
+            raise CompileError(f"Capture copy: failed to clear items on {src_node.name!r}: {exc}") from exc
+        for item_name, persisted_type in source_items:
+            constructor_type = constructor_types.get(persisted_type)
+            if constructor_type is None:
+                raise CompileError(
+                    f"Capture copy: unsupported persisted data type {persisted_type!r} "
+                    f"for item {item_name!r} on {src_node.name!r}"
+                )
             try:
-                dst_node.capture_items.new(item.data_type, item.name)
-            except Exception:
-                # Link restoration below remains the transactional correctness
-                # boundary if Blender cannot recreate a required socket.
-                pass
+                dst_node.capture_items.new(constructor_type, item_name)
+            except Exception as exc:
+                raise CompileError(
+                    f"Capture copy: failed to recreate item {item_name!r} "
+                    f"({persisted_type}) on {src_node.name!r}: {exc}"
+                ) from exc
+        actual = [(item.name, item.data_type) for item in dst_node.capture_items]
+        if actual != source_items:
+            raise CompileError(
+                f"Capture copy: restored item contract differs on {src_node.name!r}: "
+                f"expected {source_items!r}, got {actual!r}"
+            )
 
 
 def _sync_repeat_zone_dynamic_items(src_group, node_map):

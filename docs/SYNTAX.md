@@ -66,6 +66,7 @@ NodeForge supports runtime socket values and compile-time values.
 | `Int` | Signed 32-bit integer scalar or field. Integer-preserving arithmetic remains `Int`; mixed `Int`/`Float` arithmetic becomes `Float`. |
 | `Bool` | Boolean scalar or field. |
 | `Vector` | Three-component vector or field. |
+| `Color` | Four-component linear RGBA socket value or field. |
 | `Material` | Blender material socket value. |
 | `Object` | Blender object socket value with Object Info properties. |
 | `String` | Blender string socket value. |
@@ -80,6 +81,7 @@ NodeForge supports runtime socket values and compile-time values.
 | Boolean | `True` or `False`. |
 | String | Text value. |
 | Vector | Three-component value. `vector(...)` is compile-time only when all arguments are compile-time; runtime arguments produce a runtime `Vector`. |
+| Color default | A `Color`-typed function parameter may use an RGBA tuple/list of four finite nonnegative numbers; values are stored as binary32, including Alpha and HDR components above `1.0`. |
 | List | Ordered mutable collection. |
 | Tuple | Ordered collection written with parentheses. |
 
@@ -505,7 +507,7 @@ def choose(use_large: Bool = False) -> Geometry:
     return cube(size=size)
 ```
 
-Both runtime branches must be valid. Outside a runtime loop, `else` is required, and both branches must assign at least one common runtime result. Merged values must have the same type: `Float`, `Int`, `Vector`, `Bool`, `Geometry`, `String`, or `Bundle`.
+Both runtime branches must be valid. Outside a runtime loop, `else` is required, and both branches must assign at least one common runtime result. Merged values must have the same type: `Float`, `Int`, `Vector`, `Color`, `Bool`, `Geometry`, `String`, or `Bundle`.
 
 Inside a runtime loop, an `if` can update existing loop state without `else`. The unchanged state passes through when the condition is false:
 
@@ -592,7 +594,7 @@ def accumulate() -> Float:
     return value
 ```
 
-Values defined before the loop and changed inside it become repeat state. State values can be `Geometry`, `Vector`, `Float`, `Int`, `Bool`, or `Bundle`. Each state must retain its exact type throughout the loop, including assignments in nested branches. For example, an `Int` state cannot become `Float`.
+Values defined before the loop and changed inside it become repeat state. State values can be `Geometry`, `Vector`, `Color`, `Float`, `Int`, `Bool`, or `Bundle`. Each state must retain its exact type throughout the loop, including assignments in nested branches. For example, an `Int` state cannot become `Float`.
 
 A runtime loop must update at least one existing value or geometry builder. Names first defined inside the loop are iteration-local temporaries. The runtime loop target is a single name holding the iteration's `Int` index.
 

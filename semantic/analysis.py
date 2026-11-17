@@ -107,6 +107,7 @@ from .source_callables import (
     serialize_local_signature,
     has_source_value_binding,
 )
+from ..type_capabilities import SWITCH_INPUT_TYPES
 from .values import (
     ArrayResultShape,
     ExtensionResultShape,
@@ -132,15 +133,6 @@ _RESERVED_VALUE_LABELS = {
     "backend helper",
     "embedded-system constructor",
     "reserved helper",
-}
-_SWITCH_TYPES = {
-    TYPE_FLOAT,
-    TYPE_INT,
-    TYPE_VECTOR,
-    TYPE_BOOL,
-    TYPE_GEOMETRY,
-    TYPE_STRING,
-    TYPE_BUNDLE,
 }
 
 
@@ -480,6 +472,10 @@ def _analyze_extension_backend_call(
             )
         required_modes[id(source_node)] = next(iter(modes))
 
+    # Backend overloads use direct NF_SET arguments; candidate matching below
+    # decides whether a detached RGBA literal is accepted as Color.
+    static_color_spec = TypeSpec("NF_SET", frozenset({NFType.COLOR}))
+
     # Each explicit source occurrence is acquired exactly once before type-based
     # candidate selection. Defaults are already detached contract data.
     acquired: dict[int, tuple[str, object, NFType]] = {}
@@ -490,7 +486,7 @@ def _analyze_extension_backend_call(
         except ConstEvalUnavailable as exc:
             raise CompileError(f"{name}() argument must be available at compile time") from exc
         if isinstance(selection, CompileTimeSelection):
-            actual_type = static_nf_type(selection.value)
+            actual_type = static_nf_type(selection.value, declared=static_color_spec)
             acquired[id(source_node)] = ("static", selection.value, actual_type)
             continue
         if not isinstance(selection, RuntimeRequired):
@@ -781,7 +777,7 @@ def _analyze_extension_semantic_call(
                 except ConstEvalUnavailable as exc:
                     raise CompileError(f"{name}() argument must be available at compile time") from exc
                 if isinstance(selection, CompileTimeSelection):
-                    actual_type = static_nf_type(selection.value)
+                    actual_type = static_nf_type(selection.value, declared=type_spec)
                     if not type_spec_accepts_nf(type_spec, actual_type):
                         raise CompileError(f"{name}() argument type {actual_type} is not accepted by its extension contract")
                     expected_type = select_declared_nf_type(type_spec, actual_type)
@@ -1488,7 +1484,7 @@ def analyze_expression(expr, environment):
                 raise CompileError("select(cond, true, false): cond must be Bool")
             if false_typ != true_typ:
                 raise CompileError("select() true/false values must have same type")
-            if false_typ not in _SWITCH_TYPES:
+            if false_typ not in SWITCH_INPUT_TYPES:
                 raise CompileError("select() result type is not supported")
             return record(node, runtime_fact(true_typ, operation="select"))
 

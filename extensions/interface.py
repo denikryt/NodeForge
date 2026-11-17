@@ -8,10 +8,11 @@ import types
 import typing
 from collections.abc import Callable, Mapping
 
-from ..semantic.callable_contracts import canonicalize_group_input_default, source_argument_type_matches
+from ..semantic.callable_contracts import canonicalize_group_input_default
 from ..errors import CompileError
 from ..evaluation_modes import EvaluationMode
 from ..extension_annotations import MARKER_TO_NF_TYPE
+from .values import select_declared_nf_type, static_nf_type
 from .contracts import (
     ExtensionCallableId,
     ExtensionCallableSpec,
@@ -339,38 +340,20 @@ def _normalize_result_annotation(
     return result
 
 
-def _infer_detached_default_type(value: object) -> NFType:
-    """Infer the canonical source type of one supported detached Python default."""
-    if type(value) is bool:
-        return NFType.BOOL
-    if type(value) is int:
-        canonicalize_group_input_default(NFType.INT, value)
-        return NFType.INT
-    if type(value) is float:
-        canonicalize_group_input_default(NFType.FLOAT, value)
-        return NFType.FLOAT
-    if isinstance(value, str):
-        return NFType.STRING
-    if isinstance(value, (tuple, list)):
-        canonicalize_group_input_default(NFType.VECTOR, value)
-        return NFType.VECTOR
-    raise CompileError(f"Unsupported extension parameter default: {value!r}")
-
-
 def _normalize_default(value: object, type_spec: TypeSpec, *, context: str) -> tuple[object, NFType]:
     """Canonicalize one detached default against a direct ``NF_SET`` declaration."""
-    actual = _infer_detached_default_type(value)
-    if actual in type_spec.nf_types:
-        selected = actual
-    else:
-        compatible = [
-            expected
-            for expected in sorted(type_spec.nf_types, key=lambda item: item.value)
-            if source_argument_type_matches(expected, actual)
-        ]
-        if len(compatible) != 1:
-            raise CompileError(f"{context} default is not uniquely representable by its declared NodeForge type set")
-        selected = compatible[0]
+    try:
+        actual = static_nf_type(value, declared=type_spec)
+    except CompileError as exc:
+        if str(exc).startswith("Unsupported detached NodeForge value"):
+            raise CompileError(f"Unsupported extension parameter default: {value!r}") from exc
+        raise
+    try:
+        selected = select_declared_nf_type(type_spec, actual)
+    except CompileError as exc:
+        raise CompileError(
+            f"{context} default is not uniquely representable by its declared NodeForge type set"
+        ) from exc
     return canonicalize_group_input_default(selected, value), selected
 
 

@@ -1,6 +1,6 @@
 """NodeForge Blender addon package."""
 
-NODEFORGE_VERSION = (0, 90, 3)
+NODEFORGE_VERSION = (0, 91, 0)
 
 bl_info = {
     "name": "NodeForge",
@@ -16,7 +16,7 @@ from .mesh_compute import mesh_compute
 from .evaluation_modes import EvaluationMode
 from .extension_semantic_api import RuntimeRef
 from .extension_annotations import (
-    Bool, Bundle, Float, Geometry, Int, Material, Object, Rotation, String, Vector,
+    Bool, Bundle, Color, Float, Geometry, Int, Material, Object, Rotation, String, Vector,
 )
 
 
@@ -42,5 +42,5 @@ def unregister():
 __all__ = [
     "bl_info", "register", "unregister", "mesh_compute", "EvaluationMode", "RuntimeRef",
     "Float", "Int", "Bool", "Vector", "Geometry", "Material",
-    "Object", "String", "Bundle", "Rotation",
+    "Object", "String", "Bundle", "Rotation", "Color",
 ]

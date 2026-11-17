@@ -9,6 +9,7 @@ from ..nf_types import NFType
 _SOCKET_IDNAME_BY_NF_TYPE = {
     NFType.FLOAT: "NodeSocketFloat",
     NFType.VECTOR: "NodeSocketVector",
+    NFType.COLOR: "NodeSocketColor",
     NFType.BOOL: "NodeSocketBool",
     NFType.GEOMETRY: "NodeSocketGeometry",
     NFType.INT: "NodeSocketInt",

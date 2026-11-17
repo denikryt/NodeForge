@@ -8,6 +8,7 @@ from typing import TypeAlias
 
 from ..compiler_identities import BindingId, CallSiteId, FunctionId, InputDeclarationId, InterfaceInputOrigin
 from ..nf_types import NFType
+from ..type_capabilities import REPEAT_ITEM_TYPES
 from .group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
 from ..extensions.contracts import ExtensionCallableId, PythonScalarKind, TypeSpec, validate_extension_argument_positions
 
@@ -717,7 +718,7 @@ class IRInputDeclaration:
         if not self.has_default and self.default is not None:
             raise ValueError("Required input declaration must not have an explicit default")
         if self.has_default and self.typ not in {
-            NFType.FLOAT, NFType.INT, NFType.BOOL, NFType.VECTOR, NFType.STRING,
+            NFType.FLOAT, NFType.INT, NFType.BOOL, NFType.VECTOR, NFType.COLOR, NFType.STRING,
         }:
             raise ValueError("This input type does not support a declared default")
         if self.has_default and self.default is None:
@@ -896,10 +897,6 @@ class IRIf:
             raise ValueError("IRIf merge source names must be unique")
 
 
-_REPEAT_STATE_TYPES = frozenset({
-    NFType.GEOMETRY, NFType.VECTOR, NFType.FLOAT, NFType.INT, NFType.BOOL, NFType.BUNDLE
-})
-
 
 @dataclass(frozen=True)
 class IRRepeatState:
@@ -916,7 +913,7 @@ class IRRepeatState:
             raise TypeError("binding_id must be a BindingId")
         if not isinstance(self.source_name, str) or not self.source_name:
             raise ValueError("source_name must be a non-empty string")
-        if self.typ not in _REPEAT_STATE_TYPES:
+        if self.typ not in REPEAT_ITEM_TYPES:
             raise TypeError("IRRepeatState uses an unsupported Repeat state type")
         if not isinstance(self.publish_to_parent, bool):
             raise TypeError("publish_to_parent must be bool")
