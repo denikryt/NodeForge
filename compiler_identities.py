@@ -212,6 +212,19 @@ class CallSiteId:
             raise ValueError("CallSiteId.ordinal must be a non-negative integer")
 
 
+def inline_expansion_owner_scope(call_site: CallSiteId) -> str:
+    """Name an in-memory inline body by its exact semantic call occurrence.
+
+    This is an ephemeral semantic scope, never a physical Blender group key.
+    """
+    if not isinstance(call_site, CallSiteId):
+        raise TypeError("Inline expansion requires CallSiteId")
+    return _canonical_json({
+        "kind": "INLINE", "parent_scope": call_site.owner_scope,
+        "callee": call_site.callee.stable_key(), "ordinal": call_site.ordinal,
+    })
+
+
 def module_definition_function_id(definition: SourceDefinitionRef, signature: str) -> FunctionId:
     """Identify an independently compiled definition and its resolved input types."""
     if not isinstance(definition, SourceDefinitionRef):

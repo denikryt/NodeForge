@@ -106,6 +106,8 @@ def instance_key_for_materialization(materialization: IRFunctionMaterialization)
         raise TypeError("materialization must be an IRFunctionMaterialization")
     if materialization.mode is IRFunctionMaterializationMode.SHARED:
         return ""
+    if materialization.mode is IRFunctionMaterializationMode.INLINE:
+        raise ValueError("INLINE calls have no persisted physical instance key")
     return instance_key_for(materialization.call_site)
 
 
