@@ -718,7 +718,7 @@ class IRInputDeclaration:
         if not self.has_default and self.default is not None:
             raise ValueError("Required input declaration must not have an explicit default")
         if self.has_default and self.typ not in {
-            NFType.FLOAT, NFType.INT, NFType.BOOL, NFType.VECTOR, NFType.COLOR, NFType.STRING,
+            NFType.FLOAT, NFType.INT, NFType.BOOL, NFType.VECTOR, NFType.COLOR, NFType.ROTATION, NFType.STRING,
         }:
             raise ValueError("This input type does not support a declared default")
         if self.has_default and self.default is None:

@@ -56,3 +56,64 @@ def test_rotation_is_reserved_and_runtime_vector_is_not_rotation():
     assert not source_argument_type_matches(NFType.ROTATION, NFType.VECTOR)
     assert not source_argument_type_matches(NFType.VECTOR, NFType.ROTATION)
     assert source_argument_type_matches(NFType.FLOAT, NFType.INT)
+
+@pytest.mark.parametrize('value, expected', [
+    ('(0, -1, 7)', (0.0, -1.0, 7.0)),
+    ('[0, 1, 2]', (0.0, 1.0, 2.0)),
+    ('(0.1, -0.2, 7.5)', (0.1, -0.2, 7.5)),
+])
+def test_rotation_source_defaults_store_canonical_xyz_and_declaration_identity(value, expected):
+    """A declared optional Rotation retains one binary32 triple across IR/contract."""
+    from NodeForge.semantic.numeric_semantics import normalize_float_constant
+
+    signature = _signature(f'def echo(value: Rotation = {value}) -> Rotation:\n    return value')
+    actual = tuple(normalize_float_constant(v) for v in expected)
+    assert signature.logical_inputs[0].default == actual
+    assert signature.declarations[0].default == actual
+    assert type(signature.declarations[0].default) is tuple
+    assert signature.logical_inputs[0].has_default
+    assert signature.logical_inputs[0].interface_origin == signature.declarations[0].declaration_id
+
+
+@pytest.mark.parametrize('value, expected_fragment', [
+    ('(1, 2)', 'exactly three'), ('(1, 2, 3, 4)', 'exactly three'),
+    ('(1, True, 3)', 'component 1'), ('(1, "x", 3)', 'component 1'),
+    ('(2147483648, 0, 0)', 'Rotation default'),
+    ('(1e50, 0, 0)', 'Rotation default'),
+    ('(missing, 0, 0)', 'Rotation default'),
+])
+def test_rotation_source_defaults_reject_bad_values_with_parameter_context(value, expected_fragment):
+    """Both normalizer and earlier constant evaluator errors identify the owner."""
+    with pytest.raises(CompileError) as exc:
+        _signature(f'def echo(value: Rotation = {value}) -> Rotation:\n    return value')
+    assert 'value' in str(exc.value)
+    assert expected_fragment in str(exc.value)
+
+
+def test_rotation_source_default_cannot_reference_runtime_parameter():
+    """Earlier parameter-resolution guard remains authoritative for defaults."""
+    with pytest.raises(CompileError, match='runtime parameter'):
+        _signature('def echo(value: Rotation, other: Rotation = value) -> Rotation:\n    return other')
+
+
+@pytest.mark.parametrize('value', [
+    (float('nan'), 0, 0), (0, float('inf'), 0), (0, 0, 1e50),
+    (0, True, 0), (0, '2', 0), (0, 0), (1, 2, 3, 4),
+])
+def test_rotation_detached_default_rejects_invalid_shape_or_components(value):
+    """Shared normalizer rejects malformed detached Extension and source values."""
+    from NodeForge.semantic.callable_contracts import canonicalize_group_input_default
+
+    with pytest.raises(CompileError, match='Rotation default'):
+        canonicalize_group_input_default(NFType.ROTATION, value)
+
+
+def test_required_rotation_default_guard_remains_strict():
+    """Unspecified default cannot turn a required Rotation into optional input."""
+    from NodeForge.semantic.callable_contracts import GroupInputContract
+
+    required = GroupInputContract('value', 'Value', NFType.ROTATION, None, False, None)
+    assert required.default is None
+    assert not required.has_default
+    with pytest.raises(ValueError):
+        GroupInputContract('value', 'Value', NFType.ROTATION, (0., 0., 0.), False, None)
