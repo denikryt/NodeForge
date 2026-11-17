@@ -47,8 +47,12 @@ def _assert_prepared_interface_parity(group, prepared: SemanticGroupCompilation)
         if contract.has_default:
             if not hasattr(physical, "default_value"):
                 raise CompileError("Internal error: semantic input default has no physical default")
+            # Blender reads Rotation defaults as Euler; semantic defaults are numeric triples.
             physical_default = canonicalize_group_input_default(
-                contract.typ, tuple(physical.default_value) if contract.typ is NFType.COLOR else physical.default_value
+                contract.typ,
+                tuple(physical.default_value)
+                if contract.typ in {NFType.COLOR, NFType.ROTATION}
+                else physical.default_value,
             )
             if physical_default != contract.default:
                 raise CompileError("Internal error: physical input default disagrees with semantic interface")
