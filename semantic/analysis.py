@@ -44,7 +44,7 @@ from ..function_instances import (
     function_group_owner_scope,
     function_materialization_owner_scope,
 )
-from .call_modifiers import extract_function_call_modifiers, unsupported_unique, reject_unsupported_modifiers
+from .call_modifiers import extract_function_call_modifiers, reject_unsupported_modifiers
 from .constants import (
     OBJECT_PROPERTY_TYPES,
     TYPE_BOOL,
@@ -1013,8 +1013,7 @@ def _resolve_source_materialization(
     function_id, modifiers, declared_inline_default: bool, source_call_site_allocator,
 ) -> IRFunctionMaterialization:
     """Choose an occurrence mode exactly once before source-body preparation."""
-    from ..compiler_identities import CallSiteId
-    effective_inline = modifiers.inline if modifiers.inline_was_explicit else declared_inline_default
+    effective_inline = declared_inline_default if modifiers.inline is None else modifiers.inline
     if type(effective_inline) is not bool:
         raise CompileError("Internal error: source inline default is not Bool")
     if effective_inline and modifiers.unique:

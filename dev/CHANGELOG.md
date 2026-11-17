@@ -730,3 +730,7 @@ lifecycle.
 ## 0.92.1
 
 - Simplified inline function argument lowering to reuse the existing typed runtime binding map across nested bodies, without changing generated Geometry Nodes or grouped interface behavior.
+
+## 0.92.2
+
+- Simplified compiler-only call modifier extraction by using one tri-state `__inline__` value and one reserved-keyword collection, preserving explicit `False` diagnostics and removing unused semantic imports.

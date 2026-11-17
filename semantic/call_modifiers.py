@@ -16,14 +16,12 @@ class FunctionCallModifiers:
     unique: bool = False
     unique_was_explicit: bool = False
     inline: bool | None = None
-    inline_was_explicit: bool = False
 
 
 def extract_function_call_modifiers(
     expr: ast.Call, function_name: str, const_eval_values,
 ) -> tuple[ast.Call, FunctionCallModifiers]:
     """Strip reserved keywords, evaluating both in the caller's CT snapshot."""
-    seen = set()
     modifiers = {}
     ordinary = []
     for keyword in expr.keywords:
@@ -31,9 +29,8 @@ def extract_function_call_modifiers(
             ordinary.append(keyword)
             continue
         name = keyword.arg
-        if name in seen:
+        if name in modifiers:
             raise CompileError(f"{function_name}() got duplicate {name}")
-        seen.add(name)
         try:
             value = _const_eval(keyword.value, const_eval_values)
         except ConstEvalUnavailable as exc:
@@ -46,9 +43,8 @@ def extract_function_call_modifiers(
     )
     return cleaned, FunctionCallModifiers(
         unique=modifiers.get("__unique__", False),
-        unique_was_explicit="__unique__" in seen,
+        unique_was_explicit="__unique__" in modifiers,
         inline=modifiers.get("__inline__"),
-        inline_was_explicit="__inline__" in seen,
     )
 
 
@@ -59,7 +55,7 @@ def unsupported_unique(function_name: str) -> CompileError:
 
 def reject_unsupported_modifiers(function_name: str, modifiers: FunctionCallModifiers) -> None:
     """Reject compiler options on callables with no source-body boundary."""
-    if modifiers.inline_was_explicit:
+    if modifiers.inline is not None:
         raise CompileError(f"{function_name}() does not support __inline__")
     if modifiers.unique_was_explicit:
         raise unsupported_unique(function_name)

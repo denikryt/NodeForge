@@ -1,6 +1,6 @@
 """NodeForge Blender addon package."""
 
-NODEFORGE_VERSION = (0, 92, 1)
+NODEFORGE_VERSION = (0, 92, 2)
 
 bl_info = {
     "name": "NodeForge",
