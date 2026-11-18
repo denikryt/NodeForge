@@ -69,6 +69,160 @@ rgba = color_identity()
     assert all(link.is_valid for link in tree.links)
 
 
+def test_inline_rotation_default_links_native_rotation_socket():
+    """An omitted Rotation default creates one native Input Rotation in the caller."""
+    from NodeForge.semantic.numeric_semantics import normalize_float_constant
+
+    tree = _compose('''def apply_rotation(geometry: Geometry,
+                   rotation: Rotation = (0.0, 0.0, 1.5707963),
+                   __inline__=True) -> Geometry:
+    return node('GeometryNodeTransform',
+                inputs={ID('Geometry'): geometry, ID('Rotation'): rotation},
+                output=ID('Geometry'), typ=Geometry)
+result = apply_rotation(cube(1.0))
+''', 'NFTest_Inline_Rotation_Default')
+    constants = _nodes(tree, 'FunctionNodeInputRotation')
+    transforms = _nodes(tree, 'GeometryNodeTransform')
+    assert len(constants) == len(transforms) == 1
+    assert not _nodes(tree, 'GeometryNodeGroup')
+    assert constants[0].outputs['Rotation'].bl_idname == 'NodeSocketRotation'
+    assert tuple(constants[0].rotation_euler) == tuple(
+        normalize_float_constant(v) for v in (0.0, 0.0, 1.5707963)
+    )
+    assert transforms[0].inputs['Rotation'].links[0].from_socket == constants[0].outputs['Rotation']
+    assert all(link.is_valid for link in tree.links)
+
+
+def test_inline_rotation_return_reuse_and_separate_occurrences():
+    """One invocation shares its default node; a second invocation owns another."""
+    returned = _compose('''def identity(rotation: Rotation = (-0.25, 0.5, 8.0),
+                 __inline__=True) -> Rotation:
+    return rotation
+result = identity()
+''', 'NFTest_Inline_Rotation_Return')
+    assert len(_nodes(returned, 'FunctionNodeInputRotation')) == 1
+    assert not _nodes(returned, 'GeometryNodeGroup')
+
+    tree = _compose('''def twice(geometry: Geometry, rotation: Rotation = (0, 0, 1.0),
+          __inline__=True) -> Geometry:
+    first = node('GeometryNodeTransform',
+                 inputs={ID('Geometry'): geometry, ID('Rotation'): rotation},
+                 output=ID('Geometry'), typ=Geometry)
+    return node('GeometryNodeTransform',
+                inputs={ID('Geometry'): first, ID('Rotation'): rotation},
+                output=ID('Geometry'), typ=Geometry)
+one = twice(cube(1.0))
+result = twice(one)
+''', 'NFTest_Inline_Rotation_Reuse')
+    constants = _nodes(tree, 'FunctionNodeInputRotation')
+    transforms = _nodes(tree, 'GeometryNodeTransform')
+    assert len(constants) == 2
+    assert len(transforms) == 4
+    assert not _nodes(tree, 'GeometryNodeGroup')
+    for rotation in constants:
+        consumers = [link for link in tree.links if link.from_socket == rotation.outputs['Rotation']]
+        assert len(consumers) == 2
+        assert all(link.to_socket.name == 'Rotation' for link in consumers)
+    assert all(link.is_valid for link in tree.links)
+
+
+def test_inline_rotation_nested_and_grouped_caller():
+    """Nested inlines use the immediate physical owner, including grouped parents."""
+    source = '''def rotation_constant(rotation: Rotation = (0, -0.1, 7.0),
+                      __inline__=True) -> Rotation:
+    return rotation
+
+def rotate_inline(geometry: Geometry, __inline__=True) -> Geometry:
+    return node('GeometryNodeTransform',
+                inputs={ID('Geometry'): geometry, ID('Rotation'): rotation_constant()},
+                output=ID('Geometry'), typ=Geometry)
+
+def rotate_grouped(geometry: Geometry) -> Geometry:
+    return rotate_inline(geometry)
+
+result = rotate_grouped(cube(1.0))
+'''
+    root = _compose(source, 'NFTest_Inline_Rotation_Nested')
+    grouped, = _nodes(root, 'GeometryNodeGroup')
+    nested_group = grouped.node_tree
+    assert not _nodes(nested_group, 'GeometryNodeGroup')
+    assert len(_nodes(nested_group, 'FunctionNodeInputRotation')) == 1
+    assert len(_nodes(nested_group, 'GeometryNodeTransform')) == 1
+    assert all(link.is_valid for link in nested_group.links)
+
+
+def test_inline_rotation_explicit_runtime_and_grouped_default():
+    """Typed runtime Rotation creates no constant; grouped calls keep socket defaults."""
+    tree = _compose('''def apply_rotation(geometry: Geometry,
+                   rotation: Rotation = (0, 0, 0.5), __inline__=True) -> Geometry:
+    return node('GeometryNodeTransform',
+                inputs={ID('Geometry'): geometry, ID('Rotation'): rotation},
+                output=ID('Geometry'), typ=Geometry)
+euler = vector(0.0, 0.0, 1.0)
+runtime_rotation = node('FunctionNodeEulerToRotation',
+                        inputs={ID('Euler'): euler},
+                        output=ID('Rotation'), typ=Rotation)
+one = apply_rotation(cube(1.0), runtime_rotation)
+result = apply_rotation(one, __inline__=False)
+''', 'NFTest_Inline_Rotation_Runtime')
+    assert not _nodes(tree, 'FunctionNodeInputRotation')
+    transforms = _nodes(tree, 'GeometryNodeTransform')
+    producer, = _nodes(tree, 'FunctionNodeEulerToRotation')
+    assert len(transforms) == 1
+    assert transforms[0].inputs['Rotation'].links[0].from_socket == producer.outputs['Rotation']
+    grouped, = _nodes(tree, 'GeometryNodeGroup')
+    rotation_input, = [socket for socket in grouped.inputs if socket.bl_idname == 'NodeSocketRotation']
+    assert tuple(rotation_input.default_value) == pytest.approx((0, 0, 0.5), abs=1e-7)
+    assert not _nodes(grouped.node_tree, 'FunctionNodeInputRotation')
+    assert all(link.is_valid for link in tree.links)
+
+
+def test_inline_rotation_default_invalid_or_vector_runtime_rejected():
+    """Inline lowering retains the semantic Rotation default and type contract."""
+    from NodeForge.errors import CompileError
+
+    for bad in ('(0, 1)', '(0, True, 1)', '(0, 1e50, 1)'):
+        tree = bpy.data.node_groups.new('NFTest_Inline_Bad_Rotation', 'GeometryNodeTree')
+        with pytest.raises(CompileError):
+            compiler.compose_source_initial(
+                'def identity(rotation: Rotation = ' + bad + ', __inline__=True) -> Rotation:\n'
+                '    return rotation\nresult = identity()\n', tree,
+            )
+    wrong = bpy.data.node_groups.new('NFTest_Inline_Bad_Runtime', 'GeometryNodeTree')
+    with pytest.raises(CompileError):
+        compiler.compose_source_initial('''def identity(rotation: Rotation, __inline__=True) -> Rotation:
+    return rotation
+result = identity(vector(0, 0, 0))
+''', wrong)
+
+
+def test_inline_rotation_evaluates_like_grouped_function():
+    """Constant Rotation input produces the same evaluated mesh in either mode."""
+    from test_update_group import _evaluate_group_geometry_vertices
+
+    source = '''def apply_rotation(geometry: Geometry,
+                   rotation: Rotation = (0.2, -0.3, 1.1),
+                   __inline__=True) -> Geometry:
+    return node('GeometryNodeTransform',
+                inputs={ID('Geometry'): geometry, ID('Rotation'): rotation},
+                output=ID('Geometry'), typ=Geometry)
+result = apply_rotation(cube(1.0)%s)
+'''
+    evaluated = {}
+    for mode, override in (('inline', ''), ('grouped', ', __inline__=False')):
+        tree = _compose(source % override, f'NFTest_Inline_Rotation_Evaluate_{mode}')
+        result_socket = (_nodes(tree, 'GeometryNodeTransform')[0].outputs['Geometry']
+                         if mode == 'inline' else _nodes(tree, 'GeometryNodeGroup')[0].outputs[0])
+        tree.interface.new_socket(name='Geometry', in_out='OUTPUT', socket_type='NodeSocketGeometry')
+        output_node = tree.nodes.new('NodeGroupOutput')
+        tree.links.new(result_socket, output_node.inputs['Geometry'])
+        evaluated[mode] = _evaluate_group_geometry_vertices(tree, f'NFTest_Inline_Rotation_{mode}')
+
+    assert len(evaluated['inline']) == len(evaluated['grouped']) == 8
+    for inline_coord, grouped_coord in zip(evaluated['inline'], evaluated['grouped']):
+        assert inline_coord == pytest.approx(grouped_coord, abs=1e-5)
+
+
 def test_inline_call_scopes_do_not_alias_backing_nodes():
     """Repeated calls create independent native nodes without callee datablocks."""
     tree = _compose('''def increment(v: Float, __inline__=True) -> Float:
@@ -420,6 +574,91 @@ result = wrapper(2.0)
     assert selected.as_pointer() == selected_ptr
     assert len(_nodes(selected, 'ShaderNodeMath')) == 1
     assert not _nodes(selected, 'GeometryNodeGroup')
+
+
+def test_inline_rotation_package_function_uses_caller_tree(tmp_path):
+    """Imported Rotation defaults materialize in the immediate caller's tree."""
+    import json
+    from NodeForge import packages
+
+    packages.set_packages_dir_for_tests(tmp_path / 'installed')
+    try:
+        source_root = tmp_path / 'source'
+        directory = source_root / 'functions' / 'spatial'
+        directory.mkdir(parents=True)
+        (directory / 'rotate.nf').write_text('''def apply(geometry: Geometry,
+          rotation: Rotation = (0.1, -0.2, 7.0), __inline__=True) -> Geometry:
+    return node('GeometryNodeTransform',
+                inputs={ID('Geometry'): geometry, ID('Rotation'): rotation},
+                output=ID('Geometry'), typ=Geometry)
+''', encoding='utf8')
+        (source_root / 'nodeforge_package.json').write_text(json.dumps({
+            'schema_version': 1, 'id': 'vendor.rotation_inline',
+            'import_name': 'rotationpkg', 'name': 'Rotation inline regression',
+            'version': '1.0.0', 'author': 'Tests',
+            'nodeforge_min_version': '0.65.0', 'contents': {'functions': 'functions'},
+        }), encoding='utf8')
+        packages.install_package_directory(source_root)
+        tree = _compose('''from packages import rotationpkg
+result = rotationpkg.spatial.rotate.apply(cube(1.0))
+''', 'NFTest_Inline_Rotation_Package')
+        assert len(_nodes(tree, 'FunctionNodeInputRotation')) == 1
+        assert len(_nodes(tree, 'GeometryNodeTransform')) == 1
+        assert not _nodes(tree, 'GeometryNodeGroup')
+        assert all(link.is_valid for link in tree.links)
+    finally:
+        packages.set_packages_dir_for_tests(None)
+
+
+def test_grouped_parent_reload_updates_inline_rotation_and_rolls_back(monkeypatch):
+    """Reload tracks inline Rotation defaults and retains the published group on failure."""
+    from NodeForge.compiler_identities import parse_module_definition_function_id
+    from NodeForge.blender import ir_lowering
+
+    source = '''def inner(rotation: Rotation = (0, 0, 0.25), __inline__=True) -> Rotation:
+    return rotation
+
+def outer(geometry: Geometry) -> Geometry:
+    return node('GeometryNodeTransform',
+                inputs={ID('Geometry'): geometry, ID('Rotation'): inner()},
+                output=ID('Geometry'), typ=Geometry)
+
+result = outer(cube(1.0))
+'''
+    root = _compose(source, 'NFTest_Inline_Rotation_Reload')
+    grouped, = _nodes(root, 'GeometryNodeGroup')
+    parent = grouped.node_tree
+    origin = parse_module_definition_function_id(parent['nodeforge_module_definition']).module.origin
+    pointer = parent.as_pointer()
+    initial, = _nodes(parent, 'FunctionNodeInputRotation')
+    assert initial.rotation_euler.z == pytest.approx(0.25)
+
+    updated_source = source.replace('0.25', '0.75')
+    assert compiler.update_library_catalog_group(
+        parent, source=updated_source, module_context=origin,
+    ) is parent
+    assert parent.as_pointer() == pointer
+    updated, = _nodes(parent, 'FunctionNodeInputRotation')
+    assert updated.rotation_euler.z == pytest.approx(0.75)
+    before_nodes = {node.as_pointer() for node in parent.nodes}
+    before_groups = {group.as_pointer() for group in bpy.data.node_groups}
+    original = ir_lowering._rotation_value
+
+    def fail_after_native_rotation(*args, **kwargs):
+        """Simulate failure after creating the staged Rotation node."""
+        original(*args, **kwargs)
+        raise RuntimeError('injected inline Rotation failure')
+
+    monkeypatch.setattr(ir_lowering, '_rotation_value', fail_after_native_rotation)
+    with pytest.raises(RuntimeError, match='injected inline Rotation failure'):
+        compiler.update_library_catalog_group(
+            parent, source=source.replace('0.25', '1.25'), module_context=origin,
+        )
+    assert parent.as_pointer() == pointer
+    assert {node.as_pointer() for node in parent.nodes} == before_nodes
+    assert {group.as_pointer() for group in bpy.data.node_groups} == before_groups
+    assert _nodes(parent, 'FunctionNodeInputRotation')[0].rotation_euler.z == pytest.approx(0.75)
+    assert all(link.is_valid for link in parent.links)
 
 
 def test_selected_group_mid_inline_backend_failure_preserves_published_nodes(monkeypatch):

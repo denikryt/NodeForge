@@ -61,6 +61,13 @@ def _color_value(group, rgba, x=0, y=0):
     return Value(node.outputs[0], TYPE_COLOR)
 
 
+def _rotation_value(group, angles, x=0, y=0):
+    """Create a native Rotation constant from canonical XYZ Euler angles."""
+    node = _new_node(group, "FunctionNodeInputRotation", x, y)
+    node.rotation_euler = angles
+    return Value(node.outputs["Rotation"], TYPE_ROTATION)
+
+
 def _vector_value(group, components, x=0, y=0):
     """Create a native Vector value with canonical component defaults."""
     from ..semantic.callable_contracts import canonicalize_group_input_default
@@ -207,4 +214,4 @@ def _id(group, x=0, y=0):
     node = _new_node(group, "GeometryNodeInputID", x, y)
     return Value(node.outputs[0], TYPE_INT)
 
-__all__ = ['_socket_type_for', '_new_node', '_value', '_string_value', '_int_value', '_bool_value', '_color_value', '_vector_value', '_is_number_type', '_math', '_integer_math', '_vector_math', '_combine_xyz', '_combine_xyz_mixed', '_separate_xyz', '_compare', '_boolean_math', '_switch', '_position', '_normal', '_index', '_id']
+__all__ = ['_socket_type_for', '_new_node', '_value', '_string_value', '_int_value', '_bool_value', '_color_value', '_rotation_value', '_vector_value', '_is_number_type', '_math', '_integer_math', '_vector_math', '_combine_xyz', '_combine_xyz_mixed', '_separate_xyz', '_compare', '_boolean_math', '_switch', '_position', '_normal', '_index', '_id']

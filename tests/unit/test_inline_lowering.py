@@ -38,6 +38,7 @@ def _lower_inline(source, monkeypatch, runtime_values=()):
     monkeypatch.setattr(backend, '_string_value', _emit_stub_value(calls, 'String', NFType.STRING))
     monkeypatch.setattr(backend, '_vector_value', _emit_stub_value(calls, 'Vector', NFType.VECTOR))
     monkeypatch.setattr(backend, '_color_value', _emit_stub_value(calls, 'Color', NFType.COLOR))
+    monkeypatch.setattr(backend, '_rotation_value', _emit_stub_value(calls, 'Rotation', NFType.ROTATION))
     monkeypatch.setattr(backend, '_math', _emit_stub_value(calls, 'Math', NFType.FLOAT))
     context = backend.BlenderIRLoweringContext(
         group=object(), runtime_bindings={}, source_callable_session=session,
@@ -78,6 +79,7 @@ def test_bound_inline_constant_adapters_cover_scalar_vector_and_rgba(monkeypatch
         ('String', '"ok"', 'String', NFType.STRING),
         ('Vector', 'vector(1,2,3)', 'Vector', NFType.VECTOR),
         ('Color', '(0.1,0.2,0.3,0.4)', 'Color', NFType.COLOR),
+        ('Rotation', '(0.1,-0.2,7.0)', 'Rotation', NFType.ROTATION),
     ]
     for typ, expr, expected, nf_type in cases:
         _op, calls, result = _lower_inline(
@@ -87,6 +89,34 @@ def test_bound_inline_constant_adapters_cover_scalar_vector_and_rgba(monkeypatch
         )
         assert [name for name, _ in calls] == [expected]
         assert result[0].typ is nf_type
+
+
+def test_inline_rotation_default_materializes_once(monkeypatch):
+    """An omitted Rotation default binds one canonical typed runtime value."""
+    _, calls, result = _lower_inline('''def echo(rotation: Rotation = (0.1, -0.2, 7.0), __inline__=True) -> Rotation:
+    return rotation
+result = echo()
+''', monkeypatch)
+    from NodeForge.semantic.numeric_semantics import normalize_float_constant
+
+    assert result[0].typ is NFType.ROTATION
+    assert [name for name, _ in calls] == ['Rotation']
+    angles, x, y = calls[0][1]
+    assert angles == tuple(normalize_float_constant(v) for v in (0.1, -0.2, 7.0))
+    assert isinstance(x, int) and isinstance(y, int)
+
+
+def test_inline_rotation_static_materializer_uses_same_canonical_contract(monkeypatch):
+    """An already-bound static Rotation value uses the same inline adapter."""
+    calls = []
+    monkeypatch.setattr(backend, '_rotation_value', _emit_stub_value(calls, 'Rotation', NFType.ROTATION))
+    result = backend._inline_constant_value(
+        SimpleNamespace(group=object()), NFType.ROTATION, [0.1, -0.2, 7.0], 10, 20,
+    )
+    from NodeForge.semantic.numeric_semantics import normalize_float_constant
+
+    assert result.typ is NFType.ROTATION
+    assert calls == [('Rotation', (tuple(normalize_float_constant(v) for v in (0.1, -0.2, 7.0)), 10, 20))]
 
 
 def test_bound_inline_coerces_runtime_int_to_float(monkeypatch):

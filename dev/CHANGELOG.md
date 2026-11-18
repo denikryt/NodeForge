@@ -751,3 +751,8 @@ lifecycle.
 
 - Defer backend Extension API overload ambiguity for declared `Rotation | Vector` static tuples until other candidate parameters have been checked, allowing valid alternative overloads to be selected.
 - Use an explicit internal ambiguity exception instead of branching on diagnostic text, with mixed-overload regression tests.
+
+## 0.93.3
+
+- Materialize omitted or explicit static Rotation arguments in inline source calls using Blender's native Input Rotation node, preserving canonical XYZ angles and typed socket connections.
+- Added inline Rotation regression coverage for argument binding, nested calls, grouped callers, and native geometry evaluation.
