@@ -6,13 +6,13 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
-from ..semantic.constants import TYPE_BOOL, TYPE_COLOR, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_STRING, TYPE_VECTOR
+from ..semantic.constants import TYPE_BOOL, TYPE_COLOR, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_ROTATION, TYPE_STRING, TYPE_VECTOR
 from ..nf_types import NFType
 from ..type_capabilities import REPEAT_ITEM_TYPES
 from ..errors import CompileError
 from ..compiler_identities import BindingId, InputDeclarationId
 from ..semantic.group_context import GroupContextSlot
-from .nodes import _bool_value, _color_value, _vector_value, _boolean_math, _combine_xyz_mixed, _compare, _int_value, _integer_math, _math, _new_node, _separate_xyz, _string_value, _switch, _value, _vector_math
+from .nodes import _bool_value, _color_value, _rotation_value, _vector_value, _boolean_math, _combine_xyz_mixed, _compare, _int_value, _integer_math, _math, _new_node, _separate_xyz, _string_value, _switch, _value, _vector_math
 from .geometry import (
     _capture_attribute_geometry,
     _cube_geometry,
@@ -569,6 +569,8 @@ def _inline_constant_value(context, typ, value, x, y):
         return _vector_value(context.group, value, x, y)
     if typ is TYPE_COLOR:
         return _color_value(context.group, value, x, y)
+    if typ is TYPE_ROTATION:
+        return _rotation_value(context.group, value, x, y)
     raise CompileError(f"Internal error: unsupported inline default of type {typ}")
 
 
