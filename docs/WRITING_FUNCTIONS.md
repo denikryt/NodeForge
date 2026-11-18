@@ -14,7 +14,7 @@ def move(
 
 Positional arguments follow parameter order. Inputs appear in that order until `panel(...)` groups or reorders them. `geometry` is required in an explicit call; `offset` has a default. The parameter identifier `offset` is also its keyword name. `Vector["Translation"]` changes only the Blender socket label. Keywords match parameter identifiers exactly, including case. Every runtime parameter needs an explicit type annotation, including parameters with defaults. The final compiler-only `__inline__` parameter may infer `Bool` from its default; see [Inline Compilation](SYNTAX.md#inline-compilation).
 
-Function parameters support `Geometry`, `Float`, `Int`, `Bool`, `Vector`, `Color`, `Material`, `Object`, `String`, and `Bundle`. You can declare defaults for `Float`, `Int`, `Bool`, `Vector`, `Color`, and `String`. Parameters of `Geometry`, `Material`, `Object`, and `Bundle` are required.
+Function parameters support `Geometry`, `Float`, `Int`, `Bool`, `Vector`, `Color`, `Rotation`, `Material`, `Object`, `String`, and `Bundle`. You can declare defaults for `Float`, `Int`, `Bool`, `Vector`, `Color`, `Rotation`, and `String`. Parameters of `Geometry`, `Material`, `Object`, and `Bundle` are required.
 
 A `Color` default is `(R, G, B, A)`, with four finite nonnegative numeric components. Blender stores each component as a 32-bit float. Alpha is retained independently; finite HDR values above `1.0` are valid. For example:
 
@@ -24,6 +24,22 @@ def tint(value: Color = (0.2, 0.3, 0.4, 0.75)) -> Color:
 ```
 
 `Color` values travel through group sockets and functions. Use `node()` to obtain or connect physical Color sockets; see [Raw Blender node construction](BUILTINS.md#raw-blender-node-construction).
+
+A `Rotation` default supplies three XYZ Euler angles in radians. Each component must be a finite number representable as a 32-bit float; negative angles and values greater than a full revolution are valid. `.nf` integer literals and module constants retain the language's signed Int32 limits. The parameter and return value use Blender `NodeSocketRotation` sockets:
+
+```python
+def keep_rotation(value: Rotation = (0.0, -0.5, 7.0)) -> Rotation:
+    return value
+```
+
+Runtime `Rotation` and `Vector` are distinct. To convert a runtime Euler `Vector` to a `Rotation`, use Blender's Euler to Rotation node explicitly:
+
+```python
+def as_rotation(euler: Vector) -> Rotation:
+    return node("FunctionNodeEulerToRotation",
+                inputs={ID("Euler"): euler}, output=ID("Rotation"), typ=Rotation)
+```
+
 
 ```python
 result = move(cube(1.0), offset=vector(0, 0, 2))

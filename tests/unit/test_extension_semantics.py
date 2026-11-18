@@ -184,3 +184,85 @@ def test_mixed_source_interface_owner_is_rejected_before_source_preparation(tmp_
     root = ast.parse("hybrid(1.0)", mode="eval").body
     with pytest.raises(Exception, match=r"unsupported mixed source\.nf \+ interface\.py package owner"):
         analyze_expression(root, environment)
+
+
+def _rotation_static_registry(tmp_path, *, include_vector=False, union=False, mode="COMPILE_TIME_ONLY"):
+    """Create one executable Rotation/Vector backend extension family."""
+    if union:
+        annotation = 'Rotation | Vector'
+        declarations = f'def orient(value: Annotated[{annotation}, EvaluationMode.COMPILE_TIME_ONLY]) -> Rotation: ...'
+    elif include_vector:
+        declarations = '''@overload
+
+def orient(value: Annotated[Rotation, EvaluationMode.COMPILE_TIME_ONLY]) -> Rotation: ...
+@overload
+
+def orient(value: Annotated[Vector, EvaluationMode.COMPILE_TIME_ONLY]) -> Vector: ...
+def orient(*args, **kwargs): ...'''
+    else:
+        declarations = 'def orient(value: Annotated[Rotation, EvaluationMode.COMPILE_TIME_ONLY]) -> Rotation: ...'
+    declarations = declarations.replace('EvaluationMode.COMPILE_TIME_ONLY', f'EvaluationMode.{mode}')
+    (tmp_path / 'interface.py').write_text(
+        'from typing import Annotated, overload\n'
+        'from NodeForge import Rotation, Vector, EvaluationMode\n'
+        'EXTENSION_API = 2\nEXTENSIONS = {"orient": ".operations:orient"}\n'
+        + declarations + '\n', encoding='utf-8'
+    )
+    (tmp_path / 'operations.py').write_text('def orient(context, value): return None\n', encoding='utf-8')
+    session = ExtensionOwnerSession(capture_owner_code_snapshot(('system','vendor.demo','rotation'),tmp_path))
+    registry = ExtensionRegistry((session,))
+    return registry, next(iter(session.normalize_interface()[0]))
+
+
+def test_static_rotation_extension_call_uses_candidate_type_instead_of_vector(tmp_path):
+    """Only the declared Rotation signature can type an untyped triple as Rotation."""
+    from NodeForge.semantic.numeric_semantics import normalize_float_constant
+
+    registry, callable_id = _rotation_static_registry(tmp_path)
+    root = ast.parse('orient((0.1, -2, 7))', mode='eval').body
+    analyzed = analyze_expression(root, _environment(registry, callable_id, NFType.VECTOR)).facts[root].analyzed_call
+    assert len(analyzed.static_operands) == 1
+    assert analyzed.static_operands[0].value == (normalize_float_constant(0.1), -2.0, 7.0)
+    assert analyzed.result.typ is NFType.ROTATION
+
+
+def test_rotation_vector_static_overload_is_ambiguous_without_order_priority(tmp_path):
+    """Identically shaped Rotation and Vector candidates cannot use source-order tiebreak."""
+    registry, callable_id = _rotation_static_registry(tmp_path, include_vector=True)
+    root = ast.parse('orient((0.1, 0.2, 0.3))', mode='eval').body
+    with pytest.raises(CompileError, match='ambiguous'):
+        analyze_expression(root, _environment(registry, callable_id, NFType.FLOAT))
+
+
+def test_rotation_vector_union_static_operand_is_ambiguous(tmp_path):
+    """A direct NF_SET union also rejects an untyped three-number value."""
+    registry, callable_id = _rotation_static_registry(tmp_path, union=True)
+    root = ast.parse('orient((1, 2, 3))', mode='eval').body
+    with pytest.raises(CompileError, match='Ambiguous.*Vector and Rotation'):
+        analyze_expression(root, _environment(registry, callable_id, NFType.FLOAT))
+
+
+def test_rotation_static_operand_rejects_invalid_numeric_members(tmp_path):
+    """Bad triples fail candidate matching before being transported into IR."""
+    registry, callable_id = _rotation_static_registry(tmp_path)
+    root = ast.parse('orient((1, True, 3))', mode='eval').body
+    with pytest.raises(CompileError):
+        analyze_expression(root, _environment(registry, callable_id, NFType.FLOAT))
+
+
+@pytest.mark.parametrize('runtime_type, expected_index', [(NFType.ROTATION, 0), (NFType.VECTOR, 1)])
+def test_rotation_vector_runtime_overloads_use_exact_socket_types(tmp_path, runtime_type, expected_index):
+    """Already typed runtime inputs select their exact alternative without tuple inference."""
+    registry, callable_id = _rotation_static_registry(tmp_path, include_vector=True, mode='RUNTIME_ONLY')
+    root = ast.parse('orient(a)', mode='eval').body
+    analyzed = analyze_expression(root, _environment(registry, callable_id, runtime_type)).facts[root].analyzed_call
+    assert analyzed.extension_overload_index == expected_index
+    assert analyzed.runtime_operands[0].typ is runtime_type
+
+
+def test_rotation_runtime_overload_does_not_convert_vector(tmp_path):
+    """A Rotation-only backend cannot implicitly accept a Vector runtime source."""
+    registry, callable_id = _rotation_static_registry(tmp_path, mode='RUNTIME_ONLY')
+    root = ast.parse('orient(a)', mode='eval').body
+    with pytest.raises(CompileError, match='do not match'):
+        analyze_expression(root, _environment(registry, callable_id, NFType.VECTOR))

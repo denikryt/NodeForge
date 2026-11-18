@@ -33,6 +33,7 @@ TYPE_TOKEN_NAMES = {
     "Bool": TYPE_BOOL,
     "Vector": TYPE_VECTOR,
     "Color": TYPE_COLOR,
+    "Rotation": TYPE_ROTATION,
     "Geometry": TYPE_GEOMETRY,
     "Material": TYPE_MATERIAL,
     "Object": TYPE_OBJECT,

@@ -46,13 +46,25 @@ class ExtensionValue:
             raise TypeError("ExtensionValue.type_id must be an ExtensionTypeId")
 
 
+class AmbiguousStaticNFType(CompileError):
+    """An untyped static value matches multiple declared NF socket types."""
+
+
 def static_nf_type(value: object, *, declared: TypeSpec | None = None) -> NFType:
-    """Infer detached NodeForge type; RGBA tuples require an explicit Color declaration."""
+    """Infer detached NodeForge type, directing ambiguous numeric tuples by declaration."""
     if (declared is not None and declared.kind == "NF_SET"
             and NFType.COLOR in declared.nf_types
             and type(value) in {tuple, list} and len(value) == 4):
         canonicalize_group_input_default(NFType.COLOR, value)
         return NFType.COLOR
+    if (declared is not None and declared.kind == "NF_SET"
+            and type(value) in {tuple, list} and len(value) == 3):
+        candidates = declared.nf_types.intersection({NFType.VECTOR, NFType.ROTATION})
+        if len(candidates) > 1:
+            raise AmbiguousStaticNFType("Ambiguous three-component static value: declared Vector and Rotation both match")
+        if NFType.ROTATION in candidates:
+            canonicalize_group_input_default(NFType.ROTATION, value)
+            return NFType.ROTATION
     if type(value) is bool:
         return NFType.BOOL
     if type(value) is int:
@@ -250,8 +262,11 @@ def unpack_value(
                 raise TypeError("runtime_leaf_resolver must return an NFType for runtime leaves")
             select_declared_nf_type(spec, actual_type)
             return value
-        # Revalidate detached static state on reconstruction.
-        select_declared_nf_type(spec, static_nf_type(stored, declared=spec))
+        # Revalidate detached static state on reconstruction; Rotation has an
+        # explicitly declared tuple carrier (unlike a runtime ConstVector).
+        selected = select_declared_nf_type(spec, static_nf_type(stored, declared=spec))
+        if selected is NFType.ROTATION:
+            return canonicalize_group_input_default(selected, stored)
         return stored
     if spec.kind == "RECORD":
         if not isinstance(stored, ExtensionValue):

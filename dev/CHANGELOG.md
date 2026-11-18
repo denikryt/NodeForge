@@ -722,6 +722,7 @@ lifecycle.
 - Added qualified identity for nested Extension API v2 Functions owners and source-backed Library Add/Reload, plus nested completion and signature help in the editor.
 - Preserved existing flat package function calls and generated source-group ownership.
 
+
 ## 0.92.0
 
 - Added `__inline__` declaration defaults and call-site overrides for source-backed `.nf` functions, materializing native operations in the immediate caller tree while retaining typed inputs, outputs and independent nested-call materialization.
@@ -734,3 +735,19 @@ lifecycle.
 ## 0.92.2
 
 - Simplified compiler-only call modifier extraction by using one tri-state `__inline__` value and one reserved-keyword collection, preserving explicit `False` diagnostics and removing unused semantic imports.
+
+## 0.93.0
+
+- Exposed `Rotation` as a public `.nf` runtime type for typed function interfaces and raw Blender nodes, with finite binary32 XYZ Euler-angle defaults.
+- Added type-directed Rotation defaults and static value/overload selection to Extension API v2, preserving strict Vector/Rotation runtime identity.
+- Preserved representable Rotation group-node overrides across compatible updates while maintaining the existing comparison policy for other socket types.
+
+## 0.93.1
+
+- Preserve representable user-edited Rotation values on required group inputs during compatible Update Script, including edits smaller than the existing general-purpose float tolerance.
+- Added required-input Rotation regression coverage and the in-repository Rotation implementation plan.
+
+## 0.93.2
+
+- Defer backend Extension API overload ambiguity for declared `Rotation | Vector` static tuples until other candidate parameters have been checked, allowing valid alternative overloads to be selected.
+- Use an explicit internal ambiguity exception instead of branching on diagnostic text, with mixed-overload regression tests.

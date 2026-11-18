@@ -98,6 +98,7 @@ from ..extensions.semantics import (
     semantic_type_compatible,
 )
 from ..extensions.values import (
+    AmbiguousStaticNFType,
     ExtensionValue,
     select_declared_nf_type,
     static_nf_type,
@@ -471,10 +472,8 @@ def _analyze_extension_backend_call(
             )
         required_modes[id(source_node)] = next(iter(modes))
 
-    # Backend overloads use direct NF_SET arguments; candidate matching below
-    # decides whether a detached RGBA literal is accepted as Color.
-    static_color_spec = TypeSpec("NF_SET", frozenset({NFType.COLOR}))
-
+    # A source expression is evaluated only once; an untyped triple is
+    # interpreted relative to each candidate's declared NF_SET.
     # Each explicit source occurrence is acquired exactly once before type-based
     # candidate selection. Defaults are already detached contract data.
     acquired: dict[int, tuple[str, object, NFType]] = {}
@@ -485,8 +484,7 @@ def _analyze_extension_backend_call(
         except ConstEvalUnavailable as exc:
             raise CompileError(f"{name}() argument must be available at compile time") from exc
         if isinstance(selection, CompileTimeSelection):
-            actual_type = static_nf_type(selection.value, declared=static_color_spec)
-            acquired[id(source_node)] = ("static", selection.value, actual_type)
+            acquired[id(source_node)] = ("static", selection.value, None)
             continue
         if not isinstance(selection, RuntimeRequired):
             raise CompileError("Internal error: extension evaluation selector returned unsupported state")
@@ -494,10 +492,14 @@ def _analyze_extension_backend_call(
         actual_type = _require_runtime_type(fact, f"{name}() argument")
         acquired[id(source_node)] = ("runtime", source_node, actual_type)
 
+    deferred_ambiguity: AmbiguousStaticNFType | None = None
+
     def candidate_matches(item, *, exact: bool) -> bool:
-        """Return whether one bound overload candidate accepts all acquired types."""
+        """Match a complete overload, deferring declared static union ambiguity."""
+        nonlocal deferred_ambiguity
         _index, spec, bound = item
         parameters = {parameter.name: parameter for parameter in spec.parameters}
+        candidate_ambiguity: AmbiguousStaticNFType | None = None
         for parameter_name, value in bound.arguments.items():
             parameter = parameters[parameter_name]
             if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
@@ -506,13 +508,25 @@ def _analyze_extension_backend_call(
                 occurrences = (value,)
             for occurrence in occurrences:
                 if isinstance(occurrence, ast.AST):
-                    actual_type = acquired[id(occurrence)][2]
+                    representation, payload, actual_type = acquired[id(occurrence)]
+                    if representation == "static":
+                        try:
+                            actual_type = static_nf_type(payload, declared=parameter.type_spec)
+                        except AmbiguousStaticNFType as exc:
+                            # Other arguments can still make this candidate ineligible.
+                            candidate_ambiguity = exc
+                            continue
+                        except CompileError:
+                            return False
                 else:
                     if parameter.default_type is None:
                         raise CompileError("Internal error: extension bound default lost canonical type")
                     actual_type = parameter.default_type
                 if not type_spec_accepts_nf(parameter.type_spec, actual_type, exact=exact):
                     return False
+        if candidate_ambiguity is not None:
+            deferred_ambiguity = candidate_ambiguity
+            return False
         return True
 
     exact_candidates = [item for item in candidates if candidate_matches(item, exact=True)]
@@ -524,6 +538,8 @@ def _analyze_extension_backend_call(
         compatible = [item for item in candidates if candidate_matches(item, exact=False)]
         if len(compatible) != 1:
             if not compatible:
+                if deferred_ambiguity is not None:
+                    raise CompileError(f"{name}() {deferred_ambiguity}") from deferred_ambiguity
                 raise CompileError(f"{name}() argument types do not match any declared extension overload")
             raise CompileError(f"{name}() call is ambiguous between multiple compatible extension overloads")
         selected = compatible[0]
@@ -547,6 +563,7 @@ def _analyze_extension_backend_call(
                         AnalyzedCallOperand(parameter.name, actual_type, parameter_index, transport_variadic)
                     )
                 else:
+                    actual_type = static_nf_type(payload, declared=parameter.type_spec)
                     expected_type = select_declared_nf_type(parameter.type_spec, actual_type)
                     canonical = canonicalize_group_input_default(expected_type, payload)
                     static_operands.append(

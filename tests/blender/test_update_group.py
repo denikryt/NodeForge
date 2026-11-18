@@ -1004,3 +1004,157 @@ def nf_fixture(x: Float):
     compiler.update_expression_group(group, after)
     check([sock.name for sock in node.outputs] == ['Left', 'Right'], 'updated multi-output labels missing')
     check(len(wrapper.links) == 0, 'ambiguous multi-output rename reconnected unrelated output')
+
+
+@pytest.mark.parametrize('changed_angle', [1e-7, 1e-5])
+def test_rotation_update_preserves_binary32_user_edits_and_updates_untouched_defaults(changed_angle):
+    """Any representable Rotation edit survives while an untouched peer gets the new default."""
+    from NodeForge.blender.interface import _get_group_input_defaults, _get_group_input_declarations
+    from NodeForge.semantic.numeric_semantics import normalize_float_constant
+
+    before = '''def nf_fixture(angle: Rotation['Angle'] = (0.0, 0.0, 0.0)) -> Rotation:
+    return angle
+'''
+    after = '''def nf_fixture(angle: Rotation['Angle'] = (0.25, 0.0, 0.0)) -> Rotation:
+    return angle
+'''
+    group = compile_group(before, 'NFTest_RotationUpdate')
+    wrapper = bpy.data.node_groups.new('NFTest_RotationUpdateWrapper', 'GeometryNodeTree')
+    edited, untouched = (wrapper.nodes.new('GeometryNodeGroup') for _ in range(2))
+    edited.node_tree = untouched.node_tree = group
+    blender_update._apply_group_defaults_to_node(edited)
+    blender_update._apply_group_defaults_to_node(untouched)
+    assert edited.inputs['Angle'].bl_idname == 'NodeSocketRotation'
+    assert tuple(untouched.inputs['Angle'].default_value) == (0.0, 0.0, 0.0)
+    edited.inputs['Angle'].default_value = (changed_angle, 0.0, 0.0)
+    assert tuple(edited.inputs['Angle'].default_value)[0] == normalize_float_constant(changed_angle)
+
+    converter = wrapper.nodes.new('FunctionNodeRotationToEuler')
+    wrapper.links.new(edited.outputs[0], converter.inputs['Rotation'])
+    declaration_before = _get_group_input_declarations(group)
+    assert all(link.is_valid for link in wrapper.links)
+
+    compiler.update_expression_group(group, after)
+    assert tuple(edited.inputs['Angle'].default_value) == (normalize_float_constant(changed_angle), 0.0, 0.0)
+    assert tuple(untouched.inputs['Angle'].default_value) == (0.25, 0.0, 0.0)
+    assert edited.inputs['Angle'].bl_idname == untouched.inputs['Angle'].bl_idname == 'NodeSocketRotation'
+    assert len(wrapper.links) == 1 and all(link.is_valid for link in wrapper.links)
+    defaults = _get_group_input_defaults(group)
+    assert len(defaults) == 1
+    assert next(iter(defaults.values()))['nf_type'] == 'ROTATION'
+    assert tuple(next(iter(defaults.values()))['default']) == (0.25, 0.0, 0.0)
+    assert set(_get_group_input_declarations(group)) == set(declaration_before)
+
+
+
+@pytest.mark.parametrize('changed_angle', [0.0, 1e-7, 1e-5, 0.75])
+def test_required_rotation_update_retains_representable_edits(changed_angle):
+    """Required Rotation inputs detect tiny edits against Blender's native zero default."""
+    from NodeForge.blender.interface import _get_group_input_declarations
+    from NodeForge.semantic.numeric_semantics import normalize_float_constant
+
+    before = "def nf_fixture(angle: Rotation['Angle']) -> Rotation:\n    return angle\n"
+    after = ("def nf_fixture(angle: Rotation['Angle']) -> Rotation:\n"
+             "    rerouted = angle\n    return rerouted\n")
+    group = compile_group(before, 'NFTest_RequiredRotationUpdate')
+    wrapper = bpy.data.node_groups.new('NFTest_RequiredRotationWrapper', 'GeometryNodeTree')
+    edited, untouched = (wrapper.nodes.new('GeometryNodeGroup') for _ in range(2))
+    edited.node_tree = untouched.node_tree = group
+    declarations = _get_group_input_declarations(group)
+    assert len(declarations) == 1
+    record = next(iter(declarations.values()))
+    assert record['nf_type'] == 'ROTATION' and record['has_default'] is False
+    assert record['default'] is None
+    assert edited.inputs['Angle'].bl_idname == 'NodeSocketRotation'
+    assert tuple(untouched.inputs['Angle'].default_value) == (0.0, 0.0, 0.0)
+
+    edited.inputs['Angle'].default_value = (changed_angle, 0.0, 0.0)
+    expected = (normalize_float_constant(changed_angle), 0.0, 0.0)
+    assert tuple(edited.inputs['Angle'].default_value) == expected
+    converter = wrapper.nodes.new('FunctionNodeRotationToEuler')
+    wrapper.links.new(edited.outputs[0], converter.inputs['Rotation'])
+    assert all(link.is_valid for link in wrapper.links)
+
+    compiler.update_expression_group(group, after)
+    assert tuple(edited.inputs['Angle'].default_value) == expected
+    assert tuple(untouched.inputs['Angle'].default_value) == (0.0, 0.0, 0.0)
+    assert len(wrapper.links) == 1 and all(link.is_valid for link in wrapper.links)
+    assert set(_get_group_input_declarations(group)) == set(declarations)
+
+
+def test_rotation_override_compare_rejects_malformed_metadata_and_keeps_other_type_tolerance():
+    """Missing/malformed triples are captured conservatively; Float comparison stays tolerant."""
+    from NodeForge.blender.update import _rotation_defaults_equal, _defaults_equal
+    from NodeForge.semantic.numeric_semantics import normalize_float_constant
+
+    assert _rotation_defaults_equal((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+    assert not _rotation_defaults_equal((normalize_float_constant(1e-7), 0.0, 0.0), (0.0, 0.0, 0.0))
+    for malformed in [None, (0.0, 0.0), (0.0, 0.0, 0.0, 1.0), (False, 0.0, 0.0),
+                      (float('nan'), 0.0, 0.0), ('0', 0.0, 0.0)]:
+        assert not _rotation_defaults_equal((0.0, 0.0, 0.0), malformed)
+    assert _defaults_equal((normalize_float_constant(1e-7), 0.0, 0.0), (0.0, 0.0, 0.0))
+
+
+@pytest.mark.parametrize('flag, diagnostic', [
+    ('_TEST_BACKUP_COPY_FAIL_AFTER_RESET', 'rollback-backup copy failure'),
+    ('_TEST_CUTOVER_FAIL_AFTER_RESET', 'Injected NodeForge cutover failure'),
+])
+def test_rotation_update_failure_keeps_group_node_user_override(flag, diagnostic):
+    """Backup and cutover failures retain authoritative Rotation values and links."""
+    from NodeForge.blender import group_backend
+    from NodeForge.semantic.numeric_semantics import normalize_float_constant
+
+    before = '''def nf_fixture(angle: Rotation = (0.0, 0.0, 0.0)) -> Rotation:
+    return angle
+'''
+    after = '''def nf_fixture(angle: Rotation = (0.5, 0.0, 0.0)) -> Rotation:
+    return angle
+'''
+    group = compile_group(before, 'NFTest_RotationUpdateFailure')
+    wrapper = bpy.data.node_groups.new('NFTest_RotationFailureWrapper', 'GeometryNodeTree')
+    node = wrapper.nodes.new('GeometryNodeGroup')
+    node.node_tree = group
+    blender_update._apply_group_defaults_to_node(node)
+    node.inputs[0].default_value = (1e-7, 0.0, 0.0)
+    source_pointer = group.as_pointer()
+    setattr(group_backend, flag, True)
+    try:
+        with pytest.raises(RuntimeError, match=diagnostic):
+            compiler.update_expression_group(group, after)
+    finally:
+        setattr(group_backend, flag, False)
+    assert group.as_pointer() == source_pointer
+    assert tuple(node.inputs[0].default_value) == (normalize_float_constant(1e-7), 0.0, 0.0)
+    assert node.node_tree == group
+    compiler.update_expression_group(group, after)
+    assert tuple(node.inputs[0].default_value) == (normalize_float_constant(1e-7), 0.0, 0.0)
+
+
+def test_rotation_default_and_user_edit_persist_after_blend_reopen(tmp_path):
+    """A native .blend retains the typed default and small per-instance override."""
+    from NodeForge.blender.interface import _get_group_input_defaults
+    from NodeForge.semantic.numeric_semantics import normalize_float_constant
+
+    before = "def nf_fixture(angle: Rotation = (0.0, 0.0, 0.0)) -> Rotation:\n    return angle\n"
+    after = "def nf_fixture(angle: Rotation = (0.25, 0.0, 0.0)) -> Rotation:\n    return angle\n"
+    group = compile_group(before, 'NFTest_RotationReopen')
+    group.use_fake_user = True
+    wrapper = bpy.data.node_groups.new('NFTest_RotationReopenWrapper', 'GeometryNodeTree')
+    wrapper.use_fake_user = True
+    node = wrapper.nodes.new('GeometryNodeGroup')
+    node.node_tree = group
+    blender_update._apply_group_defaults_to_node(node)
+    node.inputs[0].default_value = (1e-7, 0.0, 0.0)
+    filename = str(tmp_path / 'rotation_reopen.blend')
+    bpy.ops.wm.save_as_mainfile(filepath=filename)
+    bpy.ops.wm.open_mainfile(filepath=filename)
+    restored_group = bpy.data.node_groups['NFTest_RotationReopen']
+    restored_node = next(n for n in bpy.data.node_groups['NFTest_RotationReopenWrapper'].nodes
+                         if n.bl_idname == 'GeometryNodeGroup')
+    assert restored_node.node_tree == restored_group
+    assert restored_node.inputs[0].bl_idname == 'NodeSocketRotation'
+    assert tuple(restored_node.inputs[0].default_value) == (normalize_float_constant(1e-7), 0.0, 0.0)
+    assert next(iter(_get_group_input_defaults(restored_group).values()))['nf_type'] == 'ROTATION'
+    compiler.update_expression_group(restored_group, after)
+    assert tuple(restored_node.inputs[0].default_value) == (normalize_float_constant(1e-7), 0.0, 0.0)
+    assert all(link.is_valid for link in restored_group.links)

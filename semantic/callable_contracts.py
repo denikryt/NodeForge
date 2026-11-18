@@ -38,7 +38,7 @@ class GroupInputContract:
         ):
             raise TypeError("GroupInputContract.interface_origin must be a compiler input identity or None")
         if self.has_default:
-            if self.typ not in {NFType.FLOAT, NFType.INT, NFType.BOOL, NFType.VECTOR, NFType.COLOR, NFType.STRING}:
+            if self.typ not in {NFType.FLOAT, NFType.INT, NFType.BOOL, NFType.VECTOR, NFType.COLOR, NFType.ROTATION, NFType.STRING}:
                 raise ValueError("Only scalar/vector/string group inputs may own semantic defaults")
         elif self.default is not None:
             raise ValueError("Group input without semantic default must store default=None")
@@ -184,6 +184,18 @@ def canonicalize_group_input_default(typ: NFType, value: object) -> object:
         return value
     if typ is NFType.COLOR:
         return canonicalize_color_components(value)
+    if typ is NFType.ROTATION:
+        if type(value) not in {tuple, list} or len(value) != 3:
+            raise CompileError("Rotation default must contain exactly three numeric XYZ components")
+        components = []
+        for index, component in enumerate(value):
+            if type(component) not in {int, float}:
+                raise CompileError(f"Rotation default component {index} must be numeric (not Bool)")
+            try:
+                components.append(normalize_float_constant(component))
+            except CompileError as exc:
+                raise CompileError(f"Rotation default component {index}: {exc}") from exc
+        return tuple(components)
     if typ is NFType.VECTOR:
         try:
             values = tuple(value)

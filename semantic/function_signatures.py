@@ -189,7 +189,12 @@ def compile_function_signature(
             try:
                 evaluated = _const_eval(expression, values)
             except ConstEvalUnavailable as exc:
-                raise CompileError(f"{fn.name}() parameter {name!r} requires a compile-time default") from exc
+                detail = "Rotation default " if typ is NFType.ROTATION else ""
+                raise CompileError(f"{fn.name}() parameter {name!r} {detail}requires a compile-time default") from exc
+            except CompileError as exc:
+                if typ is NFType.ROTATION:
+                    raise CompileError(f"{fn.name}() parameter {name!r} Rotation default: {exc}") from exc
+                raise
             try:
                 default = canonicalize_group_input_default(typ, evaluated)
             except CompileError as exc:

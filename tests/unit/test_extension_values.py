@@ -456,3 +456,41 @@ def test_declared_color_static_value_rejects_invalid_components(rgba):
     color_spec = TypeSpec('NF_SET', frozenset({NFType.COLOR}))
     with pytest.raises(CompileError):
         pack_value(color_spec, rgba, registry=None, active_runtime_refs={})
+
+
+def test_rotation_static_values_are_selected_from_declared_context():
+    """Untyped triples remain Vector; unique declared Rotation selects its exact type."""
+    rotation = TypeSpec("NF_SET", frozenset({NFType.ROTATION}))
+    vector = TypeSpec("NF_SET", frozenset({NFType.VECTOR}))
+    ambiguous = TypeSpec("NF_SET", frozenset({NFType.ROTATION, NFType.VECTOR}))
+    angles = [0.1, -0.2, 7]
+    assert static_nf_type(angles) is NFType.VECTOR
+    assert static_nf_type(angles, declared=rotation) is NFType.ROTATION
+    assert static_nf_type(angles, declared=vector) is NFType.VECTOR
+    with pytest.raises(CompileError, match="Ambiguous.*Vector and Rotation"):
+        static_nf_type(angles, declared=ambiguous)
+    with pytest.raises(CompileError, match="Rotation default component 1"):
+        static_nf_type((1, True, 3), declared=rotation)
+
+
+def test_rotation_static_values_are_detached_canonical_tuples_on_pack_and_unpack():
+    """Static Rotation carrier survives round-trip without Blender mathutils objects."""
+    from NodeForge.semantic.numeric_semantics import normalize_float_constant
+
+    rotation = TypeSpec("NF_SET", frozenset({NFType.ROTATION}))
+    packed = pack_value(rotation, [0.1, -2, 2147483648], registry=None, active_runtime_refs={})
+    assert type(packed) is tuple
+    assert packed == (normalize_float_constant(0.1), -2.0, 2147483648.0)
+    assert unpack_value(rotation, packed, registry=None, runtime_leaf_resolver=lambda _: None) == packed
+    with pytest.raises(CompileError):
+        pack_value(rotation, [1, 2], registry=None, active_runtime_refs={})
+    with pytest.raises(CompileError):
+        unpack_value(rotation, (1, False, 3), registry=None, runtime_leaf_resolver=lambda _: None)
+    with pytest.raises(CompileError):
+        pack_value(rotation, RuntimeRef(object(), NFType.ROTATION), registry=None, active_runtime_refs={})
+    token = object()
+    assert pack_value(rotation, RuntimeRef(token, NFType.ROTATION), registry=None,
+                      active_runtime_refs={token: (2, NFType.ROTATION)}) == ExtensionDependencySlot(2, NFType.ROTATION)
+    with pytest.raises(CompileError):
+        pack_value(rotation, RuntimeRef(token, NFType.VECTOR), registry=None,
+                   active_runtime_refs={token: (2, NFType.VECTOR)})
