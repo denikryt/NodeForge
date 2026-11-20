@@ -125,9 +125,11 @@ def test_rotation_public_token_does_not_expand_other_operation_capabilities():
         SWITCH_INPUT_TYPES, REPEAT_ITEM_TYPES, CAPTURE_ITEM_TYPES, ATTRIBUTE_DATA_TYPES,
     )
 
+    assert CAPTURE_ITEM_TYPES[NFType.ROTATION] == "ROTATION"
+    for capability in (SWITCH_INPUT_TYPES, REPEAT_ITEM_TYPES, ATTRIBUTE_DATA_TYPES):
+        assert NFType.ROTATION not in capability
     for capability in (SWITCH_INPUT_TYPES, REPEAT_ITEM_TYPES,
                        CAPTURE_ITEM_TYPES, ATTRIBUTE_DATA_TYPES):
-        assert NFType.ROTATION not in capability
         assert NFType.VECTOR in capability
     assert NFType.COLOR in SWITCH_INPUT_TYPES
     assert NFType.COLOR in ATTRIBUTE_DATA_TYPES

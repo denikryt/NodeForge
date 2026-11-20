@@ -624,6 +624,19 @@ def test_ir_capable_builtin_families_have_blender_independent_success_contracts(
     assert all(operand.typ in {TYPE_BOOL, TYPE_BUNDLE, TYPE_FLOAT, TYPE_GEOMETRY, TYPE_INT, TYPE_MATERIAL, TYPE_STRING, TYPE_VECTOR} for operand in analyzed.operands)
 
 
+def test_capture_attribute_rotation_inference_and_explicit_override():
+    """Rotation remains a real NFType; explicit token selects the same exact result."""
+    for source in ('capture_attribute(geo, rot)',
+                   'capture_attribute(geo, rot, type="ROTATION")'):
+        analyzed = _analyze('capture_attribute', source,
+                            types={'geo': TYPE_GEOMETRY, 'rot': TYPE_ROTATION})
+        assert isinstance(analyzed.result, TupleCallResult)
+        assert analyzed.result.types == (TYPE_GEOMETRY, TYPE_ROTATION)
+    with pytest.raises(CompileError, match='supports Float'):
+        _analyze('capture_attribute', 'capture_attribute(geo, rot, type="QUATERNION")',
+                 types={'geo': TYPE_GEOMETRY, 'rot': TYPE_ROTATION})
+
+
 def test_capture_attribute_success_is_structural_and_typed_without_blender():
     analyzed = _analyze(
         "capture_attribute",

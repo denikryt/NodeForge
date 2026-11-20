@@ -34,6 +34,7 @@ CAPTURE_ITEM_TYPES = MappingProxyType({
     NFType.BOOL: "BOOLEAN",
     NFType.VECTOR: "VECTOR",
     NFType.COLOR: "RGBA",
+    NFType.ROTATION: "ROTATION",
 })
 
 ATTRIBUTE_DATA_TYPES = MappingProxyType({

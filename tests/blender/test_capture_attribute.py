@@ -105,6 +105,7 @@ def nf_fixture():
     ('FLOAT', 'FLOAT', 'NodeSocketFloat'),
     ('VECTOR', 'FLOAT_VECTOR', 'NodeSocketVector'),
     ('RGBA', 'FLOAT_COLOR', 'NodeSocketColor'),
+    ('ROTATION', 'QUATERNION', 'NodeSocketRotation'),
 ])
 @pytest.mark.parametrize('role', ['backup', 'cutover'])
 @pytest.mark.parametrize('linked', [True, False])
@@ -130,17 +131,19 @@ def test_capture_copy_preserves_linked_and_unlinked_item_contract(
     assert all(link.is_valid for link in dst.links)
 
 
-def test_capture_copy_fails_on_unknown_data_type_without_modifying_authoritative_source():
-    """An unsupported, unlinked item aborts rather than silently disappearing."""
-    src = bpy.data.node_groups.new('NFTest_capture_bad_source','GeometryNodeTree')
+def test_capture_copy_restores_persisted_quaternion_without_modifying_source():
+    """A persisted QUATERNION item recreates via ROTATION, even without links."""
+    src = bpy.data.node_groups.new('NFTest_capture_rotation_source', 'GeometryNodeTree')
     cap = src.nodes.new('GeometryNodeCaptureAttribute')
-    cap.capture_items.new('ROTATION','UnsupportedNow')
+    cap.capture_items.new('ROTATION', 'Spin')
     assert cap.capture_items[0].data_type == 'QUATERNION'
-    dst = bpy.data.node_groups.new('NFTest_capture_bad_destination','GeometryNodeTree')
-    with pytest.raises(CompileError, match='unsupported persisted data type'):
-        blender_group_backend._copy_group_contents(src,dst,copy_role='backup')
-    assert len(cap.capture_items)==1
-    assert cap.capture_items[0].data_type == 'QUATERNION'
+    dst = bpy.data.node_groups.new('NFTest_capture_rotation_destination', 'GeometryNodeTree')
+    blender_group_backend._copy_group_contents(src, dst, copy_role='backup')
+    copied, = [node for node in dst.nodes if node.bl_idname == 'GeometryNodeCaptureAttribute']
+    assert [(item.name, item.data_type) for item in copied.capture_items] == [('Spin', 'QUATERNION')]
+    assert copied.inputs['Spin'].bl_idname == 'NodeSocketRotation'
+    assert copied.outputs['Spin'].bl_idname == 'NodeSocketRotation'
+    assert [(item.name, item.data_type) for item in cap.capture_items] == [('Spin', 'QUATERNION')]
 
 
 def test_capture_root_update_reconstruction_uses_same_checked_helper():
@@ -149,9 +152,12 @@ def test_capture_root_update_reconstruction_uses_same_checked_helper():
     src = bpy.data.node_groups.new('NFTest_capture_root_reconstruct','GeometryNodeTree')
     old=src.nodes.new('GeometryNodeCaptureAttribute')
     old.capture_items.new('RGBA','Tint')
+    old.capture_items.new('ROTATION','Spin')
     backup = bpy.data.node_groups.new('NFTest_capture_backup','GeometryNodeTree')
     cloned=backup.nodes.new('GeometryNodeCaptureAttribute')
     cloned.name=old.name
     root_update._sync_capture_attribute_dynamic_items(src, {old.name:cloned})
-    assert [(item.name,item.data_type) for item in cloned.capture_items] == [('Tint','FLOAT_COLOR')]
+    assert [(item.name,item.data_type) for item in cloned.capture_items] == [('Tint','FLOAT_COLOR'), ('Spin','QUATERNION')]
     assert cloned.outputs['Tint'].bl_idname == 'NodeSocketColor'
+    assert cloned.inputs['Spin'].bl_idname == 'NodeSocketRotation'
+    assert cloned.outputs['Spin'].bl_idname == 'NodeSocketRotation'

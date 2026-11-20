@@ -38,6 +38,7 @@ def test_supported_operation_tokens_match_pre_color_contract():
     assert dict(CAPTURE_ITEM_TYPES) == {
         NFType.FLOAT: 'FLOAT', NFType.INT: 'INT', NFType.BOOL: 'BOOLEAN',
         NFType.VECTOR: 'VECTOR', NFType.COLOR: 'RGBA',
+        NFType.ROTATION: 'ROTATION',
     }
     assert dict(ATTRIBUTE_DATA_TYPES) == {
         NFType.FLOAT: 'FLOAT', NFType.INT: 'INT', NFType.VECTOR: 'FLOAT_VECTOR',

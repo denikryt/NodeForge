@@ -765,3 +765,8 @@ lifecycle.
 - Resolve exact ordered runtime result types during semantic analysis and transport them through existing typed Call IR to the Python backend.
 - Validate dynamic extension results against call-specific IR arity, NF types, socket direction, physical type and current-group ownership before publishing generated candidates.
 - Preserved fixed result declarations, semantic extension modes, owner snapshots, and existing root-tree physical extension restrictions.
+
+## 0.95.0
+
+- Supported Rotation Capture Attribute items in core semantic typing, Blender materialization and transactional group/root copying, including persisted QUATERNION item reconstruction and dynamic socket defaults.
+- Added Rotation Capture regression coverage for item sockets, group copying, updates and mixed fields.
