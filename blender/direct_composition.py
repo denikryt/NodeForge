@@ -10,7 +10,7 @@ from ..errors import CompileError
 from ..function_instances import FunctionCompilationTrace
 from .function_materializer import FunctionMaterializationContext, FunctionMaterializer
 from .group_backend import BlenderGroupBuildTransaction
-from .ir_lowering import BlenderIRLoweringContext, lower_body
+from .ir_lowering import BlenderIRLoweringContext, RootInputEndpoint, lower_body
 
 
 def validate_prepared_direct(prepared, target):
@@ -28,7 +28,7 @@ def validate_prepared_direct(prepared, target):
 
 
 def compose_prepared_initial(prepared, target, backend, session, *, source_module,
-                             transaction=None):
+                             transaction=None, root_input_endpoint=None):
     """Lower prepared source in place; a supplied nested transaction remains caller-owned.
 
     Every attempt cleans up only its own newly inserted root nodes. An
@@ -55,9 +55,11 @@ def compose_prepared_initial(prepared, target, backend, session, *, source_modul
         ),
         helper_namespace=target.name,
         extension_registry=session.resolved_environment.extension_registry,
+        root_input_endpoint=root_input_endpoint if root_input_endpoint is not None else RootInputEndpoint(),
     )
     try:
         if prepared.body.statements:
+            # NODEFORGE-TEMP-ISSUE61-ROOT-STAGING: Root-producing Compile still lowers in the authoritative tree while physical Extension API v2 is rejected in root. Issue #61 PR 2 must replace this call with native-copy private staging and strict subgraph transfer; delete this marker when no backend can receive the authoritative root.
             lower_body(context, prepared.body, {}, base_depth=1)
         else:
             _place_definition_entries(prepared, context, source_module)

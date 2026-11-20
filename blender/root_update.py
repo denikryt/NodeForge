@@ -331,6 +331,7 @@ def _fail(error, failures, *, possible_change):
 def replace_prepared_root(prepared, target, backend, session, *, source_module):
     """Stage exactly once into `target`, cut over and commit nested groups last."""
     from .direct_composition import compose_prepared_initial, validate_prepared_direct
+    from .ir_lowering import RootInputEndpoint
 
     validate_base_target(target)
     reject_node_local_animation(target)
@@ -349,6 +350,7 @@ def replace_prepared_root(prepared, target, backend, session, *, source_module):
                        if node.parent is not None and node.parent.as_pointer() in old_ptrs}
     boundary = _boundary(target)
     transaction = BlenderGroupBuildTransaction()
+    endpoint = RootInputEndpoint()
     backup = None
     cutover_started = False
     io_detach_started = False
@@ -356,11 +358,18 @@ def replace_prepared_root(prepared, target, backend, session, *, source_module):
         backup = target.copy()
         mark_transaction_private(backup)
         compose_prepared_initial(prepared, target, backend, session,
-                                 source_module=source_module, transaction=transaction)
+                                 source_module=source_module, transaction=transaction,
+                                 root_input_endpoint=endpoint)
         created = tuple(node for node in target.nodes if node.as_pointer() not in preexisting_ptrs)
-        if any(node.bl_idname in _IO_TYPES for node in created):
-            raise CompileError('Direct Update cannot insert new structural Group Input/Output nodes')
-        new = created
+        allowed_input = (endpoint.node.as_pointer() if endpoint.created_by_attempt
+                         and endpoint.node is not None else None)
+        if any(node.bl_idname == 'NodeGroupOutput'
+               or (node.bl_idname == 'NodeGroupInput' and node.as_pointer() != allowed_input)
+               for node in created):
+            raise CompileError('Compile cannot insert unapproved structural Group Input/Output nodes')
+        if _interface_signature(target) != interface_before:
+            raise CompileError('Compile changed the root interface during staging')
+        new = tuple(node for node in created if node.bl_idname not in _IO_TYPES)
         matched = _matches(old, new)
         for node in io_nodes:
             if node.parent is not None and node.parent.as_pointer() in old_ptrs:

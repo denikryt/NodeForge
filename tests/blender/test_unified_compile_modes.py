@@ -125,3 +125,87 @@ def test_unified_definitions_require_stable_origin_even_with_root_statements():
     with pytest.raises(CompileError, match='stable module_context'):
         compiler.compile_source_in_tree(source, root)
     assert len(root.nodes) == 1 and root.nodes[0].as_pointer() == manual.as_pointer()
+
+
+def _radius_root(name, *, with_input):
+    """Make a base interface whose Radius native socket identifier is not zero."""
+    tree = _base(name)
+    unused = tree.interface.new_socket(name='Unused', in_out='INPUT', socket_type='NodeSocketFloat')
+    item = tree.interface.new_socket(name='Radius', in_out='INPUT', socket_type='NodeSocketFloat')
+    assert item.identifier != unused.identifier
+    tree.interface.remove(unused)
+    inlet = tree.nodes.new('NodeGroupInput') if with_input else None
+    return tree, inlet, item.identifier
+
+
+def test_canonical_root_input_reuses_manual_node_and_properties():
+    """Repeated raw reads never edit an existing user's Group Input node."""
+    root, inlet, identifier = _radius_root('PR1_existing_group_input', with_input=True)
+    inlet.label = 'Keep label'
+    inlet.location = (312, 450)
+    pointer = inlet.as_pointer()
+    code = '''a = node("NodeGroupInput", output="Radius", typ=Float)
+b = node("NodeGroupInput", output="Radius", typ=Float)
+c = a + b
+'''
+    for _ in range(2):
+        compiler.compile_source_in_tree(code, root)
+        inputs = [node for node in root.nodes if node.bl_idname == 'NodeGroupInput']
+        assert len(inputs) == 1 and inputs[0].as_pointer() == pointer
+        assert inputs[0].label == 'Keep label' and tuple(inputs[0].location) == (312, 450)
+        assert inputs[0].outputs['Radius'].identifier == identifier
+        math = [node for node in root.nodes if node.bl_idname == 'ShaderNodeMath']
+        assert math and all(node.inputs[0].is_linked for node in math if node.operation == 'ADD')
+    with pytest.raises(CompileError, match='differs'):
+        compiler.compile_source_in_tree(
+            'a = node("NodeGroupInput", props={"label":"Wrong"}, output="Radius", typ=Float)', root,
+        )
+    assert inlet.label == 'Keep label' and inlet.as_pointer() == pointer
+
+
+def test_canonical_root_input_creates_one_and_remains_across_recompiles():
+    """A missing physical Input is created lazily then reused by subsequent Compile."""
+    root, _, identifier = _radius_root('PR1_missing_group_input', with_input=False)
+    source = 'a = node("NodeGroupInput", props={"label": "Created"}, output="Radius", typ=Float)'
+    compiler.compile_source_in_tree(source, root)
+    inlet, = [node for node in root.nodes if node.bl_idname == 'NodeGroupInput']
+    pointer = inlet.as_pointer()
+    assert inlet.label == 'Created' and inlet.outputs['Radius'].identifier == identifier
+    compiler.compile_source_in_tree(source, root)
+    assert [n.as_pointer() for n in root.nodes if n.bl_idname == 'NodeGroupInput'] == [pointer]
+    with pytest.raises(CompileError):
+        compiler.compile_source_in_tree('a = node("NodeGroupInput", output="NO_SUCH_SOCKET", typ=Float)', root)
+    assert [n.as_pointer() for n in root.nodes if n.bl_idname == 'NodeGroupInput'] == [pointer]
+
+
+def test_nested_inline_raw_input_shares_root_endpoint():
+    """Inline source expansion references the caller's one physical input."""
+    root, inlet, identifier = _radius_root('PR1_inline_group_input', with_input=True)
+    code = '''def read_radius(__inline__=True) -> Float:
+    return node("NodeGroupInput", output="Radius", typ=Float)
+a = read_radius()
+b = read_radius()
+c = a + b
+'''
+    compiler.compile_source_in_tree(code, root, module_context='text:pr1-inline')
+    assert [n.as_pointer() for n in root.nodes if n.bl_idname == 'NodeGroupInput'] == [inlet.as_pointer()]
+    assert inlet.outputs['Radius'].identifier == identifier
+
+
+def test_unapproved_group_output_is_rejected_and_rolled_back(monkeypatch):
+    """A structural Group Output cannot be smuggled into root cutover."""
+    from NodeForge.blender import ir_lowering
+    root, inlet, _ = _radius_root('PR1_rogue_output', with_input=True)
+    ptrs = {node.as_pointer() for node in root.nodes}
+    old = ir_lowering._cube_geometry
+
+    def rogue(*args, **kwargs):
+        """Inject a forbidden structural output after an otherwise valid geometry call."""
+        result = old(*args, **kwargs)
+        args[0].nodes.new('NodeGroupOutput')
+        return result
+
+    monkeypatch.setattr(ir_lowering, '_cube_geometry', rogue)
+    with pytest.raises(CompileError, match='unapproved structural'):
+        compiler.compile_source_in_tree('a = cube(1)', root)
+    assert {node.as_pointer() for node in root.nodes} == ptrs
