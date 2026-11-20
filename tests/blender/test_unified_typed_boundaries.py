@@ -2,6 +2,8 @@
 
 from helpers import compile_root, published_entry
 
+import ast
+
 import bpy
 import pytest
 
@@ -16,9 +18,12 @@ def _compose(source: str):
     tree = bpy.data.node_groups.new('NFTest_unified_typed_interface', 'GeometryNodeTree')
     compile_root(source, tree)
     assert not list(tree.nodes)
-    # Every parametrized fixture contains exactly one source-backed definition.
+    # Root pointer addresses can be recycled after a previous test removes its tree.
+    # Filter by the declaration's canonical public name, not just the test origin.
+    fn_name = next(node.name for node in ast.parse(source).body if isinstance(node, ast.FunctionDef))
     groups = [g for g in bpy.data.node_groups
-              if f"test:root:{tree.as_pointer()}" in str(g.get('nodeforge_module_origin', ''))]
+              if g.get('nodeforge_module_name') == fn_name
+              and f"test:root:{tree.as_pointer()}" in str(g.get('nodeforge_module_origin', ''))]
     assert len(groups) == 1
     return tree, groups[0]
 

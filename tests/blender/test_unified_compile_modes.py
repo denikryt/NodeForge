@@ -105,10 +105,15 @@ def test_unified_groups_only_publishes_no_root_instances_and_reuses_authority():
                  and 'text:PR1-source' in g.get('nodeforge_module_origin', '')]
     group_node = root.nodes.new('GeometryNodeGroup')
     group_node.node_tree = fn_group
+    manual_math = root.nodes.new('ShaderNodeMath')
+    root.links.new(group_node.outputs[0], manual_math.inputs[0])
+    link_pointers = [(link.from_node.as_pointer(), link.to_node.as_pointer()) for link in root.links]
     root.name = 'PR1_group_only_renamed'
     compiler.compile_source_in_tree('def calc(v: Float) -> Float:\n    return v * 2.0\n', root,
                                     module_context='text:PR1-source')
     assert group_node.node_tree is fn_group
+    assert [(link.from_node.as_pointer(), link.to_node.as_pointer()) for link in root.links] == link_pointers
+    assert manual_math.inputs[0].is_linked
     assert (manual.as_pointer(), tuple(manual.location)) == saved
     assert sum(n.bl_idname == 'GeometryNodeGroup' for n in root.nodes) == 1
     assert any(n.bl_idname == 'ShaderNodeMath' and n.operation == 'MULTIPLY'
@@ -190,6 +195,33 @@ c = a + b
     compiler.compile_source_in_tree(code, root, module_context='text:pr1-inline')
     assert [n.as_pointer() for n in root.nodes if n.bl_idname == 'NodeGroupInput'] == [inlet.as_pointer()]
     assert inlet.outputs['Radius'].identifier == identifier
+
+
+def test_canonical_root_input_chooses_first_manual_and_validates_named_outputs():
+    """Named multi-socket reads reuse the first manual Input and leave other Inputs alone."""
+    root, first, radius_id = _radius_root('PR1_two_manual_inputs', with_input=True)
+    amount = root.interface.new_socket(name='Amount', in_out='INPUT', socket_type='NodeSocketFloat')
+    second = root.nodes.new('NodeGroupInput')
+    first.label = 'First remains'
+    second.label = 'Second remains'
+    second.location = (333, -444)
+    stable = ((first.as_pointer(), first.label), (second.as_pointer(), second.label, tuple(second.location)))
+    source = 'pair = node("NodeGroupInput", outputs={"Radius": Float, "Amount": Float})\nresult = pair.Radius + pair.Amount\n'
+    for _ in range(2):
+        compiler.compile_source_in_tree(source, root)
+        inputs = [n for n in root.nodes if n.bl_idname == 'NodeGroupInput']
+        assert len(inputs) == 2
+        assert (inputs[0].as_pointer(), inputs[0].label) == stable[0]
+        assert (inputs[1].as_pointer(), inputs[1].label, tuple(inputs[1].location)) == stable[1]
+        assert first.outputs['Radius'].identifier == radius_id
+        assert first.outputs['Amount'].identifier == amount.identifier
+        math, = [n for n in root.nodes if n.bl_idname == 'ShaderNodeMath' and n.operation == 'ADD']
+        assert {link.from_node.as_pointer() for link in root.links if link.to_node == math} == {first.as_pointer()}
+    before = {n.as_pointer() for n in root.nodes}
+    with pytest.raises(CompileError):
+        compiler.compile_source_in_tree('pair = node("NodeGroupInput", outputs={"Radius": Vector})', root)
+    assert {n.as_pointer() for n in root.nodes} == before
+    assert first.label == 'First remains' and second.label == 'Second remains'
 
 
 def test_unapproved_group_output_is_rejected_and_rolled_back(monkeypatch):
@@ -274,3 +306,14 @@ def test_single_compile_operator_preserves_undo_and_selected_text_origin(monkeyp
     assert ui.GNSCRIPT_MVP_OT_compile_expression.execute(operator, ctx) == {'FINISHED'}
     assert text.get(TEXT_MODULE_CONTEXT_PROP) == origin
     assert any('group cleanup incomplete' in msg for _, msg in reports)
+
+
+def test_public_root_compiler_exposes_only_unified_route():
+    """Neither legacy append nor Update remains available as an API escape hatch."""
+    assert callable(compiler.compile_source_in_tree)
+    assert not hasattr(compiler, 'compose_source_initial')
+    assert not hasattr(compiler, 'update_source_in_tree')
+    root = _base('PR1_single_root_api')
+    assert compiler.compile_script_auto('FLAG = False', root) == (root, False)
+    with pytest.raises(CompileError, match='stable module_context'):
+        compiler.compile_script_auto('def calc() -> Float:\n    return 1.0\n', root)

@@ -83,3 +83,24 @@ value = nested_safe(1.0)
     nested = [node.node_tree for node in group.nodes if node.bl_idname == 'GeometryNodeGroup']
     assert len(nested) == 1
     assert any(node.bl_idname == 'ShaderNodeMath' for node in nested[0].nodes)
+
+
+def test_physical_extension_in_transitively_inline_root_is_rejected_before_backend(tmp_path):
+    """PR1 must not pass the authoritative root into nested physical Python backends."""
+    _install_capability_fixture(tmp_path)
+    if hasattr(builtins, '_nodeforge_direct_danger_hits'):
+        delattr(builtins, '_nodeforge_direct_danger_hits')
+    root = bpy.data.node_groups.new('NFTest_inline_extension_root_forbidden', 'GeometryNodeTree')
+    manual = root.nodes.new('GeometryNodeMeshCube')
+    before = {node.as_pointer() for node in root.nodes}
+    with pytest.raises(CompileError):
+        compile_root('''from packages import danger
+
+def inline_unsafe(value: Float, __inline__=True) -> Float:
+    return unsafe_wipe(value)
+
+result = inline_unsafe(1.0)
+''', root)
+    assert not hasattr(builtins, '_nodeforge_direct_danger_hits')
+    assert {node.as_pointer() for node in root.nodes} == before
+    assert manual.as_pointer() in before

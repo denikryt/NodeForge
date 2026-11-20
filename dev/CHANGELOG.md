@@ -758,3 +758,11 @@ lifecycle.
 - Materialize omitted or explicit static Rotation arguments in inline source calls using Blender's native Input Rotation node, preserving canonical XYZ angles and typed socket connections.
 - Added inline Rotation regression coverage for argument binding, nested calls, grouped callers, and native geometry evaluation.
 - Keep the inline Rotation implementation plan local under the ignored `plans/` directory.
+
+## 0.94.0
+
+- Unified root compilation under one `Compile Script`: a physical top-level body replaces ordinary root nodes, while a definition-only or compile-time-only source updates eligible function group datablocks without modifying root topology.
+- Made stable `module_context` mandatory for local source definitions and kept their authoritative Node Group identities across root renames and selected Text Reload.
+- Reused one canonical root `NodeGroupInput` for raw reads in nested inline calls, preserving physical socket identifiers and existing user properties; rejected new Group Outputs during root replacement.
+- Preserved Undo signaling for incomplete function-group rollback and removed the separate Update operator and append-only root API.
+- Added Blender 5.2 regression coverage for both Compile outcomes, Group Input reuse, error recovery, and updated characterization baselines.
