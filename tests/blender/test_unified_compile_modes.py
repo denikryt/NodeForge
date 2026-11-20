@@ -401,11 +401,15 @@ def test_internal_root_lowering_rejects_definitions_without_mutating_root():
     prepared, backend, session, snapshot = compiler._prepare_direct_source(
         source, root, module_context='text:pr1-internal-guard',
     )
+    from NodeForge.blender.ir_lowering import RootInputEndpoint
     group_ptrs = {group.as_pointer() for group in bpy.data.node_groups}
+    tx = BlenderGroupBuildTransaction()
     with pytest.raises(CompileError, match='physical top-level body'):
         compose_prepared_initial(
-            prepared, root, backend, session, source_module=snapshot,
+            prepared, root, backend, session,
+            transaction=tx, root_input_endpoint=RootInputEndpoint(),
         )
+    tx.rollback()
     assert {group.as_pointer() for group in bpy.data.node_groups} == group_ptrs
     assert [node.as_pointer() for node in root.nodes] == [original_ptr]
     assert compiler.compile_source_in_tree(

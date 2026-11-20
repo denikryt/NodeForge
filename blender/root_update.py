@@ -328,7 +328,7 @@ def _fail(error, failures, *, possible_change):
     raise RootUpdateError(summary, may_have_mutated=possible_change or bool(failures)) from error
 
 
-def replace_prepared_root(prepared, target, backend, session, *, source_module):
+def replace_prepared_root(prepared, target, backend, session):
     """Stage exactly once into `target`, cut over and commit nested groups last."""
     from .direct_composition import compose_prepared_initial, validate_prepared_direct
     from .ir_lowering import RootInputEndpoint
@@ -358,8 +358,7 @@ def replace_prepared_root(prepared, target, backend, session, *, source_module):
         backup = target.copy()
         mark_transaction_private(backup)
         compose_prepared_initial(prepared, target, backend, session,
-                                 source_module=source_module, transaction=transaction,
-                                 root_input_endpoint=endpoint)
+                                 transaction=transaction, root_input_endpoint=endpoint)
         created = tuple(node for node in target.nodes if node.as_pointer() not in preexisting_ptrs)
         allowed_input = (endpoint.node.as_pointer() if endpoint.created_by_attempt
                          and endpoint.node is not None else None)

@@ -1,16 +1,11 @@
-"""Initial NodeForge composition into a caller-owned base GeometryNodeTree.
-
-This is an internal target-specific lowering primitive. It does not replace or
-manage nodes inserted during an earlier successful composition operation.
-"""
+"""Lower prepared physical root IR using an externally managed build attempt."""
 
 from __future__ import annotations
 
 from ..errors import CompileError
 from ..function_instances import FunctionCompilationTrace
 from .function_materializer import FunctionMaterializationContext, FunctionMaterializer
-from .group_backend import BlenderGroupBuildTransaction
-from .ir_lowering import BlenderIRLoweringContext, RootInputEndpoint, lower_body
+from .ir_lowering import BlenderIRLoweringContext, lower_body
 
 
 def validate_prepared_direct(prepared, target):
@@ -27,65 +22,35 @@ def validate_prepared_direct(prepared, target):
                            'direct base-tree installation is unavailable')
 
 
-def compose_prepared_initial(prepared, target, backend, session, *, source_module,
-                             transaction=None, root_input_endpoint=None):
-    """Lower prepared source in place; a supplied nested transaction remains caller-owned.
+def compose_prepared_initial(prepared, target, backend, session, *,
+                             transaction, root_input_endpoint):
+    """Lower root IR; the calling root updater owns commit, cleanup and rollback.
 
-    Every attempt cleans up only its own newly inserted root nodes. An
-    internally created transaction is committed or rolled back here; an
-    externally supplied one is neither committed nor rolled back here.
+    The transaction and canonical input endpoint belong to the same outer root
+    attempt, including all nested inline expansions targeting this tree.
     """
-    validate_prepared_direct(prepared, target)
     if not prepared.body.statements:
         raise CompileError(
             'Root lowering requires a physical top-level body; '
             'definition-only sources use GROUPS_ONLY publication'
         )
-    preexisting_nodes = {node.as_pointer() for node in target.nodes}
-    own_transaction = transaction is None
-    if transaction is None:
-        transaction = BlenderGroupBuildTransaction()
-    cache = {}
-    trace = FunctionCompilationTrace()
     context = BlenderIRLoweringContext(
         group=target,
         runtime_bindings={},
         source_callable_session=session,
         function_materializer=FunctionMaterializer(group_backend=backend),
         function_materialization_context=FunctionMaterializationContext(
-            function_group_cache=cache,
+            function_group_cache={},
             function_group_transaction=transaction,
-            function_compilation_trace=trace,
+            function_compilation_trace=FunctionCompilationTrace(),
             source_callable_session=session,
         ),
         helper_namespace=target.name,
         extension_registry=session.resolved_environment.extension_registry,
-        root_input_endpoint=root_input_endpoint if root_input_endpoint is not None else RootInputEndpoint(),
+        root_input_endpoint=root_input_endpoint,
     )
-    try:
-        # NODEFORGE-TEMP-ISSUE61-ROOT-STAGING: Root-producing Compile still lowers in the authoritative tree while physical Extension API v2 is rejected in root. Issue #61 PR 2 must replace this call with native-copy private staging and strict subgraph transfer; delete this marker when no backend can receive the authoritative root.
-        lower_body(context, prepared.body, {}, base_depth=1)
-        if own_transaction:
-            transaction.commit()
-    except Exception as error:
-        cleanup_failure = None
-        for node in tuple(target.nodes):
-            if node.as_pointer() not in preexisting_nodes:
-                try:
-                    target.nodes.remove(node)
-                except Exception as exc:
-                    if cleanup_failure is None:
-                        cleanup_failure = exc
-        if own_transaction:
-            try:
-                transaction.rollback()
-            except Exception as exc:
-                if cleanup_failure is None:
-                    cleanup_failure = exc
-        if cleanup_failure is not None:
-            error.add_note(f"Direct-composition node cleanup or rollback also failed: {cleanup_failure}")
-            raise error from cleanup_failure
-        raise
+    # NODEFORGE-TEMP-ISSUE61-ROOT-STAGING: Root-producing Compile still lowers in the authoritative tree while physical Extension API v2 is rejected in root. Issue #61 PR 2 must replace this call with native-copy private staging and strict subgraph transfer; delete this marker when no backend can receive the authoritative root.
+    lower_body(context, prepared.body, {}, base_depth=1)
     return target
 
 

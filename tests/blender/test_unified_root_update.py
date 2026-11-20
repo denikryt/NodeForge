@@ -399,11 +399,12 @@ def test_direct_lowering_with_caller_transaction_does_not_commit(monkeypatch):
     """An externally owned transaction remains open after successful direct lowering."""
     from NodeForge.blender.group_backend import BlenderGroupBuildTransaction
     from NodeForge.blender.direct_composition import compose_prepared_initial
+    from NodeForge.blender.ir_lowering import RootInputEndpoint
     target, _, _ = _root('NFR5_owned_lowering')
-    prepared, backend, session, snapshot = compiler._prepare_direct_source('a = cube(4)', target)
+    prepared, backend, session, _snapshot = compiler._prepare_direct_source('a = cube(4)', target)
     tx = BlenderGroupBuildTransaction()
     compose_prepared_initial(prepared, target, backend, session,
-                             source_module=snapshot, transaction=tx)
+                             transaction=tx, root_input_endpoint=RootInputEndpoint())
     assert not tx._closed
     assert sum(n.bl_idname == 'GeometryNodeMeshCube' for n in target.nodes) == 1
     tx.rollback()
@@ -672,3 +673,85 @@ def test_late_failure_reports_structural_io_parent_restoration_error(monkeypatch
     with pytest.raises(root_update.RootUpdateError, match='root restoration: parent Frame unavailable') as info:
         compile_root('a = cube(3)', tree)
     assert info.value.may_have_mutated
+
+
+def test_root_update_owns_one_transaction_and_cleans_failed_lowering(monkeypatch):
+    """A lowering failure is cleaned and rolled back once by the outer root owner."""
+    from NodeForge.blender import direct_composition
+    from NodeForge.blender.group_backend import BlenderGroupBuildTransaction
+
+    tree, _, outlet = _root('NFR5_single_attempt_owner')
+    old = tree.nodes.new('GeometryNodeMeshCube')
+    tree.links.new(old.outputs['Mesh'], outlet.inputs['Geometry'])
+    old_pointers = {node.as_pointer() for node in tree.nodes}
+    old_groups = {group.as_pointer() for group in bpy.data.node_groups}
+    transactions = []
+    rollbacks = []
+    commits = []
+
+    class ObservedTransaction(BlenderGroupBuildTransaction):
+        """Count the transaction transitions for one root-producing attempt."""
+
+        def __init__(self):
+            super().__init__()
+            transactions.append(self)
+
+        def rollback(self):
+            rollbacks.append(self)
+            return super().rollback()
+
+        def commit(self):
+            commits.append(self)
+            return super().commit()
+
+    original_lower = direct_composition.lower_body
+
+    def fail_after_lowering(*args, **kwargs):
+        """Raise only after the real lowerer has inserted its ordinary node."""
+        original_lower(*args, **kwargs)
+        raise RuntimeError('single-owner staged failure')
+
+    monkeypatch.setattr(root_update, 'BlenderGroupBuildTransaction', ObservedTransaction)
+    monkeypatch.setattr(direct_composition, 'lower_body', fail_after_lowering)
+    with pytest.raises(root_update.RootUpdateError, match='single-owner staged failure') as info:
+        compile_root('a = cube(2)\n', tree)
+    assert info.value.may_have_mutated is False
+    assert len(transactions) == 1
+    assert rollbacks == transactions and commits == []
+    assert transactions[0]._closed
+    assert {node.as_pointer() for node in tree.nodes} == old_pointers
+    assert len(tree.links) == 1 and tree.links[0].from_node.as_pointer() == old.as_pointer()
+    assert {group.as_pointer() for group in bpy.data.node_groups} == old_groups
+
+
+def test_root_lowerer_propagates_without_owning_node_or_transaction_cleanup(monkeypatch):
+    """Direct lowering leaves both failure cleanup and transaction closure to its caller."""
+    from NodeForge.blender import direct_composition
+    from NodeForge.blender.group_backend import BlenderGroupBuildTransaction
+    from NodeForge.blender.ir_lowering import RootInputEndpoint
+
+    tree, _, _ = _root('NFR5_lowering_delegates_failures')
+    prepared, backend, session, _snapshot = compiler._prepare_direct_source('a = cube(3)', tree)
+    tx = BlenderGroupBuildTransaction()
+    old_pointers = {node.as_pointer() for node in tree.nodes}
+
+    def fail_with_created_node(context, *_args, **_kwargs):
+        """Simulate a backend failure after inserting a physical node."""
+        context.group.nodes.new('GeometryNodeMeshCube')
+        raise RuntimeError('caller must clean this node')
+
+    monkeypatch.setattr(direct_composition, 'lower_body', fail_with_created_node)
+    with pytest.raises(RuntimeError, match='caller must clean this node'):
+        direct_composition.compose_prepared_initial(
+            prepared, tree, backend, session,
+            transaction=tx, root_input_endpoint=RootInputEndpoint(),
+        )
+    assert tx._closed is False
+    assert len([node for node in tree.nodes if node.as_pointer() not in old_pointers]) == 1
+    # Explicitly emulate the only supported caller's cleanup policy in this test.
+    for node in tuple(tree.nodes):
+        if node.as_pointer() not in old_pointers:
+            tree.nodes.remove(node)
+    tx.rollback()
+    assert tx._closed
+    assert {node.as_pointer() for node in tree.nodes} == old_pointers

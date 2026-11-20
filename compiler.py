@@ -205,9 +205,7 @@ def compile_source_in_tree(source: str, target, *, module_context: str | None = 
     )
     if prepared.body.statements:
         reject_node_local_animation(target)
-        updated = replace_prepared_root(
-            prepared, target, backend, session, source_module=snapshot,
-        )
+        updated = replace_prepared_root(prepared, target, backend, session)
         return RootCompileResult(target, 'ROOT_REPLACEMENT', updated.skipped_boundary_links)
 
     transaction = BlenderGroupBuildTransaction()

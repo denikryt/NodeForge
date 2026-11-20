@@ -772,3 +772,8 @@ lifecycle.
 - Preserve the Undo-required error signal when GROUPS_ONLY postcommit cleanup raises after authoritative function groups have been published.
 - Reject definition-only IR in the internal root-lowering helper instead of placing obsolete group-instance nodes in the root tree.
 - Add Blender regressions for postcommit warning escalation, non-escalated cleanup warnings, and direct internal-helper rejection.
+
+## 0.94.2
+
+- Simplified root-producing compilation so the root updater alone owns its group transaction, staged-node cleanup, rollback, and Undo uncertainty. The internal lowering helper now requires its caller-provided transaction and canonical Group Input endpoint.
+- Removed unused source-module forwarding through root lowering and added Blender regression coverage for delegated error cleanup and one transaction owner.
