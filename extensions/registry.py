@@ -522,6 +522,29 @@ class ExtensionOwnerSession:
             except Exception as exc:
                 raise CompileError(f"Dynamic result resolver preflight failed for {self.snapshot.owner_key}: {exc}") from exc
 
+    def invoke_result_resolver(self, callable_id: ExtensionCallableId, arguments, *, overload_index=None) -> tuple:
+        """Resolve one exact ordered executable tuple within the owner's SEMANTIC generation."""
+        families, _ = self.normalize_interface()
+        family = families.get(callable_id)
+        if not family or family[0].result.kind != "DYNAMIC_RESULTS":
+            raise CompileError(f"{callable_id.name!r} has no dynamic result contract")
+        if overload_index is not None and (type(overload_index) is not int or not 0 <= overload_index < len(family)):
+            raise CompileError("Dynamic extension result has invalid selected overload index")
+        label = f"{callable_id.owner}.{callable_id.name} overload {overload_index}"
+        with self._mounted("SEMANTIC"):
+            try:
+                module = importlib.import_module(self._full_name("semantic"))
+                function = getattr(module, f"_result_types_{callable_id.name}")
+                result = function(arguments)
+            except Exception as exc:
+                raise CompileError(f"Dynamic result resolver {label} failed: {exc}") from exc
+        from ..nf_types import NFType
+        if type(result) not in (tuple, list) or not result or any(type(typ) is not NFType for typ in result):
+            raise CompileError(
+                f"Dynamic result resolver {label} must return a nonempty tuple/list of exact NFType members"
+            )
+        return tuple(result)
+
     def type_specs(self) -> Mapping[ExtensionTypeId, ExtensionTypeSpec]:
         """Return the immutable normalized semantic record schemas for this owner."""
         self.normalize_interface()
@@ -771,6 +794,12 @@ class ExtensionRegistry:
     def owner_fingerprint(self, owner_key: tuple[str, ...]) -> str:
         """Return the conservative owner-code fingerprint for one admitted owner."""
         return self._session_for_owner(owner_key).snapshot.fingerprint
+
+    def invoke_result_resolver(self, callable_id: ExtensionCallableId, arguments, *, overload_index=None) -> tuple:
+        """Delegate one call-local signature request to the selected owner session."""
+        return self._session_for_owner(callable_id.owner).invoke_result_resolver(
+            callable_id, arguments, overload_index=overload_index,
+        )
 
     def invoke_implementation(self, callable_id: ExtensionCallableId, *args, **kwargs):
         """Invoke physical owner code while its IMPLEMENTATION generation remains mounted."""

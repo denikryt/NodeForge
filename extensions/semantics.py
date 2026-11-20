@@ -234,6 +234,19 @@ class SemanticInvocation:
             runtime_leaf_resolver=resolve_runtime_leaf,
         )
 
+    def clone_semantic_argument(self, type_spec: TypeSpec, value: object) -> object:
+        """Reconstruct a separate record/list view without copying active RuntimeRef tokens."""
+        storage = pack_value(type_spec, value, registry=self.registry, active_runtime_refs=self._active)
+
+        def resolve_runtime_leaf(stored: object):
+            """Resolve detached dependency slots using this invocation's canonical tokens."""
+            if not isinstance(stored, ExtensionDependencySlot):
+                return None
+            return stored.typ, self.runtime_ref(stored.dependency_index, stored.typ)
+
+        return unpack_value(type_spec, storage, registry=self.registry,
+                            runtime_leaf_resolver=resolve_runtime_leaf)
+
     def pack_result(self, return_type: TypeSpec, value: object) -> object:
         """Validate and detach one semantic function result against its declared TypeSpec."""
         return pack_value(

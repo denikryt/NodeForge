@@ -173,6 +173,8 @@ def _def_signatures(source: str) -> dict[str, tuple[Signature, ...]]:
 
 def _typespec_label(spec) -> str:
     """Convert an extension's frozen TypeSpec to a concise display label."""
+    if spec.kind == "DYNAMIC_RESULTS":
+        return "tuple[dynamic]"
     if spec.kind == "NF_SET":
         return " | ".join(sorted(t.value.title() for t in spec.nf_types))
     if spec.kind == "TUPLE_FIXED":
@@ -193,7 +195,9 @@ def _extension_signatures(name: str, specs) -> tuple[Signature, ...]:
             default = None if param.default is inspect.Parameter.empty else repr(param.default)
             kw = None if param.kind is inspect.Parameter.POSITIONAL_ONLY else param.name
             parameters.append(Parameter(param.name, _typespec_label(param.type_spec), default, kw))
-        if spec.result.kind == "TUPLE_FIXED":
+        if spec.result.kind == "DYNAMIC_RESULTS":
+            outputs = (Output("Results", "tuple[dynamic]"),)
+        elif spec.result.kind == "TUPLE_FIXED":
             outputs = tuple(Output(f"Value {i + 1}", _typespec_label(item))
                             for i, item in enumerate(spec.result.items))
         else:
