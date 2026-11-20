@@ -777,3 +777,4 @@ lifecycle.
 
 - Simplified root-producing compilation so the root updater alone owns its group transaction, staged-node cleanup, rollback, and Undo uncertainty. The internal lowering helper now requires its caller-provided transaction and canonical Group Input endpoint.
 - Removed unused source-module forwarding through root lowering and added Blender regression coverage for delegated error cleanup and one transaction owner.
+- Updated the user documentation for unified Compile Script modes, manual placement and refresh of function groups, mode transitions, and base-tree Group Input reuse.

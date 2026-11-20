@@ -33,7 +33,7 @@ def make_cube(size: Float["Size"] = 2.0) -> Geometry:
 ```
 
 5. Return to the NodeForge sidebar and select the new text in **Text Script**.
-6. Click **Compile Script**. NodeForge places a `make_cube` Group Node in the existing base Geometry Nodes tree; its implementation lives in a nested node group.
+6. Click **Compile Script**. NodeForge creates a `make_cube` node-group datablock.
 7. Connect the Group Node's **Value** output to the existing **Group Output** geometry input.
 
 See the [Get Started guide](https://denikryt.github.io/NodeForge/docs/latest/GET_STARTED/) for the complete beginner workflow.
