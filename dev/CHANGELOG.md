@@ -758,3 +758,10 @@ lifecycle.
 - Materialize omitted or explicit static Rotation arguments in inline source calls using Blender's native Input Rotation node, preserving canonical XYZ angles and typed socket connections.
 - Added inline Rotation regression coverage for argument binding, nested calls, grouped callers, and native geometry evaluation.
 - Keep the inline Rotation implementation plan local under the ignored `plans/` directory.
+
+## 0.94.0
+
+- Added per-invocation typed result tuples to Extension API v2 through the `DynamicResults` annotation and same-owner `semantic.py::_result_types_<function>` resolver convention.
+- Resolve exact ordered runtime result types during semantic analysis and transport them through existing typed Call IR to the Python backend.
+- Validate dynamic extension results against call-specific IR arity, NF types, socket direction, physical type and current-group ownership before publishing generated candidates.
+- Preserved fixed result declarations, semantic extension modes, owner snapshots, and existing root-tree physical extension restrictions.

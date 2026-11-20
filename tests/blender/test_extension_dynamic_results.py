@@ -118,3 +118,20 @@ def test_dynamic_backend_rejects_malformed_result_and_rolls_back(bad, pattern):
     finally:
         if foreign is not None and foreign.name in bpy.data.node_groups:
             bpy.data.node_groups.remove(foreign)
+
+
+def test_dynamic_extension_keeps_existing_root_tree_physical_restriction():
+    """Issue 62 does not bypass the root-owned tree restriction from Issue 61."""
+    from NodeForge import compiler
+    with tempfile.TemporaryDirectory() as tmp:
+        source = Path(tmp) / "package"
+        _write_package(source)
+        packages.install_package_directory(source)
+        root = bpy.data.node_groups.new("NFTest_dynamic_direct_root", "GeometryNodeTree")
+        try:
+            with pytest.raises(CompileError, match="existing base GeometryNodeTree"):
+                compiler.compose_source_initial('''from packages import dynamic
+value_a, value_b = foo(1.0)
+''', root)
+        finally:
+            bpy.data.node_groups.remove(root)
