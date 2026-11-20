@@ -26,6 +26,7 @@ from .contracts import (
     is_frontend_semantic_type_spec,
 )
 from ..nf_types import NFType
+from ..extension_result_api import DynamicResults
 
 
 EXTENSION_API_VERSION = 2
@@ -318,6 +319,8 @@ def _normalize_result_annotation(
     class_type_ids: Mapping[type, ExtensionTypeId],
 ) -> TypeSpec:
     """Normalize one executable or frontend-semantic public result."""
+    if annotation is DynamicResults:
+        return TypeSpec("DYNAMIC_RESULTS")
     try:
         semantic = normalize_semantic_type_annotation(annotation, class_type_ids=class_type_ids, context=context)
     except CompileError:
@@ -491,6 +494,8 @@ def normalize_interface_module(
                     record_type_specs,
                     context=f"{name}() result",
                 )
+        if len({spec.result.kind == "DYNAMIC_RESULTS" for spec in specs}) > 1:
+            raise CompileError(f"{name}() overload family mixes dynamic and fixed results")
         if overloads:
             for spec in specs:
                 if any(parameter.type_spec.kind != "NF_SET" for parameter in spec.parameters):

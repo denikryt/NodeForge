@@ -15,6 +15,7 @@ bl_info = {
 from .mesh_compute import mesh_compute
 from .evaluation_modes import EvaluationMode
 from .extension_semantic_api import RuntimeRef
+from .extension_result_api import DynamicResults
 from .extension_annotations import (
     Bool, Bundle, Color, Float, Geometry, Int, Material, Object, Rotation, String, Vector,
 )

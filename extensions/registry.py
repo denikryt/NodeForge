@@ -485,6 +485,13 @@ class ExtensionOwnerSession:
         implementation_modules = frozenset(
             ref.module[1:] for ref in refs.values() if ref is not None
         )
+        # Stage the physical targets so preflight cannot import a backend in SEMANTIC.
+        self._implementation_modules = implementation_modules
+        try:
+            self._preflight_result_resolvers(families)
+        except Exception:
+            self._implementation_modules = frozenset()
+            raise
         self._families = MappingProxyType(dict(families))
         self._refs = MappingProxyType(dict(refs))
         self._type_specs = MappingProxyType(dict(type_specs))
@@ -492,6 +499,28 @@ class ExtensionOwnerSession:
         self._type_ids_by_class = MappingProxyType(dict(type_ids_by_class))
         self._implementation_modules = implementation_modules
         return self._families, self._refs
+
+    def _preflight_result_resolvers(self, families) -> None:
+        """Validate each dynamic resolver export during contract load in SEMANTIC."""
+        dynamic_ids = [callable_id for callable_id, specs in families.items()
+                       if specs[0].result.kind == "DYNAMIC_RESULTS"]
+        if not dynamic_ids:
+            return
+        if "semantic" not in self.snapshot.modules:
+            raise CompileError("Dynamic extension result requires same-owner semantic.py")
+        with self._mounted("SEMANTIC"):
+            try:
+                module = importlib.import_module(self._full_name("semantic"))
+                for callable_id in dynamic_ids:
+                    name = f"_result_types_{callable_id.name}"
+                    if not callable(getattr(module, name, None)):
+                        raise CompileError(
+                            f"Dynamic result resolver semantic.py::{name} must exist and be callable"
+                        )
+            except CompileError:
+                raise
+            except Exception as exc:
+                raise CompileError(f"Dynamic result resolver preflight failed for {self.snapshot.owner_key}: {exc}") from exc
 
     def type_specs(self) -> Mapping[ExtensionTypeId, ExtensionTypeSpec]:
         """Return the immutable normalized semantic record schemas for this owner."""

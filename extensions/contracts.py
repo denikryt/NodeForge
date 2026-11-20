@@ -72,6 +72,7 @@ class PythonScalarKind(str, Enum):
 
 TypeSpecKind = Literal[
     "NF_SET",
+    "DYNAMIC_RESULTS",
     "PY_SCALAR",
     "RECORD",
     "LIST",
@@ -98,7 +99,7 @@ class TypeSpec:
         object.__setattr__(self, "nf_types", frozenset(self.nf_types))
         object.__setattr__(self, "items", tuple(self.items))
         allowed = {
-            "NF_SET", "PY_SCALAR", "RECORD", "LIST",
+            "NF_SET", "DYNAMIC_RESULTS", "PY_SCALAR", "RECORD", "LIST",
             "TUPLE_FIXED", "TUPLE_VAR", "DICT_STR", "OPTIONAL",
         }
         if self.kind not in allowed:
@@ -121,7 +122,10 @@ class TypeSpec:
             "record": self.record_type is not None,
             "item": self.item is not None,
         }
-        if self.kind == "NF_SET":
+        if self.kind == "DYNAMIC_RESULTS":
+            if any(populated.values()):
+                raise ValueError("DYNAMIC_RESULTS must carry no payload")
+        elif self.kind == "NF_SET":
             if not populated["nf"] or any(populated[key] for key in ("items", "scalar", "record", "item")):
                 raise ValueError("NF_SET requires one or more NFTypes and no other payload")
         elif self.kind == "PY_SCALAR":
@@ -182,6 +186,8 @@ def is_frontend_semantic_type_spec(spec: TypeSpec) -> bool:
 
 def is_executable_result_type_spec(spec: TypeSpec) -> bool:
     """Return whether *spec* is an executable public result shape from the backend-only declarative extension contract."""
+    if spec.kind == "DYNAMIC_RESULTS":
+        return True
     if spec.kind == "NF_SET":
         return len(spec.nf_types) == 1
     if spec.kind == "TUPLE_FIXED":
