@@ -152,8 +152,14 @@ def _prepare_direct_source(source: str, target, *, resolved_environment=None,
         raise CompileError("Direct composition requires an existing base GeometryNodeTree")
     backend = _new_group_backend(resolved_environment)
     session = backend.new_source_callable_session()
-    module_id = ModuleId("ROOT_TEXT", module_context or f"base-tree:{target.name}")
+    module_id = ModuleId("ROOT_TEXT", module_context if isinstance(module_context, str) and module_context.strip() else f"base-tree:{target.name}")
     snapshot = parse_source_module(source, module_id)
+    if snapshot.definitions and (
+        not isinstance(module_context, str)
+        or not module_context.strip()
+        or module_context != module_context.strip()
+    ):
+        raise CompileError("Source definitions require a stable module_context")
     owner_scope = function_group_owner_scope("COMPOSITION", module_id.stable_key())
     identity = GroupCompilationIdentity(None, owner_scope, owner_scope, owner_scope)
     prepared = analyze_group_source(
