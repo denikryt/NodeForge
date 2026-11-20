@@ -209,3 +209,68 @@ def test_unapproved_group_output_is_rejected_and_rolled_back(monkeypatch):
     with pytest.raises(CompileError, match='unapproved structural'):
         compiler.compile_source_in_tree('a = cube(1)', root)
     assert {node.as_pointer() for node in root.nodes} == ptrs
+
+
+def test_groups_only_failed_transaction_rollback_requires_undo(monkeypatch):
+    """An incomplete group rollback is surfaced through the root UI error type."""
+    from NodeForge.blender.root_update import RootUpdateError
+    root = _base('PR1_group_rollback_failure')
+    origin = 'text:PR1-rollback'
+    compiler.compile_source_in_tree('def a(x: Float) -> Float:\n    return x + 1\n',
+                                    root, module_context=origin)
+    original = FunctionMaterializer.materialize_module
+    seen = []
+
+    def fail_after_update(self, prepared, materialization, context, **kwargs):
+        """Fail the second entry after the first one updated its authority."""
+        seen.append(prepared.contract.function_id.name)
+        if seen[-1] == 'b':
+            raise RuntimeError('second function failed')
+        return original(self, prepared, materialization, context, **kwargs)
+
+    def broken_rollback(self):
+        """Expose the existing group transaction's uncertain rollback boundary."""
+        raise RuntimeError('group restoration failed')
+
+    monkeypatch.setattr(FunctionMaterializer, 'materialize_module', fail_after_update)
+    monkeypatch.setattr(BlenderGroupBuildTransaction, 'rollback', broken_rollback)
+    with pytest.raises(RootUpdateError, match='group restoration failed') as raised:
+        compiler.compile_source_in_tree('''def a(x: Float) -> Float:
+    return x * 2
+
+def b(x: Float) -> Float:
+    return x + 1
+''', root, module_context=origin)
+    assert seen == ['a', 'b'] and raised.value.may_have_mutated
+    assert 'second function failed' in str(raised.value)
+    assert isinstance(raised.value.__cause__, RuntimeError)
+    assert not list(root.nodes)
+
+
+def test_single_compile_operator_preserves_undo_and_selected_text_origin(monkeypatch):
+    """The retained Compile operator uses the Text origin and retains uncertain Undo."""
+    from types import SimpleNamespace
+    from NodeForge import ui
+    from NodeForge.blender.root_update import RootUpdateError
+    from NodeForge.compiler_identities import TEXT_MODULE_CONTEXT_PROP
+    root = _base('PR1_operator')
+    text = bpy.data.texts.new('PR1_operator_text')
+    text.write('def make() -> Geometry:\n    return cube(1)\n')
+    reports = []
+    operator = SimpleNamespace(expression='', report=lambda kind, msg: reports.append((kind, msg)))
+    ctx = SimpleNamespace(scene=SimpleNamespace(gn_script_mvp=SimpleNamespace(text_block=text)))
+    monkeypatch.setattr(ui, '_eligible_base_gn_tree', lambda context: root)
+    assert ui.GNSCRIPT_MVP_OT_compile_expression.execute(operator, ctx) == {'FINISHED'}
+    origin = text.get(TEXT_MODULE_CONTEXT_PROP)
+    assert isinstance(origin, str) and origin
+    assert not list(root.nodes)
+    assert not hasattr(ui, 'GNSCRIPT_MVP_OT_update_expression')
+
+    def uncertain(*args, **kwargs):
+        """Simulate a group rollback that could not restore authoritative data."""
+        raise RootUpdateError('group cleanup incomplete', may_have_mutated=True)
+
+    monkeypatch.setattr(ui, 'compile_source_in_tree', uncertain)
+    assert ui.GNSCRIPT_MVP_OT_compile_expression.execute(operator, ctx) == {'FINISHED'}
+    assert text.get(TEXT_MODULE_CONTEXT_PROP) == origin
+    assert any('group cleanup incomplete' in msg for _, msg in reports)

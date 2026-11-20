@@ -221,8 +221,15 @@ def compile_source_in_tree(source: str, target, *, module_context: str | None = 
             prepared, FunctionMaterializer(group_backend=backend), context, snapshot,
         )
         transaction.commit()
-    except Exception:
-        transaction.rollback()
+    except Exception as original_error:
+        try:
+            transaction.rollback()
+        except Exception as rollback_error:
+            from .blender.root_update import RootUpdateError
+            raise RootUpdateError(
+                f"Function-group rollback failed after {original_error}: {rollback_error}",
+                may_have_mutated=True,
+            ) from rollback_error
         raise
     return RootCompileResult(target, 'GROUPS_ONLY', 0)
 
