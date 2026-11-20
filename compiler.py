@@ -222,6 +222,14 @@ def compile_source_in_tree(source: str, target, *, module_context: str | None = 
         )
         transaction.commit()
     except Exception as original_error:
+        if transaction._closed:
+            # Commit has crossed the point of no return. A cleanup warning
+            # promoted to an exception cannot be repaired by rollback.
+            from .blender.root_update import RootUpdateError
+            raise RootUpdateError(
+                f"Function groups were committed, but postcommit cleanup failed: {original_error}",
+                may_have_mutated=True,
+            ) from original_error
         try:
             transaction.rollback()
         except Exception as rollback_error:

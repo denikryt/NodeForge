@@ -766,3 +766,9 @@ lifecycle.
 - Reused one canonical root `NodeGroupInput` for raw reads in nested inline calls, preserving physical socket identifiers and existing user properties; rejected new Group Outputs during root replacement.
 - Preserved Undo signaling for incomplete function-group rollback and removed the separate Update operator and append-only root API.
 - Added Blender 5.2 regression coverage for both Compile outcomes, Group Input reuse, error recovery, and updated characterization baselines.
+
+## 0.94.1
+
+- Preserve the Undo-required error signal when GROUPS_ONLY postcommit cleanup raises after authoritative function groups have been published.
+- Reject definition-only IR in the internal root-lowering helper instead of placing obsolete group-instance nodes in the root tree.
+- Add Blender regressions for postcommit warning escalation, non-escalated cleanup warnings, and direct internal-helper rejection.

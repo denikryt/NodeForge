@@ -317,3 +317,134 @@ def test_public_root_compiler_exposes_only_unified_route():
     assert compiler.compile_script_auto('FLAG = False', root) == (root, False)
     with pytest.raises(CompileError, match='stable module_context'):
         compiler.compile_script_auto('def calc() -> Float:\n    return 1.0\n', root)
+
+
+def test_groups_only_postcommit_cleanup_exception_preserves_undo(monkeypatch):
+    """A warning promoted to an exception after commit retains the Undo signal."""
+    import warnings
+    from NodeForge.blender import group_backend
+    from NodeForge.blender.root_update import RootUpdateError
+    from NodeForge.function_instances import FUNCTION_DEFINITION_OWNER_PROP
+
+    root = _base('PR1_postcommit_uncertain')
+    origin = 'text:pr1-postcommit'
+    source_v1 = 'def calc(v: Float) -> Float:\n    return v + 1.0\n'
+    source_v2 = 'def calc(v: Float) -> Float:\n    return v * 2.0\n'
+    compiler.compile_source_in_tree(source_v1, root, module_context=origin)
+    published, = [g for g in bpy.data.node_groups if g.get('nodeforge_module_name') == 'calc'
+                  and g.get(FUNCTION_DEFINITION_OWNER_PROP)
+                  and origin in g.get('nodeforge_module_origin', '')]
+    manual = root.nodes.new('GeometryNodeGroup')
+    manual.node_tree = published
+    manual_pointer = manual.as_pointer()
+    original_pointer = published.as_pointer()
+    removal = group_backend._remove_node_group_if_live
+
+    def cleanup_with_warning(group, *, failures=None):
+        """Inject one failed postcommit retirement after removing the backup."""
+        result = removal(group, failures=failures)
+        if failures is not None:
+            failures.append(RuntimeError('injected postcommit backup cleanup failure'))
+        return result
+
+    monkeypatch.setattr(group_backend, '_remove_node_group_if_live', cleanup_with_warning)
+    with warnings.catch_warnings():
+        warnings.simplefilter('error', RuntimeWarning)
+        with pytest.raises(RootUpdateError, match='postcommit backup cleanup failure') as exc:
+            compiler.compile_source_in_tree(source_v2, root, module_context=origin)
+    assert exc.value.may_have_mutated is True
+    assert isinstance(exc.value.__cause__, RuntimeWarning)
+    assert 'injected postcommit backup cleanup failure' in str(exc.value.__cause__)
+    assert manual.as_pointer() == manual_pointer
+    assert manual.node_tree.as_pointer() == original_pointer
+    assert any(n.bl_idname == 'ShaderNodeMath' and n.operation == 'MULTIPLY'
+               for n in published.nodes)
+
+
+def test_groups_only_postcommit_warning_without_escalation_keeps_success(monkeypatch):
+    """Ordinary best-effort retirement warnings remain successful commits."""
+    import warnings
+    from NodeForge.blender import group_backend
+
+    root = _base('PR1_postcommit_warning')
+    origin = 'text:pr1-postcommit-default'
+    compiler.compile_source_in_tree('def calc(v: Float) -> Float:\n    return v + 1.0\n',
+                                    root, module_context=origin)
+    removal = group_backend._remove_node_group_if_live
+
+    def cleanup_with_warning(group, *, failures=None):
+        """Record a postcommit cleanup warning without aborting publication."""
+        result = removal(group, failures=failures)
+        if failures is not None:
+            failures.append(RuntimeError('injected benign retirement failure'))
+        return result
+
+    monkeypatch.setattr(group_backend, '_remove_node_group_if_live', cleanup_with_warning)
+    with warnings.catch_warnings(record=True) as emitted:
+        warnings.simplefilter('always', RuntimeWarning)
+        result = compiler.compile_source_in_tree(
+            'def calc(v: Float) -> Float:\n    return v * 2.0\n',
+            root, module_context=origin,
+        )
+    assert result.outcome == 'GROUPS_ONLY'
+    assert any('injected benign retirement failure' in str(w.message) for w in emitted)
+
+
+def test_internal_root_lowering_rejects_definitions_without_mutating_root():
+    """The internal root helper cannot revive obsolete definition-only placement."""
+    from NodeForge.blender.direct_composition import compose_prepared_initial
+
+    root = _base('PR1_internal_definition_only_rejected')
+    manual = root.nodes.new('GeometryNodeMeshCube')
+    original_ptr = manual.as_pointer()
+    source = 'def calc(v: Float) -> Float:\n    return v + 1.0\n'
+    prepared, backend, session, snapshot = compiler._prepare_direct_source(
+        source, root, module_context='text:pr1-internal-guard',
+    )
+    group_ptrs = {group.as_pointer() for group in bpy.data.node_groups}
+    with pytest.raises(CompileError, match='physical top-level body'):
+        compose_prepared_initial(
+            prepared, root, backend, session, source_module=snapshot,
+        )
+    assert {group.as_pointer() for group in bpy.data.node_groups} == group_ptrs
+    assert [node.as_pointer() for node in root.nodes] == [original_ptr]
+    assert compiler.compile_source_in_tree(
+        source, root, module_context='text:pr1-internal-guard',
+    ).outcome == 'GROUPS_ONLY'
+    assert [node.as_pointer() for node in root.nodes] == [original_ptr]
+
+
+def test_compile_operator_retains_undo_on_real_postcommit_cleanup_exception(monkeypatch):
+    """The real group publication error travels through the UI's Undo-aware path."""
+    import warnings
+    from types import SimpleNamespace
+    from NodeForge import ui
+    from NodeForge.blender import group_backend
+
+    root = _base('PR1_operator_postcommit')
+    text = bpy.data.texts.new('PR1_operator_postcommit_source')
+    text.write('def calc(v: Float) -> Float:\n    return v + 1.0\n')
+    reports = []
+    operator = SimpleNamespace(expression='', report=lambda kind, msg: reports.append((kind, msg)))
+    context = SimpleNamespace(scene=SimpleNamespace(gn_script_mvp=SimpleNamespace(text_block=text)))
+    monkeypatch.setattr(ui, '_eligible_base_gn_tree', lambda _context: root)
+    assert ui.GNSCRIPT_MVP_OT_compile_expression.execute(operator, context) == {'FINISHED'}
+
+    text.clear()
+    text.write('def calc(v: Float) -> Float:\n    return v * 2.0\n')
+    cleanup = group_backend._remove_node_group_if_live
+
+    def fail_postcommit(group, *, failures=None):
+        """Force a retirement warning after authoritative publication."""
+        removed = cleanup(group, failures=failures)
+        if failures is not None:
+            failures.append(RuntimeError('UI postcommit warning-as-error'))
+        return removed
+
+    monkeypatch.setattr(group_backend, '_remove_node_group_if_live', fail_postcommit)
+    with warnings.catch_warnings():
+        warnings.simplefilter('error', RuntimeWarning)
+        assert ui.GNSCRIPT_MVP_OT_compile_expression.execute(operator, context) == {'FINISHED'}
+    assert any('postcommit cleanup failed' in msg and 'UI postcommit warning-as-error' in msg
+               for _, msg in reports)
+    assert not list(root.nodes)

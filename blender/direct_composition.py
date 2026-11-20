@@ -36,6 +36,11 @@ def compose_prepared_initial(prepared, target, backend, session, *, source_modul
     externally supplied one is neither committed nor rolled back here.
     """
     validate_prepared_direct(prepared, target)
+    if not prepared.body.statements:
+        raise CompileError(
+            'Root lowering requires a physical top-level body; '
+            'definition-only sources use GROUPS_ONLY publication'
+        )
     preexisting_nodes = {node.as_pointer() for node in target.nodes}
     own_transaction = transaction is None
     if transaction is None:
@@ -58,11 +63,8 @@ def compose_prepared_initial(prepared, target, backend, session, *, source_modul
         root_input_endpoint=root_input_endpoint if root_input_endpoint is not None else RootInputEndpoint(),
     )
     try:
-        if prepared.body.statements:
-            # NODEFORGE-TEMP-ISSUE61-ROOT-STAGING: Root-producing Compile still lowers in the authoritative tree while physical Extension API v2 is rejected in root. Issue #61 PR 2 must replace this call with native-copy private staging and strict subgraph transfer; delete this marker when no backend can receive the authoritative root.
-            lower_body(context, prepared.body, {}, base_depth=1)
-        else:
-            _place_definition_entries(prepared, context, source_module)
+        # NODEFORGE-TEMP-ISSUE61-ROOT-STAGING: Root-producing Compile still lowers in the authoritative tree while physical Extension API v2 is rejected in root. Issue #61 PR 2 must replace this call with native-copy private staging and strict subgraph transfer; delete this marker when no backend can receive the authoritative root.
+        lower_body(context, prepared.body, {}, base_depth=1)
         if own_transaction:
             transaction.commit()
     except Exception as error:
@@ -129,18 +131,3 @@ def materialize_definition_entries(prepared, materializer, materialization_conte
             prepared_callable, materialization, materialization_context,
         ).group)
     return tuple(groups)
-
-
-def _place_definition_entries(prepared, context, snapshot):
-    """Place the shared source groups in the legacy in-place composition path."""
-    from .library_groups import apply_function_node_display_name
-
-    groups = materialize_definition_entries(
-        prepared, context.function_materializer,
-        context.function_materialization_context, snapshot,
-    )
-    for index, group in enumerate(groups):
-        node = context.group.nodes.new('GeometryNodeGroup')
-        node.node_tree = group
-        node.location = (index * 260, 0)
-        apply_function_node_display_name(node, group)
