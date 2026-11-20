@@ -1,5 +1,7 @@
 """Public compiler facade and root build orchestration."""
 
+from dataclasses import dataclass
+
 from .errors import CompileError
 from .blender.library_groups import (
     materialize_library_entry_group_for_record,
@@ -170,6 +172,59 @@ def _prepare_direct_source(source: str, target, *, resolved_environment=None,
     )
     validate_prepared_direct(prepared, target)
     return prepared, backend, session, snapshot
+
+
+@dataclass(frozen=True)
+class RootCompileResult:
+    """One unified root compilation outcome and its boundary-link losses."""
+
+    target: object
+    outcome: str
+    skipped_boundary_links: int = 0
+
+
+def compile_source_in_tree(source: str, target, *, module_context: str | None = None,
+                           resolved_environment=None) -> RootCompileResult:
+    """Replace root nodes for physical statements or publish definition groups only.
+
+    The semantic body is the sole mode selector; no source text or historical
+    root state decides which physical graph owns this invocation.
+    """
+    from .blender.root_update import validate_base_target, reject_node_local_animation, replace_prepared_root
+    from .blender.direct_composition import materialize_definition_entries
+    from .blender.function_materializer import FunctionMaterializationContext, FunctionMaterializer
+    from .blender.group_backend import BlenderGroupBuildTransaction
+    from .function_instances import FunctionCompilationTrace
+
+    validate_base_target(target)
+    if not isinstance(source, str) or not source.strip():
+        raise CompileError('Compile Script requires a nonblank selected Text source')
+    prepared, backend, session, snapshot = _prepare_direct_source(
+        source, target, resolved_environment=resolved_environment,
+        module_context=module_context,
+    )
+    if prepared.body.statements:
+        reject_node_local_animation(target)
+        updated = replace_prepared_root(
+            prepared, target, backend, session, source_module=snapshot,
+        )
+        return RootCompileResult(target, 'ROOT_REPLACEMENT', updated.skipped_boundary_links)
+
+    transaction = BlenderGroupBuildTransaction()
+    context = FunctionMaterializationContext(
+        function_group_cache={}, function_group_transaction=transaction,
+        function_compilation_trace=FunctionCompilationTrace(),
+        source_callable_session=session,
+    )
+    try:
+        materialize_definition_entries(
+            prepared, FunctionMaterializer(group_backend=backend), context, snapshot,
+        )
+        transaction.commit()
+    except Exception:
+        transaction.rollback()
+        raise
+    return RootCompileResult(target, 'GROUPS_ONLY', 0)
 
 
 def compose_source_initial(source: str, target, *, resolved_environment=None,
