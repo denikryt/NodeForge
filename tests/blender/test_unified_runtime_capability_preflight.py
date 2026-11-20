@@ -56,7 +56,7 @@ def test_direct_physical_extension_never_invokes_destructive_backend(tmp_path):
     group.links.new(a.outputs['Mesh'], b.inputs['Geometry'])
     before = {node.as_pointer() for node in group.nodes}
     with pytest.raises(CompileError, match='unsupported directly'):
-        compiler.compose_source_initial('''from packages import danger
+        compile_root('''from packages import danger
 first = cube(1)
 result = unsafe_wipe(1.0)
 ''', group)
@@ -73,13 +73,13 @@ def test_physical_extension_inside_nested_function_uses_own_group_transaction(tm
     builtins._nodeforge_nested_safe_hits = 0
     group = bpy.data.node_groups.new('NFTest_nested_extension_supported', 'GeometryNodeTree')
     previous = group.nodes.new('GeometryNodeMeshCube')
-    compiler.compose_source_initial('''from packages import danger
+    compile_root('''from packages import danger
 def nested_safe(x: Float) -> Float:
     return safe_add(x)
 value = nested_safe(1.0)
 ''', group)
     assert builtins._nodeforge_nested_safe_hits == 1
-    assert any(node.as_pointer() == previous.as_pointer() for node in group.nodes)
+    assert all(node.as_pointer() != previous.as_pointer() for node in group.nodes)
     nested = [node.node_tree for node in group.nodes if node.bl_idname == 'GeometryNodeGroup']
     assert len(nested) == 1
     assert any(node.bl_idname == 'ShaderNodeMath' for node in nested[0].nodes)

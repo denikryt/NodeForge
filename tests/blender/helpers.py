@@ -57,19 +57,21 @@ def compile_group(source, name):
     return group
 
 def compile_entry_group(source, name, entry_name):
-    """Compose a definition-only module and return its named entry's function tree.
+    """Publish zero-incoming definitions and return the selected authoritative group.
 
-    This exercises level-0 automatic entry placement instead of treating a
-    multi-definition source as one legacy standalone function.
+    The single Compile contract never inserts definition-only instances into
+    the root tree; tests select the canonical materialized datablock instead.
     """
     target = bpy.data.node_groups.new(name + "_base", "GeometryNodeTree")
-    compiler.compose_source_initial(source, target)
+    result = compile_root(source, target)
+    check(result.outcome == 'GROUPS_ONLY', f"expected group-only source for {name}")
+    origin = f"test:root:{target.as_pointer()}"
     entries = [
-        node.node_tree for node in target.nodes
-        if node.bl_idname == "GeometryNodeGroup" and node.node_tree is not None
-        and node.node_tree.get("nodeforge_module_name") == entry_name
+        group for group in bpy.data.node_groups
+        if group.get('nodeforge_module_name') == entry_name
+        and origin in str(group.get('nodeforge_module_origin', ''))
     ]
-    check(len(entries) == 1, f"expected exactly one {entry_name!r} entry in {name}")
+    check(len(entries) == 1, f"expected exactly one authoritative {entry_name!r} group in {name}")
     return entries[0]
 
 
@@ -432,6 +434,39 @@ def _named_attribute_node_name(node):
         if isinstance(value, str):
             return value
     return None
+
+
+
+
+def compile_root(source, target, *, module_context=None, resolved_environment=None):
+    """Exercise the public Compile API with an explicit test-owned source origin.
+
+    Tests covering a missing origin call the compiler directly. Here the test
+    invocation owns an origin derived from the physical test target pointer,
+    which remains stable across root renames and repeated calls.
+    """
+    if module_context is None:
+        module_context = f"test:root:{target.as_pointer()}" if target is not None else None
+    return compiler.compile_source_in_tree(
+        source, target, module_context=module_context,
+        resolved_environment=resolved_environment,
+    )
+
+
+def published_groups_for_root(root):
+    """Return source-function datablocks for this test-owned root origin."""
+    origin = f"test:root:{root.as_pointer()}"
+    return tuple(group for group in bpy.data.node_groups
+                 if origin in str(group.get('nodeforge_module_origin', ''))
+                 and group.get('nodeforge_module_definition'))
+
+
+def published_entry(root, name):
+    """Retrieve the one group bearing a named authoritative source definition."""
+    found = [group for group in published_groups_for_root(root)
+             if group.get('nodeforge_module_name') == name]
+    check(len(found) == 1, f"expected exactly one published {name!r} group, got {len(found)}")
+    return found[0]
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

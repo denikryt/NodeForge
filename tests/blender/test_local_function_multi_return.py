@@ -1,5 +1,7 @@
 """Blender integration coverage for local-function multiple returns."""
 
+from helpers import compile_root
+
 import bpy
 import pytest
 
@@ -15,7 +17,7 @@ def _compile_direct_module(source: str, name: str):
     """Place mixed new-DSL declarations and operations in a test-owned base tree."""
     group = bpy.data.node_groups.new(name, 'GeometryNodeTree')
     try:
-        compiler.compose_source_initial(source, group)
+        compile_root(source, group)
     except Exception:
         bpy.data.node_groups.remove(group, do_unlink=True)
         raise

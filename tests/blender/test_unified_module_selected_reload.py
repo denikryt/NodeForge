@@ -22,7 +22,7 @@ c = inc(3, __unique__=True)
 def _materialized(source=_SOURCE):
     """Return one shared and two unique instances in one existing target tree."""
     target = bpy.data.node_groups.new('NFTest-selected-module-root', 'GeometryNodeTree')
-    compiler.compose_source_initial(source, target, module_context=_CONTEXT)
+    compile_root(source, target, module_context=_CONTEXT)
     nodes = [node for node in target.nodes if node.bl_idname == 'GeometryNodeGroup']
     groups = [node.node_tree for node in nodes]
     assert len(groups) == 3 and len({group.as_pointer() for group in groups}) == 3

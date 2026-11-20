@@ -1,5 +1,7 @@
 """Exercise unified source composition and copy detachment through Blender operators."""
 
+from helpers import compile_root, published_entry
+
 import bpy
 import pytest
 
@@ -60,11 +62,9 @@ after = cube(2)
     with bpy.context.temp_override(area=area):
         assert bpy.ops.gn_script_mvp.compile_expression() == {'FINISHED'}
     assert group.as_pointer() == group_pointer
-    assert len(group.links) >= 1
-    assert any(node.as_pointer() == a.as_pointer() for node in group.nodes)
-    assert any(node.as_pointer() == b.as_pointer() for node in group.nodes)
+    assert all(node.as_pointer() not in (a.as_pointer(), b.as_pointer()) for node in group.nodes)
     assert sum(node.bl_idname == 'GeometryNodeGroup' for node in group.nodes) == 1
-    assert sum(node.bl_idname == 'GeometryNodeMeshCube' for node in group.nodes) >= 3
+    assert sum(node.bl_idname == 'GeometryNodeMeshCube' for node in group.nodes) == 2
 
 
 def test_compile_operator_rejects_invalid_target_without_publication(editor_context):
@@ -83,11 +83,12 @@ def test_compile_operator_rejects_invalid_target_without_publication(editor_cont
 def test_detach_selected_copy_operator_preserves_canonical_group(editor_context):
     """Detachment is explicit, copy-directed and does not touch the original."""
     area, tree, text = editor_context
-    compiler.compose_source_initial('''def shape(size: Float = 1.0) -> Geometry:
+    compile_root('''def shape(size: Float = 1.0) -> Geometry:
     return cube(size)
 ''', tree)
-    original_node = next(node for node in tree.nodes if node.bl_idname == 'GeometryNodeGroup')
-    canonical = original_node.node_tree
+    canonical = published_entry(tree, 'shape')
+    original_node = tree.nodes.new('GeometryNodeGroup')
+    original_node.node_tree = canonical
     duplicate = canonical.copy()
     other = tree.nodes.new('GeometryNodeGroup')
     other.node_tree = duplicate
@@ -111,7 +112,12 @@ def test_selected_module_reload_operator_from_bound_text(editor_context):
 ''')
     with bpy.context.temp_override(area=area):
         assert bpy.ops.gn_script_mvp.compile_expression() == {'FINISHED'}
-    node = next(node for node in group.nodes if node.bl_idname == 'GeometryNodeGroup')
+    assert not list(group.nodes)  # Group-only Compile leaves the root's composition manual.
+    canonical = next(item for item in bpy.data.node_groups
+                     if item.get('nodeforge_module_name') == 'bump'
+                     and 'nodeforge_module_definition' in item)
+    node = group.nodes.new('GeometryNodeGroup')
+    node.node_tree = canonical
     for candidate in group.nodes:
         candidate.select = False
     node.select = True

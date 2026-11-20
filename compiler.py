@@ -123,7 +123,7 @@ def create_expression_group(source: str, name: str = "NodeForge Group"):
     """Materialize exactly one standalone unified `.nf` definition.
 
     This API no longer accepts a generated-root script or implicit root I/O.
-    Use ``compose_source_initial`` for executable top-level composition.
+    Use ``compile_source_in_tree`` for executable top-level composition.
     """
     from uuid import uuid4
     from .compiler_identities import ModuleId
@@ -234,48 +234,14 @@ def compile_source_in_tree(source: str, target, *, module_context: str | None = 
     return RootCompileResult(target, 'GROUPS_ONLY', 0)
 
 
-def compose_source_initial(source: str, target, *, resolved_environment=None,
-                           module_context: str | None = None):
-    """Append one typed `.nf` composition directly to an existing base tree."""
-    from .blender.direct_composition import compose_prepared_initial
-
-    prepared, backend, session, snapshot = _prepare_direct_source(
-        source, target, resolved_environment=resolved_environment,
-        module_context=module_context,
-    )
-    return compose_prepared_initial(prepared, target, backend, session, source_module=snapshot)
-
-
-def update_source_in_tree(source: str, target, *, module_context: str | None = None):
-    """Replace ordinary nodes of an eligible base GeometryNodeTree in place.
-
-    Returns ``RootUpdateResult`` with the number of skipped old boundary links.
-    A ``RootUpdateError.may_have_mutated`` flag distinguishes errors that require
-    an Undo step from preflight or fully cleaned staging failures.
-    """
-    from .blender.root_update import (
-        validate_base_target, reject_node_local_animation, replace_prepared_root,
-    )
-
-    validate_base_target(target)
-    if not isinstance(source, str) or not source.strip():
-        raise CompileError('Update Script requires a nonblank selected Text source')
-    reject_node_local_animation(target)
-    prepared, backend, session, snapshot = _prepare_direct_source(
-        source, target, module_context=module_context,
-    )
-    return replace_prepared_root(
-        prepared, target, backend, session, source_module=snapshot,
-    )
-
-
 def _requires_mesh_compute(prepared) -> bool:
     """Classify used runtime dependencies after semantic resolution, not import text."""
     return any(owner and owner[0] in {"local-runtime", "examples-runtime"}
                for owner, _ in prepared.extension_dependencies)
 
 
-def compile_script_auto(source: str, owner=None, name: str = "NodeForge Group"):
+def compile_script_auto(source: str, owner=None, name: str = "NodeForge Group",
+                        *, module_context: str | None = None):
     """Compile top-level `.nf` only into the explicitly supplied base node tree.
 
     ``name`` is retained for callers, not used to create a generated root.
@@ -287,7 +253,7 @@ def compile_script_auto(source: str, owner=None, name: str = "NodeForge Group"):
             'Unified Compile Script requires an existing base GeometryNodeTree; '
             'generated-root and modifier compilation are unsupported'
         )
-    compose_source_initial(source, owner)
+    compile_source_in_tree(source, owner, module_context=module_context)
     return owner, False
 
 

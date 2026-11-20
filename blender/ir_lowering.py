@@ -536,7 +536,7 @@ def _lower_builtin_call(context, operation, operands, x, y):
                 raise CompileError(f"Internal error: unknown raw-node input mode {mode!r}")
             raw_inputs.append((selector, value_spec))
         outputs = options["outputs"]
-        endpoint = context.root_input_endpoint
+        endpoint = getattr(context, 'root_input_endpoint', None)
         if options["bl_idname"] == 'NodeGroupInput' and endpoint is not None:
             if endpoint.node is None:
                 node = next((item for item in group.nodes if item.bl_idname == 'NodeGroupInput'), None)

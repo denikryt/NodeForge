@@ -111,7 +111,7 @@ def nf_fixture(geo: Geometry['Geometry'], name: String['Attribute'] = 'Weight_A'
 
 def test_top_level_store_accepts_runtime_string_name():
     group = bpy.data.node_groups.new("NFTest_string_statement_store", "GeometryNodeTree")
-    compiler.compose_source_initial('''
+    compile_root('''
 name = node("FunctionNodeInputString", props={"string": "Weight_A"}, output="String", typ=String)
 geometry = store_named_attribute(cube(1.0), name, position().x, domain="POINT", type="FLOAT")
 ''', group)

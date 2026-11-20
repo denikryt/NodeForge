@@ -13,7 +13,7 @@ def test_representative_compile_fixtures():
     for name, source in fixtures.items():
         if name == 'local_function':
             tree = bpy.data.node_groups.new('NFTest_' + name, 'GeometryNodeTree')
-            compiler.compose_source_initial(source + '\nresult = nf_fixture(2.0)\n', tree)
+            compile_root(source + '\nresult = nf_fixture(2.0)\n', tree)
         else:
             compile_group(source, 'NFTest_' + name)
     print('COMPILE_FIXTURES_OK')
