@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from helpers import compile_root
+
 import json
 import tempfile
 from pathlib import Path
@@ -252,7 +254,7 @@ def test_package_source_color_roundtrips_through_python_and_raw_nodes(tmp_path):
         _write_color_extension(root, source_functions=True)
         packages.install_package_directory(root)
         wrapper=bpy.data.node_groups.new('NFTest_ColorExt_Root','GeometryNodeTree')
-        compiler.compose_source_initial('''from packages import color_runtime
+        compile_root('''from packages import color_runtime
 
 first = color_runtime.extension_to_raw(0.2)
 second = color_runtime.extension_to_raw(0.3, __unique__=True)

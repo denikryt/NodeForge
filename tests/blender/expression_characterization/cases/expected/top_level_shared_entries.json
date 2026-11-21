@@ -1,252 +1,392 @@
 {
+  "definitions": [
+    {
+      "graph": {
+        "interface": [
+          {
+            "in_out": "OUTPUT",
+            "name": "Value",
+            "socket_type": "NodeSocketFloat"
+          },
+          {
+            "default": 0.0,
+            "in_out": "INPUT",
+            "name": "x",
+            "socket_type": "NodeSocketFloat"
+          }
+        ],
+        "links": [
+          {
+            "from": [
+              "n0",
+              "Socket_0"
+            ],
+            "to": [
+              "n3",
+              "Value"
+            ]
+          },
+          {
+            "from": [
+              "n2",
+              "Value"
+            ],
+            "to": [
+              "n3",
+              "Value_001"
+            ]
+          },
+          {
+            "from": [
+              "n3",
+              "Value"
+            ],
+            "to": [
+              "n1",
+              "Socket_1"
+            ]
+          }
+        ],
+        "nodes": [
+          {
+            "bl_idname": "NodeGroupInput",
+            "id": "n0",
+            "properties": {}
+          },
+          {
+            "bl_idname": "NodeGroupOutput",
+            "id": "n1",
+            "properties": {}
+          },
+          {
+            "bl_idname": "ShaderNodeValue",
+            "id": "n2",
+            "payload": {
+              "value": 1.0
+            },
+            "properties": {}
+          },
+          {
+            "bl_idname": "ShaderNodeMath",
+            "id": "n3",
+            "properties": {
+              "operation": "ADD"
+            }
+          }
+        ]
+      },
+      "name": "_common"
+    },
+    {
+      "graph": {
+        "interface": [
+          {
+            "in_out": "OUTPUT",
+            "name": "Value",
+            "socket_type": "NodeSocketFloat"
+          },
+          {
+            "default": 0.0,
+            "in_out": "INPUT",
+            "name": "x",
+            "socket_type": "NodeSocketFloat"
+          }
+        ],
+        "links": [
+          {
+            "from": [
+              "n0",
+              "Socket_0"
+            ],
+            "to": [
+              "n2",
+              "Socket_0"
+            ]
+          },
+          {
+            "from": [
+              "n2",
+              "Socket_1"
+            ],
+            "to": [
+              "n1",
+              "Socket_1"
+            ]
+          }
+        ],
+        "nodes": [
+          {
+            "bl_idname": "NodeGroupInput",
+            "id": "n0",
+            "properties": {}
+          },
+          {
+            "bl_idname": "NodeGroupOutput",
+            "id": "n1",
+            "properties": {}
+          },
+          {
+            "bl_idname": "GeometryNodeGroup",
+            "group": {
+              "graph": {
+                "interface": [
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "Value",
+                    "socket_type": "NodeSocketFloat"
+                  },
+                  {
+                    "default": 0.0,
+                    "in_out": "INPUT",
+                    "name": "x",
+                    "socket_type": "NodeSocketFloat"
+                  }
+                ],
+                "links": [
+                  {
+                    "from": [
+                      "n0",
+                      "Socket_0"
+                    ],
+                    "to": [
+                      "n3",
+                      "Value"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Value"
+                    ],
+                    "to": [
+                      "n3",
+                      "Value_001"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n3",
+                      "Value"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_1"
+                    ]
+                  }
+                ],
+                "nodes": [
+                  {
+                    "bl_idname": "NodeGroupInput",
+                    "id": "n0",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "NodeGroupOutput",
+                    "id": "n1",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "ShaderNodeValue",
+                    "id": "n2",
+                    "payload": {
+                      "value": 1.0
+                    },
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "ShaderNodeMath",
+                    "id": "n3",
+                    "properties": {
+                      "operation": "ADD"
+                    }
+                  }
+                ]
+              },
+              "id": "g1",
+              "unique": false
+            },
+            "id": "n2",
+            "properties": {}
+          }
+        ]
+      },
+      "name": "first"
+    },
+    {
+      "graph": {
+        "interface": [
+          {
+            "in_out": "OUTPUT",
+            "name": "Value",
+            "socket_type": "NodeSocketFloat"
+          },
+          {
+            "default": 0.0,
+            "in_out": "INPUT",
+            "name": "x",
+            "socket_type": "NodeSocketFloat"
+          }
+        ],
+        "links": [
+          {
+            "from": [
+              "n0",
+              "Socket_0"
+            ],
+            "to": [
+              "n2",
+              "Socket_0"
+            ]
+          },
+          {
+            "from": [
+              "n2",
+              "Socket_1"
+            ],
+            "to": [
+              "n4",
+              "Value"
+            ]
+          },
+          {
+            "from": [
+              "n3",
+              "Value"
+            ],
+            "to": [
+              "n4",
+              "Value_001"
+            ]
+          },
+          {
+            "from": [
+              "n4",
+              "Value"
+            ],
+            "to": [
+              "n1",
+              "Socket_1"
+            ]
+          }
+        ],
+        "nodes": [
+          {
+            "bl_idname": "NodeGroupInput",
+            "id": "n0",
+            "properties": {}
+          },
+          {
+            "bl_idname": "NodeGroupOutput",
+            "id": "n1",
+            "properties": {}
+          },
+          {
+            "bl_idname": "GeometryNodeGroup",
+            "group": {
+              "graph": {
+                "interface": [
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "Value",
+                    "socket_type": "NodeSocketFloat"
+                  },
+                  {
+                    "default": 0.0,
+                    "in_out": "INPUT",
+                    "name": "x",
+                    "socket_type": "NodeSocketFloat"
+                  }
+                ],
+                "links": [
+                  {
+                    "from": [
+                      "n0",
+                      "Socket_0"
+                    ],
+                    "to": [
+                      "n3",
+                      "Value"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Value"
+                    ],
+                    "to": [
+                      "n3",
+                      "Value_001"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n3",
+                      "Value"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_1"
+                    ]
+                  }
+                ],
+                "nodes": [
+                  {
+                    "bl_idname": "NodeGroupInput",
+                    "id": "n0",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "NodeGroupOutput",
+                    "id": "n1",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "ShaderNodeValue",
+                    "id": "n2",
+                    "payload": {
+                      "value": 1.0
+                    },
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "ShaderNodeMath",
+                    "id": "n3",
+                    "properties": {
+                      "operation": "ADD"
+                    }
+                  }
+                ]
+              },
+              "id": "g1",
+              "unique": false
+            },
+            "id": "n2",
+            "properties": {}
+          },
+          {
+            "bl_idname": "ShaderNodeValue",
+            "id": "n3",
+            "payload": {
+              "value": 2.0
+            },
+            "properties": {}
+          },
+          {
+            "bl_idname": "ShaderNodeMath",
+            "id": "n4",
+            "properties": {
+              "operation": "MULTIPLY"
+            }
+          }
+        ]
+      },
+      "name": "second"
+    }
+  ],
   "graph": {
     "interface": [],
     "links": [],
-    "nodes": [
-      {
-        "bl_idname": "GeometryNodeGroup",
-        "group": {
-          "graph": {
-            "interface": [
-              {
-                "in_out": "OUTPUT",
-                "name": "Value",
-                "socket_type": "NodeSocketFloat"
-              },
-              {
-                "default": 0.0,
-                "in_out": "INPUT",
-                "name": "x",
-                "socket_type": "NodeSocketFloat"
-              }
-            ],
-            "links": [
-              {
-                "from": [
-                  "n0",
-                  "Socket_0"
-                ],
-                "to": [
-                  "n2",
-                  "Socket_0"
-                ]
-              },
-              {
-                "from": [
-                  "n2",
-                  "Socket_1"
-                ],
-                "to": [
-                  "n1",
-                  "Socket_1"
-                ]
-              }
-            ],
-            "nodes": [
-              {
-                "bl_idname": "NodeGroupInput",
-                "id": "n0",
-                "properties": {}
-              },
-              {
-                "bl_idname": "NodeGroupOutput",
-                "id": "n1",
-                "properties": {}
-              },
-              {
-                "bl_idname": "GeometryNodeGroup",
-                "group": {
-                  "graph": {
-                    "interface": [
-                      {
-                        "in_out": "OUTPUT",
-                        "name": "Value",
-                        "socket_type": "NodeSocketFloat"
-                      },
-                      {
-                        "default": 0.0,
-                        "in_out": "INPUT",
-                        "name": "x",
-                        "socket_type": "NodeSocketFloat"
-                      }
-                    ],
-                    "links": [
-                      {
-                        "from": [
-                          "n0",
-                          "Socket_0"
-                        ],
-                        "to": [
-                          "n3",
-                          "Value"
-                        ]
-                      },
-                      {
-                        "from": [
-                          "n2",
-                          "Value"
-                        ],
-                        "to": [
-                          "n3",
-                          "Value_001"
-                        ]
-                      },
-                      {
-                        "from": [
-                          "n3",
-                          "Value"
-                        ],
-                        "to": [
-                          "n1",
-                          "Socket_1"
-                        ]
-                      }
-                    ],
-                    "nodes": [
-                      {
-                        "bl_idname": "NodeGroupInput",
-                        "id": "n0",
-                        "properties": {}
-                      },
-                      {
-                        "bl_idname": "NodeGroupOutput",
-                        "id": "n1",
-                        "properties": {}
-                      },
-                      {
-                        "bl_idname": "ShaderNodeValue",
-                        "id": "n2",
-                        "payload": {
-                          "value": 1.0
-                        },
-                        "properties": {}
-                      },
-                      {
-                        "bl_idname": "ShaderNodeMath",
-                        "id": "n3",
-                        "properties": {
-                          "operation": "ADD"
-                        }
-                      }
-                    ]
-                  },
-                  "id": "g2",
-                  "unique": false
-                },
-                "id": "n2",
-                "properties": {}
-              }
-            ]
-          },
-          "id": "g1",
-          "unique": false
-        },
-        "id": "n0",
-        "properties": {}
-      },
-      {
-        "bl_idname": "GeometryNodeGroup",
-        "group": {
-          "graph": {
-            "interface": [
-              {
-                "in_out": "OUTPUT",
-                "name": "Value",
-                "socket_type": "NodeSocketFloat"
-              },
-              {
-                "default": 0.0,
-                "in_out": "INPUT",
-                "name": "x",
-                "socket_type": "NodeSocketFloat"
-              }
-            ],
-            "links": [
-              {
-                "from": [
-                  "n0",
-                  "Socket_0"
-                ],
-                "to": [
-                  "n2",
-                  "Socket_0"
-                ]
-              },
-              {
-                "from": [
-                  "n2",
-                  "Socket_1"
-                ],
-                "to": [
-                  "n4",
-                  "Value"
-                ]
-              },
-              {
-                "from": [
-                  "n3",
-                  "Value"
-                ],
-                "to": [
-                  "n4",
-                  "Value_001"
-                ]
-              },
-              {
-                "from": [
-                  "n4",
-                  "Value"
-                ],
-                "to": [
-                  "n1",
-                  "Socket_1"
-                ]
-              }
-            ],
-            "nodes": [
-              {
-                "bl_idname": "NodeGroupInput",
-                "id": "n0",
-                "properties": {}
-              },
-              {
-                "bl_idname": "NodeGroupOutput",
-                "id": "n1",
-                "properties": {}
-              },
-              {
-                "bl_idname": "GeometryNodeGroup",
-                "group": {
-                  "id": "g2",
-                  "unique": false
-                },
-                "id": "n2",
-                "properties": {}
-              },
-              {
-                "bl_idname": "ShaderNodeValue",
-                "id": "n3",
-                "payload": {
-                  "value": 2.0
-                },
-                "properties": {}
-              },
-              {
-                "bl_idname": "ShaderNodeMath",
-                "id": "n4",
-                "properties": {
-                  "operation": "MULTIPLY"
-                }
-              }
-            ]
-          },
-          "id": "g3",
-          "unique": false
-        },
-        "id": "n1",
-        "properties": {}
-      }
-    ]
+    "nodes": []
   },
   "kind": "graph"
 }

@@ -12,7 +12,7 @@ pytestmark = pytest.mark.blender
 def _compose(source, title):
     """Compile a source module into a fresh Geometry Nodes base tree."""
     tree = bpy.data.node_groups.new(title, 'GeometryNodeTree')
-    compiler.compose_source_initial(source, tree)
+    compile_root(source, tree)
     return tree
 
 
@@ -184,13 +184,13 @@ def test_inline_rotation_default_invalid_or_vector_runtime_rejected():
     for bad in ('(0, 1)', '(0, True, 1)', '(0, 1e50, 1)'):
         tree = bpy.data.node_groups.new('NFTest_Inline_Bad_Rotation', 'GeometryNodeTree')
         with pytest.raises(CompileError):
-            compiler.compose_source_initial(
+            compile_root(
                 'def identity(rotation: Rotation = ' + bad + ', __inline__=True) -> Rotation:\n'
                 '    return rotation\nresult = identity()\n', tree,
             )
     wrong = bpy.data.node_groups.new('NFTest_Inline_Bad_Runtime', 'GeometryNodeTree')
     with pytest.raises(CompileError):
-        compiler.compose_source_initial('''def identity(rotation: Rotation, __inline__=True) -> Rotation:
+        compile_root('''def identity(rotation: Rotation, __inline__=True) -> Rotation:
     return rotation
 result = identity(vector(0, 0, 0))
 ''', wrong)
@@ -383,13 +383,13 @@ def test_direct_root_update_replaces_inline_expansion_and_staging_failure_rolls_
     from NodeForge.blender import ir_lowering
 
     tree = bpy.data.node_groups.new('NFTest_Inline_Root_Update', 'GeometryNodeTree')
-    compiler.update_source_in_tree('a = cube(1.0)\n', tree)
+    compile_root('a = cube(1.0)\n', tree)
     before = {node.as_pointer() for node in tree.nodes}
     source = '''def inline_leaf(value: Float, __inline__=True) -> Float:
     return value + 1.0
 result = inline_leaf(index())
 '''
-    compiler.update_source_in_tree(source, tree)
+    compile_root(source, tree)
     assert len(_nodes(tree, 'ShaderNodeMath')) == 2  # Int-to-Float adapter and inline addition.
     assert not _nodes(tree, 'GeometryNodeGroup')
     assert not before.intersection(node.as_pointer() for node in tree.nodes)
@@ -405,7 +405,7 @@ result = inline_leaf(index())
     monkeypatch.setattr(ir_lowering, '_math', injected)
     from NodeForge.blender.root_update import RootUpdateError
     with pytest.raises(RootUpdateError, match='injected inline lowering failure'):
-        compiler.update_source_in_tree(source.replace('1.0', '2.0'), tree)
+        compile_root(source.replace('1.0', '2.0'), tree)
     assert pointers == {node.as_pointer() for node in tree.nodes}
     assert group_pointers == {g.as_pointer() for g in bpy.data.node_groups}
 
@@ -425,10 +425,11 @@ def test_standalone_and_declaration_only_materialization_ignore_compiler_paramet
     assert len(_nodes(standalone, 'ShaderNodeMath')) == 1
 
     root = _compose(source, 'NFTest_Inline_Definition_Only')
-    group_node, = _nodes(root, 'GeometryNodeGroup')
-    assert group_node.node_tree.get('nodeforge_module_name') == 'inline_standalone'
-    assert len(group_node.inputs) == 1
-    assert len(_nodes(group_node.node_tree, 'ShaderNodeMath')) == 1
+    assert _nodes(root, 'GeometryNodeGroup') == []
+    group = published_entry(root, 'inline_standalone')
+    assert len([item for item in group.interface.items_tree
+                if item.item_type == 'SOCKET' and item.in_out == 'INPUT']) == 1
+    assert len(_nodes(group, 'ShaderNodeMath')) == 1
 
 
 @pytest.mark.parametrize('marker', ('__inline__=True', '__inline__: Bool=True'))

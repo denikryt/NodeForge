@@ -703,6 +703,7 @@ def test_blender_lowering_context_is_minimal_immutable_and_compiler_independent(
         "extension_registry",
         "generated_resource_transaction",
         "layout_origin",
+        "root_input_endpoint",
     )
     assert context.runtime_bindings[_test_binding_id("a")] is value
     source_bindings[_test_binding_id("a")] = Value(object(), TYPE_VECTOR)

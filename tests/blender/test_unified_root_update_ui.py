@@ -52,16 +52,16 @@ def test_operator_switches_selected_text_and_preserves_pinned_root(root_editor):
         pointer = root.as_pointer()
         area.spaces.active.pin = True
         with bpy.context.temp_override(area=area):
-            assert bpy.ops.gn_script_mvp.update_expression() == {'FINISHED'}
+            assert bpy.ops.gn_script_mvp.compile_expression() == {'FINISHED'}
         assert sum(n.bl_idname == 'GeometryNodeMeshCube' for n in root.nodes) == 1
         bpy.context.scene.gn_script_mvp.text_block = text_b
         text_b.write('a = cube(3)\nb = cube(4)\n')
         with bpy.context.temp_override(area=area):
-            assert bpy.ops.gn_script_mvp.update_expression() == {'FINISHED'}
+            assert bpy.ops.gn_script_mvp.compile_expression() == {'FINISHED'}
         assert root.as_pointer() == pointer
         assert sum(n.bl_idname == 'GeometryNodeMeshCube' for n in root.nodes) == 2
-        assert 'REGISTER' in ui.GNSCRIPT_MVP_OT_update_expression.bl_options
-        assert 'UNDO' in ui.GNSCRIPT_MVP_OT_update_expression.bl_options
+        assert 'REGISTER' in ui.GNSCRIPT_MVP_OT_compile_expression.bl_options
+        assert 'UNDO' in ui.GNSCRIPT_MVP_OT_compile_expression.bl_options
         assert not any(key.startswith('nodeforge_root_text') for key in root.keys())
     finally:
         area.spaces.active.pin = False
@@ -76,8 +76,8 @@ def test_operator_rejects_missing_or_blank_text_without_editing_root(root_editor
     for selected in (None, text):
         bpy.context.scene.gn_script_mvp.text_block = selected
         with bpy.context.temp_override(area=area):
-            with pytest.raises(RuntimeError, match='Update Script' if selected is text else 'Text datablock'):
-                bpy.ops.gn_script_mvp.update_expression()
+            with pytest.raises(RuntimeError, match='Compile Script requires a nonblank selected Text source'):
+                bpy.ops.gn_script_mvp.compile_expression()
         assert {node.as_pointer() for node in root.nodes} == {pointer}
 
 
@@ -111,6 +111,7 @@ def test_operator_late_error_retains_undo_compatible_finished(root_editor, monke
         def __init__(self):
             """Prepare an in-memory operator report ledger."""
             self.messages = []
+            self.expression = ''
 
         def report(self, levels, message):
             """Record Blender-style error levels and messages."""
@@ -118,7 +119,7 @@ def test_operator_late_error_retains_undo_compatible_finished(root_editor, monke
 
     operator = OperatorReport()
     with bpy.context.temp_override(area=area):
-        assert ui.GNSCRIPT_MVP_OT_update_expression.execute(operator, bpy.context) == {'FINISHED'}
+        assert ui.GNSCRIPT_MVP_OT_compile_expression.execute(operator, bpy.context) == {'FINISHED'}
     assert any('NFR5 UI late failure' in msg for levels, msg in operator.messages)
     assert sum(node.bl_idname == 'GeometryNodeMeshCube' for node in root.nodes) == 1
 
@@ -130,7 +131,6 @@ def test_operator_compile_is_append_only_and_updated_root_replaces(root_editor):
     with bpy.context.temp_override(area=area):
         assert bpy.ops.gn_script_mvp.compile_expression() == {'FINISHED'}
         assert bpy.ops.gn_script_mvp.compile_expression() == {'FINISHED'}
-        assert bpy.ops.gn_script_mvp.update_expression() == {'FINISHED'}
     assert sum(n.bl_idname == 'GeometryNodeMeshCube' for n in root.nodes) == 1
     assert ui.NODEFORGE_OT_detach_selected_source_owner in ui.classes
     assert ui.NODEFORGE_OT_reload_selected_library_group in ui.classes
@@ -156,7 +156,8 @@ def test_panel_does_not_show_detach_but_recovery_and_reload_are_registered():
 
     draw = inspect.getsource(ui.GNSCRIPT_MVP_PT_panel.draw)
     assert 'NODEFORGE_OT_detach_selected_source_owner.bl_idname' not in draw
-    assert 'GNSCRIPT_MVP_OT_update_expression.bl_idname' in draw
+    assert 'GNSCRIPT_MVP_OT_update_expression.bl_idname' not in draw
+    assert 'GNSCRIPT_MVP_OT_compile_expression.bl_idname' in draw
     assert 'NODEFORGE_OT_reload_selected_library_group.bl_idname' in draw
     assert ui.NODEFORGE_OT_detach_selected_source_owner in ui.classes
 
@@ -171,7 +172,7 @@ def test_operator_invalid_semantics_does_not_leave_new_text_identity(root_editor
     assert TEXT_MODULE_CONTEXT_PROP not in text
     with bpy.context.temp_override(area=area):
         with pytest.raises(RuntimeError, match='not_defined'):
-            bpy.ops.gn_script_mvp.update_expression()
+            bpy.ops.gn_script_mvp.compile_expression()
     assert TEXT_MODULE_CONTEXT_PROP not in text
     assert len(tree.nodes) == 1 and tree.nodes[0].as_pointer() == old.as_pointer()
 
@@ -197,6 +198,7 @@ def test_operator_predetach_unrestored_error_keeps_undo_result(root_editor, monk
         def __init__(self):
             """Initialize report capture."""
             self.messages = []
+            self.expression = ''
 
         def report(self, levels, message):
             """Record diagnostic and classification."""
@@ -204,6 +206,6 @@ def test_operator_predetach_unrestored_error_keeps_undo_result(root_editor, monk
 
     operator = OperatorReport()
     with bpy.context.temp_override(area=area):
-        assert ui.GNSCRIPT_MVP_OT_update_expression.execute(operator, bpy.context) == {'FINISHED'}
+        assert ui.GNSCRIPT_MVP_OT_compile_expression.execute(operator, bpy.context) == {'FINISHED'}
     assert output.parent.as_pointer() == frame.as_pointer()
     assert any('structural I/O restoration:' in message for _, message in operator.messages)

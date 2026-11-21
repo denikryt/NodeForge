@@ -56,7 +56,7 @@ def test_update_preserves_root_interface_io_custom_props_and_replaces_manual_gro
     outer = bpy.data.node_groups.new('NFR5_outer', 'GeometryNodeTree')
     external = outer.nodes.new('GeometryNodeGroup')
     external.node_tree = tree
-    result = compiler.update_source_in_tree('a = cube(2)\n', tree)
+    result = compile_root('a = cube(2)\n', tree)
     assert result.target is tree
     assert tree.as_pointer() == ptr and tree['user_marker'] == 'keep me'
     assert _interface(tree) == signature
@@ -81,7 +81,7 @@ def test_update_keeps_direct_io_link_and_frame_parented_io_absolute_position():
     outlet.location = (350, -100)
     before = tuple(root_update._point(node) for node in (inlet, outlet))
     tree.links.new(inlet.outputs['Geometry'], outlet.inputs['Geometry'])
-    result = compiler.update_source_in_tree('a = cube(1)\n', tree)
+    result = compile_root('a = cube(1)\n', tree)
     assert result.skipped_boundary_links == 0
     assert outlet.parent is None
     assert tuple(root_update._point(node) for node in (inlet, outlet)) == before
@@ -95,7 +95,7 @@ def test_update_reconnects_unique_compatible_boundary_and_reuses_position():
     old = tree.nodes.new('GeometryNodeMeshCube')
     old.location = (333, 177)
     tree.links.new(old.outputs['Mesh'], outlet.inputs['Geometry'])
-    result = compiler.update_source_in_tree('a = cube(3)\n', tree)
+    result = compile_root('a = cube(3)\n', tree)
     cube, = [node for node in tree.nodes if node.bl_idname == 'GeometryNodeMeshCube']
     assert cube.as_pointer() != old.as_pointer()
     assert root_update._point(cube) == (333, 177)
@@ -108,29 +108,31 @@ def test_update_skips_ambiguous_old_boundary_without_guessing():
     tree, inlet, outlet = _root('NFR5_skip_ambiguous')
     old = tree.nodes.new('GeometryNodeMeshCube')
     tree.links.new(old.outputs['Mesh'], outlet.inputs['Geometry'])
-    result = compiler.update_source_in_tree('a = cube(1)\nb = cube(2)\n', tree)
+    result = compile_root('a = cube(1)\nb = cube(2)\n', tree)
     assert result.skipped_boundary_links == 1
     assert not outlet.inputs['Geometry'].is_linked
     assert sum(node.bl_idname == 'GeometryNodeMeshCube' for node in tree.nodes) == 2
 
 
-def test_update_twice_no_accumulation_and_compile_still_appends():
+def test_compile_twice_no_accumulation():
     """Two Updates overwrite ordinary nodes; Compile alone remains append-only."""
     tree, _, _ = _root('NFR5_repeat_update')
-    compiler.update_source_in_tree('a = cube(1)\nb = cube(2)', tree)
-    compiler.update_source_in_tree('a = cube(7)\nb = cube(8)', tree)
+    compile_root('a = cube(1)\nb = cube(2)', tree)
+    compile_root('a = cube(7)\nb = cube(8)', tree)
     assert sum(node.bl_idname == 'GeometryNodeMeshCube' for node in tree.nodes) == 2
-    compiler.compose_source_initial('a = cube(1)', tree)
-    assert sum(node.bl_idname == 'GeometryNodeMeshCube' for node in tree.nodes) == 3
+    compile_root('a = cube(1)', tree)
+    assert sum(node.bl_idname == 'GeometryNodeMeshCube' for node in tree.nodes) == 1
 
 
-def test_update_definition_only_and_zero_node_source():
-    """Entry placement shares Compile while a nonblank compile-time-only script clears nodes."""
+def test_compile_definition_only_and_zero_node_source_preserves_manual_root():
+    """Group-only Compile publishes definitions without clearing ordinary root nodes."""
     tree, inlet, outlet = _root('NFR5_definitions')
-    compiler.update_source_in_tree('def make_cube() -> Geometry:\n    return cube(1)\n', tree)
-    assert sum(node.bl_idname == 'GeometryNodeGroup' for node in tree.nodes) == 1
-    compiler.update_source_in_tree('FLAG = False\n', tree)
-    assert {node.as_pointer() for node in tree.nodes} == {inlet.as_pointer(), outlet.as_pointer()}
+    old = tree.nodes.new('GeometryNodeMeshCube')
+    compile_root('def make_cube() -> Geometry:\n    return cube(1)\n', tree)
+    assert sum(node.bl_idname == 'GeometryNodeGroup' for node in tree.nodes) == 0
+    assert published_entry(tree, 'make_cube')
+    compile_root('FLAG = False\n', tree)
+    assert {node.as_pointer() for node in tree.nodes} == {inlet.as_pointer(), outlet.as_pointer(), old.as_pointer()}
 
 
 @pytest.mark.parametrize('source', ['', '  \n  ', 'x = unknown(1)', 'output(value=1)', 'x = input_float("x")'])
@@ -140,7 +142,7 @@ def test_update_rejects_invalid_source_before_root_mutation(source):
     old = tree.nodes.new('GeometryNodeMeshCube')
     ids = {node.as_pointer() for node in tree.nodes}
     with pytest.raises(CompileError):
-        compiler.update_source_in_tree(source, tree)
+        compile_root(source, tree)
     assert ids == {node.as_pointer() for node in tree.nodes}
     assert len(bpy.data.node_groups.get(tree.name).nodes) == 3
 
@@ -155,12 +157,12 @@ def test_update_rejects_function_private_and_mesh_compute_root_before_mutation()
         tree, inlet, outlet = _root(name)
         tree[key] = value
         with pytest.raises(CompileError):
-            compiler.update_source_in_tree('a = cube(1)', tree)
+            compile_root('a = cube(1)', tree)
         assert {node.as_pointer() for node in tree.nodes} == {inlet.as_pointer(), outlet.as_pointer()}
     tree, inlet, outlet = _root('NFR5_private')
     mark_transaction_private(tree)
     with pytest.raises(CompileError):
-        compiler.update_source_in_tree('a = cube(1)', tree)
+        compile_root('a = cube(1)', tree)
     assert len(tree.nodes) == 2
 
 
@@ -186,7 +188,7 @@ def test_staging_error_preserves_old_graph_and_removes_private_backup(monkeypatc
 
     monkeypatch.setattr(ir_lowering, '_cube_geometry', injected)
     with pytest.raises(root_update.RootUpdateError, match='NFR5 stage failure') as info:
-        compiler.update_source_in_tree('a = cube(1)\nb = cube(2)\n', tree)
+        compile_root('a = cube(1)\nb = cube(2)\n', tree)
     assert not info.value.may_have_mutated
     assert pointers == {node.as_pointer() for node in tree.nodes}
     assert len(tree.links) == 1 and tree.links[0].from_node.as_pointer() == old.as_pointer()
@@ -206,7 +208,7 @@ def test_late_failure_attempts_root_restoration_and_retains_undo(monkeypatch):
 
     monkeypatch.setattr(root_update, '_reconnect_boundary', injected)
     with pytest.raises(root_update.RootUpdateError, match='NFR5 late failure') as info:
-        compiler.update_source_in_tree('a = cube(4)\n', tree)
+        compile_root('a = cube(4)\n', tree)
     assert info.value.may_have_mutated
     assert len([n for n in tree.nodes if n.bl_idname == 'GeometryNodeMeshCube']) == 1
     assert len(tree.links) == 1
@@ -220,7 +222,7 @@ def test_update_frame_and_distinct_type_layout_without_guessing():
     first.location = (901, 901)
     second = tree.nodes.new('GeometryNodeTransform')
     second.location = (432, 211)
-    compiler.update_source_in_tree('a = cube(1)\nb = cube(2)\nc = transform(a)', tree)
+    compile_root('a = cube(1)\nb = cube(2)\nc = transform(a)', tree)
     transforms = [node for node in tree.nodes if node.bl_idname == 'GeometryNodeTransform']
     assert len(transforms) == 1 and root_update._point(transforms[0]) == (432, 211)
     assert all(root_update._point(node) != (901, 901)
@@ -236,12 +238,12 @@ def test_node_driver_is_rejected_while_root_interface_driver_is_allowed():
     assert any('nodes[' in fcurve.data_path for fcurve in tree.animation_data.drivers)
     before = {n.as_pointer() for n in tree.nodes}
     with pytest.raises(CompileError, match='animation/driver'):
-        compiler.update_source_in_tree('a = cube(3)', tree)
+        compile_root('a = cube(3)', tree)
     assert {n.as_pointer() for n in tree.nodes} == before
     tree.animation_data_clear()
     # Structural node animation does not target an ordinary node.
     inlet.driver_add('location', 0)
-    compiler.update_source_in_tree('a = cube(3)', tree)
+    compile_root('a = cube(3)', tree)
     assert len([n for n in tree.nodes if n.bl_idname == 'GeometryNodeMeshCube']) == 1
 
 
@@ -259,7 +261,7 @@ def test_node_driver_guard_uses_blender_escaped_paths(node_name):
     assert node.path_from_id() in tree.animation_data.drivers[0].data_path
     before = {item.as_pointer() for item in tree.nodes}
     with pytest.raises(CompileError, match='animation/driver'):
-        compiler.update_source_in_tree('a = cube(2)', tree)
+        compile_root('a = cube(2)', tree)
     assert {item.as_pointer() for item in tree.nodes} == before
     assert tree.animation_data.drivers[0].data_path.startswith(node.path_from_id() + '.')
 
@@ -272,7 +274,7 @@ def test_structural_driver_does_not_match_similar_ordinary_node_prefix():
     inlet.name = 'Node.001'
     inlet.driver_add('location', 0)
     assert inlet.path_from_id().startswith('nodes[')
-    compiler.update_source_in_tree('a = cube(3)', tree)
+    compile_root('a = cube(3)', tree)
     assert sum(node.bl_idname == 'GeometryNodeMeshCube' for node in tree.nodes) == 1
 
 
@@ -282,7 +284,7 @@ def test_directed_boundary_preserves_output_and_skips_occupied_input():
     old = tree.nodes.new('GeometryNodeTransform')
     tree.links.new(inlet.outputs['Geometry'], old.inputs['Geometry'])
     tree.links.new(old.outputs['Geometry'], outlet.inputs['Geometry'])
-    result = compiler.update_source_in_tree('a = cube(1)\nb = transform(a)', tree)
+    result = compile_root('a = cube(1)\nb = transform(a)', tree)
     transform, = (n for n in tree.nodes if n.bl_idname == 'GeometryNodeTransform')
     assert result.skipped_boundary_links == 1
     assert any(link.from_node.bl_idname == 'GeometryNodeMeshCube'
@@ -298,7 +300,7 @@ def test_layout_identical_shapes_reuses_ordered_duplicate_positions():
     tree, _, _ = _root('NFR5_ordered_duplicate')
     a, b = (tree.nodes.new('GeometryNodeMeshCube') for _ in range(2))
     a.location, b.location = (25, 55), (625, -75)
-    compiler.update_source_in_tree('a = cube(1)\nb = cube(2)', tree)
+    compile_root('a = cube(1)\nb = cube(2)', tree)
     positions = [root_update._point(n) for n in tree.nodes if n.bl_idname == 'GeometryNodeMeshCube']
     assert positions == [(25, 55), (625, -75)]
 
@@ -313,13 +315,13 @@ def test_root_update_preserves_function_identity_body_reload_and_signature_chang
                 f'    return {body}\n'
                 'y = change(2)\n')
 
-    compiler.update_source_in_tree(source('Float', 'value + 1'), tree, module_context=context)
+    compile_root(source('Float', 'value + 1'), tree, module_context=context)
     old_group = next(n.node_tree for n in tree.nodes if n.bl_idname == 'GeometryNodeGroup')
     group_pointer = old_group.as_pointer()
-    compiler.update_source_in_tree(source('Float', 'value * 3'), tree, module_context=context)
+    compile_root(source('Float', 'value * 3'), tree, module_context=context)
     new_group = next(n.node_tree for n in tree.nodes if n.bl_idname == 'GeometryNodeGroup')
     assert new_group.as_pointer() == group_pointer
-    compiler.update_source_in_tree(source('Int', 'value + 5'), tree, module_context=context)
+    compile_root(source('Int', 'value + 5'), tree, module_context=context)
     new_group = next(n.node_tree for n in tree.nodes if n.bl_idname == 'GeometryNodeGroup')
     assert new_group is not None and len([n for n in tree.nodes if n.bl_idname == 'GeometryNodeGroup']) == 1
     assert any(item.item_type == "SOCKET" and item.in_out == "INPUT"
@@ -332,12 +334,12 @@ def test_raw_math_staged_once_and_retained_without_copying():
     tree.nodes.new('GeometryNodeMeshCube')
     src = ('x = node("ShaderNodeMath", props={"operation": "ADD"}, '
            'inputs={ID("Value_001"): 2.0}, output=ID("Value"), typ=Float)\n')
-    compiler.update_source_in_tree(src, tree)
+    compile_root(src, tree)
     math_nodes = [n for n in tree.nodes if n.bl_idname == 'ShaderNodeMath']
     assert len(math_nodes) == 1
     assert math_nodes[0].operation == 'ADD'
     first_pointer = math_nodes[0].as_pointer()
-    compiler.update_source_in_tree(src, tree)
+    compile_root(src, tree)
     math_nodes = [n for n in tree.nodes if n.bl_idname == 'ShaderNodeMath']
     assert len(math_nodes) == 1 and math_nodes[0].as_pointer() != first_pointer
 
@@ -370,7 +372,7 @@ def test_old_nodes_remain_during_materialization_with_manual_group_chain(monkeyp
         return result
 
     monkeypatch.setattr(direct_composition, 'compose_prepared_initial', observe)
-    compiler.update_source_in_tree('a = cube(9)\n', tree)
+    compile_root('a = cube(9)\n', tree)
     assert seen
     assert not old_ptrs.intersection(node.as_pointer() for node in tree.nodes)
 
@@ -389,7 +391,7 @@ def test_root_copy_backup_is_deleted_before_nested_commit(monkeypatch):
         return transaction_commit(self)
 
     monkeypatch.setattr(group_backend.BlenderGroupBuildTransaction, 'commit', observe)
-    compiler.update_source_in_tree('a = cube(1)', root)
+    compile_root('a = cube(1)', root)
     assert counts == [set()]
 
 
@@ -397,11 +399,12 @@ def test_direct_lowering_with_caller_transaction_does_not_commit(monkeypatch):
     """An externally owned transaction remains open after successful direct lowering."""
     from NodeForge.blender.group_backend import BlenderGroupBuildTransaction
     from NodeForge.blender.direct_composition import compose_prepared_initial
+    from NodeForge.blender.ir_lowering import RootInputEndpoint
     target, _, _ = _root('NFR5_owned_lowering')
-    prepared, backend, session, snapshot = compiler._prepare_direct_source('a = cube(4)', target)
+    prepared, backend, session, _snapshot = compiler._prepare_direct_source('a = cube(4)', target)
     tx = BlenderGroupBuildTransaction()
     compose_prepared_initial(prepared, target, backend, session,
-                             source_module=snapshot, transaction=tx)
+                             transaction=tx, root_input_endpoint=RootInputEndpoint())
     assert not tx._closed
     assert sum(n.bl_idname == 'GeometryNodeMeshCube' for n in target.nodes) == 1
     tx.rollback()
@@ -415,14 +418,14 @@ def test_repeat_pair_stages_and_survives_physical_cutover_twice():
     source = ('x = 0\n'
               'for i in repeat_range(3):\n'
               '    x = x + 1\n')
-    compiler.update_source_in_tree(source, tree)
+    compile_root(source, tree)
     pair = [node for node in tree.nodes if node.bl_idname in
             {'GeometryNodeRepeatInput', 'GeometryNodeRepeatOutput'}]
     assert len(pair) == 2
     start, = (n for n in pair if n.bl_idname == 'GeometryNodeRepeatInput')
     end, = (n for n in pair if n.bl_idname == 'GeometryNodeRepeatOutput')
     assert start.paired_output.as_pointer() == end.as_pointer()
-    compiler.update_source_in_tree(source, tree)
+    compile_root(source, tree)
     pair = [node for node in tree.nodes if node.bl_idname in
             {'GeometryNodeRepeatInput', 'GeometryNodeRepeatOutput'}]
     assert len(pair) == 2
@@ -438,48 +441,45 @@ def test_update_accepts_import_and_rejects_missing_import_without_root_change(tm
     monkeypatch.setattr(local_sources, '_local_sources_registry_path', lambda: tmp_path / 'registry.json')
     (tmp_path / 'shapes.nf').write_text('def model() -> Geometry:\n    return cube(2)\n')
     tree, _, _ = _root('NFR5_import_source')
-    compiler.update_source_in_tree('from local import shapes\nx = shapes.model()\n', tree)
+    compile_root('from local import shapes\nx = shapes.model()\n', tree)
     assert sum(n.bl_idname == 'GeometryNodeGroup' for n in tree.nodes) == 1
     before = {n.as_pointer() for n in tree.nodes}
     with pytest.raises(CompileError):
-        compiler.update_source_in_tree('from local import missing_module\nx = missing_module.model()', tree)
+        compile_root('from local import missing_module\nx = missing_module.model()', tree)
     assert before == {n.as_pointer() for n in tree.nodes}
 
 
 def test_staging_failure_after_nested_update_preserves_old_root_but_marks_possible_change(monkeypatch):
     """A shared nested rollback cannot be promised globally atomic on stage errors."""
-    from NodeForge.blender import library_groups
+    from NodeForge.blender.function_materializer import FunctionMaterializer
     tree, _, _ = _root('NFR5_nested_stage_rollback')
     context = 'NFR5_nested_rollback_owner'
-    compiler.update_source_in_tree('''def shared() -> Geometry:
+    compile_root('''def shared() -> Geometry:
     return cube(1)
 ''', tree, module_context=context)
     old_root = {node.as_pointer() for node in tree.nodes}
-    old_group = next(n.node_tree for n in tree.nodes if n.bl_idname == 'GeometryNodeGroup')
+    old_group = next(g for g in bpy.data.node_groups if g.get('nodeforge_module_name') == 'shared'
+                     and context in str(g.get('nodeforge_module_origin', '')))
     pointer = old_group.as_pointer()
-    original = library_groups.apply_function_node_display_name
-    counter = 0
+    nodes_before = tuple((n.bl_idname, n.name) for n in old_group.nodes)
+    original = FunctionMaterializer.materialize_module
 
-    def failing_second(node, group):
-        """Stop after updating one shared nested function and staging two entries."""
-        nonlocal counter
-        result = original(node, group)
-        counter += 1
-        if counter == 2:
+    def failing_second(self, prepared, materialization, scope, **kwargs):
+        """Fail before second entry after a candidate group was already updated."""
+        if prepared.contract.function_id.name == 'extra':
             raise RuntimeError('NFR5 nested stage failure')
-        return result
+        return original(self, prepared, materialization, scope, **kwargs)
 
-    monkeypatch.setattr(library_groups, 'apply_function_node_display_name', failing_second)
-    with pytest.raises(root_update.RootUpdateError, match='NFR5 nested stage failure') as info:
-        compiler.update_source_in_tree('''def shared() -> Geometry:
+    monkeypatch.setattr(FunctionMaterializer, 'materialize_module', failing_second)
+    with pytest.raises(RuntimeError, match='NFR5 nested stage failure'):
+        compile_root('''def shared() -> Geometry:
     return cube(5)
 def extra() -> Geometry:
     return cube(6)
 ''', tree, module_context=context)
-    assert info.value.may_have_mutated  # A canonical nested group was updated.
     assert {node.as_pointer() for node in tree.nodes} == old_root
     assert old_group.as_pointer() == pointer
-    # Existing shared-group rollback limitations are deliberately not reimplemented here.
+    assert tuple((n.bl_idname, n.name) for n in old_group.nodes) == nodes_before
 
 
 def test_linked_root_rejected_before_materialization(tmp_path):
@@ -493,7 +493,7 @@ def test_linked_root_rejected_before_materialization(tmp_path):
     linked = dst.node_groups[0]
     assert linked is not None and linked.library is not None
     with pytest.raises(CompileError, match='linked or read-only'):
-        compiler.update_source_in_tree('a = cube(1)', linked)
+        compile_root('a = cube(1)', linked)
     assert len(linked.nodes) == 2
 
 
@@ -509,7 +509,7 @@ def test_backup_removal_failure_is_reported_as_possible_mutation(monkeypatch):
 
     monkeypatch.setattr(root_update, '_remove_backup', failed_remove)
     with pytest.raises(root_update.RootUpdateError, match='backup cleanup') as info:
-        compiler.update_source_in_tree('a = cube(7)', tree)
+        compile_root('a = cube(7)', tree)
     assert info.value.may_have_mutated
     assert all(n.bl_idname != 'ShaderNodeMath' for n in tree.nodes)
 
@@ -528,8 +528,8 @@ def test_unexpected_staged_structural_io_is_rejected_and_removed(monkeypatch):
         return result
 
     monkeypatch.setattr(direct_composition, 'compose_prepared_initial', insert_unexpected_io)
-    with pytest.raises(root_update.RootUpdateError, match='cannot insert new structural') as info:
-        compiler.update_source_in_tree('a = cube(1)', root)
+    with pytest.raises(root_update.RootUpdateError, match='unapproved structural') as info:
+        compile_root('a = cube(1)', root)
     assert not info.value.may_have_mutated
     assert {n.as_pointer() for n in root.nodes} == before
 
@@ -558,7 +558,7 @@ def test_update_rejects_ordinary_node_nla_animation_without_active_action():
     before = {n.as_pointer() for n in tree.nodes}
     links = tuple((link.from_node.as_pointer(), link.to_node.as_pointer()) for link in tree.links)
     with pytest.raises(CompileError, match='animation/driver'):
-        compiler.update_source_in_tree('a = cube(2)', tree)
+        compile_root('a = cube(2)', tree)
     assert before == {n.as_pointer() for n in tree.nodes}
     assert links == tuple((link.from_node.as_pointer(), link.to_node.as_pointer()) for link in tree.links)
     assert strip.action is action and tree.animation_data.action is None
@@ -569,7 +569,7 @@ def test_update_accepts_structural_io_nla_animation_without_active_action():
     tree, inlet, outlet = _root('NFR5_nla_io')
     action, strip = _nla_strip_for_node(tree, inlet)
     old_io = (inlet.as_pointer(), outlet.as_pointer())
-    compiler.update_source_in_tree('a = cube(2)', tree)
+    compile_root('a = cube(2)', tree)
     assert old_io == (inlet.as_pointer(), outlet.as_pointer())
     assert strip.action is action
 
@@ -608,7 +608,7 @@ def test_predetach_failure_restores_structural_io_parents_and_allows_clean_cance
 
     monkeypatch.setattr(root_update, '_place_absolute', fail_once)
     with pytest.raises(root_update.RootUpdateError, match='NFR5 detach once') as info:
-        compiler.update_source_in_tree('a = cube(3)', tree)
+        compile_root('a = cube(3)', tree)
     assert not info.value.may_have_mutated
     assert before == {node.as_pointer() for node in tree.nodes}
     assert inlet.parent.as_pointer() == frame.as_pointer() and outlet.parent.as_pointer() == frame.as_pointer()
@@ -626,7 +626,7 @@ def test_predetach_unrestorable_failure_requires_undo(monkeypatch):
 
     monkeypatch.setattr(root_update, '_place_absolute', fail_position)
     with pytest.raises(root_update.RootUpdateError, match='structural I/O restoration') as info:
-        compiler.update_source_in_tree('a = cube(3)', tree)
+        compile_root('a = cube(3)', tree)
     assert info.value.may_have_mutated
     assert inlet.parent.as_pointer() == frame.as_pointer()  # The restore attempt reattaches before placement.
     assert outlet.parent.as_pointer() == frame.as_pointer()
@@ -645,7 +645,7 @@ def test_late_failure_restores_io_parent_frames_with_recreated_old_graph(monkeyp
 
     monkeypatch.setattr(root_update, '_reconnect_boundary', fail_boundary)
     with pytest.raises(root_update.RootUpdateError, match='NFR5 late frame restore') as info:
-        compiler.update_source_in_tree('a = cube(4)', tree)
+        compile_root('a = cube(4)', tree)
     assert info.value.may_have_mutated
     restored_frame = tree.nodes.get('Old Frame')
     assert restored_frame is not None and restored_frame.bl_idname == 'NodeFrame'
@@ -671,5 +671,87 @@ def test_late_failure_reports_structural_io_parent_restoration_error(monkeypatch
     monkeypatch.setattr(root_update, '_reconnect_boundary', fail_boundary)
     monkeypatch.setattr(root_update, '_restore_structural_io', fail_io_restore)
     with pytest.raises(root_update.RootUpdateError, match='root restoration: parent Frame unavailable') as info:
-        compiler.update_source_in_tree('a = cube(3)', tree)
+        compile_root('a = cube(3)', tree)
     assert info.value.may_have_mutated
+
+
+def test_root_update_owns_one_transaction_and_cleans_failed_lowering(monkeypatch):
+    """A lowering failure is cleaned and rolled back once by the outer root owner."""
+    from NodeForge.blender import direct_composition
+    from NodeForge.blender.group_backend import BlenderGroupBuildTransaction
+
+    tree, _, outlet = _root('NFR5_single_attempt_owner')
+    old = tree.nodes.new('GeometryNodeMeshCube')
+    tree.links.new(old.outputs['Mesh'], outlet.inputs['Geometry'])
+    old_pointers = {node.as_pointer() for node in tree.nodes}
+    old_groups = {group.as_pointer() for group in bpy.data.node_groups}
+    transactions = []
+    rollbacks = []
+    commits = []
+
+    class ObservedTransaction(BlenderGroupBuildTransaction):
+        """Count the transaction transitions for one root-producing attempt."""
+
+        def __init__(self):
+            super().__init__()
+            transactions.append(self)
+
+        def rollback(self):
+            rollbacks.append(self)
+            return super().rollback()
+
+        def commit(self):
+            commits.append(self)
+            return super().commit()
+
+    original_lower = direct_composition.lower_body
+
+    def fail_after_lowering(*args, **kwargs):
+        """Raise only after the real lowerer has inserted its ordinary node."""
+        original_lower(*args, **kwargs)
+        raise RuntimeError('single-owner staged failure')
+
+    monkeypatch.setattr(root_update, 'BlenderGroupBuildTransaction', ObservedTransaction)
+    monkeypatch.setattr(direct_composition, 'lower_body', fail_after_lowering)
+    with pytest.raises(root_update.RootUpdateError, match='single-owner staged failure') as info:
+        compile_root('a = cube(2)\n', tree)
+    assert info.value.may_have_mutated is False
+    assert len(transactions) == 1
+    assert rollbacks == transactions and commits == []
+    assert transactions[0]._closed
+    assert {node.as_pointer() for node in tree.nodes} == old_pointers
+    assert len(tree.links) == 1 and tree.links[0].from_node.as_pointer() == old.as_pointer()
+    assert {group.as_pointer() for group in bpy.data.node_groups} == old_groups
+
+
+def test_root_lowerer_propagates_without_owning_node_or_transaction_cleanup(monkeypatch):
+    """Direct lowering leaves both failure cleanup and transaction closure to its caller."""
+    from NodeForge.blender import direct_composition
+    from NodeForge.blender.group_backend import BlenderGroupBuildTransaction
+    from NodeForge.blender.ir_lowering import RootInputEndpoint
+
+    tree, _, _ = _root('NFR5_lowering_delegates_failures')
+    prepared, backend, session, _snapshot = compiler._prepare_direct_source('a = cube(3)', tree)
+    tx = BlenderGroupBuildTransaction()
+    old_pointers = {node.as_pointer() for node in tree.nodes}
+
+    def fail_with_created_node(context, *_args, **_kwargs):
+        """Simulate a backend failure after inserting a physical node."""
+        context.group.nodes.new('GeometryNodeMeshCube')
+        raise RuntimeError('caller must clean this node')
+
+    monkeypatch.setattr(direct_composition, 'lower_body', fail_with_created_node)
+    with pytest.raises(RuntimeError, match='caller must clean this node'):
+        direct_composition.compose_prepared_initial(
+            prepared, tree, backend, session,
+            transaction=tx, root_input_endpoint=RootInputEndpoint(),
+        )
+    assert tx._closed is False
+    assert len([node for node in tree.nodes if node.as_pointer() not in old_pointers]) == 1
+    # Explicitly emulate the only supported caller's cleanup policy in this test.
+    for node in tuple(tree.nodes):
+        if node.as_pointer() not in old_pointers:
+            tree.nodes.remove(node)
+    tx.rollback()
+    assert tx._closed
+    assert {node.as_pointer() for node in tree.nodes} == old_pointers

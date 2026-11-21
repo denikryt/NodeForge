@@ -23,7 +23,7 @@ def b(x: Float):
 result = a(3)
 '''
     base = bpy.data.node_groups.new('NF-shadow-index-' + iterator[:5], 'GeometryNodeTree')
-    compiler.compose_source_initial(source, base, module_context='test:runtime-index-' + iterator)
+    compile_root(source, base, module_context='test:runtime-index-' + iterator)
     call, = [node for node in base.nodes if node.bl_idname == 'GeometryNodeGroup']
     assert call.node_tree.get('nodeforge_module_name') == 'a'
     nested = [node for node in call.node_tree.nodes if node.bl_idname == 'GeometryNodeGroup']
@@ -47,7 +47,7 @@ def a(count: Int):
 result = a(3)
 '''
     base = bpy.data.node_groups.new('NF-shadow-index-scope', 'GeometryNodeTree')
-    compiler.compose_source_initial(source, base, module_context='test:runtime-index-scope')
+    compile_root(source, base, module_context='test:runtime-index-scope')
     call, = [node for node in base.nodes if node.bl_idname == 'GeometryNodeGroup']
     assert round(_evaluate_float_output(base, call.outputs[0]), 5) == 14.0
 
@@ -71,7 +71,7 @@ def b(x: Float):
 result = a(2)
 '''
     base = bpy.data.node_groups.new('NF-shadow-index-nested', 'GeometryNodeTree')
-    compiler.compose_source_initial(source, base, module_context='test:runtime-index-nested')
+    compile_root(source, base, module_context='test:runtime-index-nested')
     call, = [node for node in base.nodes if node.bl_idname == 'GeometryNodeGroup']
     assert round(_evaluate_float_output(base, call.outputs[0]), 5) == 23.0
 
@@ -93,7 +93,7 @@ def b(x: Float):
 result = a()
 '''
     base = bpy.data.node_groups.new('NF-shadow-static-index', 'GeometryNodeTree')
-    compiler.compose_source_initial(source, base, module_context='test:static-index-scope')
+    compile_root(source, base, module_context='test:static-index-scope')
     call, = [node for node in base.nodes if node.bl_idname == 'GeometryNodeGroup']
     assert round(_evaluate_float_output(base, call.outputs[0]), 5) == 11.0
     nested = [node for node in call.node_tree.nodes if node.bl_idname == 'GeometryNodeGroup']
@@ -117,12 +117,15 @@ def b(x: Float):
     return x + 10
 '''
     base = bpy.data.node_groups.new('NF-static-loop-CT-state', 'GeometryNodeTree')
-    compiler.compose_source_initial(source, base, module_context='test:static-loop-ct')
-    calls = [node for node in base.nodes if node.bl_idname == 'GeometryNodeGroup']
-    assert [node.node_tree.get('nodeforge_module_name') for node in calls] == ['a']
-    nested = [node for node in calls[0].node_tree.nodes if node.bl_idname == 'GeometryNodeGroup']
+    compile_root(source, base, module_context='test:static-loop-ct')
+    assert not list(base.nodes)
+    group = next(g for g in bpy.data.node_groups if g.get('nodeforge_module_name') == 'a'
+                 and 'test:static-loop-ct' in str(g.get('nodeforge_module_origin', '')))
+    nested = [node for node in group.nodes if node.bl_idname == 'GeometryNodeGroup']
     assert [node.node_tree.get('nodeforge_module_name') for node in nested] == ['b']
-    assert round(_evaluate_float_output(base, calls[0].outputs[0]), 5) == 11.0
+    node = base.nodes.new('GeometryNodeGroup')  # Manually instanced after group-only publication.
+    node.node_tree = group
+    assert round(_evaluate_float_output(base, node.outputs[0]), 5) == 11.0
 
 
 def test_static_loop_false_state_does_not_materialize_unreachable_callee():
@@ -140,8 +143,12 @@ def b(x: Float):
     return x + 10
 '''
     base = bpy.data.node_groups.new('NF-static-loop-CT-false', 'GeometryNodeTree')
-    compiler.compose_source_initial(source, base, module_context='test:static-loop-ct-false')
-    calls = [node for node in base.nodes if node.bl_idname == 'GeometryNodeGroup']
-    assert [node.node_tree.get('nodeforge_module_name') for node in calls] == ['a', 'b']
-    assert not [node for node in calls[0].node_tree.nodes if node.bl_idname == 'GeometryNodeGroup']
-    assert round(_evaluate_float_output(base, calls[0].outputs[0]), 5) == 1.0
+    compile_root(source, base, module_context='test:static-loop-ct-false')
+    assert not list(base.nodes)
+    groups = {g.get('nodeforge_module_name'): g for g in bpy.data.node_groups
+              if 'test:static-loop-ct-false' in str(g.get('nodeforge_module_origin', ''))}
+    assert set(groups) == {'a', 'b'}
+    assert not [node for node in groups['a'].nodes if node.bl_idname == 'GeometryNodeGroup']
+    node = base.nodes.new('GeometryNodeGroup')
+    node.node_tree = groups['a']
+    assert round(_evaluate_float_output(base, node.outputs[0]), 5) == 1.0

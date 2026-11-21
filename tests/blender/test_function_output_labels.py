@@ -39,7 +39,7 @@ def unnamed(geo: Geometry) -> Geometry:
 
 def test_nested_function_calls_preserve_both_output_naming_styles():
     root = bpy.data.node_groups.new('NFTest_ReturnNamesRoot', 'GeometryNodeTree')
-    compiler.compose_source_initial('''
+    compile_root('''
 def move_x(geometry: Geometry, x_shift: Float["X Shift"] = 0.0) -> Geometry["Geometry"]:
     return transform(geometry, translation=vector(x_shift, 0, 0))
 
@@ -49,12 +49,10 @@ def move():
     combined = join([left, right])
     return combined
 ''', root)
-    top_calls = [node for node in root.nodes if node.bl_idname == 'GeometryNodeGroup']
-    check(len(top_calls) == 1, f'expected one Move entry, got {len(top_calls)}')
-    move = top_calls[0]
-    check([socket.name for socket in move.outputs] == ['Combined'],
-          f'outer group outputs: {[socket.name for socket in move.outputs]}')
-    shift_calls = [node for node in move.node_tree.nodes if node.bl_idname == 'GeometryNodeGroup']
+    check(not list(root.nodes), 'group-only Compile inserted root instances')
+    move = published_entry(root, 'move')
+    check(_output_names(move) == ['Combined'], f'outer group outputs: {_output_names(move)}')
+    shift_calls = [node for node in move.nodes if node.bl_idname == 'GeometryNodeGroup']
     check(len(shift_calls) == 2, 'expected two nested move_x calls')
     check(all([socket.name for socket in node.outputs] == ['Geometry'] for node in shift_calls),
           f'nested outputs: {[[socket.name for socket in node.outputs] for node in shift_calls]}')

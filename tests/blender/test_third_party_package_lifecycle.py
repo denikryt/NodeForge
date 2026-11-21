@@ -1,5 +1,7 @@
 """Blender integration coverage for third-party package lifecycle operations."""
 
+from helpers import compile_root
+
 from helpers import compile_group, expect_compile_error, has_package_function
 from NodeForge import compiler
 import bpy
@@ -48,7 +50,7 @@ def test_directory_zip_replace_uninstall_and_reinstall_lifecycle():
             assert installed.package_id == "vendor.lifecycle"
             assert has_package_function("vendor_value")
             tree = bpy.data.node_groups.new("NFTest_vendor_lifecycle_directory", "GeometryNodeTree")
-            compiler.compose_source_initial('from packages import lifecycle\nx = lifecycle.vendor_value(2.0)\n', tree)
+            compile_root('from packages import lifecycle\nx = lifecycle.vendor_value(2.0)\n', tree)
             assert any(node.bl_idname == "GeometryNodeGroup" for node in tree.nodes)
 
             source_v2 = tmp / "source_v2"

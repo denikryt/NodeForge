@@ -22,7 +22,7 @@ v = detachable_function(1)
 v = v
 '''
     root = bpy.data.node_groups.new('NFTest_module_detachment', 'GeometryNodeTree')
-    compiler.compose_source_initial(initial, root)
+    compile_root(initial, root)
     original = _group('detachable_function')
     from NodeForge.compiler_identities import parse_module_definition_function_id
     module_context = parse_module_definition_function_id(original['nodeforge_module_definition']).module.origin
@@ -79,7 +79,7 @@ def test_detachment_requires_a_selected_source_owned_copy():
     finally:
         bpy.data.node_groups.remove(plain)
     original = bpy.data.node_groups.new('NFTest_cannot_detach_canonical_without_copy', 'GeometryNodeTree')
-    compiler.compose_source_initial('''def sole_owned_leaf(x: Float):
+    compile_root('''def sole_owned_leaf(x: Float):
     return x
 
 v = sole_owned_leaf(1)
@@ -98,7 +98,7 @@ v = persistent_detachment(1)
 v = v
 '''
     root = bpy.data.node_groups.new('NFTest_persistent_detachment', 'GeometryNodeTree')
-    compiler.compose_source_initial(original_source, root)
+    compile_root(original_source, root)
     owned = _group('persistent_detachment')
     copy = owned.copy()
     detached_name = copy.name

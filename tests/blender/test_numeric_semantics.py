@@ -279,11 +279,8 @@ def move(geometry: Geometry, x: Float, y: Float) -> Geometry:
 '''
     root = bpy.data.node_groups.new("NFTest_negative_literal_root", "GeometryNodeTree")
     try:
-        compiler.compose_source_initial(source, root)
-        move_node = next(node for node in root.nodes
-                         if node.bl_idname == "GeometryNodeGroup" and node.node_tree
-                         and node.node_tree.get("nodeforge_module_name") == "move")
-        move = move_node.node_tree
+        compile_root(source, root)
+        move = published_entry(root, 'move')
         calls = [node for node in move.nodes if node.bl_idname == "GeometryNodeGroup"]
         check(len(calls) == 2, "expected two move_x calls")
         check(not _nodes(move, "ShaderNodeMath", "SUBTRACT"), "literal -2 created Subtract")

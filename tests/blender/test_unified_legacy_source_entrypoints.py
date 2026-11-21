@@ -13,7 +13,7 @@ def test_legacy_root_interface_is_rejected_before_any_blender_mutation():
     before = tuple(x.as_pointer() for x in tree.nodes)
     existing = {group.as_pointer() for group in bpy.data.node_groups}
     with pytest.raises(CompileError, match='legacy .nf interface'):
-        compiler.compose_source_initial(_OLD, tree)
+        compile_root(_OLD, tree)
     with pytest.raises(CompileError, match='legacy .nf interface'):
         compiler.create_expression_group(_OLD)
     with pytest.raises(CompileError, match='legacy .nf interface'):

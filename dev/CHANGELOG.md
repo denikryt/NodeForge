@@ -761,13 +761,33 @@ lifecycle.
 
 ## 0.94.0
 
+- Unified root compilation under one `Compile Script`: a physical top-level body replaces ordinary root nodes, while a definition-only or compile-time-only source updates eligible function group datablocks without modifying root topology.
+- Made stable `module_context` mandatory for local source definitions and kept their authoritative Node Group identities across root renames and selected Text Reload.
+- Reused one canonical root `NodeGroupInput` for raw reads in nested inline calls, preserving physical socket identifiers and existing user properties; rejected new Group Outputs during root replacement.
+- Preserved Undo signaling for incomplete function-group rollback and removed the separate Update operator and append-only root API.
+- Added Blender 5.2 regression coverage for both Compile outcomes, Group Input reuse, error recovery, and updated characterization baselines.
+
+## 0.94.1
+
+- Preserve the Undo-required error signal when GROUPS_ONLY postcommit cleanup raises after authoritative function groups have been published.
+- Reject definition-only IR in the internal root-lowering helper instead of placing obsolete group-instance nodes in the root tree.
+- Add Blender regressions for postcommit warning escalation, non-escalated cleanup warnings, and direct internal-helper rejection.
+
+## 0.94.2
+
+- Simplified root-producing compilation so the root updater alone owns its group transaction, staged-node cleanup, rollback, and Undo uncertainty. The internal lowering helper now requires its caller-provided transaction and canonical Group Input endpoint.
+- Removed unused source-module forwarding through root lowering and added Blender regression coverage for delegated error cleanup and one transaction owner.
+- Updated the user documentation for unified Compile Script modes, manual placement and refresh of function groups, mode transitions, and base-tree Group Input reuse.
+
+## 0.95.0
+
 - Added per-invocation typed result tuples to Extension API v2 through the `DynamicResults` annotation and same-owner `semantic.py::_result_types_<function>` resolver convention.
 - Resolve exact ordered runtime result types during semantic analysis and transport them through existing typed Call IR to the Python backend.
 - Validate dynamic extension results against call-specific IR arity, NF types, socket direction, physical type and current-group ownership before publishing generated candidates.
 - Preserved fixed result declarations, semantic extension modes, owner snapshots, and existing root-tree physical extension restrictions.
 - Documented invocation-dependent extension result declarations, resolver arguments and validation, backend result types, and package requirements.
 
-## 0.95.0
+## 0.96.0
 
 - Supported Rotation Capture Attribute items in core semantic typing, Blender materialization and transactional group/root copying, including persisted QUATERNION item reconstruction and dynamic socket defaults.
 - Added Rotation Capture regression coverage for item sockets, group copying, updates and mixed fields.

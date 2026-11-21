@@ -6,7 +6,7 @@ from test_module_compile_time_fingerprints import _evaluate_float_output
 
 def _compose(source, suffix):
     tree = bpy.data.node_groups.new('NF-Rev2-sem-' + suffix, 'GeometryNodeTree')
-    compiler.compose_source_initial(source, tree, module_context='test:rev2-' + suffix)
+    compile_root(source, tree, module_context='test:rev2-' + suffix)
     return tree, [node for node in tree.nodes if node.bl_idname == 'GeometryNodeGroup']
 
 
@@ -39,7 +39,7 @@ result = reuse()
     user_node = tree.nodes.new('GeometryNodeMeshCube')
     groups_before = {group.as_pointer() for group in bpy.data.node_groups}
     with pytest.raises(CompileError, match='Unknown name: root_geo'):
-        compiler.compose_source_initial(source, tree, module_context='test:no-implicit-capture')
+        compile_root(source, tree, module_context='test:no-implicit-capture')
     assert [node.as_pointer() for node in tree.nodes] == [user_node.as_pointer()]
     assert {group.as_pointer() for group in bpy.data.node_groups} == groups_before
 
@@ -142,7 +142,7 @@ def unused(value):
     connections = {(link.from_node.as_pointer(), link.to_node.as_pointer()) for link in tree.links}
     groups = {group.as_pointer() for group in bpy.data.node_groups}
     with pytest.raises(CompileError, match='explicit type annotation'):
-        compiler.compose_source_initial(source, tree, module_context='test:rev2-preflight-error')
+        compile_root(source, tree, module_context='test:rev2-preflight-error')
     assert {node.as_pointer() for node in tree.nodes} == initial
     assert {(link.from_node.as_pointer(), link.to_node.as_pointer()) for link in tree.links} == connections
     assert {group.as_pointer() for group in bpy.data.node_groups} == groups
@@ -162,7 +162,7 @@ result = f(1.0)
     tree = bpy.data.node_groups.new('NF-Rev2-before-assignment', 'GeometryNodeTree')
     user = tree.nodes.new('GeometryNodeMeshCube')
     with pytest.raises(CompileError, match='used before assignment'):
-        compiler.compose_source_initial(source, tree, module_context='test:rev2-before-assignment')
+        compile_root(source, tree, module_context='test:rev2-before-assignment')
     assert len(tree.nodes) == 1
     assert tree.nodes[0].as_pointer() == user.as_pointer()
 
@@ -226,7 +226,7 @@ result = outer(5.0)'''
     initial_links = {(link.from_node.as_pointer(), link.to_node.as_pointer()) for link in tree.links}
     original_groups = {group.as_pointer() for group in bpy.data.node_groups}
     with pytest.raises(CompileError, match="Cannot call 'copied'"):
-        compiler.compose_source_initial(source, tree, module_context='test:rev2-invalid-copied-numeric')
+        compile_root(source, tree, module_context='test:rev2-invalid-copied-numeric')
     assert {node.as_pointer() for node in tree.nodes} == initial_nodes
     assert {(link.from_node.as_pointer(), link.to_node.as_pointer()) for link in tree.links} == initial_links
     assert {group.as_pointer() for group in bpy.data.node_groups} == original_groups

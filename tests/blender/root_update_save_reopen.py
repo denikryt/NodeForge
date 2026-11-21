@@ -14,7 +14,7 @@ import bpy
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from NodeForge.compiler import update_source_in_tree
+from NodeForge.compiler import compile_source_in_tree
 
 
 FILE = Path(os.environ['NODEFORGE_ROOT_ROUNDTRIP_FILE'])
@@ -59,7 +59,7 @@ def _create():
     external = outer.nodes.new('GeometryNodeGroup')
     external.node_tree = group
     before = _interface(group)
-    result = update_source_in_tree('a = cube(4)\n', group)
+    result = compile_source_in_tree('a = cube(4)\n', group)
     assert result.skipped_boundary_links == 0
     assert _interface(group) == before
     assert mod.node_group.as_pointer() == group.as_pointer()

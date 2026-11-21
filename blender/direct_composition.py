@@ -1,15 +1,10 @@
-"""Initial NodeForge composition into a caller-owned base GeometryNodeTree.
-
-This is an internal target-specific lowering primitive. It does not replace or
-manage nodes inserted during an earlier successful composition operation.
-"""
+"""Lower prepared physical root IR using an externally managed build attempt."""
 
 from __future__ import annotations
 
 from ..errors import CompileError
 from ..function_instances import FunctionCompilationTrace
 from .function_materializer import FunctionMaterializationContext, FunctionMaterializer
-from .group_backend import BlenderGroupBuildTransaction
 from .ir_lowering import BlenderIRLoweringContext, lower_body
 
 
@@ -27,83 +22,57 @@ def validate_prepared_direct(prepared, target):
                            'direct base-tree installation is unavailable')
 
 
-def compose_prepared_initial(prepared, target, backend, session, *, source_module,
-                             transaction=None):
-    """Lower prepared source in place; a supplied nested transaction remains caller-owned.
+def compose_prepared_initial(prepared, target, backend, session, *,
+                             transaction, root_input_endpoint):
+    """Lower root IR; the calling root updater owns commit, cleanup and rollback.
 
-    Every attempt cleans up only its own newly inserted root nodes. An
-    internally created transaction is committed or rolled back here; an
-    externally supplied one is neither committed nor rolled back here.
+    The transaction and canonical input endpoint belong to the same outer root
+    attempt, including all nested inline expansions targeting this tree.
     """
-    validate_prepared_direct(prepared, target)
-    preexisting_nodes = {node.as_pointer() for node in target.nodes}
-    own_transaction = transaction is None
-    if transaction is None:
-        transaction = BlenderGroupBuildTransaction()
-    cache = {}
-    trace = FunctionCompilationTrace()
+    if not prepared.body.statements:
+        raise CompileError(
+            'Root lowering requires a physical top-level body; '
+            'definition-only sources use GROUPS_ONLY publication'
+        )
     context = BlenderIRLoweringContext(
         group=target,
         runtime_bindings={},
         source_callable_session=session,
         function_materializer=FunctionMaterializer(group_backend=backend),
         function_materialization_context=FunctionMaterializationContext(
-            function_group_cache=cache,
+            function_group_cache={},
             function_group_transaction=transaction,
-            function_compilation_trace=trace,
+            function_compilation_trace=FunctionCompilationTrace(),
             source_callable_session=session,
         ),
         helper_namespace=target.name,
         extension_registry=session.resolved_environment.extension_registry,
+        root_input_endpoint=root_input_endpoint,
     )
-    try:
-        if prepared.body.statements:
-            lower_body(context, prepared.body, {}, base_depth=1)
-        else:
-            _place_definition_entries(prepared, context, source_module)
-        if own_transaction:
-            transaction.commit()
-    except Exception as error:
-        cleanup_failure = None
-        for node in tuple(target.nodes):
-            if node.as_pointer() not in preexisting_nodes:
-                try:
-                    target.nodes.remove(node)
-                except Exception as exc:
-                    if cleanup_failure is None:
-                        cleanup_failure = exc
-        if own_transaction:
-            try:
-                transaction.rollback()
-            except Exception as exc:
-                if cleanup_failure is None:
-                    cleanup_failure = exc
-        if cleanup_failure is not None:
-            error.add_note(f"Direct-composition node cleanup or rollback also failed: {cleanup_failure}")
-            raise error from cleanup_failure
-        raise
+    # NODEFORGE-TEMP-ISSUE61-ROOT-STAGING: Root-producing Compile still lowers in the authoritative tree while physical Extension API v2 is rejected in root. Issue #61 PR 2 must replace this call with native-copy private staging and strict subgraph transfer; delete this marker when no backend can receive the authoritative root.
+    lower_body(context, prepared.body, {}, base_depth=1)
     return target
 
 
-def _place_definition_entries(prepared, context, snapshot):
-    """Place zero-incoming source functions without treating them as DSL calls.
+def materialize_definition_entries(prepared, materializer, materialization_context, snapshot):
+    """Publish only zero-incoming source definitions, without root node placement.
 
-    Required inputs deliberately remain unconnected. Input types come only
-    from validated annotations; defaults do not supply missing types.
+    The caller owns the shared group transaction and its commit/rollback.  The
+    same source-function IDs and materializer are used by direct compilation.
     """
     from ..compiler_identities import GroupCompilationIdentity, module_definition_function_id
     from ..function_instances import function_materialization_owner_scope
     from ..semantic.function_signatures import compile_function_signature
     from ..semantic.source_callables import serialize_local_signature
     from ..semantic.ir import IRFunctionMaterialization, IRFunctionMaterializationMode
-    from .library_groups import apply_function_node_display_name
 
     graph = prepared.source_call_graph
     if graph is None:
-        raise CompileError('Definition-only initial placement lacks a resolved call graph')
-    session = context.source_callable_session
+        raise CompileError('Definition-only compilation lacks a resolved call graph')
+    session = materialization_context.source_callable_session
     env, compile_time_values = session.callable_environment_for_module(snapshot)
-    for index, reference in enumerate(graph.entries):
+    groups = []
+    for reference in graph.entries:
         fn = snapshot.definitions[reference.name]
         signature = compile_function_signature(
             fn, owner_scope=reference.stable_key(),
@@ -123,10 +92,7 @@ def _place_definition_entries(prepared, context, snapshot):
             compile_time_values=compile_time_values, source_module=snapshot,
             helper_namespace=fn.name,
         )
-        nested = context.function_materializer.materialize_module(
-            prepared_callable, materialization, context.function_materialization_context,
-        )
-        node = context.group.nodes.new('GeometryNodeGroup')
-        node.node_tree = nested.group
-        node.location = (index * 260, 0)
-        apply_function_node_display_name(node, nested.group)
+        groups.append(materializer.materialize_module(
+            prepared_callable, materialization, materialization_context,
+        ).group)
+    return tuple(groups)

@@ -15,7 +15,7 @@ v = authority_module_leaf(3)
 v = v
 '''
     root = bpy.data.node_groups.new('NFTest_module_authority', 'GeometryNodeTree')
-    compiler.compose_source_initial(original, root)
+    compile_root(original, root)
     owned = next(g for g in bpy.data.node_groups if g.get('nodeforge_module_name') == 'authority_module_leaf')
     copy = owned.copy()
     root_pointer = root.as_pointer()
@@ -85,7 +85,7 @@ v = persistent_authority_leaf(1)
 v = v
 '''
     root = bpy.data.node_groups.new('NFTest_authority_reopen', 'GeometryNodeTree')
-    compiler.compose_source_initial(source, root)
+    compile_root(source, root)
     owned = next(g for g in bpy.data.node_groups if g.get('nodeforge_module_name') == 'persistent_authority_leaf')
     copy = owned.copy()
     root.use_fake_user = True
