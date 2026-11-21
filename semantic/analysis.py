@@ -83,7 +83,10 @@ from .callable_contracts import (
     canonicalize_group_input_default,
     source_argument_type_matches,
 )
-from .ir import IRFunctionMaterialization, IRFunctionMaterializationMode
+from .ir import (
+    IRFunctionMaterialization, IRFunctionMaterializationMode,
+    IRExtensionMaterialization, IRExtensionMaterializationMode,
+)
 from ..evaluation_modes import EvaluationMode
 from .evaluation_resolution import CompileTimeSelection, RuntimeRequired, resolve_argument_evaluation
 from ..extensions.contracts import (
@@ -426,6 +429,22 @@ def _extension_explicit_modes(spec: ExtensionCallableSpec, bound: inspect.BoundA
     return modes
 
 
+def _extension_materialization(modifiers, environment, resolved):
+    """Freeze physical extension mode and occurrence once during semantic analysis."""
+    from .call_modifiers import unsupported_unique
+
+    name = resolved.source_name
+    if modifiers.unique_was_explicit:
+        raise unsupported_unique(name)
+    mode = (IRExtensionMaterializationMode.GROUPED if modifiers.inline is False
+            else IRExtensionMaterializationMode.INLINE)
+    allocator = environment.extension_call_site_allocator
+    site = allocator(resolved.target) if callable(allocator) else None
+    if mode is IRExtensionMaterializationMode.GROUPED and site is None:
+        raise CompileError("Internal error: grouped extension requires physical occurrence identity")
+    return IRExtensionMaterialization(mode, site)
+
+
 def _analyze_extension_backend_call(
     node: ast.Call,
     cleaned_call: ast.Call,
@@ -435,10 +454,10 @@ def _analyze_extension_backend_call(
     analyze,
     facts,
     call_result_shape,
+    extension_materialization,
 ):
     """Preserve the reviewed backend-only extension acquisition/overload path."""
     name = resolved.source_name
-    reject_unsupported_modifiers(name, modifiers)
     if any(isinstance(argument, ast.Starred) for argument in cleaned_call.args):
         raise CompileError(f"{name}() does not support caller-side * argument expansion")
     if any(keyword.arg is None for keyword in cleaned_call.keywords):
@@ -606,6 +625,7 @@ def _analyze_extension_backend_call(
         result=result_spec,
         static_operands=tuple(static_operands),
         extension_overload_index=overload_index,
+        extension_materialization=extension_materialization,
     )
     return ExpressionFact(
         call_result_shape(result_spec),
@@ -734,10 +754,12 @@ def _analyze_extension_semantic_call(
     spec: ExtensionCallableSpec,
     semantic_return: TypeSpec,
     execution_form: ExtensionExecutionForm,
+    extension_materialization,
 ):
     """Analyze one non-overloaded semantic-capable extension call without body persistence."""
     name = resolved.source_name
-    reject_unsupported_modifiers(name, modifiers)
+    if execution_form is ExtensionExecutionForm.SEMANTIC_ONLY:
+        reject_unsupported_modifiers(name, modifiers)
     if any(keyword.arg is None for keyword in cleaned_call.keywords):
         raise CompileError(f"{name}() does not support caller-side ** argument expansion")
 
@@ -897,6 +919,7 @@ def _analyze_extension_semantic_call(
         result=result_spec,
         extension_state_type=semantic_return,
         extension_state=packed,
+        extension_materialization=extension_materialization,
     )
     return ExpressionFact(
         call_result_shape(result_spec),
@@ -921,6 +944,9 @@ def _analyze_extension_call(
         raise CompileError("Internal error: extension call has no immutable extension registry")
     family = registry.callable_specs(resolved.target)
     semantic_return = registry.semantic_return_type(resolved.target)
+    if modifiers.unique_was_explicit:
+        from .call_modifiers import unsupported_unique
+        raise unsupported_unique(resolved.source_name)
     if len(family) > 1:
         if semantic_return is not None:
             raise CompileError(f"Overloaded extension callable {resolved.source_name}() cannot define semantic.py implementation")
@@ -933,6 +959,7 @@ def _analyze_extension_call(
             analyze,
             facts,
             call_result_shape,
+            _extension_materialization(modifiers, environment, resolved),
         )
 
     spec = family[0]
@@ -941,6 +968,10 @@ def _analyze_extension_call(
         semantic_return,
         has_implementation=registry.has_implementation(spec.id),
     )
+    if execution_form is ExtensionExecutionForm.SEMANTIC_ONLY:
+        reject_unsupported_modifiers(resolved.source_name, modifiers)
+    physical = (None if execution_form is ExtensionExecutionForm.SEMANTIC_ONLY
+                else _extension_materialization(modifiers, environment, resolved))
     if execution_form is ExtensionExecutionForm.BACKEND_ONLY:
         return _analyze_extension_backend_call(
             node,
@@ -951,6 +982,7 @@ def _analyze_extension_call(
             analyze,
             facts,
             call_result_shape,
+            physical,
         )
     if semantic_return is None:
         raise CompileError("Internal error: semantic execution form has no semantic return contract")
@@ -966,6 +998,7 @@ def _analyze_extension_call(
         spec,
         semantic_return,
         execution_form,
+        physical,
     )
 
 def _unregistered_keyword_error(name):

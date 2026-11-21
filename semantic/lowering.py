@@ -393,6 +393,7 @@ def lower_analyzed_expression(expr, analysis, *, dependency_sources=None):
                     options=options,
                     raw_output_mode=raw_mode,
                     materialization=analyzed.materialization,
+                    extension_materialization=analyzed.extension_materialization,
                     static_arguments=static_arguments,
                     extension_state_type=extension_state_type,
                     extension_state=extension_state,
