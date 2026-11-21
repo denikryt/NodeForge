@@ -162,9 +162,7 @@ def _strict_preflight(stage, target, endpoint, interface_signature):
     ) or (group_inputs and endpoint.node is None):
         raise CompileError('Root stage contains an unauthorized Group Input')
     first_input = next((node for node in target.nodes if node.bl_idname == 'NodeGroupInput'), None)
-    if first_input is not None and not group_inputs:
-        raise CompileError('Root stage lost the canonical existing Group Input')
-    if first_input is not None and endpoint.created_by_attempt:
+    if first_input is not None and group_inputs and endpoint.created_by_attempt:
         raise CompileError('Root stage tried to create a second Group Input')
     for node in stage.nodes:
         if node.bl_idname in _UNSUPPORTED_ZONE_NODES:

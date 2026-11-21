@@ -825,6 +825,14 @@ class BlenderGroupBuildTransaction:
                     failures.append(exc)
             else:
                 _remove_node_group_if_live(event.get("backup"), failures=failures)
+        # Retire only exact session-created extension groups that lost every
+        # physical user during this root/source-group publication. Their
+        # generated resources use the existing manifest provenance checks.
+        try:
+            from .extension_group_materializer import retire_unused_extension_groups
+            retire_unused_extension_groups()
+        except Exception as exc:
+            failures.append(exc)
         self.retirement_failures.extend(failures)
         for exc in failures:
             warnings.warn(f"NodeForge committed with cleanup warning: {exc}", RuntimeWarning, stacklevel=2)

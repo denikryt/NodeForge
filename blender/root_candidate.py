@@ -10,7 +10,6 @@ from ..errors import CompileError
 from ..function_instances import COMPOSITION_ROOT_ID_PROP
 from .generated_resources import GeneratedResourceTransaction, GROUP_MANIFEST_PROP
 from .group_authority import BACKEND_PRIVATE_GROUP_PROPERTIES, mark_transaction_private
-from .group_backend import _copy_node_properties
 from .ir_lowering import RootInputEndpoint
 from .root_update import _interface_signature, validate_base_target
 
@@ -60,24 +59,15 @@ def build_private_root_candidate(prepared, target, backend, session, *, transact
     source_signature = _interface_signature(target)
     stage, stage_signature = _new_private_copy(target)
     tx = GeneratedResourceTransaction(owner_group_uuid=root_owner_uuid)
-    endpoint = RootInputEndpoint()
+    # Only an explicit raw DSL call may materialize a structural Group Input.
+    # Retain the original for read-only parity checks, never as a stage node
+    # visible to a Python extension backend before that call.
+    first_existing_input = next(
+        (node for node in target.nodes if node.bl_idname == 'NodeGroupInput'), None
+    )
+    endpoint = RootInputEndpoint(existing_input=first_existing_input)
     candidate = PrivateRootCandidate(stage, endpoint, tx, stage_signature)
     try:
-        first_existing_input = next(
-            (node for node in target.nodes if node.bl_idname == 'NodeGroupInput'), None
-        )
-        if first_existing_input is not None:
-            copied_input = stage.nodes.new('NodeGroupInput')
-            _copy_node_properties(first_existing_input, copied_input)
-            endpoint.node = copied_input
-            endpoint.created_by_attempt = False
-            # Strict native sockets and properties are also checked during transfer.
-            old_sockets = tuple((item.identifier, item.name, item.bl_idname)
-                                for item in first_existing_input.outputs)
-            new_sockets = tuple((item.identifier, item.name, item.bl_idname)
-                                for item in copied_input.outputs)
-            if old_sockets != new_sockets:
-                raise CompileError('Private root Group Input changed native socket identifiers')
         if _interface_signature(target) != source_signature:
             raise CompileError('Authoritative root interface changed before private lowering')
         compose_prepared_initial(

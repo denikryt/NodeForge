@@ -12,6 +12,7 @@ import bpy
 
 TRANSACTION_PRIVATE_PROP = "nodeforge_transaction_private_v1"
 PROVISIONAL_REGISTRY_KEY = "nodeforge.blender_group_backend.provisional_groups.v1"
+SESSION_PUBLISHED_GROUPS_KEY = "nodeforge.blender_group_backend.session_published_groups.v1"
 BACKEND_PRIVATE_GROUP_PROPERTIES = frozenset({TRANSACTION_PRIVATE_PROP})
 
 
@@ -56,6 +57,25 @@ def is_transaction_private(group) -> bool:
         return False
 
 
+def _session_published_registry() -> dict[int, object]:
+    """Track exact groups created and committed during the current Blender session."""
+    namespace = bpy.app.driver_namespace
+    registry = namespace.get(SESSION_PUBLISHED_GROUPS_KEY)
+    if not isinstance(registry, dict):
+        registry = {}
+        namespace[SESSION_PUBLISHED_GROUPS_KEY] = registry
+    return registry
+
+
+def session_published_groups() -> tuple:
+    """Return only still-live, exact groups published from fresh candidates."""
+    registry = _session_published_registry()
+    for key, group in tuple(registry.items()):
+        if not _is_live_exact(group) or _pointer(group) != key:
+            registry.pop(key, None)
+    return tuple(registry.values())
+
+
 def mark_provisional(group) -> None:
     """Mark a fresh canonical group provisional until outer publication."""
     _registry()[_pointer(group)] = group
@@ -82,6 +102,10 @@ def publish(groups) -> None:
         key = _pointer(group)
         if registry.get(key) is group:
             registry.pop(key, None)
+            # Only extension occurrence groups are eligible for automatic
+            # retirement; ordinary source groups have a different lifecycle.
+            if group.get('nodeforge_extension_call_authority_v1'):
+                _session_published_registry()[key] = group
 
 
 def forget(group) -> None:
@@ -90,6 +114,9 @@ def forget(group) -> None:
     key = _pointer(group)
     if registry.get(key) is group:
         registry.pop(key, None)
+    published = _session_published_registry()
+    if published.get(key) is group:
+        published.pop(key, None)
 
 
 def is_authority_ineligible_group(group) -> bool:
@@ -211,7 +238,7 @@ __all__ = [
     "find_unique_authoritative_group",
     "detach_selected_source_owner",
     "is_authority_ineligible_group",
-    "is_provisional",
+    "is_provisional", "session_published_groups",
     "is_transaction_private",
     "mark_provisional",
     "mark_transaction_private",

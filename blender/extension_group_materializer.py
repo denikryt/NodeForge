@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import bpy
 from dataclasses import replace
 
 from ..errors import CompileError
@@ -169,4 +170,56 @@ def materialize_extension_call(context, operation, operands, x, y):
     return results[0] if spec.result.kind == 'NF_SET' else tuple(results)
 
 
-__all__ = ['materialize_extension_call']
+def retire_unused_extension_groups():
+    """Retire exact session-created extension groups after the transaction PONR.
+
+    Authority metadata by itself cannot authorize deletion: .blend reloads and
+    copied datablocks retain those strings. Only the backend's session-published
+    registry proves this exact Blender ID was created by a committed build.
+    """
+    from .generated_resources import (
+        build_manifest, capture_owned_resource_ids, cleanup_previous_after_commit,
+        read_group_manifest,
+    )
+    from .group_authority import forget, is_authority_ineligible_group, session_published_groups
+
+    # Removing one child can make its own nested child eligible, so repeat
+    # until no additional exact unreferenced extension group remains.
+    while True:
+        retired = False
+        for group in session_published_groups():
+            if (not group.get(EXTENSION_AUTHORITY_PROP)
+                    or not group.get(EXTENSION_FINGERPRINT_PROP)
+                    or is_authority_ineligible_group(group)
+                    or group.users != 0
+                    or group.use_fake_user
+                    or getattr(group, 'asset_data', None) is not None):
+                continue
+            # A copied group can retain identical authority metadata. With
+            # more than one claimant, neither physical ID may be retired.
+            authority = group.get(EXTENSION_AUTHORITY_PROP)
+            if any(other != group and other.get(EXTENSION_AUTHORITY_PROP) == authority
+                   for other in bpy.data.node_groups):
+                continue
+            # Blender's user count and physical references must both agree.
+            if any(getattr(node, 'node_tree', None) is group
+                   for owner in bpy.data.node_groups for node in owner.nodes):
+                continue
+            if any(getattr(modifier, 'node_group', None) is group
+                   for obj in bpy.data.objects for modifier in obj.modifiers):
+                continue
+            old_manifest = read_group_manifest(group)
+            captured = capture_owned_resource_ids(group, old_manifest) if old_manifest else ()
+            bpy.data.node_groups.remove(group)
+            forget(group)
+            retired = True
+            if old_manifest:
+                cleanup_previous_after_commit(
+                    old_manifest, build_manifest(old_manifest['owner_group_uuid'], []),
+                    captured_ids=captured,
+                )
+        if not retired:
+            return
+
+
+__all__ = ['materialize_extension_call', 'retire_unused_extension_groups']

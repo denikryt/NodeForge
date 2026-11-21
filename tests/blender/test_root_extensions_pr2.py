@@ -122,19 +122,21 @@ def test_transfer_failure_leaves_manual_graph_and_discards_attempt_nodes(monkeyp
     assert {group.as_pointer() for group in bpy.data.node_groups} == before
 
 
-def test_root_backend_that_clears_canonical_input_is_rejected(monkeypatch, tmp_path):
+def test_root_backend_can_clear_private_candidate_without_touching_manual_input(tmp_path):
+    """An absent, unrequested Group Input is not a backend-visible root copy."""
     from test_unified_runtime_capability_preflight import _install_capability_fixture
     _install_capability_fixture(tmp_path)
-    root = bpy.data.node_groups.new('PR2_root_unauthorized_input_removal', 'GeometryNodeTree')
+    root = bpy.data.node_groups.new('PR2_root_manual_input_not_cloned', 'GeometryNodeTree')
     root.interface.new_socket(name='Value', in_out='INPUT', socket_type='NodeSocketFloat')
     inlet = root.nodes.new('NodeGroupInput')
     old = root.nodes.new('GeometryNodeMeshCube')
-    before = {n.as_pointer() for n in root.nodes}
-    with pytest.raises(CompileError, match='Group Input'):
-        compiler.compile_source_in_tree('from packages import danger\nx = unsafe_wipe(1.0)', root)
-    assert {n.as_pointer() for n in root.nodes} == before
+    before = inlet.as_pointer()
+    result = compiler.compile_source_in_tree('from packages import danger\nx = unsafe_wipe(1.0)', root)
+    assert result.outcome == 'ROOT_REPLACEMENT'
+    assert inlet.as_pointer() == before
     assert inlet in root.nodes[:]
-    assert COMPOSITION_ROOT_ID_PROP not in root
+    assert old not in root.nodes[:]
+    assert sum(node.bl_idname == 'NodeGroupInput' for node in root.nodes) == 1
 
 
 def test_postcommit_root_resource_cleanup_exception_keeps_undo_signal(monkeypatch):

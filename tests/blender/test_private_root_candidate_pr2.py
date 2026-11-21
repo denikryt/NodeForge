@@ -43,9 +43,10 @@ def test_candidate_has_native_interface_but_no_original_graph_action_or_owner():
         assert _interface_signature(candidate.stage) == signature
         assert root.interface.items_tree[0].identifier == initial_id
         assert tuple(n.as_pointer() for n in root.nodes) == before
-        assert len([n for n in candidate.stage.nodes if n.bl_idname == 'NodeGroupInput']) == 1
+        assert not any(n.bl_idname == 'NodeGroupInput' for n in candidate.stage.nodes)
         assert len([n for n in candidate.stage.nodes if n.bl_idname == 'GeometryNodeMeshCube']) == 1
-        assert candidate.endpoint.node.bl_idname == 'NodeGroupInput'
+        assert candidate.endpoint.node is None
+        assert candidate.endpoint.existing_input.as_pointer() == src_input.as_pointer()
         assert COMPOSITION_ROOT_ID_PROP not in candidate.stage
         assert GROUP_MANIFEST_PROP not in candidate.stage
         assert candidate.stage.animation_data is None
