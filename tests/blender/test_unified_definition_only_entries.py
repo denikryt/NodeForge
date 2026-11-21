@@ -12,7 +12,7 @@ def test_definition_only_entries_have_correct_nested_levels_and_required_inputs(
     """A→B→C with D places only A and D on the base node tree."""
     group = bpy.data.node_groups.new('NFTest_definition_only_entries', 'GeometryNodeTree')
     original = group.nodes.new('GeometryNodeMeshCube')
-    compiler.compose_source_initial('''def leaf(x: Float) -> Float:
+    compile_root('''def leaf(x: Float) -> Float:
     return x + 1
 
 def middle(x: Float) -> Float:
@@ -24,12 +24,11 @@ def entry_a(x: Float) -> Float:
 def entry_d(x: Float) -> Float:
     return x + 2
 ''', group)
-    entries = _group_nodes(group)
+    assert _group_nodes(group) == []
+    entries = [published_entry(group, name) for name in ('entry_a', 'entry_d')]
     assert len(entries) == 2
-    assert {node.node_tree.get('nodeforge_module_name') for node in entries} == {'entry_a', 'entry_d'}
-    entry_a = next(node for node in entries if node.node_tree.get('nodeforge_module_name') == 'entry_a')
-    assert entry_a.inputs[0].is_linked is False
-    child = _group_nodes(entry_a.node_tree)
+    entry_a = entries[0]
+    child = _group_nodes(entry_a)
     assert len(child) == 1 and child[0].node_tree.get('nodeforge_module_name') == 'middle'
     grandchild = _group_nodes(child[0].node_tree)
     assert len(grandchild) == 1 and grandchild[0].node_tree.get('nodeforge_module_name') == 'leaf'
@@ -40,7 +39,7 @@ def entry_d(x: Float) -> Float:
 def test_definition_only_entry_graph_does_not_insert_unused_mixed_definitions():
     """One effective executable expression disables automatic entry placement."""
     group = bpy.data.node_groups.new('NFTest_mixed_no_auto_entries', 'GeometryNodeTree')
-    compiler.compose_source_initial('''a = cube(1)
+    compile_root('''a = cube(1)
 
 def unused(x: Float) -> Float:
     return x + 1
@@ -52,19 +51,20 @@ def unused(x: Float) -> Float:
 def test_definition_only_constant_declarations_do_not_disable_entries():
     """Compile-time-only source declarations do not count as executable composition."""
     group = bpy.data.node_groups.new('NFTest_compile_time_entries', 'GeometryNodeTree')
-    compiler.compose_source_initial('''FACTOR = 2
+    compile_root('''FACTOR = 2
 
 def constant_entry(x: Float) -> Float:
     return x + FACTOR
 ''', group)
-    assert len(_group_nodes(group)) == 1
+    assert _group_nodes(group) == []
+    assert published_entry(group, 'constant_entry')
 
 
 def test_ambiguous_untyped_definition_only_entry_is_rejected():
     """An entry requiring unspecified type inference must not become arbitrary Float."""
     group = bpy.data.node_groups.new('NFTest_untyped_entry', 'GeometryNodeTree')
     with pytest.raises(CompileError, match='requires an explicit type annotation'):
-        compiler.compose_source_initial('''def ambiguous(x):
+        compile_root('''def ambiguous(x):
     return x
 ''', group)
     assert len(group.nodes) == 0
@@ -74,7 +74,7 @@ def test_definition_only_recursion_rejected_before_group_creation():
     """A recursive graph has no valid zero-incoming entry and must be diagnosed."""
     group = bpy.data.node_groups.new('NFTest_recursive_definition_entries', 'GeometryNodeTree')
     with pytest.raises(CompileError, match='Recursive'):
-        compiler.compose_source_initial('''def recur(x: Float) -> Float:
+        compile_root('''def recur(x: Float) -> Float:
     return recur(x)
 ''', group)
     assert len(group.nodes) == 0
@@ -83,7 +83,7 @@ def test_definition_only_recursion_rejected_before_group_creation():
 def test_two_entries_share_the_same_nested_callee():
     """Multiple roots reuse a common nested definition without duplicate backing owners."""
     group = bpy.data.node_groups.new('NFTest_shared_entries', 'GeometryNodeTree')
-    compiler.compose_source_initial('''def _common(x: Float) -> Float:
+    compile_root('''def _common(x: Float) -> Float:
     return x + 1
 
 def a(x: Float) -> Float:
@@ -92,9 +92,9 @@ def a(x: Float) -> Float:
 def b(x: Float) -> Float:
     return _common(x)
 ''', group)
-    roots = _group_nodes(group)
-    assert len(roots) == 2
-    shared = [_group_nodes(node.node_tree)[0].node_tree for node in roots]
+    assert _group_nodes(group) == []
+    roots = [published_entry(group, name) for name in ('a', 'b')]
+    shared = [_group_nodes(group)[0].node_tree for group in roots]
     assert shared[0].as_pointer() == shared[1].as_pointer()
     assert shared[0].get('nodeforge_module_name') == '_common'
 
@@ -102,7 +102,7 @@ def b(x: Float) -> Float:
 def test_top_level_function_call_does_not_create_automatic_entries():
     """Executable top-level invocation suppresses entries for untouched definitions."""
     group = bpy.data.node_groups.new('NFTest_called_entry_only', 'GeometryNodeTree')
-    compiler.compose_source_initial('''def a(x: Float) -> Float:
+    compile_root('''def a(x: Float) -> Float:
     return x + 2
 
 def uncalled(x: Float) -> Float:
@@ -118,7 +118,7 @@ v = a(1)
 def test_nested_compile_time_branch_places_only_reachable_entry():
     """Nested CT writes must produce the same edges as actual group materialization."""
     tree = bpy.data.node_groups.new('NFTest_nested_ct_true_entry', 'GeometryNodeTree')
-    compiler.compose_source_initial('''FLAG = False
+    compile_root('''FLAG = False
 
 def a():
     if True:
@@ -130,16 +130,16 @@ def a():
 def b():
     return 2
 ''', tree)
-    entries = _group_nodes(tree)
-    assert [node.node_tree.get('nodeforge_module_name') for node in entries] == ['a']
-    children = _group_nodes(entries[0].node_tree)
+    assert _group_nodes(tree) == []
+    entries = [published_entry(tree, 'a')]
+    children = _group_nodes(entries[0])
     assert [node.node_tree.get('nodeforge_module_name') for node in children] == ['b']
 
 
 def test_nested_compile_time_dead_call_does_not_hide_independent_entry():
     """Nested CT reassignment prunes a dead call in both graph and Blender body."""
     tree = bpy.data.node_groups.new('NFTest_nested_ct_false_entry', 'GeometryNodeTree')
-    compiler.compose_source_initial('''FLAG = True
+    compile_root('''FLAG = True
 
 def a():
     if True:
@@ -151,7 +151,7 @@ def a():
 def b():
     return 2
 ''', tree)
-    entries = _group_nodes(tree)
-    assert {node.node_tree.get('nodeforge_module_name') for node in entries} == {'a', 'b'}
-    a = next(node for node in entries if node.node_tree.get('nodeforge_module_name') == 'a')
-    assert _group_nodes(a.node_tree) == []
+    assert _group_nodes(tree) == []
+    entries = [published_entry(tree, name) for name in ('a', 'b')]
+    assert {group.get('nodeforge_module_name') for group in entries} == {'a', 'b'}
+    assert _group_nodes(entries[0]) == []

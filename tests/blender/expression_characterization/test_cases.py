@@ -164,9 +164,11 @@ def test_top_level_baselines_pin_sharing_and_import_side_effects():
 
 def test_top_level_baselines_pin_nesting_and_absent_unused_functions():
     """A definition chain materializes three levels; shadowed defs remain unused."""
-    definitions = load_case_baseline("top_level_definition_chain")["graph"]
-    assert len(definitions["nodes"]) == 2
-    entry_graph = definitions["nodes"][0]["group"]["graph"]
+    definitions = load_case_baseline("top_level_definition_chain")
+    assert definitions["graph"]["nodes"] == []  # groups-only does not place root instances
+    published = {item["name"]: item["graph"] for item in definitions["definitions"]}
+    assert {"entry", "independent", "leaf", "middle"} == set(published)
+    entry_graph = published["entry"]
     middle = next(node["group"]["graph"] for node in entry_graph["nodes"] if "group" in node)
     leaf = next(node["group"]["graph"] for node in middle["nodes"] if "group" in node)
     assert any(node["bl_idname"] == "ShaderNodeMath" for node in leaf["nodes"])
@@ -179,8 +181,9 @@ def test_top_level_baselines_pin_nesting_and_absent_unused_functions():
 
 def test_top_level_baselines_pin_interface_outputs_and_existing_links():
     """Check semantic details that can be lost by blindly regenerating JSON baselines."""
-    panel = load_case_baseline("top_level_panel_defaults")["graph"]
-    interface = panel["nodes"][0]["group"]["graph"]["interface"]
+    panel = load_case_baseline("top_level_panel_defaults")
+    assert panel["graph"]["nodes"] == []
+    interface = panel["definitions"][0]["graph"]["interface"]
     assert [(item["name"], item["default"]) for item in interface if item["in_out"] == "INPUT"] == [
         ("Bias", 3.0), ("Amount", 2.0),
     ]
@@ -193,10 +196,20 @@ def test_top_level_baselines_pin_interface_outputs_and_existing_links():
     assert len(outputs["links"]) == 2
 
     preserved = load_case_baseline("top_level_preserve_user_link")["graph"]
-    assert [node["bl_idname"] for node in preserved["nodes"]] == [
-        "ShaderNodeMath", "ShaderNodeMath", "GeometryNodeMeshCube",
-    ]
-    assert preserved["links"] == [{"from": ["n0", "Value"], "to": ["n1", "Value"]}]
+    assert [node["bl_idname"] for node in preserved["nodes"]] == ["GeometryNodeMeshCube"]
+    assert preserved["links"] == []  # root-producing Compile replaces all ordinary nodes
+
+
+def test_groups_only_baselines_pin_shared_helper_without_root_instances():
+    """Entry groups share a helper, while the selected root remains physically unchanged."""
+    baseline = load_case_baseline("top_level_shared_entries")
+    assert baseline["graph"]["nodes"] == []
+    groups = {row["name"]: row["graph"] for row in baseline["definitions"]}
+    assert set(groups) == {"_common", "first", "second"}
+    helper_graph = groups["_common"]
+    assert any(node["bl_idname"] == "ShaderNodeMath" for node in helper_graph["nodes"])
+    for name in ("first", "second"):
+        assert any(node["bl_idname"] == "GeometryNodeGroup" for node in groups[name]["nodes"])
 
 
 def test_top_level_baseline_pins_only_reachable_function_groups():

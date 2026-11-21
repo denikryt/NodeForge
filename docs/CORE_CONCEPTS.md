@@ -36,7 +36,7 @@ Each Group Node instance can have different input values or incoming links. Chan
 
 ## Modules and functions
 
-A `.nf` file is a module. It can declare several functions, create nodes directly with top-level statements, or combine both. Calls to its functions create Group Nodes; functions can call other functions. A module with no executable top-level statements places its entry functions as Group Nodes when compiled. See [`.nf` Modules](MODULES.md) for the placement rules and examples.
+A `.nf` file is a module. It can declare several functions, create nodes directly with top-level statements, or combine both. Grouped function calls create Group Nodes; functions can call other functions. A module without top-level node-building code creates or updates entry function groups for manual placement. See [`.nf` Modules](MODULES.md#compose-the-base-tree) for compilation modes and examples.
 
 ## Imports
 

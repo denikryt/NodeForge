@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from helpers import compile_root
+
 import json
 
 import bpy
@@ -57,7 +59,7 @@ def test_rotation_default_required_and_euler_readback():
     assert _inputs(required, 'INPUT')[0].socket_type == 'NodeSocketRotation'
     missing_call = bpy.data.node_groups.new('NFTest_RotationMissingRequired', 'GeometryNodeTree')
     with pytest.raises(CompileError):
-        compiler.compose_source_initial('''def need_rotation(value: Rotation) -> Rotation:
+        compile_root('''def need_rotation(value: Rotation) -> Rotation:
     return value
 
 result = need_rotation()

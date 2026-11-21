@@ -16,7 +16,7 @@ def _nested_groups(tree):
 def _compose_module(source, name, *, environment=None):
     """Compile unified top-level statements into a pre-existing base node tree."""
     root = bpy.data.node_groups.new(name, 'GeometryNodeTree')
-    compiler.compose_source_initial(source, root, resolved_environment=environment)
+    compile_root(source, root, resolved_environment=environment)
     return root
 
 

@@ -34,7 +34,7 @@ from .geometry import (
 from .nodes import _id as _field_id, _index as _field_index, _normal as _field_normal, _position as _field_position
 from .bundle import build_bundle, build_bundle_get, build_bundle_set
 from .object_info import resolve_object_property_explicit
-from .raw_nodes import build_materialized_raw_node
+from .raw_nodes import build_materialized_raw_node, read_existing_raw_group_input
 from .extension_backend import lower_extension_call
 from ..semantic.ir import (
     IRBinary,
@@ -127,6 +127,14 @@ def _create_repeat_zone(group, state_specs, index_name, x=0, y=0):
     return ri, ro
 
 
+@dataclass
+class RootInputEndpoint:
+    """One mutable root-only Group Input selection for a compilation attempt."""
+
+    node: object | None = None
+    created_by_attempt: bool = False
+
+
 @dataclass(frozen=True)
 class BlenderIRLoweringContext:
     """Explicit Blender backend inputs for one Semantic IR lowering operation.
@@ -147,6 +155,7 @@ class BlenderIRLoweringContext:
     extension_registry: object | None = None
     generated_resource_transaction: object | None = None
     layout_origin: tuple[float, float] = (0.0, 0.0)
+    root_input_endpoint: RootInputEndpoint | None = None
 
     def __post_init__(self):
         """Freeze value bindings while retaining explicit mutable backend-owned maps."""
@@ -527,6 +536,27 @@ def _lower_builtin_call(context, operation, operands, x, y):
                 raise CompileError(f"Internal error: unknown raw-node input mode {mode!r}")
             raw_inputs.append((selector, value_spec))
         outputs = options["outputs"]
+        endpoint = getattr(context, 'root_input_endpoint', None)
+        if options["bl_idname"] == 'NodeGroupInput' and endpoint is not None:
+            if endpoint.node is None:
+                node = next((item for item in group.nodes if item.bl_idname == 'NodeGroupInput'), None)
+                if node is None:
+                    result = build_materialized_raw_node(
+                        group, bl_idname='NodeGroupInput', props=dict(options['props']),
+                        inputs=raw_inputs, output=options['output'], typ=options['typ'],
+                        outputs=list(outputs) if outputs is not None else None,
+                        x=x, y=y, context='node()',
+                    )
+                    endpoint.node = result[0].socket.node if isinstance(result, tuple) else result.socket.node
+                    endpoint.created_by_attempt = True
+                    return result
+                endpoint.node = node
+            return read_existing_raw_group_input(
+                endpoint.node, props=dict(options['props']), inputs=raw_inputs,
+                output=options['output'], typ=options['typ'],
+                outputs=list(outputs) if outputs is not None else None,
+                context='node()',
+            )
         return build_materialized_raw_node(
             group,
             bl_idname=options["bl_idname"],
@@ -662,6 +692,7 @@ def _lower_inline_source_call(context, operation, operands, prepared, x, y):
         extension_registry=context.extension_registry,
         generated_resource_transaction=context.generated_resource_transaction,
         layout_origin=child_origin,
+        root_input_endpoint=context.root_input_endpoint,
     )
     result = lower_body(bound_context, prepared.group.body, inputs, base_depth=0)
     outputs = result.explicit_outputs if result.explicit_outputs else (

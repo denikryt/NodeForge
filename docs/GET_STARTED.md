@@ -36,7 +36,7 @@ def make_cube(size: Float["Size"] = 2.0) -> Geometry:
 
 5. Select that Text in **Text Script** and click **Compile Script**.
 
-The function becomes a Group Node in the open base tree. Connect its output to the base tree's **Group Output** Geometry input to display the cube. Change **Size** on the Group Node to see Blender reevaluate it.
+Compilation creates the `make_cube` node-group datablock. In the Geometry Node Editor, use **Add → Group** to place an instance of that group. Connect its output to the base tree's **Group Output** Geometry input to display the cube. Change **Size** on the Group Node to see Blender reevaluate it.
 
 A script can also build ordinary nodes directly:
 
@@ -44,24 +44,23 @@ A script can also build ordinary nodes directly:
 geometry = cube(2.0)
 ```
 
-**Compile Script** adds these nodes to the open base tree. It keeps existing nodes and does not connect the base tree's Group Input/Output automatically.
+**Compile Script** replaces all ordinary nodes in the open base tree with this script's nodes, including the manually placed Group Node from the previous example. Connect the Cube output to **Group Output** to display it.
 
 ## Update a script
 
-Edit the source in a Text datablock, select it under **Text Script**, open the base Geometry Nodes tree, and click **Update Script**. Each update uses the currently selected Text. The action recompiles its root graph and called functions, including nested function groups. It replaces the tree's ordinary nodes, including Group Nodes, while keeping the physical tree, its interface, and its Group Input/Output nodes.
+Edit the source in a Text datablock, select it under **Text Script**, open the base Geometry Nodes tree, and click **Compile Script** again. With top-level node-building code, compilation replaces every ordinary node, including manually created nodes and Group Nodes. It keeps the base tree, its interface sockets and defaults, its Group Input/Output nodes, and references from modifiers or other groups.
 
-Compatible unambiguous links between the root interface nodes and rebuilt nodes can be restored; other manual connections between ordinary nodes are replaced by the script's graph. Inspect boundary links after updating, especially if node types or counts changed. Repeated **Update Script** calls replace rather than accumulate nodes. **Compile Script** adds to the existing graph. A module containing only compile-time constants clears the ordinary nodes when used with **Update Script**; a module containing only declarations places its entry functions. An empty or invalid source is rejected.
+Compatible unambiguous links between the base tree's Group Input/Output nodes and rebuilt nodes can be restored; manual connections between replaced nodes are replaced by the script's graph. Inspect interface links after compiling, especially if node types or counts changed. A warning reports links that could not be restored.
 
-Update does not migrate animation or drivers on ordinary root nodes; a tree containing them cannot be updated with this action.
+With only function declarations or compile-time statements, compilation preserves the base graph and updates eligible function groups. See [Compose the base tree](MODULES.md#compose-the-base-tree) for mode selection, manual group instances, and switching between the two workflows. Empty or invalid source is rejected.
 
-Both script actions require an editable base tree in the Geometry Nodes editor. Linked read-only trees and NodeForge-managed function or Mesh Compute trees are unsupported targets. Return from any nested group before using them.
+Root replacement rejects animation or drivers on ordinary base-tree nodes. **Compile Script** requires an editable base tree in the Geometry Nodes editor for both modes. Linked read-only trees and NodeForge-managed function or Mesh Compute trees are unsupported targets. Return from any nested group before compiling.
 
 ## Main actions
 
 | Button | What it does |
 | --- | --- |
-| **Compile Script** | Adds the selected Text's nodes or entry functions to the open base tree. |
-| **Update Script** | Replaces ordinary nodes in the open base tree from the selected Text. |
+| **Compile Script** | Replaces ordinary base-tree nodes for top-level node-building code; otherwise creates or updates function groups. |
 | **Reload Function from Source** | Rebuilds a selected source-backed Function Group from its current source. |
 | **Load Script From Selected NodeGroup** | Copies the selected function's stored module source into the selected Text, replacing its contents. |
 | **Install Mesh Compute** / **Reload Compute** | Install or reload an experimental [Mesh Compute](MESH_COMPUTE.md) modifier on a Mesh object. |

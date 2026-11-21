@@ -1,6 +1,6 @@
 # Writing Functions
 
-Declare reusable functions with top-level `def` in a `.nf` module. Each parameter has a type annotation, and each function ends with a `return`. A file can declare several functions; [`.nf` Modules](MODULES.md#compose-the-base-tree) explains when their Group Nodes are placed in the base tree.
+Declare reusable functions with top-level `def` in a `.nf` module. Each parameter has a type annotation, and each function ends with a `return`. A file can declare several functions; [`.nf` Modules](MODULES.md#compose-the-base-tree) explains how to compile them for use in the base tree.
 
 ## Parameters and sockets
 
@@ -112,9 +112,9 @@ The original Text must still exist and have a unique source binding. Selecting a
 
 Reload rebuilds the selected function group in place. All Group Nodes using that shared group receive the change; a `__unique__` group retains its separate instance. Compatible links and user-edited input values are preserved.
 
-Reload also updates inline bodies embedded in the selected grouped function. Inline calls in a base tree are refreshed by **Compile Script** or **Update Script** on their calling script. Explicit standalone creation and Library **Add Node Group** produce editable groups from definitions with `__inline__=True`.
+Reload also updates inline bodies embedded in the selected grouped function. Inline calls in a base tree are refreshed by **Compile Script** on their calling script. Explicit standalone creation and Library **Add Node Group** produce editable groups from definitions with `__inline__=True`.
 
-The function name, parameter names, order, and types must match the compiled definition. Removing or renaming the definition, changing those parameters, or losing its source prevents Reload. To compile a changed signature, update the calling script and use **Compile Script** or **Update Script**. For replacement of the base graph, see [Update a script](GET_STARTED.md#update-a-script).
+The function name, parameter names, order, and types must match the compiled definition. Removing or renaming the definition, changing those parameters, or losing its source prevents Reload. To compile a changed signature, update the calling script and use **Compile Script**. For replacement of the base graph, see [Update a script](GET_STARTED.md#update-a-script).
 
 Blender's **Make Single User** copies the group's source binding along with its nodes. Duplicate bindings prevent NodeForge from choosing an owner when compiling or reloading that function. To keep a manually created copy independent, select that copy in a Geometry Nodes editor. In a Python Console in the same window, run the operator with that editor as its context:
 

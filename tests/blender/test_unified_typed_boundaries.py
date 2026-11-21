@@ -1,5 +1,9 @@
 """Physical type-interface regressions for independent .nf function definitions."""
 
+from helpers import compile_root, published_entry
+
+import ast
+
 import bpy
 import pytest
 
@@ -12,10 +16,16 @@ pytestmark = pytest.mark.blender
 def _compose(source: str):
     """Compile a definition-only module into a fresh existing user tree."""
     tree = bpy.data.node_groups.new('NFTest_unified_typed_interface', 'GeometryNodeTree')
-    compiler.compose_source_initial(source, tree)
-    calls = [node for node in tree.nodes if node.bl_idname == 'GeometryNodeGroup']
-    assert len(calls) == 1
-    return tree, calls[0].node_tree
+    compile_root(source, tree)
+    assert not list(tree.nodes)
+    # Root pointer addresses can be recycled after a previous test removes its tree.
+    # Filter by the declaration's canonical public name, not just the test origin.
+    fn_name = next(node.name for node in ast.parse(source).body if isinstance(node, ast.FunctionDef))
+    groups = [g for g in bpy.data.node_groups
+              if g.get('nodeforge_module_name') == fn_name
+              and f"test:root:{tree.as_pointer()}" in str(g.get('nodeforge_module_origin', ''))]
+    assert len(groups) == 1
+    return tree, groups[0]
 
 
 @pytest.mark.parametrize('source,input_type,output_type', [
@@ -49,7 +59,7 @@ def test_typed_argument_mismatch_leaves_existing_tree_untouched():
     root = bpy.data.node_groups.new('NFTest_unified_typed_mismatch', 'GeometryNodeTree')
     existing = root.nodes.new('GeometryNodeMeshCube')
     with pytest.raises(CompileError):
-        compiler.compose_source_initial('''def echo(value: String) -> String:
+        compile_root('''def echo(value: String) -> String:
     return value
 
 result = echo(cube(1.0))
@@ -70,7 +80,7 @@ def test_definition_bundle_parameter_and_return_use_native_bundle_socket():
 def test_explicit_float_defaults_and_int_calls_share_one_physical_group():
     """An Int runtime argument does not specialize a declared Float input."""
     tree = bpy.data.node_groups.new('NFTest_explicit_float_identity', 'GeometryNodeTree')
-    compiler.compose_source_initial('def scale(value: Float = 2.0) -> Float:\n    return value\n\na = scale()\nb = scale(3)\nc = scale(3.5)\n', tree)
+    compile_root('def scale(value: Float = 2.0) -> Float:\n    return value\n\na = scale()\nb = scale(3)\nc = scale(3.5)\n', tree)
     calls = [node for node in tree.nodes if node.bl_idname == 'GeometryNodeGroup']
     assert len(calls) == 3
     assert len({node.node_tree.as_pointer() for node in calls}) == 1
@@ -86,7 +96,7 @@ def test_definition_only_invalid_unused_parameter_does_not_mutate_user_tree():
     tree = bpy.data.node_groups.new('NFTest_explicit_unused_rollback', 'GeometryNodeTree')
     original = tree.nodes.new('GeometryNodeMeshCube')
     with pytest.raises(CompileError, match='requires an explicit type annotation'):
-        compiler.compose_source_initial('cube(1)\ndef unused(x=3):\n    return x\n', tree)
+        compile_root('cube(1)\ndef unused(x=3):\n    return x\n', tree)
     assert tuple(tree.nodes) == (original,)
 
 
@@ -108,7 +118,7 @@ def imported_echo(value: Float = RATE) -> Float:
         for name in ('functions', 'examples', 'local')
     })
     root = bpy.data.node_groups.new('NFTest_imported_explicit_default', 'GeometryNodeTree')
-    compiler.compose_source_initial('''RATE = 99.0
+    compile_root('''RATE = 99.0
 from local import defaults
 result = defaults.imported_echo()
 ''', root, resolved_environment=environment)

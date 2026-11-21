@@ -36,7 +36,7 @@ def test_reload_tracks_used_module_constant_without_replacing_shared_datablock()
     context = "test:fingerprint-module-constant"
     source = "K=2\ndef f(x: Float=1):\n    return x+K\na=f()\n"
     base = bpy.data.node_groups.new("NF-fingerprint-constant-base", "GeometryNodeTree")
-    compiler.compose_source_initial(source, base, module_context=context)
+    compile_root(source, base, module_context=context)
     call, = (node for node in base.nodes if node.bl_idname == "GeometryNodeGroup")
     group = call.node_tree
     pointer = group.as_pointer()
@@ -59,7 +59,7 @@ def test_reload_ignores_unrelated_sibling_and_module_constant():
         "def other(x: Float):\n    return x+3\na=f()\n"
     )
     base = bpy.data.node_groups.new("NF-fingerprint-sibling-base", "GeometryNodeTree")
-    compiler.compose_source_initial(source, base, module_context=context)
+    compile_root(source, base, module_context=context)
     call, = (node for node in base.nodes if node.bl_idname == "GeometryNodeGroup")
     group = call.node_tree
     before_fingerprint = stored_fingerprint(group)
@@ -76,14 +76,14 @@ def test_new_compilation_updates_reusable_group_when_constant_changes():
     context = "test:fingerprint-automatic-reuse"
     source = "K=2\ndef f(x: Float=1):\n    return x+K\na=f()\n"
     first = bpy.data.node_groups.new("NF-fingerprint-automatic-first", "GeometryNodeTree")
-    compiler.compose_source_initial(source, first, module_context=context)
+    compile_root(source, first, module_context=context)
     original, = (node for node in first.nodes if node.bl_idname == "GeometryNodeGroup")
     pointer = original.node_tree.as_pointer()
     old_fingerprint = stored_fingerprint(original.node_tree)
     assert round(_evaluate_float_output(first, original.outputs[0]), 5) == 3
 
     second = bpy.data.node_groups.new("NF-fingerprint-automatic-second", "GeometryNodeTree")
-    compiler.compose_source_initial(source.replace("K=2", "K=8"), second, module_context=context)
+    compile_root(source.replace("K=2", "K=8"), second, module_context=context)
     new, = (node for node in second.nodes if node.bl_idname == "GeometryNodeGroup")
     assert new.node_tree.as_pointer() == original.node_tree.as_pointer() == pointer
     assert stored_fingerprint(original.node_tree) != old_fingerprint

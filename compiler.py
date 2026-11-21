@@ -1,5 +1,7 @@
 """Public compiler facade and root build orchestration."""
 
+from dataclasses import dataclass
+
 from .errors import CompileError
 from .blender.library_groups import (
     materialize_library_entry_group_for_record,
@@ -121,7 +123,7 @@ def create_expression_group(source: str, name: str = "NodeForge Group"):
     """Materialize exactly one standalone unified `.nf` definition.
 
     This API no longer accepts a generated-root script or implicit root I/O.
-    Use ``compose_source_initial`` for executable top-level composition.
+    Use ``compile_source_in_tree`` for executable top-level composition.
     """
     from uuid import uuid4
     from .compiler_identities import ModuleId
@@ -152,8 +154,14 @@ def _prepare_direct_source(source: str, target, *, resolved_environment=None,
         raise CompileError("Direct composition requires an existing base GeometryNodeTree")
     backend = _new_group_backend(resolved_environment)
     session = backend.new_source_callable_session()
-    module_id = ModuleId("ROOT_TEXT", module_context or f"base-tree:{target.name}")
+    module_id = ModuleId("ROOT_TEXT", module_context if isinstance(module_context, str) and module_context.strip() else f"base-tree:{target.name}")
     snapshot = parse_source_module(source, module_id)
+    if snapshot.definitions and (
+        not isinstance(module_context, str)
+        or not module_context.strip()
+        or module_context != module_context.strip()
+    ):
+        raise CompileError("Source definitions require a stable module_context")
     owner_scope = function_group_owner_scope("COMPOSITION", module_id.stable_key())
     identity = GroupCompilationIdentity(None, owner_scope, owner_scope, owner_scope)
     prepared = analyze_group_source(
@@ -166,39 +174,70 @@ def _prepare_direct_source(source: str, target, *, resolved_environment=None,
     return prepared, backend, session, snapshot
 
 
-def compose_source_initial(source: str, target, *, resolved_environment=None,
-                           module_context: str | None = None):
-    """Append one typed `.nf` composition directly to an existing base tree."""
-    from .blender.direct_composition import compose_prepared_initial
+@dataclass(frozen=True)
+class RootCompileResult:
+    """One unified root compilation outcome and its boundary-link losses."""
 
+    target: object
+    outcome: str
+    skipped_boundary_links: int = 0
+
+
+def compile_source_in_tree(source: str, target, *, module_context: str | None = None,
+                           resolved_environment=None) -> RootCompileResult:
+    """Replace root nodes for physical statements or publish definition groups only.
+
+    The semantic body is the sole mode selector; no source text or historical
+    root state decides which physical graph owns this invocation.
+    """
+    from .blender.root_update import validate_base_target, reject_node_local_animation, replace_prepared_root
+    from .blender.direct_composition import materialize_definition_entries
+    from .blender.function_materializer import FunctionMaterializationContext, FunctionMaterializer
+    from .blender.group_backend import BlenderGroupBuildTransaction
+    from .function_instances import FunctionCompilationTrace
+
+    validate_base_target(target)
+    if not isinstance(source, str) or not source.strip():
+        raise CompileError('Compile Script requires a nonblank selected Text source')
     prepared, backend, session, snapshot = _prepare_direct_source(
         source, target, resolved_environment=resolved_environment,
         module_context=module_context,
     )
-    return compose_prepared_initial(prepared, target, backend, session, source_module=snapshot)
+    if prepared.body.statements:
+        reject_node_local_animation(target)
+        updated = replace_prepared_root(prepared, target, backend, session)
+        return RootCompileResult(target, 'ROOT_REPLACEMENT', updated.skipped_boundary_links)
 
-
-def update_source_in_tree(source: str, target, *, module_context: str | None = None):
-    """Replace ordinary nodes of an eligible base GeometryNodeTree in place.
-
-    Returns ``RootUpdateResult`` with the number of skipped old boundary links.
-    A ``RootUpdateError.may_have_mutated`` flag distinguishes errors that require
-    an Undo step from preflight or fully cleaned staging failures.
-    """
-    from .blender.root_update import (
-        validate_base_target, reject_node_local_animation, replace_prepared_root,
+    transaction = BlenderGroupBuildTransaction()
+    context = FunctionMaterializationContext(
+        function_group_cache={}, function_group_transaction=transaction,
+        function_compilation_trace=FunctionCompilationTrace(),
+        source_callable_session=session,
     )
-
-    validate_base_target(target)
-    if not isinstance(source, str) or not source.strip():
-        raise CompileError('Update Script requires a nonblank selected Text source')
-    reject_node_local_animation(target)
-    prepared, backend, session, snapshot = _prepare_direct_source(
-        source, target, module_context=module_context,
-    )
-    return replace_prepared_root(
-        prepared, target, backend, session, source_module=snapshot,
-    )
+    try:
+        materialize_definition_entries(
+            prepared, FunctionMaterializer(group_backend=backend), context, snapshot,
+        )
+        transaction.commit()
+    except Exception as original_error:
+        if transaction._closed:
+            # Commit has crossed the point of no return. A cleanup warning
+            # promoted to an exception cannot be repaired by rollback.
+            from .blender.root_update import RootUpdateError
+            raise RootUpdateError(
+                f"Function groups were committed, but postcommit cleanup failed: {original_error}",
+                may_have_mutated=True,
+            ) from original_error
+        try:
+            transaction.rollback()
+        except Exception as rollback_error:
+            from .blender.root_update import RootUpdateError
+            raise RootUpdateError(
+                f"Function-group rollback failed after {original_error}: {rollback_error}",
+                may_have_mutated=True,
+            ) from rollback_error
+        raise
+    return RootCompileResult(target, 'GROUPS_ONLY', 0)
 
 
 def _requires_mesh_compute(prepared) -> bool:
@@ -207,7 +246,8 @@ def _requires_mesh_compute(prepared) -> bool:
                for owner, _ in prepared.extension_dependencies)
 
 
-def compile_script_auto(source: str, owner=None, name: str = "NodeForge Group"):
+def compile_script_auto(source: str, owner=None, name: str = "NodeForge Group",
+                        *, module_context: str | None = None):
     """Compile top-level `.nf` only into the explicitly supplied base node tree.
 
     ``name`` is retained for callers, not used to create a generated root.
@@ -219,7 +259,7 @@ def compile_script_auto(source: str, owner=None, name: str = "NodeForge Group"):
             'Unified Compile Script requires an existing base GeometryNodeTree; '
             'generated-root and modifier compilation are unsupported'
         )
-    compose_source_initial(source, owner)
+    compile_source_in_tree(source, owner, module_context=module_context)
     return owner, False
 
 

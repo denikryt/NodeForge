@@ -31,7 +31,7 @@ K = 100.0
 shared = values.grow()
 unique = values.grow(__unique__=True)
 '''
-    compiler.compose_source_initial(caller, base, module_context='test:rev2-local-caller')
+    compile_root(caller, base, module_context='test:rev2-local-caller')
     shared, unique = [n for n in base.nodes if n.bl_idname == 'GeometryNodeGroup']
     assert shared.inputs[0].default_value == unique.inputs[0].default_value == 9.0
     assert not shared.inputs[0].is_linked and not unique.inputs[0].is_linked
@@ -68,7 +68,7 @@ def broken(x):
     before_links = {(l.from_node.as_pointer(), l.to_node.as_pointer()) for l in base.links}
     before_groups = {group.as_pointer() for group in bpy.data.node_groups}
     with pytest.raises(CompileError, match='explicit type annotation'):
-        compiler.compose_source_initial(
+        compile_root(
             'from local import values\nresult=values.good(2.0)\n',
             base, module_context='test:rev2-imported-invalid',
         )
