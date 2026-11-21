@@ -389,7 +389,7 @@ results = measure(2.0)
 tripled = results[1]
 ```
 
-See [Writing Functions](WRITING_FUNCTIONS.md) for function interfaces and [Modules](MODULES.md#compose-the-base-tree) for automatic placement of functions when compiling a module containing only declarations.
+See [Writing Functions](WRITING_FUNCTIONS.md) for function interfaces and [Modules](MODULES.md#compose-the-base-tree) for creating function groups from a module containing only declarations.
 
 ### Shared and Unique Groups
 
@@ -440,7 +440,7 @@ An effective `__inline__=True` with `__unique__=True` is an error. `__inline__` 
 
 An inline call emits nodes directly into its immediate caller's tree. A grouped caller contains its inline callee's native nodes inside the caller's group; nested calls independently select their own inline or grouped mode. Inputs and flat-tuple returns retain the normal typed function contract.
 
-**Compile Script** and **Update Script** compile inline calls in a base tree. **Reload Function from Source** recompiles inline callees embedded in a selected grouped function. Explicit **Add Node Group** and standalone function creation continue to create editable groups, even for definitions declaring `__inline__=True`.
+**Compile Script** compiles inline calls in a base tree. **Reload Function from Source** recompiles inline callees embedded in a selected grouped function. Explicit **Add Node Group** and standalone function creation continue to create editable groups, even for definitions declaring `__inline__=True`.
 
 ## Imports
 

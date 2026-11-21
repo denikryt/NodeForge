@@ -783,7 +783,7 @@ def example():
 
 Creates a Blender node directly. Use this for Blender node types that are not exposed through a dedicated NodeForge built-in. The dictionary expressions shown here are special compile-time syntax accepted only in arguments to `node(...)`; general DSL dictionaries remain unsupported.
 
-`bl_idname`, node properties, socket selectors, output aliases, and type tokens are compile-time declarations. Runtime values are allowed inside `inputs={...}` and are linked to the selected Blender input sockets. `props=` is applied before socket selectors are resolved, so selectors see the node configuration produced by those properties.
+`bl_idname`, node properties, socket selectors, output aliases, and type tokens are compile-time declarations. Runtime values are allowed inside `inputs={...}` and are linked to the selected Blender input sockets. `props=` is applied before socket selectors are resolved, so selectors see the node configuration produced by those properties. Reusing a [base-tree Group Input](#base-tree-group-input) checks its existing properties instead.
 
 Supported type tokens are `Float`, `Int`, `Bool`, `Vector`, `Color`, `Geometry`, `Material`, `Object`, `String`, and `Bundle`. A `Color`-typed result maps exactly to Blender `NodeSocketColor`; `typ=Color` is a strict output type assertion. Color input sockets accept four-component RGBA tuple literals as defaults.
 
@@ -876,6 +876,21 @@ def example():
 ```
 
 Raw-node declarations are validated before defaults, links, or result bindings are applied. Newly generated raw-node metadata stores Blender socket identifiers so later updates can fail closed if the physical node schema no longer matches the declaration.
+
+### Base-tree Group Input
+
+During **Compile Script** root replacement, `node("NodeGroupInput", ...)` reads the base tree's existing interface inputs. Create the interface sockets in Blender first. For a Float input named **Radius**:
+
+```python
+radius = node("NodeGroupInput", output="Radius", typ=Float)
+shape = cube(radius)
+```
+
+All such reads use the first existing Group Input in the tree's node order, including reads inside inline functions and control-flow bodies. If the tree has no Group Input, the first read creates one. Further reads and later compiles reuse it. Other existing Group Input nodes remain in place. A script that never requests a Group Input creates none.
+
+Reusing the selected node preserves its position, label, and properties. Links to replaced nodes follow the [base-tree compilation rules](GET_STARTED.md#update-a-script). On reuse, each supplied `props` value must already match the node's current property; a conflicting, unknown, or read-only property raises an error. The first call that creates a Group Input can set its properties normally. Each read validates its socket selectors and types against the existing sockets. Single-output and named `outputs=` forms use the selectors described above.
+
+This reuse applies to reads targeting the base tree. Separately compiled function groups construct their own raw nodes. Creating a new Group Output through `node()` during root replacement is unsupported; connect generated results to the base tree's existing Group Output in Blender.
 
 ## Runtime loops
 

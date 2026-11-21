@@ -7,8 +7,7 @@ from bpy.types import Operator, Panel, PropertyGroup, UIList, AddonPreferences
 from bpy.props import StringProperty, PointerProperty, CollectionProperty, IntProperty, BoolProperty
 
 from .compiler import (
-    compose_source_initial,
-    update_source_in_tree,
+    compile_source_in_tree,
     create_selected_library_group_auto,
     update_mesh_compute_modifier,
     create_library_catalog_group,
@@ -383,53 +382,21 @@ class GNSCRIPT_MVP_Properties(PropertyGroup):
     local_overwrite: BoolProperty(name="Overwrite", default=False)
 
 class GNSCRIPT_MVP_OT_compile_expression(Operator):
-    """Compose unified NF source once in the existing base Geometry Nodes tree."""
+    """Compile a selected Text into the current base using one semantic route."""
     bl_idname = "gn_script_mvp.compile_expression"
     bl_label = "Compile Script"
-    bl_description = "Insert NF statements or definition entries into the existing base node tree"
+    bl_description = "Replace the root graph or update function groups from the selected script"
     bl_options = {'REGISTER', 'UNDO'}
 
     expression: StringProperty(default="")
 
     @classmethod
     def poll(cls, context):
-        """Keep the action available so execute can provide a useful target diagnostic."""
-        return getattr(context, "scene", None) is not None
-
-    def execute(self, context):
-        """Compile into space.node_tree and let the compiler own rollback on error."""
-        props = getattr(getattr(context, "scene", None), "gn_script_mvp", None)
-        source = self.expression or _source_from_props(props)
-        try:
-            target = _eligible_base_gn_tree(context)
-            from .compiler import ensure_source_text_context
-            text = None if self.expression else getattr(props, 'text_block', None)
-            module_context = ensure_source_text_context(text) if text is not None else None
-            compose_source_initial(source, target, module_context=module_context)
-        except Exception as exc:
-            traceback.print_exc()
-            self.report({'ERROR'}, str(exc))
-            return {'CANCELLED'}
-        self.report({'INFO'}, f"Compiled script into: {target.name}")
-        return {'FINISHED'}
-
-
-
-class GNSCRIPT_MVP_OT_update_expression(Operator):
-    """Replace all ordinary nodes in the current base tree using selected Text."""
-
-    bl_idname = 'gn_script_mvp.update_expression'
-    bl_label = 'Update Script'
-    bl_description = 'Replace all ordinary root nodes (including manual Group Nodes) using selected Text'
-    bl_options = {'REGISTER', 'UNDO'}
-
-    @classmethod
-    def poll(cls, context):
-        """Leave the action available for precise eligibility diagnostics."""
+        """Provide a precise target diagnostic during execute."""
         return getattr(context, 'scene', None) is not None
 
     def execute(self, context):
-        """Update current base root and retain Undo for possibly partial failures."""
+        """Use one Compile route, retaining Undo when cleanup may be incomplete."""
         from .compiler import ensure_source_text_context
         from .compiler_identities import TEXT_MODULE_CONTEXT_PROP
         from .blender.root_update import RootUpdateError
@@ -440,22 +407,18 @@ class GNSCRIPT_MVP_OT_update_expression(Operator):
         try:
             target = _eligible_base_gn_tree(context)
             props = getattr(context.scene, 'gn_script_mvp', None)
-            text = getattr(props, 'text_block', None)
-            if text is None:
-                raise ValueError('Select a Text datablock for Update Script')
-            source = _source_from_props(props)
-            if not source.strip():
-                raise ValueError('Update Script requires a nonblank selected Text source')
-            context_added = TEXT_MODULE_CONTEXT_PROP not in text
-            module_context = ensure_source_text_context(text)
-            result = update_source_in_tree(source, target, module_context=module_context)
+            text = None if self.expression else getattr(props, 'text_block', None)
+            source = self.expression or _source_from_props(props)
+            if not isinstance(source, str) or not source.strip():
+                raise ValueError('Compile Script requires a nonblank selected Text source')
+            if text is not None:
+                context_added = TEXT_MODULE_CONTEXT_PROP not in text
+                module_context = ensure_source_text_context(text)
+            result = compile_source_in_tree(source, target, module_context=module_context)
         except Exception as exc:
             traceback.print_exc()
             might_have_changed = isinstance(exc, RootUpdateError) and exc.may_have_mutated
             message = str(exc)
-            # The existing nested-function identity helper stamps Text IDs. On
-            # a fully rejected attempt, undo that otherwise unnecessary change
-            # before returning CANCELLED without an Undo history entry.
             if not might_have_changed and context_added and text is not None:
                 try:
                     if module_context is None or text.get(TEXT_MODULE_CONTEXT_PROP) == module_context:
@@ -467,10 +430,14 @@ class GNSCRIPT_MVP_OT_update_expression(Operator):
             return {'FINISHED'} if might_have_changed else {'CANCELLED'}
 
         if result.skipped_boundary_links:
-            self.report({'WARNING'}, f'Updated {target.name}; skipped {result.skipped_boundary_links} incompatible or ambiguous boundary link(s)')
+            self.report({'WARNING'},
+                        f'Compiled {target.name}; skipped {result.skipped_boundary_links} incompatible or ambiguous boundary link(s)')
+        elif result.outcome == 'GROUPS_ONLY':
+            self.report({'INFO'}, f'Updated function groups from: {target.name}')
         else:
-            self.report({'INFO'}, f'Updated script in: {target.name}')
+            self.report({'INFO'}, f'Compiled root graph in: {target.name}')
         return {'FINISHED'}
+
 
 def _report_mesh_compute_evaluation(operator, context, group):
     """Evaluate a committed runtime modifier and report nonfatal callback failure."""
@@ -1214,7 +1181,6 @@ class GNSCRIPT_MVP_PT_panel(Panel):
         row = layout.row(align=True)
         op = row.operator(GNSCRIPT_MVP_OT_compile_expression.bl_idname, text="Compile Script")
         op.expression = ""
-        row.operator(GNSCRIPT_MVP_OT_update_expression.bl_idname, text="Update Script")
         owner = getattr(context, "active_object", None)
         if owner is not None and getattr(owner, "type", None) == "MESH":
             row = layout.row()
@@ -1393,7 +1359,6 @@ classes = (
     NODEFORGE_UL_function_library,
     NODEFORGE_UL_packages,
     GNSCRIPT_MVP_OT_compile_expression,
-    GNSCRIPT_MVP_OT_update_expression,
     NODEFORGE_OT_install_mesh_compute_modifier,
     NODEFORGE_OT_reload_mesh_compute_modifier,
     NODEFORGE_OT_detach_selected_source_owner,

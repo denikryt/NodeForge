@@ -431,7 +431,7 @@ Semantic and backend modules are loaded lazily for the phase that uses them. Do 
 
 A new root compilation resolves a new package environment snapshot and uses it consistently for nested calls.
 
-Call Python-backed extensions that create Blender nodes inside a typed `.nf` function. **Compile Script** and **Update Script** reject those calls directly at module level in the existing base tree. The function supplies a separate node group for the extension's nodes. Mesh Compute callbacks use the dedicated entry-function and modifier workflow described in [Mesh Compute](MESH_COMPUTE.md).
+Call Python-backed extensions that create Blender nodes inside a grouped typed `.nf` function. **Compile Script** rejects those calls directly in the base tree, including calls inside inline functions expanded there. The grouped function supplies a separate node group for the extension's nodes. Mesh Compute callbacks use the dedicated entry-function and modifier workflow described in [Mesh Compute](MESH_COMPUTE.md).
 
 ## Validation
 

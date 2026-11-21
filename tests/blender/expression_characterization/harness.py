@@ -21,7 +21,7 @@ for _path in (ROOT, PACKAGE_PARENT):
 import bpy
 
 from NodeForge import compiler, local_sources, packages
-from NodeForge.function_instances import FUNCTION_INSTANCE_KEY_PROP
+from NodeForge.function_instances import FUNCTION_INSTANCE_KEY_PROP, FUNCTION_DEFINITION_OWNER_PROP
 from NodeForge.errors import CompileError
 
 HERE = Path(__file__).resolve().parent
@@ -226,10 +226,17 @@ def _validate_baseline_document(baseline, case_id):
         raise ValueError(f"baseline for case {case_id} must be a JSON object")
     kind = baseline.get("kind")
     if kind == "graph":
-        if set(baseline) != {"kind", "graph"}:
+        if set(baseline) not in ({"kind", "graph"}, {"kind", "graph", "definitions"}):
             raise ValueError(
                 f"graph baseline for case {case_id} must contain exactly kind and graph"
             )
+        if "definitions" in baseline:
+            if not isinstance(baseline["definitions"], list) or any(
+                not isinstance(item, dict) or set(item) != {"name", "graph"}
+                or not isinstance(item["name"], str) or not isinstance(item["graph"], dict)
+                for item in baseline["definitions"]
+            ):
+                raise ValueError(f"invalid published definitions for case {case_id}")
         graph = baseline["graph"]
         if not isinstance(graph, dict) or set(graph) != {"interface", "nodes", "links"}:
             raise ValueError(
@@ -448,7 +455,9 @@ def run_case(case):
                         first = group.nodes.new("ShaderNodeMath")
                         second = group.nodes.new("ShaderNodeMath")
                         group.links.new(first.outputs[0], second.inputs[0])
-                    compiler.compose_source_initial(source, group)
+                    outcome = compiler.compile_source_in_tree(
+                        source, group, module_context=f"test:characterization:{case_id}",
+                    )
                 else:
                     group = compiler.create_expression_group(source, f"NFChar_{case_id}")
         except CompileError as exc:
@@ -466,6 +475,18 @@ def run_case(case):
                     group, include_dependencies=has_local or "top-level" in case["tags"],
                 ),
             }
+            if "top-level" in case["tags"] and outcome.outcome == "GROUPS_ONLY":
+                published = [
+                    candidate for candidate in bpy.data.node_groups
+                    if candidate.as_pointer() not in before
+                    and candidate.get(FUNCTION_DEFINITION_OWNER_PROP)
+                ]
+                if published:
+                    result["definitions"] = [
+                        {"name": str(g.get("nodeforge_module_name") or g.name),
+                         "graph": group_snapshot(g, include_dependencies=True)}
+                        for g in sorted(published, key=lambda g: str(g.get("nodeforge_module_name") or g.name))
+                    ]
         _assert_json_native(result)
         if actual_outcome != expected_outcome:
             raise AssertionError(

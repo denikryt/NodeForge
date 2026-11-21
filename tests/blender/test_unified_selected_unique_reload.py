@@ -1,5 +1,7 @@
 """Selected source Reload keeps shared/unique identity for real .nf module owners."""
 
+from helpers import compile_root
+
 import json
 
 import bpy
@@ -56,7 +58,7 @@ def _source_owner(namespace, tmp_path, monkeypatch):
 def _materialize(prefix, callee):
     """Make three level-0 calls with one shared and two distinct unique owners."""
     target = bpy.data.node_groups.new('NFTest_unique_reload_base', 'GeometryNodeTree')
-    compiler.compose_source_initial(
+    compile_root(
         prefix + f'a = {callee}(1.0)\nb = {callee}(2.0, __unique__=True)\n'
                  f'c = {callee}(3.0, __unique__=True)\n',
         target, module_context='unique-reload-fixture',
@@ -147,7 +149,7 @@ def test_rotation_shared_and_unique_package_reload_keeps_overrides(tmp_path):
     }), encoding='utf-8')
     installed = packages.install_package_directory(root)
     target = bpy.data.node_groups.new('NFTest_RotationSharedUnique', 'GeometryNodeTree')
-    compiler.compose_source_initial('''from packages import rot_reload
+    compile_root('''from packages import rot_reload
 
 a = rot_reload.rotate()
 b = rot_reload.rotate(__unique__=True)

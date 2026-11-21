@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from helpers import compile_root
+
 import bpy
 import pytest
 
@@ -79,7 +81,7 @@ def test_local_python_source_uses_registered_owner_not_permission(registered_ui,
 def test_explicit_modifier_install_rejects_occupied_modifier_without_affecting_direct_composition(
         registered_ui, configured_local, mesh_object):
     """Mesh Compute needs an exclusive private modifier; regular direct composition does not."""
-    from NodeForge.compiler import create_mesh_compute_modifier, compose_source_initial
+    from NodeForge.compiler import create_mesh_compute_modifier
     from NodeForge.errors import CompileError
 
     _select(mesh_object)
@@ -89,7 +91,7 @@ def test_explicit_modifier_install_rejects_occupied_modifier_without_affecting_d
         with pytest.raises(CompileError, match='without previous modifiers'):
             create_mesh_compute_modifier(SOURCE, mesh_object)
         assert mesh_object.modifiers[0].as_pointer() == modifier.as_pointer()
-        assert compose_source_initial('geometry = cube(1)\n', tree) is tree
+        assert compile_root('geometry = cube(1)\n', tree).target is tree
         assert any(node.bl_idname == 'GeometryNodeMeshCube' for node in tree.nodes)
         assert len(mesh_object.modifiers) == 1
     finally:

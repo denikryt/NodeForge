@@ -232,6 +232,60 @@ def build_materialized_raw_node(
     return make_value(socket, out_typ)
 
 
+def read_existing_raw_group_input(node, *, props, inputs, output, typ, outputs,
+                                  context="node()"):
+    """Read one retained Group Input without changing its RNA, links or metadata.
+
+    The root compositor has selected the canonical physical node. This uses
+    the same selector/physical-type checks as new raw-node construction, but
+    treats any requested properties as assertions about current RNA state.
+    """
+    if getattr(node, 'bl_idname', None) != 'NodeGroupInput':
+        raise CompileError(f"{context}: expected a canonical NodeGroupInput")
+    if not isinstance(props, dict) or not isinstance(inputs, (list, tuple)):
+        raise CompileError(f"{context}: invalid raw-node props or inputs")
+    if inputs:
+        raise CompileError(f"{context}: NodeGroupInput has no assignable input sockets")
+    for name, requested in props.items():
+        if not isinstance(name, str) or not name or name.startswith('['):
+            raise CompileError(f"{context}: invalid raw node property {name!r}")
+        prop = node.bl_rna.properties.get(name)
+        if prop is None or getattr(prop, 'is_readonly', False):
+            raise CompileError(f"{context}: invalid or read-only property {name!r} on NodeGroupInput")
+        actual = _normalize_json_value(getattr(node, name), f"{context}: property {name!r}")
+        expected = _normalize_json_value(requested, f"{context}: property {name!r}")
+        if not _normalized_equal(actual, expected):
+            raise CompileError(f"{context}: existing NodeGroupInput property {name!r} differs from requested value")
+
+    if outputs is None:
+        if output is None or typ is None:
+            raise CompileError(f"{context}: raw node requires an output and type")
+        _validate_public_type(typ, f"{context}: typ")
+        declarations = [(None, output, typ)]
+    else:
+        if not isinstance(outputs, (list, tuple)) or not outputs:
+            raise CompileError(f"{context}: outputs cannot be empty")
+        declarations = outputs
+    selected = []
+    for item in declarations:
+        if not isinstance(item, (list, tuple)) or len(item) != 3:
+            raise CompileError(f"{context}: outputs must contain (alias, selector, type) triples")
+        alias, selector, out_typ = item
+        if outputs is not None and (not isinstance(alias, str) or not alias):
+            raise CompileError(f"{context}: output aliases must be non-empty strings")
+        _validate_public_type(out_typ, f"{context}: output type")
+        label = _selector_label(selector)
+        socket = resolve_socket(node.outputs, selector, direction='output', context=context)
+        _validate_runtime_socket_type(socket, out_typ, direction='output', context=context, socket_name=label)
+        _capture_physical_socket_ref(socket, direction='output', context=f"{context}: output {label}")
+        _reject_duplicate_physical_socket(
+            selected, socket, context=f"{context}: two output selectors resolve to the same physical socket",
+        )
+        selected.append(socket)
+    values = tuple(make_value(socket, item[2]) for socket, item in zip(selected, declarations))
+    return values if outputs is not None else values[0]
+
+
 def _selector_label(selector) -> str:
     """Return a user-facing diagnostic label for one normalized source selector."""
     if isinstance(selector, str):
