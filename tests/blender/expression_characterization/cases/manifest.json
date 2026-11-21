@@ -698,5 +698,96 @@
       "reachability"
     ],
     "outcome": "graph"
+  },
+  {
+    "id": "extension_inline_root",
+    "description": "Default and explicit inline extension calls lower directly into root",
+    "tags": [
+      "extension-graphs",
+      "extension",
+      "top-level"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "extension_grouped_root",
+    "description": "Two grouped call sites create distinct child groups and connect results",
+    "tags": [
+      "extension-graphs",
+      "extension",
+      "top-level"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "extension_inline_and_grouped",
+    "description": "Inline and grouped calls can be connected in one root graph",
+    "tags": [
+      "extension-graphs",
+      "extension",
+      "top-level"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "extension_nested_function",
+    "description": "Extension inline/grouped choice remains local to a nested source function",
+    "tags": [
+      "extension-graphs",
+      "extension",
+      "top-level"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "extension_dynamic_mixed",
+    "description": "Grouped DynamicResults returns a heterogeneous Float and Vector tuple",
+    "tags": [
+      "extension-graphs",
+      "extension",
+      "top-level"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "extension_dynamic_singleton",
+    "description": "Call-specific singleton DynamicResults preserves tuple unpacking and socket types",
+    "tags": [
+      "extension-graphs",
+      "extension",
+      "top-level"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "extension_capture_rotation",
+    "description": "Capture Attribute Rotation items survive grouped publication and root transfer",
+    "tags": [
+      "extension-graphs",
+      "extension",
+      "top-level"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "extension_invalid_inline_modifier",
+    "description": "Non-Boolean __inline__ is rejected before physical backend lowering",
+    "tags": [
+      "extension-graphs",
+      "extension",
+      "top-level",
+      "negative"
+    ],
+    "outcome": "compile_error"
+  },
+  {
+    "id": "extension_semantic_dependency",
+    "description": "Semantic-state grouped call exposes only the compacted Dependency_0 runtime input",
+    "tags": [
+      "extension-graphs",
+      "extension",
+      "top-level"
+    ],
+    "outcome": "graph"
   }
 ]

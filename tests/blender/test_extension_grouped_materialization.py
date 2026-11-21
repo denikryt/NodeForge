@@ -24,7 +24,7 @@ def nf_fixture(v: Float):
     c, d = foo(a, __inline__=False)
     return c, d
 '''
-        group = compile_group(source, 'PR2_grouped_dynamic')
+        group = compile_group(source, 'NFExt_grouped_dynamic')
         group_nodes = [node for node in group.nodes if node.bl_idname == 'GeometryNodeGroup']
         assert len(group_nodes) == 2
         group_a = group_nodes[0].node_tree
@@ -54,7 +54,7 @@ def nf_fixture(v: Float):
     a, b = foo(v)
     return a, b
 '''
-        group = compile_group(source, 'PR2_inline_dynamic')
+        group = compile_group(source, 'NFExt_inline_dynamic')
         assert len([node for node in group.nodes if node.bl_idname == 'GeometryNodeGroup']) == 0
         assert len([node for node in group.nodes if node.bl_idname == 'ShaderNodeMath']) == 1
 
@@ -74,7 +74,7 @@ def nf_fixture(value: Int):
     part = make_part(value)
     result = consume_part(part, __inline__=False)
     return result
-''', 'PR2_grouped_semantic')
+''', 'NFExt_grouped_semantic')
             nodes = [node for node in group.nodes if node.bl_idname == 'GeometryNodeGroup']
             assert len(nodes) == 1
             assert [s.name for s in nodes[0].inputs] == ['Dependency_0']
@@ -103,7 +103,7 @@ def test_grouped_invalid_backend_result_rolls_back_owned_group_and_resources(bad
 def nf_fixture(v: Float):
     a, b = foo(v, __inline__=False)
     return a, b
-''', 'PR2_grouped_bad_'+bad)
+''', 'NFExt_grouped_bad_'+bad)
         assert {g.as_pointer() for g in bpy.data.node_groups} == groups_before
         assert {m.as_pointer() for m in bpy.data.meshes} == meshes_before
 
@@ -127,7 +127,7 @@ def test_singleton_dynamic_results_remain_tuple_when_grouped():
 def nf_fixture(v: Float):
     (a,) = foo(v, __inline__=False)
     return a
-''', 'PR2_grouped_singleton')
+''', 'NFExt_grouped_singleton')
         grouped = [node for node in group.nodes if node.bl_idname == 'GeometryNodeGroup']
         assert len(grouped) == 1
         assert [s.name for s in grouped[0].outputs] == ['Result_0']

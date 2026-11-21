@@ -21,11 +21,11 @@ def _prepare(source, root):
     # retain its physical extension preflight until transfer/cutover is ready.
     from unittest.mock import patch
     with patch('NodeForge.blender.direct_composition.validate_prepared_direct'):
-        return compiler._prepare_direct_source(source, root, module_context='text:pr2-private-candidate')[:3]
+        return compiler._prepare_direct_source(source, root, module_context='text:extension-private-candidate')[:3]
 
 
 def test_candidate_has_native_interface_but_no_original_graph_action_or_owner():
-    root = bpy.data.node_groups.new('PR2_stage_input', 'GeometryNodeTree')
+    root = bpy.data.node_groups.new('NFExt_stage_input', 'GeometryNodeTree')
     socket = root.interface.new_socket(name='Amount', in_out='INPUT', socket_type='NodeSocketFloat')
     initial_id = socket.identifier
     src_input = root.nodes.new('NodeGroupInput')
@@ -60,13 +60,13 @@ def test_extension_in_private_candidate_does_not_modify_real_root():
         directory = Path(temp) / 'package'
         _write_package(directory)
         packages.install_package_directory(directory)
-        root = bpy.data.node_groups.new('PR2_stage_extension', 'GeometryNodeTree')
+        root = bpy.data.node_groups.new('NFExt_stage_extension', 'GeometryNodeTree')
         original = root.nodes.new('GeometryNodeMeshCube')
         before = original.as_pointer()
         prepared, backend, session = _prepare('from packages import dynamic\na, b = foo(1.0)', root)
         tx = BlenderGroupBuildTransaction()
         candidate = build_private_root_candidate(prepared, root, backend, session,
-                                                  transaction=tx, root_owner_uuid='pr2-stage-extension')
+                                                  transaction=tx, root_owner_uuid='extension-stage-extension')
         try:
             assert [n.bl_idname for n in root.nodes] == ['GeometryNodeMeshCube']
             assert root.nodes[0].as_pointer() == before
@@ -83,7 +83,7 @@ def test_failing_backend_cannot_mutate_authoritative_root_via_context_group():
         directory = Path(temp) / 'package'
         _write_package(directory, bad='short')
         packages.install_package_directory(directory)
-        root = bpy.data.node_groups.new('PR2_stage_backend_fails', 'GeometryNodeTree')
+        root = bpy.data.node_groups.new('NFExt_stage_backend_fails', 'GeometryNodeTree')
         old = root.nodes.new('GeometryNodeMeshCube')
         before = old.as_pointer()
         prepared, backend, session = _prepare('from packages import dynamic\na, b = foo(1.0)', root)
@@ -92,7 +92,7 @@ def test_failing_backend_cannot_mutate_authoritative_root_via_context_group():
         tx = BlenderGroupBuildTransaction()
         with pytest.raises(CompileError, match='2-item tuple'):
             build_private_root_candidate(prepared, root, backend, session,
-                                         transaction=tx, root_owner_uuid='pr2-stage-error')
+                                         transaction=tx, root_owner_uuid='extension-stage-error')
         tx.rollback()
         assert len(root.nodes) == 1 and root.nodes[0].as_pointer() == before
         assert {g.as_pointer() for g in bpy.data.node_groups} == groups
@@ -100,8 +100,8 @@ def test_failing_backend_cannot_mutate_authoritative_root_via_context_group():
 
 
 def test_candidate_discards_inherited_action_but_does_not_change_root_animation():
-    root = bpy.data.node_groups.new('PR2_stage_action', 'GeometryNodeTree')
-    action = bpy.data.actions.new('PR2_preserve_action')
+    root = bpy.data.node_groups.new('NFExt_stage_action', 'GeometryNodeTree')
+    action = bpy.data.actions.new('NFExt_preserve_action')
     root.animation_data_create().action = action
     prepared, backend, session = _prepare('x = cube(1)', root)
     tx = BlenderGroupBuildTransaction()

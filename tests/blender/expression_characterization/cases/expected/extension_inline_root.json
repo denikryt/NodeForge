@@ -1,0 +1,52 @@
+{
+  "graph": {
+    "interface": [],
+    "links": [
+      {
+        "from": [
+          "n0",
+          "Value"
+        ],
+        "to": [
+          "n1",
+          "Value"
+        ]
+      },
+      {
+        "from": [
+          "n1",
+          "Value"
+        ],
+        "to": [
+          "n2",
+          "Value"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "bl_idname": "ShaderNodeValue",
+        "id": "n0",
+        "payload": {
+          "value": 1.0
+        },
+        "properties": {}
+      },
+      {
+        "bl_idname": "ShaderNodeMath",
+        "id": "n1",
+        "properties": {
+          "operation": "MULTIPLY"
+        }
+      },
+      {
+        "bl_idname": "ShaderNodeMath",
+        "id": "n2",
+        "properties": {
+          "operation": "MULTIPLY"
+        }
+      }
+    ]
+  },
+  "kind": "graph"
+}

@@ -9,11 +9,11 @@ from NodeForge.blender.root_candidate import build_private_root_candidate, disca
 from NodeForge.blender.root_subgraph_transfer import transfer_private_root_subgraph
 from NodeForge.blender.root_update import _interface_signature
 from NodeForge.function_instances import new_root_owner_id
-from test_private_root_candidate_pr2 import _prepare
+from test_private_root_candidate import _prepare
 
 
 def _stage(source='x = cube(1)', *, existing_input=False):
-    root = bpy.data.node_groups.new('PR2_transfer_root', 'GeometryNodeTree')
+    root = bpy.data.node_groups.new('NFExt_transfer_root', 'GeometryNodeTree')
     root.interface.new_socket(name='Radius', in_out='INPUT', socket_type='NodeSocketFloat')
     original = root.nodes.new('GeometryNodeMeshCube')
     if existing_input:
@@ -157,7 +157,7 @@ def test_transfer_rejects_new_second_input_before_modifying_target():
 
 @pytest.mark.parametrize('existing_input', [True, False])
 def test_transfer_raw_nonconsecutive_native_input_and_exact_link(existing_input):
-    root = bpy.data.node_groups.new('PR2_native_socket_transfer', 'GeometryNodeTree')
+    root = bpy.data.node_groups.new('NFExt_native_socket_transfer', 'GeometryNodeTree')
     deleted = root.interface.new_socket(name='Removed', in_out='INPUT', socket_type='NodeSocketFloat')
     radius = root.interface.new_socket(name='Radius', in_out='INPUT', socket_type='NodeSocketFloat')
     root.interface.remove(deleted)
@@ -214,7 +214,7 @@ def test_transfer_preserves_external_datablock_references_and_curve_mapping():
     root, old, candidate, tx = _stage()
     try:
         stage = candidate.stage
-        material = bpy.data.materials.new('PR2_Transfer_Material')
+        material = bpy.data.materials.new('NFExt_Transfer_Material')
         set_material = stage.nodes.new('GeometryNodeSetMaterial')
         set_material.inputs['Material'].default_value = material
         curve = stage.nodes.new('ShaderNodeFloatCurve')

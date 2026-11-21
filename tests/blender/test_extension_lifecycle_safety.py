@@ -57,7 +57,7 @@ def test_backend_cannot_see_ambient_manual_root_input_without_raw_request():
     with tempfile.TemporaryDirectory() as tmp:
         _install_fixture(tmp, backend_mode='ambient')
         for existing in (False, True):
-            root = bpy.data.node_groups.new('PR2_ambient_input_' + str(existing), 'GeometryNodeTree')
+            root = bpy.data.node_groups.new('NFExt_ambient_input_' + str(existing), 'GeometryNodeTree')
             root.interface.new_socket(name='Radius', in_out='INPUT', socket_type='NodeSocketFloat')
             manual = root.nodes.new('NodeGroupInput') if existing else None
             prior = manual.as_pointer() if manual else None
@@ -72,7 +72,7 @@ def test_backend_sees_input_only_after_explicit_raw_dsl_call():
     """An explicit NodeGroupInput read grants candidate-local structural access."""
     with tempfile.TemporaryDirectory() as tmp:
         _install_fixture(tmp, backend_mode='ambient')
-        root = bpy.data.node_groups.new('PR2_explicit_input', 'GeometryNodeTree')
+        root = bpy.data.node_groups.new('NFExt_explicit_input', 'GeometryNodeTree')
         root.interface.new_socket(name='Radius', in_out='INPUT', socket_type='NodeSocketFloat')
         manual = root.nodes.new('NodeGroupInput')
         before = manual.as_pointer()
@@ -89,7 +89,7 @@ def test_backend_inserted_group_input_is_not_adopted():
     """A backend-created structural input cannot impersonate an authorized DSL read."""
     with tempfile.TemporaryDirectory() as tmp:
         _install_fixture(tmp, backend_mode='inject_input')
-        root = bpy.data.node_groups.new('PR2_injected_input', 'GeometryNodeTree')
+        root = bpy.data.node_groups.new('NFExt_injected_input', 'GeometryNodeTree')
         root.interface.new_socket(name='Radius', in_out='INPUT', socket_type='NodeSocketFloat')
         manual = root.nodes.new('NodeGroupInput')
         before = manual.as_pointer()
@@ -102,7 +102,7 @@ def test_removed_extension_group_retires_with_connected_owned_resources():
     """An obsolete committed child and its manifest-owned Object/Mesh are retired."""
     with tempfile.TemporaryDirectory() as tmp:
         _install_fixture(tmp, backend_mode='owned_resources')
-        root = bpy.data.node_groups.new('PR2_retire_child', 'GeometryNodeTree')
+        root = bpy.data.node_groups.new('NFExt_retire_child', 'GeometryNodeTree')
         compiler.compile_source_in_tree('from packages import dynamic\na, b = foo(1.0, __inline__=False)', root)
         group = _child(root)
         authority = group[EXTENSION_AUTHORITY_PROP]
@@ -120,12 +120,12 @@ def test_manually_referenced_extension_group_and_resources_remain_live():
     """A manual Group Node in a separate root prevents child retirement."""
     with tempfile.TemporaryDirectory() as tmp:
         _install_fixture(tmp, backend_mode='owned_resources')
-        root = bpy.data.node_groups.new('PR2_preserve_child', 'GeometryNodeTree')
+        root = bpy.data.node_groups.new('NFExt_preserve_child', 'GeometryNodeTree')
         compiler.compile_source_in_tree('from packages import dynamic\na, b = foo(1.0, __inline__=False)', root)
         child = _child(root)
         obj = next(node for node in child.nodes if node.bl_idname == 'GeometryNodeObjectInfo').inputs['Object'].default_value
         obj_name, mesh_name = obj.name, obj.data.name
-        manual_root = bpy.data.node_groups.new('PR2_manual_owner', 'GeometryNodeTree')
+        manual_root = bpy.data.node_groups.new('NFExt_manual_owner', 'GeometryNodeTree')
         manual = manual_root.nodes.new('GeometryNodeGroup')
         manual.node_tree = child
         compiler.compile_source_in_tree('a = cube(1)', root)
@@ -138,7 +138,7 @@ def test_copied_group_authority_is_not_deletion_proof():
     """A duplicate copied authority must preserve ambiguous group ownership."""
     with tempfile.TemporaryDirectory() as tmp:
         _install_fixture(tmp)
-        root = bpy.data.node_groups.new('PR2_duplicate_authority', 'GeometryNodeTree')
+        root = bpy.data.node_groups.new('NFExt_duplicate_authority', 'GeometryNodeTree')
         compiler.compile_source_in_tree('from packages import dynamic\na, b = foo(1.0, __inline__=False)', root)
         child = _child(root)
         copied = child.copy()
@@ -151,7 +151,7 @@ def test_reopened_ownership_metadata_is_not_deletion_proof():
     """Metadata alone after loss of the session registry must not retire a group."""
     with tempfile.TemporaryDirectory() as tmp:
         _install_fixture(tmp)
-        root = bpy.data.node_groups.new('PR2_unverified_authority', 'GeometryNodeTree')
+        root = bpy.data.node_groups.new('NFExt_unverified_authority', 'GeometryNodeTree')
         compiler.compile_source_in_tree('from packages import dynamic\na, b = foo(1.0, __inline__=False)', root)
         child = _child(root)
         registry = bpy.app.driver_namespace[SESSION_PUBLISHED_GROUPS_KEY]
@@ -170,7 +170,7 @@ def nf_fixture(v: Float):
     a, b = foo(v, __inline__=False)
     return a
 '''
-        group = compiler.create_expression_group(source, 'PR2_source_child_retirement')
+        group = compiler.create_expression_group(source, 'NFExt_source_child_retirement')
         child = _child(group)
         authority = child[EXTENSION_AUTHORITY_PROP]
         obj = next(node for node in child.nodes if node.bl_idname == 'GeometryNodeObjectInfo').inputs['Object'].default_value
@@ -189,7 +189,7 @@ def test_failed_replacement_does_not_retire_committed_child():
     """A failed root compile retains the prior group and its generated resources."""
     with tempfile.TemporaryDirectory() as tmp:
         _install_fixture(tmp, backend_mode='owned_resources')
-        root = bpy.data.node_groups.new('PR2_failure_preserves_child', 'GeometryNodeTree')
+        root = bpy.data.node_groups.new('NFExt_failure_preserves_child', 'GeometryNodeTree')
         source = 'from packages import dynamic\na,b=foo(1.0,__inline__=False)'
         compiler.compile_source_in_tree(source, root)
         original = _child(root)

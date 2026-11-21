@@ -21,12 +21,12 @@ def test_shared_publication_new_and_updated_group_keeps_external_instance():
     """The public source builder and extension builder share one actual cutover."""
     backend = _publisher()
     tx = BlenderGroupBuildTransaction()
-    name = 'PR2_shared_candidate_' + uuid.uuid4().hex
+    name = 'NFExt_shared_candidate_' + uuid.uuid4().hex
     first = backend.publish_candidate(
         name=name, existing_group=None, build_tx=tx,
         populate=lambda group, resources: _fill_math(group, resources, operation='ADD'),
     )
-    wrapper = bpy.data.node_groups.new('PR2_candidate_manual_' + uuid.uuid4().hex, 'GeometryNodeTree')
+    wrapper = bpy.data.node_groups.new('NFExt_candidate_manual_' + uuid.uuid4().hex, 'GeometryNodeTree')
     instance = wrapper.nodes.new('GeometryNodeGroup')
     instance.node_tree = first
     original_pointer = first.as_pointer()
@@ -45,7 +45,7 @@ def test_shared_publication_failure_restores_existing_authority_and_generated_id
     """A failed nested candidate never publishes a partial group or its owned IDs."""
     backend = _publisher()
     initial_tx = BlenderGroupBuildTransaction()
-    name = 'PR2_shared_rollback_' + uuid.uuid4().hex
+    name = 'NFExt_shared_rollback_' + uuid.uuid4().hex
     authoritative = backend.publish_candidate(
         name=name, existing_group=None, build_tx=initial_tx,
         populate=lambda group, resources: _fill_math(group, resources, operation='ADD'),
@@ -57,7 +57,7 @@ def test_shared_publication_failure_restores_existing_authority_and_generated_id
 
     def broken_populate(group, resources):
         _fill_math(group, resources, operation='MULTIPLY')
-        mesh = bpy.data.meshes.new('PR2_orphan_mesh_' + uuid.uuid4().hex)
+        mesh = bpy.data.meshes.new('NFExt_orphan_mesh_' + uuid.uuid4().hex)
         resources.add(mesh, 'MESH', 'test')
         raise RuntimeError('injected extension population error')
 
@@ -79,6 +79,6 @@ def test_shared_publication_rejects_closed_attempt_before_creating_candidate():
     tx.commit()
     before = {g.as_pointer() for g in bpy.data.node_groups}
     with pytest.raises(ValueError, match='open group transaction'):
-        backend.publish_candidate(name='PR2_closed_candidate', existing_group=None,
+        backend.publish_candidate(name='NFExt_closed_candidate', existing_group=None,
                                   build_tx=tx, populate=lambda group, resources: None)
     assert {g.as_pointer() for g in bpy.data.node_groups} == before

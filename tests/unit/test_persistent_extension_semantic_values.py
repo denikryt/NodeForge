@@ -673,7 +673,7 @@ def test_persistent_extension_values_core_adds_no_extension_value_ir_or_lsystem_
     root = Path(__file__).resolve().parents[2]
     ir_source = (root / "semantic/ir.py").read_text(encoding="utf-8")
     assert "ExtensionRuntimeLeaf" not in ir_source
-    # PR2 uses one extension-specific *materialization* descriptor; persistent
+    # Extension uses one extension-specific *materialization* descriptor; persistent
     # semantic runtime values still use ordinary IRCall operands and bindings.
     assert "class IRExtensionMaterialization" in ir_source
     assert "class IRExtensionRuntimeLeaf" not in ir_source

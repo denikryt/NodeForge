@@ -23,7 +23,7 @@ def _package(temp, *, bad=''):
 def test_root_inline_dynamic_backend_publishes_without_append_and_stable_identity():
     with tempfile.TemporaryDirectory() as tmp:
         _package(tmp)
-        root = bpy.data.node_groups.new('PR2_public_inline', 'GeometryNodeTree')
+        root = bpy.data.node_groups.new('NFExt_public_inline', 'GeometryNodeTree')
         old = root.nodes.new('GeometryNodeMeshCube')
         code = 'from packages import dynamic\na, b = foo(1.0)\n'
         first = compiler.compile_source_in_tree(code, root)
@@ -35,7 +35,7 @@ def test_root_inline_dynamic_backend_publishes_without_append_and_stable_identit
         manifest = read_group_manifest(root)
         assert manifest['owner_group_uuid'] == root_uuid
         assert len(manifest['resources']) == 1
-        root.name = 'PR2_public_inline_renamed'
+        root.name = 'NFExt_public_inline_renamed'
         second = compiler.compile_source_in_tree(code, root)
         assert second.outcome == 'ROOT_REPLACEMENT'
         assert root[COMPOSITION_ROOT_ID_PROP] == root_uuid
@@ -46,7 +46,7 @@ def test_root_inline_dynamic_backend_publishes_without_append_and_stable_identit
 def test_root_grouped_extension_has_per_root_authority_and_preserves_manual_input():
     with tempfile.TemporaryDirectory() as tmp:
         _package(tmp)
-        roots = [bpy.data.node_groups.new('PR2_public_grouped'+str(i), 'GeometryNodeTree') for i in range(2)]
+        roots = [bpy.data.node_groups.new('NFExt_public_grouped'+str(i), 'GeometryNodeTree') for i in range(2)]
         for root in roots:
             root.interface.new_socket(name='Value', in_out='INPUT', socket_type='NodeSocketFloat')
             inlet = root.nodes.new('NodeGroupInput')
@@ -70,7 +70,7 @@ def test_root_grouped_extension_has_per_root_authority_and_preserves_manual_inpu
 def test_failed_root_backend_keeps_old_root_and_no_owner_stamp():
     with tempfile.TemporaryDirectory() as tmp:
         _package(tmp, bad='short')
-        root = bpy.data.node_groups.new('PR2_public_backend_failure', 'GeometryNodeTree')
+        root = bpy.data.node_groups.new('NFExt_public_backend_failure', 'GeometryNodeTree')
         manual = root.nodes.new('GeometryNodeMeshCube')
         pointer = manual.as_pointer()
         before_groups = {g.as_pointer() for g in bpy.data.node_groups}
@@ -86,7 +86,7 @@ def test_failed_root_backend_keeps_old_root_and_no_owner_stamp():
 def test_groups_only_after_root_extension_keeps_root_and_manifest_unchanged():
     with tempfile.TemporaryDirectory() as tmp:
         _package(tmp)
-        root = bpy.data.node_groups.new('PR2_group_only_after_root', 'GeometryNodeTree')
+        root = bpy.data.node_groups.new('NFExt_group_only_after_root', 'GeometryNodeTree')
         compiler.compile_source_in_tree('from packages import dynamic\na, b = foo(1.0)', root)
         before_nodes = tuple(n.as_pointer() for n in root.nodes)
         before_manifest = root.get('nodeforge_generated_resources_manifest_v1')
@@ -99,7 +99,7 @@ def test_groups_only_after_root_extension_keeps_root_and_manifest_unchanged():
 
 def test_transfer_failure_leaves_manual_graph_and_discards_attempt_nodes(monkeypatch):
     from NodeForge.blender import root_subgraph_transfer, root_update
-    root = bpy.data.node_groups.new('PR2_root_transfer_failure', 'GeometryNodeTree')
+    root = bpy.data.node_groups.new('NFExt_root_transfer_failure', 'GeometryNodeTree')
     old = root.nodes.new('GeometryNodeMeshCube')
     old_pointer = old.as_pointer()
     before = {group.as_pointer() for group in bpy.data.node_groups}
@@ -110,11 +110,11 @@ def test_transfer_failure_leaves_manual_graph_and_discards_attempt_nodes(monkeyp
         nonlocal calls
         calls += 1
         if calls == 2:
-            raise RuntimeError('PR2 copier failed after one node')
+            raise RuntimeError('Extension copier failed after one node')
         return original(src, dst)
 
     monkeypatch.setattr(root_subgraph_transfer, '_copy_node_properties', fail_second)
-    with pytest.raises(root_update.RootUpdateError, match='PR2 copier failed') as info:
+    with pytest.raises(root_update.RootUpdateError, match='Extension copier failed') as info:
         compiler.compile_source_in_tree('a = cube(1)\nb = cube(2)', root)
     assert not info.value.may_have_mutated
     assert len(root.nodes) == 1 and root.nodes[0].as_pointer() == old_pointer
@@ -126,7 +126,7 @@ def test_root_backend_can_clear_private_candidate_without_touching_manual_input(
     """An absent, unrequested Group Input is not a backend-visible root copy."""
     from test_unified_runtime_capability_preflight import _install_capability_fixture
     _install_capability_fixture(tmp_path)
-    root = bpy.data.node_groups.new('PR2_root_manual_input_not_cloned', 'GeometryNodeTree')
+    root = bpy.data.node_groups.new('NFExt_root_manual_input_not_cloned', 'GeometryNodeTree')
     root.interface.new_socket(name='Value', in_out='INPUT', socket_type='NodeSocketFloat')
     inlet = root.nodes.new('NodeGroupInput')
     old = root.nodes.new('GeometryNodeMeshCube')
@@ -144,14 +144,14 @@ def test_postcommit_root_resource_cleanup_exception_keeps_undo_signal(monkeypatc
     from NodeForge.blender import generated_resources, root_update
     with tempfile.TemporaryDirectory() as tmp:
         _package(tmp)
-        root = bpy.data.node_groups.new('PR2_postcommit_root_resource', 'GeometryNodeTree')
+        root = bpy.data.node_groups.new('NFExt_postcommit_root_resource', 'GeometryNodeTree')
         compiler.compile_source_in_tree('from packages import dynamic\na,b=foo(1.0)', root)
         uuid_before = root[COMPOSITION_ROOT_ID_PROP]
         old_manifest = read_group_manifest(root)
         assert old_manifest and old_manifest['resources']
 
         def fail_retirement(*args, **kwargs):
-            raise RuntimeError('PR2 failed after root publication')
+            raise RuntimeError('Extension failed after root publication')
 
         monkeypatch.setattr(root_update, 'cleanup_previous_after_commit', fail_retirement, raising=False)
         # Imported inside replace_prepared_root: patch the actual owner module.
@@ -167,7 +167,7 @@ def test_postcommit_root_resource_cleanup_exception_keeps_undo_signal(monkeypatc
 
 
 def test_groups_only_before_first_root_compile_does_not_stamp_composition_identity():
-    root = bpy.data.node_groups.new('PR2_root_group_only_no_identity', 'GeometryNodeTree')
+    root = bpy.data.node_groups.new('NFExt_root_group_only_no_identity', 'GeometryNodeTree')
     manual = root.nodes.new('GeometryNodeMeshCube')
     before = manual.as_pointer()
     assert compiler.compile_source_in_tree('FLAG = False', root).outcome == 'GROUPS_ONLY'

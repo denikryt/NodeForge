@@ -815,3 +815,8 @@ lifecycle.
 
 - Removed obsolete root physical-extension preflight now superseded by private root candidate compilation, while retaining Mesh Compute runtime-role checks.
 - Removed unused extension instance-key computation, private root candidate interface-signature field, and unused transfer/materializer imports.
+
+## 0.97.4
+
+- Added Blender characterization sources, deterministic graph baselines and focused assertions for Python Extension API v2 inline/grouped placement, nested calls, DynamicResults, compacted semantic dependencies, and Capture Attribute Rotation.
+- Extended characterization snapshots to retain Capture Attribute item types, domain and unlinked Float item defaults without changing existing recorded cases.

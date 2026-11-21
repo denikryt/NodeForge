@@ -136,6 +136,15 @@ def _semantic_unlinked_defaults(node):
         socket = node.inputs.get("As Instance")
         if socket is not None and not socket.is_linked:
             refs = [socket]
+    elif node.bl_idname == "GeometryNodeCaptureAttribute":
+        # A captured item can be a constant even when no link reaches its input.
+        # Blender's default for a FLOAT item is part of that captured field.
+        for item in node.capture_items:
+            if str(item.data_type) != "FLOAT":
+                continue
+            socket = node.inputs.get(item.name)
+            if socket is not None and not socket.is_linked:
+                refs.append(socket)
     result = {}
     for socket in refs:
         if not hasattr(socket, "default_value"):
@@ -160,6 +169,13 @@ def _node_snapshot(node, node_id):
     payload = _node_payload(node)
     if payload:
         row["payload"] = payload
+    if node.bl_idname == "GeometryNodeCaptureAttribute":
+        # Its dynamically declared sockets are otherwise invisible to snapshots.
+        row["properties"]["domain"] = str(node.domain)
+        row["capture_items"] = [
+            {"name": str(item.name), "data_type": str(item.data_type)}
+            for item in node.capture_items
+        ]
     defaults = _semantic_unlinked_defaults(node)
     if defaults:
         row["defaults"] = defaults
@@ -421,6 +437,19 @@ def _remove_fresh_groups(before):
 
 
 @contextmanager
+def _case_extension_fixture(case):
+    """Install deterministic extension-graph fixtures for relevant cases.
+
+    The Blender pytest fixture and the CLI recorder both isolate package inventories.
+    This fixture never resolves user-installed extensions or creates source files.
+    """
+    if "extension-graphs" in case["tags"]:
+        fixture = CASES_DIR / "packages" / "extension_graphs"
+        packages.install_package_directory(fixture, replace=True)
+    yield
+
+
+@contextmanager
 def _case_local_sources(case_id):
     """Resolve Local imports from committed case fixtures with a private registry."""
     with TemporaryDirectory(prefix="nodeforge-characterization-local-") as temp:
@@ -447,7 +476,7 @@ def run_case(case):
     harness_target_pointer = None
     try:
         try:
-            with _case_local_sources(case_id) as has_local:
+            with _case_local_sources(case_id) as has_local, _case_extension_fixture(case):
                 if "top-level" in case["tags"]:
                     group = bpy.data.node_groups.new(f"NFChar_{case_id}", "GeometryNodeTree")
                     harness_target_pointer = group.as_pointer()

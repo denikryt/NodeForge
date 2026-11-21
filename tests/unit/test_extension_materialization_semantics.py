@@ -46,12 +46,12 @@ def _result_types_foo(arguments):
     return (NFType.FLOAT,)
 ''')
     (owner_path / "backend.py").write_text(backend or "def foo(context, value): return value\n")
-    owner = ExtensionOwnerSession(capture_owner_code_snapshot(("system", "fixture.pr2", "one"), owner_path))
+    owner = ExtensionOwnerSession(capture_owner_code_snapshot(("system", "fixture.extension", "one"), owner_path))
     registry = ExtensionRegistry((owner,))
     ids = tuple(owner.normalize_interface()[0])
     cid = ids[0]
-    namespace = ResolvedPackageNamespace("fixture.pr2", "syn", "Fixture", "1", {
-        item.name: PackageCallableExport("fixture.pr2", item.name, extension_callable_id=item)
+    namespace = ResolvedPackageNamespace("fixture.extension", "syn", "Fixture", "1", {
+        item.name: PackageCallableExport("fixture.extension", item.name, extension_callable_id=item)
         for item in ids
     })
     bindings = {"x": RuntimeBindingSymbol(BindingId("scope", 0), NFType.FLOAT),

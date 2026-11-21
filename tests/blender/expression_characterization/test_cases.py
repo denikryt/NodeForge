@@ -234,3 +234,103 @@ def test_top_level_baseline_pins_only_reachable_function_groups():
     assert [node["bl_idname"] for node in c["graph"]["nodes"]] == [
         "NodeGroupInput", "NodeGroupOutput", "GeometryNodeTransform",
     ]
+
+
+def test_extension_baselines_pin_inline_vs_grouped_topology():
+    """The same owner must not silently acquire or lose a physical group boundary."""
+    inline = load_case_baseline('extension_inline_root')['graph']
+    assert [node['bl_idname'] for node in inline['nodes']] == [
+        'ShaderNodeValue', 'ShaderNodeMath', 'ShaderNodeMath',
+    ]
+    assert [node['properties'].get('operation') for node in inline['nodes'][1:]] == [
+        'MULTIPLY', 'MULTIPLY',
+    ]
+    assert len(inline['links']) == 2
+
+    grouped = load_case_baseline('extension_grouped_root')['graph']
+    children = [node['group'] for node in grouped['nodes'] if 'group' in node]
+    assert len(children) == 2
+    assert children[0]['id'] != children[1]['id']
+    assert all(any(n['bl_idname'] == 'ShaderNodeMath'
+                   for n in child['graph']['nodes']) for child in children)
+    assert len(grouped['links']) == 2
+
+    mixed = load_case_baseline('extension_inline_and_grouped')['graph']
+    assert [node['bl_idname'] for node in mixed['nodes']] == [
+        'ShaderNodeValue', 'ShaderNodeMath', 'GeometryNodeGroup', 'ShaderNodeMath',
+    ]
+    assert len(mixed['links']) == 3
+
+    nested = load_case_baseline('extension_nested_function')['graph']
+    root_group, = [node['group'] for node in nested['nodes'] if 'group' in node]
+    inner = root_group['graph']
+    assert any(node['bl_idname'] == 'ShaderNodeMath' for node in inner['nodes'])
+    child, = [node['group'] for node in inner['nodes'] if 'group' in node]
+    assert any(node['bl_idname'] == 'ShaderNodeMath' for node in child['graph']['nodes'])
+
+
+def test_extension_baselines_pin_dynamic_typed_outputs_and_semantic_dependencies():
+    """Call-specific result types, tuple arity and compacted semantic input are observable."""
+    heterogeneous = load_case_baseline('extension_dynamic_mixed')['graph']
+    child, = [node['group']['graph'] for node in heterogeneous['nodes'] if 'group' in node]
+    assert [(item['name'], item['socket_type']) for item in child['interface']
+            if item['in_out'] == 'OUTPUT'] == [
+        ('Result_0', 'NodeSocketFloat'), ('Result_1', 'NodeSocketVector'),
+    ]
+    assert any(node['bl_idname'] == 'ShaderNodeSeparateXYZ' for node in heterogeneous['nodes'])
+
+    singleton = load_case_baseline('extension_dynamic_singleton')['graph']
+    child_groups = [node['group']['graph'] for node in singleton['nodes'] if 'group' in node]
+    assert len(child_groups) == 2
+    signatures = [[item['socket_type'] for item in group['interface']
+                   if item['in_out'] == 'OUTPUT'] for group in child_groups]
+    assert signatures == [['NodeSocketVector'], ['NodeSocketFloat']]
+    assert [item['name'] for group in child_groups for item in group['interface']
+            if item['in_out'] == 'OUTPUT'] == ['Result_0', 'Result_0']
+
+    semantic = load_case_baseline('extension_semantic_dependency')['graph']
+    child, = [node['group']['graph'] for node in semantic['nodes'] if 'group' in node]
+    assert [(item['name'], item['socket_type']) for item in child['interface']
+            if item['in_out'] == 'INPUT'] == [('Dependency_0', 'NodeSocketFloat')]
+    assert len(semantic['links']) == 1
+
+
+def test_extension_baselines_pin_capture_rotation_both_materialization_paths():
+    """Dynamic capture items must survive root transfer and grouped publication."""
+    root = load_case_baseline('extension_capture_rotation')['graph']
+    grouped, = [node['group']['graph'] for node in root['nodes'] if 'group' in node]
+    expected_items = [
+        {'name': 'Spin', 'data_type': 'QUATERNION'},
+        {'name': 'Amount', 'data_type': 'FLOAT'},
+    ]
+    for graph in (root, grouped):
+        capture, = [node for node in graph['nodes']
+                    if node['bl_idname'] == 'GeometryNodeCaptureAttribute']
+        assert capture['capture_items'] == expected_items
+        assert capture['properties']['domain'] == 'POINT'
+        assert list(capture['defaults'].values()) == [0.5]
+        assert any(link['to'][0] == capture['id'] and link['from'][1] == 'Rotation'
+                   for link in graph['links'])
+
+    error = load_case_baseline('extension_invalid_inline_modifier')
+    assert error['kind'] == 'compile_error'
+    assert error['exception'] == 'CompileError'
+    assert '__inline__ must be a compile-time Bool' in error['message']
+
+
+def test_harness_capture_items_change_snapshot():
+    """Changes to capture item types cannot be invisible to characterization JSON."""
+    group = bpy.data.node_groups.new('NFCharHarnessCaptureItems', 'GeometryNodeTree')
+    try:
+        node = group.nodes.new('GeometryNodeCaptureAttribute')
+        node.capture_items.clear()
+        node.capture_items.new('FLOAT', 'Value')
+        first = harness.group_snapshot(group)
+        node.capture_items.clear()
+        node.capture_items.new('ROTATION', 'Value')
+        second = harness.group_snapshot(group)
+        assert first != second
+        assert first['nodes'][0]['capture_items'][0]['data_type'] == 'FLOAT'
+        assert second['nodes'][0]['capture_items'][0]['data_type'] == 'QUATERNION'
+    finally:
+        bpy.data.node_groups.remove(group)

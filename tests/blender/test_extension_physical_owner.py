@@ -6,8 +6,8 @@ from NodeForge.function_instances import COMPOSITION_ROOT_ID_PROP
 
 def test_root_physical_scopes_differ_for_one_source_but_group_only_does_not_stamp():
     """An explicit shared Text context is independent from the physical target tree."""
-    a = bpy.data.node_groups.new("PR2_root_scope_a", "GeometryNodeTree")
-    b = bpy.data.node_groups.new("PR2_root_scope_b", "GeometryNodeTree")
+    a = bpy.data.node_groups.new("NFExt_root_scope_a", "GeometryNodeTree")
+    b = bpy.data.node_groups.new("NFExt_root_scope_b", "GeometryNodeTree")
     from NodeForge.function_instances import new_root_owner_id
     pa, *_ = compiler._prepare_direct_source("x = cube(1)", a, module_context="text:shared",
                                               physical_root_id=new_root_owner_id())
@@ -23,8 +23,8 @@ def test_root_physical_scopes_differ_for_one_source_but_group_only_does_not_stam
 def test_copying_persisted_composition_uuid_fails_closed_before_root_update():
     """A copy of a live root must never inherit authority for the other root."""
     from NodeForge.function_instances import new_root_owner_id
-    a = bpy.data.node_groups.new("PR2_root_owner_copy_a", "GeometryNodeTree")
-    b = bpy.data.node_groups.new("PR2_root_owner_copy_b", "GeometryNodeTree")
+    a = bpy.data.node_groups.new("NFExt_root_owner_copy_a", "GeometryNodeTree")
+    b = bpy.data.node_groups.new("NFExt_root_owner_copy_b", "GeometryNodeTree")
     shared = new_root_owner_id()
     a[COMPOSITION_ROOT_ID_PROP] = b[COMPOSITION_ROOT_ID_PROP] = shared
     before = len(a.nodes)

@@ -1,0 +1,168 @@
+{
+  "graph": {
+    "interface": [],
+    "links": [
+      {
+        "from": [
+          "n0",
+          "Value"
+        ],
+        "to": [
+          "n1",
+          "Socket_0"
+        ]
+      },
+      {
+        "from": [
+          "n1",
+          "Socket_1"
+        ],
+        "to": [
+          "n2",
+          "Socket_0"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "bl_idname": "ShaderNodeValue",
+        "id": "n0",
+        "payload": {
+          "value": 1.0
+        },
+        "properties": {}
+      },
+      {
+        "bl_idname": "GeometryNodeGroup",
+        "group": {
+          "graph": {
+            "interface": [
+              {
+                "in_out": "OUTPUT",
+                "name": "Result",
+                "socket_type": "NodeSocketFloat"
+              },
+              {
+                "default": 0.0,
+                "in_out": "INPUT",
+                "name": "value",
+                "socket_type": "NodeSocketFloat"
+              }
+            ],
+            "links": [
+              {
+                "from": [
+                  "n0",
+                  "Socket_0"
+                ],
+                "to": [
+                  "n2",
+                  "Value"
+                ]
+              },
+              {
+                "from": [
+                  "n2",
+                  "Value"
+                ],
+                "to": [
+                  "n1",
+                  "Socket_1"
+                ]
+              }
+            ],
+            "nodes": [
+              {
+                "bl_idname": "NodeGroupInput",
+                "id": "n0",
+                "properties": {}
+              },
+              {
+                "bl_idname": "NodeGroupOutput",
+                "id": "n1",
+                "properties": {}
+              },
+              {
+                "bl_idname": "ShaderNodeMath",
+                "id": "n2",
+                "properties": {
+                  "operation": "MULTIPLY"
+                }
+              }
+            ]
+          },
+          "id": "g1",
+          "unique": false
+        },
+        "id": "n1",
+        "properties": {}
+      },
+      {
+        "bl_idname": "GeometryNodeGroup",
+        "group": {
+          "graph": {
+            "interface": [
+              {
+                "in_out": "OUTPUT",
+                "name": "Result",
+                "socket_type": "NodeSocketFloat"
+              },
+              {
+                "default": 0.0,
+                "in_out": "INPUT",
+                "name": "value",
+                "socket_type": "NodeSocketFloat"
+              }
+            ],
+            "links": [
+              {
+                "from": [
+                  "n0",
+                  "Socket_0"
+                ],
+                "to": [
+                  "n2",
+                  "Value"
+                ]
+              },
+              {
+                "from": [
+                  "n2",
+                  "Value"
+                ],
+                "to": [
+                  "n1",
+                  "Socket_1"
+                ]
+              }
+            ],
+            "nodes": [
+              {
+                "bl_idname": "NodeGroupInput",
+                "id": "n0",
+                "properties": {}
+              },
+              {
+                "bl_idname": "NodeGroupOutput",
+                "id": "n1",
+                "properties": {}
+              },
+              {
+                "bl_idname": "ShaderNodeMath",
+                "id": "n2",
+                "properties": {
+                  "operation": "MULTIPLY"
+                }
+              }
+            ]
+          },
+          "id": "g2",
+          "unique": false
+        },
+        "id": "n2",
+        "properties": {}
+      }
+    ]
+  },
+  "kind": "graph"
+}

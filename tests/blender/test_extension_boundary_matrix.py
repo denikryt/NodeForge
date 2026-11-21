@@ -18,9 +18,9 @@ def _package(tmp_path, *, name, interface, backend, semantic=None):
     owner = root / 'systems' / name
     owner.mkdir(parents=True)
     (root / 'nodeforge_package.json').write_text(json.dumps({
-        'schema_version': 1, 'id': 'vendor.pr2.' + name,
+        'schema_version': 1, 'id': 'vendor.extension.' + name,
         'name': name, 'version': '1.0.0', 'author': 'Tests',
-        'description': 'PR2 boundary matrix', 'nodeforge_min_version': '0.96.0',
+        'description': 'Extension boundary matrix', 'nodeforge_min_version': '0.96.0',
         'nodeforge_max_version': None, 'contents': {'systems': 'systems'},
         'permissions': {'python': True},
     }), encoding='utf-8')
@@ -56,10 +56,10 @@ def choose(context, value, form='FLOAT'):
 
 
 def test_dynamic_results_overloads_remain_distinct_tuples_across_root_grouped_updates(tmp_path):
-    _package(tmp_path, name='pr2_dynamic_types', interface=_DYNAMIC_INTERFACE,
+    _package(tmp_path, name='extension_dynamic_types', interface=_DYNAMIC_INTERFACE,
              semantic=_DYNAMIC_SEMANTIC, backend=_DYNAMIC_BACKEND)
-    root = bpy.data.node_groups.new('PR2_dynamic_matrix_root', 'GeometryNodeTree')
-    source = '''from packages import pr2_dynamic_types
+    root = bpy.data.node_groups.new('NFExt_dynamic_matrix_root', 'GeometryNodeTree')
+    source = '''from packages import extension_dynamic_types
 (a,) = choose(1.0, form='FLOAT', __inline__=False)
 (b,) = choose(2.0, form='VECTOR', __inline__=False)
 '''
@@ -72,7 +72,7 @@ def test_dynamic_results_overloads_remain_distinct_tuples_across_root_grouped_up
     authority = {g[EXTENSION_AUTHORITY_PROP]: g.as_pointer() for g in groups_by_type.values()}
     assert len(authority) == 2
     float_group = groups_by_type['NodeSocketFloat']
-    manual_tree = bpy.data.node_groups.new('PR2_dynamic_manual_ref', 'GeometryNodeTree')
+    manual_tree = bpy.data.node_groups.new('NFExt_dynamic_manual_ref', 'GeometryNodeTree')
     manual_node = manual_tree.nodes.new('GeometryNodeGroup')
     manual_node.node_tree = float_group
     src2 = source.replace("choose(1.0, form='FLOAT', __inline__=False)",
@@ -136,14 +136,14 @@ def _capture_assertions(group):
 
 
 def test_capture_rotation_clone_and_update_through_root_and_group_boundaries(tmp_path):
-    _package(tmp_path, name='pr2_capture_mix', interface=_CAPTURE_INTERFACE,
+    _package(tmp_path, name='extension_capture_mix', interface=_CAPTURE_INTERFACE,
              backend=_CAPTURE_BACKEND)
-    root = bpy.data.node_groups.new('PR2_capture_matrix_root', 'GeometryNodeTree')
-    inline = 'from packages import pr2_capture_mix\ngeo = cube(1)\nout = capture(geo)\n'
+    root = bpy.data.node_groups.new('NFExt_capture_matrix_root', 'GeometryNodeTree')
+    inline = 'from packages import extension_capture_mix\ngeo = cube(1)\nout = capture(geo)\n'
     compiler.compile_source_in_tree(inline, root)
     _capture_assertions(root)
     assert len([n for n in root.nodes if n.bl_idname == 'GeometryNodeGroup']) == 0
-    grouped = 'from packages import pr2_capture_mix\ngeo = cube(1)\nout = capture(geo,__inline__=False)\n'
+    grouped = 'from packages import extension_capture_mix\ngeo = cube(1)\nout = capture(geo,__inline__=False)\n'
     compiler.compile_source_in_tree(grouped, root)
     sub, = [n.node_tree for n in root.nodes if n.bl_idname == 'GeometryNodeGroup']
     _capture_assertions(sub)
@@ -156,18 +156,18 @@ def test_capture_rotation_clone_and_update_through_root_and_group_boundaries(tmp
 
 def test_capture_root_copy_error_preserves_previous_graph_and_resources(tmp_path, monkeypatch):
     from NodeForge.blender import root_subgraph_transfer
-    _package(tmp_path, name='pr2_capture_reject', interface=_CAPTURE_INTERFACE,
+    _package(tmp_path, name='extension_capture_reject', interface=_CAPTURE_INTERFACE,
              backend=_CAPTURE_BACKEND)
-    root = bpy.data.node_groups.new('PR2_capture_matrix_rollback', 'GeometryNodeTree')
+    root = bpy.data.node_groups.new('NFExt_capture_matrix_rollback', 'GeometryNodeTree')
     old = root.nodes.new('GeometryNodeMeshCube')
     before = old.as_pointer()
 
     def reject_capture(*args):
-        raise CompileError('PR2 Capture item reconstruction blocked')
+        raise CompileError('Extension Capture item reconstruction blocked')
 
     monkeypatch.setattr(root_subgraph_transfer, '_sync_capture_attribute_dynamic_items', reject_capture)
-    source = 'from packages import pr2_capture_reject\ngeo=cube(1)\nout=capture(geo)\n'
-    with pytest.raises(RootUpdateError, match='PR2 Capture item reconstruction blocked') as info:
+    source = 'from packages import extension_capture_reject\ngeo=cube(1)\nout=capture(geo)\n'
+    with pytest.raises(RootUpdateError, match='Extension Capture item reconstruction blocked') as info:
         compiler.compile_source_in_tree(source, root)
     assert not info.value.may_have_mutated
     assert len(root.nodes) == 1 and root.nodes[0].as_pointer() == before
@@ -179,7 +179,7 @@ def test_grouped_extension_identity_survives_actual_blend_save_reopen(tmp_path):
     import sys
     from textwrap import dedent
 
-    package_root = _package(tmp_path, name='pr2_reopen', interface=_DYNAMIC_INTERFACE,
+    package_root = _package(tmp_path, name='extension_reopen', interface=_DYNAMIC_INTERFACE,
                             semantic=_DYNAMIC_SEMANTIC, backend=_DYNAMIC_BACKEND)
     project = Path(__file__).resolve().parents[2]
     blend_file = tmp_path / 'root_reopen.blend'
@@ -198,34 +198,34 @@ def test_grouped_extension_identity_survives_actual_blend_save_reopen(tmp_path):
         except packages.PackageError as exc:
             if 'already installed' not in str(exc):
                 raise
-        src = "from packages import pr2_reopen\\n(a,) = choose(1.0, __inline__=False)\\n"
-        root = bpy.data.node_groups.new('PR2_reopen_grouped_root', 'GeometryNodeTree')
+        src = "from packages import extension_reopen\\n(a,) = choose(1.0, __inline__=False)\\n"
+        root = bpy.data.node_groups.new('NFExt_reopen_grouped_root', 'GeometryNodeTree')
         root.use_fake_user = True
-        compiler.compile_source_in_tree(src, root, module_context='text:PR2-reopen')
+        compiler.compile_source_in_tree(src, root, module_context='text:extension-reopen')
         original = root[COMPOSITION_ROOT_ID_PROP]
         groups = [n.node_tree for n in root.nodes if n.bl_idname == 'GeometryNodeGroup']
         assert len(groups) == 1 and groups[0][EXTENSION_AUTHORITY_PROP]
         assert bpy.ops.wm.save_as_mainfile(filepath={str(blend_file)!r}) == {{'FINISHED'}}
         assert bpy.ops.wm.open_mainfile(filepath={str(blend_file)!r}) == {{'FINISHED'}}
-        root = bpy.data.node_groups['PR2_reopen_grouped_root']
+        root = bpy.data.node_groups['NFExt_reopen_grouped_root']
         assert root[COMPOSITION_ROOT_ID_PROP] == original
         groups = [n.node_tree for n in root.nodes if n.bl_idname == 'GeometryNodeGroup']
         assert len(groups) == 1
         prior = groups[0].as_pointer()
         authority = groups[0][EXTENSION_AUTHORITY_PROP]
-        root.name = 'PR2_reopen_grouped_root_renamed'
-        compiler.compile_source_in_tree(src, root, module_context='text:PR2-reopen')
+        root.name = 'NFExt_reopen_grouped_root_renamed'
+        compiler.compile_source_in_tree(src, root, module_context='text:extension-reopen')
         groups = [n.node_tree for n in root.nodes if n.bl_idname == 'GeometryNodeGroup']
         assert len(groups) == 1 and groups[0].as_pointer() == prior
         assert groups[0][EXTENSION_AUTHORITY_PROP] == authority
         assert root[COMPOSITION_ROOT_ID_PROP] == original
         assert sum(g.get(EXTENSION_AUTHORITY_PROP) == authority for g in bpy.data.node_groups) == 1
-        print('PR2_SAVE_REOPEN_PASS')
+        print('NFExt_SAVE_REOPEN_PASS')
     '''), encoding='utf-8')
     finished = subprocess.run([bpy.app.binary_path, '-b', '-noaudio', '--python', str(script)],
                               capture_output=True, text=True, timeout=60)
     assert finished.returncode == 0, finished.stdout + finished.stderr
-    assert 'PR2_SAVE_REOPEN_PASS' in finished.stdout
+    assert 'NFExt_SAVE_REOPEN_PASS' in finished.stdout
 
 
 def test_variadic_dynamic_results_keep_heterogeneous_type_order_and_dependency_pins(tmp_path):
@@ -243,10 +243,10 @@ def many(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY],
     assert context.result_types == (value.typ, *(part.typ for part in values))
     return (value, *values)
 '''
-    _package(tmp_path, name='pr2_variadic_results', interface=interface,
+    _package(tmp_path, name='extension_variadic_results', interface=interface,
              semantic=semantic, backend=backend)
-    root = bpy.data.node_groups.new('PR2_variadic_dynamic_root', 'GeometryNodeTree')
-    compiler.compile_source_in_tree('''from packages import pr2_variadic_results
+    root = bpy.data.node_groups.new('NFExt_variadic_dynamic_root', 'GeometryNodeTree')
+    compiler.compile_source_in_tree('''from packages import extension_variadic_results
 (a, b) = many(1.0, vector(1, 2, 3), __inline__=False)
 (c, d, e) = many(2.0, 3, 4, __inline__=False)
 ''', root)
