@@ -765,6 +765,7 @@ lifecycle.
 - Resolve exact ordered runtime result types during semantic analysis and transport them through existing typed Call IR to the Python backend.
 - Validate dynamic extension results against call-specific IR arity, NF types, socket direction, physical type and current-group ownership before publishing generated candidates.
 - Preserved fixed result declarations, semantic extension modes, owner snapshots, and existing root-tree physical extension restrictions.
+- Documented invocation-dependent extension result declarations, resolver arguments and validation, backend result types, and package requirements.
 
 ## 0.95.0
 

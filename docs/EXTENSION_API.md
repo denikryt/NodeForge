@@ -16,7 +16,7 @@ systems/
     └── backend.py       # physical Blender realization
 ```
 
-`interface.py` is the declaration module. `semantic.py` is optional. A backend module may use any owner-local filename referenced by the declaration; `backend.py` is only a convention.
+`interface.py` is the declaration module. `semantic.py` provides frontend processing and is required for [invocation-dependent results](#invocation-dependent-results). A backend module may use any owner-local filename referenced by the declaration; `backend.py` is only a convention.
 
 An owner is either source-backed or Python-backed. Do not place both `source.nf` and `interface.py` in the same owner directory.
 
@@ -176,6 +176,82 @@ def split(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> tuple[Float, 
 ```
 
 Variadic tuples such as `tuple[Float, ...]` and union results such as `Float | Int` are not executable direct-result contracts.
+
+### Invocation-dependent results
+
+Use `DynamicResults` when a call's output count or types depend on its arguments:
+
+1. Set the return annotation in `interface.py` to `DynamicResults`, imported from `NodeForge`.
+2. Define `_result_types_<public_name>(arguments)` in the same owner's `semantic.py`. Use the callable's key in `EXTENSIONS` as `<public_name>`.
+3. Return the output types from the resolver and matching runtime values from the backend.
+
+This extension forwards one or more values as a typed tuple:
+
+```python
+# interface.py
+from typing import Annotated
+from NodeForge import DynamicResults, EvaluationMode, Float, Int, Vector
+
+EXTENSION_API = 2
+EXTENSIONS = {'forward_values': '.backend:forward_values'}
+
+
+def forward_values(
+    *values: Annotated[Float | Int | Vector, EvaluationMode.RUNTIME_ONLY],
+) -> DynamicResults:
+    ...
+```
+
+```python
+# semantic.py
+
+def _result_types_forward_values(arguments):
+    """Return each supplied value's actual type in argument order."""
+    values = arguments['values']
+    if not values:
+        raise ValueError('forward_values requires at least one value')
+    return tuple(value.typ for value in values)
+```
+
+```python
+# backend.py
+
+def forward_values(context, *values):
+    """Forward the current invocation's typed runtime values."""
+    return tuple(values)
+```
+
+Call it inside a grouped `.nf` function, using the installed package's import name:
+
+```python
+from packages import tools
+
+def example(value: Float):
+    single = tools.forward_values(value)
+    direction, number = tools.forward_values(position(), index())
+    return single[0], direction, number
+```
+
+A single result is still a tuple: use `[0]` or a one-element unpack target.
+
+The resolver's `arguments` is a read-only mapping from parameter names to the following values. Defaults are included; variadic arguments retain their source order.
+
+| Argument | Resolver value |
+| --- | --- |
+| Direct runtime value | `ResultRuntimeArg`: `.typ` is the actual `NFType`. |
+| Direct compile-time value | `ResultStaticArg`: `.typ` and the canonical immutable `.value`. |
+| Variadic parameter | A tuple of argument views, empty when no arguments were supplied. |
+| Semantic record or list | A reconstructed semantic value with `RuntimeRef` runtime leaves. |
+
+Import `ResultRuntimeArg` and `ResultStaticArg` from `NodeForge.extension_result_api`.
+
+Resolver rules:
+
+- Return a nonempty tuple or list of exact `NFType` members in output order, for example `(NFType.FLOAT, NFType.INT)`. Import `NFType` from `NodeForge.extension_api`.
+- Use argument types and compile-time data to select outputs. Create Blender nodes and resources in the backend. Importing registered physical implementation modules from the resolver is rejected.
+- For overloads, annotate every alternative with `DynamicResults` and provide one resolver for the public name.
+
+The backend must return a Python tuple of `ExtensionBackendValue` objects, including for a single result. See [`context.result_types`](#extensionbackendcontext) for output validation and [Loading and reload behavior](#loading-and-reload-behavior) for resolver loading.
 
 ### Overloads
 
@@ -397,6 +473,8 @@ Do not construct compiler values or depend on compiler internals. Use the suppli
 
 `context.location` is the `(x, y)` placement anchor for the extension call.
 
+`context.result_types` is the read-only tuple of exact `NFType` members for this call's outputs. It is available for fixed and [invocation-dependent results](#invocation-dependent-results). Return values must match its count, order, and types. Each runtime leaf must use an output socket of the matching physical type in `context.group`; input sockets and sockets from other groups are rejected. Invalid backend results reject compilation before the candidate group is published.
+
 `context.value(socket, typ)` validates and wraps an output socket from the current group as the declared NodeForge type:
 
 ```python
@@ -427,7 +505,7 @@ Resources created through these helpers participate in the active NodeForge tran
 
 NodeForge snapshots `interface.py`, `semantic.py`, backend modules, and owner-local helpers as one extension owner. Source bytes determine freshness; filesystem timestamp changes alone do not.
 
-Semantic and backend modules are loaded lazily for the phase that uses them. Do not rely on mutable module state being shared between frontend semantic execution and Blender-side realization.
+For invocation-dependent results, contract loading imports `semantic.py` and checks the required resolver exports without running their bodies. Other semantic modules and physical implementation modules load when their phase is used. Do not rely on mutable module state being shared between frontend semantic execution and Blender-side realization.
 
 A new root compilation resolves a new package environment snapshot and uses it consistently for nested calls.
 
@@ -440,6 +518,6 @@ Package installation validates Extension API declarations before the candidate p
 - `EXTENSION_API` must equal `2` and `EXTENSIONS` must be non-empty;
 - `__unique__` is compiler-reserved and cannot be an extension parameter;
 - public extension signatures do not support `**kwargs`;
-- direct executable results must be one exact NodeForge type or a fixed tuple of exact types.
+- executable results use one exact NodeForge type, a fixed tuple of exact types, or [`DynamicResults`](#invocation-dependent-results).
 
 Treat validation failures as declaration errors rather than compensating for malformed contracts inside backend code.
