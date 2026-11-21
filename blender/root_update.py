@@ -407,27 +407,22 @@ def replace_prepared_root(prepared, target, backend, session, *, root_owner_uuid
         # Socket_N IDs on existing manual Group Nodes even without adding links.
         # That Blender-side change is permitted; unexplained root mutations are not.
         updated_group_ids = {record['group'].as_pointer() for record in transaction.updated_groups}
-
-        def stable_link(contract):
-            source_id, from_socket, destination_id, to_socket = contract
-            by_ptr = {n.as_pointer(): n for n in target.nodes}
-            def normalized(node_id, socket):
-                node = by_ptr.get(node_id)
-                if (node is not None and node.bl_idname == 'GeometryNodeGroup'
-                        and node.node_tree is not None
-                        and node.node_tree.as_pointer() in updated_group_ids):
-                    return ('<updated-group>',) + socket[1:]
-                return socket
-            return (source_id, normalized(source_id, from_socket),
-                    destination_id, normalized(destination_id, to_socket))
-
-        original_stable = tuple(stable_link(link) for link in original_link_endpoints)
-        current_stable = tuple(stable_link(link) for link in link_contracts())
         updated_nodes = {
             node.as_pointer() for node in target.nodes
             if node.bl_idname == 'GeometryNodeGroup' and node.node_tree is not None
             and node.node_tree.as_pointer() in updated_group_ids
         }
+
+        def stable_link(contract):
+            source_id, from_socket, destination_id, to_socket = contract
+            if source_id in updated_nodes:
+                from_socket = ('<updated-group>',) + from_socket[1:]
+            if destination_id in updated_nodes:
+                to_socket = ('<updated-group>',) + to_socket[1:]
+            return source_id, from_socket, destination_id, to_socket
+
+        original_stable = tuple(stable_link(link) for link in original_link_endpoints)
+        current_stable = tuple(stable_link(link) for link in link_contracts())
         removed_links = [link for link in original_stable if link not in current_stable]
         added_links = [link for link in current_stable if link not in original_stable]
         valid_blender_removal = all(link[0] in updated_nodes or link[2] in updated_nodes

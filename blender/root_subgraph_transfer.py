@@ -157,9 +157,8 @@ def _strict_preflight(stage, target, endpoint, interface_signature):
     group_inputs = [node for node in stage.nodes if node.bl_idname == 'NodeGroupInput']
     if any(node.bl_idname == 'NodeGroupOutput' for node in stage.nodes):
         raise CompileError('Root backend inserted unapproved structural Group Output nodes')
-    if len(group_inputs) > 1 or (group_inputs and endpoint.node != group_inputs[0]) or (
-        not group_inputs and endpoint.node is not None
-    ) or (group_inputs and endpoint.node is None):
+    expected_inputs = [] if endpoint.node is None else [endpoint.node]
+    if group_inputs != expected_inputs:
         raise CompileError('Root stage contains an unauthorized Group Input')
     first_input = next((node for node in target.nodes if node.bl_idname == 'NodeGroupInput'), None)
     if first_input is not None and group_inputs and endpoint.created_by_attempt:

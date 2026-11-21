@@ -187,7 +187,9 @@ def retire_unused_extension_groups():
     # until no additional exact unreferenced extension group remains.
     while True:
         retired = False
-        for group in session_published_groups():
+        published = session_published_groups()
+        direct_users = bpy.data.user_map(subset=published) if published else {}
+        for group in published:
             if (not group.get(EXTENSION_AUTHORITY_PROP)
                     or not group.get(EXTENSION_FINGERPRINT_PROP)
                     or is_authority_ineligible_group(group)
@@ -201,12 +203,9 @@ def retire_unused_extension_groups():
             if any(other != group and other.get(EXTENSION_AUTHORITY_PROP) == authority
                    for other in bpy.data.node_groups):
                 continue
-            # Blender's user count and physical references must both agree.
-            if any(getattr(node, 'node_tree', None) is group
-                   for owner in bpy.data.node_groups for node in owner.nodes):
-                continue
-            if any(getattr(modifier, 'node_group', None) is group
-                   for obj in bpy.data.objects for modifier in obj.modifiers):
+            # Preserve groups referenced by any Blender ID, including modifiers
+            # and other groups. A removed parent may free its child next pass.
+            if direct_users.get(group):
                 continue
             old_manifest = read_group_manifest(group)
             captured = capture_owned_resource_ids(group, old_manifest) if old_manifest else ()
