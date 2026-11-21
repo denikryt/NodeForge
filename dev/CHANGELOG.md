@@ -804,3 +804,9 @@ lifecycle.
 ## 0.97.1
 
 - Updated Blender root-compile regressions for the unified Compile API: Capture Attribute Rotation rollback and successful invocation-dependent extension results in root trees.
+
+## 0.97.2
+
+- Simplified root link-stability checks for updated function groups, preserving Blender-driven socket changes and link removals.
+- Reused Blender ID user mapping for safe postcommit extension-group retirement, retaining session ownership, reference and resource checks.
+- Simplified validation of authorized root Group Input nodes without changing backend isolation.
