@@ -12,6 +12,8 @@ import json
 from dataclasses import dataclass
 from typing import TypeAlias
 
+from .extensions.contracts import ExtensionCallableId
+
 CORE_PACKAGE_ID = "__nodeforge_core__"
 TEXT_MODULE_CONTEXT_PROP = "nodeforge_source_text_context_v1"
 _LOCAL_FUNCTION_KIND = "LOCAL_DEF"
@@ -130,6 +132,7 @@ class GroupCompilationIdentity:
     owner_scope: str
     definition_owner: str
     declaration_owner: str
+    physical_owner_scope: str | None = None
 
     def __post_init__(self) -> None:
         """Reject incomplete ownership data before semantic IDs are allocated."""
@@ -139,6 +142,10 @@ class GroupCompilationIdentity:
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value:
                 raise ValueError(f"GroupCompilationIdentity.{field_name} must be a non-empty string")
+        if self.physical_owner_scope is not None and (
+            not isinstance(self.physical_owner_scope, str) or not self.physical_owner_scope
+        ):
+            raise ValueError("GroupCompilationIdentity.physical_owner_scope must be a non-empty string or None")
 
 
 @dataclass(frozen=True)
@@ -210,6 +217,24 @@ class CallSiteId:
             raise TypeError("CallSiteId.callee must be a FunctionId")
         if not isinstance(self.ordinal, int) or isinstance(self.ordinal, bool) or self.ordinal < 0:
             raise ValueError("CallSiteId.ordinal must be a non-negative integer")
+
+
+@dataclass(frozen=True)
+class ExtensionCallSiteId:
+    """Identify one physical extension occurrence without source-function identity."""
+
+    owner_scope: str
+    callee: ExtensionCallableId
+    ordinal: int
+
+    def __post_init__(self):
+        """Reject partial owners, non-public callees and invalid occurrences."""
+        if not isinstance(self.owner_scope, str) or not self.owner_scope:
+            raise ValueError("ExtensionCallSiteId.owner_scope must be a non-empty string")
+        if not isinstance(self.callee, ExtensionCallableId):
+            raise TypeError("ExtensionCallSiteId.callee must be ExtensionCallableId")
+        if type(self.ordinal) is not int or self.ordinal < 0:
+            raise ValueError("ExtensionCallSiteId.ordinal must be a non-negative integer")
 
 
 def inline_expansion_owner_scope(call_site: CallSiteId) -> str:
@@ -317,6 +342,7 @@ def library_function_id_for_record(record) -> FunctionId:
 __all__ = [
     "BindingId",
     "CallSiteId",
+    "ExtensionCallSiteId",
     "CORE_PACKAGE_ID",
     "FunctionId",
     "GroupCompilationIdentity",

@@ -173,6 +173,8 @@ class SemanticEnvironment:
     source_definition_owner: str | None = None
     source_owner_scope: str | None = None
     source_call_site_allocator: object | None = None
+    extension_call_site_allocator: object | None = None
+    physical_owner_scope: str | None = None
     helper_namespace: str = "Group"
     extension_registry: object | None = None
     runtime_role: object = None
@@ -991,6 +993,8 @@ def build_semantic_environment(
     source_definition_owner=None,
     source_owner_scope=None,
     source_call_site_allocator=None,
+    extension_call_site_allocator=None,
+    physical_owner_scope=None,
     helper_namespace="Group",
     extension_registry=None,
     runtime_role=None,
@@ -1060,6 +1064,8 @@ def build_semantic_environment(
         source_definition_owner=source_definition_owner,
         source_owner_scope=source_owner_scope,
         source_call_site_allocator=source_call_site_allocator,
+        extension_call_site_allocator=extension_call_site_allocator,
+        physical_owner_scope=physical_owner_scope,
         helper_namespace=str(helper_namespace or "Group"),
         extension_registry=extension_registry,
     )
@@ -1871,7 +1877,11 @@ def analyze_expression(expr, environment):
                     environment.source_call_site_allocator,
                 )
                 owner_scope = _source_materialization_owner_scope(materialization)
-                identity = GroupCompilationIdentity(None, owner_scope, definition_owner, function_id.stable_key())
+                identity = GroupCompilationIdentity(
+                    None, owner_scope, definition_owner, function_id.stable_key(),
+                    physical_owner_scope=(environment.physical_owner_scope if
+                        materialization.mode is IRFunctionMaterializationMode.INLINE else owner_scope),
+                )
                 # Imported source modules have independent lexical imports and
                 # constants; never inherit caller bindings or run imported body.
                 prepared = session.prepare_definition(
@@ -1971,6 +1981,8 @@ def analyze_expression(expr, environment):
                     owner_scope=owner_scope,
                     definition_owner=function_id.definition_owner,
                     declaration_owner=function_id.stable_key(),
+                    physical_owner_scope=(environment.physical_owner_scope if
+                        materialization.mode is IRFunctionMaterializationMode.INLINE else owner_scope),
                 )
                 prepared = session.prepare_definition(
                     function_id=function_id,
@@ -2075,7 +2087,9 @@ def analyze_expression(expr, environment):
                     if materialization.mode is IRFunctionMaterializationMode.SHARED:
                         materialization = None  # Existing direct Local catalog group ownership.
                     identity = GroupCompilationIdentity(
-                        None, owner_scope, definition_owner, function_id.stable_key()
+                        None, owner_scope, definition_owner, function_id.stable_key(),
+                        physical_owner_scope=(environment.physical_owner_scope if
+                            materialization.mode is IRFunctionMaterializationMode.INLINE else owner_scope),
                     )
                 else:
                     materialization = _resolve_source_materialization(
@@ -2083,7 +2097,9 @@ def analyze_expression(expr, environment):
                     )
                     owner_scope = _source_materialization_owner_scope(materialization)
                     identity = GroupCompilationIdentity(
-                        None, owner_scope, function_id.stable_key(), function_id.stable_key()
+                        None, owner_scope, function_id.stable_key(), function_id.stable_key(),
+                        physical_owner_scope=(environment.physical_owner_scope if
+                            materialization.mode is IRFunctionMaterializationMode.INLINE else owner_scope),
                     )
                 prepared = session.prepare_library(
                     function_id=function_id,

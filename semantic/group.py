@@ -641,6 +641,7 @@ def analyze_group_source(
         callable_environment=callable_environment,
         owner_scope=compilation_identity.owner_scope,
         declaration_owner=compilation_identity.declaration_owner,
+        physical_owner_scope=compilation_identity.physical_owner_scope,
         geometry_mode=geometry_mode,
         initial_interface_input_origins={},
         compile_time_effects_before=preprocessed.effects_before,

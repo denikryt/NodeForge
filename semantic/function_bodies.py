@@ -113,6 +113,7 @@ def compile_function_definition(
         callable_environment=callable_environment,
         owner_scope=compilation_identity.owner_scope,
         declaration_owner=compilation_identity.declaration_owner,
+        physical_owner_scope=compilation_identity.physical_owner_scope,
         initial_interface_input_origins=origins,
         compile_time_effects_before=preprocessed.effects_before,
         trailing_compile_time_effects=preprocessed.trailing_effects,

@@ -143,7 +143,8 @@ def create_expression_group(source: str, name: str = "NodeForge Group"):
 
 
 def _prepare_direct_source(source: str, target, *, resolved_environment=None,
-                           module_context: str | None = None):
+                           module_context: str | None = None,
+                           physical_root_id: str | None = None):
     """Prepare typed root statements once, without materializing Blender nodes."""
     from .compiler_identities import GroupCompilationIdentity, ModuleId
     from .function_instances import function_group_owner_scope
@@ -163,7 +164,12 @@ def _prepare_direct_source(source: str, target, *, resolved_environment=None,
     ):
         raise CompileError("Source definitions require a stable module_context")
     owner_scope = function_group_owner_scope("COMPOSITION", module_id.stable_key())
-    identity = GroupCompilationIdentity(None, owner_scope, owner_scope, owner_scope)
+    physical_scope = (function_group_owner_scope("ROOT", physical_root_id)
+                      if physical_root_id else owner_scope)
+    identity = GroupCompilationIdentity(
+        None, owner_scope, owner_scope, owner_scope,
+        physical_owner_scope=physical_scope,
+    )
     prepared = analyze_group_source(
         source, compilation_identity=identity,
         resolved_environment=session.resolved_environment,
@@ -172,6 +178,20 @@ def _prepare_direct_source(source: str, target, *, resolved_environment=None,
     )
     validate_prepared_direct(prepared, target)
     return prepared, backend, session, snapshot
+
+
+def _validate_composition_root_owner_id(target, root_id: str) -> None:
+    """Reject a copied live composition ID before any root-producing publication."""
+    import bpy
+    from .function_instances import COMPOSITION_ROOT_ID_PROP, validate_root_owner_id
+
+    root_id = validate_root_owner_id(root_id)
+    for candidate in bpy.data.node_groups:
+        if candidate.as_pointer() == target.as_pointer():
+            continue
+        stored = candidate.get(COMPOSITION_ROOT_ID_PROP)
+        if stored and validate_root_owner_id(stored) == root_id:
+            raise CompileError(f"Multiple root node groups share NodeForge composition ID {root_id}")
 
 
 @dataclass(frozen=True)
@@ -194,16 +214,27 @@ def compile_source_in_tree(source: str, target, *, module_context: str | None = 
     from .blender.direct_composition import materialize_definition_entries
     from .blender.function_materializer import FunctionMaterializationContext, FunctionMaterializer
     from .blender.group_backend import BlenderGroupBuildTransaction
-    from .function_instances import FunctionCompilationTrace
+    from .function_instances import (
+        COMPOSITION_ROOT_ID_PROP, FunctionCompilationTrace,
+        new_root_owner_id, validate_root_owner_id,
+    )
 
     validate_base_target(target)
     if not isinstance(source, str) or not source.strip():
         raise CompileError('Compile Script requires a nonblank selected Text source')
+    # A tentative physical owner may affect semantic occurrence IDs, but is never
+    # persisted until successful root publication (checkpoint 07).
+    stored_root_id = target.get(COMPOSITION_ROOT_ID_PROP)
+    physical_root_id = (
+        validate_root_owner_id(stored_root_id)
+        if stored_root_id else new_root_owner_id()
+    )
     prepared, backend, session, snapshot = _prepare_direct_source(
         source, target, resolved_environment=resolved_environment,
-        module_context=module_context,
+        module_context=module_context, physical_root_id=physical_root_id,
     )
     if prepared.body.statements:
+        _validate_composition_root_owner_id(target, physical_root_id)
         reject_node_local_animation(target)
         updated = replace_prepared_root(prepared, target, backend, session)
         return RootCompileResult(target, 'ROOT_REPLACEMENT', updated.skipped_boundary_links)

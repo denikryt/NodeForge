@@ -8,7 +8,7 @@ categories reject the complete body before Blender lowering begins.
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass, fields, is_dataclass, replace
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from typing import Mapping
 
 from .builtin_calls import (
@@ -20,7 +20,8 @@ from .builtin_calls import (
     _kw_dict,
     _check_extra,
 )
-from ..compiler_identities import BindingId, CallSiteId, FunctionId, InputDeclarationId, InterfaceInputOrigin
+from ..compiler_identities import BindingId, CallSiteId, ExtensionCallSiteId, FunctionId, InputDeclarationId, InterfaceInputOrigin
+from ..extensions.contracts import ExtensionCallableId
 from .constants import TYPE_OBJECT
 from ..type_capabilities import REPEAT_ITEM_TYPES
 from .consteval import (
@@ -296,6 +297,8 @@ class _BodyIdentityAllocator:
     structural_reservations: dict[tuple[str, tuple[str, int | str]], BindingId]
     input_declaration_ordinals: dict[str, int]
     call_occurrence_ordinals: dict[FunctionId, int]
+    physical_owner_scope: str = ""
+    extension_occurrence_ordinals: dict[ExtensionCallableId, int] = field(default_factory=dict)
     next_object_id: int = 0
     next_array_id: int = 0
 
@@ -328,13 +331,28 @@ class _BodyIdentityAllocator:
         self.input_declaration_ordinals[target_name] = ordinal + 1
         return InputDeclarationId(self.declaration_owner, target_name, ordinal)
 
+    @staticmethod
+    def _next_occurrence(occurrences, callee):
+        """Advance one shared, non-rewinding source or extension occurrence counter."""
+        ordinal = occurrences.get(callee, 0)
+        occurrences[callee] = ordinal + 1
+        return ordinal
+
+    def allocate_extension_call_site_id(self, callee: ExtensionCallableId) -> ExtensionCallSiteId:
+        """Allocate a physical occurrence across all structured-body forks."""
+        if not isinstance(callee, ExtensionCallableId):
+            raise TypeError("extension callee must be an ExtensionCallableId")
+        return ExtensionCallSiteId(
+            self.physical_owner_scope or self.owner_scope,
+            callee, self._next_occurrence(self.extension_occurrence_ordinals, callee),
+        )
+
     def allocate_call_site_id(self, callee: FunctionId) -> CallSiteId:
         """Allocate one monotonic owner-scoped source-call occurrence identity."""
         if not isinstance(callee, FunctionId):
             raise TypeError("callee must be a FunctionId")
-        ordinal = self.call_occurrence_ordinals.get(callee, 0)
-        self.call_occurrence_ordinals[callee] = ordinal + 1
-        return CallSiteId(self.owner_scope, callee, ordinal)
+        return CallSiteId(self.owner_scope, callee,
+                          self._next_occurrence(self.call_occurrence_ordinals, callee))
 
     def allocate_object_id(self) -> ObjectSemanticId:
         """Allocate one monotonic Object semantic identity."""
@@ -496,6 +514,7 @@ def lower_basic_body(
     callable_environment,
     owner_scope: str,
     declaration_owner: str | None = None,
+    physical_owner_scope: str | None = None,
     geometry_mode: bool = False,
     initial_interface_input_origins: Mapping[BindingId, InterfaceInputOrigin] | None = None,
     compile_time_effects_before=(),
@@ -532,6 +551,7 @@ def lower_basic_body(
         structural_reservations={},
         input_declaration_ordinals={},
         call_occurrence_ordinals={},
+        physical_owner_scope=physical_owner_scope or owner_scope,
     )
     if not isinstance(initial_compile_time, CompileTimeSnapshot):
         raise TypeError("initial_compile_time must be a CompileTimeSnapshot")
@@ -1173,6 +1193,8 @@ def lower_basic_body(
             source_definition_owner=source_definition_owner or declaration_owner or owner_scope,
             source_owner_scope=owner_scope,
             source_call_site_allocator=identities.allocate_call_site_id,
+            extension_call_site_allocator=identities.allocate_extension_call_site_id,
+            physical_owner_scope=identities.physical_owner_scope,
             helper_namespace=helper_namespace,
             extension_registry=extension_registry,
             runtime_role=runtime_role,
