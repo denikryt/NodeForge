@@ -23,7 +23,8 @@ def validate_prepared_direct(prepared, target):
 
 
 def compose_prepared_initial(prepared, target, backend, session, *,
-                             transaction, root_input_endpoint):
+                             transaction, root_input_endpoint,
+                             generated_resource_transaction=None):
     """Lower root IR; the calling root updater owns commit, cleanup and rollback.
 
     The transaction and canonical input endpoint belong to the same outer root
@@ -48,6 +49,7 @@ def compose_prepared_initial(prepared, target, backend, session, *,
         helper_namespace=target.name,
         extension_registry=session.resolved_environment.extension_registry,
         root_input_endpoint=root_input_endpoint,
+        generated_resource_transaction=generated_resource_transaction,
     )
     # NODEFORGE-TEMP-ISSUE61-ROOT-STAGING: Root-producing Compile still lowers in the authoritative tree while physical Extension API v2 is rejected in root. Issue #61 PR 2 must replace this call with native-copy private staging and strict subgraph transfer; delete this marker when no backend can receive the authoritative root.
     lower_body(context, prepared.body, {}, base_depth=1)
