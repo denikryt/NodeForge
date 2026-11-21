@@ -810,3 +810,8 @@ lifecycle.
 - Simplified root link-stability checks for updated function groups, preserving Blender-driven socket changes and link removals.
 - Reused Blender ID user mapping for safe postcommit extension-group retirement, retaining session ownership, reference and resource checks.
 - Simplified validation of authorized root Group Input nodes without changing backend isolation.
+
+## 0.97.3
+
+- Removed obsolete root physical-extension preflight now superseded by private root candidate compilation, while retaining Mesh Compute runtime-role checks.
+- Removed unused extension instance-key computation, private root candidate interface-signature field, and unused transfer/materializer imports.
