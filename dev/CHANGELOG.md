@@ -786,3 +786,8 @@ lifecycle.
 - Validate dynamic extension results against call-specific IR arity, NF types, socket direction, physical type and current-group ownership before publishing generated candidates.
 - Preserved fixed result declarations, semantic extension modes, owner snapshots, and existing root-tree physical extension restrictions.
 - Documented invocation-dependent extension result declarations, resolver arguments and validation, backend result types, and package requirements.
+
+## 0.96.0
+
+- Supported Rotation Capture Attribute items in core semantic typing, Blender materialization and transactional group/root copying, including persisted QUATERNION item reconstruction and dynamic socket defaults.
+- Added Rotation Capture regression coverage for item sockets, group copying, updates and mixed fields.

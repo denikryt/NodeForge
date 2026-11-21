@@ -105,6 +105,7 @@ def nf_fixture():
     ('FLOAT', 'FLOAT', 'NodeSocketFloat'),
     ('VECTOR', 'FLOAT_VECTOR', 'NodeSocketVector'),
     ('RGBA', 'FLOAT_COLOR', 'NodeSocketColor'),
+    ('ROTATION', 'QUATERNION', 'NodeSocketRotation'),
 ])
 @pytest.mark.parametrize('role', ['backup', 'cutover'])
 @pytest.mark.parametrize('linked', [True, False])
@@ -130,17 +131,19 @@ def test_capture_copy_preserves_linked_and_unlinked_item_contract(
     assert all(link.is_valid for link in dst.links)
 
 
-def test_capture_copy_fails_on_unknown_data_type_without_modifying_authoritative_source():
-    """An unsupported, unlinked item aborts rather than silently disappearing."""
-    src = bpy.data.node_groups.new('NFTest_capture_bad_source','GeometryNodeTree')
+def test_capture_copy_restores_persisted_quaternion_without_modifying_source():
+    """A persisted QUATERNION item recreates via ROTATION, even without links."""
+    src = bpy.data.node_groups.new('NFTest_capture_rotation_source', 'GeometryNodeTree')
     cap = src.nodes.new('GeometryNodeCaptureAttribute')
-    cap.capture_items.new('ROTATION','UnsupportedNow')
+    cap.capture_items.new('ROTATION', 'Spin')
     assert cap.capture_items[0].data_type == 'QUATERNION'
-    dst = bpy.data.node_groups.new('NFTest_capture_bad_destination','GeometryNodeTree')
-    with pytest.raises(CompileError, match='unsupported persisted data type'):
-        blender_group_backend._copy_group_contents(src,dst,copy_role='backup')
-    assert len(cap.capture_items)==1
-    assert cap.capture_items[0].data_type == 'QUATERNION'
+    dst = bpy.data.node_groups.new('NFTest_capture_rotation_destination', 'GeometryNodeTree')
+    blender_group_backend._copy_group_contents(src, dst, copy_role='backup')
+    copied, = [node for node in dst.nodes if node.bl_idname == 'GeometryNodeCaptureAttribute']
+    assert [(item.name, item.data_type) for item in copied.capture_items] == [('Spin', 'QUATERNION')]
+    assert copied.inputs['Spin'].bl_idname == 'NodeSocketRotation'
+    assert copied.outputs['Spin'].bl_idname == 'NodeSocketRotation'
+    assert [(item.name, item.data_type) for item in cap.capture_items] == [('Spin', 'QUATERNION')]
 
 
 def test_capture_root_update_reconstruction_uses_same_checked_helper():
@@ -149,9 +152,118 @@ def test_capture_root_update_reconstruction_uses_same_checked_helper():
     src = bpy.data.node_groups.new('NFTest_capture_root_reconstruct','GeometryNodeTree')
     old=src.nodes.new('GeometryNodeCaptureAttribute')
     old.capture_items.new('RGBA','Tint')
+    old.capture_items.new('ROTATION','Spin')
     backup = bpy.data.node_groups.new('NFTest_capture_backup','GeometryNodeTree')
     cloned=backup.nodes.new('GeometryNodeCaptureAttribute')
     cloned.name=old.name
     root_update._sync_capture_attribute_dynamic_items(src, {old.name:cloned})
-    assert [(item.name,item.data_type) for item in cloned.capture_items] == [('Tint','FLOAT_COLOR')]
+    assert [(item.name,item.data_type) for item in cloned.capture_items] == [('Tint','FLOAT_COLOR'), ('Spin','QUATERNION')]
     assert cloned.outputs['Tint'].bl_idname == 'NodeSocketColor'
+    assert cloned.inputs['Spin'].bl_idname == 'NodeSocketRotation'
+    assert cloned.outputs['Spin'].bl_idname == 'NodeSocketRotation'
+
+
+def test_rotation_capture_builtin_infers_and_accepts_explicit_type():
+    """The existing Capture builtin returns a Rotation field with native sockets."""
+    for token in ('', ', type="ROTATION"'):
+        group = compile_group(f'''
+def nf_fixture(value: Rotation):
+    geo = grid(2, 2)
+    geo, rotation = capture_attribute(geo, value{token})
+    return geo, rotation
+''', 'NFTest_capture_native_rotation')
+        capture, = _capture_nodes(group)
+        assert capture.capture_items[0].data_type == 'QUATERNION'
+        assert capture.inputs['Value'].bl_idname == 'NodeSocketRotation'
+        assert capture.outputs['Value'].bl_idname == 'NodeSocketRotation'
+        assert all(link.is_valid for link in group.links)
+    expect_compile_error('''
+def nf_fixture(value: Rotation):
+    geo = grid(2, 2)
+    geo, rotation = capture_attribute(geo, value, type="QUATERNION")
+    return geo, rotation
+''', 'NFTest_capture_wrong_rotation_constructor')
+
+
+def test_rotation_capture_group_copy_preserves_mixed_items_links_and_defaults():
+    """Transaction copy recreates Rotation and neighbors with per-item defaults."""
+    from NodeForge.blender.group_backend import _copy_group_contents
+    src = bpy.data.node_groups.new('NFTest_capture_rotation_mixed', 'GeometryNodeTree')
+    cap = src.nodes.new('GeometryNodeCaptureAttribute')
+    for token, name in (('FLOAT', 'Weight'), ('ROTATION', 'Spin'), ('VECTOR', 'Offset')):
+        cap.capture_items.new(token, name)
+    cap.inputs['Weight'].default_value = 0.25
+    cap.inputs['Spin'].default_value = (0.1, 0.2, 0.3)
+    cap.inputs['Offset'].default_value = (1.0, 2.0, 3.0)
+    src.interface.new_socket(name='Spin',in_out='OUTPUT',socket_type='NodeSocketRotation')
+    group_output = src.nodes.new('NodeGroupOutput')
+    src.links.new(cap.outputs['Spin'],group_output.inputs['Spin'])
+    assert all(link.is_valid for link in src.links)
+    for role in ('backup', 'cutover'):
+        dst=bpy.data.node_groups.new('NFTest_capture_rotation_copy_'+role, 'GeometryNodeTree')
+        _copy_group_contents(src, dst, copy_role=role)
+        copied, = _capture_nodes(dst)
+        assert [(i.name,i.data_type) for i in copied.capture_items] == [
+            ('Weight','FLOAT'),('Spin','QUATERNION'),('Offset','FLOAT_VECTOR')]
+        for name, physical in (('Weight','NodeSocketFloat'),('Spin','NodeSocketRotation'),
+                               ('Offset','NodeSocketVector')):
+            assert copied.inputs[name].bl_idname == physical
+            assert copied.outputs[name].bl_idname == physical
+        for name, expected in (('Weight',(0.25,)),('Spin',(0.1,0.2,0.3)),
+                               ('Offset',(1.0,2.0,3.0))):
+            actual=copied.inputs[name].default_value
+            if name=='Weight': actual=(actual,)
+            assert all(abs(float(a)-b)<1e-4 for a,b in zip(actual,expected))
+        assert len(dst.links)==1 and all(link.is_valid for link in dst.links)
+        assert dst.links[0].from_socket.bl_idname=='NodeSocketRotation'
+
+
+def test_capture_rotation_group_update_and_failed_update_keep_contract():
+    """Selected group update copies Rotation-backed old state and commits replacement."""
+    def source(typ, token=''):
+        return f'''
+def nf_fixture(value: {typ}):
+    geo = grid(2,2)
+    geo, captured = capture_attribute(geo, value{token})
+    return geo, captured
+'''
+    group=compile_group(source('Rotation'), 'NFTest_capture_update_rotation')
+    pointer=group.as_pointer()
+    assert _capture_nodes(group)[0].capture_items[0].data_type == 'QUATERNION'
+    with pytest.raises(CompileError):
+        compiler.update_expression_group(group, source('Rotation', ', type="QUATERNION"'))
+    assert _capture_nodes(group)[0].capture_items[0].data_type == 'QUATERNION'
+    compiler.update_expression_group(group, source('Rotation', ', type="ROTATION"'))
+    assert group.as_pointer() == pointer
+    assert _capture_nodes(group)[0].capture_items[0].data_type == 'QUATERNION'
+    compiler.update_expression_group(group, source('Rotation'))
+    assert _capture_nodes(group)[0].capture_items[0].data_type == 'QUATERNION'
+    assert all(link.is_valid for link in group.links)
+
+
+def test_rotation_capture_root_update_rollback_restores_links(monkeypatch):
+    """Root rollback reconstructs a previous linked QUATERNION item."""
+    from NodeForge.blender import root_update
+    root = bpy.data.node_groups.new('NFTest_capture_root_rotation', 'GeometryNodeTree')
+    root.interface.new_socket(name='Geometry', in_out='INPUT',socket_type='NodeSocketGeometry')
+    root.interface.new_socket(name='Geometry', in_out='OUTPUT',socket_type='NodeSocketGeometry')
+    root.interface.new_socket(name='Spin', in_out='OUTPUT',socket_type='NodeSocketRotation')
+    inlet=root.nodes.new('NodeGroupInput')
+    outlet=root.nodes.new('NodeGroupOutput')
+    cap=root.nodes.new('GeometryNodeCaptureAttribute')
+    cap.capture_items.new('FLOAT', 'Weight')
+    cap.capture_items.new('ROTATION', 'Spin')
+    cap.capture_items.new('VECTOR', 'Offset')
+    root.links.new(inlet.outputs['Geometry'],cap.inputs['Geometry'])
+    root.links.new(cap.outputs['Geometry'],outlet.inputs['Geometry'])
+    root.links.new(cap.outputs['Spin'],outlet.inputs['Spin'])
+    original=[(i.name,i.data_type) for i in cap.capture_items]
+    def fail(*args, **kwargs):
+        raise RuntimeError('Capture root rollback injection')
+    monkeypatch.setattr(root_update,'_reconnect_boundary',fail)
+    with pytest.raises(root_update.RootUpdateError,match='Capture root rollback injection'):
+        compiler.update_source_in_tree('a = cube(2)\n',root)
+    restored, = _capture_nodes(root)
+    assert [(i.name,i.data_type) for i in restored.capture_items]==original
+    assert restored.outputs['Spin'].bl_idname=='NodeSocketRotation'
+    assert len(root.links)==3 and all(link.is_valid for link in root.links)

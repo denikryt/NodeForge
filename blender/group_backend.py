@@ -391,6 +391,7 @@ def _sync_capture_attribute_dynamic_items(src_group, node_map):
         "BOOLEAN": "BOOLEAN",
         "FLOAT_VECTOR": "VECTOR",
         "FLOAT_COLOR": "RGBA",
+        "QUATERNION": "ROTATION",
     }
     for src_node in src_group.nodes:
         if getattr(src_node, "bl_idname", None) != "GeometryNodeCaptureAttribute":
@@ -423,6 +424,11 @@ def _sync_capture_attribute_dynamic_items(src_group, node_map):
                 f"Capture copy: restored item contract differs on {src_node.name!r}: "
                 f"expected {source_items!r}, got {actual!r}"
             )
+        # Dynamic sockets only exist after item reconstruction; the generic
+        # node-property copier has already run, so restore their defaults here.
+        for item_name, _persisted_type in source_items:
+            _copy_socket_default(src_node.inputs[item_name], dst_node.inputs[item_name])
+            _copy_socket_default(src_node.outputs[item_name], dst_node.outputs[item_name])
 
 
 def _sync_repeat_zone_dynamic_items(src_group, node_map):

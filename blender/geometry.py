@@ -466,7 +466,7 @@ def _capture_attribute_geometry(group, geometry, value, *, selection, domain, da
     socket_type_to_value_type = {token: typ for typ, token in CAPTURE_ITEM_TYPES.items()}
     socket_type = (data_type.upper() if data_type else CAPTURE_ITEM_TYPES.get(value.typ))
     if socket_type not in socket_type_to_value_type:
-        raise CompileError("capture_attribute() supports Float, Int, Bool and Vector values (also Color)")
+        raise CompileError("capture_attribute() supports Float, Int, Bool and Vector values (also Color and Rotation)")
     domain = normalize_attribute_domain(domain, "capture_attribute()")
     if selection is not None and (not isinstance(selection, Value) or selection.typ != TYPE_BOOL):
         raise CompileError("capture_attribute() selection= must be a Bool expression")
