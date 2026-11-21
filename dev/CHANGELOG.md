@@ -791,3 +791,12 @@ lifecycle.
 
 - Supported Rotation Capture Attribute items in core semantic typing, Blender materialization and transactional group/root copying, including persisted QUATERNION item reconstruction and dynamic socket defaults.
 - Added Rotation Capture regression coverage for item sockets, group copying, updates and mixed fields.
+
+## 0.97.0
+
+- Added `__inline__` selection to physical Python Extension API v2 calls: inline materialization by default and per-call Node Groups with `__inline__=False`, including typed and dynamic results.
+- Publish grouped extension calls through transactional group updates with stable physical-owner identity, preserving manually referenced groups across recompilation.
+- Execute root-producing Python backends against private Geometry Node trees, strictly transfer validated nodes and links, and retain existing root I/O and rollback/Undo behavior.
+- Preserve Capture Attribute dynamic items, Color/Rotation sockets, bundle/repeat structures, CurveMapping, and generated resource ownership across root compilation.
+- Expanded Blender 5.2 and unit regressions for both materialization modes, failure recovery, group identity, and save/reopen behavior.
+- Fixed private-root `NodeGroupInput` authorization so extension backends only see structural inputs requested by raw DSL calls; retire unreferenced, same-session extension groups and their provenance-verified generated resources after commit.
