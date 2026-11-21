@@ -176,7 +176,7 @@ def _prepare_direct_source(source: str, target, *, resolved_environment=None,
         source_callable_session=session, source_module=snapshot,
         direct_composition=True,
     )
-    validate_prepared_direct(prepared, target)
+    validate_prepared_direct(prepared, target, private_root_staging=True)
     return prepared, backend, session, snapshot
 
 
@@ -236,7 +236,8 @@ def compile_source_in_tree(source: str, target, *, module_context: str | None = 
     if prepared.body.statements:
         _validate_composition_root_owner_id(target, physical_root_id)
         reject_node_local_animation(target)
-        updated = replace_prepared_root(prepared, target, backend, session)
+        updated = replace_prepared_root(prepared, target, backend, session,
+                                       root_owner_uuid=physical_root_id)
         return RootCompileResult(target, 'ROOT_REPLACEMENT', updated.skipped_boundary_links)
 
     transaction = BlenderGroupBuildTransaction()

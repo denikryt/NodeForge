@@ -73,7 +73,7 @@ def _strict_rna_equal(src, dst):
     """Verify supported writable properties after the existing node copier."""
     ignored = {
         'rna_type', 'type', 'dimensions', 'inputs', 'outputs', 'internal_links',
-        'select', 'width_hidden', 'height', 'name', 'location', 'parent',
+        'select', 'width_hidden', 'height', 'name', 'location', 'location_absolute', 'parent',
         'mapping', 'active_item', 'capture_items', 'repeat_items',
         'bundle_items', 'paired_output',  # Their structure is checked below.
     }
@@ -156,7 +156,7 @@ def _strict_preflight(stage, target, endpoint, interface_signature):
         raise CompileError('Root interface changed before strict transfer')
     group_inputs = [node for node in stage.nodes if node.bl_idname == 'NodeGroupInput']
     if any(node.bl_idname == 'NodeGroupOutput' for node in stage.nodes):
-        raise CompileError('Root backend may not construct structural Group Output nodes')
+        raise CompileError('Root backend inserted unapproved structural Group Output nodes')
     if len(group_inputs) > 1 or (group_inputs and endpoint.node != group_inputs[0]) or (
         not group_inputs and endpoint.node is not None
     ) or (group_inputs and endpoint.node is None):

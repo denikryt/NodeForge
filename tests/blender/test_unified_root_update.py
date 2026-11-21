@@ -344,8 +344,8 @@ def test_raw_math_staged_once_and_retained_without_copying():
     assert len(math_nodes) == 1 and math_nodes[0].as_pointer() != first_pointer
 
 
-def test_old_nodes_remain_during_materialization_with_manual_group_chain(monkeypatch):
-    """Source staging creates new ordinary nodes before deleting old manual Group Nodes."""
+def test_private_root_staging_preserves_manual_group_chain(monkeypatch):
+    """Private lowering sees an isolated stage; old manual graph remains unchanged."""
     from NodeForge.blender import direct_composition
     tree, _, outlet = _root('NFR5_manual_group_staging')
     manual = bpy.data.node_groups.new('NFR5_manual_nested', 'GeometryNodeTree')
@@ -367,8 +367,11 @@ def test_old_nodes_remain_during_materialization_with_manual_group_chain(monkeyp
         """Inspect the root during the successful staging boundary."""
         nonlocal seen
         result = original(*args, **kwargs)
-        seen = old_ptrs.issubset({node.as_pointer() for node in tree.nodes}) and len(tree.links) >= old_links
-        assert sum(node.bl_idname == 'GeometryNodeMeshCube' for node in tree.nodes) == 2
+        stage = args[1]
+        seen = (stage is not tree and old_ptrs.issubset({node.as_pointer() for node in tree.nodes})
+                and len(tree.links) == old_links)
+        assert sum(node.bl_idname == 'GeometryNodeMeshCube' for node in tree.nodes) == 1
+        assert sum(node.bl_idname == 'GeometryNodeMeshCube' for node in stage.nodes) == 1
         return result
 
     monkeypatch.setattr(direct_composition, 'compose_prepared_initial', observe)
