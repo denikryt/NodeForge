@@ -800,3 +800,7 @@ lifecycle.
 - Preserve Capture Attribute dynamic items, Color/Rotation sockets, bundle/repeat structures, CurveMapping, and generated resource ownership across root compilation.
 - Expanded Blender 5.2 and unit regressions for both materialization modes, failure recovery, group identity, and save/reopen behavior.
 - Fixed private-root `NodeGroupInput` authorization so extension backends only see structural inputs requested by raw DSL calls; retire unreferenced, same-session extension groups and their provenance-verified generated resources after commit.
+
+## 0.97.1
+
+- Updated Blender root-compile regressions for the unified Compile API: Capture Attribute Rotation rollback and successful invocation-dependent extension results in root trees.
