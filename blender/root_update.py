@@ -328,14 +328,25 @@ def _fail(error, failures, *, possible_change):
     raise RootUpdateError(summary, may_have_mutated=possible_change or bool(failures)) from error
 
 
-def replace_prepared_root(prepared, target, backend, session):
-    """Stage exactly once into `target`, cut over and commit nested groups last."""
-    from .direct_composition import compose_prepared_initial, validate_prepared_direct
-    from .ir_lowering import RootInputEndpoint
+def replace_prepared_root(prepared, target, backend, session, *, root_owner_uuid=None):
+    """Publish one privately lowered root graph with one rollback/commit owner."""
+    import warnings
 
+    from ..function_instances import (
+        COMPOSITION_ROOT_ID_PROP, new_root_owner_id, validate_root_owner_id,
+    )
+    from .direct_composition import validate_prepared_direct
+    from .generated_resources import (
+        GROUP_MANIFEST_PROP, capture_owned_resource_ids, cleanup_previous_after_commit,
+        read_group_manifest, write_group_manifest,
+    )
+    from .root_candidate import build_private_root_candidate, discard_private_root_candidate
+    from .root_subgraph_transfer import transfer_private_root_subgraph
     validate_base_target(target)
     reject_node_local_animation(target)
     validate_prepared_direct(prepared, target)
+    root_owner_uuid = validate_root_owner_id(root_owner_uuid or target.get(COMPOSITION_ROOT_ID_PROP)
+                                            or new_root_owner_id())
     root_pointer, root_name = target.as_pointer(), target.name
     interface_before = _interface_signature(target)
     old = _ordinary(target)
@@ -349,26 +360,81 @@ def replace_prepared_root(prepared, target, backend, session):
     io_parent_names = {node.as_pointer(): node.parent.name for node in io_nodes
                        if node.parent is not None and node.parent.as_pointer() in old_ptrs}
     boundary = _boundary(target)
+    original_node_order = tuple(node.as_pointer() for node in target.nodes)
+    def link_contracts():
+        return tuple((link.from_node.as_pointer(), _socket_ref(link.from_node, link.from_socket, output=True),
+                      link.to_node.as_pointer(), _socket_ref(link.to_node, link.to_socket, output=False))
+                     for link in target.links)
+
+    original_link_endpoints = link_contracts()
+    old_manifest = read_group_manifest(target)
+    old_resource_ids = capture_owned_resource_ids(target, old_manifest) if old_manifest else ()
+    old_ownership = {key: target.get(key) for key in (COMPOSITION_ROOT_ID_PROP, GROUP_MANIFEST_PROP)}
     transaction = BlenderGroupBuildTransaction()
-    endpoint = RootInputEndpoint()
     backup = None
+    candidate = None
+    resource_tx = None
     cutover_started = False
     io_detach_started = False
     try:
         backup = target.copy()
         mark_transaction_private(backup)
-        compose_prepared_initial(prepared, target, backend, session,
-                                 transaction=transaction, root_input_endpoint=endpoint)
-        created = tuple(node for node in target.nodes if node.as_pointer() not in preexisting_ptrs)
-        allowed_input = (endpoint.node.as_pointer() if endpoint.created_by_attempt
-                         and endpoint.node is not None else None)
-        if any(node.bl_idname == 'NodeGroupOutput'
-               or (node.bl_idname == 'NodeGroupInput' and node.as_pointer() != allowed_input)
-               for node in created):
-            raise CompileError('Compile cannot insert unapproved structural Group Input/Output nodes')
-        if _interface_signature(target) != interface_before:
-            raise CompileError('Compile changed the root interface during staging')
-        new = tuple(node for node in created if node.bl_idname not in _IO_TYPES)
+        candidate = build_private_root_candidate(
+            prepared, target, backend, session, transaction=transaction,
+            root_owner_uuid=root_owner_uuid,
+        )
+        resource_tx = candidate.resource_transaction
+
+        def restore_resource_ownership():
+            """Restore pre-attempt root metadata and remove exact new IDs on rollback."""
+            for key, value in old_ownership.items():
+                if value is None:
+                    if key in target:
+                        del target[key]
+                else:
+                    target[key] = value
+            resource_tx.rollback()
+
+        # Root resource publication shares the nested-group PONR. This callback
+        # only restores state before commit; it never starts another transaction.
+        transaction.register_external_cutover(
+            rollback=restore_resource_ownership, commit=lambda: None,
+        )
+
+        # A Python backend only sees its private candidate. Nevertheless,
+        # refuse to overwrite unexplained changes to authoritative root state.
+        # Updating a nested authoritative group can reallocate the native
+        # Socket_N IDs on existing manual Group Nodes even without adding links.
+        # That Blender-side change is permitted; unexplained root mutations are not.
+        updated_group_ids = {record['group'].as_pointer() for record in transaction.updated_groups}
+        updated_nodes = {
+            node.as_pointer() for node in target.nodes
+            if node.bl_idname == 'GeometryNodeGroup' and node.node_tree is not None
+            and node.node_tree.as_pointer() in updated_group_ids
+        }
+
+        def stable_link(contract):
+            source_id, from_socket, destination_id, to_socket = contract
+            if source_id in updated_nodes:
+                from_socket = ('<updated-group>',) + from_socket[1:]
+            if destination_id in updated_nodes:
+                to_socket = ('<updated-group>',) + to_socket[1:]
+            return source_id, from_socket, destination_id, to_socket
+
+        original_stable = tuple(stable_link(link) for link in original_link_endpoints)
+        current_stable = tuple(stable_link(link) for link in link_contracts())
+        removed_links = [link for link in original_stable if link not in current_stable]
+        added_links = [link for link in current_stable if link not in original_stable]
+        valid_blender_removal = all(link[0] in updated_nodes or link[2] in updated_nodes
+                                    for link in removed_links)
+        if (_interface_signature(target) != interface_before
+                or tuple(n.as_pointer() for n in target.nodes) != original_node_order
+                or added_links or not valid_blender_removal):
+            raise CompileError('Root backend inserted unapproved structural or other nodes/links')
+        transferred = transfer_private_root_subgraph(
+            candidate, target, interface_signature=interface_before,
+        )
+        new = tuple(node for node in transferred.created_nodes if node.bl_idname not in _IO_TYPES)
         matched = _matches(old, new)
         for node in io_nodes:
             if node.parent is not None and node.parent.as_pointer() in old_ptrs:
@@ -391,18 +457,47 @@ def replace_prepared_root(prepared, target, backend, session):
             raise RuntimeError('Update changed root identity, interface or structural I/O')
         if {node.as_pointer() for node in _ordinary(target)} != {node.as_pointer() for node in new}:
             raise RuntimeError('Update left old ordinary nodes or lost staged nodes')
+
+        # No other Blender ID is mutated after the nested group commit begins.
+        # Dispose both private copies first (their pointers could otherwise keep
+        # old resources and groups artificially alive during retirement).
+        discard_private_root_candidate(candidate)
+        candidate = None
+        target[COMPOSITION_ROOT_ID_PROP] = root_owner_uuid
+        new_manifest = resource_tx.manifest()
+        write_group_manifest(target, new_manifest)
         _remove_backup(backup)
         backup = None
         transaction.commit()
+        resource_tx.mark_committed()
+        if old_manifest is not None:
+            try:
+                cleanup_previous_after_commit(old_manifest, new_manifest, captured_ids=old_resource_ids)
+            except Exception as cleanup_error:
+                warnings.warn(f'NodeForge committed with root resource cleanup warning: {cleanup_error}',
+                              RuntimeWarning, stacklevel=2)
         return RootUpdateResult(target, skipped)
     except Exception as exc:
-        # A nested group may have been modified even before a root-node cutover.
+        if transaction._closed:
+            # An exception from best-effort retirement cannot roll back groups
+            # or the already-published root. Preserve UI Undo explicitly.
+            if resource_tx is not None:
+                resource_tx.mark_committed()
+            raise RootUpdateError(
+                f'Root graph committed, but postcommit cleanup failed: {exc}',
+                may_have_mutated=True,
+            ) from exc
         possible_change = cutover_started or bool(transaction.updated_groups)
         errors = _remove_staged(target, preexisting_ptrs)
+        if candidate is not None:
+            try:
+                discard_private_root_candidate(candidate)
+            except Exception as cleanup_error:
+                errors.append(f'candidate cleanup: {cleanup_error}')
         try:
             transaction.rollback()
         except Exception as rollback_error:
-            errors.append(f'nested-group rollback: {rollback_error}')
+            errors.append(f'nested-group/resource rollback: {rollback_error}')
         if cutover_started and backup is not None:
             try:
                 _copy_missing_old_nodes(target, backup, old_ptrs)
@@ -412,8 +507,6 @@ def replace_prepared_root(prepared, target, backend, session):
         elif cutover_started:
             errors.append('root restoration: native root backup unavailable')
         elif io_detach_started:
-            # Ordinary nodes were not deleted, but changing a physical I/O parent
-            # is already a mutation. CANCELLED is safe only if we restore it.
             try:
                 _restore_structural_io(target, io_nodes, io_positions, io_active, io_parent_names)
             except Exception as restore_error:

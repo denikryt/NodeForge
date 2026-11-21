@@ -83,7 +83,10 @@ from .callable_contracts import (
     canonicalize_group_input_default,
     source_argument_type_matches,
 )
-from .ir import IRFunctionMaterialization, IRFunctionMaterializationMode
+from .ir import (
+    IRFunctionMaterialization, IRFunctionMaterializationMode,
+    IRExtensionMaterialization, IRExtensionMaterializationMode,
+)
 from ..evaluation_modes import EvaluationMode
 from .evaluation_resolution import CompileTimeSelection, RuntimeRequired, resolve_argument_evaluation
 from ..extensions.contracts import (
@@ -173,6 +176,8 @@ class SemanticEnvironment:
     source_definition_owner: str | None = None
     source_owner_scope: str | None = None
     source_call_site_allocator: object | None = None
+    extension_call_site_allocator: object | None = None
+    physical_owner_scope: str | None = None
     helper_namespace: str = "Group"
     extension_registry: object | None = None
     runtime_role: object = None
@@ -424,6 +429,22 @@ def _extension_explicit_modes(spec: ExtensionCallableSpec, bound: inspect.BoundA
     return modes
 
 
+def _extension_materialization(modifiers, environment, resolved):
+    """Freeze physical extension mode and occurrence once during semantic analysis."""
+    from .call_modifiers import unsupported_unique
+
+    name = resolved.source_name
+    if modifiers.unique_was_explicit:
+        raise unsupported_unique(name)
+    mode = (IRExtensionMaterializationMode.GROUPED if modifiers.inline is False
+            else IRExtensionMaterializationMode.INLINE)
+    allocator = environment.extension_call_site_allocator
+    site = allocator(resolved.target) if callable(allocator) else None
+    if mode is IRExtensionMaterializationMode.GROUPED and site is None:
+        raise CompileError("Internal error: grouped extension requires physical occurrence identity")
+    return IRExtensionMaterialization(mode, site)
+
+
 def _analyze_extension_backend_call(
     node: ast.Call,
     cleaned_call: ast.Call,
@@ -433,10 +454,10 @@ def _analyze_extension_backend_call(
     analyze,
     facts,
     call_result_shape,
+    extension_materialization,
 ):
     """Preserve the reviewed backend-only extension acquisition/overload path."""
     name = resolved.source_name
-    reject_unsupported_modifiers(name, modifiers)
     if any(isinstance(argument, ast.Starred) for argument in cleaned_call.args):
         raise CompileError(f"{name}() does not support caller-side * argument expansion")
     if any(keyword.arg is None for keyword in cleaned_call.keywords):
@@ -604,6 +625,7 @@ def _analyze_extension_backend_call(
         result=result_spec,
         static_operands=tuple(static_operands),
         extension_overload_index=overload_index,
+        extension_materialization=extension_materialization,
     )
     return ExpressionFact(
         call_result_shape(result_spec),
@@ -732,10 +754,12 @@ def _analyze_extension_semantic_call(
     spec: ExtensionCallableSpec,
     semantic_return: TypeSpec,
     execution_form: ExtensionExecutionForm,
+    extension_materialization,
 ):
     """Analyze one non-overloaded semantic-capable extension call without body persistence."""
     name = resolved.source_name
-    reject_unsupported_modifiers(name, modifiers)
+    if execution_form is ExtensionExecutionForm.SEMANTIC_ONLY:
+        reject_unsupported_modifiers(name, modifiers)
     if any(keyword.arg is None for keyword in cleaned_call.keywords):
         raise CompileError(f"{name}() does not support caller-side ** argument expansion")
 
@@ -895,6 +919,7 @@ def _analyze_extension_semantic_call(
         result=result_spec,
         extension_state_type=semantic_return,
         extension_state=packed,
+        extension_materialization=extension_materialization,
     )
     return ExpressionFact(
         call_result_shape(result_spec),
@@ -919,6 +944,9 @@ def _analyze_extension_call(
         raise CompileError("Internal error: extension call has no immutable extension registry")
     family = registry.callable_specs(resolved.target)
     semantic_return = registry.semantic_return_type(resolved.target)
+    if modifiers.unique_was_explicit:
+        from .call_modifiers import unsupported_unique
+        raise unsupported_unique(resolved.source_name)
     if len(family) > 1:
         if semantic_return is not None:
             raise CompileError(f"Overloaded extension callable {resolved.source_name}() cannot define semantic.py implementation")
@@ -931,6 +959,7 @@ def _analyze_extension_call(
             analyze,
             facts,
             call_result_shape,
+            _extension_materialization(modifiers, environment, resolved),
         )
 
     spec = family[0]
@@ -939,6 +968,10 @@ def _analyze_extension_call(
         semantic_return,
         has_implementation=registry.has_implementation(spec.id),
     )
+    if execution_form is ExtensionExecutionForm.SEMANTIC_ONLY:
+        reject_unsupported_modifiers(resolved.source_name, modifiers)
+    physical = (None if execution_form is ExtensionExecutionForm.SEMANTIC_ONLY
+                else _extension_materialization(modifiers, environment, resolved))
     if execution_form is ExtensionExecutionForm.BACKEND_ONLY:
         return _analyze_extension_backend_call(
             node,
@@ -949,6 +982,7 @@ def _analyze_extension_call(
             analyze,
             facts,
             call_result_shape,
+            physical,
         )
     if semantic_return is None:
         raise CompileError("Internal error: semantic execution form has no semantic return contract")
@@ -964,6 +998,7 @@ def _analyze_extension_call(
         spec,
         semantic_return,
         execution_form,
+        physical,
     )
 
 def _unregistered_keyword_error(name):
@@ -991,6 +1026,8 @@ def build_semantic_environment(
     source_definition_owner=None,
     source_owner_scope=None,
     source_call_site_allocator=None,
+    extension_call_site_allocator=None,
+    physical_owner_scope=None,
     helper_namespace="Group",
     extension_registry=None,
     runtime_role=None,
@@ -1060,6 +1097,8 @@ def build_semantic_environment(
         source_definition_owner=source_definition_owner,
         source_owner_scope=source_owner_scope,
         source_call_site_allocator=source_call_site_allocator,
+        extension_call_site_allocator=extension_call_site_allocator,
+        physical_owner_scope=physical_owner_scope,
         helper_namespace=str(helper_namespace or "Group"),
         extension_registry=extension_registry,
     )
@@ -1871,7 +1910,11 @@ def analyze_expression(expr, environment):
                     environment.source_call_site_allocator,
                 )
                 owner_scope = _source_materialization_owner_scope(materialization)
-                identity = GroupCompilationIdentity(None, owner_scope, definition_owner, function_id.stable_key())
+                identity = GroupCompilationIdentity(
+                    None, owner_scope, definition_owner, function_id.stable_key(),
+                    physical_owner_scope=(environment.physical_owner_scope if
+                        materialization.mode is IRFunctionMaterializationMode.INLINE else owner_scope),
+                )
                 # Imported source modules have independent lexical imports and
                 # constants; never inherit caller bindings or run imported body.
                 prepared = session.prepare_definition(
@@ -1971,6 +2014,8 @@ def analyze_expression(expr, environment):
                     owner_scope=owner_scope,
                     definition_owner=function_id.definition_owner,
                     declaration_owner=function_id.stable_key(),
+                    physical_owner_scope=(environment.physical_owner_scope if
+                        materialization.mode is IRFunctionMaterializationMode.INLINE else owner_scope),
                 )
                 prepared = session.prepare_definition(
                     function_id=function_id,
@@ -2075,7 +2120,9 @@ def analyze_expression(expr, environment):
                     if materialization.mode is IRFunctionMaterializationMode.SHARED:
                         materialization = None  # Existing direct Local catalog group ownership.
                     identity = GroupCompilationIdentity(
-                        None, owner_scope, definition_owner, function_id.stable_key()
+                        None, owner_scope, definition_owner, function_id.stable_key(),
+                        physical_owner_scope=(environment.physical_owner_scope if
+                            materialization.mode is IRFunctionMaterializationMode.INLINE else owner_scope),
                     )
                 else:
                     materialization = _resolve_source_materialization(
@@ -2083,7 +2130,9 @@ def analyze_expression(expr, environment):
                     )
                     owner_scope = _source_materialization_owner_scope(materialization)
                     identity = GroupCompilationIdentity(
-                        None, owner_scope, function_id.stable_key(), function_id.stable_key()
+                        None, owner_scope, function_id.stable_key(), function_id.stable_key(),
+                        physical_owner_scope=(environment.physical_owner_scope if
+                            materialization.mode is IRFunctionMaterializationMode.INLINE else owner_scope),
                     )
                 prepared = session.prepare_library(
                     function_id=function_id,

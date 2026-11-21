@@ -436,11 +436,43 @@ wrapped = merge_by_distance(base, __inline__=False)
 separate = merge_by_distance(base, __inline__=False, __unique__=True)
 ```
 
-An effective `__inline__=True` with `__unique__=True` is an error. `__inline__` is supported for source-backed functions defined in the current module or imported from Local, Examples, or packages, including nested package functions. Core built-ins, raw `node(...)`, and Python extension callables do not accept this modifier.
+An effective `__inline__=True` with `__unique__=True` is an error. `__inline__` is supported for source-backed functions defined in the current module or imported from Local, Examples, or packages, including nested package functions. Core built-ins and raw `node(...)` do not accept this modifier. Python-backed extensions use the rules below.
 
 An inline call emits nodes directly into its immediate caller's tree. A grouped caller contains its inline callee's native nodes inside the caller's group; nested calls independently select their own inline or grouped mode. Inputs and flat-tuple returns retain the normal typed function contract.
 
 **Compile Script** compiles inline calls in a base tree. **Reload Function from Source** recompiles inline callees embedded in a selected grouped function. Explicit **Add Node Group** and standalone function creation continue to create editable groups, even for definitions declaring `__inline__=True`.
+
+#### Python-backed extensions
+
+Use `__inline__` on calls to Python extensions with a physical backend:
+
+```python
+from packages import math
+
+direct = math.mix(0.0, 1.0, 0.25)
+grouped = math.mix(0.0, 1.0, 0.75, __inline__=False)
+```
+
+| Call option | Node placement |
+| --- | --- |
+| Omitted or `__inline__=True` | Backend nodes appear directly in the caller's tree. |
+| `__inline__=False` | One Group Node contains the backend nodes. |
+
+Both modes work at module level in the base tree and inside `.nf` functions, including inline functions. Each nested call selects its own mode. **Compile Script** with top-level extension calls follows the [base-tree replacement rules](MODULES.md#compose-the-base-tree).
+
+Each grouped call has a separate editable node group, including calls with identical arguments. Recompiling the same call updates its existing group; manually placed instances using that group receive the changes too.
+
+The group's sockets depend on the call:
+
+| Value | Group interface |
+| --- | --- |
+| Runtime argument | Input socket named after the parameter; variadic inputs use names such as `values_0`, `values_1`. |
+| Compile-time option | Stored in the implementation; no input socket. |
+| Runtime value retained in semantic backend state | Input named `Dependency_0`, `Dependency_1`, and so on. |
+| Scalar result | Output named **Result**. |
+| Tuple result, including [`DynamicResults`](EXTENSION_API.md#invocation-dependent-results) | Outputs named **Result_0**, **Result_1**, and so on, in return order. |
+
+Pass a compile-time `Bool` for `__inline__`. Python extensions reject `__unique__`, including `__unique__=False`. Semantic-only extensions produce records or lists and accept neither modifier.
 
 ## Imports
 

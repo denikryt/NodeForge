@@ -262,7 +262,7 @@ def test_rotation_capture_root_update_rollback_restores_links(monkeypatch):
         raise RuntimeError('Capture root rollback injection')
     monkeypatch.setattr(root_update,'_reconnect_boundary',fail)
     with pytest.raises(root_update.RootUpdateError,match='Capture root rollback injection'):
-        compiler.update_source_in_tree('a = cube(2)\n',root)
+        compiler.compile_source_in_tree('a = cube(2)\n', root)
     restored, = _capture_nodes(root)
     assert [(i.name,i.data_type) for i in restored.capture_items]==original
     assert restored.outputs['Spin'].bl_idname=='NodeSocketRotation'

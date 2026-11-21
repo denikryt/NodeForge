@@ -825,6 +825,14 @@ class BlenderGroupBuildTransaction:
                     failures.append(exc)
             else:
                 _remove_node_group_if_live(event.get("backup"), failures=failures)
+        # Retire only exact session-created extension groups that lost every
+        # physical user during this root/source-group publication. Their
+        # generated resources use the existing manifest provenance checks.
+        try:
+            from .extension_group_materializer import retire_unused_extension_groups
+            retire_unused_extension_groups()
+        except Exception as exc:
+            failures.append(exc)
         self.retirement_failures.extend(failures)
         for exc in failures:
             warnings.warn(f"NodeForge committed with cleanup warning: {exc}", RuntimeWarning, stacklevel=2)
@@ -942,20 +950,45 @@ class BlenderGroupBackend:
             function_compilation_trace=active_trace,
         )
 
-        if request.existing_group is None:
+        return self.publish_candidate(
+            name=request.name,
+            existing_group=request.existing_group,
+            build_tx=build_tx,
+            populate=lambda candidate, resources: self._populate(candidate, request, resources),
+            preserve_if_equivalent=request.preserve_if_equivalent,
+            outermost=outermost,
+            finalize_before_commit=finalize_before_commit,
+        )
+
+    def publish_candidate(
+        self, *, name: str, existing_group, build_tx: BlenderGroupBuildTransaction,
+        populate: Callable[[object, object], None], preserve_if_equivalent: bool = False,
+        outermost: bool = False, finalize_before_commit: Callable[[object], None] | None = None,
+    ):
+        """Publish a populated source or extension group through one shared lifecycle.
+
+        The caller resolves unique authority and supplies its metadata builder;
+        only this method creates private candidates and cutover/rollback state.
+        Nested extension builders pass the active transaction with outermost=False.
+        """
+        if not isinstance(name, str) or not name:
+            raise ValueError("Candidate group name must be a non-empty string")
+        if not isinstance(build_tx, BlenderGroupBuildTransaction) or build_tx._closed:
+            raise ValueError("Candidate publication requires one open group transaction")
+        if not callable(populate):
+            raise TypeError("Candidate publication requires a populate callback")
+        if existing_group is None:
             return self._create_fresh(
-                request,
-                build_tx,
+                name, build_tx, populate,
                 outermost=outermost,
                 finalize_before_commit=finalize_before_commit,
             )
-        if getattr(request.existing_group, "bl_idname", None) != "GeometryNodeTree":
+        if getattr(existing_group, "bl_idname", None) != "GeometryNodeTree":
             raise CompileError("Selected node group is not a GeometryNodeTree")
         return self._update_existing(
-            request,
-            build_tx,
+            name, existing_group, build_tx, populate,
             outermost=outermost,
-            preserve_if_equivalent=request.preserve_if_equivalent,
+            preserve_if_equivalent=preserve_if_equivalent,
             finalize_before_commit=finalize_before_commit,
         )
 
@@ -968,15 +1001,15 @@ class BlenderGroupBackend:
             group_backend=self,
         )
 
-    def _create_fresh(self, request, build_tx, *, outermost, finalize_before_commit):
+    def _create_fresh(self, name, build_tx, populate, *, outermost, finalize_before_commit):
         """Create, populate, and publish one fresh canonical group."""
         tx = generated_resources.GeneratedResourceTransaction(owner_group_uuid=uuid.uuid4().hex)
         savepoint = build_tx.savepoint()
-        group = bpy.data.node_groups.new(request.name, "GeometryNodeTree")
+        group = bpy.data.node_groups.new(name, "GeometryNodeTree")
         mark_provisional(group)
         build_tx.register_created(group, tx)
         try:
-            self._populate(group, request, tx)
+            populate(group, tx)
             if tx.resources:
                 generated_resources.write_group_manifest(group, tx.manifest())
             if finalize_before_commit is not None:
@@ -1022,16 +1055,13 @@ class BlenderGroupBackend:
 
     def _update_existing(
         self,
-        request,
-        build_tx,
+        name, existing_group, build_tx, populate,
         *,
         outermost,
         preserve_if_equivalent,
         finalize_before_commit,
     ):
         """Build a private replacement, then cut over the authoritative datablock."""
-        existing_group = request.existing_group
-        name = request.name
         old_manifest = generated_resources.read_group_manifest(existing_group)
         captured_resources = generated_resources.capture_owned_resource_ids(existing_group, old_manifest)
         owner_uuid = old_manifest["owner_group_uuid"] if old_manifest is not None else uuid.uuid4().hex
@@ -1042,7 +1072,7 @@ class BlenderGroupBackend:
         mark_transaction_private(replacement)
         backup = None
         try:
-            self._populate(replacement, request, tx)
+            populate(replacement, tx)
             new_manifest = tx.manifest(empty=not bool(tx.resources)) if (old_manifest is not None or tx.resources) else None
             if new_manifest is not None:
                 generated_resources.write_group_manifest(replacement, new_manifest)

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TypeAlias
 
-from ..compiler_identities import BindingId, CallSiteId, FunctionId, InputDeclarationId, InterfaceInputOrigin
+from ..compiler_identities import BindingId, CallSiteId, ExtensionCallSiteId, FunctionId, InputDeclarationId, InterfaceInputOrigin
 from ..nf_types import NFType
 from ..type_capabilities import REPEAT_ITEM_TYPES
 from .group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
@@ -43,6 +43,30 @@ class IRFunctionMaterializationMode(str, Enum):
     SHARED = "SHARED"
     UNIQUE = "UNIQUE"
     INLINE = "INLINE"
+
+
+class IRExtensionMaterializationMode(str, Enum):
+    """Select physical extension materialization independently from source calls."""
+
+    INLINE = "INLINE"
+    GROUPED = "GROUPED"
+
+
+@dataclass(frozen=True)
+class IRExtensionMaterialization:
+    """Preserve analyzed extension mode and optional persistent call occurrence."""
+
+    mode: IRExtensionMaterializationMode
+    call_site: ExtensionCallSiteId | None = None
+
+    def __post_init__(self) -> None:
+        """Reject invalid category and unidentifiable grouped publication."""
+        if not isinstance(self.mode, IRExtensionMaterializationMode):
+            raise TypeError("extension materialization requires IRExtensionMaterializationMode")
+        if self.call_site is not None and not isinstance(self.call_site, ExtensionCallSiteId):
+            raise TypeError("extension materialization call_site requires ExtensionCallSiteId")
+        if self.mode is IRExtensionMaterializationMode.GROUPED and self.call_site is None:
+            raise ValueError("grouped extension materialization requires an occurrence identity")
 
 
 class IRCallableKind(str, Enum):
@@ -358,6 +382,7 @@ class IRCall:
     options: tuple[tuple[str, object], ...] = ()
     raw_output_mode: IRRawNodeOutputMode | None = None
     materialization: IRFunctionMaterialization | None = None
+    extension_materialization: IRExtensionMaterialization | None = None
     static_arguments: tuple[IRStaticCallArgument, ...] = ()
     extension_state_type: TypeSpec | None = None
     extension_state: object | None = None
@@ -380,6 +405,8 @@ class IRCall:
             raise TypeError("IRCall arguments must be IRCallArgument records")
         if not all(isinstance(item, IRStaticCallArgument) for item in self.static_arguments):
             raise TypeError("IRCall static_arguments must be IRStaticCallArgument records")
+        if self.target.kind is not IRCallableKind.EXTENSION and self.extension_materialization is not None:
+            raise ValueError("only extension calls can carry IRExtensionMaterialization")
         if self.target.kind is IRCallableKind.BUILTIN:
             if self.materialization is not None or self.static_arguments:
                 raise ValueError("builtin calls cannot carry source-function materialization/static arguments")
@@ -400,6 +427,12 @@ class IRCall:
             if self.materialization is not None and self.materialization.callee != self.target.function_id:
                 raise ValueError("source-function materialization must target IRCall FunctionId")
         elif self.target.kind is IRCallableKind.EXTENSION:
+            if self.extension_materialization is not None:
+                if not isinstance(self.extension_materialization, IRExtensionMaterialization):
+                    raise TypeError("extension_materialization must be IRExtensionMaterialization")
+                site = self.extension_materialization.call_site
+                if site is not None and site.callee != self.target.extension_callable_id:
+                    raise ValueError("extension occurrence callee does not match call target")
             if self.materialization is not None:
                 raise ValueError("extension IRCall cannot carry source-function materialization")
             if self.extension_state_type is None:
@@ -984,6 +1017,8 @@ __all__ = [
     "IRCallOperandRef",
     "IRStaticCallArgument",
     "IRCall",
+    "IRExtensionMaterializationMode",
+    "IRExtensionMaterialization",
     "IRFunctionMaterializationMode",
     "IRFunctionMaterialization",
     "IRValue",

@@ -102,7 +102,7 @@ def scale_value(context: ExtensionBackendContext, value, *, factor=2.0):
     return context.value(node.outputs[0], NFType.FLOAT)
 ```
 
-Once exported by the package, the callable is used through the package namespace described in [Importing package callables](PACKAGES.md#importing-package-callables).
+Once exported by the package, the callable is used through the package namespace described in [Importing package callables](PACKAGES.md#importing-package-callables). Use [`__inline__`](SYNTAX.md#python-backed-extensions) to choose between nodes in the caller tree and a separate group for the call.
 
 ## Direct value contracts
 
@@ -221,7 +221,7 @@ def forward_values(context, *values):
     return tuple(values)
 ```
 
-Call it inside a grouped `.nf` function, using the installed package's import name:
+Call it from `.nf` source using the installed package's import name:
 
 ```python
 from packages import tools
@@ -456,7 +456,7 @@ Import the public backend types from:
 from NodeForge.extension_api import ExtensionBackendContext, ExtensionBackendValue, NFType
 ```
 
-Runtime direct arguments are `ExtensionBackendValue` instances. Compile-time arguments are detached Python data selected by the parameter's evaluation mode.
+Runtime direct arguments are `ExtensionBackendValue` instances. Compile-time arguments are detached Python data selected by the parameter's evaluation mode. The compiler consumes `__inline__`; semantic functions and backends receive only their declared arguments.
 
 ### `ExtensionBackendValue`
 
@@ -509,14 +509,14 @@ For invocation-dependent results, contract loading imports `semantic.py` and che
 
 A new root compilation resolves a new package environment snapshot and uses it consistently for nested calls.
 
-Call Python-backed extensions that create Blender nodes inside a grouped typed `.nf` function. **Compile Script** rejects those calls directly in the base tree, including calls inside inline functions expanded there. The grouped function supplies a separate node group for the extension's nodes. Mesh Compute callbacks use the dedicated entry-function and modifier workflow described in [Mesh Compute](MESH_COMPUTE.md).
+Refresh extension nodes by recompiling the calling script or using **Reload Function from Source** on the enclosing source-backed function group. Both [inline and grouped calls](SYNTAX.md#python-backed-extensions) support base-tree compilation. Mesh Compute callbacks use the dedicated entry-function and modifier workflow described in [Mesh Compute](MESH_COMPUTE.md).
 
 ## Validation
 
 Package installation validates Extension API declarations before the candidate package becomes active. In addition to the contracts described above:
 
 - `EXTENSION_API` must equal `2` and `EXTENSIONS` must be non-empty;
-- `__unique__` is compiler-reserved and cannot be an extension parameter;
+- `__inline__` and `__unique__` are compiler-reserved and cannot be extension parameters;
 - public extension signatures do not support `**kwargs`;
 - executable results use one exact NodeForge type, a fixed tuple of exact types, or [`DynamicResults`](#invocation-dependent-results).
 

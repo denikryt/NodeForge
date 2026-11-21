@@ -133,6 +133,7 @@ class RootInputEndpoint:
 
     node: object | None = None
     created_by_attempt: bool = False
+    existing_input: object | None = None  # Read-only original; never exposed as a stage node.
 
 
 @dataclass(frozen=True)
@@ -539,8 +540,11 @@ def _lower_builtin_call(context, operation, operands, x, y):
         endpoint = getattr(context, 'root_input_endpoint', None)
         if options["bl_idname"] == 'NodeGroupInput' and endpoint is not None:
             if endpoint.node is None:
-                node = next((item for item in group.nodes if item.bl_idname == 'NodeGroupInput'), None)
-                if node is None:
+                # Pre-existing stage inputs could only have been inserted by a
+                # backend without source authorization. Do not adopt them.
+                if any(item.bl_idname == 'NodeGroupInput' for item in group.nodes):
+                    raise CompileError('Root stage contains an unauthorized Group Input')
+                if endpoint.existing_input is None:
                     result = build_materialized_raw_node(
                         group, bl_idname='NodeGroupInput', props=dict(options['props']),
                         inputs=raw_inputs, output=options['output'], typ=options['typ'],
@@ -550,7 +554,11 @@ def _lower_builtin_call(context, operation, operands, x, y):
                     endpoint.node = result[0].socket.node if isinstance(result, tuple) else result.socket.node
                     endpoint.created_by_attempt = True
                     return result
+                from .group_backend import _copy_node_properties
+                node = group.nodes.new('NodeGroupInput')
+                _copy_node_properties(endpoint.existing_input, node)
                 endpoint.node = node
+                endpoint.created_by_attempt = False
             return read_existing_raw_group_input(
                 endpoint.node, props=dict(options['props']), inputs=raw_inputs,
                 output=options['output'], typ=options['typ'],
@@ -819,7 +827,13 @@ def _lower_call(context, operation, materialized, x, y):
     elif operation.target.kind is IRCallableKind.SOURCE_FUNCTION:
         result = _lower_source_call(context, operation, operands, x, y)
     elif operation.target.kind is IRCallableKind.EXTENSION:
-        result = lower_extension_call(context, operation, operands, x, y)
+        from ..semantic.ir import IRExtensionMaterializationMode
+        if (operation.extension_materialization is not None and
+                operation.extension_materialization.mode is IRExtensionMaterializationMode.GROUPED):
+            from .extension_group_materializer import materialize_extension_call
+            result = materialize_extension_call(context, operation, operands, x, y)
+        else:
+            result = lower_extension_call(context, operation, operands, x, y)
     else:
         raise CompileError(f"Internal error: unsupported Call IR target kind {operation.target.kind}")
     _store_call_results(materialized, operation, result)

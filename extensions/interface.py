@@ -381,7 +381,7 @@ def _normalize_declaration(
     annotations = _evaluated_annotations(function)
     parameters: list[ExtensionParameterSpec] = []
     for parameter in signature.parameters.values():
-        if parameter.name == "__unique__":
+        if parameter.name in {"__unique__", "__inline__"}:
             raise CompileError(f"Extension parameter {parameter.name!r} is reserved by the compiler")
         if parameter.kind is inspect.Parameter.VAR_KEYWORD:
             raise CompileError(f"{callable_id.name}() extension declarations do not support **kwargs")

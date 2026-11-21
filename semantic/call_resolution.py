@@ -12,7 +12,7 @@ from ..errors import CompileError
 from .group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
 from ..extensions.contracts import ExtensionCallableId, TypeSpec, validate_extension_argument_positions
 from ..nf_types import NFType
-from .ir import IRFunctionMaterialization
+from .ir import IRFunctionMaterialization, IRExtensionMaterialization
 
 if TYPE_CHECKING:
     from ..resolved_environment import PackageCallableExport
@@ -257,6 +257,7 @@ class AnalyzedCall:
     result: CallResultSpec
     source_function_id: FunctionId | None = None
     materialization: IRFunctionMaterialization | None = None
+    extension_materialization: IRExtensionMaterialization | None = None
     static_operands: tuple[AnalyzedStaticCallOperand, ...] = ()
     extension_overload_index: int | None = None
     extension_state_type: TypeSpec | None = None
@@ -264,6 +265,10 @@ class AnalyzedCall:
 
     def __post_init__(self) -> None:
         """Freeze normalized fields and reject non-core call targets."""
+        if self.extension_materialization is not None and not isinstance(self.extension_materialization, IRExtensionMaterialization):
+            raise TypeError("extension_materialization must be IRExtensionMaterialization")
+        if self.target.kind is not CallableKind.EXTENSION and self.extension_materialization is not None:
+            raise ValueError("only extension calls can carry IRExtensionMaterialization")
         if not isinstance(self.target, ResolvedCallable):
             raise TypeError("target must be a ResolvedCallable")
         object.__setattr__(self, "runtime_operands", tuple(self.runtime_operands))
@@ -289,6 +294,10 @@ class AnalyzedCall:
             if self.extension_overload_index is not None:
                 raise ValueError("source-backed analyzed calls cannot carry extension overload index")
         elif self.target.kind is CallableKind.EXTENSION:
+            if (self.extension_materialization is not None
+                    and self.extension_materialization.call_site is not None
+                    and self.extension_materialization.call_site.callee != self.target.target):
+                raise ValueError("extension occurrence does not match target")
             if self.source_function_id is not None or self.materialization is not None:
                 raise ValueError("extension analyzed calls cannot carry source-call identity")
             if self.extension_overload_index is not None and (

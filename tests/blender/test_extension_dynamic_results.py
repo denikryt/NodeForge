@@ -120,8 +120,8 @@ def test_dynamic_backend_rejects_malformed_result_and_rolls_back(bad, pattern):
             bpy.data.node_groups.remove(foreign)
 
 
-def test_dynamic_extension_keeps_existing_root_tree_physical_restriction():
-    """Issue 62 does not bypass the root-owned tree restriction from Issue 61."""
+def test_dynamic_extension_compiles_typed_tuple_in_root():
+    """Root Compile publishes a physical DynamicResults tuple with valid sockets."""
     from NodeForge import compiler
     with tempfile.TemporaryDirectory() as tmp:
         source = Path(tmp) / "package"
@@ -129,9 +129,18 @@ def test_dynamic_extension_keeps_existing_root_tree_physical_restriction():
         packages.install_package_directory(source)
         root = bpy.data.node_groups.new("NFTest_dynamic_direct_root", "GeometryNodeTree")
         try:
-            with pytest.raises(CompileError, match="existing base GeometryNodeTree"):
-                compiler.compose_source_initial('''from packages import dynamic
+            result = compiler.compile_source_in_tree('''from packages import dynamic
 value_a, value_b = foo(1.0)
+combined = value_a + value_b
 ''', root)
+            assert result.outcome == "ROOT_REPLACEMENT"
+            operations = {node.operation: node for node in root.nodes
+                          if node.bl_idname == "ShaderNodeMath"}
+            assert set(operations) == {"MULTIPLY", "ADD"}
+            assert operations["MULTIPLY"].outputs[0].bl_idname == "NodeSocketFloat"
+            assert operations["ADD"].outputs[0].bl_idname == "NodeSocketFloat"
+            assert any(link.from_node == operations["MULTIPLY"]
+                       and link.to_node == operations["ADD"] for link in root.links)
+            assert all(link.is_valid for link in root.links)
         finally:
             bpy.data.node_groups.remove(root)

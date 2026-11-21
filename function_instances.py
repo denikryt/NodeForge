@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from .errors import CompileError
 from .compiler_identities import (
     CallSiteId,
+    ExtensionCallSiteId,
     CORE_PACKAGE_ID,
 )
 from .semantic.ir import IRFunctionMaterialization, IRFunctionMaterializationMode
@@ -27,6 +28,7 @@ FUNCTION_DEFINITION_OWNER_PROP = "nodeforge_function_definition_owner"
 FUNCTION_INTERFACE_CONTRACT_PROP = "nodeforge_function_interface_contract"
 FUNCTION_COMPILATION_FINGERPRINT_PROP = "nodeforge_function_compilation_fingerprint"
 FUNCTION_ROOT_OWNER_ID_PROP = "nodeforge_function_root_owner_id"
+COMPOSITION_ROOT_ID_PROP = "nodeforge_composition_root_id_v1"
 
 FINGERPRINT_SCHEMA = 1
 FUNCTION_COMPILER_VERSION: str | None = None
@@ -95,6 +97,20 @@ def instance_key_for(call_site: CallSiteId) -> str:
         "schema": 1,
         "owner_scope": call_site.owner_scope,
         "callee_identity": call_site.callee.stable_key(),
+        "ordinal": call_site.ordinal,
+    })[:32]
+
+
+def extension_instance_key_for(call_site: ExtensionCallSiteId) -> str:
+    """Hash a physical extension occurrence using the established instance-key codec."""
+    if not isinstance(call_site, ExtensionCallSiteId):
+        raise TypeError("extension instance key requires ExtensionCallSiteId")
+    return _digest_payload({
+        "schema": 1,
+        "owner_scope": call_site.owner_scope,
+        "callee_identity": _canonical_json({
+            "owner": list(call_site.callee.owner), "name": call_site.callee.name,
+        }),
         "ordinal": call_site.ordinal,
     })[:32]
 
@@ -353,6 +369,7 @@ __all__ = [
     "FUNCTION_INTERFACE_CONTRACT_PROP",
     "FUNCTION_COMPILATION_FINGERPRINT_PROP",
     "FUNCTION_ROOT_OWNER_ID_PROP",
+    "COMPOSITION_ROOT_ID_PROP",
     "FunctionCompilationTrace",
     "function_group_owner_scope",
     "direct_library_owner_scope",
@@ -360,6 +377,7 @@ __all__ = [
     "function_materialization_owner_scope",
     "module_definition_owner_scope",
     "instance_key_for",
+    "extension_instance_key_for",
     "instance_key_for_materialization",
     "new_root_owner_id",
     "validate_root_owner_id",

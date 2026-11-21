@@ -30,6 +30,7 @@ from NodeForge.extension_api import NFType
 
 def unsafe_wipe(context, value):
     builtins._nodeforge_direct_danger_hits = getattr(builtins, "_nodeforge_direct_danger_hits", 0) + 1
+    builtins._nodeforge_direct_danger_root_pointer = context.group.as_pointer()
     context.group.nodes.clear()
     node = context.group.nodes.new("ShaderNodeValue")
     return context.value(node.outputs[0], NFType.FLOAT)
@@ -45,8 +46,8 @@ def safe_add(context, value):
     packages.install_package_directory(root)
 
 
-def test_direct_physical_extension_never_invokes_destructive_backend(tmp_path):
-    """Preflight executes before any level-zero node or extension side effect."""
+def test_direct_physical_extension_can_modify_only_private_root_candidate(tmp_path):
+    """An unrestricted Python backend modifies a private stage, never the old root."""
     _install_capability_fixture(tmp_path)
     if hasattr(builtins, '_nodeforge_direct_danger_hits'):
         delattr(builtins, '_nodeforge_direct_danger_hits')
@@ -55,16 +56,15 @@ def test_direct_physical_extension_never_invokes_destructive_backend(tmp_path):
     b = group.nodes.new('GeometryNodeTransform')
     group.links.new(a.outputs['Mesh'], b.inputs['Geometry'])
     before = {node.as_pointer() for node in group.nodes}
-    with pytest.raises(CompileError, match='unsupported directly'):
-        compile_root('''from packages import danger
+    compile_root('''from packages import danger
 first = cube(1)
 result = unsafe_wipe(1.0)
 ''', group)
-    assert not hasattr(builtins, '_nodeforge_direct_danger_hits')
-    assert {node.as_pointer() for node in group.nodes} == before
-    assert len(group.links) == 1
-    assert group.links[0].from_node.as_pointer() == a.as_pointer()
-    assert group.links[0].to_node.as_pointer() == b.as_pointer()
+    assert builtins._nodeforge_direct_danger_hits == 1
+    assert builtins._nodeforge_direct_danger_root_pointer != group.as_pointer()
+    assert not before.intersection(n.as_pointer() for n in group.nodes)
+    assert len(group.nodes) == 1 and group.nodes[0].bl_idname == 'ShaderNodeValue'
+    assert not group.links
 
 
 def test_physical_extension_inside_nested_function_uses_own_group_transaction(tmp_path):
@@ -85,22 +85,22 @@ value = nested_safe(1.0)
     assert any(node.bl_idname == 'ShaderNodeMath' for node in nested[0].nodes)
 
 
-def test_physical_extension_in_transitively_inline_root_is_rejected_before_backend(tmp_path):
-    """PR1 must not pass the authoritative root into nested physical Python backends."""
+def test_physical_extension_in_transitively_inline_root_uses_private_stage(tmp_path):
+    """Nested source inlining cannot escape the same private physical root."""
     _install_capability_fixture(tmp_path)
     if hasattr(builtins, '_nodeforge_direct_danger_hits'):
         delattr(builtins, '_nodeforge_direct_danger_hits')
     root = bpy.data.node_groups.new('NFTest_inline_extension_root_forbidden', 'GeometryNodeTree')
     manual = root.nodes.new('GeometryNodeMeshCube')
     before = {node.as_pointer() for node in root.nodes}
-    with pytest.raises(CompileError):
-        compile_root('''from packages import danger
+    compile_root('''from packages import danger
 
 def inline_unsafe(value: Float, __inline__=True) -> Float:
     return unsafe_wipe(value)
 
 result = inline_unsafe(1.0)
 ''', root)
-    assert not hasattr(builtins, '_nodeforge_direct_danger_hits')
-    assert {node.as_pointer() for node in root.nodes} == before
-    assert manual.as_pointer() in before
+    assert builtins._nodeforge_direct_danger_hits == 1
+    assert builtins._nodeforge_direct_danger_root_pointer != root.as_pointer()
+    assert not before.intersection(n.as_pointer() for n in root.nodes)
+    assert any(n.bl_idname == 'ShaderNodeValue' for n in root.nodes)
