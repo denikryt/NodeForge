@@ -208,3 +208,68 @@ def test_transfer_preserves_frame_parenting_and_multi_input_links():
         assert old in root.nodes[:]
     finally:
         _close(root, candidate, tx)
+
+
+def test_transfer_preserves_external_datablock_references_and_curve_mapping():
+    root, old, candidate, tx = _stage()
+    try:
+        stage = candidate.stage
+        material = bpy.data.materials.new('PR2_Transfer_Material')
+        set_material = stage.nodes.new('GeometryNodeSetMaterial')
+        set_material.inputs['Material'].default_value = material
+        curve = stage.nodes.new('ShaderNodeFloatCurve')
+        curve.mapping.curves[0].points.new(0.35, 0.65)
+        curve.mapping.update()
+        transferred = transfer_private_root_subgraph(candidate, root,
+                                                      interface_signature=_interface_signature(root))
+        material_node, = [n for n in transferred.created_nodes if n.bl_idname == 'GeometryNodeSetMaterial']
+        curve_node, = [n for n in transferred.created_nodes if n.bl_idname == 'ShaderNodeFloatCurve']
+        assert material_node.inputs['Material'].default_value is material
+        assert len(curve_node.mapping.curves[0].points) == len(curve.mapping.curves[0].points)
+        assert all(tuple(p.location) == pytest.approx(tuple(q.location))
+                   for p, q in zip(curve_node.mapping.curves[0].points, curve.mapping.curves[0].points))
+        assert old in root.nodes[:]
+    finally:
+        _close(root, candidate, tx)
+
+
+def test_transfer_preserves_multi_input_link_sequence():
+    root, old, candidate, tx = _stage()
+    try:
+        stage = candidate.stage
+        cubes = [n for n in stage.nodes if n.bl_idname == 'GeometryNodeMeshCube']
+        for size in (2.0, 3.0):
+            n = stage.nodes.new('GeometryNodeMeshCube')
+            n.inputs['Size'].default_value = (size, size, size)
+            cubes.append(n)
+        cubes[0].inputs['Size'].default_value = (1.0, 1.0, 1.0)
+        join = stage.nodes.new('GeometryNodeJoinGeometry')
+        for node in cubes:
+            stage.links.new(node.outputs['Mesh'], join.inputs['Geometry'])
+        expected = tuple(float(l.from_node.inputs['Size'].default_value[0]) for l in stage.links
+                         if l.to_node == join)
+        transferred = transfer_private_root_subgraph(candidate, root,
+                                                      interface_signature=_interface_signature(root))
+        target_join, = [n for n in transferred.created_nodes if n.bl_idname == 'GeometryNodeJoinGeometry']
+        actual = tuple(float(l.from_node.inputs['Size'].default_value[0]) for l in root.links
+                       if l.to_node == target_join)
+        assert actual == expected
+    finally:
+        _close(root, candidate, tx)
+
+
+def test_transfer_preserves_bundle_dynamic_items_even_without_links():
+    root, old, candidate, tx = _stage()
+    try:
+        stage = candidate.stage
+        bundle = stage.nodes.new('NodeCombineBundle')
+        bundle.bundle_items.clear()
+        bundle.bundle_items.new('FLOAT', 'Mass')
+        bundle.bundle_items.new('VECTOR', 'Position')
+        expected = tuple((i.name, i.socket_type) for i in bundle.bundle_items)
+        result = transfer_private_root_subgraph(candidate, root,
+                                                interface_signature=_interface_signature(root))
+        copied, = [n for n in result.created_nodes if n.bl_idname == 'NodeCombineBundle']
+        assert tuple((i.name, i.socket_type) for i in copied.bundle_items) == expected
+    finally:
+        _close(root, candidate, tx)

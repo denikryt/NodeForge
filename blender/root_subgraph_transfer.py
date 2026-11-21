@@ -184,7 +184,11 @@ def _strict_preflight(stage, target, endpoint, interface_signature):
         if (link.from_node.id_data is not stage or link.to_node.id_data is not stage
                 or not link.from_socket.is_output or link.to_socket.is_output
                 or not getattr(link, 'is_valid', True)):
-            raise CompileError('Root transfer received an invalid or cross-tree link')
+            raise CompileError(
+                f'Root transfer received an invalid or cross-tree link: '
+                f'{link.from_node.bl_idname}.{link.from_socket.name} -> '
+                f'{link.to_node.bl_idname}.{link.to_socket.name}'
+            )
     return first_input
 
 
@@ -249,11 +253,11 @@ def transfer_private_root_subgraph(candidate, target, *, interface_signature):
                 raise CompileError('Root transfer lost a Frame parent')
             dst.parent = mapped_parent
         dst.location = tuple(src.location)
-    # The reusable group backend's dynamic-item copiers are verified here with
-    # exact post-copy socket contracts, including unlinked dynamic items.
+    # Validate dynamic items before wiring links; mapping nodes are checked after
+    # linking because Blender may reset their mapping state during link creation.
     for src in stage.nodes:
         dst = nodes[src.name]
-        if dst is not original_input:
+        if dst is not original_input and not hasattr(src, 'mapping'):
             _strict_node_parity(src, dst)
     source_links = []
     for link in stage.links:
