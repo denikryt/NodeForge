@@ -778,3 +778,11 @@ lifecycle.
 - Simplified root-producing compilation so the root updater alone owns its group transaction, staged-node cleanup, rollback, and Undo uncertainty. The internal lowering helper now requires its caller-provided transaction and canonical Group Input endpoint.
 - Removed unused source-module forwarding through root lowering and added Blender regression coverage for delegated error cleanup and one transaction owner.
 - Updated the user documentation for unified Compile Script modes, manual placement and refresh of function groups, mode transitions, and base-tree Group Input reuse.
+
+## 0.95.0
+
+- Added per-invocation typed result tuples to Extension API v2 through the `DynamicResults` annotation and same-owner `semantic.py::_result_types_<function>` resolver convention.
+- Resolve exact ordered runtime result types during semantic analysis and transport them through existing typed Call IR to the Python backend.
+- Validate dynamic extension results against call-specific IR arity, NF types, socket direction, physical type and current-group ownership before publishing generated candidates.
+- Preserved fixed result declarations, semantic extension modes, owner snapshots, and existing root-tree physical extension restrictions.
+- Documented invocation-dependent extension result declarations, resolver arguments and validation, backend result types, and package requirements.

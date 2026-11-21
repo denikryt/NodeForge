@@ -65,6 +65,8 @@ from .consteval import NOT_FOLDABLE, ConstEvalUnavailable, _const_eval, try_runt
 from .compile_time import CompileTimeSnapshot, detached_compile_time_mapping, _is_const_vector
 from ..errors import CompileError
 from ..nf_types import NFType, NUMERIC_NF_TYPES
+from ..extension_result_api import ResultRuntimeArg, ResultStaticArg
+from ..extension_semantic_api import RuntimeRef
 from .numeric_semantics import (
     INT_MIN,
     normalize_float_constant,
@@ -396,8 +398,12 @@ def _call_result_types(result):
 
 
 
-def _extension_result_spec(spec: ExtensionCallableSpec):
+def _extension_result_spec(spec: ExtensionCallableSpec, resolved_types=None):
     """Convert one exact extension result TypeSpec to the existing analyzed call shape."""
+    if spec.result.kind == "DYNAMIC_RESULTS":
+        if resolved_types is None:
+            raise CompileError("Internal error: dynamic extension result has not been resolved")
+        return TupleCallResult(tuple(resolved_types))
     if spec.result.kind == "NF_SET":
         return RuntimeCallResult(next(iter(spec.result.nf_types)))
     return TupleCallResult(tuple(next(iter(item.nf_types)) for item in spec.result.items))
@@ -548,9 +554,11 @@ def _analyze_extension_backend_call(
     runtime_nodes: list[ast.expr] = []
     runtime_operands: list[AnalyzedCallOperand] = []
     static_operands: list[AnalyzedStaticCallOperand] = []
+    resolver_arguments: dict[str, object] = {}
     for parameter_index, parameter in enumerate(selected_spec.parameters):
         value = selected_bound.arguments.get(parameter.name, ()) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else selected_bound.arguments.get(parameter.name)
         occurrences = tuple(value) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else (value,)
+        resolved_items = []
         for variadic_index, occurrence in enumerate(occurrences):
             if occurrence is None and parameter.kind is not inspect.Parameter.VAR_POSITIONAL:
                 raise CompileError("Internal error: selected extension binding lost fixed parameter")
@@ -558,6 +566,7 @@ def _analyze_extension_backend_call(
             if isinstance(occurrence, ast.AST):
                 representation, payload, actual_type = acquired[id(occurrence)]
                 if representation == "runtime":
+                    resolved_items.append(ResultRuntimeArg(actual_type))
                     runtime_nodes.append(occurrence)
                     runtime_operands.append(
                         AnalyzedCallOperand(parameter.name, actual_type, parameter_index, transport_variadic)
@@ -566,6 +575,7 @@ def _analyze_extension_backend_call(
                     actual_type = static_nf_type(payload, declared=parameter.type_spec)
                     expected_type = select_declared_nf_type(parameter.type_spec, actual_type)
                     canonical = canonicalize_group_input_default(expected_type, payload)
+                    resolved_items.append(ResultStaticArg(expected_type, canonical))
                     static_operands.append(
                         AnalyzedStaticCallOperand(parameter_index, canonical, transport_variadic)
                     )
@@ -575,9 +585,18 @@ def _analyze_extension_backend_call(
                 static_operands.append(
                     AnalyzedStaticCallOperand(parameter_index, occurrence, transport_variadic)
                 )
+                resolved_items.append(ResultStaticArg(parameter.default_type, occurrence))
+        resolver_arguments[parameter.name] = (
+            tuple(resolved_items) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else resolved_items[0]
+        )
 
     overload_index = selected_index if len(family) > 1 else None
-    result_spec = _extension_result_spec(selected_spec)
+    result_types = None
+    if selected_spec.result.kind == "DYNAMIC_RESULTS":
+        result_types = registry.invoke_result_resolver(
+            selected_spec.id, MappingProxyType(resolver_arguments), overload_index=overload_index,
+        )
+    result_spec = _extension_result_spec(selected_spec, result_types)
     analyzed_call = AnalyzedCall(
         target=resolved,
         runtime_operands=tuple(runtime_operands),
@@ -833,6 +852,26 @@ def _analyze_extension_semantic_call(
         else:
             bound.arguments[parameter.name] = acquired_items[0]
 
+    result_types = None
+    if spec.result.kind == "DYNAMIC_RESULTS":
+        resolver_arguments = {}
+        for parameter in spec.parameters:
+            value = bound.arguments[parameter.name]
+            occurrences = tuple(value) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else (value,)
+            argument_items = []
+            for item in occurrences:
+                if parameter.type_spec.kind != "NF_SET":
+                    argument_items.append(invocation.clone_semantic_argument(parameter.type_spec, item))
+                elif isinstance(item, RuntimeRef):
+                    argument_items.append(ResultRuntimeArg(item.typ))
+                else:
+                    actual = static_nf_type(item, declared=parameter.type_spec)
+                    argument_items.append(ResultStaticArg(select_declared_nf_type(parameter.type_spec, actual), item))
+            resolver_arguments[parameter.name] = (
+                tuple(argument_items) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else argument_items[0]
+            )
+        result_types = registry.invoke_result_resolver(spec.id, MappingProxyType(resolver_arguments))
+
     semantic_value = registry.invoke_semantic(spec.id, *bound.args, **bound.kwargs)
     packed = invocation.pack_result(semantic_return, semantic_value)
     semantic_payload = compact_extension_semantic_payload(semantic_return, packed, invocation.dependencies)
@@ -847,7 +886,7 @@ def _analyze_extension_semantic_call(
 
     if execution_form is not ExtensionExecutionForm.SEMANTIC_THEN_BACKEND:
         raise CompileError("Internal error: semantic extension call has unexpected execution form")
-    result_spec = _extension_result_spec(spec)
+    result_spec = _extension_result_spec(spec, result_types)
     runtime_operands = tuple(AnalyzedCallOperand(None, source.typ) for source in dependencies)
     analyzed_call = AnalyzedCall(
         target=resolved,

@@ -93,18 +93,24 @@ def _validate_result_leaf(value, expected_type: NFType, context: ExtensionBacken
 
 
 def _validate_result(value, result_spec: TypeSpec, context: ExtensionBackendContext):
-    """Validate exact selected result shape and convert it to internal backend Values."""
+    """Compare physical return shape against the exact typed Call IR result tuple."""
+    expected_types = context.result_types
     if result_spec.kind == "NF_SET":
-        expected = next(iter(result_spec.nf_types))
-        return _validate_result_leaf(value, expected, context)
-    if not isinstance(value, tuple) or len(value) != len(result_spec.items):
-        raise CompileError(
-            f"Extension implementation must return a {len(result_spec.items)}-item tuple"
-        )
-    return tuple(
-        _validate_result_leaf(item, next(iter(item_spec.nf_types)), context)
-        for item, item_spec in zip(value, result_spec.items)
-    )
+        declared_types = (next(iter(result_spec.nf_types)),)
+    elif result_spec.kind == "TUPLE_FIXED":
+        declared_types = tuple(next(iter(item.nf_types)) for item in result_spec.items)
+    elif result_spec.kind == "DYNAMIC_RESULTS":
+        declared_types = expected_types
+    else:
+        raise CompileError("Internal error: non-executable result reached the physical backend")
+    if expected_types != declared_types:
+        raise CompileError("Extension Call IR results disagree with the selected callable contract")
+    if result_spec.kind == "NF_SET":
+        return _validate_result_leaf(value, expected_types[0], context)
+    if not isinstance(value, tuple) or len(value) != len(expected_types):
+        raise CompileError(f"Extension implementation must return a {len(expected_types)}-item tuple")
+    return tuple(_validate_result_leaf(item, expected_types[index], context)
+                 for index, item in enumerate(value))
 
 
 def lower_extension_call(context, operation, operands, x, y):
@@ -122,6 +128,7 @@ def lower_extension_call(context, operation, operands, x, y):
         group=context.group,
         location=(x, y),
         generated_resource_transaction=transaction,
+        result_types=tuple(item.typ for item in operation.results),
     )
     try:
         if operation.extension_state_type is None:

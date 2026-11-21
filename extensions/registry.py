@@ -485,6 +485,13 @@ class ExtensionOwnerSession:
         implementation_modules = frozenset(
             ref.module[1:] for ref in refs.values() if ref is not None
         )
+        # Stage the physical targets so preflight cannot import a backend in SEMANTIC.
+        self._implementation_modules = implementation_modules
+        try:
+            self._preflight_result_resolvers(families)
+        except Exception:
+            self._implementation_modules = frozenset()
+            raise
         self._families = MappingProxyType(dict(families))
         self._refs = MappingProxyType(dict(refs))
         self._type_specs = MappingProxyType(dict(type_specs))
@@ -492,6 +499,51 @@ class ExtensionOwnerSession:
         self._type_ids_by_class = MappingProxyType(dict(type_ids_by_class))
         self._implementation_modules = implementation_modules
         return self._families, self._refs
+
+    def _preflight_result_resolvers(self, families) -> None:
+        """Validate each dynamic resolver export during contract load in SEMANTIC."""
+        dynamic_ids = [callable_id for callable_id, specs in families.items()
+                       if specs[0].result.kind == "DYNAMIC_RESULTS"]
+        if not dynamic_ids:
+            return
+        if "semantic" not in self.snapshot.modules:
+            raise CompileError("Dynamic extension result requires same-owner semantic.py")
+        with self._mounted("SEMANTIC"):
+            try:
+                module = importlib.import_module(self._full_name("semantic"))
+                for callable_id in dynamic_ids:
+                    name = f"_result_types_{callable_id.name}"
+                    if not callable(getattr(module, name, None)):
+                        raise CompileError(
+                            f"Dynamic result resolver semantic.py::{name} must exist and be callable"
+                        )
+            except CompileError:
+                raise
+            except Exception as exc:
+                raise CompileError(f"Dynamic result resolver preflight failed for {self.snapshot.owner_key}: {exc}") from exc
+
+    def invoke_result_resolver(self, callable_id: ExtensionCallableId, arguments, *, overload_index=None) -> tuple:
+        """Resolve one exact ordered executable tuple within the owner's SEMANTIC generation."""
+        families, _ = self.normalize_interface()
+        family = families.get(callable_id)
+        if not family or family[0].result.kind != "DYNAMIC_RESULTS":
+            raise CompileError(f"{callable_id.name!r} has no dynamic result contract")
+        if overload_index is not None and (type(overload_index) is not int or not 0 <= overload_index < len(family)):
+            raise CompileError("Dynamic extension result has invalid selected overload index")
+        label = f"{callable_id.owner}.{callable_id.name} overload {overload_index}"
+        with self._mounted("SEMANTIC"):
+            try:
+                module = importlib.import_module(self._full_name("semantic"))
+                function = getattr(module, f"_result_types_{callable_id.name}")
+                result = function(arguments)
+            except Exception as exc:
+                raise CompileError(f"Dynamic result resolver {label} failed: {exc}") from exc
+        from ..nf_types import NFType
+        if type(result) not in (tuple, list) or not result or any(type(typ) is not NFType for typ in result):
+            raise CompileError(
+                f"Dynamic result resolver {label} must return a nonempty tuple/list of exact NFType members"
+            )
+        return tuple(result)
 
     def type_specs(self) -> Mapping[ExtensionTypeId, ExtensionTypeSpec]:
         """Return the immutable normalized semantic record schemas for this owner."""
@@ -742,6 +794,12 @@ class ExtensionRegistry:
     def owner_fingerprint(self, owner_key: tuple[str, ...]) -> str:
         """Return the conservative owner-code fingerprint for one admitted owner."""
         return self._session_for_owner(owner_key).snapshot.fingerprint
+
+    def invoke_result_resolver(self, callable_id: ExtensionCallableId, arguments, *, overload_index=None) -> tuple:
+        """Delegate one call-local signature request to the selected owner session."""
+        return self._session_for_owner(callable_id.owner).invoke_result_resolver(
+            callable_id, arguments, overload_index=overload_index,
+        )
 
     def invoke_implementation(self, callable_id: ExtensionCallableId, *args, **kwargs):
         """Invoke physical owner code while its IMPLEMENTATION generation remains mounted."""

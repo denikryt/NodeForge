@@ -33,8 +33,8 @@ class ExtensionBackendValue:
 class ExtensionBackendContext:
     """Expose the minimal physical realization surface to one extension invocation."""
 
-    def __init__(self, *, group, location, generated_resource_transaction):
-        """Bind one invocation to its target group, layout anchor, and outer transaction."""
+    def __init__(self, *, group, location, generated_resource_transaction, result_types=()):
+        """Bind one invocation to the candidate group and immutable typed output contract."""
         if group is None:
             raise ValueError("ExtensionBackendContext requires a target node group")
         if (
@@ -48,6 +48,14 @@ class ExtensionBackendContext:
         self._group = group
         self._location = (float(location[0]), float(location[1]))
         self._generated_resource_transaction = generated_resource_transaction
+        if not isinstance(result_types, tuple) or any(type(typ) is not NFType for typ in result_types):
+            raise TypeError("ExtensionBackendContext.result_types must be a tuple of exact NFType members")
+        self._result_types = result_types
+
+    @property
+    def result_types(self) -> tuple[NFType, ...]:
+        """Return the selected call's ordered immutable executable result signature."""
+        return self._result_types
 
     @property
     def group(self) -> "bpy.types.GeometryNodeTree":

@@ -1,6 +1,7 @@
 """NodeForge Blender addon package."""
 
-NODEFORGE_VERSION = (0, 94, 2)
+NODEFORGE_VERSION = (0, 95, 0)
+
 
 bl_info = {
     "name": "NodeForge",
@@ -15,6 +16,7 @@ bl_info = {
 from .mesh_compute import mesh_compute
 from .evaluation_modes import EvaluationMode
 from .extension_semantic_api import RuntimeRef
+from .extension_result_api import DynamicResults
 from .extension_annotations import (
     Bool, Bundle, Color, Float, Geometry, Int, Material, Object, Rotation, String, Vector,
 )
