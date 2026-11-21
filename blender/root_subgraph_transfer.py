@@ -14,7 +14,6 @@ from .group_backend import (
     _copy_node_properties,
     _sync_bundle_dynamic_items,
     _sync_capture_attribute_dynamic_items,
-    _sync_curve_mapping_state,
     _sync_repeat_zone_dynamic_items,
 )
 from .root_update import _interface_signature

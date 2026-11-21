@@ -8,7 +8,6 @@ import bpy
 from dataclasses import replace
 
 from ..errors import CompileError
-from ..function_instances import extension_instance_key_for
 from ..semantic.ir import IRExtensionMaterializationMode
 from .extension_backend import _selected_spec, lower_extension_call
 from .group_authority import find_unique_authoritative_group
@@ -85,7 +84,6 @@ def materialize_extension_call(context, operation, operands, x, y):
     if registry is None:
         raise CompileError('Grouped extension requires a resolved extension registry')
     spec = _selected_spec(registry, operation)
-    key = extension_instance_key_for(site)
     input_names = _input_names(operation, spec)
     output_names = _output_names(operation, spec)
     identity = site.owner_scope + ':' + repr((site.callee.owner, site.callee.name, site.ordinal))
@@ -101,8 +99,6 @@ def materialize_extension_call(context, operation, operands, x, y):
         fingerprint = _fingerprint(operation, spec, registry)
 
         def populate(candidate, resources):
-            from .ir_lowering import BlenderIRLoweringContext
-
             for name, argument in zip(input_names, operation.arguments):
                 candidate.interface.new_socket(
                     name=name, in_out='INPUT', socket_type=socket_type_for_nf_type(argument.value.typ),

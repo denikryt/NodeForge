@@ -344,7 +344,7 @@ def replace_prepared_root(prepared, target, backend, session, *, root_owner_uuid
     from .root_subgraph_transfer import transfer_private_root_subgraph
     validate_base_target(target)
     reject_node_local_animation(target)
-    validate_prepared_direct(prepared, target, private_root_staging=True)
+    validate_prepared_direct(prepared, target)
     root_owner_uuid = validate_root_owner_id(root_owner_uuid or target.get(COMPOSITION_ROOT_ID_PROP)
                                             or new_root_owner_id())
     root_pointer, root_name = target.as_pointer(), target.name

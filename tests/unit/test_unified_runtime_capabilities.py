@@ -6,7 +6,7 @@ from NodeForge import environment_resolution, local_sources
 from NodeForge.compiler_identities import GroupCompilationIdentity
 from NodeForge.errors import CompileError
 from NodeForge.semantic.group import analyze_group_source
-from NodeForge.semantic.runtime_capabilities import RuntimeRole, preflight_direct_base_operations
+from NodeForge.semantic.runtime_capabilities import RuntimeRole
 from NodeForge.semantic.source_callable_session import SourceCallableSession
 
 
@@ -37,14 +37,6 @@ def test_nested_role_rejects_used_root_only_mesh_compute_but_root_allows_it(tmp_
     unused = _prepare('from local import erosion\nvalue = cube(1)\n',
                       environment_resolution._make_compilation_environment(), RuntimeRole.NESTED)
     assert not unused.extension_dependencies
-
-
-def test_direct_preflight_allows_plain_builtin_ir_and_does_not_change_it():
-    """A preflight over ordinary resolved source cannot mutate the IR."""
-    group = _prepare('value = cube(1)\n', environment_resolution._make_compilation_environment(), RuntimeRole.ROOT)
-    original = repr(group.body)
-    assert preflight_direct_base_operations(group.body) is None
-    assert repr(group.body) == original
 
 
 def test_invalid_runtime_role_fails_during_semantic_environment_construction():

@@ -21,7 +21,6 @@ class PrivateRootCandidate:
     stage: object
     endpoint: RootInputEndpoint
     resource_transaction: GeneratedResourceTransaction
-    interface_signature: tuple
 
 
 def discard_private_root_candidate(candidate: PrivateRootCandidate):
@@ -66,7 +65,7 @@ def build_private_root_candidate(prepared, target, backend, session, *, transact
         (node for node in target.nodes if node.bl_idname == 'NodeGroupInput'), None
     )
     endpoint = RootInputEndpoint(existing_input=first_existing_input)
-    candidate = PrivateRootCandidate(stage, endpoint, tx, stage_signature)
+    candidate = PrivateRootCandidate(stage, endpoint, tx)
     try:
         if _interface_signature(target) != source_signature:
             raise CompileError('Authoritative root interface changed before private lowering')

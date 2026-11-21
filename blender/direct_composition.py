@@ -8,15 +8,12 @@ from .function_materializer import FunctionMaterializationContext, FunctionMater
 from .ir_lowering import BlenderIRLoweringContext, lower_body
 
 
-def validate_prepared_direct(prepared, target, *, private_root_staging=False):
+def validate_prepared_direct(prepared, target):
     """Reject unsupported direct-root contracts before any node/group mutation."""
     if getattr(target, 'bl_idname', None) != 'GeometryNodeTree':
         raise CompileError('Direct composition requires an existing base GeometryNodeTree')
     if prepared.geometry_mode or prepared.interface.inputs or prepared.interface.outputs:
         raise CompileError('Direct composition may not declare a base tree interface')
-    from ..semantic.runtime_capabilities import preflight_direct_base_operations
-    if not private_root_staging:
-        preflight_direct_base_operations(prepared.body)
     if any(owner and owner[0] in {'local-runtime', 'examples-runtime'}
            for owner, _fingerprint in prepared.extension_dependencies):
         raise CompileError('Mesh Compute requires a supported root modifier contract; '

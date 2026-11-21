@@ -176,7 +176,7 @@ def _prepare_direct_source(source: str, target, *, resolved_environment=None,
         source_callable_session=session, source_module=snapshot,
         direct_composition=True,
     )
-    validate_prepared_direct(prepared, target, private_root_staging=True)
+    validate_prepared_direct(prepared, target)
     return prepared, backend, session, snapshot
 
 
