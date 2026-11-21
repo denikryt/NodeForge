@@ -819,7 +819,13 @@ def _lower_call(context, operation, materialized, x, y):
     elif operation.target.kind is IRCallableKind.SOURCE_FUNCTION:
         result = _lower_source_call(context, operation, operands, x, y)
     elif operation.target.kind is IRCallableKind.EXTENSION:
-        result = lower_extension_call(context, operation, operands, x, y)
+        from ..semantic.ir import IRExtensionMaterializationMode
+        if (operation.extension_materialization is not None and
+                operation.extension_materialization.mode is IRExtensionMaterializationMode.GROUPED):
+            from .extension_group_materializer import materialize_extension_call
+            result = materialize_extension_call(context, operation, operands, x, y)
+        else:
+            result = lower_extension_call(context, operation, operands, x, y)
     else:
         raise CompileError(f"Internal error: unsupported Call IR target kind {operation.target.kind}")
     _store_call_results(materialized, operation, result)
