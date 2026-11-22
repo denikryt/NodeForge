@@ -758,3 +758,96 @@ def test_root_lowerer_propagates_without_owning_node_or_transaction_cleanup(monk
     tx.rollback()
     assert tx._closed
     assert {node.as_pointer() for node in tree.nodes} == old_pointers
+
+
+def test_update_preserves_contextual_position_link_vs_true_omission_and_schema_v2():
+    """A replaced raw node retains the precise present/absent input contract."""
+    from NodeForge.blender import raw_nodes
+
+    tree, _, outlet = _root('NFR5_constant_position_update')
+    explicit = ('base = cube(2)\n'
+                'result = node("GeometryNodeSetPosition", '
+                'inputs={"Geometry": base, "Position": vector(0, 0, 0)}, '
+                'output="Geometry", typ=Geometry)\n')
+    omitted = ('base = cube(2)\n'
+               'result = node("GeometryNodeSetPosition", '
+               'inputs={"Geometry": base}, output="Geometry", typ=Geometry)\n')
+
+    def contract(node, identifier):
+        spec = raw_nodes.raw_node_spec(node)
+        assert spec['schema_version'] == raw_nodes.RAW_SCHEMA_VERSION == 2
+        return next((row for row in spec['inputs']
+                     if row['socket'].identifier == identifier), None)
+
+    def setpos():
+        nodes = [node for node in tree.nodes if node.bl_idname == 'GeometryNodeSetPosition']
+        assert len(nodes) == 1
+        return nodes[0]
+
+    def vertices(obj):
+        bpy.context.view_layer.update()
+        evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+        mesh = evaluated.to_mesh()
+        try:
+            return [tuple(round(float(x), 4) for x in v.co) for v in mesh.vertices]
+        finally:
+            evaluated.to_mesh_clear()
+
+    obj = bpy.data.objects.new('NFR5_position_obj', bpy.data.meshes.new('NFR5_position_mesh'))
+    bpy.context.collection.objects.link(obj)
+    mod = obj.modifiers.new('Nodes', 'NODES')
+    mod.node_group = tree
+    try:
+        compile_root(explicit, tree)
+        node = setpos()
+        tree.links.new(node.outputs['Geometry'], outlet.inputs['Geometry'])
+        assert node.inputs['Position'].is_linked
+        assert contract(node, 'Position')['mode'] == raw_nodes.INPUT_SINGLE_LINK
+        assert set(vertices(obj)) == {(0.0, 0.0, 0.0)}
+        compile_root(omitted, tree)
+        node = setpos()
+        assert not node.inputs['Position'].is_linked
+        assert contract(node, 'Position') is None
+        assert outlet.inputs['Geometry'].is_linked
+        assert len(set(vertices(obj))) == 8
+        compile_root(explicit, tree)
+        node = setpos()
+        assert node.inputs['Position'].is_linked
+        assert contract(node, 'Position')['mode'] == raw_nodes.INPUT_SINGLE_LINK
+        assert set(vertices(obj)) == {(0.0, 0.0, 0.0)}
+    finally:
+        bpy.data.objects.remove(obj, do_unlink=True)
+
+
+def test_update_failed_constant_delivery_keeps_published_nodes_and_realization(monkeypatch):
+    """An adapter failure in a staged candidate must not alter the old tree."""
+    from NodeForge.blender import raw_nodes
+
+    tree, _, outlet = _root('NFR5_constant_failure_update')
+    old = ('base = cube(2)\n'
+           'result = node("GeometryNodeSetPosition", '
+           'inputs={"Geometry": base, "Position": vector(0, 0, 0)}, '
+           'output="Geometry", typ=Geometry)\n')
+    compile_root(old, tree)
+    node, = [item for item in tree.nodes if item.bl_idname == 'GeometryNodeSetPosition']
+    tree.links.new(node.outputs['Geometry'], outlet.inputs['Geometry'])
+    ids = {item.as_pointer() for item in tree.nodes}
+    links = {(link.from_socket.as_pointer(), link.to_socket.as_pointer()) for link in tree.links}
+    spec_before = raw_nodes.raw_node_spec(node)
+    group_refs = {g.as_pointer() for g in bpy.data.node_groups}
+    real_deliver = raw_nodes.deliver_input
+
+    def failing_delivery(group, socket, operand, *, context='node input'):
+        result = real_deliver(group, socket, operand, context=context)
+        if socket.identifier == 'Position' and socket.node.bl_idname == 'GeometryNodeSetPosition':
+            raise RuntimeError('injected deferred constant candidate failure')
+        return result
+
+    monkeypatch.setattr(raw_nodes, 'deliver_input', failing_delivery)
+    with pytest.raises(root_update.RootUpdateError, match='injected deferred constant candidate failure'):
+        compile_root(old.replace('cube(2)', 'cube(3)'), tree)
+    node, = [item for item in tree.nodes if item.bl_idname == 'GeometryNodeSetPosition']
+    assert ids == {item.as_pointer() for item in tree.nodes}
+    assert links == {(link.from_socket.as_pointer(), link.to_socket.as_pointer()) for link in tree.links}
+    assert raw_nodes.raw_node_spec(node) == spec_before
+    assert group_refs == {g.as_pointer() for g in bpy.data.node_groups}

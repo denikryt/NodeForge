@@ -421,3 +421,57 @@ def test_bundle_backend_rejects_unsupported_and_foreign_runtime_items():
     finally:
         bpy.data.node_groups.remove(group, do_unlink=True)
         bpy.data.node_groups.remove(other, do_unlink=True)
+
+
+def test_bundle_rebuild_preserves_dynamic_direct_defaults_and_physical_bundle_link():
+    """Configured dynamic item defaults survive cutover; invalid signatures roll back."""
+    before = '''
+def nf_fixture():
+    state = bundle(value=1.25, enabled=True, direction=vector(1, 2, 3))
+    state = bundle_set(state, "value", 5.0)
+    return (state,)
+'''
+    after = '''
+def nf_fixture():
+    state = bundle(value=7.5, label="updated", enabled=False)
+    state = bundle_set(state, "value", 2.5)
+    return (state,)
+'''
+    group = compile_group(before, 'NFTest_bundle_constant_update')
+    root_pointer = group.as_pointer()
+
+    def current():
+        node = _one_node(group, 'NodeCombineBundle')
+        return node, _one_node(group, 'NodeStoreBundleItem')
+
+    combine, store = current()
+    assert [item.name for item in combine.bundle_items] == ['value', 'enabled', 'direction']
+    for socket, default in (('value', 1.25), ('enabled', True), ('direction', (1, 2, 3))):
+        assert not combine.inputs[socket].is_linked
+        observed = combine.inputs[socket].default_value
+        assert (tuple(observed) if socket == 'direction' else observed) == default
+    assert store.inputs['Bundle'].is_linked
+    assert store.inputs['Path'].default_value == 'value' and not store.inputs['Path'].is_linked
+    assert store.inputs['Item'].default_value == 5.0 and not store.inputs['Item'].is_linked
+
+    prepared_create_or_update(after, group.name, existing_group=group)
+    assert group.as_pointer() == root_pointer
+    combine, store = current()
+    assert [item.name for item in combine.bundle_items] == ['value', 'label', 'enabled']
+    assert combine.inputs['value'].default_value == 7.5 and not combine.inputs['value'].is_linked
+    assert combine.inputs['label'].default_value == 'updated' and not combine.inputs['label'].is_linked
+    assert combine.inputs['enabled'].default_value is False and not combine.inputs['enabled'].is_linked
+    assert store.inputs['Item'].default_value == 2.5 and not store.inputs['Item'].is_linked
+    assert store.inputs['Bundle'].is_linked
+
+    blender_group_backend._TEST_CUTOVER_FAIL_AFTER_RESET = True
+    try:
+        with pytest.raises(RuntimeError):
+            prepared_create_or_update(before, group.name, existing_group=group)
+    finally:
+        blender_group_backend._TEST_CUTOVER_FAIL_AFTER_RESET = False
+    assert group.as_pointer() == root_pointer
+    combine, store = current()
+    assert [item.name for item in combine.bundle_items] == ['value', 'label', 'enabled']
+    assert combine.inputs['value'].default_value == 7.5
+    assert store.inputs['Item'].default_value == 2.5 and store.inputs['Bundle'].is_linked
