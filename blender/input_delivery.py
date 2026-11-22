@@ -213,7 +213,7 @@ def deliver_input(group, socket, operand, *, context: str = "node input") -> Inp
             raise CompileError(f"{context}: failed to link runtime input: {exc}") from exc
         return InputRealization("single_link", links=1)
     checked.bind_group(group)
-    if _is_safe_default(socket):
+    if _is_safe_default(socket) and not checked._shared_runtime:
         default = checked.value
         if checked.typ is NFType.INT and _input_type(socket) is NFType.FLOAT:
             default = canonicalize_group_input_default(NFType.FLOAT, default)

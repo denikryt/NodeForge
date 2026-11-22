@@ -63,13 +63,21 @@ class DeferredConstant:
     share its single producer once the value is physically required.
     """
 
-    __slots__ = ("payload", "_owner_group", "_materialized")
+    __slots__ = ("payload", "_owner_group", "_materialized", "_shared_runtime")
 
     def __init__(self, typ: NFType, value):
         """Create one canonical value without mutating any Blender node tree."""
         self.payload = ConstantPayload(typ, value)
         self._owner_group = None
         self._materialized = None
+        self._shared_runtime = False
+
+    def share_runtime_consumers(self) -> None:
+        """Use one physical producer for non-literal consumers of a shared inline value.
+
+        Literal-only sockets may still consume the original constant directly.
+        """
+        self._shared_runtime = True
 
     @property
     def typ(self) -> NFType:

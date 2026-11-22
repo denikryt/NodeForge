@@ -731,7 +731,10 @@ def _inline_parameter_bindings(context, operation, operands, prepared, x, y):
         if isinstance(value, DeferredConstant) and not _inline_parameter_is_direct_single_sink(
             prepared.group.body, origin
         ):
-            value = require_output(context.group, value, context=f"inline argument {parameter.display_name}")
+            # Retain literal provenance for consumers without runtime inputs
+            # (notably Menu enums). Other consumers still share one physical
+            # producer, materialized at the first real socket boundary.
+            value.share_runtime_consumers()
         if origin in bound:
             raise CompileError("Internal error: inline declaration was bound more than once")
         bound[origin] = value
