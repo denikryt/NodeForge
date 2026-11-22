@@ -731,10 +731,15 @@ def _inline_parameter_bindings(context, operation, operands, prepared, x, y):
         if isinstance(value, DeferredConstant) and not _inline_parameter_is_direct_single_sink(
             prepared.group.body, origin
         ):
-            # Retain literal provenance for consumers without runtime inputs
-            # (notably Menu enums). Other consumers still share one physical
-            # producer, materialized at the first real socket boundary.
-            value.share_runtime_consumers()
+            if value.typ is TYPE_STRING:
+                # Literal-only Menu sockets need the known String even when
+                # other consumers require a shared physical String producer.
+                value.share_runtime_consumers()
+            else:
+                # Eager realization preserves non-String sharing through
+                # consumers that rewrap Bool or unpack numeric arguments.
+                value = require_output(context.group, value,
+                                       context=f"inline argument {parameter.display_name}")
         if origin in bound:
             raise CompileError("Internal error: inline declaration was bound more than once")
         bound[origin] = value
