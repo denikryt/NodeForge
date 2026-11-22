@@ -257,3 +257,87 @@ def test_source_outputs_share_popup_rows_and_preview_with_overflow():
         '→ 5 outputs:', '  Mesh: Geometry', '  Top: Bool', '  Bottom: Bool',
         '  Side: Bool', '  … +1 outputs']
     assert _return_preview(signature) == '→ (Geometry, Bool, Bool, Bool, Vector)'
+
+
+def test_real_blender_text_editor_escape_and_enter_leave_node_graph_untouched():
+    """Exercise modal acceptance using actual Text datablocks and bpy text operators."""
+    import bpy
+    from NodeForge.editor import blender_ui as ui
+
+    area = bpy.context.screen.areas[0]
+    old_type = area.type
+    initially_enabled = ui._ENABLED
+    before_groups = set(bpy.data.node_groups.keys())
+    text = bpy.data.texts.new('NFTest_PopupRealEditor')
+    other = bpy.data.texts.new('NFTest_PopupOtherText')
+    pointer = area.as_pointer()
+    try:
+        if not initially_enabled:
+            ui.register()
+        bpy.context.window_manager.nodeforge_assist_enabled = True
+        area.type = 'TEXT_EDITOR'
+        area.spaces.active.text = text
+        region = next(item for item in area.regions if item.type == 'WINDOW')
+        operator = SimpleNamespace(area_pointer=pointer)
+        ui._RUNNING_AREAS.add(pointer)
+
+        def event(key, unicode='', **modifiers):
+            data = dict(type=key, value='PRESS', unicode=unicode, ctrl=False,
+                        alt=False, oskey=False, shift=False)
+            data.update(modifiers)
+            return SimpleNamespace(**data)
+
+        with bpy.context.temp_override(area=area, region=region):
+            bpy.ops.text.insert(text='cu')
+            ui._refresh_state(area)
+            state = ui._STATES[pointer]
+            assert any(item.insert == 'cube' for item in state.help.candidates)
+            assert ui.NODEFORGE_OT_editor_session.modal(operator, bpy.context, event('ESC')) == {'RUNNING_MODAL'}
+            assert state.suppressed == state.key
+            assert ui.NODEFORGE_OT_editor_session.modal(operator, bpy.context, event('BACK_SPACE')) == {'PASS_THROUGH'}
+            bpy.ops.text.delete(type='PREVIOUS_CHARACTER')
+            bpy.ops.text.insert(text='u')
+            ui._refresh_state(area)
+            assert state.help.candidates and state.suppressed is None
+            assert ui.NODEFORGE_OT_editor_session.modal(operator, bpy.context, event('RET')) == {'RUNNING_MODAL'}
+            assert text.as_string() == 'cube'
+
+            # A native Text datablock switch before the next poll invalidates the hint.
+            area.spaces.active.text = other
+            bpy.ops.text.insert(text='cu')
+            assert ui.NODEFORGE_OT_editor_session.modal(operator, bpy.context, event('RET')) == {'PASS_THROUGH'}
+            assert other.as_string() == 'cu'
+            ui._refresh_state(area)
+            assert ui.NODEFORGE_OT_editor_session.modal(operator, bpy.context, event('NUMPAD_ENTER')) == {'RUNNING_MODAL'}
+            assert other.as_string() == 'cube'
+    finally:
+        ui._STATES.pop(pointer, None)
+        ui._RUNNING_AREAS.discard(pointer)
+        bpy.context.window_manager.nodeforge_assist_enabled = False
+        area.type = old_type
+        bpy.data.texts.remove(text)
+        bpy.data.texts.remove(other)
+        if not initially_enabled:
+            ui.unregister()
+    assert set(bpy.data.node_groups.keys()) == before_groups
+
+
+def test_raw_node_declared_selectors_match_blender_mesh_cube_sockets():
+    """The supplied Blender 5.2 Mesh Cube exposes the declared Mesh/UV Map sockets."""
+    import bpy
+    from NodeForge.editor.intelligence import _def_signatures
+    signatures = _def_signatures("""def mesh_cube():
+    result = node('GeometryNodeMeshCube', outputs={'mesh': (ID('Mesh'), Geometry), 'uv': (ID('UV Map'), Vector)})
+    return result.mesh, result.uv
+""")
+    tree = bpy.data.node_groups.new('NFTest_CompletionSocketNames', 'GeometryNodeTree')
+    try:
+        native = tree.nodes.new('GeometryNodeMeshCube')
+        expected = [(socket.name, {'NodeSocketGeometry': 'Geometry',
+                                   'NodeSocketVector': 'Vector'}[socket.bl_idname])
+                    for socket in native.outputs if socket.name in {'Mesh', 'UV Map'}]
+        assert [(o.name, o.typ) for o in signatures['mesh_cube'][0].outputs] == expected
+        assert [socket.identifier for socket in native.outputs if socket.name in {'Mesh', 'UV Map'}] == [
+            'Mesh', 'UV Map']
+    finally:
+        bpy.data.node_groups.remove(tree)

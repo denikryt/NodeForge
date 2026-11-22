@@ -38,7 +38,7 @@ class Parameter:
 
 @dataclass(frozen=True)
 class Output:
-    """One named return value with a compiler-confirmed or unknown type."""
+    """One named return value with a projected or unknown type."""
 
     name: str
     typ: str
