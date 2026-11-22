@@ -70,3 +70,30 @@ def test_no_legacy_root_input_completion(index):
     names = index.symbols('') ['']
     assert 'input_float' not in names
     assert 'output' not in names
+
+
+
+def test_extension_signature_displays_none_as_optional_without_changing_required_defaults():
+    """Editor signatures distinguish omission from required and concrete defaults."""
+    import inspect
+    from NodeForge.editor.intelligence import _extension_signatures
+    from NodeForge.extensions.contracts import ExtensionCallableId, ExtensionCallableSpec, ExtensionParameterSpec, TypeSpec
+    from NodeForge.evaluation_modes import EvaluationMode
+    from NodeForge.nf_types import NFType
+
+    typ = TypeSpec("NF_SET", frozenset({NFType.FLOAT}))
+    spec = ExtensionCallableSpec(
+        ExtensionCallableId(("system", "test", "editor"), "sample"),
+        (
+            ExtensionParameterSpec("required", inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                                   typ, EvaluationMode.RUNTIME_ONLY),
+            ExtensionParameterSpec("optional", inspect.Parameter.KEYWORD_ONLY,
+                                   typ, EvaluationMode.RUNTIME_ONLY, None),
+            ExtensionParameterSpec("amount", inspect.Parameter.KEYWORD_ONLY,
+                                   typ, EvaluationMode.COMPILE_TIME_OR_RUNTIME, 1.5, NFType.FLOAT),
+        ),
+        typ,
+    )
+    editor_signature, = _extension_signatures("sample", (spec,))
+    assert [parameter.default for parameter in editor_signature.parameters] == [None, "None", "1.5"]
+    assert [parameter.keyword for parameter in editor_signature.parameters] == ["required", "optional", "amount"]

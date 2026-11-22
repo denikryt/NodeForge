@@ -820,3 +820,9 @@ lifecycle.
 
 - Added Blender characterization sources, deterministic graph baselines and focused assertions for Python Extension API v2 inline/grouped placement, nested calls, DynamicResults, compacted semantic dependencies, and Capture Attribute Rotation.
 - Extended characterization snapshots to retain Capture Attribute item types, domain and unlinked Float item defaults without changing existing recorded cases.
+
+## 0.98.0
+
+- Added optional direct typed Extension API v2 parameters declared with `= None`, including compile-time, runtime, and mixed evaluation modes.
+- Preserve omitted parameters as indexed static `None` operands through overload selection, semantic processing, dynamic result resolution, and inline/grouped Blender materialization.
+- Added declaration, semantic, dynamic-result, Blender socket-default, and downstream `nodeforge.nodes` regression coverage.
