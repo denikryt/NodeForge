@@ -248,6 +248,23 @@ def _draw_overlay():
         gpu.state.blend_set('NONE')
 
 
+def _restarts_dismissed_completion(event, region) -> bool:
+    """Recognize editor input after Escape without intercepting Blender's keymap."""
+    if event.value != 'PRESS' or event.type == 'ESC':
+        return False
+    if event.type == 'LEFTMOUSE':
+        # Header/sidebar clicks are not Text Editor caret-placement actions.
+        return region is not None and region.type == 'WINDOW'
+    if (event.type in {'BACK_SPACE', 'DEL', 'RET', 'NUMPAD_ENTER', 'TAB',
+                       'LEFT_ARROW', 'RIGHT_ARROW', 'UP_ARROW', 'DOWN_ARROW',
+                       'HOME', 'END', 'PAGE_UP', 'PAGE_DOWN', 'HOME_KEY', 'END_KEY'}):
+        return True
+    if (event.ctrl or event.oskey) and not event.alt and event.type in {'Z', 'Y', 'V', 'X'}:
+        return True
+    return bool(event.unicode and event.unicode.isprintable() and
+                not (event.ctrl or event.alt or event.oskey))
+
+
 class NODEFORGE_OT_editor_session(bpy.types.Operator):
     """Receive popup navigation while allowing normal Text Editor keys through."""
 
@@ -265,7 +282,7 @@ class NODEFORGE_OT_editor_session(bpy.types.Operator):
         return {'RUNNING_MODAL'}
 
     def modal(self, context, event):
-        """Accept Tab, navigate Up/Down, dismiss Escape; pass every other event."""
+        """Accept fresh completions, navigate suggestions, and dismiss on Escape."""
         pointer = self.area_pointer
         if not _ENABLED or pointer not in _RUNNING_AREAS:
             _RUNNING_AREAS.discard(pointer)
@@ -278,7 +295,23 @@ class NODEFORGE_OT_editor_session(bpy.types.Operator):
             _STATES.pop(pointer, None)
             return {'CANCELLED'}
         state = _STATES.get(pointer)
-        if state is None or not state.help.candidates or state.suppressed == state.key:
+        if state is None:
+            return {'PASS_THROUGH'}
+        # One modal listener covers the whole area. Only its text WINDOW region
+        # may navigate, accept, dismiss, or restart completion suggestions.
+        region = getattr(context, 'region', None)
+        if region is None or region.type != 'WINDOW':
+            return {'PASS_THROUGH'}
+        if state.suppressed is not None and state.suppressed == state.key:
+            if _restarts_dismissed_completion(event, getattr(context, 'region', None)):
+                # Invalidate even when several edits restore the same key before a timer tick.
+                state.suppressed = None
+                state.key = None
+                state.help = Assistance()
+                state.selection = 0
+                context.area.tag_redraw()
+            return {'PASS_THROUGH'}
+        if not state.help.candidates:
             return {'PASS_THROUGH'}
         if event.value != 'PRESS':
             return {'PASS_THROUGH'}
@@ -288,13 +321,30 @@ class NODEFORGE_OT_editor_session(bpy.types.Operator):
             context.area.tag_redraw()
             return {'RUNNING_MODAL'}
         if event.type == 'ESC':
+            # The user may have edited the Text since the last 250 ms poll.
+            # Suppress the live snapshot, not the stale candidate snapshot.
+            text = space.text
+            state.key = (text.as_pointer(), text.as_string(), text.current_line_index,
+                         text.current_character)
             state.suppressed = state.key
+            state.help = Assistance()
+            state.selection = 0
             context.area.tag_redraw()
             return {'RUNNING_MODAL'}
-        if event.type == 'TAB' and not (event.ctrl or event.alt or event.oskey):
+        if event.type in {'TAB', 'RET', 'NUMPAD_ENTER'}:
+            if event.ctrl or event.alt or event.oskey or (event.type != 'TAB' and event.shift):
+                return {'PASS_THROUGH'}
             hint = state.help
             text = space.text
-            if text.current_line_index != hint.line or text.current_character != hint.replace_end:
+            source = text.as_string()
+            current_key = (text.as_pointer(), source, text.current_line_index, text.current_character)
+            lines = source.split('\n')
+            if (current_key != state.key or
+                    not 0 <= state.selection < len(hint.candidates) or
+                    not 0 <= hint.line < len(lines) or
+                    text.current_line_index != hint.line or
+                    text.current_character != hint.replace_end or
+                    not 0 <= hint.replace_start <= hint.replace_end <= len(lines[hint.line])):
                 return {'PASS_THROUGH'}
             suggestion = hint.candidates[state.selection]
             for _ in range(hint.replace_end - hint.replace_start):

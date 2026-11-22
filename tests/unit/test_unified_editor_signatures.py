@@ -70,3 +70,30 @@ def test_no_legacy_root_input_completion(index):
     names = index.symbols('') ['']
     assert 'input_float' not in names
     assert 'output' not in names
+
+
+def test_local_source_return_types_follow_mtime_and_import_alias(index, tmp_path):
+    """Local source refresh changes the cached projection without rebuilding the index."""
+    path = tmp_path / 'local' / 'terrain' / 'geometry.nf'
+    initial = _at('from local.terrain.geometry import move as go\nx = go(|', index)
+    assert initial.signatures[0].outputs[0].typ == 'Geometry'
+    import os
+    prior_stamp = path.stat().st_mtime_ns
+    path.write_text('''def move(geo: Geometry):
+    out = node('X', outputs={'mesh': (ID('Mesh'), Geometry), 'uv': (ID('UV Map'), Vector)})
+    return out.mesh, out.uv
+''', encoding='utf-8')
+    os.utime(path, ns=(prior_stamp + 10_000_000, prior_stamp + 10_000_000))
+    updated = _at('from local.terrain.geometry import move as go\nx = go(|', index)
+    assert updated.signatures[0].name == 'go'
+    assert [(o.name, o.typ) for o in updated.signatures[0].outputs] == [
+        ('Mesh', 'Geometry'), ('UV Map', 'Vector')]
+
+
+def test_unresolved_source_does_not_change_core_or_parameter_contract(index):
+    """Source inference cannot alter core signature keywords or unknown-call honesty."""
+    core = _at('x = set_position(|', index)
+    assert core.signatures and core.signatures[0].outputs[0].typ == 'Geometry'
+    local = _at('from local.terrain.geometry import move as go\nx = go(of|', index)
+    assert [item.insert for item in local.candidates] == ['offset=']
+    assert local.signatures[0].parameters[1].keyword == 'offset'
