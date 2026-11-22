@@ -443,7 +443,7 @@ def _sample_index_geometry(group, geometry, value, index, *, domain, clamp, x=0,
     domain = normalize_attribute_domain(domain, "sample_index()")
     if type(clamp) is not bool:
         raise CompileError("sample_index() clamp= must be a compile-time Bool")
-    if isinstance(index, Value):
+    if isinstance(index, (Value, DeferredConstant)):
         if index.typ != TYPE_INT:
             raise CompileError("sample_index() index must be Int")
         constant_index = None

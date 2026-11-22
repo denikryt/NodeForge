@@ -53,6 +53,17 @@ def _untyped_graph_substrate(monkeypatch):
 
     monkeypatch.setattr(backend_nodes, "deliver_input", fake_delivery)
     monkeypatch.setattr(backend_geometry, "deliver_input", fake_delivery)
+    def fake_required(group, operand, *, context="constant", allow_native_conversion=False):
+        if isinstance(group, _FakeGroup):
+            if isinstance(operand, Value):
+                return operand
+            if isinstance(operand, DeferredConstant):
+                return Value(_FakeSocket(), operand.typ)
+        return require_original(group, operand, context=context,
+                                allow_native_conversion=allow_native_conversion)
+
+    require_original = blender_ir_lowering.require_output
+    monkeypatch.setattr(blender_ir_lowering, "require_output", fake_required)
 
 def _empty_callable_environment():
     """Return an empty immutable callable namespace for non-call semantic tests."""
@@ -320,8 +331,10 @@ def test_vector_literal_uses_real_combine_xyz_helper_contract():
         blender_ir_lowering.BlenderIRLoweringContext(group, MappingProxyType({})), program
     )
     assert result.typ == TYPE_VECTOR
-    combine = next(node for node in group.nodes if node.bl_idname == "ShaderNodeCombineXYZ")
-    assert [socket.default_value for socket in combine.inputs[:3]] == [1.0, 2.0, 3.0]
+    from NodeForge.blender.values import DeferredConstant
+    assert isinstance(result, DeferredConstant)
+    assert result.value == (1.0, 2.0, 3.0)
+    assert not group.nodes  # no producer until an output socket actually needs one
 
 
 def test_object_property_uses_exact_object_value_and_reuses_object_info_node():

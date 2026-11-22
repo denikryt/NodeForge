@@ -37,14 +37,6 @@
           "value": 1.0
         },
         "properties": {}
-      },
-      {
-        "bl_idname": "ShaderNodeValue",
-        "id": "n3",
-        "payload": {
-          "value": 2.0
-        },
-        "properties": {}
       }
     ]
   },

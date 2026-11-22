@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from ..errors import CompileError
 from ..nf_types import NFType
 from ..semantic.callable_contracts import canonicalize_group_input_default
-from .socket_types import runtime_socket_nf_type, validate_runtime_value_socket
+from .socket_types import runtime_socket_nf_type, runtime_socket_owner_tree, validate_runtime_value_socket
 from .values import ConstantPayload, DeferredConstant, Value
 
 
@@ -136,10 +136,20 @@ def validate_input(group, socket, operand, *, context: str = "node input"):
     return constant
 
 
-def require_output(group, operand, *, context: str = "constant") -> Value:
+def require_output(group, operand, *, context: str = "constant", allow_native_conversion: bool = False) -> Value:
     """Return a physical output, allocating one typed producer per deferred owner."""
     if isinstance(operand, Value):
-        validate_runtime_value_socket(operand.socket, operand.typ, group, context=context)
+        if allow_native_conversion:
+            # Group outputs have historically accepted Blender's native links
+            # (notably Object Info Rotation -> NodeForge Vector). Preserve the
+            # physical source's output/owner invariants without changing types.
+            source = operand.socket
+            if (runtime_socket_owner_tree(source) is not group
+                    or not getattr(source, "is_output", False)
+                    or runtime_socket_nf_type(source) is None):
+                raise CompileError(f"{context}: invalid physical output socket for native group conversion")
+        else:
+            validate_runtime_value_socket(operand.socket, operand.typ, group, context=context)
         return operand
     if not isinstance(operand, DeferredConstant):
         raise CompileError(f"{context}: expected a typed backend operand")

@@ -749,7 +749,7 @@ def test_backend_binding_bridge_and_invariant_drift():
     with pytest.raises(CompileError, match="changed type"):
         lower_expression(drifted, program)
     missing = _backend_context(backend, {}, group=None)
-    with pytest.raises(CompileError, match="no longer a runtime Value"):
+    with pytest.raises(CompileError, match="no backend operand"):
         lower_expression(missing, program)
 
 
@@ -778,7 +778,7 @@ def test_backend_executes_program_order_and_applies_nonzero_base_depth(monkeypat
 
     result = backend.lower_expression(context, _lower("a * 2", bindings={"a": TYPE_FLOAT}), base_depth=3)
     assert result.typ == TYPE_FLOAT
-    assert calls == [("int_value", 2, 960, -360), ("math", "MULTIPLY", 720, -270)]
+    assert calls == [("math", "MULTIPLY", 720, -270)]
 
 
 def test_backend_missing_operand_is_controlled_internal_error():
@@ -832,9 +832,9 @@ def test_backend_unary_identity_and_current_node_policy_without_blender(monkeypa
     backend.lower_expression(context, _lower("-a", bindings={"a": TYPE_FLOAT}), base_depth=1)
     backend.lower_expression(context, _lower("-v", bindings={"v": TYPE_VECTOR}), base_depth=1)
     backend.lower_expression(context, _lower("not flag", bindings={"flag": TYPE_BOOL}), base_depth=1)
-    assert ("value", 0.0, 240, -130) in calls
+    assert not [row for row in calls if row[0] == "value"]  # constants use native operation input defaults
     assert ("math", "SUBTRACT", 240, -90) in calls
-    assert ("value", -1.0, 240, -130) in calls
+    assert not [row for row in calls if row[0] == "value"]
     assert ("vector_math", "SCALE", 240, -90) in calls
     assert ("boolean_math", "NOT", 240, -90) in calls
 
@@ -1422,6 +1422,19 @@ def _sample_index_untyped_socket_compatibility(monkeypatch):
     The dedicated Blender tests exercise strict deliver_input validation.
     """
     original = geometry_backend.deliver_input
+    require_original = blender_ir_lowering.require_output
+
+    def mock_require_output(group, operand, *, context="constant", allow_native_conversion=False):
+        from NodeForge.blender.values import DeferredConstant
+        if not hasattr(group, "bl_rna"):
+            if isinstance(operand, Value):
+                return operand
+            if isinstance(operand, DeferredConstant):
+                return Value(object(), operand.typ)
+        return require_original(group, operand, context=context,
+                                allow_native_conversion=allow_native_conversion)
+
+    monkeypatch.setattr(blender_ir_lowering, "require_output", mock_require_output)
 
     def mock_sample_delivery(group, socket, operand, *, context="node input"):
         if isinstance(socket, _SampleSocket):

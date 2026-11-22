@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from NodeForge.blender import ir_lowering as backend
-from NodeForge.blender.values import Value
+from NodeForge.blender.values import Value, DeferredConstant
 from NodeForge.errors import CompileError
 from NodeForge.semantic.ir import IRInputDeclaration
 from NodeForge.nf_types import NFType
@@ -16,6 +16,32 @@ from NodeForge.tests.unit.test_inline_source_calls import _analyze
 
 class StubSocket:
     """Stand in for a typed Blender output socket during detached lowering tests."""
+
+
+@pytest.fixture(autouse=True)
+def _host_only_physical_output_stub(monkeypatch):
+    """Real Blender validates RNA owners; unit-only bare groups use producer stubs."""
+    original = backend.require_output
+
+    def require(group, operand, *, context="constant", allow_native_conversion=False):
+        if type(group) is object:
+            if isinstance(operand, Value):
+                return operand
+            if isinstance(operand, DeferredConstant):
+                emit = {
+                    NFType.FLOAT: backend._value,
+                    NFType.INT: backend._int_value,
+                    NFType.BOOL: backend._bool_value,
+                    NFType.STRING: backend._string_value,
+                    NFType.VECTOR: backend._vector_value,
+                    NFType.COLOR: backend._color_value,
+                    NFType.ROTATION: backend._rotation_value,
+                }[operand.typ]
+                return emit(group, operand.value)
+        return original(group, operand, context=context,
+                        allow_native_conversion=allow_native_conversion)
+
+    monkeypatch.setattr(backend, 'require_output', require)
 
 
 def _emit_stub_value(calls, name, typ):
@@ -40,6 +66,25 @@ def _lower_inline(source, monkeypatch, runtime_values=()):
     monkeypatch.setattr(backend, '_color_value', _emit_stub_value(calls, 'Color', NFType.COLOR))
     monkeypatch.setattr(backend, '_rotation_value', _emit_stub_value(calls, 'Rotation', NFType.ROTATION))
     monkeypatch.setattr(backend, '_math', _emit_stub_value(calls, 'Math', NFType.FLOAT))
+    from NodeForge.blender.values import DeferredConstant
+
+    def fake_required_output(group, operand, *, context="constant", allow_native_conversion=False):
+        """Host-only stubs have no Blender RNA; use their typed fake producers."""
+        if isinstance(operand, Value):
+            return operand
+        assert isinstance(operand, DeferredConstant)
+        producer = {
+            NFType.FLOAT: backend._value,
+            NFType.INT: backend._int_value,
+            NFType.BOOL: backend._bool_value,
+            NFType.STRING: backend._string_value,
+            NFType.VECTOR: backend._vector_value,
+            NFType.COLOR: backend._color_value,
+            NFType.ROTATION: backend._rotation_value,
+        }[operand.typ]
+        return producer(group, operand.value)
+
+    monkeypatch.setattr(backend, 'require_output', fake_required_output)
     context = backend.BlenderIRLoweringContext(
         group=object(), runtime_bindings={}, source_callable_session=session,
         function_materializer=object(), function_materialization_context=object(),
@@ -55,8 +100,7 @@ def test_bound_inline_uses_no_group_and_realizes_defaults(monkeypatch):
 x = calc(2.0)
 ''', monkeypatch)
     assert len(result) == 1 and result[0].typ is NFType.FLOAT
-    assert [name for name, _ in calls] == ['Float', 'Float', 'Math']
-    assert [args[0] for name, args in calls if name == 'Float'] == [2.0, 4.0]
+    assert [name for name, _ in calls] == ['Math']  # both literal operands use Math socket defaults
 
 
 def test_bound_inline_preserves_panel_reordered_input_identity(monkeypatch):
@@ -68,7 +112,7 @@ x = calc(2.0, 3.0)
 ''', monkeypatch)
     assert [arg.parameter_index for arg in operation.static_arguments] == [2, 0]
     assert result[0].typ is NFType.FLOAT
-    assert [args[0] for name, args in calls if name == 'Float'] == [2.0, 3.0, 1.0]
+    assert not [name for name, args in calls if name == 'Float']  # unused c and direct a/b create no Value producers
 
 
 def test_bound_inline_constant_adapters_cover_scalar_vector_and_rgba(monkeypatch):
@@ -101,9 +145,8 @@ result = echo()
 
     assert result[0].typ is NFType.ROTATION
     assert [name for name, _ in calls] == ['Rotation']
-    angles, x, y = calls[0][1]
+    (angles,) = calls[0][1]
     assert angles == tuple(normalize_float_constant(v) for v in (0.1, -0.2, 7.0))
-    assert isinstance(x, int) and isinstance(y, int)
 
 
 def test_inline_rotation_static_materializer_uses_same_canonical_contract(monkeypatch):
@@ -126,7 +169,7 @@ def test_bound_inline_coerces_runtime_int_to_float(monkeypatch):
 input_value = index()
 x = calc(input_value)
 ''', monkeypatch, (Value(StubSocket(), NFType.INT),))
-    assert [name for name, _ in calls] == ['Float', 'Math']
+    assert [name for name, _ in calls] == ['Math']
     assert result[0].typ is NFType.FLOAT
 
 
@@ -157,7 +200,7 @@ x = calc(3)
         })
     result = backend.lower_body(context, prepared.group.body, {
         declaration.target_binding_id: Value(StubSocket(), NFType.FLOAT),
-    })
+    }, physical_outputs=False)
     assert result.explicit_outputs[0][1].typ is NFType.FLOAT
 
 

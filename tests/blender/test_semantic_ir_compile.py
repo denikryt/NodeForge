@@ -46,7 +46,11 @@ def _linked_numeric_inputs(group, node):
     values = []
     for socket in node.inputs[:2]:
         link = next((item for item in group.links if item.to_node == node and item.to_socket == socket), None)
-        check(link is not None, f"Math input {socket.name!r} is unexpectedly unlinked")
+        if link is None:
+            # The same source-order value can now reside directly in the Math
+            # input default, without a redundant producer.
+            values.append(float(socket.default_value))
+            continue
         source = link.from_node
         if source.bl_idname == "FunctionNodeInputInt":
             values.append(float(source.integer))
@@ -305,8 +309,12 @@ def nf_fixture(a: Float['A'] = 2.0, v: Vector['V'] = (1, 2, 3), flag: Bool['Flag
     helper_values = _nodes(group, "ShaderNodeValue")
     zero_helpers = [node for node in helper_values if abs(float(node.outputs[0].default_value) - 0.0) < 1e-8]
     minus_one_helpers = [node for node in helper_values if abs(float(node.outputs[0].default_value) + 1.0) < 1e-8]
-    check(len(zero_helpers) == 1, f"expected one 0.0 unary helper, got {len(zero_helpers)}")
-    check(len(minus_one_helpers) == 1, f"expected one -1.0 unary helper, got {len(minus_one_helpers)}")
+    check(not zero_helpers, f"unary minus created unnecessary zero helpers: {zero_helpers}")
+    check(not minus_one_helpers, f"unary minus created unnecessary minus-one helpers: {minus_one_helpers}")
+    check(subtract[0].inputs[0].default_value == 0.0 and not subtract[0].inputs[0].is_linked,
+          "unary scalar zero must use the Math input default")
+    check(scale[0].inputs[3].default_value == -1.0 and not scale[0].inputs[3].is_linked,
+          "unary Vector scale -1 must use the Vector Math input default")
 
 
 
@@ -538,7 +546,11 @@ def _lower_contract_program_on_real_blender(program, bindings, name):
         for binding_name, typ in bindings.items()
     })
     context = BlenderIRLoweringContext(group, runtime_bindings)
+    from NodeForge.blender.values import DeferredConstant
+    from NodeForge.blender.input_delivery import require_output
     result = lower_ir_program(context, program)
+    if isinstance(result, DeferredConstant):
+        result = require_output(group, result, context="standalone expression result")
     return group, result
 
 
@@ -632,13 +644,8 @@ def _check_literal_realization(group, operation, result_link):
         check(node.string == operation.value, "String literal value changed at the Blender boundary")
         return
     if operation.result.typ == TYPE_BOOL:
-        check(node.bl_idname == "FunctionNodeCompare", "Bool literal did not realize through Compare")
-        check(node.operation == "NOT_EQUAL", "Bool literal Compare operation changed")
-        check(node.data_type == "FLOAT", "Bool literal Compare data_type changed")
-        inputs = [_link_to_socket(group, node.inputs[index]) for index in (0, 1)]
-        values = [float(link.from_socket.default_value) for link in inputs]
-        expected = [1.0 if operation.value else 0.0, 0.0]
-        check(values == expected, f"Bool literal helper values changed: {values!r} != {expected!r}")
+        check(node.bl_idname == "FunctionNodeInputBool", "Physical Bool output must use native Bool producer")
+        check(bool(node.boolean) is bool(operation.value), "Bool literal changed at physical output boundary")
         return
     raise AssertionError(f"unexpected literal type {operation.result.typ}")
 
@@ -663,18 +670,16 @@ def _check_unary_realization(group, operation, result_link, binding_names):
     if operation.operand.typ == TYPE_FLOAT:
         check(node.bl_idname == "ShaderNodeMath", "Float unary - did not realize as Math")
         check(node.operation == "SUBTRACT", "Float unary - operation enum changed")
-        zero_link = _link_to_socket(group, node.inputs[0])
-        check(zero_link.from_node.bl_idname == "ShaderNodeValue", "Float unary - lost its zero helper")
-        check(abs(float(zero_link.from_socket.default_value)) < 1e-8, "Float unary - zero helper changed")
+        check(not node.inputs[0].is_linked and abs(float(node.inputs[0].default_value)) < 1e-8,
+              "Float unary - zero was not written as Math input default")
         _check_operand_source(group, node.inputs[1], operation.operand, binding_names)
         return
     check(operation.operand.typ == TYPE_VECTOR, "unexpected analyzer-accepted unary - type")
     check(node.bl_idname == "ShaderNodeVectorMath", "Vector unary - did not realize as Vector Math")
     check(node.operation == "SCALE", "Vector unary - operation enum changed")
     _check_operand_source(group, node.inputs[0], operation.operand, binding_names)
-    scale_link = _link_to_socket(group, node.inputs[3])
-    check(scale_link.from_node.bl_idname == "ShaderNodeValue", "Vector unary - lost its scale helper")
-    check(abs(float(scale_link.from_socket.default_value) + 1.0) < 1e-8, "Vector unary - scale helper changed")
+    check(not node.inputs[3].is_linked and abs(float(node.inputs[3].default_value) + 1.0) < 1e-8,
+          "Vector unary - scale must use Vector Math input default")
 
 
 def _check_binary_realization(group, operation, result_link, binding_names):
@@ -739,9 +744,9 @@ def _check_binary_realization(group, operation, result_link, binding_names):
     reciprocal = reciprocal_link.from_node
     check(reciprocal.bl_idname == "ShaderNodeMath", "Vector / scalar reciprocal did not use Math")
     check(reciprocal.operation == "DIVIDE", "Vector / scalar reciprocal operation changed")
-    one_link = _link_to_socket(group, reciprocal.inputs[0])
-    check(one_link.from_node.bl_idname == "ShaderNodeValue", "Vector / scalar reciprocal lost its 1.0 helper")
-    check(abs(float(one_link.from_socket.default_value) - 1.0) < 1e-8, "Vector / scalar reciprocal helper changed")
+    check(not reciprocal.inputs[0].is_linked, "Vector / scalar reciprocal has redundant 1.0 producer")
+    check(abs(float(reciprocal.inputs[0].default_value) - 1.0) < 1e-8,
+          "Vector / scalar reciprocal default changed")
     _check_operand_source(group, reciprocal.inputs[1], operation.right, binding_names)
 
 
