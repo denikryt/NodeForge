@@ -215,3 +215,88 @@ def test_visible_typed_defaults_and_dynamic_socket_shapes():
         assert not hasattr(set_position.inputs["Geometry"], "default_value")
     finally:
         bpy.data.node_groups.remove(group, do_unlink=True)
+
+
+def test_consumer_delivery_uses_direct_default_and_caches_hidden_producer():
+    """One deferred Vector serves a visible default and a hidden linked input."""
+    from NodeForge.blender.input_delivery import deliver_input, require_output
+    from NodeForge.blender.values import DeferredConstant
+    from NodeForge.nf_types import NFType
+
+    group = bpy.data.node_groups.new("NFDeferred_inputs", "GeometryNodeTree")
+    other = bpy.data.node_groups.new("NFDeferred_other", "GeometryNodeTree")
+    try:
+        cube = group.nodes.new("GeometryNodeMeshCube")
+        set_pos = group.nodes.new("GeometryNodeSetPosition")
+        constant = DeferredConstant(NFType.VECTOR, (0, 1, 2))
+        direct = deliver_input(group, cube.inputs["Size"], constant)
+        assert direct.mode == "literal_default" and tuple(cube.inputs["Size"].default_value) == (0, 1, 2)
+        assert constant._materialized is None
+        linked = deliver_input(group, set_pos.inputs["Position"], constant)
+        assert linked.mode == "single_link" and set_pos.inputs["Position"].is_linked
+        physical = require_output(group, constant)
+        assert physical.socket.as_pointer() == group.links[-1].from_socket.as_pointer()
+        assert sum(n.bl_idname == "ShaderNodeCombineXYZ" for n in group.nodes) == 1
+        assert require_output(group, constant) is physical
+        another_cube = other.nodes.new("GeometryNodeMeshCube")
+        with pytest.raises(Exception, match="cross physical node-tree"):
+            deliver_input(other, another_cube.inputs["Size"], constant)
+    finally:
+        bpy.data.node_groups.remove(group, do_unlink=True)
+        bpy.data.node_groups.remove(other, do_unlink=True)
+
+
+def test_consumer_delivery_strict_types_and_existing_runtime_links():
+    """Typed input checks reject Bool→Int but retain an existing runtime link."""
+    from NodeForge.blender.input_delivery import deliver_input
+    from NodeForge.blender.values import DeferredConstant, Value
+    from NodeForge.nf_types import NFType
+    from NodeForge.errors import CompileError
+
+    group = bpy.data.node_groups.new("NFDeferred_types", "GeometryNodeTree")
+    try:
+        cube = group.nodes.new("GeometryNodeMeshCube")
+        assert deliver_input(group, cube.inputs["Vertices X"], DeferredConstant(NFType.INT, 3)).mode == "literal_default"
+        with pytest.raises(CompileError, match="expects INT, got BOOL"):
+            deliver_input(group, cube.inputs["Vertices X"], DeferredConstant(NFType.BOOL, True))
+        float_consumer = group.nodes.new("ShaderNodeMath")
+        assert deliver_input(group, float_consumer.inputs[0], DeferredConstant(NFType.INT, 2)).mode == "literal_default"
+        bool_value = group.nodes.new("FunctionNodeInputBool")
+        switch = group.nodes.new("GeometryNodeSwitch")
+        switch.input_type = "FLOAT"
+        assert deliver_input(group, switch.inputs["Switch"], Value(bool_value.outputs[0], NFType.BOOL)).mode == "single_link"
+        assert switch.inputs["Switch"].is_linked
+        with pytest.raises(CompileError, match="input expects INT"):
+            deliver_input(group, cube.inputs["Vertices X"], Value(bool_value.outputs[0], NFType.BOOL))
+    finally:
+        bpy.data.node_groups.remove(group, do_unlink=True)
+
+
+def test_consumer_delivery_respects_contextual_group_and_typed_color_rotation():
+    """Caller POSITION defaults require a link; ordinary Color/Rotation inputs can store data."""
+    from NodeForge.blender.input_delivery import deliver_input
+    from NodeForge.blender.values import DeferredConstant
+    from NodeForge.nf_types import NFType
+
+    outer = bpy.data.node_groups.new("NFDeferred_outer", "GeometryNodeTree")
+    inner = bpy.data.node_groups.new("NFDeferred_inner", "GeometryNodeTree")
+    try:
+        socket = inner.interface.new_socket(name="Location", in_out="INPUT", socket_type="NodeSocketVector")
+        socket.default_input = "POSITION"
+        group = outer.nodes.new("GeometryNodeGroup")
+        group.node_tree = inner
+        result = deliver_input(outer, group.inputs["Location"], DeferredConstant(NFType.VECTOR, (0, 0, 0)))
+        assert result.mode == "single_link"
+        assert group.inputs["Location"].is_linked
+        transform = outer.nodes.new("GeometryNodeTransform")
+        rotation = DeferredConstant(NFType.ROTATION, (0, -0.5, 1.5))
+        assert deliver_input(outer, transform.inputs["Rotation"], rotation).mode == "literal_default"
+        assert tuple(transform.inputs["Rotation"].default_value) == rotation.value
+        color_input = outer.nodes.new("ShaderNodeMix")
+        color_input.data_type = "RGBA"
+        color = DeferredConstant(NFType.COLOR, (0.25, 0.5, 1.0, 0.75))
+        assert deliver_input(outer, color_input.inputs["A"], color).mode == "literal_default"
+        assert tuple(color_input.inputs["A"].default_value) == color.value
+    finally:
+        bpy.data.node_groups.remove(outer, do_unlink=True)
+        bpy.data.node_groups.remove(inner, do_unlink=True)

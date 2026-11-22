@@ -33,3 +33,62 @@ def make_value(socket, typ):
 
 
 __all__ = ["Value", "ObjectValue", "make_value"]
+
+
+from dataclasses import dataclass
+
+from ..errors import CompileError
+from ..semantic.callable_contracts import canonicalize_group_input_default
+
+
+@dataclass(frozen=True)
+class ConstantPayload:
+    """Canonical detached scalar/composite data suitable for a physical socket default."""
+
+    typ: NFType
+    value: bool | int | float | str | tuple
+
+    def __post_init__(self):
+        """Normalize a valid typed constant without retaining Blender RNA objects."""
+        if not isinstance(self.typ, NFType):
+            raise TypeError("ConstantPayload.typ must be NFType")
+        canonical = canonicalize_group_input_default(self.typ, self.value)
+        object.__setattr__(self, "value", canonical)
+
+
+class DeferredConstant:
+    """Attempt-local typed constant, materialized only at a physical socket boundary.
+
+    The identity of this carrier is significant: aliases keep this object and
+    share its single producer once the value is physically required.
+    """
+
+    __slots__ = ("payload", "_owner_group", "_materialized")
+
+    def __init__(self, typ: NFType, value):
+        """Create one canonical value without mutating any Blender node tree."""
+        self.payload = ConstantPayload(typ, value)
+        self._owner_group = None
+        self._materialized = None
+
+    @property
+    def typ(self) -> NFType:
+        """Return the original semantic type even after physical materialization."""
+        return self.payload.typ
+
+    @property
+    def value(self):
+        """Return immutable canonical constant data."""
+        return self.payload.value
+
+    def bind_group(self, group) -> None:
+        """Pin this invocation-scoped carrier to its first physical Blender owner."""
+        if self._owner_group is None:
+            self._owner_group = group
+        elif self._owner_group is not group:
+            raise CompileError("Deferred constant cannot cross physical node-tree boundaries")
+
+
+BackendOperand = Value | DeferredConstant
+
+__all__ += ["ConstantPayload", "DeferredConstant", "BackendOperand"]
