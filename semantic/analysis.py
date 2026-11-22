@@ -1821,7 +1821,8 @@ def analyze_expression(expr, environment):
                     return typ
 
                 builtin = analyze_builtin_call(
-                    name, cleaned_call, environment.const_eval_values, add_runtime
+                    name, cleaned_call, environment.const_eval_values, add_runtime,
+                    runtime_binding_names=environment.runtime_bindings,
                 )
                 if isinstance(builtin.result, ContextReadCallResult):
                     if builtin.result.slot not in available_group_context_slots:

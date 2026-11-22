@@ -17,6 +17,13 @@ from .values import ConstantPayload, DeferredConstant, Value
 
 
 @dataclass(frozen=True)
+class MenuLiteral:
+    """An enum-backed Blender input without a general runtime producer."""
+
+    value: str
+
+
+@dataclass(frozen=True)
 class InputRealization:
     """Report the actual physical realization for raw metadata and tests."""
 
@@ -111,6 +118,12 @@ def validate_input(group, socket, operand, *, context: str = "node input"):
         raise CompileError(f"{context}: input belongs to a different node tree")
     if bool(getattr(socket, "is_unavailable", False)) or not bool(getattr(socket, "enabled", True)):
         raise CompileError(f"{context}: input socket is unavailable")
+    if getattr(socket, "bl_idname", "") == "NodeSocketMenu" and not isinstance(operand, (Value, DeferredConstant)):
+        if type(operand) is not str or not operand:
+            raise CompileError(f"{context}: Menu input requires a non-empty enum literal")
+        if not hasattr(socket, "default_value"):
+            raise CompileError(f"{context}: Menu input has no supported literal default")
+        return MenuLiteral(operand)
     if isinstance(operand, Value):
         _validate_type(socket, operand.typ, context)
         validate_runtime_value_socket(operand.socket, operand.typ, group, context=context)
@@ -158,6 +171,14 @@ def require_output(group, operand, *, context: str = "constant") -> Value:
 def deliver_input(group, socket, operand, *, context: str = "node input") -> InputRealization:
     """Write an eligible default or connect a validated physical producer to an input."""
     checked = validate_input(group, socket, operand, context=context)
+    if isinstance(checked, MenuLiteral):
+        try:
+            socket.default_value = checked.value
+        except Exception as exc:
+            raise CompileError(f"{context}: failed to assign Menu input: {exc}") from exc
+        if socket.default_value != checked.value:
+            raise CompileError(f"{context}: Menu input did not store the requested literal")
+        return InputRealization("literal_default", default=checked.value)
     if isinstance(checked, Value):
         try:
             group.links.new(checked.socket, socket)

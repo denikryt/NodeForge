@@ -300,3 +300,59 @@ def test_consumer_delivery_respects_contextual_group_and_typed_color_rotation():
     finally:
         bpy.data.node_groups.remove(outer, do_unlink=True)
         bpy.data.node_groups.remove(inner, do_unlink=True)
+
+
+def test_raw_consumer_link_semantics_and_named_vector_identity():
+    """Raw named Vector links one producer; contextual explicit zero is linked."""
+    from NodeForge import compiler
+    from NodeForge.blender import raw_nodes
+
+    source = '''
+def shape():
+    size = vector(2.0, 1.0, 1.5)
+    mesh = node("GeometryNodeMeshCube", inputs={"Size": size}, output="Mesh", typ=Geometry)
+    return mesh
+'''
+    group = compiler.create_expression_group(source, "NFDeferred_raw_named")
+    try:
+        cubes = [n for n in group.nodes if n.bl_idname == "GeometryNodeMeshCube"]
+        combine = [n for n in group.nodes if n.bl_idname == "ShaderNodeCombineXYZ"]
+        assert len(cubes) == 1 and len(combine) == 1
+        assert cubes[0].inputs["Size"].is_linked
+        assert len([l for l in group.links if l.from_node == combine[0]]) == 1
+        spec = raw_nodes.raw_node_spec(cubes[0])
+        assert spec["inputs"][0]["mode"] == raw_nodes.INPUT_SINGLE_LINK
+
+        explicit = compiler.create_expression_group('''
+def shape():
+    return node("GeometryNodeSetPosition", inputs={"Geometry": cube(1.0), "Position": (0.0, 0.0, 0.0)}, output="Geometry", typ=Geometry)
+''', "NFDeferred_raw_pos")
+        try:
+            position_node = next(n for n in explicit.nodes if n.bl_idname == "GeometryNodeSetPosition")
+            assert position_node.inputs["Position"].is_linked
+            assert raw_nodes.raw_node_spec(position_node)["inputs"][1]["mode"] == raw_nodes.INPUT_SINGLE_LINK
+        finally:
+            bpy.data.node_groups.remove(explicit, do_unlink=True)
+    finally:
+        bpy.data.node_groups.remove(group, do_unlink=True)
+
+
+def test_raw_value_defaults_do_not_add_producers_and_unsupported_types_fail():
+    """Regular inputs stay as defaults; wrong typed runtime/virtual sockets reject."""
+    from NodeForge import compiler
+    from NodeForge.errors import CompileError
+
+    group = compiler.create_expression_group('''
+def shape():
+    return node("GeometryNodeMeshCube", inputs={"Size": (2.0, 1.0, 1.5), "Vertices X": 3}, output="Mesh", typ=Geometry)
+''', "NFDeferred_raw_defaults")
+    try:
+        assert len([n for n in group.nodes if n.bl_idname == "GeometryNodeMeshCube"]) == 1
+        assert all(n.bl_idname != "ShaderNodeCombineXYZ" for n in group.nodes)
+    finally:
+        bpy.data.node_groups.remove(group, do_unlink=True)
+    with pytest.raises(CompileError):
+        compiler.create_expression_group('''
+def shape():
+    return node("GeometryNodeMeshCube", inputs={"Vertices X": True}, output="Mesh", typ=Geometry)
+''', "NFDeferred_raw_bad_bool")
