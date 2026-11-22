@@ -17,6 +17,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from ..semantic.builtin_registry import BUILTIN_NAMES
+from ..semantic.constants import TYPE_TOKEN_NAMES
 
 
 @dataclass(frozen=True)
@@ -112,8 +113,134 @@ def _core_signature(name: str) -> Signature:
     return Signature(name, tuple(params), outputs)
 
 
+def _socket_selector_name(expr: ast.expr) -> str | None:
+    """Return a literal raw-node socket selector label, never evaluating DSL code."""
+    if isinstance(expr, ast.Constant) and isinstance(expr.value, str) and expr.value:
+        return expr.value
+    if (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) and
+            expr.func.id == 'ID' and len(expr.args) == 1 and not expr.keywords):
+        return _socket_selector_name(expr.args[0])
+    return None
+
+
+def _node_output_declarations(call: ast.expr) -> dict[str, Output] | None:
+    """Project literal ``node(outputs={...})`` aliases and their types."""
+    if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+            and call.func.id == 'node'):
+        return None
+    mapping = next((kw.value for kw in call.keywords if kw.arg == 'outputs'), None)
+    if not isinstance(mapping, ast.Dict):
+        return None
+    outputs = {}
+    for key, value in zip(mapping.keys, mapping.values):
+        if not (isinstance(key, ast.Constant) and isinstance(key.value, str) and key.value):
+            continue
+        alias = key.value
+        label = alias.replace('_', ' ').title()
+        typ = value
+        if isinstance(value, ast.Tuple) and len(value.elts) == 2:
+            selector, typ = value.elts
+            literal = _socket_selector_name(selector)
+            if literal is not None:
+                label = literal
+            elif not (isinstance(selector, ast.Constant) and type(selector.value) is int
+                      and selector.value >= 0):
+                continue
+        if isinstance(typ, ast.Name) and typ.id in TYPE_TOKEN_NAMES:
+            outputs[alias] = Output(label, typ.id)
+    return outputs
+
+
+def _direct_node_output(call: ast.expr) -> Output | None:
+    """Read a single raw-node output selector and type from literal keywords."""
+    if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+            and call.func.id == 'node'):
+        return None
+    keywords = {kw.arg: kw.value for kw in call.keywords if kw.arg is not None}
+    typ = keywords.get('typ')
+    selector = keywords.get('output')
+    if not (isinstance(typ, ast.Name) and typ.id in TYPE_TOKEN_NAMES and selector is not None):
+        return None
+    return Output(_socket_selector_name(selector) or 'Value', typ.id)
+
+
+def _source_return_values(fn: ast.FunctionDef, parameters: list[Parameter],
+                          returned: ast.expr) -> tuple[Output, ...]:
+    """Project the final straight-line return from known arguments and node sockets.
+
+    Bindings are invalidated on assignment and ambiguous control flow. They are
+    display metadata, not compiler type inference, and cannot execute source.
+    """
+    # A binding also tracks whether its label came from a raw socket selector.
+    values: dict[str, tuple[Output, bool]] = {
+        param.name: (Output(param.name.replace('_', ' ').title(), param.typ), False)
+        for param in parameters if param.typ in TYPE_TOKEN_NAMES
+    }
+    raw_results: dict[str, dict[str, Output]] = {}
+
+    def resolve(expr: ast.expr) -> tuple[Output, bool] | None:
+        """Resolve a known value or selected raw socket in the current block."""
+        if isinstance(expr, ast.Name):
+            return values.get(expr.id)
+        if isinstance(expr, ast.Attribute) and isinstance(expr.value, ast.Name):
+            output = raw_results.get(expr.value.id, {}).get(expr.attr)
+            return (output, True) if output is not None else None
+        output = _direct_node_output(expr)
+        return (output, True) if output is not None else None
+
+    for statement in fn.body[:-1]:
+        if isinstance(statement, ast.Assign) and len(statement.targets) == 1 and isinstance(statement.targets[0], ast.Name):
+            target = statement.targets[0].id
+            declaration = _node_output_declarations(statement.value)
+            source_results = (raw_results.get(statement.value.id) if isinstance(statement.value, ast.Name)
+                              else None)
+            bound = resolve(statement.value)
+            raw_results.pop(target, None)
+            values.pop(target, None)
+            if declaration is not None:
+                raw_results[target] = declaration
+            elif source_results is not None:
+                raw_results[target] = source_results.copy()
+            elif bound is not None:
+                output, from_socket = bound
+                name = output.name if from_socket else target.replace('_', ' ').title()
+                values[target] = (Output(name, output.typ), from_socket)
+        elif isinstance(statement, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Delete)):
+            targets = (statement.targets if isinstance(statement, (ast.Assign, ast.Delete))
+                       else (statement.target,))
+            for target in targets:
+                for item in ast.walk(target):
+                    if isinstance(item, ast.Name):
+                        raw_results.pop(item.id, None)
+                        values.pop(item.id, None)
+        elif isinstance(statement, (ast.Expr, ast.Pass)):
+            # Expression statements do not rebind locals unless they use ':='.
+            if any(isinstance(item, ast.NamedExpr) for item in ast.walk(statement)):
+                raw_results.clear()
+                values.clear()
+        else:
+            # A branch, loop, or other unsupported statement can rebind any local.
+            raw_results.clear()
+            values.clear()
+
+    elements = returned.elts if isinstance(returned, ast.Tuple) else [returned]
+    outputs = []
+    duplicates: dict[str, int] = {}
+    for index, expr in enumerate(elements):
+        bound = resolve(expr)
+        name = (bound[0].name if bound is not None else
+                expr.id.replace('_', ' ').title() if isinstance(expr, ast.Name) else
+                f'Value {index + 1}' if isinstance(returned, ast.Tuple) else 'Value')
+        typ = bound[0].typ if bound is not None else '?'
+        if typ == '?' and isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name):
+            typ = _CORE_OUTPUT_TYPES.get(expr.func.id, '?')
+        duplicates[name] = duplicates.get(name, 0) + 1
+        outputs.append(Output(name if duplicates[name] == 1 else f'{name} {duplicates[name]}', typ))
+    return tuple(outputs)
+
+
 def _definition_signature(fn: ast.FunctionDef, display_name: str) -> Signature:
-    """Project one source function's exact keyword contract from its AST."""
+    """Project one source function's exact keyword and statically known result contract."""
     arguments = fn.args.args
     offset = len(arguments) - len(fn.args.defaults)
     parameters = []
@@ -129,26 +256,27 @@ def _definition_signature(fn: ast.FunctionDef, display_name: str) -> Signature:
         default = ast.unparse(fn.args.defaults[index - offset]) if index >= offset else None
         parameters.append(Parameter(arg.arg, typ, default, arg.arg, label))
     outputs = ()
-    if fn.body and isinstance(fn.body[-1], ast.Return):
+    if fn.body and isinstance(fn.body[-1], ast.Return) and fn.body[-1].value is not None:
         returned = fn.body[-1].value
-        if isinstance(returned, ast.Tuple):
-            names = []
-            for index, element in enumerate(returned.elts):
-                title = element.id.replace('_', ' ').title() if isinstance(element, ast.Name) else f'Value {index + 1}'
-                names.append(title)
-            counts = {}
-            unique = []
-            for title in names:
-                counts[title] = counts.get(title, 0) + 1
-                unique.append(title if counts[title] == 1 else f'{title} {counts[title]}')
-            outputs = tuple(Output(title, '?') for title in unique)
-        elif returned is not None:
-            annotation = ast.unparse(fn.returns) if fn.returns is not None else '?'
-            if fn.returns is None and isinstance(returned, ast.Name):
-                annotation = next((p.typ for p in parameters if p.name == returned.id and p.typ), '?')
-            if fn.returns is None and isinstance(returned, ast.Call) and isinstance(returned.func, ast.Name):
-                annotation = _CORE_OUTPUT_TYPES.get(returned.func.id, '?')
-            outputs = (Output('Value', annotation),)
+        outputs = _source_return_values(fn, parameters, returned)
+        if not isinstance(returned, ast.Tuple):
+            label = None
+            if (isinstance(fn.returns, ast.Subscript) and
+                    isinstance(fn.returns.value, ast.Name) and
+                    isinstance(fn.returns.slice, ast.Constant) and
+                    isinstance(fn.returns.slice.value, str) and
+                    fn.returns.value.id in TYPE_TOKEN_NAMES):
+                label = fn.returns.slice.value
+                annotation = fn.returns.value.id
+            else:
+                annotation = ast.unparse(fn.returns) if fn.returns is not None else None
+            inferred = outputs[0]
+            # Ordinary single-return labels remain "Value" unless a raw socket
+            # or an explicit Type['Label'] gives a more meaningful source label.
+            raw_socket = (isinstance(returned, ast.Call) and _direct_node_output(returned) is not None) or (
+                isinstance(returned, ast.Attribute) and inferred.typ != '?')
+            outputs = (Output(label or (inferred.name if raw_socket else 'Value'),
+                              annotation or inferred.typ),)
     return Signature(display_name, tuple(parameters), outputs)
 
 
@@ -157,8 +285,15 @@ def _def_signatures(source: str) -> dict[str, tuple[Signature, ...]]:
     try:
         definitions = [statement for statement in ast.parse(source).body
                        if isinstance(statement, ast.FunctionDef)]
-    except SyntaxError:
-        definitions = []
+    except SyntaxError as exc:
+        # Incomplete typing at the caret must not erase fully parsed definitions
+        # above the error. Retain the old header fallback for incomplete bodies.
+        try:
+            prefix = '\n'.join(source.split('\n')[:max(0, (exc.lineno or 1) - 1)])
+            definitions = [statement for statement in ast.parse(prefix).body
+                           if isinstance(statement, ast.FunctionDef)]
+        except SyntaxError:
+            definitions = []
         for line in source.splitlines():
             if not line.startswith('def ') or not line.rstrip().endswith(':'):
                 continue
@@ -166,7 +301,7 @@ def _def_signatures(source: str) -> dict[str, tuple[Signature, ...]]:
                 definition = ast.parse(line + '\n    pass').body[0]
             except SyntaxError:
                 continue
-            if isinstance(definition, ast.FunctionDef):
+            if isinstance(definition, ast.FunctionDef) and not any(fn.name == definition.name for fn in definitions):
                 definitions.append(definition)
     return {fn.name: (_definition_signature(fn, fn.name),) for fn in definitions}
 

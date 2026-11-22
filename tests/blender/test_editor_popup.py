@@ -242,3 +242,18 @@ def test_stale_completion_is_never_inserted(popup_session, mutation):
     if mutation in {'source', 'caret', 'line', 'text'}:
         ui._refresh_state(context.area)
         assert state.key != (101, 'nodes.', 0, 6)
+
+
+def test_source_outputs_share_popup_rows_and_preview_with_overflow():
+    """AST-derived outputs feed the existing row renderer without a parallel formatter."""
+    from NodeForge.editor.intelligence import _def_signatures, _return_preview
+    source = """def many():
+    result = node('X', outputs={'a': (ID('Mesh'), Geometry), 'b': (ID('Top'), Bool), 'c': (ID('Bottom'), Bool), 'd': (ID('Side'), Bool), 'e': (ID('UV Map'), Vector)})
+    return result.a, result.b, result.c, result.d, result.e
+"""
+    signature = _def_signatures(source)['many'][0]
+    rows = _popup_rows(Assistance(signatures=(signature,)), 0, 500)
+    assert [row[0] for row in rows][-6:] == [
+        '→ 5 outputs:', '  Mesh: Geometry', '  Top: Bool', '  Bottom: Bool',
+        '  Side: Bool', '  … +1 outputs']
+    assert _return_preview(signature) == '→ (Geometry, Bool, Bool, Bool, Vector)'

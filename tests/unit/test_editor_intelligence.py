@@ -138,7 +138,7 @@ def test_typed_single_and_multiple_local_outputs(editor_index):
     index = SymbolIndex(resolve_environment())
     hint = help_at_caret('from local.two_outputs import both\nx = both(|', index)
     assert [(item.name, item.typ) for item in hint.signatures[0].outputs] == [
-        ('Geo', '?'), ('Weight', '?')
+        ('Geo', 'Geometry'), ('Weight', 'Float')
     ]
     # Cached snapshots key on the source path and selected definition.
     assert len(index._source_cache) == 1
@@ -156,7 +156,7 @@ def test_source_fallback_keeps_named_outputs_if_analysis_fails(editor_index):
     index = SymbolIndex(resolve_environment())
     hint = help_at_caret('from local.broken import broken\nx = broken(|', index)
     assert [(item.name, item.typ) for item in hint.signatures[0].outputs] == [
-        ('Value 1', '?'), ('X', '?')
+        ('Value 1', '?'), ('X', 'Float')
     ]
 
 
@@ -202,6 +202,11 @@ def _install_nested_editor_package(tmp_path):
             'def cube(size: Float, bevel: Float = 0.0) -> Float:\n'
             '    return size + bevel\n'
         ),
+        'mesh/sockets.nf': (
+            "def dual(geo: Geometry):\n"
+            "    out = node('X', outputs={'mesh': (ID('Mesh'), Geometry), 'uv': (ID('UV Map'), Vector)})\n"
+            "    return out.mesh, out.uv\n"
+        ),
         'curve/primitives.nf': (
             'def cube(radius: Float = 1.0) -> Float:\n'
             '    return radius\n'
@@ -219,6 +224,11 @@ def _install_nested_editor_package(tmp_path):
             '    return value\n'
         ),
     }
+    (root / 'examples').mkdir(parents=True, exist_ok=True)
+    (root / 'examples' / 'preview.nf').write_text(
+        "def example():\n"
+        "    out = node('X', outputs={'mesh': (ID('Mesh'), Geometry), 'uv': (ID('UV Map'), Vector)})\n"
+        "    return out.uv, out.mesh\n", encoding='utf-8')
     for relative, content in files.items():
         path = root / 'functions' / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -228,7 +238,7 @@ def _install_nested_editor_package(tmp_path):
         'name': 'Nested Editor', 'version': '1.0.0', 'author': 'Test',
         'description': 'Nested completion fixture',
         'nodeforge_min_version': '0.65.0',
-        'contents': {'functions': 'functions'},
+        'contents': {'functions': 'functions', 'examples': 'examples'},
     }), encoding='utf-8')
     packages.install_package_directory(root)
     return root
@@ -277,3 +287,157 @@ def test_nested_package_signatures_are_owner_exact_and_frozen(editor_index):
     again = help_at_caret(prefix + 'n.mesh.primitives.cube(be|', index)
     assert [p.name for p in again.signatures[0].parameters] == ['size', 'bevel']
     assert 'bevel=' in [item.insert for item in again.candidates]
+
+
+@pytest.mark.parametrize('source, expected', [
+    ("""def dual():
+    result = node('GeometryNodeMeshCube', outputs={'r1': (ID('UV Map'), Vector), 'r0': (ID('Mesh'), Geometry)})
+    return (result.r0, result.r1)
+""", [('Mesh', 'Geometry'), ('UV Map', 'Vector')]),
+    ("""def dual():
+    result = node('GeometryNodeMeshCube', outputs={'r1': (ID('UV Map'), Vector), 'r0': (ID('Mesh'), Geometry)})
+    return result.r0, result.r1
+""", [('Mesh', 'Geometry'), ('UV Map', 'Vector')]),
+    ("""def dual():
+    result = node('X', outputs={'mesh': Geometry, 'uv_map': (3, Vector), 'direct': ('Normal', Vector)})
+    return result.uv_map, result.mesh, result.direct
+""", [('Uv Map', 'Vector'), ('Mesh', 'Geometry'), ('Normal', 'Vector')]),
+    ("""def dual():
+    output = node('X', outputs={'mesh': (ID('Mesh'), Geometry), 'bad': (ID(variable), Float)})
+    return output.mesh, output.bad
+""", [('Mesh', 'Geometry'), ('Value 2', '?')]),
+    ("""def dual():
+    data = node('X', outputs={'a': (ID('Mesh'), Geometry), 'b': (ID('Mesh'), Geometry)})
+    return data.a, data.b
+""", [('Mesh', 'Geometry'), ('Mesh 2', 'Geometry')]),
+    ("""def dual(geo: Geometry, weight: Float):
+    alias = geo
+    return alias, weight
+""", [('Alias', 'Geometry'), ('Weight', 'Float')]),
+    ("""def dual():
+    original = node('X', outputs={'mesh': (ID('Mesh'), Geometry)})
+    alias = original
+    copy = alias.mesh
+    return copy, alias.mesh
+""", [('Mesh', 'Geometry'), ('Mesh 2', 'Geometry')]),
+    ("""def dual(geo: Geometry):
+    return unknown(geo), geo
+""", [('Value 1', '?'), ('Geo', 'Geometry')]),
+    ("""def dual():
+    result = node('X', outputs={'mesh': (ID('Mesh'), Geometry)})
+    result = unknown()
+    return result.mesh, result.missing
+""", [('Value 1', '?'), ('Value 2', '?')]),
+    ("""def dual():
+    result = node('X', outputs={'mesh': (ID('Mesh'), Geometry)})
+    if flag:
+        result = unknown()
+    return result.mesh, result.mesh
+""", [('Value 1', '?'), ('Value 2', '?')]),
+    ("""def dual(geo: Geometry):
+    geo = random()
+    return geo, geo
+""", [('Geo', '?'), ('Geo 2', '?')]),
+])
+def test_source_return_projection_and_conservative_fallback(source, expected):
+    """Literal raw selectors and simple assignments preserve only defensible metadata."""
+    from NodeForge.editor.intelligence import _def_signatures
+    signature = _def_signatures(source)['dual'][0]
+    assert [(o.name, o.typ) for o in signature.outputs] == expected
+
+
+def test_direct_single_source_output_and_annotation_labels():
+    """Direct raw-node sockets use their declared name; explicit Type labels win."""
+    from NodeForge.editor.intelligence import _def_signatures, _return_preview
+    source = """def circle() -> Geometry:
+    return node('GeometryNodeMeshCircle', output=ID('Mesh'), typ=Geometry)
+def labeled() -> Geometry['Result']:
+    return node('GeometryNodeMeshCircle', output=ID('Mesh'), typ=Geometry)
+def unnamed(geo: Geometry) -> Geometry:
+    return transform(geo)
+def unknown():
+    return other_function()
+"""
+    signatures = _def_signatures(source)
+    assert [(o.name, o.typ) for o in signatures['circle'][0].outputs] == [('Mesh', 'Geometry')]
+    assert [(o.name, o.typ) for o in signatures['labeled'][0].outputs] == [('Result', 'Geometry')]
+    assert [(o.name, o.typ) for o in signatures['unnamed'][0].outputs] == [('Value', 'Geometry')]
+    assert signatures['unknown'][0].outputs[0].typ == '?'
+    assert _return_preview(signatures['circle'][0]) == '→ Geometry'
+    assert _return_preview(signatures['unknown'][0]) == ''
+
+
+def test_unsaved_function_source_survives_incomplete_call(editor_index):
+    """An unfinished expression below a full declaration retains its output metadata."""
+    index, _ = editor_index
+    source = """def local_mesh():
+    value = node('X', outputs={'mesh': (ID('Mesh'), Geometry), 'uv': (ID('UV Map'), Vector)})
+    return value.mesh, value.uv
+x = local_mesh(|"""
+    hint = help_at_caret(source, index)
+    assert [(o.name, o.typ) for o in hint.signatures[0].outputs] == [
+        ('Mesh', 'Geometry'), ('UV Map', 'Vector')
+    ]
+
+
+def test_real_nodes_package_outputs(editor_index):
+    """The supplied nodeforge.nodes package exposes actual raw-node selector labels."""
+    import os
+    from NodeForge.editor.intelligence import _return_preview
+    source_root = os.environ.get('NODEFORGE_NODES_TEST_DIR')
+    if source_root is None:
+        pytest.skip('nodeforge.nodes fixture directory not supplied')
+    index, _ = editor_index
+    packages.install_package_directory(Path(source_root))
+    index = SymbolIndex(resolve_environment())
+    prefix = 'from packages import nodes as n\nx = n.mesh.primitives.'
+    expected = {
+        'mesh_cube': [('Mesh', 'Geometry'), ('UV Map', 'Vector')],
+        'mesh_cone': [('Mesh', 'Geometry'), ('Top', 'Bool'), ('Bottom', 'Bool'),
+                      ('Side', 'Bool'), ('UV Map', 'Vector')],
+        'mesh_circle': [('Mesh', 'Geometry')],
+    }
+    for function, outputs in expected.items():
+        hint = help_at_caret(prefix + function + '(|', index)
+        assert [(o.name, o.typ) for o in hint.signatures[0].outputs] == outputs
+    members = help_at_caret(prefix + 'mesh_cu|', index)
+    assert [(s.label, s.detail) for s in members.candidates if s.label == 'mesh_cube'] == [
+        ('mesh_cube', '→ (Geometry, Vector)')]
+
+
+
+def test_package_source_output_metadata_is_frozen_and_example_visible(editor_index):
+    """Package, aliases, and Examples show the same source-backed types and order."""
+    _, tmp_path = editor_index
+    root = _install_nested_editor_package(tmp_path)
+    index = SymbolIndex(resolve_environment())
+    qualified = help_at_caret('from packages import nodes as n\nx = n.mesh.sockets.dual(|', index)
+    assert [(o.name, o.typ) for o in qualified.signatures[0].outputs] == [
+        ('Mesh', 'Geometry'), ('UV Map', 'Vector')]
+    short = help_at_caret('from packages import nodes as n\nx = n.dual(|', index)
+    assert short.signatures[0].outputs == qualified.signatures[0].outputs
+    example = help_at_caret('from examples import preview as ex\nx = ex.example(|', index)
+    assert [(o.name, o.typ) for o in example.signatures[0].outputs] == [
+        ('UV Map', 'Vector'), ('Mesh', 'Geometry')]
+    (root / 'functions/mesh/sockets.nf').write_text('def dual(changed: Float):\n    return changed\n')
+    frozen = help_at_caret('from packages import nodes as n\nx = n.mesh.sockets.dual(|', index)
+    assert frozen.signatures[0].outputs == qualified.signatures[0].outputs
+
+
+def test_plain_expr_and_docstring_do_not_erase_known_parameter_types():
+    """Non-binding expressions preserve types, while assignment expressions do not."""
+    from NodeForge.editor.intelligence import _def_signatures
+    source = """def stable(geo: Geometry, weight: Float):
+    '''A source-docstring does not rebind parameters.'''
+    inspect(geo)
+    return geo, weight
+
+def mutated(geo: Geometry):
+    inspect((geo := other()))
+    return geo, geo
+"""
+    signatures = _def_signatures(source)
+    assert [(o.name, o.typ) for o in signatures['stable'][0].outputs] == [
+        ('Geo', 'Geometry'), ('Weight', 'Float')]
+    assert [(o.name, o.typ) for o in signatures['mutated'][0].outputs] == [
+        ('Geo', '?'), ('Geo 2', '?')]
