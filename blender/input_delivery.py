@@ -144,9 +144,15 @@ def require_output(group, operand, *, context: str = "constant", allow_native_co
             # (notably Object Info Rotation -> NodeForge Vector). Preserve the
             # physical source's output/owner invariants without changing types.
             source = operand.socket
+            physical = runtime_socket_nf_type(source)
             if (runtime_socket_owner_tree(source) is not group
                     or not getattr(source, "is_output", False)
-                    or runtime_socket_nf_type(source) is None):
+                    or physical is None
+                    or physical is not operand.typ and not (
+                        operand.typ is NFType.VECTOR and physical is NFType.ROTATION
+                    )):
+                # Object Info's Rotation output has an existing Blender-native
+                # Rotation->Vector conversion. Reject every other typed mismatch.
                 raise CompileError(f"{context}: invalid physical output socket for native group conversion")
         else:
             validate_runtime_value_socket(operand.socket, operand.typ, group, context=context)

@@ -428,3 +428,37 @@ def test_geometry_consumer_direct_vector_and_implicit_position_link():
         assert sum(n.bl_idname == "ShaderNodeCombineXYZ" for n in group.nodes) == 1
     finally:
         bpy.data.node_groups.remove(group, do_unlink=True)
+
+
+def test_native_output_boundary_keeps_owner_and_output_direction_strict():
+    """An existing native type conversion never permits a foreign or input socket."""
+    from NodeForge.blender.input_delivery import require_output
+    from NodeForge.blender.values import Value
+    from NodeForge.nf_types import NFType
+    from NodeForge.errors import CompileError
+
+    group = bpy.data.node_groups.new('NFC_AllowNativeOwner', 'GeometryNodeTree')
+    foreign = bpy.data.node_groups.new('NFC_ForeignNativeOwner', 'GeometryNodeTree')
+    try:
+        own = group.nodes.new('ShaderNodeValue')
+        another = foreign.nodes.new('ShaderNodeValue')
+        own_value = Value(own.outputs[0], NFType.FLOAT)
+        assert require_output(group, own_value, context='test', allow_native_conversion=True) is own_value
+        with pytest.raises(CompileError, match='invalid physical output socket'):
+            require_output(group, Value(another.outputs[0], NFType.FLOAT),
+                           context='test', allow_native_conversion=True)
+        math = group.nodes.new('ShaderNodeMath')
+        with pytest.raises(CompileError, match='invalid physical output socket'):
+            require_output(group, Value(math.inputs[0], NFType.FLOAT),
+                           context='test', allow_native_conversion=True)
+        native_rotation = group.nodes.new('FunctionNodeInputRotation')
+        # Existing Object Info style physical Rotation -> semantic Vector output.
+        converted = Value(native_rotation.outputs[0], NFType.VECTOR)
+        assert require_output(group, converted, context='test', allow_native_conversion=True) is converted
+        string_node = group.nodes.new('FunctionNodeInputString')
+        with pytest.raises(CompileError, match='invalid physical output socket'):
+            require_output(group, Value(string_node.outputs[0], NFType.FLOAT),
+                           context='test', allow_native_conversion=True)
+    finally:
+        bpy.data.node_groups.remove(group)
+        bpy.data.node_groups.remove(foreign)

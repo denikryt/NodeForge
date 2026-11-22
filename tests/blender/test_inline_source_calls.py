@@ -700,3 +700,41 @@ result = outer(2.0)
     assert {node.as_pointer() for node in target.nodes} == node_pointers
     assert {group.as_pointer() for group in bpy.data.node_groups} == group_pointers
     assert all(link.is_valid for link in target.links)
+
+
+def test_installed_nodeforge_nodes_constants_respect_socket_fallbacks(tmp_path):
+    """Real v1.3 wrapper defaults preserve ordinary and contextual socket semantics."""
+    from pathlib import Path
+    from NodeForge import packages
+
+    source_root = Path(__file__).resolve().parents[3] / 'nodeforge.nodes'
+    if not (source_root / 'nodeforge_package.json').exists():
+        pytest.skip('nodeforge.nodes integration source is not installed beside NodeForge')
+    packages.set_packages_dir_for_tests(tmp_path / 'installed')
+    try:
+        packages.install_package_directory(source_root)
+        cube_tree = _compose('''from packages import nodes
+result, uv = nodes.mesh.primitives.mesh_cube(size_value=vector(2, 1, 1.5))
+''', 'NFTest_Nodes_Issue67_Cube')
+        native_cube, = _nodes(cube_tree, 'GeometryNodeMeshCube')
+        assert not native_cube.inputs['Size'].is_linked
+        assert tuple(native_cube.inputs['Size'].default_value) == pytest.approx((2, 1, 1.5))
+        assert not _nodes(cube_tree, 'ShaderNodeCombineXYZ')
+        assert not _nodes(cube_tree, 'GeometryNodeGroup')
+
+        write_tree = _compose('''from packages import nodes
+result = nodes.geometry.write.set_position_node(cube(1.0))
+''', 'NFTest_Nodes_Issue67_Position')
+        node, = _nodes(write_tree, 'GeometryNodeSetPosition')
+        assert node.inputs['Position'].is_linked
+        assert node.inputs['Position'].links[0].from_socket.bl_idname == 'NodeSocketVector'
+        assert not _nodes(write_tree, 'GeometryNodeGroup')
+
+        grouped_tree = _compose('''from packages import nodes
+result, uv = nodes.mesh.primitives.mesh_cube(__inline__=False)
+''', 'NFTest_Nodes_Issue67_Grouped')
+        group_node, = _nodes(grouped_tree, 'GeometryNodeGroup')
+        assert not _nodes(grouped_tree, 'GeometryNodeMeshCube')
+        assert len(_nodes(group_node.node_tree, 'GeometryNodeMeshCube')) == 1
+    finally:
+        packages.set_packages_dir_for_tests(None)
