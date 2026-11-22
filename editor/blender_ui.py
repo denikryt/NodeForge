@@ -248,6 +248,22 @@ def _draw_overlay():
         gpu.state.blend_set('NONE')
 
 
+def _restarts_dismissed_completion(event) -> bool:
+    """Recognize editor input after Escape without intercepting Blender's keymap."""
+    if event.value != 'PRESS' or event.type == 'ESC':
+        return False
+    if event.type == 'LEFTMOUSE':
+        return True
+    if (event.type in {'BACK_SPACE', 'DEL', 'RET', 'NUMPAD_ENTER', 'TAB',
+                       'LEFT_ARROW', 'RIGHT_ARROW', 'UP_ARROW', 'DOWN_ARROW',
+                       'HOME', 'END', 'PAGE_UP', 'PAGE_DOWN', 'HOME_KEY', 'END_KEY'}):
+        return True
+    if (event.ctrl or event.oskey) and not event.alt and event.type in {'Z', 'Y', 'V', 'X'}:
+        return True
+    return bool(event.unicode and event.unicode.isprintable() and
+                not (event.ctrl or event.alt or event.oskey))
+
+
 class NODEFORGE_OT_editor_session(bpy.types.Operator):
     """Receive popup navigation while allowing normal Text Editor keys through."""
 
@@ -278,7 +294,18 @@ class NODEFORGE_OT_editor_session(bpy.types.Operator):
             _STATES.pop(pointer, None)
             return {'CANCELLED'}
         state = _STATES.get(pointer)
-        if state is None or not state.help.candidates or state.suppressed == state.key:
+        if state is None:
+            return {'PASS_THROUGH'}
+        if state.suppressed is not None and state.suppressed == state.key:
+            if _restarts_dismissed_completion(event):
+                # Invalidate even when several edits restore the same key before a timer tick.
+                state.suppressed = None
+                state.key = None
+                state.help = Assistance()
+                state.selection = 0
+                context.area.tag_redraw()
+            return {'PASS_THROUGH'}
+        if not state.help.candidates:
             return {'PASS_THROUGH'}
         if event.value != 'PRESS':
             return {'PASS_THROUGH'}
