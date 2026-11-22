@@ -188,7 +188,16 @@ def _source_return_values(fn: ast.FunctionDef, parameters: list[Parameter],
         output = _direct_node_output(expr)
         return (output, True) if output is not None else None
 
+    def invalidate_named_targets(tree: ast.AST) -> None:
+        """Discard old metadata for names rebound by unsupported ``:=`` expressions."""
+        for item in ast.walk(tree):
+            if isinstance(item, ast.NamedExpr) and isinstance(item.target, ast.Name):
+                raw_results.pop(item.target.id, None)
+                values.pop(item.target.id, None)
+
     for statement in fn.body[:-1]:
+        # Assignment expressions can rebind a name within another statement's RHS.
+        invalidate_named_targets(statement)
         if isinstance(statement, ast.Assign) and len(statement.targets) == 1 and isinstance(statement.targets[0], ast.Name):
             target = statement.targets[0].id
             declaration = _node_output_declarations(statement.value)
@@ -213,16 +222,13 @@ def _source_return_values(fn: ast.FunctionDef, parameters: list[Parameter],
                     if isinstance(item, ast.Name):
                         raw_results.pop(item.id, None)
                         values.pop(item.id, None)
-        elif isinstance(statement, (ast.Expr, ast.Pass)):
-            # Expression statements do not rebind locals unless they use ':='.
-            if any(isinstance(item, ast.NamedExpr) for item in ast.walk(statement)):
-                raw_results.clear()
-                values.clear()
-        else:
+        elif not isinstance(statement, (ast.Expr, ast.Pass)):
             # A branch, loop, or other unsupported statement can rebind any local.
             raw_results.clear()
             values.clear()
 
+    # A return tuple can rebind an earlier result before a later element reads it.
+    invalidate_named_targets(returned)
     elements = returned.elts if isinstance(returned, ast.Tuple) else [returned]
     outputs = []
     duplicates: dict[str, int] = {}

@@ -248,12 +248,13 @@ def _draw_overlay():
         gpu.state.blend_set('NONE')
 
 
-def _restarts_dismissed_completion(event) -> bool:
+def _restarts_dismissed_completion(event, region) -> bool:
     """Recognize editor input after Escape without intercepting Blender's keymap."""
     if event.value != 'PRESS' or event.type == 'ESC':
         return False
     if event.type == 'LEFTMOUSE':
-        return True
+        # Header/sidebar clicks are not Text Editor caret-placement actions.
+        return region is not None and region.type == 'WINDOW'
     if (event.type in {'BACK_SPACE', 'DEL', 'RET', 'NUMPAD_ENTER', 'TAB',
                        'LEFT_ARROW', 'RIGHT_ARROW', 'UP_ARROW', 'DOWN_ARROW',
                        'HOME', 'END', 'PAGE_UP', 'PAGE_DOWN', 'HOME_KEY', 'END_KEY'}):
@@ -297,7 +298,7 @@ class NODEFORGE_OT_editor_session(bpy.types.Operator):
         if state is None:
             return {'PASS_THROUGH'}
         if state.suppressed is not None and state.suppressed == state.key:
-            if _restarts_dismissed_completion(event):
+            if _restarts_dismissed_completion(event, getattr(context, 'region', None)):
                 # Invalidate even when several edits restore the same key before a timer tick.
                 state.suppressed = None
                 state.key = None
@@ -315,7 +316,14 @@ class NODEFORGE_OT_editor_session(bpy.types.Operator):
             context.area.tag_redraw()
             return {'RUNNING_MODAL'}
         if event.type == 'ESC':
+            # The user may have edited the Text since the last 250 ms poll.
+            # Suppress the live snapshot, not the stale candidate snapshot.
+            text = space.text
+            state.key = (text.as_pointer(), text.as_string(), text.current_line_index,
+                         text.current_character)
             state.suppressed = state.key
+            state.help = Assistance()
+            state.selection = 0
             context.area.tag_redraw()
             return {'RUNNING_MODAL'}
         if event.type in {'TAB', 'RET', 'NUMPAD_ENTER'}:

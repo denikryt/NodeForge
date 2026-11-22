@@ -107,7 +107,7 @@ def popup_session(monkeypatch):
         return Assistance(candidates=(candidate,), line=line, replace_start=0, replace_end=character)
 
     monkeypatch.setattr(ui, 'cursor_assistance', assistance)
-    context = SimpleNamespace(area=area)
+    context = SimpleNamespace(area=area, region=area.regions[0])
     operator = SimpleNamespace(area_pointer=17)
     operator.modal = lambda ctx, event: ui.NODEFORGE_OT_editor_session.modal(operator, ctx, event)
     ui._refresh_state(area)
@@ -173,6 +173,48 @@ def test_caret_navigation_and_shortcuts_restart_but_noop_events_do_not(popup_ses
     operator.modal(context, event('ESC'))
     assert operator.modal(context, event('F5')) == {'PASS_THROUGH'}
     assert state.suppressed == state.key
+
+
+def test_escape_suppresses_live_snapshot_if_timer_has_not_refreshed(popup_session):
+    """A pre-Escape edit cannot reopen hints on a subsequent idle timer tick."""
+    ui, operator, context, text, calls, event = popup_session
+    state = ui._STATES[17]
+    assert state.help.candidates
+    text.source = 'nodes.c'
+    text.current_character = len(text.source)
+    assert state.key[1] == 'nodes.'
+    assert operator.modal(context, event('ESC')) == {'RUNNING_MODAL'}
+    assert state.suppressed == state.key == (101, 'nodes.c', 0, 7)
+    assert not state.help.candidates
+    ui._refresh_state(context.area)
+    assert state.suppressed == state.key
+    assert not state.help.candidates
+    # The next editor action, rather than the idle tick, restores completion.
+    assert operator.modal(context, event('BACK_SPACE')) == {'PASS_THROUGH'}
+    assert state.suppressed is None and state.key is None
+    ui._refresh_state(context.area)
+    assert state.help.candidates
+
+
+def test_non_text_clicks_do_not_reopen_dismissed_popup(popup_session):
+    """Only the Text Editor WINDOW region may restart on a left click."""
+    ui, operator, context, text, calls, event = popup_session
+    state = ui._STATES[17]
+    assert operator.modal(context, event('ESC')) == {'RUNNING_MODAL'}
+    for region_type in ('HEADER', 'UI'):
+        context.region = SimpleNamespace(type=region_type)
+        assert operator.modal(context, event('LEFTMOUSE')) == {'PASS_THROUGH'}
+        ui._refresh_state(context.area)
+        assert state.suppressed == state.key
+        assert not state.help.candidates
+    context.region = None
+    assert operator.modal(context, event('LEFTMOUSE')) == {'PASS_THROUGH'}
+    assert state.suppressed == state.key
+    context.region = SimpleNamespace(type='WINDOW')
+    assert operator.modal(context, event('LEFTMOUSE')) == {'PASS_THROUGH'}
+    assert state.suppressed is None and state.key is None
+    ui._refresh_state(context.area)
+    assert state.help.candidates
 
 
 @pytest.mark.parametrize('key', ['RET', 'NUMPAD_ENTER', 'TAB'])
@@ -320,6 +362,71 @@ def test_real_blender_text_editor_escape_and_enter_leave_node_graph_untouched():
         if not initially_enabled:
             ui.unregister()
     assert set(bpy.data.node_groups.keys()) == before_groups
+
+
+def test_real_blender_escape_with_stale_snapshot_and_header_click():
+    """Dismiss the current Text state, not a cached one; ignore header clicks."""
+    import bpy
+    from NodeForge.editor import blender_ui as ui
+
+    area = bpy.context.screen.areas[0]
+    old_type = area.type
+    initially_enabled = ui._ENABLED
+    manager = bpy.context.window_manager
+    old_assist = getattr(manager, 'nodeforge_assist_enabled', False)
+    pointer = area.as_pointer()
+    text = bpy.data.texts.new('NFTest_PopupStaleEscape')
+    operator = SimpleNamespace(area_pointer=pointer)
+
+    def event(name):
+        return SimpleNamespace(type=name, value='PRESS', unicode='', ctrl=False,
+                               alt=False, oskey=False, shift=False)
+
+    try:
+        if not initially_enabled:
+            ui.register()
+        manager.nodeforge_assist_enabled = True
+        area.type = 'TEXT_EDITOR'
+        area.spaces.active.text = text
+        window_region = next(region for region in area.regions if region.type == 'WINDOW')
+        header_region = next(region for region in area.regions if region.type == 'HEADER')
+        ui._RUNNING_AREAS.add(pointer)
+
+        with bpy.context.temp_override(area=area, region=window_region):
+            bpy.ops.text.insert(text='cu')
+            ui._refresh_state(area)
+            state = ui._STATES[pointer]
+            assert state.help.candidates
+            assert state.key[1] == 'cu'
+            bpy.ops.text.insert(text='b')
+            assert state.key[1] == 'cu' and text.as_string() == 'cub'
+            assert ui.NODEFORGE_OT_editor_session.modal(operator, bpy.context,
+                                                        event('ESC')) == {'RUNNING_MODAL'}
+            assert state.key[1] == 'cub' and state.suppressed == state.key
+            ui._refresh_state(area)
+            assert state.suppressed == state.key
+            assert not state.help.candidates
+
+        with bpy.context.temp_override(area=area, region=header_region):
+            assert ui.NODEFORGE_OT_editor_session.modal(operator, bpy.context,
+                                                        event('LEFTMOUSE')) == {'PASS_THROUGH'}
+        with bpy.context.temp_override(area=area, region=window_region):
+            ui._refresh_state(area)
+            assert state.suppressed == state.key
+            assert not state.help.candidates
+            assert ui.NODEFORGE_OT_editor_session.modal(operator, bpy.context,
+                                                        event('LEFTMOUSE')) == {'PASS_THROUGH'}
+            ui._refresh_state(area)
+            assert state.suppressed is None
+            assert state.help.candidates
+    finally:
+        ui._STATES.pop(pointer, None)
+        ui._RUNNING_AREAS.discard(pointer)
+        manager.nodeforge_assist_enabled = old_assist
+        area.type = old_type
+        bpy.data.texts.remove(text)
+        if not initially_enabled:
+            ui.unregister()
 
 
 def test_raw_node_declared_selectors_match_blender_mesh_cube_sockets():

@@ -160,6 +160,47 @@ def test_source_fallback_keeps_named_outputs_if_analysis_fails(editor_index):
     ]
 
 
+@pytest.mark.parametrize('statement, expected', [
+    ('dummy = (result := unrelated())', [('Value 1', '?'), ('Value 2', '?')]),
+    ("dummy = {'socket': (result := unrelated())}", [('Value 1', '?'), ('Value 2', '?')]),
+    ('(result := unrelated())', [('Value 1', '?'), ('Value 2', '?')]),
+    ('dummy = (other := unrelated())', [('Mesh', 'Geometry'), ('Mesh 2', 'Geometry')]),
+])
+def test_return_projection_discards_only_rebound_named_expr_targets(statement, expected):
+    """Unsupported walrus expressions cannot retain obsolete socket metadata."""
+    from NodeForge.editor.intelligence import _def_signatures
+    source = ("def sample():\n"
+              "    result = node('X', outputs={'out': (ID('Mesh'), Geometry)})\n"
+              f"    {statement}\n"
+              "    return result.out, result.out\n")
+    signature = _def_signatures(source)['sample'][0]
+    assert [(out.name, out.typ) for out in signature.outputs] == expected
+
+
+def test_return_projection_drops_rebound_name_within_return_tuple():
+    """A walrus rebinding in return invalidates a later socket access."""
+    from NodeForge.editor.intelligence import _def_signatures, _return_preview
+    source = ("def sample():\n"
+              "    result = node('X', outputs={'out': (ID('Mesh'), Geometry)})\n"
+              "    return (result := unrelated()), result.out\n")
+    signature = _def_signatures(source)['sample'][0]
+    assert [(out.name, out.typ) for out in signature.outputs] == [
+        ('Value 1', '?'), ('Value 2', '?')]
+    assert _return_preview(signature) == ''
+
+
+def test_later_known_assignment_recovers_socket_metadata_after_walrus():
+    """A later explicit declaration can safely establish a new raw-node binding."""
+    from NodeForge.editor.intelligence import _def_signatures
+    source = ("def sample():\n"
+              "    result = node('X', outputs={'out': (ID('Old'), Vector)})\n"
+              "    dummy = (result := unrelated())\n"
+              "    result = node('X', outputs={'out': (ID('Mesh'), Geometry)})\n"
+              "    return result.out\n")
+    signature = _def_signatures(source)['sample'][0]
+    assert [(out.name, out.typ) for out in signature.outputs] == [('Mesh', 'Geometry')]
+
+
 def test_tuple_extension_result_is_split_into_ordered_outputs():
     """Extension tuple results must show individual types, not one long type string."""
     from types import SimpleNamespace
