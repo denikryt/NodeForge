@@ -118,12 +118,23 @@ def validate_input(group, socket, operand, *, context: str = "node input"):
         raise CompileError(f"{context}: input belongs to a different node tree")
     if bool(getattr(socket, "is_unavailable", False)) or not bool(getattr(socket, "enabled", True)):
         raise CompileError(f"{context}: input socket is unavailable")
-    if getattr(socket, "bl_idname", "") == "NodeSocketMenu" and not isinstance(operand, (Value, DeferredConstant)):
-        if type(operand) is not str or not operand:
+    if getattr(socket, "bl_idname", "") == "NodeSocketMenu":
+        if isinstance(operand, DeferredConstant):
+            # An inline String default is still a known enum literal, not a
+            # String output socket. Menu inputs have no runtime String link.
+            if operand.typ is not NFType.STRING:
+                raise CompileError(f"{context}: Menu input requires a String enum literal")
+            operand.bind_group(group)
+            literal = operand.value
+        elif type(operand) is str:
+            literal = operand
+        else:
+            raise CompileError(f"{context}: Menu input requires a compile-time String enum literal")
+        if not literal:
             raise CompileError(f"{context}: Menu input requires a non-empty enum literal")
         if not hasattr(socket, "default_value"):
             raise CompileError(f"{context}: Menu input has no supported literal default")
-        return MenuLiteral(operand)
+        return MenuLiteral(literal)
     if isinstance(operand, Value):
         _validate_type(socket, operand.typ, context)
         validate_runtime_value_socket(operand.socket, operand.typ, group, context=context)
