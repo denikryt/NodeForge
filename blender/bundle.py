@@ -8,6 +8,7 @@ from ..semantic.constants import (
 )
 from ..errors import CompileError
 from .nodes import _new_node
+from .input_delivery import deliver_input, require_output
 from .values import make_value
 
 _BUNDLE_SOCKET_TYPES = {
@@ -24,7 +25,7 @@ _BUNDLE_SOCKET_TYPES = {
 }
 
 def build_bundle(group, items, *, x=0, y=0):
-    """Build a Combine Bundle node from already-materialized runtime item Values."""
+    """Build a Combine Bundle, delivering items after dynamic sockets are defined."""
     node = _new_node(group, "NodeCombineBundle", x, y)
     try:
         for item_name, value in items:
@@ -41,15 +42,12 @@ def build_bundle(group, items, *, x=0, y=0):
             raise CompileError(
                 f"bundle(): generated input order mismatch for {item_name!r}; got {getattr(socket, 'name', None)!r}"
             )
-        try:
-            group.links.new(value.socket, socket)
-        except Exception as exc:
-            raise CompileError(f"bundle(): failed to link item {item_name!r}: {exc}") from exc
+        deliver_input(group, socket, value, context=f"bundle() item {item_name!r}")
     return make_value(node.outputs["Bundle"], TYPE_BUNDLE)
 
 
 def build_bundle_get(group, bundle_value, path_value, output_type, *, x=0, y=0):
-    """Build Get Bundle Item from already-materialized runtime operands."""
+    """Build Get Bundle Item with a physical Bundle and consumer-aware Path."""
     if bundle_value.typ != TYPE_BUNDLE:
         raise CompileError(f"bundle_get() first argument expects Bundle, got {bundle_value.typ}")
     if path_value.typ != TYPE_STRING:
@@ -58,15 +56,16 @@ def build_bundle_get(group, bundle_value, path_value, output_type, *, x=0, y=0):
     node = _new_node(group, "NodeGetBundleItem", x, y)
     try:
         node.socket_type = socket_type
-        group.links.new(bundle_value.socket, node.inputs["Bundle"])
-        group.links.new(path_value.socket, node.inputs["Path"])
     except Exception as exc:
         raise CompileError(f"bundle_get(): failed to configure Get Bundle Item: {exc}") from exc
+    physical_bundle = require_output(group, bundle_value, context="bundle_get() Bundle")
+    deliver_input(group, node.inputs["Bundle"], physical_bundle, context="bundle_get() Bundle")
+    deliver_input(group, node.inputs["Path"], path_value, context="bundle_get() Path")
     return make_value(node.outputs["Item"], output_type)
 
 
 def build_bundle_set(group, bundle_value, path_value, item_value, *, x=0, y=0):
-    """Build Store Bundle Item from already-materialized runtime operands."""
+    """Build Store Bundle Item with typed Path/Item socket delivery."""
     if bundle_value.typ != TYPE_BUNDLE:
         raise CompileError(f"bundle_set() first argument expects Bundle, got {bundle_value.typ}")
     if path_value.typ != TYPE_STRING:
@@ -75,11 +74,12 @@ def build_bundle_set(group, bundle_value, path_value, item_value, *, x=0, y=0):
     node = _new_node(group, "NodeStoreBundleItem", x, y)
     try:
         node.socket_type = socket_type
-        group.links.new(bundle_value.socket, node.inputs["Bundle"])
-        group.links.new(path_value.socket, node.inputs["Path"])
-        group.links.new(item_value.socket, node.inputs["Item"])
     except Exception as exc:
         raise CompileError(f"bundle_set(): failed to configure Store Bundle Item: {exc}") from exc
+    physical_bundle = require_output(group, bundle_value, context="bundle_set() Bundle")
+    deliver_input(group, node.inputs["Bundle"], physical_bundle, context="bundle_set() Bundle")
+    deliver_input(group, node.inputs["Path"], path_value, context="bundle_set() Path")
+    deliver_input(group, node.inputs["Item"], item_value, context="bundle_set() Item")
     return make_value(node.outputs["Bundle"], TYPE_BUNDLE)
 
 
