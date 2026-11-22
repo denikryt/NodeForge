@@ -820,3 +820,14 @@ lifecycle.
 
 - Added Blender characterization sources, deterministic graph baselines and focused assertions for Python Extension API v2 inline/grouped placement, nested calls, DynamicResults, compacted semantic dependencies, and Capture Attribute Rotation.
 - Extended characterization snapshots to retain Capture Attribute item types, domain and unlinked Float item defaults without changing existing recorded cases.
+
+## 0.97.8
+
+- Added consumer-aware typed constant delivery across raw Blender nodes, Math/Compare/Vector operators, geometry builtins, dynamic Bundle inputs, and inline/grouped functions, storing eligible literals in native input defaults instead of creating redundant constant nodes.
+- Preserved connected constants for implicit/contextual inputs (Set Position, Mesh to Points, Noise and contextual group interfaces), native behavior of omitted inputs, runtime value identity and named Vector sharing.
+- Preserved Float32/Int32 types, Bool comparisons, Color/Rotation input semantics, typed Bundle item ordering, and physical ownership across grouped calls, extensions and control flow.
+- Preserved raw-node schema-v2 input realization modes and dynamic Bundle defaults across Compile, Update, Reload and transactional rollback.
+- Enabled known inline String constants to populate literal-only Menu inputs through aliases, nested calls and multiple consumers, while rejecting runtime String connections and invalid Menu values.
+- Retained one shared physical producer for multi-consumer non-String inline operands (including Bool Compare, points() count and cube() scale) and shared String producers for runtime-capable consumers.
+- Consolidated duplicated scale/Euler conversion logic in geometry builtins and removed the unused legacy inline constant materializer.
+- Added Blender 5.2 characterization, regression and package integration tests covering constant topology, native evaluation, type validation, inline sharing and graph updates.
