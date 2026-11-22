@@ -817,8 +817,12 @@ def _analyze_extension_semantic_call(
         acquired_items: list[object] = []
         type_spec = parameter.type_spec
         for occurrence in occurrences:
-            if occurrence is None and parameter.kind is not inspect.Parameter.VAR_POSITIONAL:
-                raise CompileError("Internal error: semantic extension binding lost fixed parameter")
+            if occurrence is None:
+                if type_spec.kind != "NF_SET" or parameter.default is not None:
+                    raise CompileError("Internal error: semantic extension binding lost fixed parameter")
+                # An omitted typed parameter has no semantic dependency or type.
+                acquired_items.append(None)
+                continue
             if isinstance(occurrence, ExtensionSemanticPayload):
                 payload = occurrence
                 if type_spec.kind not in {"RECORD", "LIST"}:
@@ -892,7 +896,9 @@ def _analyze_extension_semantic_call(
             occurrences = tuple(value) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else (value,)
             argument_items = []
             for item in occurrences:
-                if parameter.type_spec.kind != "NF_SET":
+                if item is None and parameter.type_spec.kind == "NF_SET" and parameter.default is None:
+                    argument_items.append(None)
+                elif parameter.type_spec.kind != "NF_SET":
                     argument_items.append(invocation.clone_semantic_argument(parameter.type_spec, item))
                 elif isinstance(item, RuntimeRef):
                     argument_items.append(ResultRuntimeArg(item.typ))

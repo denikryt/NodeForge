@@ -384,3 +384,19 @@ def _result_types_foo(arguments):
     assert isinstance(first["selection"], ResultStaticArg) and first["selection"].value is True
     assert isinstance(second["domain"], ResultStaticArg) and second["domain"].value == "POINT"
     assert isinstance(second["selection"], ResultRuntimeArg)
+
+
+
+def test_semantic_dynamic_resolver_reads_optional_none_once_per_call(tmp_path):
+    """A semantic-then-backend result resolver handles omitted direct NF inputs."""
+    from NodeForge.tests.unit.test_extension_optional_defaults import (
+        _SEMANTIC_BACKEND_INTERFACE, _SEMANTIC_BACKEND, _analyzed, _owner,
+    )
+    from NodeForge.extension_result_api import ResultRuntimeArg
+    owner = _owner(tmp_path, _SEMANTIC_BACKEND_INTERFACE, semantic=_SEMANTIC_BACKEND)
+    for expression in ("sample(f)", "sample(f, optional=i)"):
+        _analyzed(owner, expression)
+    semantic = owner._phase_modules["SEMANTIC"]["semantic"]
+    assert len(semantic.RESOLVED) == len(semantic.SEEN) == 2
+    assert semantic.RESOLVED[0]["optional"] is None
+    assert isinstance(semantic.RESOLVED[1]["optional"], ResultRuntimeArg)

@@ -174,3 +174,121 @@ def _result_types_sample(arguments):
     assert seen[0]["required_mode"].value == 1.5
     assert isinstance(seen[1]["optional"], ResultRuntimeArg)
     assert isinstance(seen[1]["runtime_optional"], ResultRuntimeArg)
+
+
+_SEMANTIC_ONLY_INTERFACE = '''from typing import Annotated
+from dataclasses import dataclass
+from NodeForge import Float, Int, EvaluationMode
+EXTENSION_API = 2
+EXTENSIONS = {"sample": None}
+@dataclass(frozen=True)
+class Part:
+    base: Float
+    optional: Int | None
+def sample(base: Annotated[Float, EvaluationMode.RUNTIME_ONLY],
+           *, optional: Annotated[Int, EvaluationMode.RUNTIME_ONLY] = None) -> Part: ...
+'''
+
+_SEMANTIC_ONLY = '''from .interface import Part
+SEEN = []
+def sample(base, *, optional=None) -> Part:
+    SEEN.append(optional)
+    return Part(base, optional)
+'''
+
+
+def test_semantic_only_omission_has_no_dependency_and_explicit_value_does(tmp_path):
+    """Semantic records retain the one required runtime value and any supplied optional."""
+    from NodeForge.nf_types import NFType
+    from NodeForge.extensions.values import ExtensionDependencySlot
+    owner = _owner(tmp_path, _SEMANTIC_ONLY_INTERFACE, semantic=_SEMANTIC_ONLY)
+    from NodeForge.tests.unit.test_extension_dynamic_results import _dynamic_semantic_environment
+    from NodeForge.semantic.analysis import analyze_expression
+    import ast
+    env, _ = _dynamic_semantic_environment(owner)
+    omission = ast.parse("sample(f)", mode="eval").body
+    fact = analyze_expression(omission, env).facts[omission]
+    assert len(fact.semantic_payload.dependencies) == 1
+    assert fact.semantic_payload.value.storage[1] is None
+    supplied = ast.parse("sample(f, optional=i)", mode="eval").body
+    fact = analyze_expression(supplied, env).facts[supplied]
+    assert len(fact.semantic_payload.dependencies) == 2
+    assert isinstance(fact.semantic_payload.value.storage[1], ExtensionDependencySlot)
+    assert fact.semantic_payload.dependencies[1].typ is NFType.INT
+    seen = owner._phase_modules["SEMANTIC"]["semantic"].SEEN
+    assert seen[0] is None and seen[1] is not None
+    bad = ast.parse("sample(f, optional=None)", mode="eval").body
+    with pytest.raises(CompileError, match="Only numeric, boolean and string constants"):
+        analyze_expression(bad, env)
+
+
+_SEMANTIC_BACKEND_INTERFACE = _SEMANTIC_ONLY_INTERFACE.replace(
+    'EXTENSIONS = {"sample": None}', 'EXTENSIONS = {"sample": ".backend:sample"}'
+).replace('class Part:', 'class _State:').replace(') -> Part: ...', ') -> DynamicResults: ...').replace(
+    'from NodeForge import Float,', 'from NodeForge import DynamicResults, Float,'
+)
+
+_SEMANTIC_BACKEND = '''from .interface import _State
+from NodeForge.nf_types import NFType
+from NodeForge.extension_result_api import ResultStaticArg, ResultRuntimeArg
+SEEN = []
+RESOLVED = []
+def sample(base, *, optional=None) -> _State:
+    SEEN.append(optional)
+    return _State(base, optional)
+def _result_types_sample(arguments):
+    assert not hasattr(arguments, "__setitem__")
+    RESOLVED.append(dict(arguments))
+    return (NFType.FLOAT, NFType.INT)
+'''
+
+
+def test_semantic_then_backend_omission_is_compact_and_dynamic_resolver_is_typed(tmp_path):
+    """Resolver and semantic state independently retain omission and supplied dependencies."""
+    from NodeForge.extension_result_api import ResultRuntimeArg
+    from NodeForge.nf_types import NFType
+    from NodeForge.semantic.ir import IRCall
+    owner = _owner(tmp_path, _SEMANTIC_BACKEND_INTERFACE, semantic=_SEMANTIC_BACKEND)
+    analyzed, program = _analyzed(owner, "sample(f)")
+    assert analyzed.result.types == (NFType.FLOAT, NFType.INT)
+    assert len(analyzed.runtime_operands) == 1
+    call, = [op for op in program.operations if isinstance(op, IRCall)]
+    assert len(call.arguments) == 1
+    assert call.extension_state_type is not None
+    analyzed, program = _analyzed(owner, "sample(f, optional=i)")
+    assert len(analyzed.runtime_operands) == 2
+    call, = [op for op in program.operations if isinstance(op, IRCall)]
+    assert len(call.arguments) == 2
+    semantic = owner._phase_modules["SEMANTIC"]["semantic"]
+    assert semantic.SEEN[0] is None and semantic.SEEN[1] is not None
+    assert len(semantic.RESOLVED) == 2
+    assert semantic.RESOLVED[0]["optional"] is None
+    assert isinstance(semantic.RESOLVED[1]["optional"], ResultRuntimeArg)
+    assert semantic.RESOLVED[1]["optional"].typ is NFType.INT
+
+
+def test_semantic_only_list_results_preserve_omission(tmp_path):
+    """Optional direct parameters are independent of semantic record/list return shape."""
+    from NodeForge.tests.unit.test_extension_dynamic_results import _dynamic_semantic_environment
+    from NodeForge.semantic.analysis import analyze_expression
+    import ast
+
+    interface = _SEMANTIC_ONLY_INTERFACE.replace(
+        ') -> Part: ...', ') -> list[Part]: ...',
+    )
+    semantic = '''from .interface import Part
+def sample(base, *, optional=None) -> list[Part]:
+    if optional is None:
+        return [Part(base, None)]
+    return [Part(base, optional), Part(base, None)]
+'''
+    owner = _owner(tmp_path, interface, semantic=semantic)
+    env, _ = _dynamic_semantic_environment(owner)
+    first = ast.parse("sample(f)", mode="eval").body
+    first_fact = analyze_expression(first, env).facts[first]
+    assert len(first_fact.semantic_payload.value) == 1
+    assert len(first_fact.semantic_payload.dependencies) == 1
+    second = ast.parse("sample(f, optional=i)", mode="eval").body
+    second_fact = analyze_expression(second, env).facts[second]
+    assert len(second_fact.semantic_payload.value) == 2
+    assert len(second_fact.semantic_payload.dependencies) == 2
