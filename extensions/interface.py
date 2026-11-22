@@ -400,9 +400,10 @@ def _normalize_declaration(
                 raise CompileError(f"{callable_id.name}() variadic parameter cannot declare a default")
             if type_spec.kind != "NF_SET":
                 raise CompileError(f"{callable_id.name}() semantic parameter {parameter.name!r} cannot declare a default")
-            if mode is EvaluationMode.RUNTIME_ONLY:
-                raise CompileError(f"{callable_id.name}() RUNTIME_ONLY parameter {parameter.name!r} cannot declare a default")
-            default, default_type = _normalize_default(default, type_spec, context=f"{callable_id.name}() parameter {parameter.name!r}")
+            if default is not None:
+                if mode is EvaluationMode.RUNTIME_ONLY:
+                    raise CompileError(f"{callable_id.name}() RUNTIME_ONLY parameter {parameter.name!r} cannot declare a concrete default")
+                default, default_type = _normalize_default(default, type_spec, context=f"{callable_id.name}() parameter {parameter.name!r}")
         parameters.append(ExtensionParameterSpec(parameter.name, parameter.kind, type_spec, mode, default, default_type))
     return_annotation = annotations.get("return", signature.return_annotation)
     if return_annotation is inspect.Signature.empty:

@@ -229,14 +229,24 @@ class ExtensionParameterSpec:
                 raise ValueError("semantic RECORD/LIST extension parameter cannot carry EvaluationMode")
         else:
             raise TypeError("public extension parameters support only NF_SET or semantic RECORD/LIST")
-        if self.default is inspect.Parameter.empty:
+        if self.kind is inspect.Parameter.VAR_KEYWORD:
+            raise ValueError("extension parameters cannot use **kwargs")
+        if self.kind is inspect.Parameter.VAR_POSITIONAL and self.default is not inspect.Parameter.empty:
+            raise ValueError("variadic extension parameter cannot declare a default")
+        if self.default is inspect.Parameter.empty or self.default is None:
             if self.default_type is not None:
-                raise ValueError("extension parameter without default cannot carry default_type")
+                raise ValueError("extension parameter without concrete default cannot carry default_type")
+            if self.default is None and self.type_spec.kind != "NF_SET":
+                raise ValueError("semantic RECORD/LIST extension parameters cannot declare defaults")
         else:
             if self.type_spec.kind != "NF_SET":
                 raise ValueError("semantic RECORD/LIST extension parameters cannot declare defaults")
+            if self.evaluation_mode is EvaluationMode.RUNTIME_ONLY:
+                raise ValueError("RUNTIME_ONLY extension parameter cannot declare a concrete default")
             if not isinstance(self.default_type, NFType):
-                raise TypeError("extension parameter default requires canonical NFType")
+                raise TypeError("extension parameter concrete default requires canonical NFType")
+            if self.default_type not in self.type_spec.nf_types:
+                raise ValueError("extension parameter default NFType is not declared")
 
 
 @dataclass(frozen=True)
