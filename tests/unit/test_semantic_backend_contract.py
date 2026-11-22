@@ -33,6 +33,27 @@ from NodeForge.blender.values import ObjectValue, Value
 
 pytestmark = pytest.mark.unit
 
+
+@pytest.fixture(autouse=True)
+def _untyped_graph_substrate(monkeypatch):
+    """The host-only shape matrix uses untyped sockets, not real Blender RNA.
+
+    Socket legality is tested against Blender-owned sockets in the dedicated
+    input-delivery tests. Keep this suite focused on analyzer/backend IR shapes.
+    """
+    from NodeForge.blender import nodes as backend_nodes
+    from NodeForge.blender import geometry as backend_geometry
+    from NodeForge.blender.values import DeferredConstant, Value
+
+    def fake_delivery(group, socket, operand, *, context="node input"):
+        if isinstance(operand, Value):
+            group.links.new(operand.socket, socket)
+        else:
+            socket.default_value = operand.value if isinstance(operand, DeferredConstant) else operand
+
+    monkeypatch.setattr(backend_nodes, "deliver_input", fake_delivery)
+    monkeypatch.setattr(backend_geometry, "deliver_input", fake_delivery)
+
 def _empty_callable_environment():
     """Return an empty immutable callable namespace for non-call semantic tests."""
     return CallableEnvironment(frozenset(), {}, {}, {})

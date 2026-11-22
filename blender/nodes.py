@@ -5,7 +5,9 @@ from ..type_capabilities import SWITCH_INPUT_TYPES
 from .socket_types import socket_type_for_nf_type
 from ..errors import CompileError
 from ..semantic.numeric_semantics import normalize_float_constant, normalize_int_constant
-from .values import Value
+from .values import Value, DeferredConstant
+from .input_delivery import deliver_input, require_output
+from .socket_types import runtime_socket_nf_type, runtime_socket_owner_tree
 
 
 
@@ -87,7 +89,7 @@ def _math(group, operation, args, x=0, y=0):
     for i, arg in enumerate(args):
         if not _is_number_type(arg.typ):
             raise CompileError(f"Math operation {operation} expects numeric input")
-        group.links.new(arg.socket, node.inputs[i])
+        deliver_input(group, node.inputs[i], arg, context=f"{operation} input {i}")
     return Value(node.outputs[0], TYPE_FLOAT)
 
 
@@ -98,7 +100,7 @@ def _integer_math(group, operation, args, x=0, y=0):
     for i, arg in enumerate(args):
         if arg.typ is not TYPE_INT:
             raise CompileError(f"Integer Math operation {operation} expects Int input")
-        group.links.new(arg.socket, node.inputs[i])
+        deliver_input(group, node.inputs[i], arg, context=f"{operation} input {i}")
     return Value(node.outputs[0], TYPE_INT)
 
 def _vector_math(group, operation, args, out_type=TYPE_VECTOR, x=0, y=0):
@@ -108,10 +110,18 @@ def _vector_math(group, operation, args, out_type=TYPE_VECTOR, x=0, y=0):
     vi = 0
     for arg in args:
         if arg.typ == TYPE_VECTOR:
-            group.links.new(arg.socket, node.inputs[vi])
+            if isinstance(arg, Value) and runtime_socket_nf_type(arg.socket) is TYPE_ROTATION:
+                # Object Info exposes Rotation as a physical Rotation socket,
+                # while its established NodeForge object property is Vector.
+                # Preserve Blender's existing Rotation -> Vector field link.
+                if runtime_socket_owner_tree(arg.socket) is not group or not getattr(arg.socket, "is_output", False):
+                    raise CompileError(f"{operation} Vector input: foreign or non-output Rotation socket")
+                group.links.new(arg.socket, node.inputs[vi])
+            else:
+                deliver_input(group, node.inputs[vi], arg, context=f"{operation} Vector input")
             vi += 1
         elif _is_number_type(arg.typ):
-            group.links.new(arg.socket, node.inputs[3])
+            deliver_input(group, node.inputs[3], arg, context=f"{operation} scalar input")
         else:
             raise CompileError(f"Vector Math {operation} got unsupported type {arg.typ}")
     return Value(node.outputs[1 if out_type == TYPE_FLOAT else 0], out_type)
@@ -131,12 +141,12 @@ def _combine_xyz_mixed(group, comps, x=0, y=0):
         raise CompileError("vector(x, y, z) expects 3 arguments")
     node = _new_node(group, "ShaderNodeCombineXYZ", x, y)
     for i, val in enumerate(comps):
-        if isinstance(val, Value):
+        if isinstance(val, (Value, DeferredConstant)):
             if not _is_number_type(val.typ):
                 raise CompileError("vector(x, y, z) expects numeric arguments")
-            group.links.new(val.socket, node.inputs[i])
+            deliver_input(group, node.inputs[i], val, context=f"vector component {i}")
         elif type(val) in {int, float}:
-            node.inputs[i].default_value = normalize_float_constant(val)
+            deliver_input(group, node.inputs[i], normalize_float_constant(val), context=f"vector component {i}")
         else:
             raise CompileError("vector(x, y, z) expects numeric arguments")
     return Value(node.outputs[0], TYPE_VECTOR)
@@ -146,7 +156,7 @@ def _separate_xyz(group, val, component, x=0, y=0):
     if val.typ != TYPE_VECTOR:
         raise CompileError(".x/.y/.z can only be used on Vector values")
     node = _new_node(group, "ShaderNodeSeparateXYZ", x, y)
-    group.links.new(val.socket, node.inputs[0])
+    deliver_input(group, node.inputs[0], val, context="separate xyz")
     return Value(node.outputs[{"x": 0, "y": 1, "z": 2}[component]], TYPE_FLOAT)
 
 def _compare(group, operation, left, right, x=0, y=0):
@@ -167,8 +177,15 @@ def _compare(group, operation, left, right, x=0, y=0):
             if getattr(socket, "name", None) == "Epsilon":
                 socket.default_value = 0.0
                 break
-    group.links.new(left.socket, node.inputs[0])
-    group.links.new(right.socket, node.inputs[1])
+    for index, value in enumerate((left, right)):
+        if data_type == "INT" and value.typ is TYPE_BOOL and isinstance(value, DeferredConstant):
+            # Blender represents Bool comparisons with integer inputs; this
+            # conversion is specific to Compare, not a general raw socket cast.
+            value = DeferredConstant(TYPE_INT, int(value.value))
+        if data_type == "INT" and value.typ is TYPE_BOOL and isinstance(value, Value):
+            group.links.new(value.socket, node.inputs[index])
+        else:
+            deliver_input(group, node.inputs[index], value, context="Compare input")
     return Value(node.outputs[0], TYPE_BOOL)
 
 def _boolean_math(group, operation, args, x=0, y=0):
@@ -178,7 +195,7 @@ def _boolean_math(group, operation, args, x=0, y=0):
     for i, arg in enumerate(args):
         if arg.typ != TYPE_BOOL:
             raise CompileError("Boolean operations expect Bool values")
-        group.links.new(arg.socket, node.inputs[i])
+        deliver_input(group, node.inputs[i], arg, context=f"{operation} input {i}")
     return Value(node.outputs[0], TYPE_BOOL)
 
 def _switch(group, cond, false_val, true_val, x=0, y=0):
@@ -189,9 +206,9 @@ def _switch(group, cond, false_val, true_val, x=0, y=0):
         raise CompileError("select() true/false values must have same type")
     node = _new_node(group, "GeometryNodeSwitch", x, y)
     node.input_type = SWITCH_INPUT_TYPES[false_val.typ]
-    group.links.new(cond.socket, node.inputs[0])
-    group.links.new(false_val.socket, node.inputs[1])
-    group.links.new(true_val.socket, node.inputs[2])
+    deliver_input(group, node.inputs[0], cond, context="Switch condition")
+    deliver_input(group, node.inputs[1], false_val, context="Switch false input")
+    deliver_input(group, node.inputs[2], true_val, context="Switch true input")
     return Value(node.outputs[0], false_val.typ)
 
 def _position(group, x=0, y=0):

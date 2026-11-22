@@ -526,61 +526,23 @@ def test_backend_compare_uses_int_or_float_contract_and_zero_float_epsilon():
     from NodeForge.blender.nodes import _compare
     from NodeForge.blender.values import Value
 
-    class Socket:
-        def __init__(self, name=""):
-            self.name = name
-            self.default_value = None
-
-    class SocketList(list):
-        def __getitem__(self, key):
-            if isinstance(key, str):
-                for socket in self:
-                    if socket.name == key:
-                        return socket
-                raise KeyError(key)
-            return super().__getitem__(key)
-
-    class Node:
-        def __init__(self):
-            self.bl_idname = "FunctionNodeCompare"
-            self.location = (0, 0)
-            self.operation = None
-            self.data_type = None
-            self.inputs = SocketList([Socket("A"), Socket("B"), Socket("Epsilon")])
-            self.outputs = SocketList([Socket("Result")])
-
-    class Nodes(list):
-        def new(self, bl_idname):
-            assert bl_idname == "FunctionNodeCompare"
-            node = Node()
-            self.append(node)
-            return node
-
-    class Links(list):
-        def new(self, from_socket, to_socket):
-            self.append((from_socket, to_socket))
-
-    class Group:
-        def __init__(self):
-            self.nodes = Nodes()
-            self.links = Links()
-
-    int_group = Group()
+    # Shared fake nodes now model physical input ownership and dynamic types.
+    int_group = _FakeGroup()
     result = _compare(
         int_group,
         "EQUAL",
-        Value(Socket(), TYPE_INT),
-        Value(Socket(), TYPE_INT),
+        Value(_FakeSocket(), TYPE_INT),
+        Value(_FakeSocket(), TYPE_INT),
     )
     assert result.typ is TYPE_BOOL
     assert int_group.nodes[0].data_type == "INT"
 
-    float_group = Group()
+    float_group = _FakeGroup()
     result = _compare(
         float_group,
         "EQUAL",
-        Value(Socket(), TYPE_INT),
-        Value(Socket(), TYPE_FLOAT),
+        Value(_FakeSocket(), TYPE_INT),
+        Value(_FakeSocket(), TYPE_FLOAT),
     )
     assert result.typ is TYPE_BOOL
     assert float_group.nodes[0].data_type == "FLOAT"
@@ -663,12 +625,56 @@ def test_input_defaults_keep_consumer_specific_numeric_conversion_rules():
         analyze('input_float("X", default=True + 1)')
 
 
+@pytest.fixture(autouse=True)
+def _allow_unowned_fake_source_sockets(monkeypatch):
+    """Legacy numeric unit fakes omit source RNA; Blender suite checks owner/type."""
+    from NodeForge.blender import input_delivery
+
+    monkeypatch.setattr(
+        input_delivery, "validate_runtime_value_socket",
+        lambda socket, _typ, _group, **_kwargs: socket,
+    )
+
+
 class _FakeSocket:
     """Minimal socket used to exercise the real Blender-lowering helpers without bpy."""
 
-    def __init__(self, name=""):
+    def __init__(self, name="", *, index=0, is_output=False):
         self.name = name
+        self.index = index
+        self.is_output = is_output
         self.default_value = None
+        self.hide_value = False
+        self.is_multi_input = False
+        self.is_unavailable = False
+        self.enabled = True
+        self.node = None
+
+    @property
+    def bl_idname(self):
+        """Expose the same type-dependent input/output boundary as Blender RNA."""
+        node = self.node
+        if node is None:
+            return "NodeSocketFloat"
+        type_name = node.bl_idname
+        if self.is_output:
+            return {
+                "FunctionNodeInputInt": "NodeSocketInt",
+                "FunctionNodeInputBool": "NodeSocketBool",
+                "FunctionNodeIntegerMath": "NodeSocketInt",
+                "FunctionNodeCompare": "NodeSocketBool",
+                "FunctionNodeBooleanMath": "NodeSocketBool",
+                "ShaderNodeCombineXYZ": "NodeSocketVector",
+            }.get(type_name, "NodeSocketFloat")
+        if type_name == "FunctionNodeIntegerMath":
+            return "NodeSocketInt"
+        if type_name == "FunctionNodeBooleanMath":
+            return "NodeSocketBool"
+        if type_name == "FunctionNodeCompare":
+            return {"INT": "NodeSocketInt", "VECTOR": "NodeSocketVector"}.get(node.data_type, "NodeSocketFloat")
+        if type_name == "ShaderNodeVectorMath" and self.index in {0, 1}:
+            return "NodeSocketVector"
+        return "NodeSocketFloat"
 
 
 class _FakeSockets(list):
@@ -695,17 +701,24 @@ class _FakeNode:
         self.data_type = None
         if bl_idname == "FunctionNodeCompare":
             names = ["A", "B", "Epsilon", "", "", "", "", ""]
-            self.inputs = _FakeSockets([_FakeSocket(name) for name in names])
+            self.inputs = _FakeSockets([_FakeSocket(name, index=i) for i, name in enumerate(names)])
         else:
-            self.inputs = _FakeSockets([_FakeSocket() for _ in range(8)])
-        self.outputs = _FakeSockets([_FakeSocket() for _ in range(4)])
+            self.inputs = _FakeSockets([_FakeSocket(index=i) for i in range(8)])
+        self.outputs = _FakeSockets([_FakeSocket(index=i, is_output=True) for i in range(4)])
+        for socket in (*self.inputs, *self.outputs):
+            socket.node = self
 
 
 class _FakeNodes(list):
     """Node collection implementing ``nodes.new`` for numeric backend tests."""
 
+    def __init__(self, owner):
+        super().__init__()
+        self.owner = owner
+
     def new(self, bl_idname):
         node = _FakeNode(bl_idname)
+        node.id_data = self.owner
         self.append(node)
         return node
 
@@ -722,7 +735,7 @@ class _FakeGroup:
     """Minimal Geometry Nodes group substrate for pure backend selection tests."""
 
     def __init__(self):
-        self.nodes = _FakeNodes()
+        self.nodes = _FakeNodes(self)
         self.links = _FakeLinks()
 
 

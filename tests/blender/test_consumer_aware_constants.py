@@ -356,3 +356,75 @@ def shape():
 def shape():
     return node("GeometryNodeMeshCube", inputs={"Vertices X": True}, output="Mesh", typ=Geometry)
 ''', "NFDeferred_raw_bad_bool")
+
+
+def test_expression_consumer_defaults_keep_runtime_producer_links():
+    """Math and Combine XYZ inline constants occupy sockets, not extra nodes."""
+    from NodeForge.blender.nodes import _math, _combine_xyz_mixed
+    from NodeForge.blender.values import DeferredConstant, Value
+    from NodeForge.nf_types import NFType
+
+    group = bpy.data.node_groups.new("NFDeferred_expression", "GeometryNodeTree")
+    try:
+        source = group.nodes.new("ShaderNodeValue")
+        operand = Value(source.outputs[0], NFType.FLOAT)
+        result = _math(group, "ADD", (operand, DeferredConstant(NFType.FLOAT, 5.0)))
+        math_node = result.socket.node
+        assert math_node.inputs[0].is_linked
+        assert not math_node.inputs[1].is_linked
+        assert math_node.inputs[1].default_value == 5.0
+        vector = _combine_xyz_mixed(group, [operand, DeferredConstant(NFType.INT, 2), 3.0])
+        combine = vector.socket.node
+        assert combine.inputs[0].is_linked
+        assert not combine.inputs[1].is_linked and combine.inputs[1].default_value == 2.0
+        assert not combine.inputs[2].is_linked and combine.inputs[2].default_value == 3.0
+        assert len([n for n in group.nodes if n.bl_idname == "ShaderNodeValue"]) == 1
+    finally:
+        bpy.data.node_groups.remove(group, do_unlink=True)
+
+
+@pytest.mark.parametrize("flag", [True, False])
+def test_deferred_bool_compare_uses_consumer_int_default_not_global_cast(flag):
+    """Boolean Compare has Int inputs but source Bool links retain their identity."""
+    from NodeForge.blender.nodes import _compare
+    from NodeForge.blender.values import DeferredConstant, Value
+    from NodeForge.nf_types import NFType
+
+    group = bpy.data.node_groups.new("NFDeferred_bool_compare", "GeometryNodeTree")
+    try:
+        physical = group.nodes.new("FunctionNodeInputBool")
+        physical.boolean = flag
+        result = _compare(
+            group, "EQUAL", DeferredConstant(NFType.BOOL, flag),
+            Value(physical.outputs[0], NFType.BOOL),
+        )
+        compare = result.socket.node
+        assert compare.data_type == "INT"
+        assert not compare.inputs[0].is_linked and compare.inputs[0].default_value == int(flag)
+        assert compare.inputs[1].is_linked
+        assert next(l for l in group.links if l.to_socket == compare.inputs[1]).from_node == physical
+        assert not any(n.bl_idname == "FunctionNodeInputInt" for n in group.nodes)
+    finally:
+        bpy.data.node_groups.remove(group, do_unlink=True)
+
+
+def test_geometry_consumer_direct_vector_and_implicit_position_link():
+    """Cube Size is stored directly while Set Position uses a linked explicit zero."""
+    from NodeForge.blender.geometry import _cube_geometry, _set_position_geometry
+    from NodeForge.blender.values import DeferredConstant
+    from NodeForge.nf_types import NFType
+
+    group = bpy.data.node_groups.new("NFDeferred_geometry", "GeometryNodeTree")
+    try:
+        size = DeferredConstant(NFType.VECTOR, (2, 3, 4))
+        cube = _cube_geometry(group, size)
+        assert not cube.socket.node.inputs["Size"].is_linked
+        assert tuple(cube.socket.node.inputs["Size"].default_value) == size.value
+        moved = _set_position_geometry(
+            group, cube, DeferredConstant(NFType.VECTOR, (0, 0, 0)), selection=None,
+        )
+        node = moved.socket.node
+        assert node.inputs["Position"].is_linked
+        assert sum(n.bl_idname == "ShaderNodeCombineXYZ" for n in group.nodes) == 1
+    finally:
+        bpy.data.node_groups.remove(group, do_unlink=True)

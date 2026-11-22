@@ -1415,6 +1415,26 @@ class _SampleSocket:
         self.default_value = None
 
 
+@pytest.fixture(autouse=True)
+def _sample_index_untyped_socket_compatibility(monkeypatch):
+    """Sample Index helper unit stubs lack Blender RNA ownership/type metadata.
+
+    The dedicated Blender tests exercise strict deliver_input validation.
+    """
+    original = geometry_backend.deliver_input
+
+    def mock_sample_delivery(group, socket, operand, *, context="node input"):
+        if isinstance(socket, _SampleSocket):
+            if isinstance(operand, Value):
+                group.links.new(operand.socket, socket)
+            else:
+                socket.default_value = operand.value if hasattr(operand, "value") else operand
+            return None
+        return original(group, socket, operand, context=context)
+
+    monkeypatch.setattr(geometry_backend, "deliver_input", mock_sample_delivery)
+
+
 class _SampleNode:
     """Sample Index stand-in that exposes dynamic sockets only after data_type is set."""
 

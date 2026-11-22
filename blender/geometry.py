@@ -4,7 +4,8 @@ from ..semantic.constants import *
 from ..type_capabilities import ATTRIBUTE_DATA_TYPES, CAPTURE_ITEM_TYPES
 from ..semantic.attribute_domains import normalize_attribute_domain
 from ..errors import CompileError
-from .values import Value
+from .values import Value, DeferredConstant
+from .input_delivery import deliver_input
 from .nodes import _new_node, _combine_xyz, _combine_xyz_mixed, _is_number_type
 from ..semantic.compile_time import _as_float_const, _is_const_number, _is_const_vector, _is_const_vector_like
 from ..semantic.numeric_semantics import normalize_int_constant
@@ -46,44 +47,56 @@ def _store_named_attribute(
     node.data_type = data_type
     node.domain = domain
     node.inputs["Selection"].default_value = True
-    if isinstance(attr_name, Value):
-        if attr_name.typ != TYPE_STRING:
-            raise CompileError("store() attribute name must be String")
-        group.links.new(attr_name.socket, node.inputs["Name"])
-    else:
-        node.inputs["Name"].default_value = attr_name
+    deliver_input(group, node.inputs["Name"], attr_name, context="store() Name")
     group.links.new(geometry_socket, node.inputs["Geometry"])
     if selection is not None:
         group.links.new(selection.socket, node.inputs["Selection"])
-    group.links.new(value.socket, node.inputs["Value"])
+    if isinstance(value, Value) and _attribute_data_type(value.typ) != data_type:
+        # An explicit store data_type override intentionally uses Blender's
+        # physical socket conversion; strict literal delivery must not erase it.
+        group.links.new(value.socket, node.inputs["Value"])
+    else:
+        deliver_input(group, node.inputs["Value"], value, context="attribute Value")
     return node.outputs["Geometry"]
 
 
 
 def _set_int_like_socket(group, socket, value, x=0, y=0, label="value", minimum=None):
     """Write or link a numeric value into an integer-like Blender node socket."""
+    if isinstance(value, DeferredConstant):
+        if not _is_number_type(value.typ):
+            raise CompileError(f"{label} expects Float/Int")
+        value = value.value
     if _is_const_number(value):
         intval = int(value)
         if minimum is not None:
             intval = max(int(minimum), intval)
-        socket.default_value = intval
+        deliver_input(group, socket, intval, context=label)
         return
     if isinstance(value, Value) and _is_number_type(value.typ):
-        group.links.new(value.socket, socket)
+        if value.typ == TYPE_FLOAT:
+            # Existing numeric geometry helper permits physical Float→Int links.
+            group.links.new(value.socket, socket)
+        else:
+            deliver_input(group, socket, value, context=label)
         return
     raise CompileError(f"{label} expects Float/Int")
 
 
 def _set_float_like_socket(group, socket, value, x=0, y=0, label="value", minimum=None):
     """Write or link a numeric value into a float-like Blender node socket."""
+    if isinstance(value, DeferredConstant):
+        if not _is_number_type(value.typ):
+            raise CompileError(f"{label} expects Float/Int")
+        value = value.value
     if _is_const_number(value):
         fval = float(value)
         if minimum is not None:
             fval = max(float(minimum), fval)
-        socket.default_value = fval
+        deliver_input(group, socket, fval, context=label)
         return
     if isinstance(value, Value) and _is_number_type(value.typ):
-        group.links.new(value.socket, socket)
+        deliver_input(group, socket, value, context=label)
         return
     raise CompileError(f"{label} expects Float/Int")
 
@@ -166,23 +179,25 @@ def _euler_to_rotation(group, euler_vec, x=0, y=0):
     return Value(node.outputs[0], TYPE_ROTATION)
 
 def _cube_geometry(group, size, x=0, y=0):
-    """Function `_cube_geometry` used by the NodeForge addon."""
+    """Create Mesh Cube with direct scalar/vector defaults or existing runtime links."""
     node = _new_node(group, "GeometryNodeMeshCube", x, y)
-    for i in [1, 2, 3]:
-        try: node.inputs[i].default_value = 2
-        except Exception: pass
-    if _is_const_number(size):
-        _set_vector_socket_default(node.inputs[0], (size, size, size))
-    elif _is_const_vector_like(size):
-        _set_vector_socket_default(node.inputs[0], size)
-    elif isinstance(size, Value) and size.typ == TYPE_VECTOR:
-        group.links.new(size.socket, node.inputs[0])
+    for index in (1, 2, 3):
+        node.inputs[index].default_value = 2
+    if isinstance(size, DeferredConstant) and _is_number_type(size.typ):
+        size = (size.value,) * 3
+    elif _is_const_number(size):
+        size = (size,) * 3
+    if _is_const_vector_like(size) or (
+        isinstance(size, (Value, DeferredConstant)) and size.typ == TYPE_VECTOR
+    ):
+        _set_vector_socket_value(group, node.inputs[0], size, x, y, "cube() size")
     elif isinstance(size, Value) and _is_number_type(size.typ):
-        v = _combine_xyz(group, size, size, size, x - 180, y - 60)
-        group.links.new(v.socket, node.inputs[0])
+        vector = _combine_xyz(group, size, size, size, x - 180, y - 60)
+        deliver_input(group, node.inputs[0], vector, context="cube() size")
     else:
         raise CompileError("cube(size) expects Float/Int or Vector size")
     return Value(node.outputs[0], TYPE_GEOMETRY)
+
 
 def _empty_geometry(group, x=0, y=0):
     """Create a valid Geometry value with zero elements.
@@ -201,26 +216,14 @@ def _empty_geometry(group, x=0, y=0):
     return Value(node.outputs[0], TYPE_GEOMETRY)
 
 
-def _set_vector_socket_value(group, socket, value, x=0, y=0, label="value", *, link_const=False):
-    """Write or link a Vector into a Blender node socket.
-
-    Some Geometry Nodes field inputs, notably Set Position's Position socket in
-    Blender 5.x, ignore an unlinked socket default during modifier evaluation.
-    `link_const=True` materializes compile-time vectors as a Combine XYZ node so
-    those sockets receive an explicit field value while ordinary value sockets can
-    still keep compact defaults.
-    """
+def _set_vector_socket_value(group, socket, value, x=0, y=0, label="value"):
+    """Deliver a Vector to its resolved Blender consumer and respect implicit fields."""
     if _is_const_vector_like(value):
-        if link_const:
-            vector_value = _combine_xyz_mixed(group, list(value), x, y)
-            group.links.new(vector_value.socket, socket)
-        else:
-            _set_vector_socket_default(socket, value)
-        return
-    if isinstance(value, Value) and value.typ == TYPE_VECTOR:
-        group.links.new(value.socket, socket)
-        return
-    raise CompileError(f"{label} expects Vector")
+        deliver_input(group, socket, tuple(value), context=label)
+    elif isinstance(value, (Value, DeferredConstant)) and value.typ == TYPE_VECTOR:
+        deliver_input(group, socket, value, context=label)
+    else:
+        raise CompileError(f"{label} expects Vector")
 
 
 def _socket_by_name_or_index(node, name, index):
@@ -234,7 +237,7 @@ def _point_geometry(group, position, x=0, y=0):
     geo = _points_geometry(group, 1, x, y)
     node = _new_node(group, "GeometryNodeSetPosition", x + 220, y)
     group.links.new(geo.socket, node.inputs[0])
-    _set_vector_socket_value(group, node.inputs[2], position, x, y, "point() position", link_const=True)
+    _set_vector_socket_value(group, node.inputs[2], position, x, y, "point() position")
     return Value(node.outputs[0], TYPE_GEOMETRY)
 
 
@@ -287,47 +290,47 @@ def _polyline_geometry(group, points, x=0, y=0):
     segments = []
     for idx, (a, b) in enumerate(zip(points, points[1:])):
         node = _new_node(group, "GeometryNodeCurvePrimitiveLine", x, y - idx * 90)
-        _set_vector_socket_default(node.inputs[0], a)
-        _set_vector_socket_default(node.inputs[1], b)
+        _set_vector_socket_value(group, node.inputs[0], a, x, y, "polyline() start")
+        _set_vector_socket_value(group, node.inputs[1], b, x, y, "polyline() end")
         segments.append(Value(node.outputs[0], TYPE_GEOMETRY))
     return _join_geometry(group, segments, x + 280, y)
 
 
 
 def _transform_geometry(group, geo, *, translation, scale, rotation, x=0, y=0):
-    """Function `_transform_geometry` used by the NodeForge addon."""
+    """Apply translation, Euler rotation and scale with resolved input semantics."""
     if geo.typ != TYPE_GEOMETRY:
         raise CompileError("transform() expects Geometry")
     node = _new_node(group, "GeometryNodeTransform", x, y)
     group.links.new(geo.socket, node.inputs[0])
     if translation is not None:
-        if _is_const_vector_like(translation):
-            _set_vector_socket_default(node.inputs[2], translation)
-        elif isinstance(translation, Value) and translation.typ == TYPE_VECTOR:
-            group.links.new(translation.socket, node.inputs[2])
-        else:
-            raise CompileError("translation= must be Vector")
+        _set_vector_socket_value(group, node.inputs[2], translation, x, y, "translation=")
     if rotation is not None:
-        if _is_const_vector_like(rotation):
-            _set_rotation_socket_default(node.inputs[3], rotation)
+        if isinstance(rotation, DeferredConstant) and rotation.typ == TYPE_VECTOR:
+            rotation = DeferredConstant(TYPE_ROTATION, rotation.value)
+        elif _is_const_vector_like(rotation):
+            rotation = DeferredConstant(TYPE_ROTATION, tuple(rotation))
         elif isinstance(rotation, Value) and rotation.typ == TYPE_VECTOR:
-            rot = _euler_to_rotation(group, rotation, x - 180, y - 120)
-            group.links.new(rot.socket, node.inputs[3])
+            rotation = _euler_to_rotation(group, rotation, x - 180, y - 120)
         else:
             raise CompileError("rotation= must be Vector in radians")
+        deliver_input(group, node.inputs[3], rotation, context="transform() rotation")
     if scale is not None:
-        if _is_const_number(scale):
-            _set_vector_socket_default(node.inputs[4], (scale, scale, scale))
-        elif _is_const_vector_like(scale):
-            _set_vector_socket_default(node.inputs[4], scale)
-        elif isinstance(scale, Value) and scale.typ == TYPE_VECTOR:
-            group.links.new(scale.socket, node.inputs[4])
+        if isinstance(scale, DeferredConstant) and _is_number_type(scale.typ):
+            scale = (scale.value,) * 3
+        elif _is_const_number(scale):
+            scale = (scale,) * 3
+        if _is_const_vector_like(scale) or (
+            isinstance(scale, (Value, DeferredConstant)) and scale.typ == TYPE_VECTOR
+        ):
+            _set_vector_socket_value(group, node.inputs[4], scale, x, y, "scale=")
         elif isinstance(scale, Value) and _is_number_type(scale.typ):
-            v = _combine_xyz(group, scale, scale, scale, x - 180, y - 80)
-            group.links.new(v.socket, node.inputs[4])
+            combined = _combine_xyz(group, scale, scale, scale, x - 180, y - 80)
+            deliver_input(group, node.inputs[4], combined, context="transform() scale")
         else:
             raise CompileError("scale= must be Float/Int or Vector")
     return Value(node.outputs[0], TYPE_GEOMETRY)
+
 
 def _realize_instances(group, geo, x=0, y=0):
     """Function `_realize_instances` used by the NodeForge addon."""
@@ -346,10 +349,12 @@ def _points_geometry(group, count, x=0, y=0):
     """
     node = _new_node(group, "GeometryNodeMeshLine", x, y)
     # Count
+    if isinstance(count, DeferredConstant):
+        count = count.value
     if _is_const_number(count):
-        node.inputs[0].default_value = max(0, int(count))
+        deliver_input(group, node.inputs[0], max(0, int(count)), context="points() Count")
     elif isinstance(count, Value) and count.typ == TYPE_INT:
-        group.links.new(count.socket, node.inputs[0])
+        deliver_input(group, node.inputs[0], count, context="points() Count")
     elif isinstance(count, Value) and count.typ == TYPE_FLOAT:
         group.links.new(count.socket, node.inputs[0])
     else:
@@ -369,14 +374,14 @@ def _set_position_geometry(group, geo, pos, *, selection, x=0, y=0):
         raise CompileError("set_position(geo, position) first argument must be Geometry")
     if pos.typ != TYPE_VECTOR:
         raise CompileError("set_position(geo, position) second argument must be Vector")
-    if selection is not None and (not isinstance(selection, Value) or selection.typ != TYPE_BOOL):
+    if selection is not None and (not isinstance(selection, (Value, DeferredConstant)) or selection.typ != TYPE_BOOL):
         raise CompileError("set_position(..., selection=...) expects Bool selection")
     node = _new_node(group, "GeometryNodeSetPosition", x, y)
     group.links.new(geo.socket, node.inputs[0])
     node.inputs[1].default_value = True
     if selection is not None:
-        group.links.new(selection.socket, node.inputs[1])
-    group.links.new(pos.socket, node.inputs[2])
+        deliver_input(group, node.inputs[1], selection, context="selection field")
+    deliver_input(group, node.inputs[2], pos, context="set_position() Position")
     return Value(node.outputs[0], TYPE_GEOMETRY)
 
 
@@ -388,34 +393,38 @@ def _instance_on_points(group, instance, points, *, selection, scale, rotation, 
         raise CompileError("instance_on_points(instance, points) first argument must be Geometry")
     if points.typ != TYPE_GEOMETRY:
         raise CompileError("instance_on_points(instance, points) second argument must be Geometry")
-    if selection is not None and (not isinstance(selection, Value) or selection.typ != TYPE_BOOL):
+    if selection is not None and (not isinstance(selection, (Value, DeferredConstant)) or selection.typ != TYPE_BOOL):
         raise CompileError("instance_on_points selection= expects Bool")
     node = _new_node(group, "GeometryNodeInstanceOnPoints", x, y)
     group.links.new(points.socket, node.inputs[0])
     node.inputs[1].default_value = True
     if selection is not None:
-        group.links.new(selection.socket, node.inputs[1])
+        deliver_input(group, node.inputs[1], selection, context="selection field")
     group.links.new(instance.socket, node.inputs[2])
     if scale is not None:
-        if _is_const_number(scale):
-            _set_vector_socket_default(node.inputs[6], (scale, scale, scale))
-        elif _is_const_vector_like(scale):
-            _set_vector_socket_default(node.inputs[6], scale)
-        elif isinstance(scale, Value) and scale.typ == TYPE_VECTOR:
-            group.links.new(scale.socket, node.inputs[6])
+        if isinstance(scale, DeferredConstant) and _is_number_type(scale.typ):
+            scale = (scale.value,) * 3
+        elif _is_const_number(scale):
+            scale = (scale,) * 3
+        if _is_const_vector_like(scale) or (
+            isinstance(scale, (Value, DeferredConstant)) and scale.typ == TYPE_VECTOR
+        ):
+            _set_vector_socket_value(group, node.inputs[6], scale, x, y, "instance_on_points scale")
         elif isinstance(scale, Value) and _is_number_type(scale.typ):
-            v = _combine_xyz(group, scale, scale, scale, x - 180, y - 80)
-            group.links.new(v.socket, node.inputs[6])
+            vector = _combine_xyz(group, scale, scale, scale, x - 180, y - 80)
+            deliver_input(group, node.inputs[6], vector, context="instance_on_points scale")
         else:
             raise CompileError("instance_on_points scale= expects Float/Int or Vector")
     if rotation is not None:
-        if _is_const_vector_like(rotation):
-            _set_rotation_socket_default(node.inputs[5], rotation)
+        if isinstance(rotation, DeferredConstant) and rotation.typ == TYPE_VECTOR:
+            rotation = DeferredConstant(TYPE_ROTATION, rotation.value)
+        elif _is_const_vector_like(rotation):
+            rotation = DeferredConstant(TYPE_ROTATION, tuple(rotation))
         elif isinstance(rotation, Value) and rotation.typ == TYPE_VECTOR:
-            rot = _euler_to_rotation(group, rotation, x - 180, y - 120)
-            group.links.new(rot.socket, node.inputs[5])
+            rotation = _euler_to_rotation(group, rotation, x - 180, y - 120)
         else:
             raise CompileError("instance_on_points rotation= expects Vector in radians")
+        deliver_input(group, node.inputs[5], rotation, context="instance_on_points rotation")
     out = Value(node.outputs[0], TYPE_GEOMETRY)
     if realize:
         return _realize_instances(group, out, x + 240, y)
@@ -446,11 +455,11 @@ def _sample_index_geometry(group, geometry, value, index, *, domain, clamp, x=0,
     node.domain = domain
     node.clamp = clamp
     group.links.new(geometry.socket, node.inputs["Geometry"])
-    group.links.new(value.socket, node.inputs["Value"])
+    deliver_input(group, node.inputs["Value"], value, context="attribute Value")
     if constant_index is None:
-        group.links.new(index.socket, node.inputs["Index"])
+        deliver_input(group, node.inputs["Index"], index, context="sample_index() Index")
     else:
-        node.inputs["Index"].default_value = constant_index
+        deliver_input(group, node.inputs["Index"], constant_index, context="sample_index() Index")
     return Value(node.outputs["Value"], value.typ)
 
 
@@ -468,7 +477,7 @@ def _capture_attribute_geometry(group, geometry, value, *, selection, domain, da
     if socket_type not in socket_type_to_value_type:
         raise CompileError("capture_attribute() supports Float, Int, Bool and Vector values (also Color and Rotation)")
     domain = normalize_attribute_domain(domain, "capture_attribute()")
-    if selection is not None and (not isinstance(selection, Value) or selection.typ != TYPE_BOOL):
+    if selection is not None and (not isinstance(selection, (Value, DeferredConstant)) or selection.typ != TYPE_BOOL):
         raise CompileError("capture_attribute() selection= must be a Bool expression")
     node = _new_node(group, "GeometryNodeCaptureAttribute", x, y)
     node.domain = domain
@@ -478,5 +487,10 @@ def _capture_attribute_geometry(group, geometry, value, *, selection, domain, da
         node.inputs["Selection"].default_value = True
     else:
         group.links.new(selection.socket, node.inputs["Selection"])
-    group.links.new(value.socket, node.inputs["Value"])
+    if isinstance(value, Value) and CAPTURE_ITEM_TYPES.get(value.typ) != socket_type:
+        # Existing explicit capture type overrides allow Blender to convert a
+        # linked field; this is not an implicit raw constant conversion.
+        group.links.new(value.socket, node.inputs["Value"])
+    else:
+        deliver_input(group, node.inputs["Value"], value, context="attribute Value")
     return Value(node.outputs["Geometry"], TYPE_GEOMETRY), Value(node.outputs["Value"], socket_type_to_value_type[socket_type])
