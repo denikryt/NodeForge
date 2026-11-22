@@ -23,6 +23,7 @@ from NodeForge.semantic.constants import (
 )
 from NodeForge.errors import CompileError
 from NodeForge.blender import ir_lowering as blender_ir_lowering
+from NodeForge.blender import nodes as node_factories
 from NodeForge.blender import geometry as geometry_backend
 from NodeForge.blender.values import Value
 from NodeForge.semantic.group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
@@ -772,8 +773,8 @@ def test_backend_executes_program_order_and_applies_nonzero_base_depth(monkeypat
         calls.append(("math", operation, x, y))
         return Value(object(), TYPE_FLOAT)
 
-    monkeypatch.setattr(backend, "_value", fake_value)
-    monkeypatch.setattr(backend, "_int_value", fake_int_value)
+    monkeypatch.setattr(node_factories, "_value", fake_value)
+    monkeypatch.setattr(node_factories, "_int_value", fake_int_value)
     monkeypatch.setattr(backend, "_math", fake_math)
 
     result = backend.lower_expression(context, _lower("a * 2", bindings={"a": TYPE_FLOAT}), base_depth=3)
@@ -820,7 +821,7 @@ def test_backend_unary_identity_and_current_node_policy_without_blender(monkeypa
         calls.append(("boolean_math", operation, x, y))
         return Value(object(), TYPE_BOOL)
 
-    monkeypatch.setattr(backend, "_value", fake_value)
+    monkeypatch.setattr(node_factories, "_value", fake_value)
     monkeypatch.setattr(backend, "_math", fake_math)
     monkeypatch.setattr(backend, "_vector_math", fake_vector_math)
     monkeypatch.setattr(backend, "_boolean_math", fake_boolean_math)
@@ -870,8 +871,8 @@ def test_backend_comparison_chain_executes_explicit_duplicate_operations(monkeyp
         calls.append(("boolean_math", operation, x, y))
         return Value(object(), TYPE_BOOL)
 
-    monkeypatch.setattr(backend, "_value", fake_value)
-    monkeypatch.setattr(backend, "_int_value", fake_int_value)
+    monkeypatch.setattr(node_factories, "_value", fake_value)
+    monkeypatch.setattr(node_factories, "_int_value", fake_int_value)
     monkeypatch.setattr(backend, "_math", fake_math)
     monkeypatch.setattr(backend, "_compare", fake_compare)
     monkeypatch.setattr(backend, "_boolean_math", fake_boolean_math)
@@ -899,8 +900,8 @@ def test_backend_result_type_drift_is_controlled_internal_error(monkeypatch):
     def fake_math(group, operation, args, x=0, y=0):
         return Value(object(), TYPE_VECTOR)
 
-    monkeypatch.setattr(backend, "_value", fake_value)
-    monkeypatch.setattr(backend, "_int_value", fake_int_value)
+    monkeypatch.setattr(node_factories, "_value", fake_value)
+    monkeypatch.setattr(node_factories, "_int_value", fake_int_value)
     monkeypatch.setattr(backend, "_math", fake_math)
 
     with pytest.raises(CompileError, match="expected type FLOAT, got VECTOR"):
@@ -947,7 +948,7 @@ def test_backend_vector_conditional_component_and_boolean_primitives_without_ble
         calls.append(("component", component, x, y))
         return Value(object(), TYPE_FLOAT)
 
-    monkeypatch.setattr(backend, "_value", fake_value)
+    monkeypatch.setattr(node_factories, "_value", fake_value)
     monkeypatch.setattr(backend, "_math", fake_math)
     monkeypatch.setattr(backend, "_vector_math", fake_vector_math)
     monkeypatch.setattr(backend, "_boolean_math", fake_boolean_math)

@@ -183,19 +183,10 @@ def _cube_geometry(group, size, x=0, y=0):
     node = _new_node(group, "GeometryNodeMeshCube", x, y)
     for index in (1, 2, 3):
         node.inputs[index].default_value = 2
-    if isinstance(size, DeferredConstant) and _is_number_type(size.typ):
-        size = (size.value,) * 3
-    elif _is_const_number(size):
-        size = (size,) * 3
-    if _is_const_vector_like(size) or (
-        isinstance(size, (Value, DeferredConstant)) and size.typ == TYPE_VECTOR
-    ):
-        _set_vector_socket_value(group, node.inputs[0], size, x, y, "cube() size")
-    elif isinstance(size, Value) and _is_number_type(size.typ):
-        vector = _combine_xyz(group, size, size, size, x - 180, y - 60)
-        deliver_input(group, node.inputs[0], vector, context="cube() size")
-    else:
-        raise CompileError("cube(size) expects Float/Int or Vector size")
+    _deliver_scale(
+        group, node.inputs[0], size, x=x, y=y, label="cube() size",
+        error="cube(size) expects Float/Int or Vector size", combine_y=-60,
+    )
     return Value(node.outputs[0], TYPE_GEOMETRY)
 
 
@@ -224,6 +215,36 @@ def _set_vector_socket_value(group, socket, value, x=0, y=0, label="value"):
         deliver_input(group, socket, value, context=label)
     else:
         raise CompileError(f"{label} expects Vector")
+
+
+def _deliver_scale(group, socket, scale, *, x, y, label, error, combine_y):
+    """Deliver a scalar-uniform or Vector scale to the resolved Blender input."""
+    if isinstance(scale, DeferredConstant) and _is_number_type(scale.typ):
+        scale = (scale.value,) * 3
+    elif _is_const_number(scale):
+        scale = (scale,) * 3
+    if _is_const_vector_like(scale) or (
+        isinstance(scale, (Value, DeferredConstant)) and scale.typ == TYPE_VECTOR
+    ):
+        _set_vector_socket_value(group, socket, scale, x, y, label)
+    elif isinstance(scale, Value) and _is_number_type(scale.typ):
+        combined = _combine_xyz(group, scale, scale, scale, x - 180, y + combine_y)
+        deliver_input(group, socket, combined, context=label)
+    else:
+        raise CompileError(error)
+
+
+def _deliver_euler_rotation(group, socket, rotation, *, x, y, label, error):
+    """Convert a Vector Euler argument to Rotation at its resolved input."""
+    if isinstance(rotation, DeferredConstant) and rotation.typ == TYPE_VECTOR:
+        rotation = DeferredConstant(TYPE_ROTATION, rotation.value)
+    elif _is_const_vector_like(rotation):
+        rotation = DeferredConstant(TYPE_ROTATION, tuple(rotation))
+    elif isinstance(rotation, Value) and rotation.typ == TYPE_VECTOR:
+        rotation = _euler_to_rotation(group, rotation, x - 180, y - 120)
+    else:
+        raise CompileError(error)
+    deliver_input(group, socket, rotation, context=label)
 
 
 def _socket_by_name_or_index(node, name, index):
@@ -306,29 +327,15 @@ def _transform_geometry(group, geo, *, translation, scale, rotation, x=0, y=0):
     if translation is not None:
         _set_vector_socket_value(group, node.inputs[2], translation, x, y, "translation=")
     if rotation is not None:
-        if isinstance(rotation, DeferredConstant) and rotation.typ == TYPE_VECTOR:
-            rotation = DeferredConstant(TYPE_ROTATION, rotation.value)
-        elif _is_const_vector_like(rotation):
-            rotation = DeferredConstant(TYPE_ROTATION, tuple(rotation))
-        elif isinstance(rotation, Value) and rotation.typ == TYPE_VECTOR:
-            rotation = _euler_to_rotation(group, rotation, x - 180, y - 120)
-        else:
-            raise CompileError("rotation= must be Vector in radians")
-        deliver_input(group, node.inputs[3], rotation, context="transform() rotation")
+        _deliver_euler_rotation(
+            group, node.inputs[3], rotation, x=x, y=y,
+            label="transform() rotation", error="rotation= must be Vector in radians",
+        )
     if scale is not None:
-        if isinstance(scale, DeferredConstant) and _is_number_type(scale.typ):
-            scale = (scale.value,) * 3
-        elif _is_const_number(scale):
-            scale = (scale,) * 3
-        if _is_const_vector_like(scale) or (
-            isinstance(scale, (Value, DeferredConstant)) and scale.typ == TYPE_VECTOR
-        ):
-            _set_vector_socket_value(group, node.inputs[4], scale, x, y, "scale=")
-        elif isinstance(scale, Value) and _is_number_type(scale.typ):
-            combined = _combine_xyz(group, scale, scale, scale, x - 180, y - 80)
-            deliver_input(group, node.inputs[4], combined, context="transform() scale")
-        else:
-            raise CompileError("scale= must be Float/Int or Vector")
+        _deliver_scale(
+            group, node.inputs[4], scale, x=x, y=y, label="scale=",
+            error="scale= must be Float/Int or Vector", combine_y=-80,
+        )
     return Value(node.outputs[0], TYPE_GEOMETRY)
 
 
@@ -402,29 +409,16 @@ def _instance_on_points(group, instance, points, *, selection, scale, rotation, 
         deliver_input(group, node.inputs[1], selection, context="selection field")
     group.links.new(instance.socket, node.inputs[2])
     if scale is not None:
-        if isinstance(scale, DeferredConstant) and _is_number_type(scale.typ):
-            scale = (scale.value,) * 3
-        elif _is_const_number(scale):
-            scale = (scale,) * 3
-        if _is_const_vector_like(scale) or (
-            isinstance(scale, (Value, DeferredConstant)) and scale.typ == TYPE_VECTOR
-        ):
-            _set_vector_socket_value(group, node.inputs[6], scale, x, y, "instance_on_points scale")
-        elif isinstance(scale, Value) and _is_number_type(scale.typ):
-            vector = _combine_xyz(group, scale, scale, scale, x - 180, y - 80)
-            deliver_input(group, node.inputs[6], vector, context="instance_on_points scale")
-        else:
-            raise CompileError("instance_on_points scale= expects Float/Int or Vector")
+        _deliver_scale(
+            group, node.inputs[6], scale, x=x, y=y, label="instance_on_points scale",
+            error="instance_on_points scale= expects Float/Int or Vector", combine_y=-80,
+        )
     if rotation is not None:
-        if isinstance(rotation, DeferredConstant) and rotation.typ == TYPE_VECTOR:
-            rotation = DeferredConstant(TYPE_ROTATION, rotation.value)
-        elif _is_const_vector_like(rotation):
-            rotation = DeferredConstant(TYPE_ROTATION, tuple(rotation))
-        elif isinstance(rotation, Value) and rotation.typ == TYPE_VECTOR:
-            rotation = _euler_to_rotation(group, rotation, x - 180, y - 120)
-        else:
-            raise CompileError("instance_on_points rotation= expects Vector in radians")
-        deliver_input(group, node.inputs[5], rotation, context="instance_on_points rotation")
+        _deliver_euler_rotation(
+            group, node.inputs[5], rotation, x=x, y=y,
+            label="instance_on_points rotation",
+            error="instance_on_points rotation= expects Vector in radians",
+        )
     out = Value(node.outputs[0], TYPE_GEOMETRY)
     if realize:
         return _realize_instances(group, out, x + 240, y)

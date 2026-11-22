@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from NodeForge.blender import ir_lowering as backend
+from NodeForge.blender import nodes as node_factories
 from NodeForge.blender.values import Value, DeferredConstant
 from NodeForge.errors import CompileError
 from NodeForge.semantic.ir import IRInputDeclaration
@@ -24,20 +25,8 @@ def _host_only_physical_output_stub(monkeypatch):
     original = backend.require_output
 
     def require(group, operand, *, context="constant", allow_native_conversion=False):
-        if type(group) is object:
-            if isinstance(operand, Value):
-                return operand
-            if isinstance(operand, DeferredConstant):
-                emit = {
-                    NFType.FLOAT: backend._value,
-                    NFType.INT: backend._int_value,
-                    NFType.BOOL: backend._bool_value,
-                    NFType.STRING: backend._string_value,
-                    NFType.VECTOR: backend._vector_value,
-                    NFType.COLOR: backend._color_value,
-                    NFType.ROTATION: backend._rotation_value,
-                }[operand.typ]
-                return emit(group, operand.value)
+        if type(group) is object and isinstance(operand, Value):
+            return operand  # Host-only fake sockets have no Blender RNA owner.
         return original(group, operand, context=context,
                         allow_native_conversion=allow_native_conversion)
 
@@ -58,33 +47,14 @@ def _lower_inline(source, monkeypatch, runtime_values=()):
     assert len(operations) == 1
     operation = operations[0]
     calls = []
-    monkeypatch.setattr(backend, '_value', _emit_stub_value(calls, 'Float', NFType.FLOAT))
-    monkeypatch.setattr(backend, '_int_value', _emit_stub_value(calls, 'Int', NFType.INT))
-    monkeypatch.setattr(backend, '_bool_value', _emit_stub_value(calls, 'Bool', NFType.BOOL))
-    monkeypatch.setattr(backend, '_string_value', _emit_stub_value(calls, 'String', NFType.STRING))
-    monkeypatch.setattr(backend, '_vector_value', _emit_stub_value(calls, 'Vector', NFType.VECTOR))
-    monkeypatch.setattr(backend, '_color_value', _emit_stub_value(calls, 'Color', NFType.COLOR))
-    monkeypatch.setattr(backend, '_rotation_value', _emit_stub_value(calls, 'Rotation', NFType.ROTATION))
+    monkeypatch.setattr(node_factories, '_value', _emit_stub_value(calls, 'Float', NFType.FLOAT))
+    monkeypatch.setattr(node_factories, '_int_value', _emit_stub_value(calls, 'Int', NFType.INT))
+    monkeypatch.setattr(node_factories, '_bool_value', _emit_stub_value(calls, 'Bool', NFType.BOOL))
+    monkeypatch.setattr(node_factories, '_string_value', _emit_stub_value(calls, 'String', NFType.STRING))
+    monkeypatch.setattr(node_factories, '_vector_value', _emit_stub_value(calls, 'Vector', NFType.VECTOR))
+    monkeypatch.setattr(node_factories, '_color_value', _emit_stub_value(calls, 'Color', NFType.COLOR))
+    monkeypatch.setattr(node_factories, '_rotation_value', _emit_stub_value(calls, 'Rotation', NFType.ROTATION))
     monkeypatch.setattr(backend, '_math', _emit_stub_value(calls, 'Math', NFType.FLOAT))
-    from NodeForge.blender.values import DeferredConstant
-
-    def fake_required_output(group, operand, *, context="constant", allow_native_conversion=False):
-        """Host-only stubs have no Blender RNA; use their typed fake producers."""
-        if isinstance(operand, Value):
-            return operand
-        assert isinstance(operand, DeferredConstant)
-        producer = {
-            NFType.FLOAT: backend._value,
-            NFType.INT: backend._int_value,
-            NFType.BOOL: backend._bool_value,
-            NFType.STRING: backend._string_value,
-            NFType.VECTOR: backend._vector_value,
-            NFType.COLOR: backend._color_value,
-            NFType.ROTATION: backend._rotation_value,
-        }[operand.typ]
-        return producer(group, operand.value)
-
-    monkeypatch.setattr(backend, 'require_output', fake_required_output)
     context = backend.BlenderIRLoweringContext(
         group=object(), runtime_bindings={}, source_callable_session=session,
         function_materializer=object(), function_materialization_context=object(),
@@ -149,17 +119,19 @@ result = echo()
     assert angles == tuple(normalize_float_constant(v) for v in (0.1, -0.2, 7.0))
 
 
-def test_inline_rotation_static_materializer_uses_same_canonical_contract(monkeypatch):
-    """An already-bound static Rotation value uses the same inline adapter."""
-    calls = []
-    monkeypatch.setattr(backend, '_rotation_value', _emit_stub_value(calls, 'Rotation', NFType.ROTATION))
-    result = backend._inline_constant_value(
-        SimpleNamespace(group=object()), NFType.ROTATION, [0.1, -0.2, 7.0], 10, 20,
-    )
+def test_inline_rotation_output_materializer_uses_same_canonical_contract(monkeypatch):
+    """The active output boundary canonicalizes and shares a Rotation constant."""
+    from NodeForge.blender.input_delivery import require_output
     from NodeForge.semantic.numeric_semantics import normalize_float_constant
 
-    assert result.typ is NFType.ROTATION
-    assert calls == [('Rotation', (tuple(normalize_float_constant(v) for v in (0.1, -0.2, 7.0)), 10, 20))]
+    calls = []
+    monkeypatch.setattr(node_factories, '_rotation_value', _emit_stub_value(calls, 'Rotation', NFType.ROTATION))
+    group = object()
+    value = DeferredConstant(NFType.ROTATION, [0.1, -0.2, 7.0])
+    first = require_output(group, value, context='inline default')
+    assert require_output(group, value, context='inline default') is first
+    assert first.typ is NFType.ROTATION
+    assert calls == [('Rotation', (tuple(normalize_float_constant(v) for v in (0.1, -0.2, 7.0)),))]
 
 
 def test_bound_inline_coerces_runtime_int_to_float(monkeypatch):
@@ -227,7 +199,7 @@ y = add(3.0)
 '''
     calls, session = _analyze(source)
     native = []
-    monkeypatch.setattr(backend, '_value', _emit_stub_value(native, 'Float', NFType.FLOAT))
+    monkeypatch.setattr(node_factories, '_value', _emit_stub_value(native, 'Float', NFType.FLOAT))
     monkeypatch.setattr(backend, '_math', _emit_stub_value(native, 'Math', NFType.FLOAT))
     context = backend.BlenderIRLoweringContext(
         group=object(), runtime_bindings={}, source_callable_session=session,
@@ -250,7 +222,7 @@ def test_inline_context_map_cannot_mutate_caller(monkeypatch):
     return value
 x = identity(2.0)
 ''')
-    monkeypatch.setattr(backend, '_value', _emit_stub_value([], 'Float', NFType.FLOAT))
+    monkeypatch.setattr(node_factories, '_value', _emit_stub_value([], 'Float', NFType.FLOAT))
     outer = Value(StubSocket(), NFType.VECTOR)
     context = backend.BlenderIRLoweringContext(
         group=object(), runtime_bindings={}, group_context_values={GroupContextSlot.GRID_UV: outer},
@@ -276,7 +248,7 @@ def test_inline_lowering_records_dependency_on_active_physical_frame(monkeypatch
     return value + 1.0
 result = leaf(2.0)
 ''')
-    monkeypatch.setattr(backend, '_value', _emit_stub_value([], 'Float', NFType.FLOAT))
+    monkeypatch.setattr(node_factories, '_value', _emit_stub_value([], 'Float', NFType.FLOAT))
     monkeypatch.setattr(backend, '_math', _emit_stub_value([], 'Math', NFType.FLOAT))
     trace = FunctionCompilationTrace()
     context = backend.BlenderIRLoweringContext(

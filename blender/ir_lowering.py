@@ -12,7 +12,7 @@ from ..type_capabilities import REPEAT_ITEM_TYPES
 from ..errors import CompileError
 from ..compiler_identities import BindingId, InputDeclarationId
 from ..semantic.group_context import GroupContextSlot
-from .nodes import _bool_value, _color_value, _rotation_value, _vector_value, _boolean_math, _combine_xyz_mixed, _compare, _int_value, _integer_math, _math, _new_node, _separate_xyz, _string_value, _switch, _value, _vector_math
+from .nodes import _boolean_math, _combine_xyz_mixed, _compare, _integer_math, _math, _new_node, _separate_xyz, _switch, _vector_math
 from .geometry import (
     _capture_attribute_geometry,
     _cube_geometry,
@@ -67,7 +67,7 @@ from ..semantic.ir import (
 )
 from .values import ObjectValue, Value, DeferredConstant, make_value
 from .input_delivery import deliver_input, require_output
-from ..semantic.callable_contracts import canonicalize_group_input_default, source_argument_type_matches
+from ..semantic.callable_contracts import source_argument_type_matches
 from ..semantic.ir import IRFunctionMaterializationMode
 from .interface import _create_group_input_socket, _create_interface_panel, _set_socket_default
 from ..function_instances import (
@@ -590,26 +590,6 @@ def _source_call_owner_scope(operation):
     if function_id is None or function_id.namespace != "local":
         raise CompileError("Internal error: source Call IR without materialization must be Local catalog")
     return direct_library_owner_scope_for_id(function_id)
-
-
-def _inline_constant_value(context, typ, value, x, y):
-    """Materialize a detached call argument/default as one typed runtime socket."""
-    value = canonicalize_group_input_default(typ, value)
-    if typ is TYPE_FLOAT:
-        return _value(context.group, value, x, y)
-    if typ is TYPE_INT:
-        return _int_value(context.group, value, x, y)
-    if typ is TYPE_BOOL:
-        return _bool_value(context.group, value, x, y)
-    if typ is TYPE_STRING:
-        return _string_value(context.group, value, x, y)
-    if typ is TYPE_VECTOR:
-        return _vector_value(context.group, value, x, y)
-    if typ is TYPE_COLOR:
-        return _color_value(context.group, value, x, y)
-    if typ is TYPE_ROTATION:
-        return _rotation_value(context.group, value, x, y)
-    raise CompileError(f"Internal error: unsupported inline default of type {typ}")
 
 
 def _inline_runtime_value(context, expected, actual, x, y):
