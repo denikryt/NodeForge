@@ -56,6 +56,20 @@ class _FakeText:
         self.pointer = pointer
         self.current_line_index = 0
         self.current_character = len(source)
+        self.edits = []
+
+    def delete(self, *, type):
+        assert type == 'PREVIOUS_CHARACTER'
+        self.edits.append(('delete', type))
+        index = self.current_character
+        self.source = self.source[:index - 1] + self.source[index:]
+        self.current_character -= 1
+
+    def insert(self, *, text):
+        self.edits.append(('insert', text))
+        index = self.current_character
+        self.source = self.source[:index] + text + self.source[index:]
+        self.current_character += len(text)
 
     def as_pointer(self):
         return self.pointer
@@ -78,7 +92,9 @@ def popup_session(monkeypatch):
         tag_redraw=lambda: None,
     )
     window_manager = SimpleNamespace(nodeforge_assist_enabled=True)
-    monkeypatch.setattr(ui, 'bpy', SimpleNamespace(context=SimpleNamespace(window_manager=window_manager)))
+    monkeypatch.setattr(ui, 'bpy', SimpleNamespace(
+        context=SimpleNamespace(window_manager=window_manager),
+        ops=SimpleNamespace(text=SimpleNamespace(delete=text.delete, insert=text.insert))))
     monkeypatch.setattr(ui, '_ENABLED', True)
     monkeypatch.setattr(ui, '_SYMBOLS', object())
     monkeypatch.setattr(ui, '_STATES', {})
@@ -157,3 +173,72 @@ def test_caret_navigation_and_shortcuts_restart_but_noop_events_do_not(popup_ses
     operator.modal(context, event('ESC'))
     assert operator.modal(context, event('F5')) == {'PASS_THROUGH'}
     assert state.suppressed == state.key
+
+
+@pytest.mark.parametrize('key', ['RET', 'NUMPAD_ENTER', 'TAB'])
+def test_completion_accepts_selected_candidate_once(popup_session, key):
+    """All acceptance keys insert exactly the highlighted value without a newline."""
+    ui, operator, context, text, calls, event = popup_session
+    state = ui._STATES[17]
+    state.help = Assistance(candidates=(Suggestion('mesh', 'mesh', 'function'),
+                                        Suggestion('cube', 'cube', 'function')),
+                            line=0, replace_start=0, replace_end=6)
+    assert operator.modal(context, event('DOWN_ARROW')) == {'RUNNING_MODAL'}
+    assert state.selection == 1
+    assert operator.modal(context, event(key)) == {'RUNNING_MODAL'}
+    assert text.source == 'cube' and '\n' not in text.source
+    assert text.edits == [('delete', 'PREVIOUS_CHARACTER')] * 6 + [('insert', 'cube')]
+    assert operator.modal(context, event(key)) == {'PASS_THROUGH'}
+    assert len(text.edits) == 7
+
+
+@pytest.mark.parametrize('key,kw', [
+    ('RET', {}), ('NUMPAD_ENTER', {}), ('TAB', {}), ('RET', {'shift': True}),
+    ('RET', {'ctrl': True}), ('NUMPAD_ENTER', {'alt': True}),
+    ('RET', {'oskey': True}),
+])
+def test_native_keys_with_no_popup_or_modified_enter(popup_session, key, kw):
+    """No popup or modified Enter leaves Blender free to handle the keystroke."""
+    ui, operator, context, text, calls, event = popup_session
+    state = ui._STATES[17]
+    if kw:
+        key_event = event(key)
+        for name, value in kw.items():
+            setattr(key_event, name, value)
+        assert operator.modal(context, key_event) == {'PASS_THROUGH'}
+    else:
+        state.help = Assistance()
+        assert operator.modal(context, event(key)) == {'PASS_THROUGH'}
+    assert not text.edits
+    assert text.source == 'nodes.'
+
+
+@pytest.mark.parametrize('mutation', ['source', 'caret', 'line', 'text', 'range', 'selection'])
+def test_stale_completion_is_never_inserted(popup_session, mutation):
+    """Snapshot and span checks happen before any destructive editor operation."""
+    ui, operator, context, text, calls, event = popup_session
+    state = ui._STATES[17]
+    if mutation == 'source':
+        text.source = 'nodesx'
+    elif mutation == 'caret':
+        text.current_character = 4
+    elif mutation == 'line':
+        text.source = 'nodes.\n'
+        text.current_line_index = 1
+        text.current_character = 0
+    elif mutation == 'text':
+        other = _FakeText(source='nodes.', pointer=202)
+        context.area.spaces.active.text = other
+    elif mutation == 'range':
+        state.help = Assistance(candidates=state.help.candidates, line=0,
+                                replace_start=-1, replace_end=6)
+    elif mutation == 'selection':
+        state.selection = 99
+    assert operator.modal(context, event('RET')) == {'PASS_THROUGH'}
+    assert not text.edits
+    if mutation == 'text':
+        assert not context.area.spaces.active.text.edits
+    # The next timer tick is responsible for refreshing changed snapshots.
+    if mutation in {'source', 'caret', 'line', 'text'}:
+        ui._refresh_state(context.area)
+        assert state.key != (101, 'nodes.', 0, 6)

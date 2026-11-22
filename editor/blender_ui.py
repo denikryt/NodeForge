@@ -281,7 +281,7 @@ class NODEFORGE_OT_editor_session(bpy.types.Operator):
         return {'RUNNING_MODAL'}
 
     def modal(self, context, event):
-        """Accept Tab, navigate Up/Down, dismiss Escape; pass every other event."""
+        """Accept fresh completions, navigate suggestions, and dismiss on Escape."""
         pointer = self.area_pointer
         if not _ENABLED or pointer not in _RUNNING_AREAS:
             _RUNNING_AREAS.discard(pointer)
@@ -318,10 +318,20 @@ class NODEFORGE_OT_editor_session(bpy.types.Operator):
             state.suppressed = state.key
             context.area.tag_redraw()
             return {'RUNNING_MODAL'}
-        if event.type == 'TAB' and not (event.ctrl or event.alt or event.oskey):
+        if event.type in {'TAB', 'RET', 'NUMPAD_ENTER'}:
+            if event.ctrl or event.alt or event.oskey or (event.type != 'TAB' and event.shift):
+                return {'PASS_THROUGH'}
             hint = state.help
             text = space.text
-            if text.current_line_index != hint.line or text.current_character != hint.replace_end:
+            source = text.as_string()
+            current_key = (text.as_pointer(), source, text.current_line_index, text.current_character)
+            lines = source.split('\n')
+            if (current_key != state.key or
+                    not 0 <= state.selection < len(hint.candidates) or
+                    not 0 <= hint.line < len(lines) or
+                    text.current_line_index != hint.line or
+                    text.current_character != hint.replace_end or
+                    not 0 <= hint.replace_start <= hint.replace_end <= len(lines[hint.line])):
                 return {'PASS_THROUGH'}
             suggestion = hint.candidates[state.selection]
             for _ in range(hint.replace_end - hint.replace_start):
