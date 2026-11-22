@@ -217,6 +217,40 @@ def test_non_text_clicks_do_not_reopen_dismissed_popup(popup_session):
     assert state.help.candidates
 
 
+@pytest.mark.parametrize('region_type', ['HEADER', 'UI', None])
+def test_non_text_region_keys_do_not_change_popup_state(popup_session, region_type):
+    """Only the Text Editor WINDOW region owns modal completion key handling."""
+    ui, operator, context, text, calls, event = popup_session
+    state = ui._STATES[17]
+    context.region = SimpleNamespace(type=region_type) if region_type else None
+    current_key = state.key
+    original_help = state.help
+
+    # A visible candidate must not accept, navigate, or dismiss through another region.
+    for key in ('RET', 'NUMPAD_ENTER', 'TAB', 'UP_ARROW', 'DOWN_ARROW', 'ESC'):
+        assert operator.modal(context, event(key)) == {'PASS_THROUGH'}
+        assert (state.key, state.help, state.selection, state.suppressed) == (
+            current_key, original_help, 0, None)
+        assert text.source == 'nodes.' and not text.edits
+
+    # Dismiss from the text region, then try typing/restarting from another region.
+    context.region = SimpleNamespace(type='WINDOW')
+    assert operator.modal(context, event('ESC')) == {'RUNNING_MODAL'}
+    dismissed_help = state.help
+    context.region = SimpleNamespace(type=region_type) if region_type else None
+    for key, uni in (('A', 'a'), ('BACK_SPACE', ''), ('LEFT_ARROW', ''),
+                     ('RET', ''), ('TAB', ''), ('ESC', '')):
+        assert operator.modal(context, event(key, unicode=uni)) == {'PASS_THROUGH'}
+        ui._refresh_state(context.area)
+        assert (state.key, state.help, state.selection, state.suppressed) == (
+            current_key, dismissed_help, 0, current_key)
+        assert text.source == 'nodes.' and not text.edits
+    context.region = SimpleNamespace(type='WINDOW')
+    assert operator.modal(context, event('BACK_SPACE')) == {'PASS_THROUGH'}
+    ui._refresh_state(context.area)
+    assert state.help.candidates and state.suppressed is None
+
+
 @pytest.mark.parametrize('key', ['RET', 'NUMPAD_ENTER', 'TAB'])
 def test_completion_accepts_selected_candidate_once(popup_session, key):
     """All acceptance keys insert exactly the highlighted value without a newline."""
@@ -408,8 +442,12 @@ def test_real_blender_escape_with_stale_snapshot_and_header_click():
             assert not state.help.candidates
 
         with bpy.context.temp_override(area=area, region=header_region):
-            assert ui.NODEFORGE_OT_editor_session.modal(operator, bpy.context,
-                                                        event('LEFTMOUSE')) == {'PASS_THROUGH'}
+            for key, uni in (('LEFTMOUSE', ''), ('A', 'a'), ('RET', ''), ('BACK_SPACE', '')):
+                header_event = event(key)
+                header_event.unicode = uni
+                assert ui.NODEFORGE_OT_editor_session.modal(
+                    operator, bpy.context, header_event) == {'PASS_THROUGH'}
+                assert state.suppressed == state.key
         with bpy.context.temp_override(area=area, region=window_region):
             ui._refresh_state(area)
             assert state.suppressed == state.key
@@ -419,6 +457,17 @@ def test_real_blender_escape_with_stale_snapshot_and_header_click():
             ui._refresh_state(area)
             assert state.suppressed is None
             assert state.help.candidates
+            current = (state.key, state.help, state.selection)
+        with bpy.context.temp_override(area=area, region=header_region):
+            for key in ('RET', 'NUMPAD_ENTER', 'TAB', 'UP_ARROW', 'ESC'):
+                assert ui.NODEFORGE_OT_editor_session.modal(
+                    operator, bpy.context, event(key)) == {'PASS_THROUGH'}
+                assert (state.key, state.help, state.selection) == current
+                assert text.as_string() == 'cub'
+        with bpy.context.temp_override(area=area, region=window_region):
+            assert ui.NODEFORGE_OT_editor_session.modal(
+                operator, bpy.context, event('RET')) == {'RUNNING_MODAL'}
+            assert text.as_string() != 'cub'
     finally:
         ui._STATES.pop(pointer, None)
         ui._RUNNING_AREAS.discard(pointer)

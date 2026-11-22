@@ -297,6 +297,11 @@ class NODEFORGE_OT_editor_session(bpy.types.Operator):
         state = _STATES.get(pointer)
         if state is None:
             return {'PASS_THROUGH'}
+        # One modal listener covers the whole area. Only its text WINDOW region
+        # may navigate, accept, dismiss, or restart completion suggestions.
+        region = getattr(context, 'region', None)
+        if region is None or region.type != 'WINDOW':
+            return {'PASS_THROUGH'}
         if state.suppressed is not None and state.suppressed == state.key:
             if _restarts_dismissed_completion(event, getattr(context, 'region', None)):
                 # Invalidate even when several edits restore the same key before a timer tick.

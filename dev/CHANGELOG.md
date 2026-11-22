@@ -820,3 +820,11 @@ lifecycle.
 
 - Added Blender characterization sources, deterministic graph baselines and focused assertions for Python Extension API v2 inline/grouped placement, nested calls, DynamicResults, compacted semantic dependencies, and Capture Attribute Rotation.
 - Extended characterization snapshots to retain Capture Attribute item types, domain and unlinked Float item defaults without changing existing recorded cases.
+
+## 0.97.5
+
+- Made Blender Text Editor completion accept Enter/Numpad Enter as well as Tab, reopen after Escape on the next editor action, and reject stale selections.
+- Displayed static raw-node output selector names and types, including multi-return functions, in completion signatures and member previews.
+- Kept Text Editor suggestions dismissed after Escape when edits precede the next refresh; ignored unrelated header/sidebar mouse clicks.
+- Invalidated stale socket names and types after nested assignment expressions in source-signature previews.
+- Limited Text Editor completion keyboard handling to the text WINDOW region, preserving Escape dismissal and native header/sidebar key behavior.
