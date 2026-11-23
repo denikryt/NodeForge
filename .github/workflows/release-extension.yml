@@ -61,6 +61,11 @@ jobs:
                   '--dir', 'staging/package_install',
               ], check=True)
           PY
+      - name: Validate bundled Nodes package
+        run: |
+          set -euo pipefail
+          python3 tools/nodegen/build.py --check
+          cp package_install/nodeforge.nodes-v*.zip staging/package_install/
       - name: Stage extension contents
         run: |
           set -euo pipefail
@@ -73,7 +78,7 @@ jobs:
           from pathlib import Path
           import json, tomllib, zipfile
           from bundled_packages import BUNDLED_PACKAGES
-          expected = set(BUNDLED_PACKAGES)
+          expected = set(BUNDLED_PACKAGES) | {'nodeforge.nodes'}
           nodeforge_version = tuple(int(part) for part in tomllib.loads(
               Path('blender_manifest.toml').read_text())['version'].split('.'))
           seen = {}
@@ -130,7 +135,7 @@ jobs:
                   'package_install/' + archive.name
                   for archive in pathlib.Path('staging/package_install').glob('*.zip')
               }
-              assert len(staged_archives) == len(BUNDLED_PACKAGES), staged_archives
+              assert len(staged_archives) == len(BUNDLED_PACKAGES) + 1, staged_archives
               assert bundled_archives == staged_archives, bundled_archives
               for archive_name in bundled_archives:
                   with zipfile.ZipFile(io.BytesIO(z.read(archive_name))) as bundled:

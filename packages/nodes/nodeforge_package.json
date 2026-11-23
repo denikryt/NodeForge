@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "nodeforge.nodes",
+  "import_name": "nodes",
+  "name": "NodeForge Nodes",
+  "version": "1.4.0",
+  "author": "NodeForge Contributors",
+  "description": "Blender 5.2 node wrappers for NodeForge, including generated native bindings.",
+  "nodeforge_min_version": "0.99.0",
+  "contents": {
+    "systems": "systems"
+  }
+}

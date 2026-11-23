@@ -845,3 +845,8 @@ lifecycle.
 - Added optional direct typed Extension API v2 parameters declared with `= None`, including compile-time, runtime, and mixed evaluation modes.
 - Preserve omitted parameters as indexed static `None` operands through overload selection, semantic processing, dynamic result resolution, and inline/grouped Blender materialization.
 - Added declaration, semantic, dynamic-result, Blender socket-default, and downstream `nodeforge.nodes` regression coverage.
+## 0.100.0
+
+- Bundle `nodeforge.nodes` as a regular installable package containing generated Blender 5.2 native-node wrappers; replace the legacy wrapper implementations.
+- Add an in-repository Blender Inspector, deterministic wrapper generator, and one-command package generation/validation tool that preserves the manually managed package manifest.
+- Add a pinned Blender 5.2 inspection catalogue and regression checks for package discovery, generated bindings, and real Blender compilation.
