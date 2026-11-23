@@ -83,13 +83,12 @@ result = apply_rotation(cube(1.0))
 ''', 'NFTest_Inline_Rotation_Default')
     constants = _nodes(tree, 'FunctionNodeInputRotation')
     transforms = _nodes(tree, 'GeometryNodeTransform')
-    assert len(constants) == len(transforms) == 1
+    assert len(constants) == 0 and len(transforms) == 1
     assert not _nodes(tree, 'GeometryNodeGroup')
-    assert constants[0].outputs['Rotation'].bl_idname == 'NodeSocketRotation'
-    assert tuple(constants[0].rotation_euler) == tuple(
+    assert not transforms[0].inputs['Rotation'].is_linked
+    assert tuple(transforms[0].inputs['Rotation'].default_value) == tuple(
         normalize_float_constant(v) for v in (0.0, 0.0, 1.5707963)
     )
-    assert transforms[0].inputs['Rotation'].links[0].from_socket == constants[0].outputs['Rotation']
     assert all(link.is_valid for link in tree.links)
 
 
@@ -603,8 +602,10 @@ def test_inline_rotation_package_function_uses_caller_tree(tmp_path):
         tree = _compose('''from packages import rotationpkg
 result = rotationpkg.spatial.rotate.apply(cube(1.0))
 ''', 'NFTest_Inline_Rotation_Package')
-        assert len(_nodes(tree, 'FunctionNodeInputRotation')) == 1
-        assert len(_nodes(tree, 'GeometryNodeTransform')) == 1
+        assert not _nodes(tree, 'FunctionNodeInputRotation')
+        transform, = _nodes(tree, 'GeometryNodeTransform')
+        assert not transform.inputs['Rotation'].is_linked
+        assert tuple(transform.inputs['Rotation'].default_value) == pytest.approx((0.1, -0.2, 7.0), abs=1e-6)
         assert not _nodes(tree, 'GeometryNodeGroup')
         assert all(link.is_valid for link in tree.links)
     finally:
@@ -614,7 +615,7 @@ result = rotationpkg.spatial.rotate.apply(cube(1.0))
 def test_grouped_parent_reload_updates_inline_rotation_and_rolls_back(monkeypatch):
     """Reload tracks inline Rotation defaults and retains the published group on failure."""
     from NodeForge.compiler_identities import parse_module_definition_function_id
-    from NodeForge.blender import ir_lowering
+    from NodeForge.blender import nodes as blender_nodes
 
     source = '''def inner(rotation: Rotation = (0, 0, 0.25), __inline__=True) -> Rotation:
     return rotation
@@ -643,14 +644,14 @@ result = outer(cube(1.0))
     assert updated.rotation_euler.z == pytest.approx(0.75)
     before_nodes = {node.as_pointer() for node in parent.nodes}
     before_groups = {group.as_pointer() for group in bpy.data.node_groups}
-    original = ir_lowering._rotation_value
+    original = blender_nodes._rotation_value
 
     def fail_after_native_rotation(*args, **kwargs):
         """Simulate failure after creating the staged Rotation node."""
         original(*args, **kwargs)
         raise RuntimeError('injected inline Rotation failure')
 
-    monkeypatch.setattr(ir_lowering, '_rotation_value', fail_after_native_rotation)
+    monkeypatch.setattr(blender_nodes, '_rotation_value', fail_after_native_rotation)
     with pytest.raises(RuntimeError, match='injected inline Rotation failure'):
         compiler.update_library_catalog_group(
             parent, source=source.replace('0.25', '1.25'), module_context=origin,
@@ -699,3 +700,41 @@ result = outer(2.0)
     assert {node.as_pointer() for node in target.nodes} == node_pointers
     assert {group.as_pointer() for group in bpy.data.node_groups} == group_pointers
     assert all(link.is_valid for link in target.links)
+
+
+def test_installed_nodeforge_nodes_constants_respect_socket_fallbacks(tmp_path):
+    """Real v1.3 wrapper defaults preserve ordinary and contextual socket semantics."""
+    from pathlib import Path
+    from NodeForge import packages
+
+    source_root = Path(__file__).resolve().parents[3] / 'nodeforge.nodes'
+    if not (source_root / 'nodeforge_package.json').exists():
+        pytest.skip('nodeforge.nodes integration source is not installed beside NodeForge')
+    packages.set_packages_dir_for_tests(tmp_path / 'installed')
+    try:
+        packages.install_package_directory(source_root)
+        cube_tree = _compose('''from packages import nodes
+result, uv = nodes.mesh.primitives.mesh_cube(size_value=vector(2, 1, 1.5))
+''', 'NFTest_Nodes_Issue67_Cube')
+        native_cube, = _nodes(cube_tree, 'GeometryNodeMeshCube')
+        assert not native_cube.inputs['Size'].is_linked
+        assert tuple(native_cube.inputs['Size'].default_value) == pytest.approx((2, 1, 1.5))
+        assert not _nodes(cube_tree, 'ShaderNodeCombineXYZ')
+        assert not _nodes(cube_tree, 'GeometryNodeGroup')
+
+        write_tree = _compose('''from packages import nodes
+result = nodes.geometry.write.set_position_node(cube(1.0))
+''', 'NFTest_Nodes_Issue67_Position')
+        node, = _nodes(write_tree, 'GeometryNodeSetPosition')
+        assert node.inputs['Position'].is_linked
+        assert node.inputs['Position'].links[0].from_socket.bl_idname == 'NodeSocketVector'
+        assert not _nodes(write_tree, 'GeometryNodeGroup')
+
+        grouped_tree = _compose('''from packages import nodes
+result, uv = nodes.mesh.primitives.mesh_cube(__inline__=False)
+''', 'NFTest_Nodes_Issue67_Grouped')
+        group_node, = _nodes(grouped_tree, 'GeometryNodeGroup')
+        assert not _nodes(grouped_tree, 'GeometryNodeMeshCube')
+        assert len(_nodes(group_node.node_tree, 'GeometryNodeMeshCube')) == 1
+    finally:
+        packages.set_packages_dir_for_tests(None)

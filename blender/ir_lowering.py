@@ -12,7 +12,7 @@ from ..type_capabilities import REPEAT_ITEM_TYPES
 from ..errors import CompileError
 from ..compiler_identities import BindingId, InputDeclarationId
 from ..semantic.group_context import GroupContextSlot
-from .nodes import _bool_value, _color_value, _rotation_value, _vector_value, _boolean_math, _combine_xyz_mixed, _compare, _int_value, _integer_math, _math, _new_node, _separate_xyz, _string_value, _switch, _value, _vector_math
+from .nodes import _boolean_math, _combine_xyz_mixed, _compare, _integer_math, _math, _new_node, _separate_xyz, _switch, _vector_math
 from .geometry import (
     _capture_attribute_geometry,
     _cube_geometry,
@@ -65,8 +65,9 @@ from ..semantic.ir import (
     IRRepeat,
     IRPanelDeclaration,
 )
-from .values import ObjectValue, Value, make_value
-from ..semantic.callable_contracts import canonicalize_group_input_default, source_argument_type_matches
+from .values import ObjectValue, Value, DeferredConstant, make_value
+from .input_delivery import deliver_input, require_output
+from ..semantic.callable_contracts import source_argument_type_matches
 from ..semantic.ir import IRFunctionMaterializationMode
 from .interface import _create_group_input_socket, _create_interface_panel, _set_socket_default
 from ..function_instances import (
@@ -146,7 +147,7 @@ class BlenderIRLoweringContext:
     """
 
     group: object
-    runtime_bindings: Mapping[BindingId, Value]
+    runtime_bindings: Mapping[BindingId, Value | DeferredConstant]
     group_context_values: Mapping[GroupContextSlot, Value] = None
     interface_input_items: dict | None = None
     source_callable_session: object | None = None
@@ -190,9 +191,9 @@ def _materialized_value(materialized, value):
 
 def _store_result(materialized, result, value):
     """Validate and register one backend value for an IR result."""
-    if not isinstance(value, Value):
+    if not isinstance(value, (Value, DeferredConstant)):
         raise CompileError(
-            f"Internal error: Semantic IR value v{result.id} materialized as {type(value).__name__}, not Value"
+            f"Internal error: Semantic IR value v{result.id} has invalid backend type {type(value).__name__}"
         )
     if value.typ != result.typ:
         raise CompileError(
@@ -202,26 +203,17 @@ def _store_result(materialized, result, value):
 
 
 def _lower_literal(context, operation, materialized, x, y):
-    """Materialize one literal operation with the existing Blender node topology."""
-    if operation.result.typ == TYPE_BOOL:
-        val = _value(context.group, 1.0 if operation.value else 0.0, x, y)
-        zero = _value(context.group, 0.0, x + 20, y - 40)
-        result = _compare(context.group, "NOT_EQUAL", val, zero, x, y)
-    elif operation.result.typ == TYPE_FLOAT:
-        result = _value(context.group, operation.value, x, y)
-    elif operation.result.typ == TYPE_INT:
-        result = _int_value(context.group, operation.value, x, y)
-    else:
-        result = _string_value(context.group, operation.value, x, y)
+    """Keep a typed IR literal detached until a physical input/output needs it."""
+    result = DeferredConstant(operation.result.typ, operation.value)
     _store_result(materialized, operation.result, result)
 
 
 def _lower_binding(context, operation, materialized, runtime_bindings):
     """Resolve one semantic runtime binding to its backend materialization."""
     value = runtime_bindings.get(operation.binding_id)
-    if not isinstance(value, Value):
+    if not isinstance(value, (Value, DeferredConstant)):
         raise CompileError(
-            f"Internal error: Semantic IR binding {operation.binding_id!r} is no longer a runtime Value"
+            f"Internal error: Semantic IR binding {operation.binding_id!r} has no backend operand"
         )
     if value.typ != operation.result.typ:
         raise CompileError(
@@ -238,10 +230,10 @@ def _lower_unary(context, operation, materialized, x, y):
         if operation.operand.typ is TYPE_INT:
             result = _integer_math(context.group, "NEGATE", [operand], x, y)
         elif operation.operand.typ is TYPE_FLOAT:
-            zero = _value(context.group, 0.0, x, y - 40)
+            zero = DeferredConstant(TYPE_FLOAT, 0.0)
             result = _math(context.group, "SUBTRACT", [zero, operand], x, y)
         elif operation.operand.typ == TYPE_VECTOR:
-            minus_one = _value(context.group, -1.0, x, y - 40)
+            minus_one = DeferredConstant(TYPE_FLOAT, -1.0)
             result = _vector_math(context.group, "SCALE", [operand, minus_one], TYPE_VECTOR, x, y)
         else:
             raise CompileError(
@@ -302,7 +294,7 @@ def _lower_binary(context, operation, materialized, x, y):
                 f"{operation.left.typ} {operation.op} {operation.right.typ}"
             )
     elif operation.op == "DIVIDE" and operation.left.typ == TYPE_VECTOR and operation.right.typ in numeric_types:
-        inv = _math(context.group, "DIVIDE", [_value(context.group, 1.0, x, y - 40), right], x, y)
+        inv = _math(context.group, "DIVIDE", [DeferredConstant(TYPE_FLOAT, 1.0), right], x, y)
         result = _vector_math(context.group, "SCALE", [left, inv], TYPE_VECTOR, x, y)
     else:
         raise CompileError(
@@ -339,8 +331,8 @@ def _lower_conditional(context, operation, materialized, x, y):
 
 
 def _lower_vector_literal(context, operation, materialized, x, y):
-    """Materialize one normalized compile-time Vector with existing topology."""
-    result = _combine_xyz_mixed(context.group, list(operation.components), x, y)
+    """Keep a literal Vector detached, preserving its typed components."""
+    result = DeferredConstant(TYPE_VECTOR, tuple(operation.components))
     _store_result(materialized, operation.result, result)
 
 
@@ -415,6 +407,12 @@ def _lower_builtin_call(context, operation, operands, x, y):
         return _field_id(group, x, y)
     if name == "vector":
         components = [_slot_value(slot, operands) for slot in options["components"]]
+        if all(type(component) in {int, float} or isinstance(component, DeferredConstant)
+               and component.typ in {TYPE_FLOAT, TYPE_INT} for component in components):
+            return DeferredConstant(TYPE_VECTOR, tuple(
+                component.value if isinstance(component, DeferredConstant) else component
+                for component in components
+            ))
         return _combine_xyz_mixed(group, components, x, y)
     if "vector_operation" in options:
         result_type = operation.results[0].typ
@@ -445,8 +443,8 @@ def _lower_builtin_call(context, operation, operands, x, y):
         return _capture_attribute_geometry(
             group,
             operands[0],
-            operands[1],
-            selection=selection,
+            require_output(group, operands[1], context="capture_attribute() field"),
+            selection=require_output(group, selection, context="capture_attribute() selection") if selection is not None else None,
             domain=options["domain"],
             data_type=options["data_type"],
             x=x,
@@ -456,7 +454,7 @@ def _lower_builtin_call(context, operation, operands, x, y):
         return _sample_index_geometry(
             group,
             operands[0],
-            operands[1],
+            require_output(group, operands[1], context="sample_index() field"),
             _slot_value(options["index"], operands),
             domain=options["domain"],
             clamp=options["clamp"],
@@ -469,6 +467,8 @@ def _lower_builtin_call(context, operation, operands, x, y):
         value_index = 2 if name_mode[0] == "runtime" else 1
         value = operands[value_index]
         selection = operands[value_index + 1] if len(operands) > value_index + 1 else None
+        if selection is not None:
+            selection = require_output(group, selection, context="store_named_attribute() selection")
         return _store_named_attribute_geometry(
             group,
             operands[0],
@@ -508,7 +508,7 @@ def _lower_builtin_call(context, operation, operands, x, y):
             group,
             operands[0],
             operands[1],
-            selection=selection,
+            selection=require_output(group, selection, context="instance_on_points() selection") if selection is not None else None,
             scale=_slot_value(options["scale"], operands),
             rotation=_slot_value(options["rotation"], operands),
             realize=options["realize"],
@@ -592,33 +592,80 @@ def _source_call_owner_scope(operation):
     return direct_library_owner_scope_for_id(function_id)
 
 
-def _inline_constant_value(context, typ, value, x, y):
-    """Materialize a detached call argument/default as one typed runtime socket."""
-    value = canonicalize_group_input_default(typ, value)
-    if typ is TYPE_FLOAT:
-        return _value(context.group, value, x, y)
-    if typ is TYPE_INT:
-        return _int_value(context.group, value, x, y)
-    if typ is TYPE_BOOL:
-        return _bool_value(context.group, value, x, y)
-    if typ is TYPE_STRING:
-        return _string_value(context.group, value, x, y)
-    if typ is TYPE_VECTOR:
-        return _vector_value(context.group, value, x, y)
-    if typ is TYPE_COLOR:
-        return _color_value(context.group, value, x, y)
-    if typ is TYPE_ROTATION:
-        return _rotation_value(context.group, value, x, y)
-    raise CompileError(f"Internal error: unsupported inline default of type {typ}")
-
-
 def _inline_runtime_value(context, expected, actual, x, y):
-    """Detach a runtime Value and realize the only permitted numeric widening."""
-    if not isinstance(actual, Value) or not source_argument_type_matches(expected, actual.typ):
+    """Detach physical Values while retaining deferred arguments until use."""
+    if not isinstance(actual, (Value, DeferredConstant)) or not source_argument_type_matches(expected, actual.typ):
         raise CompileError(f"Internal error: inline argument expects {expected}, got {getattr(actual, 'typ', None)}")
     if expected is TYPE_FLOAT and actual.typ is TYPE_INT:
-        return _math(context.group, "ADD", [actual, _value(context.group, 0.0, x, y - 60)], x, y)
-    return make_value(actual.socket, actual.typ)
+        if isinstance(actual, DeferredConstant):
+            return DeferredConstant(TYPE_FLOAT, actual.value)
+        return _math(context.group, "ADD", [actual, DeferredConstant(TYPE_FLOAT, 0.0)], x, y)
+    if isinstance(actual, Value):
+        return make_value(actual.socket, actual.typ)
+    return actual
+
+
+def _inline_parameter_is_direct_single_sink(body, declaration_id):
+    """Prove one parameter reaches at most one supported, immediate IR consumer.
+
+    Only the prepared typed body is inspected. Loops/branches, nested source
+    forwarding, output-only values, and multiple uses retain one shared physical
+    producer per invocation (#59). This does not build a new flattened IR pass.
+    """
+    declarations = (stmt for stmt in body.statements if isinstance(stmt, IRInputDeclaration))
+    binding_id = next((stmt.target_binding_id for stmt in declarations
+                       if stmt.declaration_id == declaration_id), None)
+    if binding_id is None:
+        return False
+    consumers = 0
+    for stmt in body.statements:
+        if isinstance(stmt, (IRIf, IRRepeat)):
+            return False
+        program = getattr(stmt, "value", None)
+        if program is None or not hasattr(program, "operations"):
+            continue
+        refs = [op.result.id for op in program.operations
+                if isinstance(op, IRBinding) and op.binding_id == binding_id]
+        if not refs:
+            continue
+        if len(refs) > 1 or getattr(program.result, "id", None) in refs:
+            return False
+        ref = refs[0]
+        used = 0
+        for op in program.operations:
+            if isinstance(op, IRBinding):
+                continue
+            if isinstance(op, IRCall):
+                hits = [index for index, arg in enumerate(op.arguments) if arg.value.id == ref]
+                if hits:
+                    if op.target.kind is not IRCallableKind.BUILTIN or len(hits) != 1:
+                        return False
+                    if op.target.name not in {
+                        "node", "vector", "cube", "points", "point", "line", "grid",
+                        "set_position", "transform", "instance_on_points", "bundle",
+                        "bundle_get", "bundle_set", "store_named_attribute", "sample_index",
+                    } and "vector_operation" not in dict(op.options):
+                        return False
+                    if op.target.name == "node":
+                        raw = dict(op.options).get("inputs", ())
+                        if sum(spec == ("runtime", hits[0]) for _selector, spec in raw) != 1:
+                            return False
+                    used += 1
+                continue
+            for attribute in ("operand", "left", "right", "condition", "true_value", "false_value", "value"):
+                if getattr(getattr(op, attribute, None), "id", None) == ref:
+                    if not isinstance(op, (IRUnary, IRBinary, IRBoolBinary, IRCompare,
+                                           IRConditional, IRVectorComponent)):
+                        return False
+                    used += 1
+        # A reference without an admitted consumer may be part of a structural
+        # expression; avoid assuming that such a value is unused.
+        if used != 1:
+            return False
+        consumers += used
+        if consumers > 1:
+            return False
+    return consumers <= 1
 
 
 def _inline_parameter_bindings(context, operation, operands, prepared, x, y):
@@ -660,7 +707,19 @@ def _inline_parameter_bindings(context, operation, operands, prepared, x, y):
         if mode == "runtime":
             value = _inline_runtime_value(context, parameter.typ, arg, x - 180, y - offset)
         else:
-            value = _inline_constant_value(context, parameter.typ, arg, x - 180, y - offset)
+            value = DeferredConstant(parameter.typ, arg)
+        if isinstance(value, DeferredConstant) and not _inline_parameter_is_direct_single_sink(
+            prepared.group.body, origin
+        ):
+            if value.typ is TYPE_STRING:
+                # Literal-only Menu sockets need the known String even when
+                # other consumers require a shared physical String producer.
+                value.share_runtime_consumers()
+            else:
+                # Eager realization preserves non-String sharing through
+                # consumers that rewrap Bool or unpack numeric arguments.
+                value = require_output(context.group, value,
+                                       context=f"inline argument {parameter.display_name}")
         if origin in bound:
             raise CompileError("Internal error: inline declaration was bound more than once")
         bound[origin] = value
@@ -702,7 +761,8 @@ def _lower_inline_source_call(context, operation, operands, prepared, x, y):
         layout_origin=child_origin,
         root_input_endpoint=context.root_input_endpoint,
     )
-    result = lower_body(bound_context, prepared.group.body, inputs, base_depth=0)
+    result = lower_body(bound_context, prepared.group.body, inputs, base_depth=0,
+                        physical_outputs=False)
     outputs = result.explicit_outputs if result.explicit_outputs else (
         (result.auto_output,) if result.auto_output is not None else ()
     )
@@ -712,7 +772,8 @@ def _lower_inline_source_call(context, operation, operands, prepared, x, y):
     for (_name, value), output in zip(outputs, prepared.contract.outputs):
         if value.typ is not output.typ:
             raise CompileError("Internal error: inline return type disagrees with source contract")
-        values.append(make_value(value.socket, value.typ))
+        physical = require_output(context.group, value, context="inline function return", allow_native_conversion=True)
+        values.append(make_value(physical.socket, physical.typ))
     trace = getattr(context.function_materialization_context, "function_compilation_trace", None)
     frame = getattr(trace, "current", None)
     if frame is not None:
@@ -801,12 +862,14 @@ def _lower_source_call(context, operation, operands, x, y):
     for static in operation.static_arguments:
         if static.parameter_index >= len(physical_inputs):
             raise CompileError("Internal error: source-call static input position is out of range")
-        _set_socket_default(physical_inputs[static.parameter_index], static.value)
+        deliver_input(context.group, physical_inputs[static.parameter_index],
+                      DeferredConstant(static.typ, static.value) if hasattr(static, "typ") else static.value,
+                      context="grouped static argument")
     for argument, value in zip(operation.arguments, operands):
         position = argument.parameter_index
         if position is None or position >= len(physical_inputs):
             raise CompileError("Internal error: source-call runtime input position is out of range")
-        context.group.links.new(value.socket, physical_inputs[position])
+        deliver_input(context.group, physical_inputs[position], value, context="grouped function argument")
 
     physical_outputs = _group_node_outputs(node)
     values = []
@@ -831,9 +894,11 @@ def _lower_call(context, operation, materialized, x, y):
         if (operation.extension_materialization is not None and
                 operation.extension_materialization.mode is IRExtensionMaterializationMode.GROUPED):
             from .extension_group_materializer import materialize_extension_call
-            result = materialize_extension_call(context, operation, operands, x, y)
+            result = materialize_extension_call(context, operation,
+                                               [require_output(context.group, v, context="grouped extension input") for v in operands], x, y)
         else:
-            result = lower_extension_call(context, operation, operands, x, y)
+            result = lower_extension_call(context, operation,
+                                          [require_output(context.group, v, context="extension input") for v in operands], x, y)
     else:
         raise CompileError(f"Internal error: unsupported Call IR target kind {operation.target.kind}")
     _store_call_results(materialized, operation, result)
@@ -887,7 +952,7 @@ def _execute_operation(context, operation, materialized, base_depth, runtime_bin
         return
     if isinstance(operation, IRContextWrite):
         value = _materialized_value(materialized, operation.value)
-        context.group_context_values[operation.slot] = value
+        context.group_context_values[operation.slot] = require_output(context.group, value, context="group context")
         return
     raise CompileError(f"Internal error: unsupported Semantic IR operation {type(operation).__name__}")
 
@@ -909,8 +974,8 @@ def _lower_program_result(context, program, runtime_bindings, base_depth):
 
 def _require_body_value_type(value, expected_type):
     """Reject impossible backend/body semantic type mismatches before publication."""
-    if not isinstance(value, Value):
-        raise CompileError("Internal error: IRBody expression did not materialize a runtime Value")
+    if not isinstance(value, (Value, DeferredConstant)):
+        raise CompileError("Internal error: IRBody expression did not produce a backend operand")
     if value.typ is not expected_type:
         raise CompileError(
             f"Internal error: IRBody backend type {value.typ} does not match semantic type {expected_type}"
@@ -924,7 +989,7 @@ class BodyLoweringResult:
 
     explicit_outputs: tuple[tuple[str, Value], ...]
     auto_output: tuple[str, Value] | None
-    runtime_bindings: Mapping[BindingId, Value]
+    runtime_bindings: Mapping[BindingId, Value | DeferredConstant]
     group_context_values: Mapping[GroupContextSlot, Value]
 
     def __post_init__(self) -> None:
@@ -954,7 +1019,7 @@ def _lower_body_internal(
             if group_input is None:
                 # Inline parameters are already validated and keyed by BindingId.
                 value = runtime_bindings.get(statement.target_binding_id)
-                if not isinstance(value, Value) or value.typ is not statement.typ:
+                if not isinstance(value, (Value, DeferredConstant)) or value.typ is not statement.typ:
                     raise CompileError("Internal error: missing or incompatible prebound inline input")
                 auto_output = (statement.target_name, value)
                 continue
@@ -975,6 +1040,12 @@ def _lower_body_internal(
                 _lower_program_result(context, statement.value, runtime_bindings, base_depth),
                 statement.value.result.typ,
             )
+            if statement.value.result.typ is TYPE_VECTOR and isinstance(value, DeferredConstant):
+                # A named Vector constructor is an intentional source identity (#50).
+                if any(isinstance(op, IRVectorLiteral) or
+                       isinstance(op, IRCall) and op.target.name == "vector"
+                       for op in statement.value.operations):
+                    value = require_output(context.group, value, context="named Vector")
             runtime_bindings[statement.binding_id] = value
             auto_output = (statement.source_name, value)
             continue
@@ -1082,6 +1153,7 @@ def _lower_body_internal(
                 repeat_x,
                 repeat_y,
             )
+            iterations = require_output(context.group, iterations, context="Repeat iterations")
             context.group.links.new(iterations.socket, ri.inputs[0])
             for state in statement.states:
                 try:
@@ -1090,6 +1162,7 @@ def _lower_body_internal(
                     raise CompileError(f"Internal error: missing Repeat entry state {state.source_name!r}") from exc
                 if initial.typ is not state.typ:
                     raise CompileError("Internal error: Repeat backend entry type does not match semantic input type")
+                initial = require_output(context.group, initial, context="Repeat entry state")
                 context.group.links.new(initial.socket, _socket_by_name(ri.inputs, state.source_name))
 
             body_bindings = dict(runtime_bindings)
@@ -1112,6 +1185,7 @@ def _lower_body_internal(
                     raise CompileError(f"Internal error: missing Repeat exit state {state.source_name!r}") from exc
                 if final_value.typ is not state.typ:
                     raise CompileError("Internal error: Repeat backend exit type violates semantic state contract")
+                final_value = require_output(context.group, final_value, context="Repeat exit state")
                 context.group.links.new(final_value.socket, _socket_by_name(ro.inputs, state.source_name))
                 output_value = Value(_socket_by_name(ro.outputs, state.source_name), state.typ)
                 if state.publish_to_parent:
@@ -1127,11 +1201,19 @@ def _lower_body_internal(
     )
 
 
-def lower_body(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None):
-    """Materialize typed IR using supplied bindings or a physical Group Input node."""
+def lower_body(context, body, initial_runtime_bindings, base_depth=1, *, group_input=None,
+               physical_outputs=True):
+    """Lower one body; expose physical outputs for group assembly boundaries."""
     if not isinstance(body, IRBody):
         raise TypeError("body must be an IRBody")
-    return _lower_body_internal(context, body, initial_runtime_bindings, base_depth, group_input=group_input)
+    result = _lower_body_internal(context, body, initial_runtime_bindings, base_depth, group_input=group_input)
+    if not physical_outputs:
+        return result
+    outputs = tuple((name, require_output(context.group, v, context="Group Output", allow_native_conversion=True))
+                    for name, v in result.explicit_outputs)
+    auto = ((result.auto_output[0], require_output(context.group, result.auto_output[1],
+             context="Group auto output", allow_native_conversion=True)) if result.auto_output is not None else None)
+    return BodyLoweringResult(outputs, auto, result.runtime_bindings, result.group_context_values)
 
 
 def _materialize_program_result(materialized, result):

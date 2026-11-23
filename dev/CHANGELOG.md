@@ -821,7 +821,26 @@ lifecycle.
 - Added Blender characterization sources, deterministic graph baselines and focused assertions for Python Extension API v2 inline/grouped placement, nested calls, DynamicResults, compacted semantic dependencies, and Capture Attribute Rotation.
 - Extended characterization snapshots to retain Capture Attribute item types, domain and unlinked Float item defaults without changing existing recorded cases.
 
+## 0.97.5
+
+- Made Blender Text Editor completion accept Enter/Numpad Enter as well as Tab, reopen after Escape on the next editor action, and reject stale selections.
+- Displayed static raw-node output selector names and types, including multi-return functions, in completion signatures and member previews.
+- Kept Text Editor suggestions dismissed after Escape when edits precede the next refresh; ignored unrelated header/sidebar mouse clicks.
+- Invalidated stale socket names and types after nested assignment expressions in source-signature previews.
+- Limited Text Editor completion keyboard handling to the text WINDOW region, preserving Escape dismissal and native header/sidebar key behavior.
+
 ## 0.98.0
+
+- Added consumer-aware typed constant delivery across raw Blender nodes, Math/Compare/Vector operators, geometry builtins, dynamic Bundle inputs, and inline/grouped functions, storing eligible literals in native input defaults instead of creating redundant constant nodes.
+- Preserved connected constants for implicit/contextual inputs (Set Position, Mesh to Points, Noise and contextual group interfaces), native behavior of omitted inputs, runtime value identity and named Vector sharing.
+- Preserved Float32/Int32 types, Bool comparisons, Color/Rotation input semantics, typed Bundle item ordering, and physical ownership across grouped calls, extensions and control flow.
+- Preserved raw-node schema-v2 input realization modes and dynamic Bundle defaults across Compile, Update, Reload and transactional rollback.
+- Enabled known inline String constants to populate literal-only Menu inputs through aliases, nested calls and multiple consumers, while rejecting runtime String connections and invalid Menu values.
+- Retained one shared physical producer for multi-consumer non-String inline operands (including Bool Compare, points() count and cube() scale) and shared String producers for runtime-capable consumers.
+- Consolidated duplicated scale/Euler conversion logic in geometry builtins and removed the unused legacy inline constant materializer.
+- Added Blender 5.2 characterization, regression and package integration tests covering constant topology, native evaluation, type validation, inline sharing and graph updates.
+
+## 0.99.0
 
 - Added optional direct typed Extension API v2 parameters declared with `= None`, including compile-time, runtime, and mixed evaluation modes.
 - Preserve omitted parameters as indexed static `None` operands through overload selection, semantic processing, dynamic result resolution, and inline/grouped Blender materialization.

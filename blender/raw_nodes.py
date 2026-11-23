@@ -22,7 +22,8 @@ from ..errors import CompileError
 from ..semantic.callable_contracts import canonicalize_color_components
 from .socket_types import runtime_socket_nf_type
 from .nodes import _new_node
-from .values import Value, make_value
+from .values import Value, DeferredConstant, make_value
+from .input_delivery import deliver_input, validate_input
 
 
 RAW_NODE_PROP = "nodeforge_raw_node"
@@ -147,16 +148,16 @@ def build_materialized_raw_node(
                 raise CompileError(f"{context}: multi-input {selector_label} items cannot be empty")
             _require_multi_input(socket, context, selector_label)
             for value in value_spec:
-                _validate_materialized_value(value, socket, context, selector_label)
+                validate_input(group, socket, value, context=f"{context}: input {selector_label}")
             prepared_inputs.append((socket, socket_ref, INPUT_MULTI_LINK, tuple(value_spec)))
-        elif isinstance(value_spec, Value):
-            _validate_materialized_value(value_spec, socket, context, selector_label)
-            prepared_inputs.append((socket, socket_ref, INPUT_SINGLE_LINK, value_spec))
         else:
-            normalized = _normalize_input_literal(value_spec, context, selector_label, socket=socket)
-            if not hasattr(socket, "default_value"):
-                raise CompileError(f"{context}: input {selector_label!r} does not accept literal defaults")
-            prepared_inputs.append((socket, socket_ref, INPUT_LITERAL, normalized))
+            # Raw literal syntax retains its established validation; physical
+            # type and realization are decided at the resolved socket boundary.
+            payload = value_spec
+            if not isinstance(value_spec, (Value, DeferredConstant)):
+                payload = _normalize_input_literal(value_spec, context, selector_label, socket=socket)
+            validate_input(group, socket, payload, context=f"{context}: input {selector_label}")
+            prepared_inputs.append((socket, socket_ref, None, payload))
 
     prepared_outputs = []
     resolved_output_sockets = []
@@ -205,22 +206,23 @@ def build_materialized_raw_node(
     # rollback for such failures.
     input_contracts = []
     for socket, socket_ref, mode, payload in prepared_inputs:
+        input_context = f"{context}: input {socket_ref.identifier}"
         if mode == INPUT_MULTI_LINK:
             for value in payload:
-                _link_materialized_value(group, value, socket, context, socket_ref.identifier)
+                realization = deliver_input(group, socket, value, context=input_context)
+                if realization.mode != INPUT_SINGLE_LINK:
+                    raise CompileError(f"{input_context}: multi-input items must be connected")
             input_contracts.append(
-                {"socket": _serialize_physical_socket_ref(socket_ref), "mode": mode, "links": len(payload)}
-            )
-        elif mode == INPUT_SINGLE_LINK:
-            _link_materialized_value(group, payload, socket, context, socket_ref.identifier)
-            input_contracts.append(
-                {"socket": _serialize_physical_socket_ref(socket_ref), "mode": mode, "links": 1}
+                {"socket": _serialize_physical_socket_ref(socket_ref), "mode": INPUT_MULTI_LINK, "links": len(payload)}
             )
         else:
-            normalized = _assign_literal_default(socket, payload, context, socket_ref.identifier)
-            input_contracts.append(
-                {"socket": _serialize_physical_socket_ref(socket_ref), "mode": mode, "default": normalized}
-            )
+            realization = deliver_input(group, socket, payload, context=input_context)
+            contract = {"socket": _serialize_physical_socket_ref(socket_ref), "mode": realization.mode}
+            if realization.mode == INPUT_SINGLE_LINK:
+                contract["links"] = 1
+            else:
+                contract["default"] = _normalize_socket_default(socket.default_value, input_context)
+            input_contracts.append(contract)
 
     output_refs = tuple(item[2] for item in prepared_outputs)
     mode = RAW_MULTI_MODE if outputs is not None else RAW_SINGLE_MODE
@@ -432,21 +434,6 @@ def _reject_duplicate_physical_socket(existing, socket, *, context: str) -> None
         raise CompileError(context)
 
 
-def _validate_materialized_value(value, socket, context, socket_name):
-    """Validate one runtime Value against a resolved input without linking it."""
-    if not isinstance(value, Value):
-        raise CompileError(f"{context}: input {socket_name!r} expects a runtime node value")
-    _validate_runtime_socket_type(socket, value.typ, direction="input", context=context, socket_name=socket_name)
-
-
-def _link_materialized_value(group, value, socket, context, socket_name):
-    """Link one prevalidated runtime Value to a prevalidated raw-node input."""
-    try:
-        group.links.new(value.socket, socket)
-    except Exception as exc:
-        raise CompileError(f"{context}: failed to link input {socket_name!r}: {exc}") from exc
-
-
 def _validate_public_type(typ, context):
     if typ not in _SUPPORTED_TYPES:
         raise CompileError(f"{context} must be a NodeForge type token")
@@ -502,25 +489,6 @@ def _require_multi_input(socket, context, socket_name):
         except Exception as exc:
             raise CompileError(f"{context}: could not verify multi-input socket {socket_name!r}") from exc
     raise CompileError(f"{context}: Blender did not expose multi-input metadata for socket {socket_name!r}")
-
-
-def _assign_literal_default(socket, literal, context, socket_name):
-    literal = _normalize_input_literal(literal, context, socket_name, socket=socket)
-    if not hasattr(socket, "default_value"):
-        raise CompileError(f"{context}: input {socket_name!r} does not accept literal defaults")
-    try:
-        socket.default_value = literal
-    except Exception:
-        try:
-            for index, component in enumerate(literal):
-                socket.default_value[index] = component
-        except Exception as exc:
-            raise CompileError(f"{context}: failed to assign literal default for input {socket_name!r}: {exc}") from exc
-    try:
-        normalized = _normalize_socket_default(socket.default_value, f"{context}: input {socket_name!r}")
-    except Exception as exc:
-        raise CompileError(f"{context}: could not verify literal default for input {socket_name!r}") from exc
-    return normalized
 
 
 def _normalize_input_literal(literal, context, socket_name, *, socket=None):

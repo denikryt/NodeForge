@@ -785,7 +785,7 @@ Creates a Blender node directly. Use this for Blender node types that are not ex
 
 `bl_idname`, node properties, socket selectors, output aliases, and type tokens are compile-time declarations. Runtime values are allowed inside `inputs={...}` and are linked to the selected Blender input sockets. `props=` is applied before socket selectors are resolved, so selectors see the node configuration produced by those properties. Reusing a [base-tree Group Input](#base-tree-group-input) checks its existing properties instead.
 
-Supported type tokens are `Float`, `Int`, `Bool`, `Vector`, `Color`, `Geometry`, `Material`, `Object`, `String`, and `Bundle`. A `Color`-typed result maps exactly to Blender `NodeSocketColor`; `typ=Color` is a strict output type assertion. Color input sockets accept four-component RGBA tuple literals as defaults.
+Supported type tokens are `Float`, `Int`, `Bool`, `Vector`, `Color`, `Rotation`, `Geometry`, `Material`, `Object`, `String`, and `Bundle`. A `Color`-typed result maps exactly to Blender `NodeSocketColor`; `typ=Color` is a strict output type assertion. Color input sockets accept four-component RGBA tuple literals as defaults.
 
 ```python
 def split_color(factor: Float) -> Float:
@@ -799,12 +799,36 @@ These strict `typ=` declarations are distinct from the explicit Capture/Store `t
 | --- | --- | --- | --- |
 | `bl_idname` | compile-time `String` | required | Blender node type identifier, for example `"ShaderNodeMath"`. |
 | `props` | literal dict | `{}` | Blender node properties assigned before socket resolution. Custom properties are not supported. |
-| `inputs` | literal dict | `{}` | Maps input socket selectors to literal defaults, runtime values, or a literal list for multi-input fanout. |
+| `inputs` | literal dict | `{}` | Maps input socket selectors to literal values, runtime values, or a literal list for multi-input fanout. See [Input values](#input-values). |
 | `output` | socket selector | required in single-output mode | Output socket returned by the call. |
 | `typ` | type token | required in single-output mode | NodeForge type of `output`. |
 | `outputs` | literal dict | required in multi-output mode | Maps NodeForge result aliases to type tokens or explicit `(selector, TypeToken)` pairs. |
 
 Returns: one runtime value in single-output mode; a named multi-output result in `outputs=` mode.
+
+### Input values
+
+Constants can be stored directly on input sockets, as with **Size** below:
+
+```python
+shape = node("GeometryNodeMeshCube", inputs={"Size": (2.0, 1.0, 1.5)},
+             output="Mesh", typ=Geometry)
+```
+
+NodeForge creates a constant node when a link is needed, for example on Set Position's **Position** input. Omit an `inputs` entry to keep Blender's native unconnected behavior. Named `vector(...)` results keep their shared output.
+
+### Menu inputs
+
+Menu inputs accept valid, nonempty String enum names, including constants passed through inline `.nf` calls. Runtime String sockets are unsupported.
+
+```python
+def resample(geometry: Geometry, mode: String = "Count", __inline__=True) -> Geometry:
+    return node("GeometryNodeResampleCurve",
+                inputs={"Curve": geometry, ID("Mode"): mode},
+                output="Curve", typ=Geometry)
+
+result = resample(line((0, 0, 0), (1, 0, 0)), mode="Length")
+```
 
 ### Socket selectors
 

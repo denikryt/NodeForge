@@ -453,7 +453,7 @@ def _raw_input_literal(value, context, socket_name):
     raise CompileError(f"{context}: unsupported literal default for input {socket_name!r}")
 
 
-def _analyze_raw_node(expr, consts, add_runtime):
+def _analyze_raw_node(expr, consts, add_runtime, runtime_binding_names=frozenset()):
     """Normalize ``node(...)`` source syntax without querying Blender sockets."""
     if len(expr.args) != 1:
         raise CompileError("node(...) expects exactly one positional bl_idname argument")
@@ -563,15 +563,26 @@ def _analyze_raw_node(expr, consts, add_runtime):
                     operands.append(AnalyzedCallOperand(parameter_name, typ_i))
                 input_specs.append((selector, ("multi", tuple(refs))))
                 continue
-            try:
-                literal = _const_eval(value_expr, consts)
-            except ConstEvalUnavailable:
-                typ_i = add_runtime(value_expr, parameter_name, f"node() input {parameter_name!r}")
-                ref = len(operands)
-                operands.append(AnalyzedCallOperand(parameter_name, typ_i))
-                input_specs.append((selector, ("runtime", ref)))
-            else:
-                input_specs.append((selector, ("literal", _raw_input_literal(literal, "node()", parameter_name))))
+            # Runtime names shadow compile-time snapshots at ordinary expression
+            # sites. Raw input evaluation must honor the same binding precedence;
+            # otherwise named Vector producers become orphaned while their
+            # consumers silently receive copied static defaults.
+            runtime_expression = any(
+                isinstance(child, ast.Name) and child.id in runtime_binding_names
+                for child in ast.walk(value_expr)
+            )
+            if not runtime_expression:
+                try:
+                    literal = _const_eval(value_expr, consts)
+                except ConstEvalUnavailable:
+                    pass
+                else:
+                    input_specs.append((selector, ("literal", _raw_input_literal(literal, "node()", parameter_name))))
+                    continue
+            typ_i = add_runtime(value_expr, parameter_name, f"node() input {parameter_name!r}")
+            ref = len(operands)
+            operands.append(AnalyzedCallOperand(parameter_name, typ_i))
+            input_specs.append((selector, ("runtime", ref)))
 
     options = (
         ("bl_idname", bl_idname),
@@ -588,7 +599,7 @@ def _analyze_raw_node(expr, consts, add_runtime):
     return BuiltinCallSemantics(tuple(operands), options, result)
 
 
-def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: RuntimeAnalyzer) -> BuiltinCallSemantics:
+def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: RuntimeAnalyzer, *, runtime_binding_names=frozenset()) -> BuiltinCallSemantics:
     """Normalize one IR-capable builtin call using detached compile-time state."""
     if name not in IR_CAPABLE_BUILTIN_NAMES:
         raise KeyError(name)
@@ -1043,7 +1054,7 @@ def analyze_builtin_call(name: str, expr: ast.Call, consts, add_runtime: Runtime
         return BuiltinCallSemantics(tuple(operands), (), RuntimeCallResult(TYPE_BUNDLE))
 
     if name == "node":
-        return _analyze_raw_node(expr, consts, add_runtime)
+        return _analyze_raw_node(expr, consts, add_runtime, runtime_binding_names)
 
     raise CompileError(f"Internal error: missing semantic builtin analyzer for {name}")
 

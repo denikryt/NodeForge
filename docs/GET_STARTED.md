@@ -92,7 +92,7 @@ To call functions saved in Local from another script, see [Import functions](MOD
 
 ## Text Editor completion (prototype)
 
-NodeForge has built-in text completion for scripts in Blender's Text Editor. This prototype suggests Core DSL functions, Local and package imports, imported members, and functions declared in the current script. It also shows function parameters and return types when available. Enable it with **NodeForge** in the Text Editor header.
+Text Editor completion suggests Core DSL functions, Local and package imports, imported members, and functions declared in the current Text. Call hints show parameter names, types, and defaults, plus available output names and types in return order.
 
 ## What to read next
 

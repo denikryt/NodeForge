@@ -367,6 +367,42 @@ def _sync_bundle_dynamic_items(src_group, node_map):
                     f"Failed to recreate Bundle item {src_item.name!r} on node {src_node.name!r}: {exc}"
                 ) from exc
 
+        # Items rebuild their input/output sockets after generic RNA copying.
+        # Restore their defaults now, otherwise successful updates silently
+        # replace unlinked constant values with Blender's initial zero values.
+        for direction in ("inputs", "outputs"):
+            source = getattr(src_node, direction)
+            target = getattr(dst_node, direction)
+            if len(source) != len(target):
+                raise CompileError(f"Bundle cutover changed {direction} count on {src_node.name!r}")
+            for src_socket, dst_socket in zip(source, target):
+                if (src_socket.name != dst_socket.name
+                        or src_socket.bl_idname != dst_socket.bl_idname):
+                    raise CompileError(f"Bundle cutover changed {direction} socket type/name on {src_node.name!r}")
+                if not hasattr(src_socket, "default_value"):
+                    continue
+                _copy_socket_default(src_socket, dst_socket)
+                before = src_socket.default_value
+                after = dst_socket.default_value
+                if hasattr(before, 'as_pointer'):
+                    equal = hasattr(after, 'as_pointer') and before.as_pointer() == after.as_pointer()
+                elif isinstance(before, (str, int, float, bool)):
+                    equal = before == after
+                else:
+                    try:
+                        old, new = tuple(before), tuple(after)
+                    except (TypeError, ValueError):
+                        equal = before == after
+                    else:
+                        equal = len(old) == len(new) and all(
+                            abs(float(a) - float(b)) <= 1e-6 for a, b in zip(old, new)
+                        )
+                if not equal:
+                    raise CompileError(
+                        f"Bundle cutover lost {direction} default {src_socket.name!r} "
+                        f"on {src_node.name!r}"
+                    )
+
         for attr in ("active_index", "define_signature"):
             if not hasattr(src_node, attr) or not hasattr(dst_node, attr):
                 continue

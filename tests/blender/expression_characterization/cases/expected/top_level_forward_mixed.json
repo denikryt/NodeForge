@@ -8,18 +8,8 @@
           "Mesh"
         ],
         "to": [
-          "n2",
-          "Socket_0"
-        ]
-      },
-      {
-        "from": [
           "n1",
-          "Vector"
-        ],
-        "to": [
-          "n2",
-          "Socket_1"
+          "Socket_0"
         ]
       }
     ],
@@ -27,16 +17,6 @@
       {
         "bl_idname": "GeometryNodeMeshCube",
         "id": "n0",
-        "properties": {}
-      },
-      {
-        "bl_idname": "ShaderNodeCombineXYZ",
-        "defaults": {
-          "X": 0.0,
-          "Y": 0.0,
-          "Z": 2.0
-        },
-        "id": "n1",
         "properties": {}
       },
       {
@@ -118,12 +98,12 @@
           "id": "g1",
           "unique": false
         },
-        "id": "n2",
+        "id": "n1",
         "properties": {}
       },
       {
         "bl_idname": "GeometryNodeMeshCube",
-        "id": "n3",
+        "id": "n2",
         "properties": {}
       }
     ]
