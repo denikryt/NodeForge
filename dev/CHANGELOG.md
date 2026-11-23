@@ -850,3 +850,5 @@ lifecycle.
 - Bundle `nodeforge.nodes` as a regular installable package containing generated Blender 5.2 native-node wrappers; replace the legacy wrapper implementations.
 - Add an in-repository Blender Inspector, deterministic wrapper generator, and one-command package generation/validation tool that preserves the manually managed package manifest.
 - Add a pinned Blender 5.2 inspection catalogue and regression checks for package discovery, generated bindings, and real Blender compilation.
+- Install bundled `nodeforge.nodes` from `packages/nodes/` directly into the versioned user package inventory; stop tracking and shipping a nested Nodes ZIP.
+- Add `tools/nodegen/cli.py` with `inspect`, `generate`, `test`, and `build` commands; merge seven Inspector stages into a versioned specification before generation.

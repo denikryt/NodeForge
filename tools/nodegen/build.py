@@ -120,7 +120,7 @@ def verify(blender: Path, package: Path, report: dict, out: Path, *, all_states:
     if limit:
         command.extend(['--limit', str(limit)])
     env = os.environ.copy()
-    env['NODEFORGE_CORE_PARENT'] = str(ROOT.parent)
+    env.setdefault('NODEFORGE_CORE_PARENT', str(ROOT.parent))
     print('VERIFY', ' '.join(command), flush=True)
     with (out / 'blender.log').open('w', encoding='utf-8') as log:
         subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
