@@ -39,7 +39,7 @@ def main():
     logs = out / 'logs'
     logs.mkdir()
     for stage, script, names in PIPELINE:
-        command = [str(blender), '-b', '-t', '1', '--factory-startup', '--python', str(SCRIPTS / script),
+        command = [str(blender), '-b', '-t', '1', '--factory-startup', '--python-exit-code', '1', '--python', str(SCRIPTS / script),
                    '--', *(str(out / name) for name in names)]
         print(f'STAGE {stage}', flush=True)
         with (logs / f'{stage}.log').open('w', encoding='utf-8') as log:
@@ -49,7 +49,18 @@ def main():
         expected = out / f'{stage}.json'
         if result.returncode or not expected.is_file():
             raise SystemExit(f'Stage {stage} failed (exit={result.returncode}). See {logs / (stage + ".log")}')
-    print(f'Complete: {out}. Merge separately with python merge_artifacts.py --input "{out}" --output spec.json')
+    from merge_artifacts import load_sources, merge_documents, restore_stage, write_json, STAGES
+
+    docs, sources = load_sources(out)
+    merged = merge_documents(docs, sources)
+    for stage in STAGES:
+        if restore_stage(merged, stage) != docs[stage]:
+            raise RuntimeError(f'Inspector merged specification lost {stage} data')
+    version_parts = merged['blender_version'].split('.')
+    version = '.'.join(version_parts[:2])
+    destination = out / f'blender-{version}.spec.json'
+    write_json(destination, merged)
+    print(f'INSPECTOR_SPEC {destination}', flush=True)
 
 
 if __name__ == '__main__':

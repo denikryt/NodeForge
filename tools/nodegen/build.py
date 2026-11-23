@@ -153,7 +153,7 @@ def main() -> None:
     parser.add_argument('--all', action='store_true', help='Check every supported configuration (requires --verify)')
     parser.add_argument('--limit', type=int, default=0, help='Limit validation cases for a quick smoke run')
     parser.add_argument('--check', action='store_true', help='Compare generated output without changing it')
-    parser.add_argument('--no-zip', action='store_true', help='Do not create the installable package ZIP')
+    parser.add_argument('--no-zip', action='store_true', help='Deprecated no-op; source packages do not need ZIP')
     parser.add_argument('--results', type=Path, default=ROOT.parent / 'nodegen-results')
     args = parser.parse_args()
     if args.verify and (args.blender is None or not args.blender.is_file()):
@@ -161,7 +161,7 @@ def main() -> None:
     if args.all and not args.verify:
         parser.error('--all requires --verify')
     spec = read_spec(args.spec)
-    report, bundle = build(spec, args.output, check=args.check, archive=not args.no_zip)
+    report, bundle = build(spec, args.output, check=args.check, archive=False)
     print(f"GENERATED {report['summary']['wrappers']} functions; "
           f"{report['summary']['states']} representable configurations; "
           f"{len(report['skipped'])} skipped nodes", flush=True)

@@ -61,16 +61,20 @@ jobs:
                   '--dir', 'staging/package_install',
               ], check=True)
           PY
-      - name: Validate bundled Nodes package
+      - name: Check generated Blender Nodes sources
         run: |
           set -euo pipefail
-          python3 tools/nodegen/build.py --check
-          cp package_install/nodeforge.nodes-v*.zip staging/package_install/
+          python3 tools/nodegen/cli.py generate --check
       - name: Stage extension contents
         run: |
           set -euo pipefail
           cp ./*.py blender_manifest.toml LICENCE README.md staging/
           cp -R blender semantic extensions examples editor staging/
+          # Bundled Nodes is shipped as source, not a nested ZIP.
+          mkdir -p staging/packages
+          cp -R packages/nodes staging/packages/
+          test -f staging/packages/nodes/nodeforge_package.json
+          test -f staging/packages/nodes/systems/blender/interface.py
           # Only these code directories are part of the extension (no tests or .git).
           test -d staging/blender && test -d staging/extensions && test -d staging/semantic && test -d staging/editor
           find staging -name __pycache__ -type d -prune -exec rm -rf {} +
@@ -78,7 +82,7 @@ jobs:
           from pathlib import Path
           import json, tomllib, zipfile
           from bundled_packages import BUNDLED_PACKAGES
-          expected = set(BUNDLED_PACKAGES) | {'nodeforge.nodes'}
+          expected = set(BUNDLED_PACKAGES)
           nodeforge_version = tuple(int(part) for part in tomllib.loads(
               Path('blender_manifest.toml').read_text())['version'].split('.'))
           seen = {}
@@ -96,6 +100,14 @@ jobs:
                   assert tuple(int(part) for part in minimum.split('.')) <= nodeforge_version, archive
                   seen[package_id] = archive.name
           assert set(seen) == set(expected), seen
+          # The included Nodes package is installed directly from its source tree.
+          builtin = Path('staging/packages/nodes/nodeforge_package.json')
+          assert builtin.is_file()
+          node_meta = json.loads(builtin.read_text())
+          assert node_meta['id'] == 'nodeforge.nodes'
+          assert node_meta['contents']['systems'] == 'systems'
+          assert tuple(int(part) for part in node_meta['nodeforge_min_version'].split('.')) <= nodeforge_version
+          assert 'nodeforge.nodes' not in seen
           PY
       - name: Cache Blender 5.2
         id: blender-cache
@@ -135,11 +147,14 @@ jobs:
                   'package_install/' + archive.name
                   for archive in pathlib.Path('staging/package_install').glob('*.zip')
               }
-              assert len(staged_archives) == len(BUNDLED_PACKAGES) + 1, staged_archives
+              assert len(staged_archives) == len(BUNDLED_PACKAGES), staged_archives
               assert bundled_archives == staged_archives, bundled_archives
               for archive_name in bundled_archives:
                   with zipfile.ZipFile(io.BytesIO(z.read(archive_name))) as bundled:
                       assert 'nodeforge_package.json' in bundled.namelist(), archive_name
+              assert 'packages/nodes/nodeforge_package.json' in files
+              assert 'packages/nodes/systems/blender/interface.py' in files
+              assert not any(n.startswith('package_install/nodeforge.nodes-') for n in files)
               assert not any(n.startswith(('.git/', 'tests/', 'dev/')) for n in files)
           PY
           "$BLENDER" -b --command extension server-generate --repo-dir public

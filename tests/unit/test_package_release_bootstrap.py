@@ -217,3 +217,69 @@ def test_directory_fsync_always_closes_descriptor_and_reports_sync_error(tmp_pat
     else:
         packages._fsync_directory(tmp_path)
     assert seen == ["open", "fsync", "close"]
+
+
+def source_package(extension_root: Path, package_id: str, version: str) -> Path:
+    """Create an embedded source tree; no installable ZIP is generated."""
+    root = extension_root / 'packages' / package_id
+    (root / 'functions').mkdir(parents=True, exist_ok=True)
+    (root / 'nodeforge_package.json').write_text(json.dumps({
+        'schema_version': 1, 'id': package_id, 'name': package_id,
+        'version': version, 'nodeforge_min_version': '0.50.0',
+        'contents': {'functions': 'functions'},
+    }))
+    (root / 'functions' / 'entry.nf').write_text('output(1.0)\n')
+    return root
+
+
+def test_included_source_directory_is_installed_as_copy(tmp_path):
+    extension = tmp_path / 'addon'
+    src = source_package(extension, 'nodeforge.nodes', '1.4.0')
+    assert packages.install_included_packages(extension) == ()
+    record, = packages.active_package_records()
+    assert record.manifest.package_id == 'nodeforge.nodes'
+    assert record.manifest.version == '1.4.0'
+    assert record.manifest.root != src.resolve()
+    assert (record.manifest.root / 'functions' / 'entry.nf').read_text() == 'output(1.0)\n'
+    state = packages.load_package_state()
+    assert packages.install_included_packages(extension) == ()
+    assert packages.load_package_state() == state
+    src.joinpath('functions', 'entry.nf').write_text('output(2.0)\n')
+    assert (record.manifest.root / 'functions' / 'entry.nf').read_text() == 'output(1.0)\n'
+
+
+def test_included_source_directory_upgrades_but_never_downgrades(tmp_path):
+    extension = tmp_path / 'addon'
+    source_package(extension, 'nodeforge.nodes', '1.4.0')
+    assert packages.install_included_packages(extension) == ()
+    state_before = packages.load_package_state()
+    source_package(extension, 'nodeforge.nodes', '1.3.0')
+    assert packages.install_included_packages(extension) == ()
+    assert packages.load_package_state() == state_before
+    source_package(extension, 'nodeforge.nodes', '1.5.0')
+    assert packages.install_included_packages(extension) == ()
+    record, = packages.active_package_records()
+    assert record.manifest.version == '1.5.0'
+
+
+def test_duplicate_id_between_source_tree_and_zip_rejected_before_install(tmp_path):
+    extension = tmp_path / 'addon'
+    source_package(extension, 'nodeforge.nodes', '1.4.0')
+    extra = archive(tmp_path / 'zip', 'nodeforge.nodes', '1.4.0')
+    bundle = extension / 'package_install'
+    bundle.mkdir()
+    shutil.copyfile(extra, bundle / extra.name)
+    errors = packages.install_included_packages(extension)
+    assert len(errors) == 1 and 'Duplicate included package ID' in errors[0]
+    assert not packages.active_package_records()
+
+
+def test_independent_zip_and_source_packages_still_install_together(tmp_path):
+    extension = tmp_path / 'addon'
+    source_package(extension, 'nodeforge.nodes', '1.4.0')
+    extra = archive(tmp_path / 'zip', 'vendor.math', '1.0.0')
+    bundle = extension / 'package_install'
+    bundle.mkdir()
+    shutil.copyfile(extra, bundle / extra.name)
+    assert packages.install_included_packages(extension) == ()
+    assert {r.manifest.package_id for r in packages.active_package_records()} == {'nodeforge.nodes', 'vendor.math'}

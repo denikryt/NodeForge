@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 import subprocess
 import sys
-import zipfile
 
 import pytest
 
@@ -31,23 +30,19 @@ def test_bundled_package_declares_generated_blender_owner():
     assert "'resample_curve': '.backend:resample_curve'" in text
 
 
-def test_generated_bindings_and_bundle_match_inspector():
-    """Regeneration must not alter manually edited manifests or generated bindings."""
+def test_generated_bindings_match_inspector_source():
+    """Regeneration preserves the manually managed manifest and exact bindings."""
     before = (PACKAGE / 'nodeforge_package.json').read_bytes()
-    run = subprocess.run([sys.executable, str(BUILD), '--check'],
+    run = subprocess.run([sys.executable, str(BUILD), '--check', '--no-zip'],
                          capture_output=True, text=True, check=True)
     assert 'GENERATED 297 functions' in run.stdout
     assert (PACKAGE / 'nodeforge_package.json').read_bytes() == before
-    meta = json.loads(before)
-    archive = ROOT / 'package_install' / f"{meta['id']}-v{meta['version']}_nf-v{meta['nodeforge_min_version']}.zip"
-    with zipfile.ZipFile(archive) as zf:
-        assert zf.read('nodeforge_package.json') == before
-        assert 'systems/blender/interface.py' in zf.namelist()
-        assert not any('/unified/' in path for path in zf.namelist())
+    assert (PACKAGE / 'systems/blender/interface.py').is_file()
+    assert not list((ROOT / 'package_install').glob('nodeforge.nodes*.zip'))
 
 
-def test_stock_bundle_installs_without_special_package_logic(tmp_path):
-    """A bundled ZIP is handled by the existing versioned package installer."""
+def test_included_sources_install_without_special_package_logic(tmp_path):
+    """Bundled sources use the stock versioned package directory installer."""
     packages.set_packages_dir_for_tests(tmp_path / 'inventory')
     try:
         assert packages.install_included_packages(ROOT) == ()

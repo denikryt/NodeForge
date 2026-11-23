@@ -65,16 +65,19 @@ def test_library_release_assets_are_downloaded_from_latest_releases():
     assert "for package_id, repository in BUNDLED_PACKAGES.items():" in download
     assert "'--repo', repository" in download
     assert "f'{package_id}-v*_nf-v*.zip'" in download
-    local = _step(_job("build"), "name: Validate bundled Nodes package")
-    assert "tools/nodegen/build.py --check" in local
-    assert "package_install/nodeforge.nodes-v*.zip" in local
+    local = _step(_job("build"), "name: Check generated Blender Nodes sources")
+    assert "tools/nodegen/cli.py generate --check" in local
     stage = _step(_job("build"), "name: Stage extension contents")
-    assert "expected = set(BUNDLED_PACKAGES) | {'nodeforge.nodes'}" in stage
+    assert "cp -R packages/nodes staging/packages/" in stage
+    assert "staging/packages/nodes/nodeforge_package.json" in stage
+    assert "expected = set(BUNDLED_PACKAGES)" in stage
     assert "manifest['nodeforge_min_version']" in stage
     assert "minimum.split('.')" in stage
     assert "assert set(seen) == set(expected)" in stage
     build = _step(_job("build"), "name: Validate and build")
-    assert "len(staged_archives) == len(BUNDLED_PACKAGES) + 1" in build
+    assert "len(staged_archives) == len(BUNDLED_PACKAGES)" in build
+    assert "'packages/nodes/nodeforge_package.json' in files" in build
+    assert "'packages/nodes/systems/blender/interface.py' in files" in build
 
 
 def test_extension_staging_includes_text_editor_modules():
@@ -126,9 +129,9 @@ def test_pages_retry_reuses_existing_pages_artifact():
     """Deploy retries never re-upload an artifact or retry immutable release creation."""
     build = _job("build")
     pages = _job("deploy-pages")
-    staged = _job("build-pages")
-    prepared = _step(staged, "name: Preserve combined Pages artifact")
-    assert f"if: {TAG_PUSH_ONLY}" in staged
+    build_pages = _job("build-pages")
+    prepared = _step(build_pages, "name: Preserve combined Pages artifact")
+    assert f"if: {TAG_PUSH_ONLY}" in build_pages
     assert "uses: actions/upload-pages-artifact@v3" in prepared
     assert "path: combined/" in prepared
     assert "retention-days: 30" in prepared
