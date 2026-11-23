@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from helpers import _owned_generated_id_keys, check, compile_group, expect_compile_error
+from helpers import bpy, compile_root, _owned_generated_id_keys, check, compile_group, expect_compile_error
 
 
 def _sample_nodes(group):
@@ -123,3 +123,33 @@ def nf_fixture():
         "NFTest_sample_index_rejected_type_no_resources",
     )
     check(_owned_generated_id_keys() == before, "failed Sample Index compile published generated resources")
+
+
+def test_sample_index_inline_default_index_uses_direct_default_and_rejects_wrong_type():
+    """Deferred inline Int reaches Index without accidental int(DeferredConstant)."""
+    group = bpy.data.node_groups.new("NFTest_sample_index_inline_default_index", "GeometryNodeTree")
+    compile_root(
+        '''def sampled(geometry: Geometry, value: Float, at: Int = 3, __inline__=True) -> Float:
+    return sample_index(geometry, value, at)
+
+geo = grid(3, 3)
+result = sampled(geo, position().x)
+''', group,
+    )
+    sample, = _sample_nodes(group)
+    assert not sample.inputs["Index"].is_linked
+    assert sample.inputs["Index"].default_value == 3
+    assert not any(node.bl_idname == "FunctionNodeInputInt" for node in group.nodes)
+
+    bad_group = bpy.data.node_groups.new("NFTest_sample_index_inline_bad_index", "GeometryNodeTree")
+    with __import__("pytest").raises(Exception):
+        compile_root(
+        '''def sampled(geometry: Geometry, value: Float, at: Bool = True, __inline__=True) -> Float:
+    return sample_index(geometry, value, at)
+
+def nf_fixture():
+    geo = grid(3, 3)
+    value = sampled(geo, position().x)
+    return (value,)
+''', bad_group,
+        )

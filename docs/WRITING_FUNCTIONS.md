@@ -59,7 +59,9 @@ DEFAULT_SIZE = 2.0
 shape = make_cube()
 ```
 
-For a grouped call, omitting an optional argument leaves its socket unlinked, using the declared default. An inline call materializes the same default as a typed runtime value in the caller tree. Here, the unlinked `size` input defaults to `2.0`. Constants in the calling module do not replace defaults in an imported function. Defaults cannot refer to function parameters.
+Grouped calls leave omitted optional inputs unlinked, using the declared default (`size = 2.0` above). Explicit constants can use Group Node input defaults. Inline calls may use [socket defaults or constant nodes](BUILTINS.md#input-values). These rules also apply to `.nf` functions imported from Local, Examples, and packages.
+
+Constants in the calling module do not replace defaults in an imported function. Defaults cannot refer to function parameters.
 
 Use `panel([geometry, offset], name="Transform", collapsed=True)` at the start of a function body to group its inputs in Blender's interface. Panels change socket layout while positional arguments continue to follow the function declaration. See [Interface Panels](BUILTINS.md#interface-panels).
 

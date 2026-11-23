@@ -345,3 +345,133 @@ def nf_fixture(path: String['Path'] = 'value'):
     check(len([node for node in group.nodes if node.bl_idname == "NodeGetBundleItem"]) == 1, "Bundle IRBody get topology changed")
     check(len([node for node in group.nodes if node.bl_idname == "NodeStoreBundleItem"]) == 1, "Bundle IRBody set topology changed")
     bpy.data.node_groups.remove(group)
+
+
+def test_bundle_backend_delivers_deferred_primitives_into_dynamic_defaults():
+    """An explicitly supplied primitive uses the generated Bundle socket default."""
+    from NodeForge.blender.bundle import build_bundle, build_bundle_get, build_bundle_set
+    from NodeForge.blender.values import DeferredConstant, Value
+    from NodeForge.nf_types import NFType
+
+    group = bpy.data.node_groups.new("NFBundle_deferred_direct", "GeometryNodeTree")
+    try:
+        geometry = group.nodes.new("GeometryNodeMeshCube")
+        state = build_bundle(group, [
+            ("value", DeferredConstant(NFType.FLOAT, 2.5)),
+            ("count", DeferredConstant(NFType.INT, 3)),
+            ("flag", DeferredConstant(NFType.BOOL, True)),
+            ("direction", DeferredConstant(NFType.VECTOR, (1.0, 2.0, 3.0))),
+            ("label", DeferredConstant(NFType.STRING, "ok")),
+            ("color", DeferredConstant(NFType.COLOR, (0.1, 0.2, 0.3, 0.4))),
+            ("geometry", Value(geometry.outputs["Mesh"], NFType.GEOMETRY)),
+        ])
+        combine = _one_node(group, "NodeCombineBundle")
+        check([item.name for item in combine.bundle_items] == [
+            "value", "count", "flag", "direction", "label", "color", "geometry"
+        ], "Bundle item order changed")
+        check(not any(combine.inputs[name].is_linked for name in
+            ("value", "count", "flag", "direction", "label", "color")),
+            "primitive Bundle items created redundant links")
+        check(combine.inputs["value"].default_value == 2.5, "Float Bundle default mismatch")
+        check(combine.inputs["count"].default_value == 3, "Int Bundle default mismatch")
+        check(combine.inputs["flag"].default_value is True, "Bool Bundle default mismatch")
+        check(tuple(combine.inputs["direction"].default_value) == (1, 2, 3), "Vector Bundle default mismatch")
+        check(combine.inputs["label"].default_value == "ok", "String Bundle default mismatch")
+        check(tuple(round(x, 3) for x in combine.inputs["color"].default_value) == (0.1, 0.2, 0.3, 0.4), "Color Bundle default mismatch")
+        check(combine.inputs["geometry"].is_linked, "runtime geometry Bundle item lost link")
+
+        got = build_bundle_get(group, state, DeferredConstant(NFType.STRING, "value"), NFType.FLOAT)
+        read = _one_node(group, "NodeGetBundleItem")
+        check(read.inputs["Bundle"].is_linked, "Get Bundle input lost link")
+        check(read.inputs["Path"].default_value == "value" and not read.inputs["Path"].is_linked,
+              "Get Bundle Path must be a direct String default")
+        check(got.typ == NFType.FLOAT, "Get Bundle result type mismatch")
+
+        build_bundle_set(group, state, DeferredConstant(NFType.STRING, "value"), DeferredConstant(NFType.FLOAT, 5.0))
+        store = _one_node(group, "NodeStoreBundleItem")
+        check(store.inputs["Bundle"].is_linked, "Store Bundle source lost link")
+        check(store.inputs["Path"].default_value == "value" and not store.inputs["Path"].is_linked,
+              "Store Bundle Path must be a direct String default")
+        check(store.inputs["Item"].default_value == 5.0 and not store.inputs["Item"].is_linked,
+              "Store Bundle Item must be a direct Float default")
+        check(not any(n.bl_idname in ("ShaderNodeValue", "FunctionNodeInputInt", "FunctionNodeInputBool", "FunctionNodeInputString", "ShaderNodeCombineXYZ") for n in group.nodes),
+              "redundant Bundle constant producers remain")
+    finally:
+        bpy.data.node_groups.remove(group, do_unlink=True)
+
+
+def test_bundle_backend_rejects_unsupported_and_foreign_runtime_items():
+    """Bundle validation occurs at dynamic item or physical source boundary."""
+    from NodeForge.blender.bundle import build_bundle, build_bundle_get, build_bundle_set
+    from NodeForge.blender.values import DeferredConstant, Value
+    from NodeForge.errors import CompileError
+    from NodeForge.nf_types import NFType
+
+    group = bpy.data.node_groups.new("NFBundle_deferred_errors", "GeometryNodeTree")
+    other = bpy.data.node_groups.new("NFBundle_deferred_foreign", "GeometryNodeTree")
+    try:
+        with pytest.raises(CompileError, match="unsupported Bundle item type"):
+            build_bundle(group, [("rotation", DeferredConstant(NFType.ROTATION, (0.0, 0.0, 0.0)))])
+        valid = build_bundle(group, [("number", DeferredConstant(NFType.INT, 1))])
+        with pytest.raises(CompileError, match="path expects String"):
+            build_bundle_get(group, valid, DeferredConstant(NFType.FLOAT, 1.0), NFType.INT)
+        foreign = other.nodes.new("ShaderNodeValue")
+        with pytest.raises(CompileError, match="current Geometry Nodes group"):
+            build_bundle_set(group, valid, DeferredConstant(NFType.STRING, "number"), Value(foreign.outputs[0], NFType.FLOAT))
+    finally:
+        bpy.data.node_groups.remove(group, do_unlink=True)
+        bpy.data.node_groups.remove(other, do_unlink=True)
+
+
+def test_bundle_rebuild_preserves_dynamic_direct_defaults_and_physical_bundle_link():
+    """Configured dynamic item defaults survive cutover; invalid signatures roll back."""
+    before = '''
+def nf_fixture():
+    state = bundle(value=1.25, enabled=True, direction=vector(1, 2, 3))
+    state = bundle_set(state, "value", 5.0)
+    return (state,)
+'''
+    after = '''
+def nf_fixture():
+    state = bundle(value=7.5, label="updated", enabled=False)
+    state = bundle_set(state, "value", 2.5)
+    return (state,)
+'''
+    group = compile_group(before, 'NFTest_bundle_constant_update')
+    root_pointer = group.as_pointer()
+
+    def current():
+        node = _one_node(group, 'NodeCombineBundle')
+        return node, _one_node(group, 'NodeStoreBundleItem')
+
+    combine, store = current()
+    assert [item.name for item in combine.bundle_items] == ['value', 'enabled', 'direction']
+    for socket, default in (('value', 1.25), ('enabled', True), ('direction', (1, 2, 3))):
+        assert not combine.inputs[socket].is_linked
+        observed = combine.inputs[socket].default_value
+        assert (tuple(observed) if socket == 'direction' else observed) == default
+    assert store.inputs['Bundle'].is_linked
+    assert store.inputs['Path'].default_value == 'value' and not store.inputs['Path'].is_linked
+    assert store.inputs['Item'].default_value == 5.0 and not store.inputs['Item'].is_linked
+
+    prepared_create_or_update(after, group.name, existing_group=group)
+    assert group.as_pointer() == root_pointer
+    combine, store = current()
+    assert [item.name for item in combine.bundle_items] == ['value', 'label', 'enabled']
+    assert combine.inputs['value'].default_value == 7.5 and not combine.inputs['value'].is_linked
+    assert combine.inputs['label'].default_value == 'updated' and not combine.inputs['label'].is_linked
+    assert combine.inputs['enabled'].default_value is False and not combine.inputs['enabled'].is_linked
+    assert store.inputs['Item'].default_value == 2.5 and not store.inputs['Item'].is_linked
+    assert store.inputs['Bundle'].is_linked
+
+    blender_group_backend._TEST_CUTOVER_FAIL_AFTER_RESET = True
+    try:
+        with pytest.raises(RuntimeError):
+            prepared_create_or_update(before, group.name, existing_group=group)
+    finally:
+        blender_group_backend._TEST_CUTOVER_FAIL_AFTER_RESET = False
+    assert group.as_pointer() == root_pointer
+    combine, store = current()
+    assert [item.name for item in combine.bundle_items] == ['value', 'label', 'enabled']
+    assert combine.inputs['value'].default_value == 7.5
+    assert store.inputs['Item'].default_value == 2.5 and store.inputs['Bundle'].is_linked

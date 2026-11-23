@@ -28,7 +28,7 @@
               "Socket_0"
             ],
             "to": [
-              "n3",
+              "n2",
               "Value"
             ]
           },
@@ -38,7 +38,7 @@
               "Socket_1"
             ],
             "to": [
-              "n4",
+              "n3",
               "Value_001"
             ]
           },
@@ -49,22 +49,12 @@
             ],
             "to": [
               "n3",
-              "Value_001"
+              "Value"
             ]
           },
           {
             "from": [
               "n3",
-              "Value"
-            ],
-            "to": [
-              "n4",
-              "Value"
-            ]
-          },
-          {
-            "from": [
-              "n4",
               "Value"
             ],
             "to": [
@@ -85,23 +75,15 @@
             "properties": {}
           },
           {
-            "bl_idname": "ShaderNodeValue",
-            "id": "n2",
-            "payload": {
-              "value": 2.0
-            },
-            "properties": {}
-          },
-          {
             "bl_idname": "ShaderNodeMath",
-            "id": "n3",
+            "id": "n2",
             "properties": {
               "operation": "MULTIPLY"
             }
           },
           {
             "bl_idname": "ShaderNodeMath",
-            "id": "n4",
+            "id": "n3",
             "properties": {
               "operation": "ADD"
             }

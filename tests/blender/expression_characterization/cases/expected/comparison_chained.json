@@ -32,7 +32,7 @@
           "Socket_0"
         ],
         "to": [
-          "n4",
+          "n3",
           "A"
         ]
       },
@@ -42,7 +42,7 @@
           "Socket_1"
         ],
         "to": [
-          "n3",
+          "n2",
           "Value"
         ]
       },
@@ -52,7 +52,7 @@
           "Socket_1"
         ],
         "to": [
-          "n6",
+          "n4",
           "Value"
         ]
       },
@@ -62,73 +62,53 @@
           "Socket_2"
         ],
         "to": [
-          "n7",
+          "n5",
           "B"
         ]
       },
       {
         "from": [
           "n2",
-          "Integer"
-        ],
-        "to": [
-          "n3",
-          "Value_001"
-        ]
-      },
-      {
-        "from": [
-          "n3",
           "Value"
         ],
         "to": [
-          "n4",
+          "n3",
           "B"
         ]
       },
       {
         "from": [
-          "n4",
+          "n3",
           "Result"
         ],
         "to": [
-          "n8",
+          "n6",
           "Boolean"
         ]
       },
       {
         "from": [
-          "n5",
-          "Integer"
-        ],
-        "to": [
-          "n6",
-          "Value_001"
-        ]
-      },
-      {
-        "from": [
-          "n6",
+          "n4",
           "Value"
         ],
         "to": [
-          "n7",
+          "n5",
           "A"
         ]
       },
       {
         "from": [
-          "n7",
+          "n5",
           "Result"
         ],
         "to": [
-          "n8",
+          "n6",
           "Boolean_001"
         ]
       },
       {
         "from": [
-          "n8",
+          "n6",
           "Boolean"
         ],
         "to": [
@@ -149,23 +129,15 @@
         "properties": {}
       },
       {
-        "bl_idname": "FunctionNodeInputInt",
-        "id": "n2",
-        "payload": {
-          "value": 2
-        },
-        "properties": {}
-      },
-      {
         "bl_idname": "ShaderNodeMath",
-        "id": "n3",
+        "id": "n2",
         "properties": {
           "operation": "MULTIPLY"
         }
       },
       {
         "bl_idname": "FunctionNodeCompare",
-        "id": "n4",
+        "id": "n3",
         "properties": {
           "data_type": "FLOAT",
           "mode": "ELEMENT",
@@ -173,23 +145,15 @@
         }
       },
       {
-        "bl_idname": "FunctionNodeInputInt",
-        "id": "n5",
-        "payload": {
-          "value": 2
-        },
-        "properties": {}
-      },
-      {
         "bl_idname": "ShaderNodeMath",
-        "id": "n6",
+        "id": "n4",
         "properties": {
           "operation": "MULTIPLY"
         }
       },
       {
         "bl_idname": "FunctionNodeCompare",
-        "id": "n7",
+        "id": "n5",
         "properties": {
           "data_type": "FLOAT",
           "mode": "ELEMENT",
@@ -198,7 +162,7 @@
       },
       {
         "bl_idname": "FunctionNodeBooleanMath",
-        "id": "n8",
+        "id": "n6",
         "properties": {
           "operation": "AND"
         }

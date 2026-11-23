@@ -20,23 +20,13 @@
           "Socket_0"
         ],
         "to": [
-          "n3",
+          "n2",
           "Value_001"
         ]
       },
       {
         "from": [
           "n2",
-          "Value"
-        ],
-        "to": [
-          "n3",
-          "Value"
-        ]
-      },
-      {
-        "from": [
-          "n3",
           "Value"
         ],
         "to": [
@@ -57,16 +47,8 @@
         "properties": {}
       },
       {
-        "bl_idname": "ShaderNodeValue",
-        "id": "n2",
-        "payload": {
-          "value": 0.0
-        },
-        "properties": {}
-      },
-      {
         "bl_idname": "ShaderNodeMath",
-        "id": "n3",
+        "id": "n2",
         "properties": {
           "operation": "SUBTRACT"
         }

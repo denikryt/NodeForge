@@ -68,6 +68,8 @@ class _FakeNode(dict):
         self.name = bl_idname
         self.label = ""
         self.bl_rna = SimpleNamespace(properties={})
+        for socket in (*self.inputs, *self.outputs):
+            socket.node = self
 
 
 class _FakeLinks(list):
@@ -360,6 +362,8 @@ def test_raw_build_preflights_all_selectors_before_defaults_links_or_metadata(mo
     input_socket = _FakeSocket("Value", "Value", default_value=0.0)
     node = _FakeNode("ShaderNodeValue", inputs=[input_socket], outputs=[_FakeSocket("Value", "ValueOut", is_output=True)])
     group = _FakeGroup()
+    # Backend socket validation now verifies ownership at the physical boundary.
+    node.id_data = group
     monkeypatch.setattr(raw_nodes, "_new_node", lambda *_args, **_kwargs: node)
 
     with pytest.raises(CompileError, match="unknown output socket name"):
@@ -383,6 +387,8 @@ def test_raw_build_rejects_identifierless_declared_socket_before_mutation(monkey
     output_socket = _FakeSocket("Value", "Out", is_output=True)
     node = _FakeNode("ShaderNodeValue", inputs=[input_socket], outputs=[output_socket])
     group = _FakeGroup()
+    # Backend socket validation now verifies ownership at the physical boundary.
+    node.id_data = group
     monkeypatch.setattr(raw_nodes, "_new_node", lambda *_args, **_kwargs: node)
 
     with pytest.raises(CompileError, match="cannot be persisted safely"):
@@ -406,6 +412,8 @@ def test_raw_build_writes_schema_v2_identifier_refs_only(monkeypatch):
     output_socket = _FakeSocket("Value", "OutputValue", is_output=True)
     node = _FakeNode("ShaderNodeValue", inputs=[input_socket], outputs=[output_socket])
     group = _FakeGroup()
+    # Backend socket validation now verifies ownership at the physical boundary.
+    node.id_data = group
     monkeypatch.setattr(raw_nodes, "_new_node", lambda *_args, **_kwargs: node)
 
     value = raw_nodes.build_materialized_raw_node(
@@ -437,6 +445,8 @@ def test_mixed_selectors_cannot_bind_one_physical_socket_twice(monkeypatch):
     output = _FakeSocket("Value", "Out", is_output=True)
     node = _FakeNode("ShaderNodeMath", inputs=[shared], outputs=[output])
     group = _FakeGroup()
+    # Backend socket validation now verifies ownership at the physical boundary.
+    node.id_data = group
     monkeypatch.setattr(raw_nodes, "_new_node", lambda *_args, **_kwargs: node)
 
     with pytest.raises(CompileError, match="two input selectors resolve to the same physical socket"):
@@ -618,3 +628,40 @@ def test_validate_raw_node_after_cutover_uses_schema_specific_locator_and_fails_
     output.identifier = "Corrupted"
     with pytest.raises(CompileError, match="identifier 'OutputID' is missing"):
         raw_nodes.validate_raw_node_after_cutover(node, group)
+
+
+def test_raw_input_precedence_preserves_runtime_bound_name():
+    """Runtime names shadow detached CTFE snapshots in raw input evaluation."""
+    expr = ast.parse('node("GeometryNodeMeshCube", inputs={"Size": size}, output="Mesh", typ=Geometry)', mode="eval").body
+    calls = []
+
+    def add_runtime(node, parameter_name, context):
+        calls.append((node, parameter_name, context))
+        return TYPE_VECTOR
+
+    result = analyze_builtin_call(
+        "node", expr, {"size": (2.0, 1.0, 1.5)}, add_runtime,
+        runtime_binding_names={"size"},
+    )
+    options = dict(result.options)
+    assert options["inputs"] == (("Size", ("runtime", 0)),)
+    assert len(calls) == 1 and isinstance(calls[0][0], ast.Name)
+
+    static = analyze_builtin_call(
+        "node", expr, {"size": (2.0, 1.0, 1.5)}, add_runtime,
+        runtime_binding_names=(),
+    )
+    assert dict(static.options)["inputs"] == (("Size", ("literal", (2.0, 1.0, 1.5))),)
+
+
+def test_raw_input_precedence_follows_runtime_name_in_expression():
+    """A nested expression referencing a runtime name is not replaced by CTFE."""
+    expr = ast.parse(
+        'node("GeometryNodeMeshCube", inputs={"Size": vector(size, 1, 1)}, output="Mesh", typ=Geometry)',
+        mode="eval",
+    ).body
+    result = analyze_builtin_call(
+        "node", expr, {"size": 2.0}, lambda *_: TYPE_VECTOR,
+        runtime_binding_names={"size"},
+    )
+    assert dict(result.options)["inputs"] == (("Size", ("runtime", 0)),)

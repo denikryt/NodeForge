@@ -53,7 +53,7 @@
                   "Socket_0"
                 ],
                 "to": [
-                  "n3",
+                  "n2",
                   "Value"
                 ]
               },
@@ -63,7 +63,7 @@
                   "Socket_0"
                 ],
                 "to": [
-                  "n5",
+                  "n3",
                   "Value"
                 ]
               },
@@ -73,33 +73,13 @@
                   "Value"
                 ],
                 "to": [
-                  "n3",
-                  "Value_001"
-                ]
-              },
-              {
-                "from": [
-                  "n3",
-                  "Value"
-                ],
-                "to": [
                   "n1",
                   "Socket_1"
                 ]
               },
               {
                 "from": [
-                  "n4",
-                  "Value"
-                ],
-                "to": [
-                  "n5",
-                  "Value_001"
-                ]
-              },
-              {
-                "from": [
-                  "n5",
+                  "n3",
                   "Value"
                 ],
                 "to": [
@@ -120,31 +100,15 @@
                 "properties": {}
               },
               {
-                "bl_idname": "ShaderNodeValue",
-                "id": "n2",
-                "payload": {
-                  "value": 2.0
-                },
-                "properties": {}
-              },
-              {
                 "bl_idname": "ShaderNodeMath",
-                "id": "n3",
+                "id": "n2",
                 "properties": {
                   "operation": "MULTIPLY"
                 }
               },
               {
-                "bl_idname": "ShaderNodeValue",
-                "id": "n4",
-                "payload": {
-                  "value": 1.0
-                },
-                "properties": {}
-              },
-              {
                 "bl_idname": "ShaderNodeMath",
-                "id": "n5",
+                "id": "n3",
                 "properties": {
                   "operation": "ADD"
                 }

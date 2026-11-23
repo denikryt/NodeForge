@@ -30,7 +30,7 @@
           "Socket_0"
         ],
         "to": [
-          "n4",
+          "n3",
           "Vector"
         ]
       },
@@ -40,7 +40,7 @@
           "Socket_1"
         ],
         "to": [
-          "n3",
+          "n2",
           "Value_001"
         ]
       },
@@ -51,22 +51,12 @@
         ],
         "to": [
           "n3",
-          "Value"
-        ]
-      },
-      {
-        "from": [
-          "n3",
-          "Value"
-        ],
-        "to": [
-          "n4",
           "Scale"
         ]
       },
       {
         "from": [
-          "n4",
+          "n3",
           "Vector"
         ],
         "to": [
@@ -87,23 +77,15 @@
         "properties": {}
       },
       {
-        "bl_idname": "ShaderNodeValue",
-        "id": "n2",
-        "payload": {
-          "value": 1.0
-        },
-        "properties": {}
-      },
-      {
         "bl_idname": "ShaderNodeMath",
-        "id": "n3",
+        "id": "n2",
         "properties": {
           "operation": "DIVIDE"
         }
       },
       {
         "bl_idname": "ShaderNodeVectorMath",
-        "id": "n4",
+        "id": "n3",
         "properties": {
           "operation": "SCALE"
         }
