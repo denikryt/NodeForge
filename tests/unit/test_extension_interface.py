@@ -240,8 +240,8 @@ def foo(
     assert params["s"].default == "x" and params["s"].default_type is NFType.STRING
 
 
-def test_none_default_and_unresolved_result_tuple_are_rejected(tmp_path):
-    """Nullability and variadic result tuples are deferred rather than inferred implicitly."""
+def test_none_default_is_omittable_but_variadic_result_tuple_is_rejected(tmp_path):
+    """None marks omitted typed input, while executable result arity remains fixed."""
     none_default = _session(
         tmp_path / "none",
         """
@@ -252,8 +252,9 @@ EXTENSIONS = {"foo": ".operations:build"}
 def foo(value: Annotated[Float, EvaluationMode.COMPILE_TIME_ONLY] = None) -> Float: ...
 """,
     )
-    with pytest.raises(CompileError, match="Unsupported extension parameter default"):
-        none_default.normalize_interface()
+    specs, _ = none_default.normalize_interface()
+    parameter = next(iter(specs.values()))[0].parameters[0]
+    assert parameter.default is None and parameter.default_type is None
 
     tuple_var = _session(
         tmp_path / "tuplevar",

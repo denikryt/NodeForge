@@ -839,3 +839,9 @@ lifecycle.
 - Retained one shared physical producer for multi-consumer non-String inline operands (including Bool Compare, points() count and cube() scale) and shared String producers for runtime-capable consumers.
 - Consolidated duplicated scale/Euler conversion logic in geometry builtins and removed the unused legacy inline constant materializer.
 - Added Blender 5.2 characterization, regression and package integration tests covering constant topology, native evaluation, type validation, inline sharing and graph updates.
+
+## 0.99.0
+
+- Added optional direct typed Extension API v2 parameters declared with `= None`, including compile-time, runtime, and mixed evaluation modes.
+- Preserve omitted parameters as indexed static `None` operands through overload selection, semantic processing, dynamic result resolution, and inline/grouped Blender materialization.
+- Added declaration, semantic, dynamic-result, Blender socket-default, and downstream `nodeforge.nodes` regression coverage.

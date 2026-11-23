@@ -355,3 +355,48 @@ def test_call_specific_tuple_index_rejects_out_of_range(tmp_path):
     bad = ast.parse("foo(geo, f)[5]", mode="eval").body
     with pytest.raises(CompileError):
         analyze_expression(bad, env)
+
+
+def test_optional_backend_dynamic_resolver_sees_omission_separately_from_values(tmp_path):
+    """A resolver gets None only for an omitted parameter, not a synthetic typed view."""
+    import ast
+    from NodeForge.semantic.analysis import analyze_expression
+    from NodeForge.extension_result_api import ResultRuntimeArg, ResultStaticArg
+    from NodeForge.nf_types import NFType
+
+    source = _DYNAMIC_INTERFACE.replace(
+        'domain: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = "POINT"',
+        'domain: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = None',
+    )
+    semantic = '''from NodeForge.nf_types import NFType
+SEEN = []
+def _result_types_foo(arguments):
+    SEEN.append(dict(arguments))
+    return (NFType.GEOMETRY,)
+'''
+    owner = _owner(tmp_path, source, backend="def foo(*a, **kw): pass\n", semantic=semantic)
+    env, _ = _dynamic_semantic_environment(owner)
+    for expression in ("foo(geo)", "foo(geo, selection=b, domain='POINT')"):
+        node = ast.parse(expression, mode="eval").body
+        assert analyze_expression(node, env).facts[node].analyzed_call.result.types == (NFType.GEOMETRY,)
+    first, second = owner._phase_modules["SEMANTIC"]["semantic"].SEEN
+    assert first["domain"] is None
+    assert isinstance(first["selection"], ResultStaticArg) and first["selection"].value is True
+    assert isinstance(second["domain"], ResultStaticArg) and second["domain"].value == "POINT"
+    assert isinstance(second["selection"], ResultRuntimeArg)
+
+
+
+def test_semantic_dynamic_resolver_reads_optional_none_once_per_call(tmp_path):
+    """A semantic-then-backend result resolver handles omitted direct NF inputs."""
+    from NodeForge.tests.unit.test_extension_optional_defaults import (
+        _SEMANTIC_BACKEND_INTERFACE, _SEMANTIC_BACKEND, _analyzed, _owner,
+    )
+    from NodeForge.extension_result_api import ResultRuntimeArg
+    owner = _owner(tmp_path, _SEMANTIC_BACKEND_INTERFACE, semantic=_SEMANTIC_BACKEND)
+    for expression in ("sample(f)", "sample(f, optional=i)"):
+        _analyzed(owner, expression)
+    semantic = owner._phase_modules["SEMANTIC"]["semantic"]
+    assert len(semantic.RESOLVED) == len(semantic.SEEN) == 2
+    assert semantic.RESOLVED[0]["optional"] is None
+    assert isinstance(semantic.RESOLVED[1]["optional"], ResultRuntimeArg)

@@ -139,13 +139,13 @@ The marker classes are annotation tokens rather than runtime values to instantia
 
 ### Evaluation modes
 
-| Mode | Accepted representation |
+| Mode | Supplied argument representation |
 | --- | --- |
 | `EvaluationMode.COMPILE_TIME_ONLY` | Detached compile-time data only. |
 | `EvaluationMode.RUNTIME_ONLY` | Runtime NodeForge value only; the backend receives an `ExtensionBackendValue`. |
 | `EvaluationMode.COMPILE_TIME_OR_RUNTIME` | Detached data when known at compile time, otherwise the runtime representation. |
 
-`RUNTIME_ONLY` parameters cannot have defaults. Compile-time and mixed parameters may default to detached `Bool`, signed-32 `Int`, `Float`, `String`, 3-component `Vector` or `Rotation`, or 4-component `Color` values. Vector, Rotation and Color defaults may be written as Python lists or tuples and are canonicalized by NodeForge. Color is linear RGBA `(R, G, B, A)` with finite nonnegative binary32 components, including alpha and valid HDR values. A Color-marked parameter receives an immutable RGBA tuple in its compile-time branch, or an `ExtensionBackendValue` in its runtime branch. Ordinary extension `list` and `tuple` semantic fields remain structural Python values.
+`RUNTIME_ONLY` parameters accept only `None` as a default; see [Optional typed parameters](#optional-typed-parameters). Compile-time and mixed parameters may default to detached `Bool`, signed-32 `Int`, `Float`, `String`, 3-component `Vector` or `Rotation`, or 4-component `Color` values. Vector, Rotation and Color defaults may be written as Python lists or tuples and are canonicalized by NodeForge. Color is linear RGBA `(R, G, B, A)` with finite nonnegative binary32 components, including alpha and valid HDR values. A Color-marked parameter receives an immutable RGBA tuple in its compile-time branch, or an `ExtensionBackendValue` in its runtime branch. Ordinary extension `list` and `tuple` semantic fields remain structural Python values.
 
 A declared `Rotation` default is an XYZ Euler-angle triple in radians, normalized to an immutable three-float binary32 tuple. Python integer components may exceed signed Int32 when their numeric values are representable as finite binary32 floats. A uniquely declared `Rotation` parameter interprets an untyped numeric triple as Rotation; `Vector` declarations interpret it as Vector. A parameter typed `Rotation | Vector` cannot use an untyped numeric triple as a default or static argument because both alternatives match. A typed runtime reference uses its exact declared type. Backend overloads with equally matching Rotation and Vector candidates also reject an untyped triple as ambiguous. See [Writing Functions](WRITING_FUNCTIONS.md#parameters-and-sockets) for the `.nf` source-default limits and explicit runtime Euler conversion.
 
@@ -158,6 +158,47 @@ def tint(value: Annotated[Color, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = (0.2,
 ```
 
 Use compile-time data for configuration that changes graph shape or node properties. Use runtime values for data that should remain connected as Geometry Nodes sockets or fields.
+
+### Optional typed parameters
+
+Use `= None` in `interface.py` to allow omission of a direct typed argument. All three evaluation modes support it.
+
+| Declaration | Omitted argument |
+| --- | --- |
+| No default | Required; omission is an error. |
+| Concrete default | Receives the declared value. |
+| `= None` | Receives Python `None` in the backend and semantic function. |
+
+For example, a Resample Curve wrapper can leave Count at Blender's default:
+
+```python
+# interface.py
+from typing import Annotated
+from NodeForge import EvaluationMode, Geometry, Int
+
+
+def resample_curve(
+    curve: Annotated[Geometry, EvaluationMode.RUNTIME_ONLY],
+    *,
+    count: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
+) -> Geometry:
+    ...
+```
+
+In the backend, skip socket assignment and linking when the argument is `None`:
+
+```python
+# backend.py: after creating node and connecting Curve
+from NodeForge.extension_api import ExtensionBackendValue
+
+if count is not None:
+    if isinstance(count, ExtensionBackendValue):
+        context.group.links.new(count.socket, node.inputs['Count'])
+    else:
+        node.inputs['Count'].default_value = count
+```
+
+Omit the keyword in `.nf` calls to use this behavior. Explicit `.nf` arguments such as `count=None` and direct parameter annotations such as `Int | None` are unsupported. Supplied values retain their declared type and evaluation-mode checks.
 
 ### Direct results
 
@@ -240,6 +281,7 @@ The resolver's `arguments` is a read-only mapping from parameter names to the fo
 | --- | --- |
 | Direct runtime value | `ResultRuntimeArg`: `.typ` is the actual `NFType`. |
 | Direct compile-time value | `ResultStaticArg`: `.typ` and the canonical immutable `.value`. |
+| Omitted parameter declared with `= None` | Python `None`. |
 | Variadic parameter | A tuple of argument views, empty when no arguments were supplied. |
 | Semantic record or list | A reconstructed semantic value with `RuntimeRef` runtime leaves. |
 
@@ -255,7 +297,7 @@ The backend must return a Python tuple of `ExtensionBackendValue` objects, inclu
 
 ### Overloads
 
-Use `typing.overload` for a finite set of direct-value signatures. Alternatives are tried in source order.
+Use `typing.overload` for a finite set of direct-value signatures. Exact type matches take precedence over compatible matches. Omitted `= None` parameters provide no type evidence; equally matching alternatives are ambiguous.
 
 ```python
 from typing import Annotated, overload
@@ -456,7 +498,7 @@ Import the public backend types from:
 from NodeForge.extension_api import ExtensionBackendContext, ExtensionBackendValue, NFType
 ```
 
-Runtime direct arguments are `ExtensionBackendValue` instances. Compile-time arguments are detached Python data selected by the parameter's evaluation mode. The compiler consumes `__inline__`; semantic functions and backends receive only their declared arguments.
+Supplied runtime direct arguments are `ExtensionBackendValue` instances. Compile-time arguments are detached Python data selected by the parameter's evaluation mode. The compiler consumes `__inline__`; semantic functions and backends receive only their declared arguments.
 
 ### `ExtensionBackendValue`
 

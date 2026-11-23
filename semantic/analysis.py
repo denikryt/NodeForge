@@ -546,6 +546,9 @@ def _analyze_extension_backend_call(
                         except CompileError:
                             return False
                 else:
+                    if occurrence is None and parameter.default is None:
+                        # Omitted typed inputs carry no type evidence for overload selection.
+                        continue
                     if parameter.default_type is None:
                         raise CompileError("Internal error: extension bound default lost canonical type")
                     actual_type = parameter.default_type
@@ -581,9 +584,14 @@ def _analyze_extension_backend_call(
         occurrences = tuple(value) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else (value,)
         resolved_items = []
         for variadic_index, occurrence in enumerate(occurrences):
-            if occurrence is None and parameter.kind is not inspect.Parameter.VAR_POSITIONAL:
-                raise CompileError("Internal error: selected extension binding lost fixed parameter")
             transport_variadic = variadic_index if parameter.kind is inspect.Parameter.VAR_POSITIONAL else None
+            if occurrence is None:
+                if parameter.default is not None or parameter.kind is inspect.Parameter.VAR_POSITIONAL:
+                    raise CompileError("Internal error: selected extension binding lost fixed parameter")
+                # A fixed positional slot is retained for physical signature reconstruction.
+                static_operands.append(AnalyzedStaticCallOperand(parameter_index, None, None))
+                resolved_items.append(None)
+                continue
             if isinstance(occurrence, ast.AST):
                 representation, payload, actual_type = acquired[id(occurrence)]
                 if representation == "runtime":
@@ -809,8 +817,12 @@ def _analyze_extension_semantic_call(
         acquired_items: list[object] = []
         type_spec = parameter.type_spec
         for occurrence in occurrences:
-            if occurrence is None and parameter.kind is not inspect.Parameter.VAR_POSITIONAL:
-                raise CompileError("Internal error: semantic extension binding lost fixed parameter")
+            if occurrence is None:
+                if type_spec.kind != "NF_SET" or parameter.default is not None:
+                    raise CompileError("Internal error: semantic extension binding lost fixed parameter")
+                # An omitted typed parameter has no semantic dependency or type.
+                acquired_items.append(None)
+                continue
             if isinstance(occurrence, ExtensionSemanticPayload):
                 payload = occurrence
                 if type_spec.kind not in {"RECORD", "LIST"}:
@@ -884,7 +896,9 @@ def _analyze_extension_semantic_call(
             occurrences = tuple(value) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else (value,)
             argument_items = []
             for item in occurrences:
-                if parameter.type_spec.kind != "NF_SET":
+                if item is None and parameter.type_spec.kind == "NF_SET" and parameter.default is None:
+                    argument_items.append(None)
+                elif parameter.type_spec.kind != "NF_SET":
                     argument_items.append(invocation.clone_semantic_argument(parameter.type_spec, item))
                 elif isinstance(item, RuntimeRef):
                     argument_items.append(ResultRuntimeArg(item.typ))
