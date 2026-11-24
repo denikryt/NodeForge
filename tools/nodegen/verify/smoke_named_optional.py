@@ -34,15 +34,15 @@ CASES = [
      'call': 'resample_curve()', 'values': {'Count': 10},
      'menu_values': {'Mode': 'Count'}, 'rna_values': {'keep_last_segment': True}},
     {'name': 'resample_blender_count_default', 'node': 'GeometryNodeResampleCurve',
-     'call': "resample_curve(menu_mode='Count')", 'values': {'Count': 10}},
+     'call': "resample_curve(mode='Count')", 'values': {'Count': 10}},
     {'name': 'resample_explicit_count', 'node': 'GeometryNodeResampleCurve',
-     'call': "resample_curve(menu_mode='Count', count=23)", 'values': {'Count': 23}},
+     'call': "resample_curve(mode='Count', count=23)", 'values': {'Count': 23}},
     {'name': 'resample_blender_length_default', 'node': 'GeometryNodeResampleCurve',
-     'call': "resample_curve(menu_mode='Length')", 'values': {'Length': 0.1}},
+     'call': "resample_curve(mode='Length')", 'values': {'Length': 0.1}},
     {'name': 'resample_explicit_length', 'node': 'GeometryNodeResampleCurve',
-     'call': "resample_curve(menu_mode='Length', length=0.75)", 'values': {'Length': 0.75}},
+     'call': "resample_curve(mode='Length', length=0.75)", 'values': {'Length': 0.75}},
     {'name': 'resample_selection', 'node': 'GeometryNodeResampleCurve',
-     'call': "resample_curve(selection=False, menu_mode='Count')", 'values': {'Selection': False}},
+     'call': "resample_curve(selection=False, mode='Count')", 'values': {'Selection': False}},
     {'name': 'math_named_inputs', 'node': 'ShaderNodeMath',
      'call': "math(value=2.0, value_001=3.0, operation='MULTIPLY')",
      'values': {'Value': 2.0, 'Value_001': 3.0}},
@@ -52,16 +52,25 @@ CASES = [
      'call': "named_attribute()", 'values': {'Name': ''}, 'results': ('x', 'y')},
     {'name': 'named_attribute_explicit', 'node': 'GeometryNodeInputNamedAttribute',
      'call': "named_attribute(name='velocity')", 'values': {'Name': 'velocity'}, 'results': ('x', 'y')},
+    {'name': 'plain_index', 'node': 'GeometryNodeInputIndex',
+     'call': 'index()', 'values': {}},
+    {'name': 'builtin_and_package_index', 'node': 'GeometryNodeInputIndex',
+     'source': 'from packages import nodes\n\ndef entry():\n    a = index()\n    b, = nodes.index()\n    return a, b\n',
+     'count': 2, 'values': {}},
+    {'name': 'plain_index_grouped', 'node': 'GeometryNodeInputIndex',
+     'call': 'index()', 'values': {}, 'grouped': True},
+    {'name': 'sample_index_named', 'node': 'GeometryNodeSampleIndex',
+     'call': "sample_index(index=7, data_type='FLOAT')", 'values': {'Index': 7}},
     {'name': 'index_dynamic_and_named', 'node': 'GeometryNodeIndexSwitch',
-     'call': "index_switch(3.0, 4.0, 5.0, input_index=1, elements=3)",
+     'call': "index_switch(3.0, 4.0, 5.0, index=1, elements=3)",
      'values': {'Index': 1, 'Item_0': 3.0, 'Item_1': 4.0, 'Item_2': 5.0}},
     {'name': 'menu_dynamic', 'node': 'GeometryNodeMenuSwitch',
-     'call': "menu_switch(1.5, 2.5, 3.5, elements='A,B,C', menu_menu='C', data_type='FLOAT')",
+     'call': "menu_switch(1.5, 2.5, 3.5, elements='A,B,C', menu='C', data_type='FLOAT')",
      'values': {'A': 1.5, 'B': 2.5, 'C': 3.5}, 'results': ('x', 'y', 'z', 'w')},
     {'name': 'resample_grouped', 'node': 'GeometryNodeResampleCurve',
-     'call': "resample_curve(count=29, menu_mode='Count')", 'values': {'Count': 29}, 'grouped': True},
+     'call': "resample_curve(count=29, mode='Count')", 'values': {'Count': 29}, 'grouped': True},
     {'name': 'inactive_length_rejected', 'node': 'GeometryNodeResampleCurve',
-     'call': "resample_curve(menu_mode='Count', length=0.75)", 'error': True},
+     'call': "resample_curve(mode='Count', length=0.75)", 'error': True},
     {'name': 'inactive_math_input_rejected', 'node': 'ShaderNodeMath',
      'call': "math(value_002=10.0, operation='ADD')", 'error': True},
 ]
@@ -83,7 +92,7 @@ def main():
         packages.install_package_directory(Path(args.package))
         for case in CASES:
             before = {g.as_pointer() for g in bpy.data.node_groups}
-            src = nf(case['call'], case.get('results', ('x',)), case.get('grouped', False))
+            src = case['source'] if 'source' in case else nf(case['call'], case.get('results', ('x',)), case.get('grouped', False))
             record = {'name': case['name'], 'source': src, 'status': 'failed'}
             try:
                 try:
@@ -102,7 +111,7 @@ def main():
                                if n.bl_idname == 'GeometryNodeGroup' and n.node_tree]
                     found = [n for group in groups for n in group.nodes
                              if n.bl_idname == case['node']]
-                    assert len(found) == 1, (case['name'], len(found))
+                    assert len(found) == case.get('count', 1), (case['name'], len(found))
                     native = found[0]
                     for key, expected in case['values'].items():
                         matches = [s for s in native.inputs if s.identifier == key]

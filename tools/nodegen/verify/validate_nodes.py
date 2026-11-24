@@ -45,7 +45,9 @@ def runtime_inputs(node, dynamic, cfg):
 
 def source_for(item,cfg,mode,runtime,params,output_count,menu_override=None,elements=None,available=()):
     opts={f['param']:cfg['rna'][f['key']] if f['kind']=='rna' else cfg['menus'][f['key']] for f in item['fields']}
-    if menu_override:opts['menu_menu']=menu_override
+    if menu_override is not None:
+        menu = next(f['param'] for f in item['fields'] if f['kind']=='menu' and f['key']=='Menu')
+        opts[menu]=menu_override
     if item['dynamic'] and elements is not None:opts['elements']=elements
     named={entry['socket']: entry['param'] for entry in item['named_inputs']}
     positional=[]

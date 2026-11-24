@@ -104,7 +104,7 @@ def prepare_node(node_id, node):
     fields=[{'kind':'rna','key':k,'param':sanitized(k),
              'marker':'Bool' if all(type(st['rna'][k]) is bool for st,_,_ in valid) else 'Int'
                if all(type(st['rna'][k]) is int for st,_,_ in valid) else 'String'} for k in rna_keys]
-    fields += [{'kind':'menu','key':k,'param':'menu_'+sanitized(k),'marker':'String'} for k in menu_keys]
+    fields += [{'kind':'menu','key':k,'param':sanitized(k),'marker':'String'} for k in menu_keys]
     if len({f['param'] for f in fields})!=len(fields):raise ValueError('Duplicate names')
     configurations=[];input_types=set(); seen=set()
     for st,inputs,outputs in valid:

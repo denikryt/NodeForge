@@ -338,7 +338,7 @@ def find_in_string(
     *,
     string=None,
     search=None,
-    menu_mode='From Start',
+    mode='From Start',
 ):
     return materialize(
         context,
@@ -346,7 +346,7 @@ def find_in_string(
         named={'String': string, 'Search': search},
         items=(),
         rna={},
-        menus=(('Mode', menu_mode),),
+        menus=(('Mode', mode),),
         orders=[()],
         constant_rna={},
         constant_outputs={},
@@ -566,7 +566,7 @@ def match_string(
     *,
     string=None,
     key=None,
-    menu_operation='Starts With',
+    operation='Starts With',
 ):
     return materialize(
         context,
@@ -574,7 +574,7 @@ def match_string(
         named={'String': string, 'Key': key},
         items=(),
         rna={},
-        menus=(('Operation', menu_operation),),
+        menus=(('Operation', operation),),
         orders=[()],
         constant_rna={},
         constant_outputs={},
@@ -790,7 +790,7 @@ def set_string_case(
     context,
     *,
     string=None,
-    menu_case='Uppercase',
+    case='Uppercase',
 ):
     return materialize(
         context,
@@ -798,7 +798,7 @@ def set_string_case(
         named={'String': string},
         items=(),
         rna={},
-        menus=(('Case', menu_case),),
+        menus=(('Case', case),),
         orders=[()],
         constant_rna={},
         constant_outputs={},
@@ -1593,7 +1593,7 @@ def distribute_points_in_volume(
     seed=None,
     spacing=None,
     threshold=None,
-    menu_mode='Random',
+    mode='Random',
 ):
     return materialize(
         context,
@@ -1601,7 +1601,7 @@ def distribute_points_in_volume(
         named={'Volume': volume, 'Density': density, 'Seed': seed, 'Spacing': spacing, 'Threshold': threshold},
         items=(),
         rna={},
-        menus=(('Mode', menu_mode),),
+        menus=(('Mode', mode),),
         orders=[()],
         constant_rna={},
         constant_outputs={},
@@ -1803,14 +1803,14 @@ def evaluate_at_index(
     context,
     *,
     value=None,
-    input_index=None,
+    index=None,
     data_type='FLOAT',
     domain='POINT',
 ):
     return materialize(
         context,
         'GeometryNodeFieldAtIndex',
-        named={'Value': value, 'Index': input_index},
+        named={'Value': value, 'Index': index},
         items=(),
         rna={'data_type': data_type, 'domain': domain},
         menus=(),
@@ -1903,8 +1903,8 @@ def fill_curve(
     *,
     curve=None,
     group_id=None,
-    menu_fill_rule='Even-Odd',
-    menu_mode='Triangles',
+    fill_rule='Even-Odd',
+    mode='Triangles',
 ):
     return materialize(
         context,
@@ -1912,7 +1912,7 @@ def fill_curve(
         named={'Curve': curve, 'Group ID': group_id},
         items=(),
         rna={},
-        menus=(('Fill Rule', menu_fill_rule), ('Mode', menu_mode)),
+        menus=(('Fill Rule', fill_rule), ('Mode', mode)),
         orders=[()],
         constant_rna={},
         constant_outputs={},
@@ -1925,7 +1925,7 @@ def fillet_curve(
     radius=None,
     limit_radius=None,
     count=None,
-    menu_mode='Bézier',
+    mode='Bézier',
 ):
     return materialize(
         context,
@@ -1933,7 +1933,7 @@ def fillet_curve(
         named={'Curve': curve, 'Radius': radius, 'Limit Radius': limit_radius, 'Count': count},
         items=(),
         rna={},
-        menus=(('Mode', menu_mode),),
+        menus=(('Mode', mode),),
         orders=[()],
         constant_rna={},
         constant_outputs={},
@@ -1999,8 +1999,8 @@ def get_attribute_names(
     geometry=None,
     filter_data_type=None,
     filter_domain=None,
-    menu_data_type='Float',
-    menu_domain='Point',
+    data_type='Float',
+    domain='Point',
 ):
     return materialize(
         context,
@@ -2008,7 +2008,7 @@ def get_attribute_names(
         named={'Geometry': geometry, 'Filter Data Type': filter_data_type, 'Filter Domain': filter_domain},
         items=(),
         rna={},
-        menus=(('Data Type', menu_data_type), ('Domain', menu_domain)),
+        menus=(('Data Type', data_type), ('Domain', domain)),
         orders=[()],
         constant_rna={},
         constant_outputs={},
@@ -2019,7 +2019,7 @@ def get_geometry_component(
     *,
     geometry=None,
     remove=None,
-    menu_type='Mesh',
+    type='Mesh',
 ):
     return materialize(
         context,
@@ -2027,7 +2027,7 @@ def get_geometry_component(
         named={'Geometry': geometry, 'Remove': remove},
         items=(),
         rna={},
-        menus=(('Type', menu_type),),
+        menus=(('Type', type),),
         orders=[()],
         constant_rna={},
         constant_outputs={},
@@ -2122,8 +2122,8 @@ def advect_grid(
     velocity=None,
     time_step=None,
     data_type='FLOAT',
-    menu_integration_scheme='Runge-Kutta 3',
-    menu_limiter='Clamp',
+    integration_scheme='Runge-Kutta 3',
+    limiter='Clamp',
 ):
     return materialize(
         context,
@@ -2131,7 +2131,7 @@ def advect_grid(
         named={'Grid': grid, 'Velocity': velocity, 'Time Step': time_step},
         items=(),
         rna={'data_type': data_type},
-        menus=(('Integration Scheme', menu_integration_scheme), ('Limiter', menu_limiter)),
+        menus=(('Integration Scheme', integration_scheme), ('Limiter', limiter)),
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
@@ -2184,8 +2184,8 @@ def grid_dilate_erode(
     grid=None,
     steps=None,
     data_type='FLOAT',
-    menu_connectivity='Face',
-    menu_tiles='Preserve',
+    connectivity='Face',
+    tiles='Preserve',
 ):
     return materialize(
         context,
@@ -2193,7 +2193,7 @@ def grid_dilate_erode(
         named={'Grid': grid, 'Steps': steps},
         items=(),
         rna={'data_type': data_type},
-        menus=(('Connectivity', menu_connectivity), ('Tiles', menu_tiles)),
+        menus=(('Connectivity', connectivity), ('Tiles', tiles)),
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
@@ -2296,7 +2296,7 @@ def prune_grid(
     grid=None,
     threshold=None,
     data_type='FLOAT',
-    menu_mode='Threshold',
+    mode='Threshold',
 ):
     return materialize(
         context,
@@ -2304,7 +2304,7 @@ def prune_grid(
         named={'Grid': grid, 'Threshold': threshold},
         items=(),
         rna={'data_type': data_type},
-        menus=(('Mode', menu_mode),),
+        menus=(('Mode', mode),),
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
@@ -2489,14 +2489,14 @@ def index_of_nearest(
 def index_switch(
     context,
     *items,
-    input_index=None,
+    index=None,
     data_type='FLOAT',
     elements=2,
 ):
     return materialize(
         context,
         'GeometryNodeIndexSwitch',
-        named={'Index': input_index},
+        named={'Index': index},
         items=items,
         rna={'data_type': data_type},
         menus=(),
@@ -2584,7 +2584,7 @@ def id(
         constant_outputs={},
     )
 
-def index_node(
+def index(
     context,
 ):
     return materialize(
@@ -3120,14 +3120,14 @@ def get_list_item(
     context,
     *,
     list=None,
-    input_index=None,
+    index=None,
     socket_type='FLOAT',
     structure_type='AUTO',
 ):
     return materialize(
         context,
         'GeometryNodeListGetItem',
-        named={'List': list, 'Index': input_index},
+        named={'List': list, 'Index': index},
         items=(),
         rna={'socket_type': socket_type, 'structure_type': structure_type},
         menus=(),
@@ -3157,7 +3157,7 @@ def menu_switch(
     context,
     *items,
     data_type='GEOMETRY',
-    menu_menu='A',
+    menu='A',
     elements='A,B',
 ):
     return materialize(
@@ -3166,7 +3166,7 @@ def menu_switch(
         named={},
         items=items,
         rna={'data_type': data_type},
-        menus=(('Menu', menu_menu),),
+        menus=(('Menu', menu),),
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
@@ -3180,7 +3180,7 @@ def merge_by_distance(
     geometry=None,
     selection=None,
     distance=None,
-    menu_mode='All',
+    mode='All',
 ):
     return materialize(
         context,
@@ -3188,7 +3188,7 @@ def merge_by_distance(
         named={'Geometry': geometry, 'Selection': selection, 'Distance': distance},
         items=(),
         rna={},
-        menus=(('Mode', menu_mode),),
+        menus=(('Mode', mode),),
         orders=[()],
         constant_rna={},
         constant_outputs={},
@@ -3247,7 +3247,7 @@ def mesh_bevel(
     start_right_offset=None,
     end_left_offset=None,
     end_right_offset=None,
-    menu_affect_kind='Edges',
+    affect_kind='Edges',
 ):
     return materialize(
         context,
@@ -3255,7 +3255,7 @@ def mesh_bevel(
         named={'Mesh': mesh, 'Selection': selection, 'Offset': offset, 'Miter': miter, 'Segments': segments, 'Shape': shape, 'Profile': profile, 'Start Left Offset': start_left_offset, 'Start Right Offset': start_right_offset, 'End Left Offset': end_left_offset, 'End Right Offset': end_right_offset},
         items=(),
         rna={},
-        menus=(('Affect Kind', menu_affect_kind),),
+        menus=(('Affect Kind', affect_kind),),
         orders=[()],
         constant_rna={},
         constant_outputs={},
@@ -3531,7 +3531,7 @@ def mesh_to_volume(
     voxel_amount=None,
     interior_band_width=None,
     voxel_size=None,
-    menu_resolution_mode='Amount',
+    resolution_mode='Amount',
 ):
     return materialize(
         context,
@@ -3539,7 +3539,7 @@ def mesh_to_volume(
         named={'Mesh': mesh, 'Density': density, 'Voxel Amount': voxel_amount, 'Interior Band Width': interior_band_width, 'Voxel Size': voxel_size},
         items=(),
         rna={},
-        menus=(('Resolution Mode', menu_resolution_mode),),
+        menus=(('Resolution Mode', resolution_mode),),
         orders=[()],
         constant_rna={},
         constant_outputs={},
@@ -3702,7 +3702,7 @@ def points_to_volume(
     voxel_amount=None,
     radius=None,
     voxel_size=None,
-    menu_resolution_mode='Amount',
+    resolution_mode='Amount',
 ):
     return materialize(
         context,
@@ -3710,7 +3710,7 @@ def points_to_volume(
         named={'Points': points, 'Density': density, 'Voxel Amount': voxel_amount, 'Radius': radius, 'Voxel Size': voxel_size},
         items=(),
         rna={},
-        menus=(('Resolution Mode', menu_resolution_mode),),
+        menus=(('Resolution Mode', resolution_mode),),
         orders=[()],
         constant_rna={},
         constant_outputs={},
@@ -3746,7 +3746,7 @@ def raycast(
     ray_direction=None,
     ray_length=None,
     data_type='FLOAT',
-    menu_interpolation='Interpolated',
+    interpolation='Interpolated',
 ):
     return materialize(
         context,
@@ -3754,7 +3754,7 @@ def raycast(
         named={'Target Geometry': target_geometry, 'Attribute': attribute, 'Source Position': source_position, 'Ray Direction': ray_direction, 'Ray Length': ray_length},
         items=(),
         rna={'data_type': data_type},
-        menus=(('Interpolation', menu_interpolation),),
+        menus=(('Interpolation', interpolation),),
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
@@ -3786,7 +3786,7 @@ def remove_named_attribute(
     *,
     geometry=None,
     name=None,
-    menu_pattern_mode='Exact',
+    pattern_mode='Exact',
 ):
     return materialize(
         context,
@@ -3794,7 +3794,7 @@ def remove_named_attribute(
         named={'Geometry': geometry, 'Name': name},
         items=(),
         rna={},
-        menus=(('Pattern Mode', menu_pattern_mode),),
+        menus=(('Pattern Mode', pattern_mode),),
         orders=[()],
         constant_rna={},
         constant_outputs={},
@@ -3807,7 +3807,7 @@ def rename_attribute(
     old=None,
     new=None,
     overwrite=None,
-    menu_mode='Single',
+    mode='Single',
 ):
     return materialize(
         context,
@@ -3815,7 +3815,7 @@ def rename_attribute(
         named={'Geometry': geometry, 'Old': old, 'New': new, 'Overwrite': overwrite},
         items=(),
         rna={},
-        menus=(('Mode', menu_mode),),
+        menus=(('Mode', mode),),
         orders=[()],
         constant_rna={},
         constant_outputs={},
@@ -3848,7 +3848,7 @@ def resample_curve(
     count=None,
     length=None,
     keep_last_segment=True,
-    menu_mode='Count',
+    mode='Count',
 ):
     return materialize(
         context,
@@ -3856,7 +3856,7 @@ def resample_curve(
         named={'Curve': curve, 'Selection': selection, 'Count': count, 'Length': length},
         items=(),
         rna={'keep_last_segment': keep_last_segment},
-        menus=(('Mode', menu_mode),),
+        menus=(('Mode', mode),),
         orders=[('keep_last_segment',)],
         constant_rna={},
         constant_outputs={},
@@ -4060,7 +4060,7 @@ def sample_grid(
     grid=None,
     position=None,
     data_type='FLOAT',
-    menu_interpolation='Trilinear',
+    interpolation='Trilinear',
 ):
     return materialize(
         context,
@@ -4068,7 +4068,7 @@ def sample_grid(
         named={'Grid': grid, 'Position': position},
         items=(),
         rna={'data_type': data_type},
-        menus=(('Interpolation', menu_interpolation),),
+        menus=(('Interpolation', interpolation),),
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
@@ -4100,7 +4100,7 @@ def sample_index(
     *,
     geometry=None,
     value=None,
-    input_index=None,
+    index=None,
     clamp=False,
     data_type='FLOAT',
     domain='POINT',
@@ -4108,7 +4108,7 @@ def sample_index(
     return materialize(
         context,
         'GeometryNodeSampleIndex',
-        named={'Geometry': geometry, 'Value': value, 'Index': input_index},
+        named={'Geometry': geometry, 'Value': value, 'Index': index},
         items=(),
         rna={'clamp': clamp, 'data_type': data_type, 'domain': domain},
         menus=(),
@@ -4188,7 +4188,7 @@ def scale_elements(
     center=None,
     axis=None,
     domain='FACE',
-    menu_scale_mode='Uniform',
+    scale_mode='Uniform',
 ):
     return materialize(
         context,
@@ -4196,7 +4196,7 @@ def scale_elements(
         named={'Geometry': geometry, 'Selection': selection, 'Scale': scale, 'Center': center, 'Axis': axis},
         items=(),
         rna={'domain': domain},
-        menus=(('Scale Mode', menu_scale_mode),),
+        menus=(('Scale Mode', scale_mode),),
         orders=[('domain',)],
         constant_rna={},
         constant_outputs={},
@@ -4301,7 +4301,7 @@ def set_curve_normal(
     curve=None,
     selection=None,
     normal=None,
-    menu_mode='Minimum Twist',
+    mode='Minimum Twist',
 ):
     return materialize(
         context,
@@ -4309,7 +4309,7 @@ def set_curve_normal(
         named={'Curve': curve, 'Selection': selection, 'Normal': normal},
         items=(),
         rna={},
-        menus=(('Mode', menu_mode),),
+        menus=(('Mode', mode),),
         orders=[()],
         constant_rna={},
         constant_outputs={},
@@ -4879,8 +4879,8 @@ def subdivision_surface(
     vertex_crease=None,
     limit_surface=None,
     quality=None,
-    menu_boundary_smooth='All',
-    menu_uv_smooth='Keep Boundaries',
+    boundary_smooth='All',
+    uv_smooth='Keep Boundaries',
 ):
     return materialize(
         context,
@@ -4888,7 +4888,7 @@ def subdivision_surface(
         named={'Mesh': mesh, 'Level': level, 'Edge Crease': edge_crease, 'Vertex Crease': vertex_crease, 'Limit Surface': limit_surface, 'Quality': quality},
         items=(),
         rna={},
-        menus=(('Boundary Smooth', menu_boundary_smooth), ('UV Smooth', menu_uv_smooth)),
+        menus=(('Boundary Smooth', boundary_smooth), ('UV Smooth', uv_smooth)),
         orders=[()],
         constant_rna={},
         constant_outputs={},
@@ -5066,7 +5066,7 @@ def transfer_attributes(
     source_instance_id=None,
     attribute_names=None,
     exclude_names=None,
-    menu_pattern_mode='Wildcard',
+    pattern_mode='Wildcard',
 ):
     return materialize(
         context,
@@ -5074,7 +5074,7 @@ def transfer_attributes(
         named={'Target': target, 'Target Point ID': target_point_id, 'Target Edge ID': target_edge_id, 'Target Face ID': target_face_id, 'Target Corner ID': target_corner_id, 'Target Curve ID': target_curve_id, 'Target Instance ID': target_instance_id, 'Source': source, 'Source Point ID': source_point_id, 'Source Edge ID': source_edge_id, 'Source Face ID': source_face_id, 'Source Corner ID': source_corner_id, 'Source Curve ID': source_curve_id, 'Source Instance ID': source_instance_id, 'Attribute Names': attribute_names, 'Exclude Names': exclude_names},
         items=(),
         rna={},
-        menus=(('Pattern Mode', menu_pattern_mode),),
+        menus=(('Pattern Mode', pattern_mode),),
         orders=[()],
         constant_rna={},
         constant_outputs={},
@@ -5087,7 +5087,7 @@ def transform_geometry(
     translation=None,
     rotation=None,
     scale=None,
-    menu_mode='Components',
+    mode='Components',
 ):
     return materialize(
         context,
@@ -5095,7 +5095,7 @@ def transform_geometry(
         named={'Geometry': geometry, 'Translation': translation, 'Rotation': rotation, 'Scale': scale},
         items=(),
         rna={},
-        menus=(('Mode', menu_mode),),
+        menus=(('Mode', mode),),
         orders=[()],
         constant_rna={},
         constant_outputs={},
@@ -5126,8 +5126,8 @@ def triangulate(
     *,
     mesh=None,
     selection=None,
-    menu_n_gon_method='Beauty',
-    menu_quad_method='Shortest Diagonal',
+    n_gon_method='Beauty',
+    quad_method='Shortest Diagonal',
 ):
     return materialize(
         context,
@@ -5135,7 +5135,7 @@ def triangulate(
         named={'Mesh': mesh, 'Selection': selection},
         items=(),
         rna={},
-        menus=(('N-gon Method', menu_n_gon_method), ('Quad Method', menu_quad_method)),
+        menus=(('N-gon Method', n_gon_method), ('Quad Method', quad_method)),
         orders=[()],
         constant_rna={},
         constant_outputs={},
@@ -5173,7 +5173,7 @@ def uv_unwrap(
     fill_holes=None,
     iterations=None,
     no_flip=None,
-    menu_method='Angle Based',
+    method='Angle Based',
 ):
     return materialize(
         context,
@@ -5181,7 +5181,7 @@ def uv_unwrap(
         named={'Selection': selection, 'Seam': seam, 'Margin': margin, 'Fill Holes': fill_holes, 'Iterations': iterations, 'No Flip': no_flip},
         items=(),
         rna={},
-        menus=(('Method', menu_method),),
+        menus=(('Method', method),),
         orders=[()],
         constant_rna={},
         constant_outputs={},
@@ -5235,7 +5235,7 @@ def volume_to_mesh(
     adaptivity=None,
     voxel_amount=None,
     voxel_size=None,
-    menu_resolution_mode='Grid',
+    resolution_mode='Grid',
 ):
     return materialize(
         context,
@@ -5243,7 +5243,7 @@ def volume_to_mesh(
         named={'Volume': volume, 'Threshold': threshold, 'Adaptivity': adaptivity, 'Voxel Amount': voxel_amount, 'Voxel Size': voxel_size},
         items=(),
         rna={},
-        menus=(('Resolution Mode', menu_resolution_mode),),
+        menus=(('Resolution Mode', resolution_mode),),
         orders=[()],
         constant_rna={},
         constant_outputs={},

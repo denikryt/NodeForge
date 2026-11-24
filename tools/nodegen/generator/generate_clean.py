@@ -7,7 +7,6 @@ Original generation.json remains test input / audit evidence, not runtime code.
 from __future__ import annotations
 import argparse
 import itertools
-import keyword
 import re
 import json
 import sys
@@ -65,13 +64,7 @@ def literal(value):
 def public_name(node_id, inspected):
     """Use Blender's UI label (e.g. 'Resample Curve' -> resample_curve)."""
     label = inspected['inventory'].get('label') or node_id
-    result = sanitized(label)
-    # Avoid the NodeForge DSL reserved identifier and Python keywords.
-    if result == 'index':
-        result = 'index_node'
-    if keyword.iskeyword(result):
-        result = 'node_' + result
-    return result
+    return sanitized(label)
 
 
 def named_inputs(item):
@@ -94,13 +87,12 @@ def named_inputs(item):
             per_state.add(ident)
             observed.setdefault(ident, set()).add(socket['type'])
     field_names = {f['param'] for f in item['fields']}
-    occupied = field_names | {'elements', 'context', 'items', 'values'}
+    occupied = field_names | {'context'}
+    if dynamic:
+        occupied.update(('elements', 'items'))
     result = []
     for ident, types in observed.items():
         stem = sanitized(ident)
-        # 'index' is a built-in NodeForge DSL name, not a safe argument name.
-        if stem == 'index':
-            stem = 'input_index'
         # A configuration property keeps its Blender name. Disambiguate a
         # same-named socket by its type (e.g. primary_axis_vector).
         if stem in field_names:
@@ -473,7 +465,7 @@ def render_semantic(items):
         elif kind=='menu':
             lines.extend(["    raw = static_value(arguments, 'elements')",
                           "    names = [s.strip() for s in raw.split(',')] if raw else []",
-                          "    selected = static_value(arguments, 'menu_menu')",
+                          f"    selected = static_value(arguments, {next(f['param'] for f in i['fields'] if f['kind'] == 'menu' and f['key'] == 'Menu')!r})",
                           "    if not all(names) or len(names) != len(set(names)) or selected not in names:",
                           "        raise ValueError('Invalid Menu selection / elements')",
                           "    return base + (NFType.BOOL,) * len(names)"])

@@ -2,7 +2,7 @@
 from typing import Annotated
 from NodeForge import Bool, Color, DynamicResults, EvaluationMode, Float, Geometry, Int, Material, Object, Rotation, String, Vector
 EXTENSION_API = 2
-EXTENSIONS = {'align_euler_to_vector': '.backend:align_euler_to_vector', 'align_rotation_to_vector': '.backend:align_rotation_to_vector', 'axes_to_rotation': '.backend:axes_to_rotation', 'axis_angle_to_rotation': '.backend:axis_angle_to_rotation', 'bit_math': '.backend:bit_math', 'boolean_math': '.backend:boolean_math', 'combine_color': '.backend:combine_color', 'compare': '.backend:compare', 'euler_to_rotation': '.backend:euler_to_rotation', 'find_in_string': '.backend:find_in_string', 'float_to_integer': '.backend:float_to_integer', 'format_string': '.backend:format_string', 'hash_value': '.backend:hash_value', 'boolean': '.backend:boolean', 'color': '.backend:color', 'integer': '.backend:integer', 'rotation': '.backend:rotation', 'special_characters': '.backend:special_characters', 'string': '.backend:string', 'vector': '.backend:vector', 'integer_math': '.backend:integer_math', 'invert_rotation': '.backend:invert_rotation', 'match_string': '.backend:match_string', 'quaternion_to_rotation': '.backend:quaternion_to_rotation', 'random_value': '.backend:random_value', 'replace_string': '.backend:replace_string', 'reverse_string': '.backend:reverse_string', 'rotate_euler': '.backend:rotate_euler', 'rotate_rotation': '.backend:rotate_rotation', 'rotate_vector': '.backend:rotate_vector', 'rotation_to_axis_angle': '.backend:rotation_to_axis_angle', 'rotation_to_euler': '.backend:rotation_to_euler', 'rotation_to_quaternion': '.backend:rotation_to_quaternion', 'separate_color': '.backend:separate_color', 'set_string_case': '.backend:set_string_case', 'slice_string': '.backend:slice_string', 'split_string': '.backend:split_string', 'string_length': '.backend:string_length', 'string_to_value': '.backend:string_to_value', 'trim_string': '.backend:trim_string', 'value_to_string': '.backend:value_to_string', 'accumulate_field': '.backend:accumulate_field', 'domain_size': '.backend:domain_size', 'attribute_statistic': '.backend:attribute_statistic', 'blur_attribute': '.backend:blur_attribute', 'bounding_box': '.backend:bounding_box', 'capture_attribute': '.backend:capture_attribute', 'cluster_by_connected': '.backend:cluster_by_connected', 'cluster_by_distance': '.backend:cluster_by_distance', 'convex_hull': '.backend:convex_hull', 'corners_of_edge': '.backend:corners_of_edge', 'corners_of_face': '.backend:corners_of_face', 'corners_of_vertex': '.backend:corners_of_vertex', 'cube_grid_topology': '.backend:cube_grid_topology', 'arc': '.backend:arc', 'endpoint_selection': '.backend:endpoint_selection', 'handle_type_selection': '.backend:handle_type_selection', 'curve_length': '.backend:curve_length', 'curve_of_point': '.backend:curve_of_point', 'b_zier_segment': '.backend:b_zier_segment', 'curve_circle': '.backend:curve_circle', 'curve_line': '.backend:curve_line', 'quadrilateral': '.backend:quadrilateral', 'quadratic_b_zier': '.backend:quadratic_b_zier', 'set_handle_type': '.backend:set_handle_type', 'spiral': '.backend:spiral', 'set_spline_type': '.backend:set_spline_type', 'star': '.backend:star', 'curve_to_mesh': '.backend:curve_to_mesh', 'curve_to_points': '.backend:curve_to_points', 'curves_to_grease_pencil': '.backend:curves_to_grease_pencil', 'deform_curves_on_surface': '.backend:deform_curves_on_surface', 'delete_geometry': '.backend:delete_geometry', 'distribute_points_in_grid': '.backend:distribute_points_in_grid', 'distribute_points_in_volume': '.backend:distribute_points_in_volume', 'distribute_points_on_faces': '.backend:distribute_points_on_faces', 'dual_mesh': '.backend:dual_mesh', 'duplicate_elements': '.backend:duplicate_elements', 'edge_paths_to_curves': '.backend:edge_paths_to_curves', 'edge_paths_to_selection': '.backend:edge_paths_to_selection', 'edges_of_corner': '.backend:edges_of_corner', 'edges_of_vertex': '.backend:edges_of_vertex', 'edges_to_face_groups': '.backend:edges_to_face_groups', 'extrude_mesh': '.backend:extrude_mesh', 'face_of_corner': '.backend:face_of_corner', 'evaluate_at_index': '.backend:evaluate_at_index', 'field_average': '.backend:field_average', 'field_min_max': '.backend:field_min_max', 'evaluate_on_domain': '.backend:evaluate_on_domain', 'field_variance': '.backend:field_variance', 'fill_curve': '.backend:fill_curve', 'fillet_curve': '.backend:fillet_curve', 'filter_list': '.backend:filter_list', 'flip_faces': '.backend:flip_faces', 'geometry_to_instance': '.backend:geometry_to_instance', 'get_attribute_names': '.backend:get_attribute_names', 'get_geometry_component': '.backend:get_geometry_component', 'get_named_grid': '.backend:get_named_grid', 'dial_gizmo': '.backend:dial_gizmo', 'linear_gizmo': '.backend:linear_gizmo', 'grease_pencil_to_curves': '.backend:grease_pencil_to_curves', 'advect_grid': '.backend:advect_grid', 'clip_grid': '.backend:clip_grid', 'grid_curl': '.backend:grid_curl', 'grid_dilate_erode': '.backend:grid_dilate_erode', 'grid_divergence': '.backend:grid_divergence', 'grid_gradient': '.backend:grid_gradient', 'grid_laplacian': '.backend:grid_laplacian', 'grid_mean': '.backend:grid_mean', 'grid_median': '.backend:grid_median', 'prune_grid': '.backend:prune_grid', 'grid_to_mesh': '.backend:grid_to_mesh', 'grid_to_points': '.backend:grid_to_points', 'voxelize_grid': '.backend:voxelize_grid', 'import_csv': '.backend:import_csv', 'import_obj': '.backend:import_obj', 'import_ply': '.backend:import_ply', 'import_stl': '.backend:import_stl', 'import_text': '.backend:import_text', 'import_vdb': '.backend:import_vdb', 'index_of_nearest': '.backend:index_of_nearest', 'index_switch': '.backend:index_switch', 'active_camera': '.backend:active_camera', 'curve_handle_positions': '.backend:curve_handle_positions', 'curve_tilt': '.backend:curve_tilt', 'is_edge_smooth': '.backend:is_edge_smooth', 'id': '.backend:id', 'index_node': '.backend:index_node', 'instance_bounds': '.backend:instance_bounds', 'instance_reference': '.backend:instance_reference', 'instance_rotation': '.backend:instance_rotation', 'instance_scale': '.backend:instance_scale', 'material': '.backend:material', 'material_index': '.backend:material_index', 'edge_angle': '.backend:edge_angle', 'edge_neighbors': '.backend:edge_neighbors', 'edge_vertices': '.backend:edge_vertices', 'face_area': '.backend:face_area', 'is_face_planar': '.backend:is_face_planar', 'face_neighbors': '.backend:face_neighbors', 'mesh_island': '.backend:mesh_island', 'vertex_neighbors': '.backend:vertex_neighbors', 'named_attribute': '.backend:named_attribute', 'named_layer_selection': '.backend:named_layer_selection', 'normal': '.backend:normal', 'object': '.backend:object', 'position': '.backend:position', 'radius': '.backend:radius', 'scene_time': '.backend:scene_time', 'is_face_smooth': '.backend:is_face_smooth', 'shortest_edge_paths': '.backend:shortest_edge_paths', 'is_spline_cyclic': '.backend:is_spline_cyclic', 'spline_resolution': '.backend:spline_resolution', 'curve_tangent': '.backend:curve_tangent', 'voxel_index': '.backend:voxel_index', 'instance_on_points': '.backend:instance_on_points', 'instances_to_points': '.backend:instances_to_points', 'interpolate_curves': '.backend:interpolate_curves', 'is_viewport': '.backend:is_viewport', 'join_geometry': '.backend:join_geometry', 'get_list_item': '.backend:get_list_item', 'material_selection': '.backend:material_selection', 'menu_switch': '.backend:menu_switch', 'merge_by_distance': '.backend:merge_by_distance', 'merge_layers': '.backend:merge_layers', 'merge_points': '.backend:merge_points', 'mesh_bevel': '.backend:mesh_bevel', 'mesh_boolean': '.backend:mesh_boolean', 'mesh_circle': '.backend:mesh_circle', 'cone': '.backend:cone', 'cube': '.backend:cube', 'cylinder': '.backend:cylinder', 'face_group_boundaries': '.backend:face_group_boundaries', 'grid': '.backend:grid', 'ico_sphere': '.backend:ico_sphere', 'mesh_line': '.backend:mesh_line', 'mesh_to_curve': '.backend:mesh_to_curve', 'mesh_to_density_grid': '.backend:mesh_to_density_grid', 'mesh_to_points': '.backend:mesh_to_points', 'mesh_to_sdf_grid': '.backend:mesh_to_sdf_grid', 'mesh_to_volume': '.backend:mesh_to_volume', 'uv_sphere': '.backend:uv_sphere', 'offset_corner_in_face': '.backend:offset_corner_in_face', 'offset_point_in_curve': '.backend:offset_point_in_curve', 'points': '.backend:points', 'points_of_curve': '.backend:points_of_curve', 'points_to_curves': '.backend:points_to_curves', 'points_to_sdf_grid': '.backend:points_to_sdf_grid', 'points_to_vertices': '.backend:points_to_vertices', 'points_to_volume': '.backend:points_to_volume', 'geometry_proximity': '.backend:geometry_proximity', 'raycast': '.backend:raycast', 'realize_instances': '.backend:realize_instances', 'remove_named_attribute': '.backend:remove_named_attribute', 'rename_attribute': '.backend:rename_attribute', 'replace_material': '.backend:replace_material', 'resample_curve': '.backend:resample_curve', 'reverse_curve': '.backend:reverse_curve', 'rotate_instances': '.backend:rotate_instances', 'sdf_grid_boolean': '.backend:sdf_grid_boolean', 'sdf_grid_fillet': '.backend:sdf_grid_fillet', 'sdf_grid_laplacian': '.backend:sdf_grid_laplacian', 'sdf_grid_mean': '.backend:sdf_grid_mean', 'sdf_grid_mean_curvature': '.backend:sdf_grid_mean_curvature', 'sdf_grid_median': '.backend:sdf_grid_median', 'sdf_grid_offset': '.backend:sdf_grid_offset', 'sample_curve': '.backend:sample_curve', 'sample_grid': '.backend:sample_grid', 'sample_grid_index': '.backend:sample_grid_index', 'sample_index': '.backend:sample_index', 'sample_nearest': '.backend:sample_nearest', 'sample_nearest_surface': '.backend:sample_nearest_surface', 'sample_uv_surface': '.backend:sample_uv_surface', 'scale_elements': '.backend:scale_elements', 'scale_instances': '.backend:scale_instances', 'self_object': '.backend:self_object', 'separate_components': '.backend:separate_components', 'separate_geometry': '.backend:separate_geometry', 'set_handle_positions': '.backend:set_handle_positions', 'set_curve_normal': '.backend:set_curve_normal', 'set_curve_radius': '.backend:set_curve_radius', 'set_curve_tilt': '.backend:set_curve_tilt', 'set_geometry_name': '.backend:set_geometry_name', 'set_grease_pencil_color': '.backend:set_grease_pencil_color', 'set_grease_pencil_depth': '.backend:set_grease_pencil_depth', 'set_grease_pencil_softness': '.backend:set_grease_pencil_softness', 'set_grid_background': '.backend:set_grid_background', 'set_id': '.backend:set_id', 'set_material': '.backend:set_material', 'set_material_index': '.backend:set_material_index', 'set_mesh_normal': '.backend:set_mesh_normal', 'set_nurbs_order': '.backend:set_nurbs_order', 'set_nurbs_weight': '.backend:set_nurbs_weight', 'set_point_radius': '.backend:set_point_radius', 'set_position': '.backend:set_position', 'set_shade_smooth': '.backend:set_shade_smooth', 'set_spline_cyclic': '.backend:set_spline_cyclic', 'set_spline_resolution': '.backend:set_spline_resolution', 'sort_elements': '.backend:sort_elements', 'sort_list': '.backend:sort_list', 'spline_length': '.backend:spline_length', 'spline_parameter': '.backend:spline_parameter', 'split_edges': '.backend:split_edges', 'split_to_instances': '.backend:split_to_instances', 'store_named_attribute': '.backend:store_named_attribute', 'store_named_grid': '.backend:store_named_grid', 'join_strings': '.backend:join_strings', 'subdivide_curve': '.backend:subdivide_curve', 'subdivide_mesh': '.backend:subdivide_mesh', 'subdivision_surface': '.backend:subdivision_surface', 'switch': '.backend:switch', 'tag_filter': '.backend:tag_filter', 'option_3d_cursor': '.backend:option_3d_cursor', 'active_element': '.backend:active_element', 'face_set': '.backend:face_set', 'mouse_position': '.backend:mouse_position', 'selection': '.backend:selection', 'set_face_set': '.backend:set_face_set', 'set_selection': '.backend:set_selection', 'transfer_attributes': '.backend:transfer_attributes', 'transform_geometry': '.backend:transform_geometry', 'translate_instances': '.backend:translate_instances', 'triangulate': '.backend:triangulate', 'trim_curve': '.backend:trim_curve', 'uv_unwrap': '.backend:uv_unwrap', 'vertex_of_corner': '.backend:vertex_of_corner', 'volume_cube': '.backend:volume_cube', 'volume_to_mesh': '.backend:volume_to_mesh', 'warning': '.backend:warning', 'enable_output': '.backend:enable_output', 'implicit_conversion': '.backend:implicit_conversion', 'reroute': '.backend:reroute', 'blackbody': '.backend:blackbody', 'clamp': '.backend:clamp', 'combine_xyz': '.backend:combine_xyz', 'float_curve': '.backend:float_curve', 'gamma': '.backend:gamma', 'map_range': '.backend:map_range', 'math': '.backend:math', 'mix': '.backend:mix', 'mix_legacy': '.backend:mix_legacy', 'rgb_curves': '.backend:rgb_curves', 'separate_xyz': '.backend:separate_xyz', 'brick_texture': '.backend:brick_texture', 'checker_texture': '.backend:checker_texture', 'gabor_texture': '.backend:gabor_texture', 'gradient_texture': '.backend:gradient_texture', 'magic_texture': '.backend:magic_texture', 'noise_texture': '.backend:noise_texture', 'voronoi_texture': '.backend:voronoi_texture', 'wave_texture': '.backend:wave_texture', 'white_noise_texture': '.backend:white_noise_texture', 'color_ramp': '.backend:color_ramp', 'value': '.backend:value', 'vector_curves': '.backend:vector_curves', 'vector_math': '.backend:vector_math', 'vector_rotate': '.backend:vector_rotate'}
+EXTENSIONS = {'align_euler_to_vector': '.backend:align_euler_to_vector', 'align_rotation_to_vector': '.backend:align_rotation_to_vector', 'axes_to_rotation': '.backend:axes_to_rotation', 'axis_angle_to_rotation': '.backend:axis_angle_to_rotation', 'bit_math': '.backend:bit_math', 'boolean_math': '.backend:boolean_math', 'combine_color': '.backend:combine_color', 'compare': '.backend:compare', 'euler_to_rotation': '.backend:euler_to_rotation', 'find_in_string': '.backend:find_in_string', 'float_to_integer': '.backend:float_to_integer', 'format_string': '.backend:format_string', 'hash_value': '.backend:hash_value', 'boolean': '.backend:boolean', 'color': '.backend:color', 'integer': '.backend:integer', 'rotation': '.backend:rotation', 'special_characters': '.backend:special_characters', 'string': '.backend:string', 'vector': '.backend:vector', 'integer_math': '.backend:integer_math', 'invert_rotation': '.backend:invert_rotation', 'match_string': '.backend:match_string', 'quaternion_to_rotation': '.backend:quaternion_to_rotation', 'random_value': '.backend:random_value', 'replace_string': '.backend:replace_string', 'reverse_string': '.backend:reverse_string', 'rotate_euler': '.backend:rotate_euler', 'rotate_rotation': '.backend:rotate_rotation', 'rotate_vector': '.backend:rotate_vector', 'rotation_to_axis_angle': '.backend:rotation_to_axis_angle', 'rotation_to_euler': '.backend:rotation_to_euler', 'rotation_to_quaternion': '.backend:rotation_to_quaternion', 'separate_color': '.backend:separate_color', 'set_string_case': '.backend:set_string_case', 'slice_string': '.backend:slice_string', 'split_string': '.backend:split_string', 'string_length': '.backend:string_length', 'string_to_value': '.backend:string_to_value', 'trim_string': '.backend:trim_string', 'value_to_string': '.backend:value_to_string', 'accumulate_field': '.backend:accumulate_field', 'domain_size': '.backend:domain_size', 'attribute_statistic': '.backend:attribute_statistic', 'blur_attribute': '.backend:blur_attribute', 'bounding_box': '.backend:bounding_box', 'capture_attribute': '.backend:capture_attribute', 'cluster_by_connected': '.backend:cluster_by_connected', 'cluster_by_distance': '.backend:cluster_by_distance', 'convex_hull': '.backend:convex_hull', 'corners_of_edge': '.backend:corners_of_edge', 'corners_of_face': '.backend:corners_of_face', 'corners_of_vertex': '.backend:corners_of_vertex', 'cube_grid_topology': '.backend:cube_grid_topology', 'arc': '.backend:arc', 'endpoint_selection': '.backend:endpoint_selection', 'handle_type_selection': '.backend:handle_type_selection', 'curve_length': '.backend:curve_length', 'curve_of_point': '.backend:curve_of_point', 'b_zier_segment': '.backend:b_zier_segment', 'curve_circle': '.backend:curve_circle', 'curve_line': '.backend:curve_line', 'quadrilateral': '.backend:quadrilateral', 'quadratic_b_zier': '.backend:quadratic_b_zier', 'set_handle_type': '.backend:set_handle_type', 'spiral': '.backend:spiral', 'set_spline_type': '.backend:set_spline_type', 'star': '.backend:star', 'curve_to_mesh': '.backend:curve_to_mesh', 'curve_to_points': '.backend:curve_to_points', 'curves_to_grease_pencil': '.backend:curves_to_grease_pencil', 'deform_curves_on_surface': '.backend:deform_curves_on_surface', 'delete_geometry': '.backend:delete_geometry', 'distribute_points_in_grid': '.backend:distribute_points_in_grid', 'distribute_points_in_volume': '.backend:distribute_points_in_volume', 'distribute_points_on_faces': '.backend:distribute_points_on_faces', 'dual_mesh': '.backend:dual_mesh', 'duplicate_elements': '.backend:duplicate_elements', 'edge_paths_to_curves': '.backend:edge_paths_to_curves', 'edge_paths_to_selection': '.backend:edge_paths_to_selection', 'edges_of_corner': '.backend:edges_of_corner', 'edges_of_vertex': '.backend:edges_of_vertex', 'edges_to_face_groups': '.backend:edges_to_face_groups', 'extrude_mesh': '.backend:extrude_mesh', 'face_of_corner': '.backend:face_of_corner', 'evaluate_at_index': '.backend:evaluate_at_index', 'field_average': '.backend:field_average', 'field_min_max': '.backend:field_min_max', 'evaluate_on_domain': '.backend:evaluate_on_domain', 'field_variance': '.backend:field_variance', 'fill_curve': '.backend:fill_curve', 'fillet_curve': '.backend:fillet_curve', 'filter_list': '.backend:filter_list', 'flip_faces': '.backend:flip_faces', 'geometry_to_instance': '.backend:geometry_to_instance', 'get_attribute_names': '.backend:get_attribute_names', 'get_geometry_component': '.backend:get_geometry_component', 'get_named_grid': '.backend:get_named_grid', 'dial_gizmo': '.backend:dial_gizmo', 'linear_gizmo': '.backend:linear_gizmo', 'grease_pencil_to_curves': '.backend:grease_pencil_to_curves', 'advect_grid': '.backend:advect_grid', 'clip_grid': '.backend:clip_grid', 'grid_curl': '.backend:grid_curl', 'grid_dilate_erode': '.backend:grid_dilate_erode', 'grid_divergence': '.backend:grid_divergence', 'grid_gradient': '.backend:grid_gradient', 'grid_laplacian': '.backend:grid_laplacian', 'grid_mean': '.backend:grid_mean', 'grid_median': '.backend:grid_median', 'prune_grid': '.backend:prune_grid', 'grid_to_mesh': '.backend:grid_to_mesh', 'grid_to_points': '.backend:grid_to_points', 'voxelize_grid': '.backend:voxelize_grid', 'import_csv': '.backend:import_csv', 'import_obj': '.backend:import_obj', 'import_ply': '.backend:import_ply', 'import_stl': '.backend:import_stl', 'import_text': '.backend:import_text', 'import_vdb': '.backend:import_vdb', 'index_of_nearest': '.backend:index_of_nearest', 'index_switch': '.backend:index_switch', 'active_camera': '.backend:active_camera', 'curve_handle_positions': '.backend:curve_handle_positions', 'curve_tilt': '.backend:curve_tilt', 'is_edge_smooth': '.backend:is_edge_smooth', 'id': '.backend:id', 'index': '.backend:index', 'instance_bounds': '.backend:instance_bounds', 'instance_reference': '.backend:instance_reference', 'instance_rotation': '.backend:instance_rotation', 'instance_scale': '.backend:instance_scale', 'material': '.backend:material', 'material_index': '.backend:material_index', 'edge_angle': '.backend:edge_angle', 'edge_neighbors': '.backend:edge_neighbors', 'edge_vertices': '.backend:edge_vertices', 'face_area': '.backend:face_area', 'is_face_planar': '.backend:is_face_planar', 'face_neighbors': '.backend:face_neighbors', 'mesh_island': '.backend:mesh_island', 'vertex_neighbors': '.backend:vertex_neighbors', 'named_attribute': '.backend:named_attribute', 'named_layer_selection': '.backend:named_layer_selection', 'normal': '.backend:normal', 'object': '.backend:object', 'position': '.backend:position', 'radius': '.backend:radius', 'scene_time': '.backend:scene_time', 'is_face_smooth': '.backend:is_face_smooth', 'shortest_edge_paths': '.backend:shortest_edge_paths', 'is_spline_cyclic': '.backend:is_spline_cyclic', 'spline_resolution': '.backend:spline_resolution', 'curve_tangent': '.backend:curve_tangent', 'voxel_index': '.backend:voxel_index', 'instance_on_points': '.backend:instance_on_points', 'instances_to_points': '.backend:instances_to_points', 'interpolate_curves': '.backend:interpolate_curves', 'is_viewport': '.backend:is_viewport', 'join_geometry': '.backend:join_geometry', 'get_list_item': '.backend:get_list_item', 'material_selection': '.backend:material_selection', 'menu_switch': '.backend:menu_switch', 'merge_by_distance': '.backend:merge_by_distance', 'merge_layers': '.backend:merge_layers', 'merge_points': '.backend:merge_points', 'mesh_bevel': '.backend:mesh_bevel', 'mesh_boolean': '.backend:mesh_boolean', 'mesh_circle': '.backend:mesh_circle', 'cone': '.backend:cone', 'cube': '.backend:cube', 'cylinder': '.backend:cylinder', 'face_group_boundaries': '.backend:face_group_boundaries', 'grid': '.backend:grid', 'ico_sphere': '.backend:ico_sphere', 'mesh_line': '.backend:mesh_line', 'mesh_to_curve': '.backend:mesh_to_curve', 'mesh_to_density_grid': '.backend:mesh_to_density_grid', 'mesh_to_points': '.backend:mesh_to_points', 'mesh_to_sdf_grid': '.backend:mesh_to_sdf_grid', 'mesh_to_volume': '.backend:mesh_to_volume', 'uv_sphere': '.backend:uv_sphere', 'offset_corner_in_face': '.backend:offset_corner_in_face', 'offset_point_in_curve': '.backend:offset_point_in_curve', 'points': '.backend:points', 'points_of_curve': '.backend:points_of_curve', 'points_to_curves': '.backend:points_to_curves', 'points_to_sdf_grid': '.backend:points_to_sdf_grid', 'points_to_vertices': '.backend:points_to_vertices', 'points_to_volume': '.backend:points_to_volume', 'geometry_proximity': '.backend:geometry_proximity', 'raycast': '.backend:raycast', 'realize_instances': '.backend:realize_instances', 'remove_named_attribute': '.backend:remove_named_attribute', 'rename_attribute': '.backend:rename_attribute', 'replace_material': '.backend:replace_material', 'resample_curve': '.backend:resample_curve', 'reverse_curve': '.backend:reverse_curve', 'rotate_instances': '.backend:rotate_instances', 'sdf_grid_boolean': '.backend:sdf_grid_boolean', 'sdf_grid_fillet': '.backend:sdf_grid_fillet', 'sdf_grid_laplacian': '.backend:sdf_grid_laplacian', 'sdf_grid_mean': '.backend:sdf_grid_mean', 'sdf_grid_mean_curvature': '.backend:sdf_grid_mean_curvature', 'sdf_grid_median': '.backend:sdf_grid_median', 'sdf_grid_offset': '.backend:sdf_grid_offset', 'sample_curve': '.backend:sample_curve', 'sample_grid': '.backend:sample_grid', 'sample_grid_index': '.backend:sample_grid_index', 'sample_index': '.backend:sample_index', 'sample_nearest': '.backend:sample_nearest', 'sample_nearest_surface': '.backend:sample_nearest_surface', 'sample_uv_surface': '.backend:sample_uv_surface', 'scale_elements': '.backend:scale_elements', 'scale_instances': '.backend:scale_instances', 'self_object': '.backend:self_object', 'separate_components': '.backend:separate_components', 'separate_geometry': '.backend:separate_geometry', 'set_handle_positions': '.backend:set_handle_positions', 'set_curve_normal': '.backend:set_curve_normal', 'set_curve_radius': '.backend:set_curve_radius', 'set_curve_tilt': '.backend:set_curve_tilt', 'set_geometry_name': '.backend:set_geometry_name', 'set_grease_pencil_color': '.backend:set_grease_pencil_color', 'set_grease_pencil_depth': '.backend:set_grease_pencil_depth', 'set_grease_pencil_softness': '.backend:set_grease_pencil_softness', 'set_grid_background': '.backend:set_grid_background', 'set_id': '.backend:set_id', 'set_material': '.backend:set_material', 'set_material_index': '.backend:set_material_index', 'set_mesh_normal': '.backend:set_mesh_normal', 'set_nurbs_order': '.backend:set_nurbs_order', 'set_nurbs_weight': '.backend:set_nurbs_weight', 'set_point_radius': '.backend:set_point_radius', 'set_position': '.backend:set_position', 'set_shade_smooth': '.backend:set_shade_smooth', 'set_spline_cyclic': '.backend:set_spline_cyclic', 'set_spline_resolution': '.backend:set_spline_resolution', 'sort_elements': '.backend:sort_elements', 'sort_list': '.backend:sort_list', 'spline_length': '.backend:spline_length', 'spline_parameter': '.backend:spline_parameter', 'split_edges': '.backend:split_edges', 'split_to_instances': '.backend:split_to_instances', 'store_named_attribute': '.backend:store_named_attribute', 'store_named_grid': '.backend:store_named_grid', 'join_strings': '.backend:join_strings', 'subdivide_curve': '.backend:subdivide_curve', 'subdivide_mesh': '.backend:subdivide_mesh', 'subdivision_surface': '.backend:subdivision_surface', 'switch': '.backend:switch', 'tag_filter': '.backend:tag_filter', 'option_3d_cursor': '.backend:option_3d_cursor', 'active_element': '.backend:active_element', 'face_set': '.backend:face_set', 'mouse_position': '.backend:mouse_position', 'selection': '.backend:selection', 'set_face_set': '.backend:set_face_set', 'set_selection': '.backend:set_selection', 'transfer_attributes': '.backend:transfer_attributes', 'transform_geometry': '.backend:transform_geometry', 'translate_instances': '.backend:translate_instances', 'triangulate': '.backend:triangulate', 'trim_curve': '.backend:trim_curve', 'uv_unwrap': '.backend:uv_unwrap', 'vertex_of_corner': '.backend:vertex_of_corner', 'volume_cube': '.backend:volume_cube', 'volume_to_mesh': '.backend:volume_to_mesh', 'warning': '.backend:warning', 'enable_output': '.backend:enable_output', 'implicit_conversion': '.backend:implicit_conversion', 'reroute': '.backend:reroute', 'blackbody': '.backend:blackbody', 'clamp': '.backend:clamp', 'combine_xyz': '.backend:combine_xyz', 'float_curve': '.backend:float_curve', 'gamma': '.backend:gamma', 'map_range': '.backend:map_range', 'math': '.backend:math', 'mix': '.backend:mix', 'mix_legacy': '.backend:mix_legacy', 'rgb_curves': '.backend:rgb_curves', 'separate_xyz': '.backend:separate_xyz', 'brick_texture': '.backend:brick_texture', 'checker_texture': '.backend:checker_texture', 'gabor_texture': '.backend:gabor_texture', 'gradient_texture': '.backend:gradient_texture', 'magic_texture': '.backend:magic_texture', 'noise_texture': '.backend:noise_texture', 'voronoi_texture': '.backend:voronoi_texture', 'wave_texture': '.backend:wave_texture', 'white_noise_texture': '.backend:white_noise_texture', 'color_ramp': '.backend:color_ramp', 'value': '.backend:value', 'vector_curves': '.backend:vector_curves', 'vector_math': '.backend:vector_math', 'vector_rotate': '.backend:vector_rotate'}
 
 def align_euler_to_vector(
     *,
@@ -99,7 +99,7 @@ def find_in_string(
     *,
     string: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     search: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'From Start',
+    mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'From Start',
 ) -> tuple[Int, Int]:
     """Build a FunctionNodeFindInString; omitted inputs keep Blender defaults."""
     ...
@@ -197,7 +197,7 @@ def match_string(
     *,
     string: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     key: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_operation: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Starts With',
+    operation: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Starts With',
 ) -> tuple[Bool]:
     """Build a FunctionNodeMatchString; omitted inputs keep Blender defaults."""
     ...
@@ -301,7 +301,7 @@ def separate_color(
 def set_string_case(
     *,
     string: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_case: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Uppercase',
+    case: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Uppercase',
 ) -> tuple[String]:
     """Build a FunctionNodeSetStringCase; omitted inputs keep Blender defaults."""
     ...
@@ -701,7 +701,7 @@ def distribute_points_in_volume(
     seed: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     spacing: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     threshold: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Random',
+    mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Random',
 ) -> tuple[Geometry]:
     """Build a GeometryNodeDistributePointsInVolume; omitted inputs keep Blender defaults."""
     ...
@@ -801,7 +801,7 @@ def face_of_corner(
 def evaluate_at_index(
     *,
     value: Annotated[Bool | Color | Float | Int | Rotation | Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    input_index: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
+    index: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     data_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'FLOAT',
     domain: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'POINT',
 ) -> DynamicResults:
@@ -851,8 +851,8 @@ def fill_curve(
     *,
     curve: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     group_id: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_fill_rule: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Even-Odd',
-    menu_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Triangles',
+    fill_rule: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Even-Odd',
+    mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Triangles',
 ) -> tuple[Geometry]:
     """Build a GeometryNodeFillCurve; omitted inputs keep Blender defaults."""
     ...
@@ -863,7 +863,7 @@ def fillet_curve(
     radius: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     limit_radius: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     count: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Bézier',
+    mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Bézier',
 ) -> tuple[Geometry]:
     """Build a GeometryNodeFilletCurve; omitted inputs keep Blender defaults."""
     ...
@@ -897,8 +897,8 @@ def get_attribute_names(
     geometry: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     filter_data_type: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     filter_domain: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_data_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Float',
-    menu_domain: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Point',
+    data_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Float',
+    domain: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Point',
 ) -> tuple[String]:
     """Build a GeometryNodeGetAttributeNames; omitted inputs keep Blender defaults."""
     ...
@@ -907,7 +907,7 @@ def get_geometry_component(
     *,
     geometry: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     remove: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Mesh',
+    type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Mesh',
 ) -> tuple[Geometry, Geometry, Bool]:
     """Build a GeometryNodeGetGeometryComponent; omitted inputs keep Blender defaults."""
     ...
@@ -960,8 +960,8 @@ def advect_grid(
     velocity: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     time_step: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     data_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'FLOAT',
-    menu_integration_scheme: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Runge-Kutta 3',
-    menu_limiter: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Clamp',
+    integration_scheme: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Runge-Kutta 3',
+    limiter: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Clamp',
 ) -> DynamicResults:
     """Build a GeometryNodeGridAdvect; omitted inputs keep Blender defaults."""
     ...
@@ -992,8 +992,8 @@ def grid_dilate_erode(
     grid: Annotated[Bool | Float | Int | Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     steps: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     data_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'FLOAT',
-    menu_connectivity: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Face',
-    menu_tiles: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Preserve',
+    connectivity: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Face',
+    tiles: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Preserve',
 ) -> DynamicResults:
     """Build a GeometryNodeGridDilateAndErode; omitted inputs keep Blender defaults."""
     ...
@@ -1044,7 +1044,7 @@ def prune_grid(
     grid: Annotated[Bool | Float | Int | Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     threshold: Annotated[Float | Int | Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     data_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'FLOAT',
-    menu_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Threshold',
+    mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Threshold',
 ) -> DynamicResults:
     """Build a GeometryNodeGridPrune; omitted inputs keep Blender defaults."""
     ...
@@ -1127,7 +1127,7 @@ def index_of_nearest(
 
 def index_switch(
     *items: Annotated[Bool | Color | Float | Geometry | Int | Material | Object | Rotation | String | Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME],
-    input_index: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
+    index: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     data_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'FLOAT',
     elements: Annotated[Int, EvaluationMode.COMPILE_TIME_ONLY] = 2,
 ) -> DynamicResults:
@@ -1161,7 +1161,7 @@ def id(
     """Build a GeometryNodeInputID; omitted inputs keep Blender defaults."""
     ...
 
-def index_node(
+def index(
 ) -> tuple[Int]:
     """Build a GeometryNodeInputIndex; omitted inputs keep Blender defaults."""
     ...
@@ -1366,7 +1366,7 @@ def join_geometry(
 def get_list_item(
     *,
     list: Annotated[Bool | Color | Float | Geometry | Int | Material | Object | Rotation | String | Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    input_index: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
+    index: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     socket_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'FLOAT',
     structure_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'AUTO',
 ) -> DynamicResults:
@@ -1383,7 +1383,7 @@ def material_selection(
 def menu_switch(
     *items: Annotated[Bool | Color | Float | Geometry | Int | Material | Object | Rotation | String | Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME],
     data_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'GEOMETRY',
-    menu_menu: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'A',
+    menu: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'A',
     elements: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'A,B',
 ) -> DynamicResults:
     """Build a GeometryNodeMenuSwitch; omitted inputs keep Blender defaults."""
@@ -1394,7 +1394,7 @@ def merge_by_distance(
     geometry: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     distance: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'All',
+    mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'All',
 ) -> tuple[Geometry]:
     """Build a GeometryNodeMergeByDistance; omitted inputs keep Blender defaults."""
     ...
@@ -1431,7 +1431,7 @@ def mesh_bevel(
     start_right_offset: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     end_left_offset: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     end_right_offset: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_affect_kind: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Edges',
+    affect_kind: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Edges',
 ) -> tuple[Geometry, Bool, Bool, Bool, Bool]:
     """Build a GeometryNodeMeshBevel; omitted inputs keep Blender defaults."""
     ...
@@ -1575,7 +1575,7 @@ def mesh_to_volume(
     voxel_amount: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     interior_band_width: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     voxel_size: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_resolution_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Amount',
+    resolution_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Amount',
 ) -> tuple[Geometry]:
     """Build a GeometryNodeMeshToVolume; omitted inputs keep Blender defaults."""
     ...
@@ -1656,7 +1656,7 @@ def points_to_volume(
     voxel_amount: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     radius: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     voxel_size: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_resolution_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Amount',
+    resolution_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Amount',
 ) -> tuple[Geometry]:
     """Build a GeometryNodePointsToVolume; omitted inputs keep Blender defaults."""
     ...
@@ -1680,7 +1680,7 @@ def raycast(
     ray_direction: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     ray_length: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     data_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'FLOAT',
-    menu_interpolation: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Interpolated',
+    interpolation: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Interpolated',
 ) -> DynamicResults:
     """Build a GeometryNodeRaycast; omitted inputs keep Blender defaults."""
     ...
@@ -1700,7 +1700,7 @@ def remove_named_attribute(
     *,
     geometry: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     name: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_pattern_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Exact',
+    pattern_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Exact',
 ) -> tuple[Geometry]:
     """Build a GeometryNodeRemoveAttribute; omitted inputs keep Blender defaults."""
     ...
@@ -1711,7 +1711,7 @@ def rename_attribute(
     old: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     new: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     overwrite: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Single',
+    mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Single',
 ) -> tuple[Geometry]:
     """Build a GeometryNodeRenameAttribute; omitted inputs keep Blender defaults."""
     ...
@@ -1732,7 +1732,7 @@ def resample_curve(
     count: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     length: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     keep_last_segment: Annotated[Bool, EvaluationMode.COMPILE_TIME_ONLY] = True,
-    menu_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Count',
+    mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Count',
 ) -> tuple[Geometry]:
     """Build a GeometryNodeResampleCurve; omitted inputs keep Blender defaults."""
     ...
@@ -1834,7 +1834,7 @@ def sample_grid(
     grid: Annotated[Bool | Float | Int | Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     position: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     data_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'FLOAT',
-    menu_interpolation: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Trilinear',
+    interpolation: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Trilinear',
 ) -> DynamicResults:
     """Build a GeometryNodeSampleGrid; omitted inputs keep Blender defaults."""
     ...
@@ -1854,7 +1854,7 @@ def sample_index(
     *,
     geometry: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     value: Annotated[Bool | Color | Float | Int | Rotation | Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    input_index: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
+    index: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     clamp: Annotated[Bool, EvaluationMode.COMPILE_TIME_ONLY] = False,
     data_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'FLOAT',
     domain: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'POINT',
@@ -1902,7 +1902,7 @@ def scale_elements(
     center: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     axis: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     domain: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'FACE',
-    menu_scale_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Uniform',
+    scale_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Uniform',
 ) -> tuple[Geometry]:
     """Build a GeometryNodeScaleElements; omitted inputs keep Blender defaults."""
     ...
@@ -1955,7 +1955,7 @@ def set_curve_normal(
     curve: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     normal: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Minimum Twist',
+    mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Minimum Twist',
 ) -> tuple[Geometry]:
     """Build a GeometryNodeSetCurveNormal; omitted inputs keep Blender defaults."""
     ...
@@ -2233,8 +2233,8 @@ def subdivision_surface(
     vertex_crease: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     limit_surface: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     quality: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_boundary_smooth: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'All',
-    menu_uv_smooth: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Keep Boundaries',
+    boundary_smooth: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'All',
+    uv_smooth: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Keep Boundaries',
 ) -> tuple[Geometry]:
     """Build a GeometryNodeSubdivisionSurface; omitted inputs keep Blender defaults."""
     ...
@@ -2320,7 +2320,7 @@ def transfer_attributes(
     source_instance_id: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     attribute_names: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     exclude_names: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_pattern_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Wildcard',
+    pattern_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Wildcard',
 ) -> tuple[Geometry, String]:
     """Build a GeometryNodeTransferAttributes; omitted inputs keep Blender defaults."""
     ...
@@ -2331,7 +2331,7 @@ def transform_geometry(
     translation: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     rotation: Annotated[Rotation, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     scale: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Components',
+    mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Components',
 ) -> tuple[Geometry]:
     """Build a GeometryNodeTransform; omitted inputs keep Blender defaults."""
     ...
@@ -2350,8 +2350,8 @@ def triangulate(
     *,
     mesh: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_n_gon_method: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Beauty',
-    menu_quad_method: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Shortest Diagonal',
+    n_gon_method: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Beauty',
+    quad_method: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Shortest Diagonal',
 ) -> tuple[Geometry]:
     """Build a GeometryNodeTriangulate; omitted inputs keep Blender defaults."""
     ...
@@ -2377,7 +2377,7 @@ def uv_unwrap(
     fill_holes: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     iterations: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     no_flip: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_method: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Angle Based',
+    method: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Angle Based',
 ) -> tuple[Vector]:
     """Build a GeometryNodeUVUnwrap; omitted inputs keep Blender defaults."""
     ...
@@ -2409,7 +2409,7 @@ def volume_to_mesh(
     adaptivity: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     voxel_amount: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     voxel_size: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-    menu_resolution_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Grid',
+    resolution_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Grid',
 ) -> tuple[Geometry]:
     """Build a GeometryNodeVolumeToMesh; omitted inputs keep Blender defaults."""
     ...

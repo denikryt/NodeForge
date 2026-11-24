@@ -350,7 +350,7 @@ def _result_types_menu_switch(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_menu_switch)
     raw = static_value(arguments, 'elements')
     names = [s.strip() for s in raw.split(',')] if raw else []
-    selected = static_value(arguments, 'menu_menu')
+    selected = static_value(arguments, 'menu')
     if not all(names) or len(names) != len(set(names)) or selected not in names:
         raise ValueError('Invalid Menu selection / elements')
     return base + (NFType.BOOL,) * len(names)

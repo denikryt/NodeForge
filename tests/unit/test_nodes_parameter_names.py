@@ -72,3 +72,50 @@ def test_same_named_axis_properties_and_inputs_are_distinct(generated):
         'primary_axis': 'primary_axis', 'secondary_axis': 'secondary_axis'}
     assert {inp['param']: inp['socket'] for inp in axes['named_inputs']} == {
         'primary_axis_vector': 'Primary Axis', 'secondary_axis_vector': 'Secondary Axis'}
+
+
+def test_index_has_no_builtin_name_exception(generated):
+    report, _ = generated
+    wrappers = {w['node']: w for w in report['wrappers']}
+    assert wrappers['GeometryNodeInputIndex']['name'] == 'index'
+    for node in ('GeometryNodeFieldAtIndex', 'GeometryNodeIndexSwitch',
+                 'GeometryNodeListGetItem', 'GeometryNodeSampleIndex'):
+        inputs = wrappers[node]['named_inputs']
+        assert [i['param'] for i in inputs if i['socket'] == 'Index'] == ['index']
+    assert not any(w['name'] == 'index_node' for w in wrappers.values())
+    assert not any(i['param'] == 'input_index' for w in wrappers.values()
+                   for i in w['named_inputs'])
+
+
+def test_menu_parameters_have_plain_socket_names(generated):
+    report, output = generated
+    from inspect_contract import sanitized
+    backend = {f.name: f for f in ast.parse((output / 'backend.py').read_text()).body
+               if isinstance(f, ast.FunctionDef)}
+    count = 0
+    for wrapper in report['wrappers']:
+        expected = {f['key']: f['param'] for f in wrapper['fields'] if f['kind'] == 'menu'}
+        assert all(sanitized(key) == param for key, param in expected.items())
+        call = backend[wrapper['name']].body[0].value
+        menus = next(k.value for k in call.keywords if k.arg == 'menus')
+        actual = {entry.elts[0].value: entry.elts[1].id for entry in menus.elts}
+        assert actual == expected
+        count += len(expected)
+    assert count == 35
+
+
+def test_public_names_only_normalize_labels_and_disambiguate_real_conflicts(generated):
+    report, _ = generated
+    from inspect_contract import sanitized
+    from generate_clean import public_name
+    with gzip.open(TOOL / 'data' / 'blender-5.2.spec.json.gz', 'rt') as source:
+        spec = json.load(source)
+    for w in report['wrappers']:
+        label = spec['nodes'][w['node']]['inventory'].get('label') or w['node']
+        assert w['name'] == sanitized(label)
+        for inp in w['named_inputs']:
+            if inp['param'] != sanitized(inp['socket']):
+                assert sanitized(inp['socket']) in {f['param'] for f in w['fields']}
+    # Hard Python keywords and invalid identifiers still need sanitizing.
+    assert public_name('test', {'inventory': {'label': 'Class'}}) == 'option_class'
+    assert public_name('test', {'inventory': {'label': '3D'}}) == 'option_3d'
