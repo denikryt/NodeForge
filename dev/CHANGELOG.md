@@ -847,6 +847,7 @@ lifecycle.
 - Added declaration, semantic, dynamic-result, Blender socket-default, and downstream `nodeforge.nodes` regression coverage.
 ## 0.100.0
 
+- Expose plain Blender RNA property names in `nodeforge.nodes` 1.5.0 (for example, `data_type`, `domain`, and `rotation_type`) and disambiguate same-named vector input sockets.
 - Bundle `nodeforge.nodes` as a regular installable package containing generated Blender 5.2 native-node wrappers; replace the legacy wrapper implementations.
 - Add an in-repository Blender Inspector, deterministic wrapper generator, and one-command package generation/validation tool that preserves the manually managed package manifest.
 - Add a pinned Blender 5.2 inspection catalogue and regression checks for package discovery, generated bindings, and real Blender compilation.

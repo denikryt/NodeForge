@@ -101,7 +101,7 @@ def prepare_node(node_id, node):
     menu_keys=sorted({m['identifier'] for st,_,_ in valid for m in st['menus']})
     if any(set(st['rna'])!=set(rna_keys) or {m['identifier'] for m in st['menus']}!=set(menu_keys) for st,_,_ in valid):
         raise ValueError('Option keys vary across otherwise representable states')
-    fields=[{'kind':'rna','key':k,'param':'rna_'+sanitized(k),
+    fields=[{'kind':'rna','key':k,'param':sanitized(k),
              'marker':'Bool' if all(type(st['rna'][k]) is bool for st,_,_ in valid) else 'Int'
                if all(type(st['rna'][k]) is int for st,_,_ in valid) else 'String'} for k in rna_keys]
     fields += [{'kind':'menu','key':k,'param':'menu_'+sanitized(k),'marker':'String'} for k in menu_keys]

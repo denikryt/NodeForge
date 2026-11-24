@@ -93,13 +93,19 @@ def named_inputs(item):
                 raise ValueError(f"Ambiguous duplicate input socket identifier: {item['node']} {ident!r}")
             per_state.add(ident)
             observed.setdefault(ident, set()).add(socket['type'])
-    occupied = {f['param'] for f in item['fields']} | {'elements', 'context', 'items', 'values'}
+    field_names = {f['param'] for f in item['fields']}
+    occupied = field_names | {'elements', 'context', 'items', 'values'}
     result = []
     for ident, types in observed.items():
         stem = sanitized(ident)
         # 'index' is a built-in NodeForge DSL name, not a safe argument name.
         if stem == 'index':
             stem = 'input_index'
+        # A configuration property keeps its Blender name. Disambiguate a
+        # same-named socket by its type (e.g. primary_axis_vector).
+        if stem in field_names:
+            suffix = next(iter(types)).lower() if len(types) == 1 else 'input'
+            stem = f'{stem}_{suffix}'
         name = stem
         number = 2
         while name in occupied:

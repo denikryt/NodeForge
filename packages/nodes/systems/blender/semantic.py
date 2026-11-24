@@ -26,7 +26,7 @@ _SIGNATURE_random_value = {
 }
 
 def _result_types_random_value(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_random_value)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_random_value)
     return base
 
 _SIGNATURE_string_to_value = {
@@ -35,7 +35,7 @@ _SIGNATURE_string_to_value = {
 }
 
 def _result_types_string_to_value(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_string_to_value)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_string_to_value)
     return base
 
 _SIGNATURE_accumulate_field = {
@@ -45,7 +45,7 @@ _SIGNATURE_accumulate_field = {
 }
 
 def _result_types_accumulate_field(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_accumulate_field)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_accumulate_field)
     return base
 
 _SIGNATURE_domain_size = {
@@ -57,7 +57,7 @@ _SIGNATURE_domain_size = {
 }
 
 def _result_types_domain_size(arguments):
-    base = output_types(arguments, ['rna_component'], _SIGNATURE_domain_size)
+    base = output_types(arguments, ['component'], _SIGNATURE_domain_size)
     return base
 
 _SIGNATURE_attribute_statistic = {
@@ -66,7 +66,7 @@ _SIGNATURE_attribute_statistic = {
 }
 
 def _result_types_attribute_statistic(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_attribute_statistic)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_attribute_statistic)
     return base
 
 _SIGNATURE_blur_attribute = {
@@ -77,7 +77,7 @@ _SIGNATURE_blur_attribute = {
 }
 
 def _result_types_blur_attribute(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_blur_attribute)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_blur_attribute)
     return base
 
 _SIGNATURE_capture_attribute = {
@@ -104,7 +104,7 @@ _SIGNATURE_arc = {
 }
 
 def _result_types_arc(arguments):
-    base = output_types(arguments, ['rna_mode'], _SIGNATURE_arc)
+    base = output_types(arguments, ['mode'], _SIGNATURE_arc)
     return base
 
 _SIGNATURE_curve_circle = {
@@ -113,7 +113,7 @@ _SIGNATURE_curve_circle = {
 }
 
 def _result_types_curve_circle(arguments):
-    base = output_types(arguments, ['rna_mode'], _SIGNATURE_curve_circle)
+    base = output_types(arguments, ['mode'], _SIGNATURE_curve_circle)
     return base
 
 _SIGNATURE_evaluate_at_index = {
@@ -126,7 +126,7 @@ _SIGNATURE_evaluate_at_index = {
 }
 
 def _result_types_evaluate_at_index(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_evaluate_at_index)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_evaluate_at_index)
     return base
 
 _SIGNATURE_field_average = {
@@ -135,7 +135,7 @@ _SIGNATURE_field_average = {
 }
 
 def _result_types_field_average(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_field_average)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_field_average)
     return base
 
 _SIGNATURE_field_min_max = {
@@ -145,7 +145,7 @@ _SIGNATURE_field_min_max = {
 }
 
 def _result_types_field_min_max(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_field_min_max)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_field_min_max)
     return base
 
 _SIGNATURE_evaluate_on_domain = {
@@ -158,7 +158,7 @@ _SIGNATURE_evaluate_on_domain = {
 }
 
 def _result_types_evaluate_on_domain(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_evaluate_on_domain)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_evaluate_on_domain)
     return base
 
 _SIGNATURE_field_variance = {
@@ -167,7 +167,7 @@ _SIGNATURE_field_variance = {
 }
 
 def _result_types_field_variance(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_field_variance)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_field_variance)
     return base
 
 _SIGNATURE_filter_list = {
@@ -184,7 +184,7 @@ _SIGNATURE_filter_list = {
 }
 
 def _result_types_filter_list(arguments):
-    base = output_types(arguments, ['rna_socket_type'], _SIGNATURE_filter_list)
+    base = output_types(arguments, ['socket_type'], _SIGNATURE_filter_list)
     return base
 
 _SIGNATURE_get_named_grid = {
@@ -195,7 +195,7 @@ _SIGNATURE_get_named_grid = {
 }
 
 def _result_types_get_named_grid(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_get_named_grid)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_get_named_grid)
     return base
 
 _SIGNATURE_advect_grid = {
@@ -205,7 +205,7 @@ _SIGNATURE_advect_grid = {
 }
 
 def _result_types_advect_grid(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_advect_grid)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_advect_grid)
     return base
 
 _SIGNATURE_clip_grid = {
@@ -216,7 +216,7 @@ _SIGNATURE_clip_grid = {
 }
 
 def _result_types_clip_grid(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_clip_grid)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_clip_grid)
     return base
 
 _SIGNATURE_grid_dilate_erode = {
@@ -227,7 +227,7 @@ _SIGNATURE_grid_dilate_erode = {
 }
 
 def _result_types_grid_dilate_erode(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_grid_dilate_erode)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_grid_dilate_erode)
     return base
 
 _SIGNATURE_grid_mean = {
@@ -237,7 +237,7 @@ _SIGNATURE_grid_mean = {
 }
 
 def _result_types_grid_mean(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_grid_mean)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_grid_mean)
     return base
 
 _SIGNATURE_grid_median = {
@@ -247,7 +247,7 @@ _SIGNATURE_grid_median = {
 }
 
 def _result_types_grid_median(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_grid_median)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_grid_median)
     return base
 
 _SIGNATURE_prune_grid = {
@@ -258,7 +258,7 @@ _SIGNATURE_prune_grid = {
 }
 
 def _result_types_prune_grid(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_prune_grid)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_prune_grid)
     return base
 
 _SIGNATURE_grid_to_points = {
@@ -269,7 +269,7 @@ _SIGNATURE_grid_to_points = {
 }
 
 def _result_types_grid_to_points(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_grid_to_points)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_grid_to_points)
     return base
 
 _SIGNATURE_voxelize_grid = {
@@ -280,7 +280,7 @@ _SIGNATURE_voxelize_grid = {
 }
 
 def _result_types_voxelize_grid(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_voxelize_grid)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_voxelize_grid)
     return base
 
 _SIGNATURE_index_switch = {
@@ -297,7 +297,7 @@ _SIGNATURE_index_switch = {
 }
 
 def _result_types_index_switch(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_index_switch)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_index_switch)
     count = static_value(arguments, 'elements')
     if type(count) is not int or count < 0:
         raise ValueError('elements must be nonnegative')
@@ -313,7 +313,7 @@ _SIGNATURE_named_attribute = {
 }
 
 def _result_types_named_attribute(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_named_attribute)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_named_attribute)
     return base
 
 _SIGNATURE_get_list_item = {
@@ -330,7 +330,7 @@ _SIGNATURE_get_list_item = {
 }
 
 def _result_types_get_list_item(arguments):
-    base = output_types(arguments, ['rna_socket_type'], _SIGNATURE_get_list_item)
+    base = output_types(arguments, ['socket_type'], _SIGNATURE_get_list_item)
     return base
 
 _SIGNATURE_menu_switch = {
@@ -347,7 +347,7 @@ _SIGNATURE_menu_switch = {
 }
 
 def _result_types_menu_switch(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_menu_switch)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_menu_switch)
     raw = static_value(arguments, 'elements')
     names = [s.strip() for s in raw.split(',')] if raw else []
     selected = static_value(arguments, 'menu_menu')
@@ -362,7 +362,7 @@ _SIGNATURE_mesh_boolean = {
 }
 
 def _result_types_mesh_boolean(arguments):
-    base = output_types(arguments, ['rna_solver'], _SIGNATURE_mesh_boolean)
+    base = output_types(arguments, ['solver'], _SIGNATURE_mesh_boolean)
     return base
 
 _SIGNATURE_raycast = {
@@ -375,7 +375,7 @@ _SIGNATURE_raycast = {
 }
 
 def _result_types_raycast(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_raycast)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_raycast)
     return base
 
 _SIGNATURE_sample_curve = {
@@ -388,7 +388,7 @@ _SIGNATURE_sample_curve = {
 }
 
 def _result_types_sample_curve(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_sample_curve)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_sample_curve)
     return base
 
 _SIGNATURE_sample_grid = {
@@ -399,7 +399,7 @@ _SIGNATURE_sample_grid = {
 }
 
 def _result_types_sample_grid(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_sample_grid)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_sample_grid)
     return base
 
 _SIGNATURE_sample_grid_index = {
@@ -410,7 +410,7 @@ _SIGNATURE_sample_grid_index = {
 }
 
 def _result_types_sample_grid_index(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_sample_grid_index)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_sample_grid_index)
     return base
 
 _SIGNATURE_sample_index = {
@@ -423,7 +423,7 @@ _SIGNATURE_sample_index = {
 }
 
 def _result_types_sample_index(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_sample_index)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_sample_index)
     return base
 
 _SIGNATURE_sample_nearest_surface = {
@@ -436,7 +436,7 @@ _SIGNATURE_sample_nearest_surface = {
 }
 
 def _result_types_sample_nearest_surface(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_sample_nearest_surface)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_sample_nearest_surface)
     return base
 
 _SIGNATURE_sample_uv_surface = {
@@ -449,7 +449,7 @@ _SIGNATURE_sample_uv_surface = {
 }
 
 def _result_types_sample_uv_surface(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_sample_uv_surface)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_sample_uv_surface)
     return base
 
 _SIGNATURE_set_grid_background = {
@@ -460,7 +460,7 @@ _SIGNATURE_set_grid_background = {
 }
 
 def _result_types_set_grid_background(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_set_grid_background)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_set_grid_background)
     return base
 
 _SIGNATURE_sort_list = {
@@ -477,7 +477,7 @@ _SIGNATURE_sort_list = {
 }
 
 def _result_types_sort_list(arguments):
-    base = output_types(arguments, ['rna_socket_type'], _SIGNATURE_sort_list)
+    base = output_types(arguments, ['socket_type'], _SIGNATURE_sort_list)
     return base
 
 _SIGNATURE_switch = {
@@ -494,7 +494,7 @@ _SIGNATURE_switch = {
 }
 
 def _result_types_switch(arguments):
-    base = output_types(arguments, ['rna_input_type'], _SIGNATURE_switch)
+    base = output_types(arguments, ['input_type'], _SIGNATURE_switch)
     return base
 
 _SIGNATURE_enable_output = {
@@ -511,7 +511,7 @@ _SIGNATURE_enable_output = {
 }
 
 def _result_types_enable_output(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_enable_output)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_enable_output)
     return base
 
 _SIGNATURE_implicit_conversion = {
@@ -528,7 +528,7 @@ _SIGNATURE_implicit_conversion = {
 }
 
 def _result_types_implicit_conversion(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_implicit_conversion)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_implicit_conversion)
     return base
 
 _SIGNATURE_map_range = {
@@ -537,7 +537,7 @@ _SIGNATURE_map_range = {
 }
 
 def _result_types_map_range(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_map_range)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_map_range)
     return base
 
 _SIGNATURE_mix = {
@@ -548,7 +548,7 @@ _SIGNATURE_mix = {
 }
 
 def _result_types_mix(arguments):
-    base = output_types(arguments, ['rna_data_type'], _SIGNATURE_mix)
+    base = output_types(arguments, ['data_type'], _SIGNATURE_mix)
     return base
 
 _SIGNATURE_voronoi_texture = {
@@ -575,7 +575,7 @@ _SIGNATURE_voronoi_texture = {
 }
 
 def _result_types_voronoi_texture(arguments):
-    base = output_types(arguments, ['rna_feature', 'rna_voronoi_dimensions'], _SIGNATURE_voronoi_texture)
+    base = output_types(arguments, ['feature', 'voronoi_dimensions'], _SIGNATURE_voronoi_texture)
     return base
 
 _SIGNATURE_vector_math = {
@@ -612,6 +612,6 @@ _SIGNATURE_vector_math = {
 }
 
 def _result_types_vector_math(arguments):
-    base = output_types(arguments, ['rna_operation'], _SIGNATURE_vector_math)
+    base = output_types(arguments, ['operation'], _SIGNATURE_vector_math)
     return base
 

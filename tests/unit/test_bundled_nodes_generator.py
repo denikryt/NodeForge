@@ -52,7 +52,7 @@ def test_included_sources_install_without_special_package_logic(tmp_path):
         assert manifest.root != PACKAGE
         assert [record.system_id for record in packages.system_package_records()] == ['blender']
         state = packages.load_package_state()
-        assert state['packages']['nodeforge.nodes']['installed_version'] == '1.4.0'
+        assert state['packages']['nodeforge.nodes']['installed_version'] == '1.5.0'
         assert packages.install_included_packages(ROOT) == ()
     finally:
         packages.set_packages_dir_for_tests(None)
