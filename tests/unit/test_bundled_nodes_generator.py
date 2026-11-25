@@ -278,3 +278,153 @@ def test_unsupported_output_type_remains_a_skip(generator_modules, tmp_path):
     report = generator.generate(spec, [node, 'GeometryNodeInputIndex'], tmp_path)
     assert report['summary'] == {'wrappers': 1, 'states': 1}
     assert report['skipped'] == [{'node': node, 'reason': 'no representable configurations'}]
+
+
+@pytest.mark.parametrize('node, fault', [
+    ('ShaderNodeValue', 'missing'), ('ShaderNodeValue', 'null'),
+    ('ShaderNodeValue', 'duplicate'), ('FunctionNodeInputInt', 'duplicate'),
+    ('ShaderNodeValue', 'wrong_identifier'), ('ShaderNodeValue', 'invalid_default'),
+    ('ShaderNodeValue', 'missing_container'), ('ShaderNodeValue', 'null_record'),
+])
+def test_required_constant_baseline_is_fatal(generator_modules, tmp_path, node, fault):
+    """Malformed baseline lookup data must not silently remove a constant or wrapper."""
+    import shutil
+    build, generator, _ = generator_modules
+    spec = build.read_spec(build.DEFAULT_SPEC)
+    baseline = spec['nodes'][node]['inventory']['baseline']
+    target = tmp_path / 'nodes'
+    shutil.copytree(PACKAGE, target, ignore=shutil.ignore_patterns('__pycache__'))
+    owner = target / 'systems/blender'
+    before = {name: (owner / name).read_bytes() for name in build.FILES}
+    prepared = generator.prepare_node(node, spec['nodes'][node])
+    expected = ([{'param': 'value', 'type': 'Float', 'target': 'output', 'key': 'Value'}]
+                if node == 'ShaderNodeValue' else
+                [{'param': 'integer', 'type': 'Int', 'target': 'rna', 'key': 'integer'}])
+    assert generator.constant_parameters(prepared, spec['nodes'][node]) == expected
+    socket = baseline['outputs'][0]
+    if fault == 'missing':
+        del socket['identifier']
+    elif fault == 'null':
+        socket['identifier'] = None
+    elif fault == 'duplicate':
+        baseline['outputs'].append(dict(socket))
+    elif fault == 'wrong_identifier':
+        socket['identifier'] = 'NotTheExpectedOutput'
+    elif fault == 'invalid_default':
+        del socket['has_default_value']
+    elif fault == 'missing_container':
+        del baseline['outputs']
+    else:
+        baseline['outputs'][0] = None
+    with pytest.raises(generator.ResultSchemaError, match=rf'{node} state baseline: .*physical sockets'):
+        build.build(spec, target, archive=True)
+    assert {name: (owner / name).read_bytes() for name in build.FILES} == before
+    assert not list(tmp_path.glob('*.zip'))
+
+
+@pytest.mark.parametrize('probe', [False, True], ids=['active-layout', 'capture-probe'])
+@pytest.mark.parametrize('fault', ['missing', 'null-container', 'mapping', 'null-record', 'string-record'])
+def test_invalid_output_records_are_fatal(generator_modules, tmp_path, probe, fault):
+    """Output shape is validated before ordinary filtering or accepted probe inspection."""
+    import shutil
+    build, generator, _ = generator_modules
+    spec = build.read_spec(build.DEFAULT_SPEC)
+    node = 'GeometryNodeCaptureAttribute' if probe else 'GeometryNodeInputIndex'
+    joint = spec['nodes'][node]['joint']
+    applied = [st for st in joint['states'] if st['status'] == 'applied']
+    if probe:
+        trial = next(t for st in applied for c in st['collections'] if c['name'] == 'capture_items'
+                     for t in c['attempts'] if t['status'] == 'accepted' and t['args'][0] == 'FLOAT')
+        state = trial['after']
+        assert state not in {st['socket_state_id'] for st in applied}
+    else:
+        state = applied[0]['socket_state_id']
+    layout = joint['socket_states'][state]
+    if fault == 'missing':
+        del layout['outputs']
+    elif fault == 'null-container':
+        layout['outputs'] = None
+    elif fault == 'mapping':
+        layout['outputs'] = {'socket': layout['outputs'][0]}
+    elif fault == 'null-record':
+        layout['outputs'][0] = None
+    else:
+        layout['outputs'][0] = 'invalid'
+    target = tmp_path / 'nodes'
+    shutil.copytree(PACKAGE, target, ignore=shutil.ignore_patterns('__pycache__'))
+    owner = target / 'systems/blender'
+    before = {name: (owner / name).read_bytes() for name in build.FILES}
+    diagnostic = rf'{node} state .*invalid output container or record.*physical sockets'
+    with pytest.raises(generator.ResultSchemaError, match=diagnostic):
+        generator.generate(spec, ['GeometryNodeInputPosition', node], owner)
+    with pytest.raises(generator.ResultSchemaError, match=diagnostic):
+        build.build(spec, target, archive=True)
+    assert {name: (owner / name).read_bytes() for name in build.FILES} == before
+    assert not list(tmp_path.glob('*.zip'))
+
+
+def test_failed_constant_build_preserves_existing_archive_and_recovers(generator_modules, tmp_path):
+    """A successful build, rejected build, and corrected rebuild preserve the constant API."""
+    build, generator, _ = generator_modules
+    spec = build.read_spec(build.DEFAULT_SPEC)
+    target = tmp_path / 'nodes'
+    report, archive = build.build(spec, target, archive=True)
+    owner = target / 'systems/blender'
+    before = {name: (owner / name).read_bytes() for name in build.FILES}
+    archive_before = archive.read_bytes()
+    sock = spec['nodes']['ShaderNodeValue']['inventory']['baseline']['outputs'][0]
+    ident = sock.pop('identifier')
+    with pytest.raises(generator.ResultSchemaError, match='ShaderNodeValue state baseline'):
+        build.build(spec, target, archive=True)
+    assert archive.read_bytes() == archive_before
+    assert {name: (owner / name).read_bytes() for name in build.FILES} == before
+    sock['identifier'] = ident
+    rebuilt, _ = build.build(spec, target, archive=True)
+    assert rebuilt == report
+    assert {name: (owner / name).read_bytes() for name in build.FILES} == before
+
+
+def test_known_unsupported_outcomes_are_not_schema_errors(generator_modules, tmp_path):
+    """Empty outputs, unsupported constant sockets and varying options retain omission semantics."""
+    build, generator, _ = generator_modules
+    spec = build.read_spec(build.DEFAULT_SPEC)
+    node = 'GeometryNodeInputIndex'
+    for layout in spec['nodes'][node]['joint']['socket_states'].values():
+        layout['outputs'] = []
+    report = generator.generate(spec, [node, 'GeometryNodeListLength', 'ShaderNodeValue'], tmp_path)
+    assert report['skipped'] == [
+        {'node': node, 'reason': 'no representable configurations'},
+        {'node': 'GeometryNodeListLength', 'reason': 'Option keys vary across otherwise representable states'},
+    ]
+    constant_node = spec['nodes']['ShaderNodeValue']
+    item = generator.prepare_node('ShaderNodeValue', constant_node)
+    sock = constant_node['inventory']['baseline']['outputs'][0]
+    sock['has_default_value'] = False
+    assert generator.constant_parameters(item, constant_node) == []
+    sock['bl_idname'] = 'NodeSocketMatrix'
+    sock.pop('identifier')
+    assert generator.constant_parameters(item, constant_node) == []
+
+
+def test_unexpected_preparation_error_aborts_generation(generator_modules, tmp_path, monkeypatch):
+    """Unexpected preparation failures cannot be reported as unsupported nodes."""
+    build, generator, _ = generator_modules
+    spec = build.read_spec(build.DEFAULT_SPEC)
+    target = tmp_path / 'nodes'
+    _, archive = build.build(spec, target, archive=True)
+    owner = target / 'systems/blender'
+    before = {name: (owner / name).read_bytes() for name in build.FILES}
+    archive_before = archive.read_bytes()
+    original = generator.prepare_node
+
+    def broken(name, inspected):
+        """Inject an unexpected preparation failure into one supported node."""
+        if name == 'ShaderNodeValue':
+            raise RuntimeError('injected preparation failure')
+        return original(name, inspected)
+
+    monkeypatch.setattr(generator, 'prepare_node', broken)
+    with pytest.raises(RuntimeError, match='injected preparation failure'):
+        build.build(spec, target, archive=True)
+    assert {name: (owner / name).read_bytes() for name in build.FILES} == before
+    assert archive.read_bytes() == archive_before

@@ -13,7 +13,9 @@ import json
 import sys
 from pathlib import Path
 
-from inspect_contract import ResultSchemaError, prepare_node, sanitized
+from inspect_contract import (ResultSchemaError, UnsupportedNodeError, marker,
+                              output_records, prepare_node, sanitized,
+                              validate_output_identifiers, validate_output_types)
 
 
 def capture_entries(elements, supported):
@@ -97,7 +99,7 @@ def named_inputs(item):
             if dynamic in ('index', 'menu') and ident.startswith('Item_'):
                 continue
             if ident in per_state:
-                raise ValueError(f"Ambiguous duplicate input socket identifier: {item['node']} {ident!r}")
+                raise UnsupportedNodeError(f"Ambiguous duplicate input socket identifier: {item['node']} {ident!r}")
             per_state.add(ident)
             observed.setdefault(ident, set()).add(socket['type'])
     field_names = {f['param'] for f in item['fields']}
@@ -145,10 +147,22 @@ def constant_parameters(item, inspected):
     if len(signature) != 1:
         return []
     ident, typ = signature[0]
-    baseline = inspected['inventory']['baseline']['outputs']
-    matches = [sock for sock in baseline
-               if sock['identifier'] == ident and sock.get('has_default_value')]
+    node = item['node']
+    baseline = output_records(node, 'baseline', inspected['inventory'].get('baseline'))
+    validate_output_types(node, 'baseline', baseline)
+    supported = [sock for sock in baseline if marker(sock['bl_idname']) is not None]
+    validate_output_identifiers(node, 'baseline', supported)
+    if not supported:
+        return []
+    matches = [sock for sock in supported if sock['identifier'] == ident]
     if len(matches) != 1:
+        raise ResultSchemaError(f'{node} state baseline: missing required output identifier {ident!r}; '
+                                f'physical sockets {baseline!r}')
+    has_default = matches[0].get('has_default_value')
+    if type(has_default) is not bool:
+        raise ResultSchemaError(f'{node} state baseline: invalid has_default_value for output {ident!r}; '
+                                f'physical sockets {baseline!r}')
+    if not has_default:
         return []
     properties = inspected['inventory']['properties']
     # Blender's FunctionNodeInput* constant sources store their effective
@@ -551,9 +565,7 @@ def generate(spec, requested, out):
                 occupied.add(candidate)
             prefer_blender_defaults(p, spec['nodes'][name])
             prepared.append(p)
-        except ResultSchemaError:
-            raise
-        except Exception as e:
+        except UnsupportedNodeError as e:
             skipped.append({'node':name,'reason':str(e)})
     # Blender UI labels are unique for this sample; explicitly reject ambiguous APIs.
     name_to_ids = {}

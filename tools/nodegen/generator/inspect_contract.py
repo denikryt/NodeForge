@@ -26,6 +26,10 @@ class ResultSchemaError(ValueError):
     """A supported configuration cannot express an unambiguous result contract."""
 
 
+class UnsupportedNodeError(ValueError):
+    """A known node layout cannot be represented by the current wrapper API."""
+
+
 def marker(bl):
     if bl in BLOCKED:
         return None
@@ -52,6 +56,15 @@ def valid_output_text(value, *, allow_empty=False):
     return True
 
 
+def output_records(node_id, state, layout):
+    """Read a required output list before any socket selection or field access."""
+    outputs = layout.get('outputs') if isinstance(layout, dict) else None
+    if not isinstance(outputs, list) or any(not isinstance(sock, dict) for sock in outputs):
+        raise ResultSchemaError(f"{node_id} state {state}: invalid output container or record; "
+                                f"physical sockets {outputs!r}")
+    return outputs
+
+
 def validate_output_types(node_id, state, outputs):
     """Require physical type metadata before filtering unsupported output types."""
     if any(not valid_output_text(sock.get('bl_idname')) for sock in outputs):
@@ -59,19 +72,25 @@ def validate_output_types(node_id, state, outputs):
                                 f"physical sockets {outputs!r}")
 
 
-def validate_output_schema(node_id, state, outputs):
-    """Require exact, unambiguous physical identities and labels on supported outputs."""
+def validate_output_identifiers(node_id, state, outputs):
+    """Require exact, unique physical identities for output lookup."""
     identifiers = set()
     for sock in outputs:
         ident = sock.get('identifier')
-        label = sock.get('name')
         if not valid_output_text(ident) or ident in identifiers:
             raise ResultSchemaError(f"{node_id} state {state}: invalid or duplicate output identifier {ident!r}; "
                                     f"physical sockets {outputs!r}")
+        identifiers.add(ident)
+
+
+def validate_output_schema(node_id, state, outputs):
+    """Require physical identities and labels on supported outputs."""
+    validate_output_identifiers(node_id, state, outputs)
+    for sock in outputs:
+        label = sock.get('name')
         if not valid_output_text(label, allow_empty=True):
             raise ResultSchemaError(f"{node_id} state {state}: invalid output display label {label!r}; "
                                     f"physical sockets {outputs!r}")
-        identifiers.add(ident)
 
 
 def detect_dynamic(node_id, node):
@@ -80,7 +99,7 @@ def detect_dynamic(node_id, node):
     recognized={'index_switch_items':'index','capture_items':'capture','enum_items':'menu'}
     selected=[(name,kind) for name,kind in recognized.items() if name in names]
     if not selected:return None
-    if len(selected)>1:raise ValueError('Multiple dynamic collections need an explicit recipe')
+    if len(selected)>1:raise UnsupportedNodeError('Multiple dynamic collections need an explicit recipe')
     name, kind=selected[0]
     desc=next(c for c in collections if c['name']==name)
     types={}
@@ -95,8 +114,8 @@ def detect_dynamic(node_id, node):
                     label if type(label) is str else None, sock['bl_idname'])
         for trial in desc['attempts']:
             if trial.get('status')!='accepted':continue
-            before=node['joint']['socket_states'][trial['before']]['outputs']
-            after=node['joint']['socket_states'][trial['after']]['outputs']
+            before=output_records(node_id, trial['before'], node['joint']['socket_states'][trial['before']])
+            after=output_records(node_id, trial['after'], node['joint']['socket_states'][trial['after']])
             for state, sockets in ((trial['before'], before), (trial['after'], after)):
                 validate_output_types(node_id, state, sockets)
                 validate_output_schema(node_id, state, [s for s in sockets if marker(s['bl_idname']) is not None])
@@ -114,7 +133,7 @@ def detect_dynamic(node_id, node):
 
 def prepare_node(node_id, node):
     states=[s for s in node['joint']['states'] if s['status']=='applied']
-    if not states:raise ValueError('No applied states')
+    if not states:raise UnsupportedNodeError('No applied states')
     dynamic=detect_dynamic(node_id,node)
     valid=[]; unsupported=[]
     for st in states:
@@ -124,7 +143,7 @@ def prepare_node(node_id, node):
         select=lambda sock: (not sock.get('is_unavailable') and sock.get('enabled',True)
                              and (dynamic is not None or not sock.get('is_inactive')))
         inputs=[sock for sock in layout['inputs'] if select(sock) and sock['bl_idname'] not in ('NodeSocketVirtual','NodeSocketMenu')]
-        outputs=[sock for sock in layout['outputs'] if select(sock)]
+        outputs=[sock for sock in output_records(node_id, node['joint']['states'].index(st), layout) if select(sock)]
         validate_output_types(node_id, node['joint']['states'].index(st), outputs)
         outputs=[sock for sock in outputs if sock['bl_idname']!='NodeSocketVirtual']
         bad=[{'side':side,'identifier':sock.get('identifier'),'bl_idname':sock['bl_idname']}
@@ -149,12 +168,12 @@ def prepare_node(node_id, node):
         return value
     menu_keys=sorted({m['identifier'] for st,_,_ in valid for m in st['menus']})
     if any(set(st['rna'])!=set(rna_keys) or {m['identifier'] for m in st['menus']}!=set(menu_keys) for st,_,_ in valid):
-        raise ValueError('Option keys vary across otherwise representable states')
+        raise UnsupportedNodeError('Option keys vary across otherwise representable states')
     fields=[{'kind':'rna','key':k,'param':sanitized(k),
              'marker':'Bool' if all(type(st['rna'][k]) is bool for st,_,_ in valid) else 'Int'
                if all(type(st['rna'][k]) is int for st,_,_ in valid) else 'String'} for k in rna_keys]
     fields += [{'kind':'menu','key':k,'param':sanitized(k),'marker':'String'} for k in menu_keys]
-    if len({f['param'] for f in fields})!=len(fields):raise ValueError('Duplicate names')
+    if len({f['param'] for f in fields})!=len(fields):raise UnsupportedNodeError('Duplicate names')
     configurations=[];input_types=set(); seen=set()
     for st,inputs,outputs in valid:
         menus={m['identifier']:m['value'] for m in st['menus']}
