@@ -861,3 +861,4 @@ lifecycle.
 - Upgrade bundled Nodes to 1.6.0, with named results for all generated wrappers, independent physical socket validation, exact dynamic collection labels and deterministic three-file generation. Migrate Nodes consumers and dynamic result resolvers to the named contract.
 - Add named result signature previews and field completion, and verify source, extension, editor, group replacement, package installation and Blender 5.2 native socket provenance.
 - Reject malformed required native output labels before generator publication; retain named signature and field completion across incomplete declarations and resolve bare imported package calls with the compiler's ambiguity rules. Document the named dynamic result protocol's minimum version.
+- Reject missing, malformed, or duplicate required physical output identifiers and malformed output type metadata before generated Nodes publication, including Capture Attribute probes.

@@ -41,11 +41,37 @@ def sanitized(raw):
     if not v or v[0].isdigit() or keyword.iskeyword(v):v='option_'+v
     return v
 
-def validate_output_labels(node_id, state, outputs):
-    """Reject malformed display labels before required output schemas are derived."""
-    if any(type(sock.get('name')) is not str for sock in outputs):
-        raise ResultSchemaError(f"{node_id} state {state}: invalid output display labels; "
+def valid_output_text(value, *, allow_empty=False):
+    """Physical socket metadata must be an exact, UTF-8 encodable string."""
+    if type(value) is not str or (not allow_empty and not value) or '\0' in value:
+        return False
+    try:
+        value.encode('utf-8')
+    except UnicodeError:
+        return False
+    return True
+
+
+def validate_output_types(node_id, state, outputs):
+    """Require physical type metadata before filtering unsupported output types."""
+    if any(not valid_output_text(sock.get('bl_idname')) for sock in outputs):
+        raise ResultSchemaError(f"{node_id} state {state}: invalid output bl_idname; "
                                 f"physical sockets {outputs!r}")
+
+
+def validate_output_schema(node_id, state, outputs):
+    """Require exact, unambiguous physical identities and labels on supported outputs."""
+    identifiers = set()
+    for sock in outputs:
+        ident = sock.get('identifier')
+        label = sock.get('name')
+        if not valid_output_text(ident) or ident in identifiers:
+            raise ResultSchemaError(f"{node_id} state {state}: invalid or duplicate output identifier {ident!r}; "
+                                    f"physical sockets {outputs!r}")
+        if not valid_output_text(label, allow_empty=True):
+            raise ResultSchemaError(f"{node_id} state {state}: invalid output display label {label!r}; "
+                                    f"physical sockets {outputs!r}")
+        identifiers.add(ident)
 
 
 def detect_dynamic(node_id, node):
@@ -63,14 +89,17 @@ def detect_dynamic(node_id, node):
         # by that enum token, not by guessing the token's meaning.
         def identity(sock):
             """Compare probe sockets without requiring labels for unsupported types."""
+            ident = sock.get('identifier')
             label = sock.get('name')
-            return (sock['identifier'], label if type(label) is str else None, sock['bl_idname'])
+            return (ident if type(ident) is str else None,
+                    label if type(label) is str else None, sock['bl_idname'])
         for trial in desc['attempts']:
             if trial.get('status')!='accepted':continue
             before=node['joint']['socket_states'][trial['before']]['outputs']
             after=node['joint']['socket_states'][trial['after']]['outputs']
             for state, sockets in ((trial['before'], before), (trial['after'], after)):
-                validate_output_labels(node_id, state, [s for s in sockets if marker(s['bl_idname']) is not None])
+                validate_output_types(node_id, state, sockets)
+                validate_output_schema(node_id, state, [s for s in sockets if marker(s['bl_idname']) is not None])
             before_ids={identity(s) for s in before}
             extras=[s for s in after if identity(s) not in before_ids and s['bl_idname']!='NodeSocketVirtual']
             if len(extras)==1 and marker(extras[0]['bl_idname']):
@@ -93,11 +122,12 @@ def prepare_node(node_id, node):
         # Inactive is not unsupported: e.g. Index Switch's Item_1 or Menu Switch's B
         # can still hold a constant. Only permanently disabled/unavailable sockets are excluded.
         select=lambda sock: (not sock.get('is_unavailable') and sock.get('enabled',True)
-                             and sock['bl_idname']!='NodeSocketVirtual'
                              and (dynamic is not None or not sock.get('is_inactive')))
-        inputs=[sock for sock in layout['inputs'] if select(sock) and sock['bl_idname']!='NodeSocketMenu']
+        inputs=[sock for sock in layout['inputs'] if select(sock) and sock['bl_idname'] not in ('NodeSocketVirtual','NodeSocketMenu')]
         outputs=[sock for sock in layout['outputs'] if select(sock)]
-        bad=[{'side':side,'identifier':sock['identifier'],'bl_idname':sock['bl_idname']}
+        validate_output_types(node_id, node['joint']['states'].index(st), outputs)
+        outputs=[sock for sock in outputs if sock['bl_idname']!='NodeSocketVirtual']
+        bad=[{'side':side,'identifier':sock.get('identifier'),'bl_idname':sock['bl_idname']}
              for side,sockets in (('inputs',inputs),('outputs',outputs))
              for sock in sockets if marker(sock['bl_idname']) is None]
         if bad or not outputs:
@@ -105,7 +135,7 @@ def prepare_node(node_id, node):
                                 'menu':{m['identifier']:m['value'] for m in st['menus']},
                                 'reason':'unsupported_socket_type' if bad else 'no_outputs','sockets':bad})
         else:
-            validate_output_labels(node_id, node['joint']['states'].index(st), outputs)
+            validate_output_schema(node_id, node['joint']['states'].index(st), outputs)
             valid.append((st, inputs, outputs))
     if not valid:
         return {'node':node_id,'name':sanitized(node_id),'fields':[],'configurations':[],

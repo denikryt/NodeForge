@@ -200,35 +200,73 @@ def test_schema_collision_is_fatal_and_build_does_not_publish(generator_modules,
 
 
 @pytest.mark.parametrize('node, identifier', [('GeometryNodeInputIndex', 'Index'),
-                                              ('GeometryNodeCaptureAttribute', 'Geometry')])
-@pytest.mark.parametrize('label', [None, 42, ['invalid'], 'missing'])
-def test_invalid_required_output_label_is_fatal(generator_modules, tmp_path, node, identifier, label):
-    """Malformed native metadata cannot turn a supported wrapper into a skip."""
+                                              ('GeometryNodeCaptureAttribute', 'Geometry'),
+                                              ('GeometryNodeCaptureAttribute', 'Attribute')])
+@pytest.mark.parametrize('field, value', [
+    ('name', None), ('name', 42), ('name', ['invalid']), ('name', 'missing'),
+    ('name', '\0'), ('name', '\ud800'),
+    ('identifier', 'missing'), ('identifier', None), ('identifier', 42),
+    ('identifier', ['invalid']), ('identifier', ''), ('identifier', '\0'),
+    ('identifier', '\ud800'),
+    ('bl_idname', 'missing'), ('bl_idname', None), ('bl_idname', 42),
+    ('bl_idname', ['invalid']), ('bl_idname', ''), ('bl_idname', '\0'),
+    ('bl_idname', '\ud800'),
+])
+def test_invalid_required_output_metadata_is_fatal(generator_modules, tmp_path, node, identifier, field, value):
+    """Required output metadata is validated before conversion or dynamic probing."""
     import shutil
     build, generator, _ = generator_modules
     spec = build.read_spec(build.DEFAULT_SPEC)
+    changed = 0
     for layout in spec['nodes'][node]['joint']['socket_states'].values():
         for socket in layout['outputs']:
-            if socket['identifier'] == identifier:
-                if label == 'missing':
-                    del socket['name']
+            if socket.get('identifier') == identifier:
+                if value == 'missing':
+                    del socket[field]
                 else:
-                    socket['name'] = label
+                    socket[field] = value
+                changed += 1
+    assert changed
     target = tmp_path / 'nodes'
     shutil.copytree(PACKAGE, target, ignore=shutil.ignore_patterns('__pycache__'))
     owner = target / 'systems/blender'
     before = {name: (owner / name).read_bytes() for name in build.FILES}
-    with pytest.raises(generator.ResultSchemaError, match=rf'{node} state .*physical sockets .*{identifier}'):
+    problem = 'display label' if field == 'name' else field
+    diagnostic = rf'{node} state .*{problem}.*physical sockets'
+    with pytest.raises(generator.ResultSchemaError, match=diagnostic):
+        generator.generate(spec, ['GeometryNodeInputPosition', node], owner)
+    assert {name: (owner / name).read_bytes() for name in build.FILES} == before
+    with pytest.raises(generator.ResultSchemaError, match=diagnostic):
+        build.build(spec, target, archive=True)
+    assert {name: (owner / name).read_bytes() for name in build.FILES} == before
+    assert not list(tmp_path.glob('*.zip'))
+
+
+@pytest.mark.parametrize('node', ['GeometryNodeMeshCylinder', 'GeometryNodeCaptureAttribute'])
+def test_duplicate_required_output_identifiers_are_fatal(generator_modules, tmp_path, node):
+    """Distinct named outputs cannot share one physical identifier in an active layout."""
+    import shutil
+    build, generator, _ = generator_modules
+    spec = build.read_spec(build.DEFAULT_SPEC)
+    for layout in spec['nodes'][node]['joint']['socket_states'].values():
+        first, second = layout['outputs'][:2]
+        second['identifier'] = first['identifier']
+    target = tmp_path / 'nodes'
+    shutil.copytree(PACKAGE, target, ignore=shutil.ignore_patterns('__pycache__'))
+    owner = target / 'systems/blender'
+    before = {name: (owner / name).read_bytes() for name in build.FILES}
+    diagnostic = rf'{node} state .*duplicate output identifier.*physical sockets'
+    with pytest.raises(generator.ResultSchemaError, match=diagnostic):
         generator.generate(spec, [node], owner)
     assert {name: (owner / name).read_bytes() for name in build.FILES} == before
-    with pytest.raises(generator.ResultSchemaError, match=node):
+    with pytest.raises(generator.ResultSchemaError, match=diagnostic):
         build.build(spec, target, archive=True)
     assert {name: (owner / name).read_bytes() for name in build.FILES} == before
     assert not list(tmp_path.glob('*.zip'))
 
 
 def test_unsupported_output_type_remains_a_skip(generator_modules, tmp_path):
-    """A malformed label on an unrepresentable matrix socket is not a required schema."""
+    """An unrepresentable matrix socket does not require named result metadata."""
     build, generator, _ = generator_modules
     spec = build.read_spec(build.DEFAULT_SPEC)
     node = 'FunctionNodeCombineMatrix'
@@ -236,6 +274,7 @@ def test_unsupported_output_type_remains_a_skip(generator_modules, tmp_path):
         for socket in layout['outputs']:
             if socket['bl_idname'] == 'NodeSocketMatrix':
                 socket.pop('name', None)
+                socket.pop('identifier', None)
     report = generator.generate(spec, [node, 'GeometryNodeInputIndex'], tmp_path)
     assert report['summary'] == {'wrappers': 1, 'states': 1}
     assert report['skipped'] == [{'node': node, 'reason': 'no representable configurations'}]
