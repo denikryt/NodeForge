@@ -681,3 +681,128 @@ def main(value: {typ}):
     assert all(link.is_valid for link in group.links)
     calls = [n for n in group.nodes if n.bl_idname == 'GeometryNodeGroup']
     assert len(calls) == (0 if inline else 2)
+
+
+@pytest.mark.parametrize('semantic_state', [False, True])
+@pytest.mark.parametrize('inline', [False, True])
+def test_mixed_dynamic_chain_update_and_failure_retry(tmp_path, semantic_state, inline):
+    """Preserve dependent direct/named links and evaluated geometry on update and retry."""
+    from collections import Counter
+    import json
+    from NodeForge import compiler
+    from NodeForge.errors import CompileError
+    from helpers import compile_group
+    from test_extension_boundary_matrix import _package
+    from test_group_rollback_link_identity import _topology
+    from test_update_group import _evaluate_group_geometry_vertices as evaluate
+
+    events = tmp_path / 'calls.jsonl'
+    interface = '''from dataclasses import dataclass
+from typing import Annotated
+from NodeForge import Float, String, DynamicResults, EvaluationMode
+EXTENSION_API = 2
+EXTENSIONS = {'choose': '.backend:choose'}
+@dataclass(frozen=True)
+class _State:
+    value: Float
+    form: str
+
+def choose(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY], form: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY]) -> DynamicResults: ...
+'''
+    common = f'''from pathlib import Path
+import json
+from NodeForge.nf_types import NFType
+
+def record(event, form):
+    with Path({str(events)!r}).open('a') as f:
+        f.write(json.dumps([event, form]) + '\\n')
+'''
+    semantic = common + '''
+def _result_types_choose(args):
+    form = args['form'].value
+    record('resolve', form)
+    if form == 'ONE': return {'value': NFType.FLOAT}
+    if form == 'MULTI': return {'value': NFType.FLOAT, 'original': NFType.FLOAT}
+    return NFType.FLOAT
+'''
+    if semantic_state:
+        semantic += '''
+from .interface import _State
+
+def choose(value, form) -> _State:
+    record('semantic', form)
+    return _State(value, form)
+'''
+    backend = common + 'from NodeForge.extension_api import ExtensionBackendValue\nimport bpy\n'
+    backend += ('def choose(context, state):\n    value, form = state.value, state.form\n' if semantic_state else
+                'def choose(context, value, form):\n')
+    backend += '''    record('backend', form)
+    context.new_generated_mesh(role='mixed-rollback', name_hint='Probe')
+    node = context.group.nodes.new('ShaderNodeMath')
+    node.operation = 'MULTIPLY'
+    context.group.links.new(value.socket, node.inputs[0])
+    node.inputs[1].default_value = 2.0
+    result = context.value(node.outputs[0], NFType.FLOAT)
+    if form == 'ONE':
+        assert context.result_names == ('value',)
+        return {'value': result}
+    if form == 'MULTI':
+        assert context.result_names == ('value', 'original')
+        return {'original': value, 'value': result}
+    assert context.result_names is None
+    if form == 'BAD_DICT': return {'value': result}
+    if form == 'BAD_LIST': return [result]
+    if form == 'BAD_TYPE': return ExtensionBackendValue(node.outputs[0], NFType.INT)
+    if form == 'BAD_INPUT': return ExtensionBackendValue(node.inputs[0], NFType.FLOAT)
+    if form == 'BAD_PHYSICAL':
+        other = context.group.nodes.new('GeometryNodeInputPosition')
+        return ExtensionBackendValue(other.outputs[0], NFType.FLOAT)
+    if form == 'BAD_FOREIGN':
+        return ExtensionBackendValue(bpy.data.node_groups['NFTest_mixed_foreign'].nodes[0].outputs[0], NFType.FLOAT)
+    return result
+'''
+    _package(tmp_path, name='mixed_rollback', interface=interface, semantic=semantic, backend=backend)
+    source = f'''from packages import mixed_rollback
+
+def main():
+    a = choose(3.0, form="DIRECT", __inline__={inline})
+    one = choose(4.0, form="ONE", __inline__={inline})
+    multi = choose(one.value, form="MULTI", __inline__={inline})
+    alias = one
+    return {{"geometry": point(vector(a + alias.value, multi.value, multi.original))}}
+'''
+    foreign = bpy.data.node_groups.new('NFTest_mixed_foreign', 'GeometryNodeTree')
+    foreign.nodes.new('ShaderNodeMath')
+    group = compile_group(source, 'MixedDynamicRollback')
+    expected = Counter((event, form) for event in ('resolve', 'backend') + (('semantic',) if semantic_state else ())
+                       for form in ('DIRECT', 'ONE', 'MULTI'))
+    assert Counter(tuple(json.loads(line)) for line in events.read_text().splitlines()) == expected
+
+    def snapshot():
+        """Compare live topology, owned resources and evaluated output, not RNA handles."""
+        vertices = evaluate(group, 'mixed_dynamic_rollback')
+        return (group.as_pointer(), _topology(group), vertices,
+                {g.as_pointer() for g in bpy.data.node_groups},
+                {m.as_pointer() for m in bpy.data.meshes})
+
+    before = snapshot()
+    assert before[2] == [(14., 16., 8.)]
+    compiler.update_expression_group(group, source)
+    assert snapshot() == before
+    for bad in ('BAD_DICT', 'BAD_LIST', 'BAD_TYPE', 'BAD_INPUT', 'BAD_PHYSICAL', 'BAD_FOREIGN'):
+        invalid = source.replace('form="ONE"', f'form={bad!r}').replace('choose(one.value,', 'choose(one,').replace('a + alias.value', 'a + alias')
+        events.write_text('')
+        with pytest.raises(CompileError):
+            compiler.update_expression_group(group, invalid)
+        assert ['backend', bad] in [json.loads(line) for line in events.read_text().splitlines()]
+        assert snapshot() == before
+        compiler.update_expression_group(group, source)
+        assert snapshot() == before
+    invalid = source.replace('form="MULTI"', 'form="BAD_DICT"').replace('multi.value, multi.original', 'multi, one.value')
+    events.write_text('')
+    with pytest.raises(CompileError):
+        compiler.update_expression_group(group, invalid)
+    assert ['backend', 'BAD_DICT'] in [json.loads(line) for line in events.read_text().splitlines()]
+    assert snapshot() == before
+    compiler.update_expression_group(group, source)
+    assert snapshot() == before

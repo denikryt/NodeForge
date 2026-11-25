@@ -146,7 +146,7 @@ def _validate_group_external_state_for_replacement(replacement_group, state):
                 if endpoint.get("kind") != "group_node_socket" or endpoint.get("direction") != "OUTPUT":
                     continue
                 old_key = endpoint["socket_key"]
-                old_group = endpoint["node"].node_tree
+                old_group = endpoint["node"][2]
                 if has_named_results(old_group):
                     continue
                 old_outputs = [item for item in old_group.interface.items_tree
@@ -274,18 +274,34 @@ def _find_group_node_users(group):
     return users
 
 
-def _affected_endpoint(node, socket, direction):
-    """Describe one endpoint whose group-node socket will be recreated."""
+def _capture_node_identity(node):
+    """Identify a node within an exact saved tree version, not by its RNA address."""
+    return (node.name, node.bl_idname, getattr(node, "node_tree", None))
+
+
+def _resolve_node_identity(tree, identity, *, strict):
+    name, node_type, group = identity
+    node = tree.nodes.get(name)
+    if (node is not None and node.bl_idname == node_type
+            and getattr(node, "node_tree", None) == group):
+        return node
+    if strict:
+        raise CompileError(f"Rollback could not resolve captured node {name!r}")
+    return None
+
+
+def _capture_endpoint(node, socket, direction, *, affected):
+    """Capture socket identity, never a potentially invalidated RNA socket."""
     sockets = node.inputs if direction == "INPUT" else node.outputs
     for candidate, key in _socket_keys(sockets, direction):
         if candidate == socket:
             endpoint = {
-                "kind": "group_node_socket",
-                "node": node,
+                "kind": "group_node_socket" if affected else "stable_socket",
+                "node": _capture_node_identity(node),
                 "direction": direction,
                 "socket_key": key,
             }
-            if direction == "INPUT":
+            if affected and direction == "INPUT":
                 endpoint["input_reference"] = _capture_input_reference(node.node_tree, key)
             return endpoint
     raise CompileError(f"Failed to identify {direction.lower()} socket {getattr(socket, 'name', '<unnamed>')!r}")
@@ -308,32 +324,30 @@ def _capture_group_external_state(group):
                 "reference": _capture_input_reference(group, key),
                 "value": value,
             })
-        group_nodes.append({"tree": tree, "node": node, "input_overrides": overrides})
+        group_nodes.append({"tree": tree, "node": _capture_node_identity(node), "input_overrides": overrides})
 
     links = []
     for tree, affected_nodes in affected_by_tree.items():
         for link in list(tree.links):
             if link.from_node not in affected_nodes and link.to_node not in affected_nodes:
                 continue
-            from_endpoint = (
-                _affected_endpoint(link.from_node, link.from_socket, "OUTPUT")
-                if link.from_node in affected_nodes
-                else {"kind": "stable_socket", "socket": link.from_socket}
+            from_endpoint = _capture_endpoint(
+                link.from_node, link.from_socket, "OUTPUT",
+                affected=link.from_node in affected_nodes,
             )
-            to_endpoint = (
-                _affected_endpoint(link.to_node, link.to_socket, "INPUT")
-                if link.to_node in affected_nodes
-                else {"kind": "stable_socket", "socket": link.to_socket}
+            to_endpoint = _capture_endpoint(
+                link.to_node, link.to_socket, "INPUT",
+                affected=link.to_node in affected_nodes,
             )
             links.append({"tree": tree, "from": from_endpoint, "to": to_endpoint})
     return {"group_nodes": group_nodes, "links": links}
 
 
-def _resolve_endpoint(endpoint, *, strict):
+def _resolve_endpoint(tree, endpoint, *, strict):
     """Resolve a captured link endpoint under success or strict rollback policy."""
-    if endpoint.get("kind") == "stable_socket":
-        return endpoint.get("socket")
-    node = endpoint.get("node")
+    node = _resolve_node_identity(tree, endpoint["node"], strict=strict)
+    if node is None:
+        return None
     direction = endpoint.get("direction")
     reference = endpoint.get("input_reference")
     if reference is not None:
@@ -351,7 +365,7 @@ def _resolve_endpoint(endpoint, *, strict):
 def _restore_group_external_state(group, state, *, strict=False):
     """Restore captured group-node state after cutover or strict rollback."""
     for item in state.get("group_nodes", []):
-        node = item.get("node")
+        node = _resolve_node_identity(item["tree"], item["node"], strict=strict)
         if node is None or getattr(node, "node_tree", None) != group:
             if strict:
                 raise CompileError("Rollback lost a captured GeometryNodeGroup instance")
@@ -371,8 +385,8 @@ def _restore_group_external_state(group, state, *, strict=False):
     restored = 0
     for item in state.get("links", []):
         tree = item.get("tree")
-        from_socket = _resolve_endpoint(item.get("from", {}), strict=strict)
-        to_socket = _resolve_endpoint(item.get("to", {}), strict=strict)
+        from_socket = _resolve_endpoint(tree, item["from"], strict=strict)
+        to_socket = _resolve_endpoint(tree, item["to"], strict=strict)
         if from_socket is None or to_socket is None:
             continue
         try:

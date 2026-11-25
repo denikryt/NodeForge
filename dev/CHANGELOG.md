@@ -866,3 +866,5 @@ lifecycle.
 - Reject empty or unrepresentable baseline output sets for supported fixed constant sources before publication.
 - Extend `DynamicResults` to explicitly resolve either one direct runtime type or a named schema, retaining named singleton declarations, exact backend validation and the existing transactional group update policy.
 - Add direct/named editor previews, independent grouped/native provenance checks and 12 characterization fixtures covering source, extension and bundled Nodes result forms.
+
+- Restore interdependent group links and input overrides using live node and socket identities during equivalent updates and transaction rollback.
