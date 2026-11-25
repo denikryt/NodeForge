@@ -25,7 +25,7 @@ def _write_package(root: Path, *, bad: str = "") -> None:
     (root / "nodeforge_package.json").write_text(json.dumps({
         "schema_version": 1, "id": "vendor.extension.dynamic",
         "name": "Dynamic Result Fixture", "version": "1.0.0", "author": "Tests",
-        "description": "Dynamic named result physical verification", "nodeforge_min_version": "0.101.0",
+        "description": "Dynamic named result physical verification", "nodeforge_min_version": "0.102.0",
         "nodeforge_max_version": None, "contents": {"systems": "systems"},
         "permissions": {"python": True},
     }), encoding="utf-8")

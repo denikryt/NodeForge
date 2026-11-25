@@ -52,8 +52,8 @@ def test_included_sources_install_without_special_package_logic(tmp_path):
         assert manifest.root != PACKAGE
         assert [record.system_id for record in packages.system_package_records()] == ['blender']
         state = packages.load_package_state()
-        assert state['packages']['nodeforge.nodes']['installed_version'] == '1.6.0'
-        assert json.loads((manifest.root / 'nodeforge_package.json').read_text())['nodeforge_min_version'] == '0.101.0'
+        assert state['packages']['nodeforge.nodes']['installed_version'] == '1.7.0'
+        assert json.loads((manifest.root / 'nodeforge_package.json').read_text())['nodeforge_min_version'] == '0.102.0'
         assert packages.install_included_packages(ROOT) == ()
     finally:
         packages.set_packages_dir_for_tests(None)

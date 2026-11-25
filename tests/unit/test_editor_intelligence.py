@@ -594,7 +594,7 @@ def test_dynamic_direct_editor_preview_and_named_singleton(editor_index):
     owner.mkdir(parents=True)
     (pkg / 'nodeforge_package.json').write_text(json.dumps({
         'schema_version': 1, 'id': 'vendor.shapes', 'name': 'Shapes', 'version': '1.0.0',
-        'author': 'Tests', 'description': 'Explicit dynamic shapes', 'nodeforge_min_version': '0.101.0',
+        'author': 'Tests', 'description': 'Explicit dynamic shapes', 'nodeforge_min_version': '0.102.0',
         'nodeforge_max_version': None, 'contents': {'systems': 'systems'}, 'permissions': {'python': True},
     }))
     (owner / 'interface.py').write_text('''from typing import Annotated
