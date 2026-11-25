@@ -166,3 +166,67 @@ def test_included_nodes_package_exposes_generated_blender_wrappers():
         assert native[0].outputs['Value'].default_value == pytest.approx(2.5)
     finally:
         bpy.data.node_groups.remove(group)
+
+
+def test_included_nodes_package_local_operator_preserves_named_outputs(tmp_path):
+    """Compile a linked Local script against the actually installed Nodes library."""
+    extension = _installed_extension()
+    ui = importlib.import_module(extension.__name__ + '.ui')
+    local_sources = importlib.import_module(extension.__name__ + '.local_sources')
+    marker = importlib.import_module(extension.__name__ + '.blender.interface').NAMED_RESULTS_PROP
+    folder = tmp_path / 'release_named_nodes'
+    folder.mkdir()
+    script = folder / 'entry.nf'
+    script.write_text('''from packages import nodes
+
+def entry(radius: Float):
+    r = nodes.cylinder(radius=radius)
+    return {"Mesh": r.mesh, "Top": r["top"]}
+''', encoding='utf-8')
+    area = next(a for a in bpy.context.screen.areas if a.type == 'VIEW_3D')
+    previous_type = area.type
+    mesh = bpy.data.meshes.new('NFReleaseOwnerMesh')
+    obj = bpy.data.objects.new('NFReleaseOwner', mesh)
+    bpy.context.collection.objects.link(obj)
+    previous_active = bpy.context.view_layer.objects.active
+    previous_selected = list(bpy.context.selected_objects)
+    for selected in previous_selected:
+        selected.select_set(False)
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    tree = bpy.data.node_groups.new('NFReleaseBase', 'GeometryNodeTree')
+    obj.modifiers.new('NFReleaseNodes', 'NODES').node_group = tree
+    area.type = 'NODE_EDITOR'
+    area.ui_type = 'GeometryNodeTree'
+    area.spaces.active.node_tree = tree
+    props = bpy.context.scene.gn_script_mvp
+    previous_path = props.local_browser_path
+    local_sources.link_local_source_folder(str(folder))
+    try:
+        props.local_browser_path = str(folder)
+        ui._refresh_catalog_items(props, 'local')
+        props.local_index = next(i for i, item in enumerate(props.local_items) if item.path == str(script))
+        with bpy.context.temp_override(area=area):
+            assert bpy.ops.nodeforge.create_function_group(namespace='local') == {'FINISHED'}
+        assert len(tree.nodes) == 1
+        group_node = tree.nodes[0]
+        assert group_node.bl_idname == 'GeometryNodeGroup'
+        assert list(group_node.outputs.keys()) == ['Mesh', 'Top']
+        group = group_node.node_tree
+        assert group[marker]
+        output = next(n for n in group.nodes if n.bl_idname == 'NodeGroupOutput')
+        mesh_socket = output.inputs['Mesh'].links[0].from_socket
+        top_socket = output.inputs['Top'].links[0].from_socket
+        assert mesh_socket.node == top_socket.node
+        assert mesh_socket.node.bl_idname == 'GeometryNodeMeshCylinder'
+        assert (mesh_socket.name, top_socket.name) == ('Mesh', 'Top')
+    finally:
+        local_sources.unlink_local_source_folder(str(folder))
+        props.local_browser_path = previous_path
+        area.type = previous_type
+        bpy.data.objects.remove(obj, do_unlink=True)
+        bpy.data.node_groups.remove(tree, do_unlink=True)
+        bpy.data.meshes.remove(mesh)
+        for selected in previous_selected:
+            selected.select_set(True)
+        bpy.context.view_layer.objects.active = previous_active

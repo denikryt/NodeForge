@@ -853,3 +853,10 @@ lifecycle.
 - Add a pinned Blender 5.2 inspection catalogue and regression checks for package discovery, generated bindings, and real Blender compilation.
 - Install bundled `nodeforge.nodes` from `packages/nodes/` directly into the versioned user package inventory; stop tracking and shipping a nested Nodes ZIP.
 - Add `tools/nodegen/cli.py` with `inspect`, `generate`, `test`, and `build` commands; merge seven Inspector stages into a versioned specification before generation.
+
+## 0.101.0
+
+- Add explicit named source-function returns and static and dynamic named Extension API results, with exact keys, dot and string-key projection, and independent semantic and backend phases.
+- Preserve named output links across group replacement only when the output key and physical socket type match; preserve positional output behavior and transactional rollback.
+- Upgrade bundled Nodes to 1.6.0, with named results for all generated wrappers, independent physical socket validation, exact dynamic collection labels and deterministic three-file generation. Migrate Nodes consumers and dynamic result resolvers to the named contract.
+- Add named result signature previews and field completion, and verify source, extension, editor, group replacement, package installation and Blender 5.2 native socket provenance.
