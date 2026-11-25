@@ -510,11 +510,11 @@ def test_bundled_named_extension_receiver_completion(editor_index):
     prefix = 'from packages import nodes as n\n'
     assert {c.insert for c in help_at_caret(prefix + 'x = n.cylinder().|', index).candidates} == {'mesh', 'top', 'side', 'bottom', 'uv_map'}
     signature = help_at_caret(prefix + 'x = n.face_group_boundaries(|', index).signatures[0]
-    assert signature.result_kind == 'named' and signature.outputs[0].key == 'boundary_edges'
+    assert signature.result_kind == 'positional' and signature.outputs[0].typ == 'Bool' and signature.outputs[0].key is None
     assert help_at_caret(prefix + 'x = n.domain_size(|', index).signatures[0].result_kind == 'dynamic'
-    assert {c.insert for c in help_at_caret(prefix + 'x = n.domain_size(component="POINTCLOUD").|', index).candidates} == {'point_count'}
-    assert {c.insert for c in help_at_caret(prefix + 'r = n.domain_size(component="INSTANCES")\nx = r.|', index).candidates} == {'instance_count'}
-    assert {c.insert for c in help_at_caret(prefix + 'def f(g: Geometry):\n    r = n.domain_size(geometry=g, component="POINTCLOUD")\n    x = r.|', index).candidates} == {'point_count'}
+    assert not help_at_caret(prefix + 'x = n.domain_size(component="POINTCLOUD").|', index).candidates
+    assert not help_at_caret(prefix + 'r = n.domain_size(component="INSTANCES")\nx = r.|', index).candidates
+    assert not help_at_caret(prefix + 'def f(g: Geometry):\n    r = n.domain_size(geometry=g, component="POINTCLOUD")\n    x = r.|', index).candidates
     assert not help_at_caret(prefix + 'x = n.domain_size(component=unknown).|', index).candidates
 
 
@@ -548,7 +548,8 @@ def test_unqualified_named_package_receiver_completion(editor_index):
                  'r = domain_size(component="INSTANCES")\nx = r.|',
                  'def f(g: Geometry):\n    x = domain_size(geometry=g, component="INSTANCES").|',
                  'def f(g: Geometry):\n    r = domain_size(geometry=g, component="INSTANCES")\n    x = r.|'):
-        assert [c.insert for c in help_at_caret(prefix + tail, index).candidates] == ['instance_count']
+        hint = help_at_caret(prefix + tail, index)
+        assert not hint.candidates and hint.signatures[0].outputs[0].typ == 'Int'
     unresolved = help_at_caret(prefix + 'x = domain_size(component=unknown).|', index)
     assert not unresolved.candidates and unresolved.signatures[0].result_kind == 'dynamic'
     for tail in ('cylinder = 1\nx = cylinder().|',

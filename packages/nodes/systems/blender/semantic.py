@@ -34,6 +34,11 @@ def output_types(arguments, parameters, signatures):
     except KeyError:
         raise ValueError(f'Unsupported result configuration: {key!r}') from None
 
+def public_result(schema):
+    """Choose the public Nodes carrier from the complete validated schema."""
+    return next(iter(schema.values())) if len(schema) == 1 else schema
+
+
 def with_collection_results(base, entries):
     """Append explicit collection keys without normalizing or overwriting them."""
     output = dict(base)
@@ -55,7 +60,7 @@ _SIGNATURE_random_value = {
 
 def _result_types_random_value(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_random_value)
-    return base
+    return public_result(base)
 
 _SIGNATURE_string_to_value = {
     ('FLOAT',): {'value': NFType.FLOAT, 'length': NFType.INT},
@@ -64,7 +69,7 @@ _SIGNATURE_string_to_value = {
 
 def _result_types_string_to_value(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_string_to_value)
-    return base
+    return public_result(base)
 
 _SIGNATURE_accumulate_field = {
     ('FLOAT',): {'leading': NFType.FLOAT, 'trailing': NFType.FLOAT, 'total': NFType.FLOAT},
@@ -74,7 +79,7 @@ _SIGNATURE_accumulate_field = {
 
 def _result_types_accumulate_field(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_accumulate_field)
-    return base
+    return public_result(base)
 
 _SIGNATURE_domain_size = {
     ('CURVE',): {'point_count': NFType.INT, 'spline_count': NFType.INT},
@@ -86,7 +91,7 @@ _SIGNATURE_domain_size = {
 
 def _result_types_domain_size(arguments):
     base = output_types(arguments, ['component'], _SIGNATURE_domain_size)
-    return base
+    return public_result(base)
 
 _SIGNATURE_attribute_statistic = {
     ('FLOAT',): {'mean': NFType.FLOAT, 'median': NFType.FLOAT, 'sum': NFType.FLOAT, 'min': NFType.FLOAT, 'max': NFType.FLOAT, 'range': NFType.FLOAT, 'standard_deviation': NFType.FLOAT, 'variance': NFType.FLOAT},
@@ -95,7 +100,7 @@ _SIGNATURE_attribute_statistic = {
 
 def _result_types_attribute_statistic(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_attribute_statistic)
-    return base
+    return public_result(base)
 
 _SIGNATURE_blur_attribute = {
     ('FLOAT',): {'value': NFType.FLOAT},
@@ -106,7 +111,7 @@ _SIGNATURE_blur_attribute = {
 
 def _result_types_blur_attribute(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_blur_attribute)
-    return base
+    return public_result(base)
 
 _SIGNATURE_capture_attribute = {
     (): {'geometry': NFType.GEOMETRY, 'selection': NFType.BOOL},
@@ -116,7 +121,7 @@ def _result_types_capture_attribute(arguments):
     base = output_types(arguments, [], _SIGNATURE_capture_attribute)
     types = {'BOOLEAN': NFType.BOOL, 'FLOAT': NFType.FLOAT, 'INT': NFType.INT, 'RGBA': NFType.COLOR, 'ROTATION': NFType.ROTATION, 'VECTOR': NFType.VECTOR}
     entries = capture_entries(static_value(arguments, 'elements'), types)
-    return with_collection_results(base, ((name, types[token]) for token, name in entries))
+    return public_result(with_collection_results(base, ((name, types[token]) for token, name in entries)))
 
 _SIGNATURE_arc = {
     ('POINTS',): {'curve': NFType.GEOMETRY, 'center': NFType.VECTOR, 'normal': NFType.VECTOR, 'radius': NFType.FLOAT},
@@ -125,7 +130,7 @@ _SIGNATURE_arc = {
 
 def _result_types_arc(arguments):
     base = output_types(arguments, ['mode'], _SIGNATURE_arc)
-    return base
+    return public_result(base)
 
 _SIGNATURE_curve_circle = {
     ('POINTS',): {'curve': NFType.GEOMETRY, 'center': NFType.VECTOR},
@@ -134,7 +139,7 @@ _SIGNATURE_curve_circle = {
 
 def _result_types_curve_circle(arguments):
     base = output_types(arguments, ['mode'], _SIGNATURE_curve_circle)
-    return base
+    return public_result(base)
 
 _SIGNATURE_evaluate_at_index = {
     ('BOOLEAN',): {'value': NFType.BOOL},
@@ -147,7 +152,7 @@ _SIGNATURE_evaluate_at_index = {
 
 def _result_types_evaluate_at_index(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_evaluate_at_index)
-    return base
+    return public_result(base)
 
 _SIGNATURE_field_average = {
     ('FLOAT',): {'mean': NFType.FLOAT, 'median': NFType.FLOAT},
@@ -156,7 +161,7 @@ _SIGNATURE_field_average = {
 
 def _result_types_field_average(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_field_average)
-    return base
+    return public_result(base)
 
 _SIGNATURE_field_min_max = {
     ('FLOAT',): {'min': NFType.FLOAT, 'max': NFType.FLOAT},
@@ -166,7 +171,7 @@ _SIGNATURE_field_min_max = {
 
 def _result_types_field_min_max(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_field_min_max)
-    return base
+    return public_result(base)
 
 _SIGNATURE_evaluate_on_domain = {
     ('BOOLEAN',): {'value': NFType.BOOL},
@@ -179,7 +184,7 @@ _SIGNATURE_evaluate_on_domain = {
 
 def _result_types_evaluate_on_domain(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_evaluate_on_domain)
-    return base
+    return public_result(base)
 
 _SIGNATURE_field_variance = {
     ('FLOAT',): {'standard_deviation': NFType.FLOAT, 'variance': NFType.FLOAT},
@@ -188,7 +193,7 @@ _SIGNATURE_field_variance = {
 
 def _result_types_field_variance(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_field_variance)
-    return base
+    return public_result(base)
 
 _SIGNATURE_filter_list = {
     ('BOOLEAN',): {'selection': NFType.BOOL, 'inverted': NFType.BOOL},
@@ -205,7 +210,7 @@ _SIGNATURE_filter_list = {
 
 def _result_types_filter_list(arguments):
     base = output_types(arguments, ['socket_type'], _SIGNATURE_filter_list)
-    return base
+    return public_result(base)
 
 _SIGNATURE_get_named_grid = {
     ('BOOLEAN',): {'volume': NFType.GEOMETRY, 'grid': NFType.BOOL},
@@ -216,7 +221,7 @@ _SIGNATURE_get_named_grid = {
 
 def _result_types_get_named_grid(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_get_named_grid)
-    return base
+    return public_result(base)
 
 _SIGNATURE_advect_grid = {
     ('FLOAT',): {'grid': NFType.FLOAT},
@@ -226,7 +231,7 @@ _SIGNATURE_advect_grid = {
 
 def _result_types_advect_grid(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_advect_grid)
-    return base
+    return public_result(base)
 
 _SIGNATURE_clip_grid = {
     ('BOOLEAN',): {'grid': NFType.BOOL},
@@ -237,7 +242,7 @@ _SIGNATURE_clip_grid = {
 
 def _result_types_clip_grid(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_clip_grid)
-    return base
+    return public_result(base)
 
 _SIGNATURE_grid_dilate_erode = {
     ('BOOLEAN',): {'grid': NFType.BOOL},
@@ -248,7 +253,7 @@ _SIGNATURE_grid_dilate_erode = {
 
 def _result_types_grid_dilate_erode(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_grid_dilate_erode)
-    return base
+    return public_result(base)
 
 _SIGNATURE_grid_mean = {
     ('FLOAT',): {'grid': NFType.FLOAT},
@@ -258,7 +263,7 @@ _SIGNATURE_grid_mean = {
 
 def _result_types_grid_mean(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_grid_mean)
-    return base
+    return public_result(base)
 
 _SIGNATURE_grid_median = {
     ('FLOAT',): {'grid': NFType.FLOAT},
@@ -268,7 +273,7 @@ _SIGNATURE_grid_median = {
 
 def _result_types_grid_median(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_grid_median)
-    return base
+    return public_result(base)
 
 _SIGNATURE_prune_grid = {
     ('BOOLEAN',): {'grid': NFType.BOOL},
@@ -279,7 +284,7 @@ _SIGNATURE_prune_grid = {
 
 def _result_types_prune_grid(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_prune_grid)
-    return base
+    return public_result(base)
 
 _SIGNATURE_grid_to_points = {
     ('BOOLEAN',): {'points': NFType.GEOMETRY, 'value': NFType.BOOL, 'x': NFType.INT, 'y': NFType.INT, 'z': NFType.INT, 'is_tile': NFType.BOOL, 'extent': NFType.INT},
@@ -290,7 +295,7 @@ _SIGNATURE_grid_to_points = {
 
 def _result_types_grid_to_points(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_grid_to_points)
-    return base
+    return public_result(base)
 
 _SIGNATURE_voxelize_grid = {
     ('BOOLEAN',): {'grid': NFType.BOOL},
@@ -301,7 +306,7 @@ _SIGNATURE_voxelize_grid = {
 
 def _result_types_voxelize_grid(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_voxelize_grid)
-    return base
+    return public_result(base)
 
 _SIGNATURE_index_switch = {
     ('BOOLEAN',): {'output': NFType.BOOL},
@@ -321,7 +326,7 @@ def _result_types_index_switch(arguments):
     count = static_value(arguments, 'elements')
     if type(count) is not int or count < 0:
         raise ValueError('elements must be nonnegative')
-    return base
+    return public_result(base)
 
 _SIGNATURE_named_attribute = {
     ('BOOLEAN',): {'attribute': NFType.BOOL, 'exists': NFType.BOOL},
@@ -334,7 +339,7 @@ _SIGNATURE_named_attribute = {
 
 def _result_types_named_attribute(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_named_attribute)
-    return base
+    return public_result(base)
 
 _SIGNATURE_get_list_item = {
     ('BOOLEAN',): {'value': NFType.BOOL},
@@ -351,7 +356,7 @@ _SIGNATURE_get_list_item = {
 
 def _result_types_get_list_item(arguments):
     base = output_types(arguments, ['socket_type'], _SIGNATURE_get_list_item)
-    return base
+    return public_result(base)
 
 _SIGNATURE_menu_switch = {
     ('BOOLEAN',): {'output': NFType.BOOL},
@@ -372,7 +377,7 @@ def _result_types_menu_switch(arguments):
     selected = static_value(arguments, 'menu')
     if selected not in names:
         raise ValueError('Invalid Menu selection / elements')
-    return with_collection_results(base, ((name, NFType.BOOL) for name in names))
+    return public_result(with_collection_results(base, ((name, NFType.BOOL) for name in names)))
 
 _SIGNATURE_mesh_boolean = {
     ('EXACT',): {'mesh': NFType.GEOMETRY, 'intersecting_edges': NFType.BOOL},
@@ -382,7 +387,7 @@ _SIGNATURE_mesh_boolean = {
 
 def _result_types_mesh_boolean(arguments):
     base = output_types(arguments, ['solver'], _SIGNATURE_mesh_boolean)
-    return base
+    return public_result(base)
 
 _SIGNATURE_raycast = {
     ('BOOLEAN',): {'is_hit': NFType.BOOL, 'hit_position': NFType.VECTOR, 'hit_normal': NFType.VECTOR, 'hit_distance': NFType.FLOAT, 'attribute': NFType.BOOL},
@@ -395,7 +400,7 @@ _SIGNATURE_raycast = {
 
 def _result_types_raycast(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_raycast)
-    return base
+    return public_result(base)
 
 _SIGNATURE_sample_curve = {
     ('BOOLEAN',): {'value': NFType.BOOL, 'position': NFType.VECTOR, 'tangent': NFType.VECTOR, 'normal': NFType.VECTOR},
@@ -408,7 +413,7 @@ _SIGNATURE_sample_curve = {
 
 def _result_types_sample_curve(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_sample_curve)
-    return base
+    return public_result(base)
 
 _SIGNATURE_sample_grid = {
     ('BOOLEAN',): {'value': NFType.BOOL},
@@ -419,7 +424,7 @@ _SIGNATURE_sample_grid = {
 
 def _result_types_sample_grid(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_sample_grid)
-    return base
+    return public_result(base)
 
 _SIGNATURE_sample_grid_index = {
     ('BOOLEAN',): {'value': NFType.BOOL},
@@ -430,7 +435,7 @@ _SIGNATURE_sample_grid_index = {
 
 def _result_types_sample_grid_index(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_sample_grid_index)
-    return base
+    return public_result(base)
 
 _SIGNATURE_sample_index = {
     ('BOOLEAN',): {'value': NFType.BOOL},
@@ -443,7 +448,7 @@ _SIGNATURE_sample_index = {
 
 def _result_types_sample_index(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_sample_index)
-    return base
+    return public_result(base)
 
 _SIGNATURE_sample_nearest_surface = {
     ('BOOLEAN',): {'value': NFType.BOOL, 'is_valid': NFType.BOOL},
@@ -456,7 +461,7 @@ _SIGNATURE_sample_nearest_surface = {
 
 def _result_types_sample_nearest_surface(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_sample_nearest_surface)
-    return base
+    return public_result(base)
 
 _SIGNATURE_sample_uv_surface = {
     ('BOOLEAN',): {'value': NFType.BOOL, 'is_valid': NFType.BOOL},
@@ -469,7 +474,7 @@ _SIGNATURE_sample_uv_surface = {
 
 def _result_types_sample_uv_surface(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_sample_uv_surface)
-    return base
+    return public_result(base)
 
 _SIGNATURE_set_grid_background = {
     ('BOOLEAN',): {'grid': NFType.BOOL},
@@ -480,7 +485,7 @@ _SIGNATURE_set_grid_background = {
 
 def _result_types_set_grid_background(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_set_grid_background)
-    return base
+    return public_result(base)
 
 _SIGNATURE_sort_list = {
     ('BOOLEAN',): {'list': NFType.BOOL},
@@ -497,7 +502,7 @@ _SIGNATURE_sort_list = {
 
 def _result_types_sort_list(arguments):
     base = output_types(arguments, ['socket_type'], _SIGNATURE_sort_list)
-    return base
+    return public_result(base)
 
 _SIGNATURE_switch = {
     ('BOOLEAN',): {'output': NFType.BOOL},
@@ -514,7 +519,7 @@ _SIGNATURE_switch = {
 
 def _result_types_switch(arguments):
     base = output_types(arguments, ['input_type'], _SIGNATURE_switch)
-    return base
+    return public_result(base)
 
 _SIGNATURE_enable_output = {
     ('BOOLEAN',): {'value': NFType.BOOL},
@@ -531,7 +536,7 @@ _SIGNATURE_enable_output = {
 
 def _result_types_enable_output(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_enable_output)
-    return base
+    return public_result(base)
 
 _SIGNATURE_implicit_conversion = {
     ('BOOLEAN',): {'value': NFType.BOOL},
@@ -548,7 +553,7 @@ _SIGNATURE_implicit_conversion = {
 
 def _result_types_implicit_conversion(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_implicit_conversion)
-    return base
+    return public_result(base)
 
 _SIGNATURE_map_range = {
     ('FLOAT',): {'result': NFType.FLOAT},
@@ -557,7 +562,7 @@ _SIGNATURE_map_range = {
 
 def _result_types_map_range(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_map_range)
-    return base
+    return public_result(base)
 
 _SIGNATURE_mix = {
     ('FLOAT',): {'result': NFType.FLOAT},
@@ -568,7 +573,7 @@ _SIGNATURE_mix = {
 
 def _result_types_mix(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_mix)
-    return base
+    return public_result(base)
 
 _SIGNATURE_voronoi_texture = {
     ('DISTANCE_TO_EDGE', '1D'): {'distance': NFType.FLOAT},
@@ -595,7 +600,7 @@ _SIGNATURE_voronoi_texture = {
 
 def _result_types_voronoi_texture(arguments):
     base = output_types(arguments, ['feature', 'voronoi_dimensions'], _SIGNATURE_voronoi_texture)
-    return base
+    return public_result(base)
 
 _SIGNATURE_vector_math = {
     ('ABSOLUTE',): {'vector': NFType.VECTOR},
@@ -632,5 +637,5 @@ _SIGNATURE_vector_math = {
 
 def _result_types_vector_math(arguments):
     base = output_types(arguments, ['operation'], _SIGNATURE_vector_math)
-    return base
+    return public_result(base)
 

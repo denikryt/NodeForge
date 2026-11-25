@@ -126,7 +126,7 @@ def deliver(context, socket, value):
 
 def materialize(context, node_id, named, items=(), rna=None, menus=(), orders=(),
                 kind=None, elements=None, capture_types=None,
-                constant_rna=None, constant_outputs=None):
+                constant_rna=None, constant_outputs=None, scalar_name=None):
     node = make_node(context, node_id, rna or {}, orders)
     requested_names = set_collection(node, kind, elements, capture_types) if kind else ()
     for key, value in menus:
@@ -173,10 +173,12 @@ def materialize(context, node_id, named, items=(), rna=None, menus=(), orders=()
     if tuple(observed_names[base_count:]) != requested_names:
         raise ValueError(f'{node_id}: collection output labels differ from {requested_names!r}')
     observed = tuple(zip(observed_names, (socket_type(socket) for socket in outputs)))
-    expected = tuple(zip(context.result_names, context.result_types))
+    expected = tuple(zip((scalar_name,) if scalar_name is not None else context.result_names, context.result_types))
     if observed != expected:
         raise ValueError(f'{node_id}: output schema {observed!r} does not match {expected!r}; '
                          f'physical identifiers {[socket.identifier for socket in outputs]!r}')
+    if scalar_name is not None:
+        return context.value(outputs[0], context.result_types[0])
     return {key: context.value(socket, typ) for (key, typ), socket in zip(observed, outputs)}
 
 
@@ -200,6 +202,7 @@ def align_euler_to_vector(
         orders=[('axis', 'pivot_axis')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='rotation',
     )
 
 def align_rotation_to_vector(
@@ -221,6 +224,7 @@ def align_rotation_to_vector(
         orders=[('axis', 'pivot_axis')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='rotation',
     )
 
 def axes_to_rotation(
@@ -241,6 +245,7 @@ def axes_to_rotation(
         orders=[('primary_axis', 'secondary_axis')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='rotation',
     )
 
 def axis_angle_to_rotation(
@@ -259,6 +264,7 @@ def axis_angle_to_rotation(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='rotation',
     )
 
 def bit_math(
@@ -279,6 +285,7 @@ def bit_math(
         orders=[('operation',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='value',
     )
 
 def boolean_math(
@@ -298,6 +305,7 @@ def boolean_math(
         orders=[('operation',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='boolean',
     )
 
 def combine_color(
@@ -319,6 +327,7 @@ def combine_color(
         orders=[('mode',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='color',
     )
 
 def compare(
@@ -343,6 +352,7 @@ def compare(
         orders=[('data_type', 'mode', 'operation'), ('operation', 'mode', 'data_type')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='result',
     )
 
 def euler_to_rotation(
@@ -360,6 +370,7 @@ def euler_to_rotation(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='rotation',
     )
 
 def find_in_string(
@@ -397,6 +408,7 @@ def float_to_integer(
         orders=[('rounding_mode',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='integer',
     )
 
 def format_string(
@@ -414,6 +426,7 @@ def format_string(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='string',
     )
 
 def hash_value(
@@ -433,6 +446,7 @@ def hash_value(
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='hash',
     )
 
 def boolean(
@@ -451,6 +465,7 @@ def boolean(
         orders=[('boolean',)],
         constant_rna={'boolean': boolean_2},
         constant_outputs={},
+        scalar_name='boolean',
     )
 
 def color(
@@ -468,6 +483,7 @@ def color(
         orders=[()],
         constant_rna={'value': value},
         constant_outputs={},
+        scalar_name='color',
     )
 
 def integer(
@@ -485,6 +501,7 @@ def integer(
         orders=[()],
         constant_rna={'integer': integer},
         constant_outputs={},
+        scalar_name='integer',
     )
 
 def rotation(
@@ -502,6 +519,7 @@ def rotation(
         orders=[()],
         constant_rna={'rotation_euler': rotation},
         constant_outputs={},
+        scalar_name='rotation',
     )
 
 def special_characters(
@@ -534,6 +552,7 @@ def string(
         orders=[()],
         constant_rna={'string': string},
         constant_outputs={},
+        scalar_name='string',
     )
 
 def vector(
@@ -551,6 +570,7 @@ def vector(
         orders=[()],
         constant_rna={'vector': vector},
         constant_outputs={},
+        scalar_name='vector',
     )
 
 def integer_math(
@@ -571,6 +591,7 @@ def integer_math(
         orders=[('operation',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='value',
     )
 
 def invert_rotation(
@@ -588,6 +609,7 @@ def invert_rotation(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='rotation',
     )
 
 def match_string(
@@ -607,6 +629,7 @@ def match_string(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='result',
     )
 
 def quaternion_to_rotation(
@@ -627,6 +650,7 @@ def quaternion_to_rotation(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='rotation',
     )
 
 def random_value(
@@ -649,6 +673,7 @@ def random_value(
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='value' if context.result_names is None else None,
     )
 
 def replace_string(
@@ -668,6 +693,7 @@ def replace_string(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='string',
     )
 
 def reverse_string(
@@ -685,6 +711,7 @@ def reverse_string(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='string',
     )
 
 def rotate_euler(
@@ -707,6 +734,7 @@ def rotate_euler(
         orders=[('rotation_type', 'space')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='rotation',
     )
 
 def rotate_rotation(
@@ -726,6 +754,7 @@ def rotate_rotation(
         orders=[('rotation_space',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='rotation',
     )
 
 def rotate_vector(
@@ -744,6 +773,7 @@ def rotate_vector(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='vector',
     )
 
 def rotation_to_axis_angle(
@@ -778,6 +808,7 @@ def rotation_to_euler(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='euler',
     )
 
 def rotation_to_quaternion(
@@ -831,6 +862,7 @@ def set_string_case(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='string',
     )
 
 def slice_string(
@@ -850,6 +882,7 @@ def slice_string(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='string',
     )
 
 def split_string(
@@ -868,6 +901,7 @@ def split_string(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='list',
     )
 
 def string_length(
@@ -885,6 +919,7 @@ def string_length(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='length',
     )
 
 def string_to_value(
@@ -925,6 +960,7 @@ def trim_string(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='string',
     )
 
 def value_to_string(
@@ -946,6 +982,7 @@ def value_to_string(
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='string',
     )
 
 def accumulate_field(
@@ -984,6 +1021,7 @@ def domain_size(
         orders=[('component',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name={('POINTCLOUD',): 'point_count', ('INSTANCES',): 'instance_count', ('GREASEPENCIL',): 'layer_count'}[(component,)] if context.result_names is None else None,
     )
 
 def attribute_statistic(
@@ -1025,6 +1063,7 @@ def blur_attribute(
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='value' if context.result_names is None else None,
     )
 
 def bounding_box(
@@ -1085,6 +1124,7 @@ def cluster_by_connected(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='cluster_id',
     )
 
 def cluster_by_distance(
@@ -1105,6 +1145,7 @@ def cluster_by_distance(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='cluster_id',
     )
 
 def convex_hull(
@@ -1122,6 +1163,7 @@ def convex_hull(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='convex_hull',
     )
 
 def corners_of_edge(
@@ -1203,6 +1245,7 @@ def cube_grid_topology(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='topology',
     )
 
 def arc(
@@ -1230,6 +1273,7 @@ def arc(
         orders=[('mode',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve' if context.result_names is None else None,
     )
 
 def endpoint_selection(
@@ -1248,6 +1292,7 @@ def endpoint_selection(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='selection',
     )
 
 def handle_type_selection(
@@ -1266,6 +1311,7 @@ def handle_type_selection(
         orders=[('handle_type', 'mode')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='selection',
     )
 
 def curve_length(
@@ -1283,6 +1329,7 @@ def curve_length(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='length',
     )
 
 def curve_of_point(
@@ -1322,6 +1369,7 @@ def b_zier_segment(
         orders=[('mode',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve',
     )
 
 def curve_circle(
@@ -1344,6 +1392,7 @@ def curve_circle(
         orders=[('mode',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve' if context.result_names is None else None,
     )
 
 def curve_line(
@@ -1365,6 +1414,7 @@ def curve_line(
         orders=[('mode',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve',
     )
 
 def quadrilateral(
@@ -1393,6 +1443,7 @@ def quadrilateral(
         orders=[('mode',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve',
     )
 
 def quadratic_b_zier(
@@ -1413,6 +1464,7 @@ def quadratic_b_zier(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve',
     )
 
 def set_handle_type(
@@ -1433,6 +1485,7 @@ def set_handle_type(
         orders=[('handle_type', 'mode')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve',
     )
 
 def spiral(
@@ -1455,6 +1508,7 @@ def spiral(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve',
     )
 
 def set_spline_type(
@@ -1474,6 +1528,7 @@ def set_spline_type(
         orders=[('spline_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve',
     )
 
 def star(
@@ -1514,6 +1569,7 @@ def curve_to_mesh(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='mesh',
     )
 
 def curve_to_points(
@@ -1553,6 +1609,7 @@ def curves_to_grease_pencil(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='grease_pencil',
     )
 
 def deform_curves_on_surface(
@@ -1570,6 +1627,7 @@ def deform_curves_on_surface(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curves',
     )
 
 def delete_geometry(
@@ -1590,6 +1648,7 @@ def delete_geometry(
         orders=[('domain', 'mode')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='geometry',
     )
 
 def distribute_points_in_grid(
@@ -1612,6 +1671,7 @@ def distribute_points_in_grid(
         orders=[('mode',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='points',
     )
 
 def distribute_points_in_volume(
@@ -1634,6 +1694,7 @@ def distribute_points_in_volume(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='points',
     )
 
 def distribute_points_on_faces(
@@ -1677,6 +1738,7 @@ def dual_mesh(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='dual_mesh',
     )
 
 def duplicate_elements(
@@ -1716,6 +1778,7 @@ def edge_paths_to_curves(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curves',
     )
 
 def edge_paths_to_selection(
@@ -1734,6 +1797,7 @@ def edge_paths_to_selection(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='selection',
     )
 
 def edges_of_corner(
@@ -1787,6 +1851,7 @@ def edges_to_face_groups(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='face_group_id',
     )
 
 def extrude_mesh(
@@ -1846,6 +1911,7 @@ def evaluate_at_index(
         orders=[('data_type', 'domain')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='value' if context.result_names is None else None,
     )
 
 def field_average(
@@ -1905,6 +1971,7 @@ def evaluate_on_domain(
         orders=[('data_type', 'domain')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='value' if context.result_names is None else None,
     )
 
 def field_variance(
@@ -1945,6 +2012,7 @@ def fill_curve(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='mesh',
     )
 
 def fillet_curve(
@@ -1966,6 +2034,7 @@ def fillet_curve(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve',
     )
 
 def filter_list(
@@ -2003,6 +2072,7 @@ def flip_faces(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='mesh',
     )
 
 def geometry_to_instance(
@@ -2020,6 +2090,7 @@ def geometry_to_instance(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='instances',
     )
 
 def get_attribute_names(
@@ -2041,6 +2112,7 @@ def get_attribute_names(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='names',
     )
 
 def get_geometry_component(
@@ -2102,6 +2174,7 @@ def dial_gizmo(
         orders=[('color_id',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='transform',
     )
 
 def linear_gizmo(
@@ -2123,6 +2196,7 @@ def linear_gizmo(
         orders=[('color_id', 'draw_style')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='transform',
     )
 
 def grease_pencil_to_curves(
@@ -2142,6 +2216,7 @@ def grease_pencil_to_curves(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curves',
     )
 
 def advect_grid(
@@ -2164,6 +2239,7 @@ def advect_grid(
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='grid' if context.result_names is None else None,
     )
 
 def clip_grid(
@@ -2188,6 +2264,7 @@ def clip_grid(
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='grid' if context.result_names is None else None,
     )
 
 def grid_curl(
@@ -2205,6 +2282,7 @@ def grid_curl(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curl',
     )
 
 def grid_dilate_erode(
@@ -2226,6 +2304,7 @@ def grid_dilate_erode(
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='grid' if context.result_names is None else None,
     )
 
 def grid_divergence(
@@ -2243,6 +2322,7 @@ def grid_divergence(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='divergence',
     )
 
 def grid_gradient(
@@ -2260,6 +2340,7 @@ def grid_gradient(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='gradient',
     )
 
 def grid_laplacian(
@@ -2277,6 +2358,7 @@ def grid_laplacian(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='laplacian',
     )
 
 def grid_mean(
@@ -2297,6 +2379,7 @@ def grid_mean(
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='grid' if context.result_names is None else None,
     )
 
 def grid_median(
@@ -2317,6 +2400,7 @@ def grid_median(
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='grid' if context.result_names is None else None,
     )
 
 def prune_grid(
@@ -2337,6 +2421,7 @@ def prune_grid(
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='grid' if context.result_names is None else None,
     )
 
 def grid_to_mesh(
@@ -2356,6 +2441,7 @@ def grid_to_mesh(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='mesh',
     )
 
 def grid_to_points(
@@ -2392,6 +2478,7 @@ def voxelize_grid(
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='grid' if context.result_names is None else None,
     )
 
 def import_csv(
@@ -2410,6 +2497,7 @@ def import_csv(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='point_cloud',
     )
 
 def import_obj(
@@ -2427,6 +2515,7 @@ def import_obj(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='instances',
     )
 
 def import_ply(
@@ -2444,6 +2533,7 @@ def import_ply(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='mesh',
     )
 
 def import_stl(
@@ -2461,6 +2551,7 @@ def import_stl(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='mesh',
     )
 
 def import_text(
@@ -2478,6 +2569,7 @@ def import_text(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='string',
     )
 
 def import_vdb(
@@ -2495,6 +2587,7 @@ def import_vdb(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='volume',
     )
 
 def index_of_nearest(
@@ -2534,6 +2627,7 @@ def index_switch(
         constant_outputs={},
         kind='index',
         elements=elements,
+        scalar_name='output' if context.result_names is None else None,
     )
 
 def active_camera(
@@ -2549,6 +2643,7 @@ def active_camera(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='active_camera',
     )
 
 def curve_handle_positions(
@@ -2581,6 +2676,7 @@ def curve_tilt(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='tilt',
     )
 
 def is_edge_smooth(
@@ -2596,6 +2692,7 @@ def is_edge_smooth(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='smooth',
     )
 
 def id(
@@ -2611,6 +2708,7 @@ def id(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='id',
     )
 
 def index(
@@ -2626,6 +2724,7 @@ def index(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='index',
     )
 
 def instance_bounds(
@@ -2658,6 +2757,7 @@ def instance_reference(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='reference_index',
     )
 
 def instance_rotation(
@@ -2673,6 +2773,7 @@ def instance_rotation(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='rotation',
     )
 
 def instance_scale(
@@ -2688,6 +2789,7 @@ def instance_scale(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='scale',
     )
 
 def material(
@@ -2703,6 +2805,7 @@ def material(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='material',
     )
 
 def material_index(
@@ -2718,6 +2821,7 @@ def material_index(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='material_index',
     )
 
 def edge_angle(
@@ -2748,6 +2852,7 @@ def edge_neighbors(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='face_count',
     )
 
 def edge_vertices(
@@ -2778,6 +2883,7 @@ def face_area(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='area',
     )
 
 def is_face_planar(
@@ -2795,6 +2901,7 @@ def is_face_planar(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='planar',
     )
 
 def face_neighbors(
@@ -2875,6 +2982,7 @@ def named_layer_selection(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='selection',
     )
 
 def normal(
@@ -2907,6 +3015,7 @@ def object(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='object',
     )
 
 def position(
@@ -2922,6 +3031,7 @@ def position(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='position',
     )
 
 def radius(
@@ -2937,6 +3047,7 @@ def radius(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='radius',
     )
 
 def scene_time(
@@ -2967,6 +3078,7 @@ def is_face_smooth(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='smooth',
     )
 
 def shortest_edge_paths(
@@ -3000,6 +3112,7 @@ def is_spline_cyclic(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='cyclic',
     )
 
 def spline_resolution(
@@ -3015,6 +3128,7 @@ def spline_resolution(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='resolution',
     )
 
 def curve_tangent(
@@ -3030,6 +3144,7 @@ def curve_tangent(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='tangent',
     )
 
 def voxel_index(
@@ -3068,6 +3183,7 @@ def instance_on_points(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='instances',
     )
 
 def instances_to_points(
@@ -3088,6 +3204,7 @@ def instances_to_points(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='points',
     )
 
 def interpolate_curves(
@@ -3126,6 +3243,7 @@ def is_viewport(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='is_viewport',
     )
 
 def join_geometry(
@@ -3143,6 +3261,7 @@ def join_geometry(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='geometry',
     )
 
 def get_list_item(
@@ -3163,6 +3282,7 @@ def get_list_item(
         orders=[('socket_type', 'structure_type')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='value' if context.result_names is None else None,
     )
 
 def material_selection(
@@ -3180,6 +3300,7 @@ def material_selection(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='selection',
     )
 
 def menu_switch(
@@ -3221,6 +3342,7 @@ def merge_by_distance(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='geometry',
     )
 
 def merge_layers(
@@ -3241,6 +3363,7 @@ def merge_layers(
         orders=[('mode',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='grease_pencil',
     )
 
 def merge_points(
@@ -3260,6 +3383,7 @@ def merge_points(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='geometry',
     )
 
 def mesh_bevel(
@@ -3310,6 +3434,7 @@ def mesh_boolean(
         orders=[('operation', 'solver')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='mesh' if context.result_names is None else None,
     )
 
 def mesh_circle(
@@ -3329,6 +3454,7 @@ def mesh_circle(
         orders=[('fill_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='mesh',
     )
 
 def cone(
@@ -3411,6 +3537,7 @@ def face_group_boundaries(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='boundary_edges',
     )
 
 def grid(
@@ -3471,6 +3598,7 @@ def mesh_line(
         orders=[('count_mode', 'mode')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='mesh',
     )
 
 def mesh_to_curve(
@@ -3490,6 +3618,7 @@ def mesh_to_curve(
         orders=[('mode',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve',
     )
 
 def mesh_to_density_grid(
@@ -3510,6 +3639,7 @@ def mesh_to_density_grid(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='density_grid',
     )
 
 def mesh_to_points(
@@ -3531,6 +3661,7 @@ def mesh_to_points(
         orders=[('mode',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='points',
     )
 
 def mesh_to_sdf_grid(
@@ -3550,6 +3681,7 @@ def mesh_to_sdf_grid(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='sdf_grid',
     )
 
 def mesh_to_volume(
@@ -3572,6 +3704,7 @@ def mesh_to_volume(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='volume',
     )
 
 def uv_sphere(
@@ -3609,6 +3742,7 @@ def offset_corner_in_face(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='corner_index',
     )
 
 def offset_point_in_curve(
@@ -3646,6 +3780,7 @@ def points(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='points',
     )
 
 def points_of_curve(
@@ -3684,6 +3819,7 @@ def points_to_curves(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curves',
     )
 
 def points_to_sdf_grid(
@@ -3703,6 +3839,7 @@ def points_to_sdf_grid(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='sdf_grid',
     )
 
 def points_to_vertices(
@@ -3721,6 +3858,7 @@ def points_to_vertices(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='mesh',
     )
 
 def points_to_volume(
@@ -3743,6 +3881,7 @@ def points_to_volume(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='volume',
     )
 
 def geometry_proximity(
@@ -3808,6 +3947,7 @@ def realize_instances(
         orders=[('realize_to_point_domain',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='geometry',
     )
 
 def remove_named_attribute(
@@ -3827,6 +3967,7 @@ def remove_named_attribute(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='geometry',
     )
 
 def rename_attribute(
@@ -3848,6 +3989,7 @@ def rename_attribute(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='geometry',
     )
 
 def replace_material(
@@ -3867,6 +4009,7 @@ def replace_material(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='geometry',
     )
 
 def resample_curve(
@@ -3889,6 +4032,7 @@ def resample_curve(
         orders=[('keep_last_segment',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve',
     )
 
 def reverse_curve(
@@ -3907,6 +4051,7 @@ def reverse_curve(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve',
     )
 
 def rotate_instances(
@@ -3928,6 +4073,7 @@ def rotate_instances(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='instances',
     )
 
 def sdf_grid_boolean(
@@ -3947,6 +4093,7 @@ def sdf_grid_boolean(
         orders=[('operation',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='grid',
     )
 
 def sdf_grid_fillet(
@@ -3965,6 +4112,7 @@ def sdf_grid_fillet(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='grid',
     )
 
 def sdf_grid_laplacian(
@@ -3983,6 +4131,7 @@ def sdf_grid_laplacian(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='grid',
     )
 
 def sdf_grid_mean(
@@ -4002,6 +4151,7 @@ def sdf_grid_mean(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='grid',
     )
 
 def sdf_grid_mean_curvature(
@@ -4020,6 +4170,7 @@ def sdf_grid_mean_curvature(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='grid',
     )
 
 def sdf_grid_median(
@@ -4039,6 +4190,7 @@ def sdf_grid_median(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='grid',
     )
 
 def sdf_grid_offset(
@@ -4057,6 +4209,7 @@ def sdf_grid_offset(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='grid',
     )
 
 def sample_curve(
@@ -4101,6 +4254,7 @@ def sample_grid(
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='value' if context.result_names is None else None,
     )
 
 def sample_grid_index(
@@ -4122,6 +4276,7 @@ def sample_grid_index(
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='value' if context.result_names is None else None,
     )
 
 def sample_index(
@@ -4144,6 +4299,7 @@ def sample_index(
         orders=[('clamp', 'data_type', 'domain')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='value' if context.result_names is None else None,
     )
 
 def sample_nearest(
@@ -4163,6 +4319,7 @@ def sample_nearest(
         orders=[('domain',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='index',
     )
 
 def sample_nearest_surface(
@@ -4229,6 +4386,7 @@ def scale_elements(
         orders=[('domain',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='geometry',
     )
 
 def scale_instances(
@@ -4250,6 +4408,7 @@ def scale_instances(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='instances',
     )
 
 def self_object(
@@ -4265,6 +4424,7 @@ def self_object(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='self_object',
     )
 
 def separate_components(
@@ -4322,6 +4482,7 @@ def set_handle_positions(
         orders=[('mode',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve',
     )
 
 def set_curve_normal(
@@ -4342,6 +4503,7 @@ def set_curve_normal(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve',
     )
 
 def set_curve_radius(
@@ -4361,6 +4523,7 @@ def set_curve_radius(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve',
     )
 
 def set_curve_tilt(
@@ -4380,6 +4543,7 @@ def set_curve_tilt(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve',
     )
 
 def set_geometry_name(
@@ -4398,6 +4562,7 @@ def set_geometry_name(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='geometry',
     )
 
 def set_grease_pencil_color(
@@ -4419,6 +4584,7 @@ def set_grease_pencil_color(
         orders=[('mode',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='grease_pencil',
     )
 
 def set_grease_pencil_depth(
@@ -4437,6 +4603,7 @@ def set_grease_pencil_depth(
         orders=[('depth_order',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='grease_pencil',
     )
 
 def set_grease_pencil_softness(
@@ -4456,6 +4623,7 @@ def set_grease_pencil_softness(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='grease_pencil',
     )
 
 def set_grid_background(
@@ -4476,6 +4644,7 @@ def set_grid_background(
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='grid' if context.result_names is None else None,
     )
 
 def set_id(
@@ -4495,6 +4664,7 @@ def set_id(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='geometry',
     )
 
 def set_material(
@@ -4514,6 +4684,7 @@ def set_material(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='geometry',
     )
 
 def set_material_index(
@@ -4533,6 +4704,7 @@ def set_material_index(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='geometry',
     )
 
 def set_mesh_normal(
@@ -4556,6 +4728,7 @@ def set_mesh_normal(
         orders=[('domain', 'mode')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='mesh',
     )
 
 def set_nurbs_order(
@@ -4575,6 +4748,7 @@ def set_nurbs_order(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curves',
     )
 
 def set_nurbs_weight(
@@ -4594,6 +4768,7 @@ def set_nurbs_weight(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curves',
     )
 
 def set_point_radius(
@@ -4613,6 +4788,7 @@ def set_point_radius(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='points',
     )
 
 def set_position(
@@ -4633,6 +4809,7 @@ def set_position(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='geometry',
     )
 
 def set_shade_smooth(
@@ -4653,6 +4830,7 @@ def set_shade_smooth(
         orders=[('domain',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='mesh',
     )
 
 def set_spline_cyclic(
@@ -4672,6 +4850,7 @@ def set_spline_cyclic(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve',
     )
 
 def set_spline_resolution(
@@ -4691,6 +4870,7 @@ def set_spline_resolution(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve',
     )
 
 def sort_elements(
@@ -4712,6 +4892,7 @@ def sort_elements(
         orders=[('domain',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='geometry',
     )
 
 def sort_list(
@@ -4733,6 +4914,7 @@ def sort_list(
         orders=[('socket_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='list' if context.result_names is None else None,
     )
 
 def spline_length(
@@ -4781,6 +4963,7 @@ def split_edges(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='mesh',
     )
 
 def split_to_instances(
@@ -4823,6 +5006,7 @@ def store_named_attribute(
         orders=[('data_type', 'domain')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='geometry',
     )
 
 def store_named_grid(
@@ -4843,6 +5027,7 @@ def store_named_grid(
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='volume',
     )
 
 def join_strings(
@@ -4861,6 +5046,7 @@ def join_strings(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='string',
     )
 
 def subdivide_curve(
@@ -4879,6 +5065,7 @@ def subdivide_curve(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve',
     )
 
 def subdivide_mesh(
@@ -4897,6 +5084,7 @@ def subdivide_mesh(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='mesh',
     )
 
 def subdivision_surface(
@@ -4921,6 +5109,7 @@ def subdivision_surface(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='mesh',
     )
 
 def switch(
@@ -4940,6 +5129,7 @@ def switch(
         orders=[('input_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='output' if context.result_names is None else None,
     )
 
 def tag_filter(
@@ -4958,6 +5148,7 @@ def tag_filter(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='match',
     )
 
 def option_3d_cursor(
@@ -5054,6 +5245,7 @@ def set_face_set(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='mesh',
     )
 
 def set_selection(
@@ -5074,6 +5266,7 @@ def set_selection(
         orders=[('domain', 'selection_type')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='geometry',
     )
 
 def transfer_attributes(
@@ -5128,6 +5321,7 @@ def transform_geometry(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='geometry',
     )
 
 def translate_instances(
@@ -5148,6 +5342,7 @@ def translate_instances(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='instances',
     )
 
 def triangulate(
@@ -5168,6 +5363,7 @@ def triangulate(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='mesh',
     )
 
 def trim_curve(
@@ -5191,6 +5387,7 @@ def trim_curve(
         orders=[('mode',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='curve',
     )
 
 def uv_unwrap(
@@ -5214,6 +5411,7 @@ def uv_unwrap(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='uv',
     )
 
 def vertex_of_corner(
@@ -5231,6 +5429,7 @@ def vertex_of_corner(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='vertex_index',
     )
 
 def volume_cube(
@@ -5254,6 +5453,7 @@ def volume_cube(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='volume',
     )
 
 def volume_to_mesh(
@@ -5276,6 +5476,7 @@ def volume_to_mesh(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='mesh',
     )
 
 def warning(
@@ -5295,6 +5496,7 @@ def warning(
         orders=[('warning_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='show',
     )
 
 def enable_output(
@@ -5313,6 +5515,7 @@ def enable_output(
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='value' if context.result_names is None else None,
     )
 
 def implicit_conversion(
@@ -5331,6 +5534,7 @@ def implicit_conversion(
         orders=[('data_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='value' if context.result_names is None else None,
     )
 
 def reroute(
@@ -5348,6 +5552,7 @@ def reroute(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='output',
     )
 
 def blackbody(
@@ -5365,6 +5570,7 @@ def blackbody(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='color',
     )
 
 def clamp(
@@ -5385,6 +5591,7 @@ def clamp(
         orders=[('clamp_type',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name='result',
     )
 
 def combine_xyz(
@@ -5404,6 +5611,7 @@ def combine_xyz(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='vector',
     )
 
 def float_curve(
@@ -5422,6 +5630,7 @@ def float_curve(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='value',
     )
 
 def gamma(
@@ -5440,6 +5649,7 @@ def gamma(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='color',
     )
 
 def map_range(
@@ -5471,6 +5681,7 @@ def map_range(
         orders=[('clamp', 'data_type', 'interpolation_type')],
         constant_rna={},
         constant_outputs={},
+        scalar_name={('FLOAT',): 'result', ('FLOAT_VECTOR',): 'vector'}[(data_type,)] if context.result_names is None else None,
     )
 
 def math(
@@ -5492,6 +5703,7 @@ def math(
         orders=[('operation', 'use_clamp')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='value',
     )
 
 def mix(
@@ -5521,6 +5733,7 @@ def mix(
         orders=[('blend_type', 'clamp_factor', 'clamp_result', 'data_type', 'factor_mode')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='result' if context.result_names is None else None,
     )
 
 def mix_legacy(
@@ -5543,6 +5756,7 @@ def mix_legacy(
         orders=[('blend_type', 'use_alpha', 'use_clamp')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='color',
     )
 
 def rgb_curves(
@@ -5561,6 +5775,7 @@ def rgb_curves(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='color',
     )
 
 def separate_xyz(
@@ -5741,6 +5956,7 @@ def voronoi_texture(
         orders=[('distance', 'feature', 'normalize', 'voronoi_dimensions')],
         constant_rna={},
         constant_outputs={},
+        scalar_name={('DISTANCE_TO_EDGE', '1D'): 'distance', ('DISTANCE_TO_EDGE', '2D'): 'distance', ('DISTANCE_TO_EDGE', '3D'): 'distance', ('DISTANCE_TO_EDGE', '4D'): 'distance', ('N_SPHERE_RADIUS', '1D'): 'radius', ('N_SPHERE_RADIUS', '2D'): 'radius', ('N_SPHERE_RADIUS', '3D'): 'radius', ('N_SPHERE_RADIUS', '4D'): 'radius'}[(feature, voronoi_dimensions)] if context.result_names is None else None,
     )
 
 def wave_texture(
@@ -5821,6 +6037,7 @@ def value(
         orders=[()],
         constant_rna={},
         constant_outputs={'Value': value},
+        scalar_name='value',
     )
 
 def vector_curves(
@@ -5839,6 +6056,7 @@ def vector_curves(
         orders=[()],
         constant_rna={},
         constant_outputs={},
+        scalar_name='vector',
     )
 
 def vector_math(
@@ -5860,6 +6078,7 @@ def vector_math(
         orders=[('operation',)],
         constant_rna={},
         constant_outputs={},
+        scalar_name={('ADD',): 'vector', ('SUBTRACT',): 'vector', ('MULTIPLY',): 'vector', ('DIVIDE',): 'vector', ('MULTIPLY_ADD',): 'vector', ('CROSS_PRODUCT',): 'vector', ('PROJECT',): 'vector', ('REFLECT',): 'vector', ('REFRACT',): 'vector', ('FACEFORWARD',): 'vector', ('DOT_PRODUCT',): 'value', ('DISTANCE',): 'value', ('LENGTH',): 'value', ('SCALE',): 'vector', ('NORMALIZE',): 'vector', ('ABSOLUTE',): 'vector', ('POWER',): 'vector', ('SIGN',): 'vector', ('MINIMUM',): 'vector', ('MAXIMUM',): 'vector', ('ROUND',): 'vector', ('FLOOR',): 'vector', ('CEIL',): 'vector', ('FRACTION',): 'vector', ('MODULO',): 'vector', ('WRAP',): 'vector', ('SNAP',): 'vector', ('SINE',): 'vector', ('COSINE',): 'vector', ('TANGENT',): 'vector'}[(operation,)] if context.result_names is None else None,
     )
 
 def vector_rotate(
@@ -5883,4 +6102,5 @@ def vector_rotate(
         orders=[('invert', 'rotation_type')],
         constant_rna={},
         constant_outputs={},
+        scalar_name='vector',
     )

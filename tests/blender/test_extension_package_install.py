@@ -157,7 +157,7 @@ def test_included_nodes_package_exposes_generated_blender_wrappers():
                for record in packages.system_package_records())
     source = ('from packages import nodes\n\n'
               'def entry():\n'
-              '    scalar = nodes.value(value=2.5).value\n'
+              '    scalar = nodes.value(value=2.5)\n'
               '    return scalar\n')
     group = compiler.create_expression_group(source, name='NF_BundledNodesSmoke')
     try:

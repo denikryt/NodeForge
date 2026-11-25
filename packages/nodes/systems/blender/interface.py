@@ -11,7 +11,7 @@ def align_euler_to_vector(
     vector: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     axis: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'X',
     pivot_axis: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'AUTO',
-) -> {'rotation': Vector}:
+) -> Vector:
     """Build a FunctionNodeAlignEulerToVector; omitted inputs keep Blender defaults."""
     ...
 
@@ -22,7 +22,7 @@ def align_rotation_to_vector(
     vector: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     axis: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Z',
     pivot_axis: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'AUTO',
-) -> {'rotation': Rotation}:
+) -> Rotation:
     """Build a FunctionNodeAlignRotationToVector; omitted inputs keep Blender defaults."""
     ...
 
@@ -32,7 +32,7 @@ def axes_to_rotation(
     secondary_axis_vector: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     primary_axis: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Z',
     secondary_axis: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'X',
-) -> {'rotation': Rotation}:
+) -> Rotation:
     """Build a FunctionNodeAxesToRotation; omitted inputs keep Blender defaults."""
     ...
 
@@ -40,7 +40,7 @@ def axis_angle_to_rotation(
     *,
     axis: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     angle: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'rotation': Rotation}:
+) -> Rotation:
     """Build a FunctionNodeAxisAngleToRotation; omitted inputs keep Blender defaults."""
     ...
 
@@ -50,7 +50,7 @@ def bit_math(
     b: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     shift: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     operation: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'AND',
-) -> {'value': Int}:
+) -> Int:
     """Build a FunctionNodeBitMath; omitted inputs keep Blender defaults."""
     ...
 
@@ -59,7 +59,7 @@ def boolean_math(
     boolean: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     boolean_001: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     operation: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'AND',
-) -> {'boolean': Bool}:
+) -> Bool:
     """Build a FunctionNodeBooleanMath; omitted inputs keep Blender defaults."""
     ...
 
@@ -70,7 +70,7 @@ def combine_color(
     blue: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     alpha: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'RGB',
-) -> {'color': Color}:
+) -> Color:
     """Build a FunctionNodeCombineColor; omitted inputs keep Blender defaults."""
     ...
 
@@ -84,14 +84,14 @@ def compare(
     data_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'FLOAT',
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'ELEMENT',
     operation: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'GREATER_THAN',
-) -> {'result': Bool}:
+) -> Bool:
     """Build a FunctionNodeCompare; omitted inputs keep Blender defaults."""
     ...
 
 def euler_to_rotation(
     *,
     euler: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'rotation': Rotation}:
+) -> Rotation:
     """Build a FunctionNodeEulerToRotation; omitted inputs keep Blender defaults."""
     ...
 
@@ -108,14 +108,14 @@ def float_to_integer(
     *,
     float: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     rounding_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'ROUND',
-) -> {'integer': Int}:
+) -> Int:
     """Build a FunctionNodeFloatToInt; omitted inputs keep Blender defaults."""
     ...
 
 def format_string(
     *,
     format: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'string': String}:
+) -> String:
     """Build a FunctionNodeFormatString; omitted inputs keep Blender defaults."""
     ...
 
@@ -124,7 +124,7 @@ def hash_value(
     value: Annotated[Color | Float | Int | Rotation | String | Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     seed: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     data_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'INT',
-) -> {'hash': Int}:
+) -> Int:
     """Build a FunctionNodeHashValue; omitted inputs keep Blender defaults."""
     ...
 
@@ -132,28 +132,28 @@ def boolean(
     *,
     boolean_2: Annotated[Bool, EvaluationMode.COMPILE_TIME_ONLY] = None,
     boolean: Annotated[Bool, EvaluationMode.COMPILE_TIME_ONLY] = False,
-) -> {'boolean': Bool}:
+) -> Bool:
     """Build a FunctionNodeInputBool; omitted inputs keep Blender defaults."""
     ...
 
 def color(
     *,
     value: Annotated[Color, EvaluationMode.COMPILE_TIME_ONLY] = None,
-) -> {'color': Color}:
+) -> Color:
     """Build a FunctionNodeInputColor; omitted inputs keep Blender defaults."""
     ...
 
 def integer(
     *,
     integer: Annotated[Int, EvaluationMode.COMPILE_TIME_ONLY] = None,
-) -> {'integer': Int}:
+) -> Int:
     """Build a FunctionNodeInputInt; omitted inputs keep Blender defaults."""
     ...
 
 def rotation(
     *,
     rotation: Annotated[Rotation, EvaluationMode.COMPILE_TIME_ONLY] = None,
-) -> {'rotation': Rotation}:
+) -> Rotation:
     """Build a FunctionNodeInputRotation; omitted inputs keep Blender defaults."""
     ...
 
@@ -165,14 +165,14 @@ def special_characters(
 def string(
     *,
     string: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = None,
-) -> {'string': String}:
+) -> String:
     """Build a FunctionNodeInputString; omitted inputs keep Blender defaults."""
     ...
 
 def vector(
     *,
     vector: Annotated[Vector, EvaluationMode.COMPILE_TIME_ONLY] = None,
-) -> {'vector': Vector}:
+) -> Vector:
     """Build a FunctionNodeInputVector; omitted inputs keep Blender defaults."""
     ...
 
@@ -182,14 +182,14 @@ def integer_math(
     value_001: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     value_002: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     operation: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'ADD',
-) -> {'value': Int}:
+) -> Int:
     """Build a FunctionNodeIntegerMath; omitted inputs keep Blender defaults."""
     ...
 
 def invert_rotation(
     *,
     rotation: Annotated[Rotation, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'rotation': Rotation}:
+) -> Rotation:
     """Build a FunctionNodeInvertRotation; omitted inputs keep Blender defaults."""
     ...
 
@@ -198,7 +198,7 @@ def match_string(
     string: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     key: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     operation: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Starts With',
-) -> {'result': Bool}:
+) -> Bool:
     """Build a FunctionNodeMatchString; omitted inputs keep Blender defaults."""
     ...
 
@@ -208,7 +208,7 @@ def quaternion_to_rotation(
     x: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     y: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     z: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'rotation': Rotation}:
+) -> Rotation:
     """Build a FunctionNodeQuaternionToRotation; omitted inputs keep Blender defaults."""
     ...
 
@@ -229,14 +229,14 @@ def replace_string(
     string: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     find: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     replace: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'string': String}:
+) -> String:
     """Build a FunctionNodeReplaceString; omitted inputs keep Blender defaults."""
     ...
 
 def reverse_string(
     *,
     string: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'string': String}:
+) -> String:
     """Build a FunctionNodeReverseString; omitted inputs keep Blender defaults."""
     ...
 
@@ -248,7 +248,7 @@ def rotate_euler(
     rotate_by: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     rotation_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'EULER',
     space: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'OBJECT',
-) -> {'rotation': Vector}:
+) -> Vector:
     """Build a FunctionNodeRotateEuler; omitted inputs keep Blender defaults."""
     ...
 
@@ -257,7 +257,7 @@ def rotate_rotation(
     rotation: Annotated[Rotation, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     rotate_by: Annotated[Rotation, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     rotation_space: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'GLOBAL',
-) -> {'rotation': Rotation}:
+) -> Rotation:
     """Build a FunctionNodeRotateRotation; omitted inputs keep Blender defaults."""
     ...
 
@@ -265,7 +265,7 @@ def rotate_vector(
     *,
     vector: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     rotation: Annotated[Rotation, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'vector': Vector}:
+) -> Vector:
     """Build a FunctionNodeRotateVector; omitted inputs keep Blender defaults."""
     ...
 
@@ -279,7 +279,7 @@ def rotation_to_axis_angle(
 def rotation_to_euler(
     *,
     rotation: Annotated[Rotation, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'euler': Vector}:
+) -> Vector:
     """Build a FunctionNodeRotationToEuler; omitted inputs keep Blender defaults."""
     ...
 
@@ -302,7 +302,7 @@ def set_string_case(
     *,
     string: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     case: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Uppercase',
-) -> {'string': String}:
+) -> String:
     """Build a FunctionNodeSetStringCase; omitted inputs keep Blender defaults."""
     ...
 
@@ -311,7 +311,7 @@ def slice_string(
     string: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     position: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     length: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'string': String}:
+) -> String:
     """Build a FunctionNodeSliceString; omitted inputs keep Blender defaults."""
     ...
 
@@ -319,14 +319,14 @@ def split_string(
     *,
     string: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     separator: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'list': String}:
+) -> String:
     """Build a FunctionNodeSplitString; omitted inputs keep Blender defaults."""
     ...
 
 def string_length(
     *,
     string: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'length': Int}:
+) -> Int:
     """Build a FunctionNodeStringLength; omitted inputs keep Blender defaults."""
     ...
 
@@ -346,7 +346,7 @@ def trim_string(
     whitespace: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     start: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     end: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'string': String}:
+) -> String:
     """Build a FunctionNodeTrimString; omitted inputs keep Blender defaults."""
     ...
 
@@ -357,7 +357,7 @@ def value_to_string(
     base: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     padding: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     data_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'FLOAT',
-) -> {'string': String}:
+) -> String:
     """Build a FunctionNodeValueToString; omitted inputs keep Blender defaults."""
     ...
 
@@ -423,7 +423,7 @@ def cluster_by_connected(
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     position: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     distance: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'cluster_id': Int}:
+) -> Int:
     """Build a GeometryNodeClusterByConnected; omitted inputs keep Blender defaults."""
     ...
 
@@ -433,14 +433,14 @@ def cluster_by_distance(
     group_id: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     position: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     distance: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'cluster_id': Int}:
+) -> Int:
     """Build a GeometryNodeClusterByDistance; omitted inputs keep Blender defaults."""
     ...
 
 def convex_hull(
     *,
     geometry: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'convex_hull': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeConvexHull; omitted inputs keep Blender defaults."""
     ...
 
@@ -481,7 +481,7 @@ def cube_grid_topology(
     min_x: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     min_y: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     min_z: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'topology': Bool}:
+) -> Bool:
     """Build a GeometryNodeCubeGridTopology; omitted inputs keep Blender defaults."""
     ...
 
@@ -506,7 +506,7 @@ def endpoint_selection(
     *,
     start_size: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     end_size: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'selection': Bool}:
+) -> Bool:
     """Build a GeometryNodeCurveEndpointSelection; omitted inputs keep Blender defaults."""
     ...
 
@@ -514,14 +514,14 @@ def handle_type_selection(
     *,
     handle_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'AUTO',
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'LEFT,RIGHT',
-) -> {'selection': Bool}:
+) -> Bool:
     """Build a GeometryNodeCurveHandleTypeSelection; omitted inputs keep Blender defaults."""
     ...
 
 def curve_length(
     *,
     curve: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'length': Float}:
+) -> Float:
     """Build a GeometryNodeCurveLength; omitted inputs keep Blender defaults."""
     ...
 
@@ -540,7 +540,7 @@ def b_zier_segment(
     end_handle: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     end: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'POSITION',
-) -> {'curve': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeCurvePrimitiveBezierSegment; omitted inputs keep Blender defaults."""
     ...
 
@@ -563,7 +563,7 @@ def curve_line(
     direction: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     length: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'POINTS',
-) -> {'curve': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeCurvePrimitiveLine; omitted inputs keep Blender defaults."""
     ...
 
@@ -581,7 +581,7 @@ def quadrilateral(
     point_3: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     point_4: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'RECTANGLE',
-) -> {'curve': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeCurvePrimitiveQuadrilateral; omitted inputs keep Blender defaults."""
     ...
 
@@ -591,7 +591,7 @@ def quadratic_b_zier(
     start: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     middle: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     end: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'curve': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeCurveQuadraticBezier; omitted inputs keep Blender defaults."""
     ...
 
@@ -601,7 +601,7 @@ def set_handle_type(
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     handle_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'AUTO',
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'LEFT,RIGHT',
-) -> {'curve': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeCurveSetHandles; omitted inputs keep Blender defaults."""
     ...
 
@@ -613,7 +613,7 @@ def spiral(
     end_radius: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     height: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     reverse: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'curve': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeCurveSpiral; omitted inputs keep Blender defaults."""
     ...
 
@@ -622,7 +622,7 @@ def set_spline_type(
     curve: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     spline_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'POLY',
-) -> {'curve': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeCurveSplineType; omitted inputs keep Blender defaults."""
     ...
 
@@ -642,7 +642,7 @@ def curve_to_mesh(
     profile_curve: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     scale: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     fill_caps: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'mesh': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeCurveToMesh; omitted inputs keep Blender defaults."""
     ...
 
@@ -661,14 +661,14 @@ def curves_to_grease_pencil(
     curves: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     instances_as_layers: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'grease_pencil': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeCurvesToGreasePencil; omitted inputs keep Blender defaults."""
     ...
 
 def deform_curves_on_surface(
     *,
     curves: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'curves': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeDeformCurvesOnSurface; omitted inputs keep Blender defaults."""
     ...
 
@@ -678,7 +678,7 @@ def delete_geometry(
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     domain: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'POINT',
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'ALL',
-) -> {'geometry': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeDeleteGeometry; omitted inputs keep Blender defaults."""
     ...
 
@@ -690,7 +690,7 @@ def distribute_points_in_grid(
     spacing: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     threshold: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'DENSITY_RANDOM',
-) -> {'points': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeDistributePointsInGrid; omitted inputs keep Blender defaults."""
     ...
 
@@ -702,7 +702,7 @@ def distribute_points_in_volume(
     spacing: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     threshold: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Random',
-) -> {'points': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeDistributePointsInVolume; omitted inputs keep Blender defaults."""
     ...
 
@@ -725,7 +725,7 @@ def dual_mesh(
     *,
     mesh: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     keep_boundaries: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'dual_mesh': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeDualMesh; omitted inputs keep Blender defaults."""
     ...
 
@@ -744,7 +744,7 @@ def edge_paths_to_curves(
     mesh: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     start_vertices: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     next_vertex_index: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'curves': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeEdgePathsToCurves; omitted inputs keep Blender defaults."""
     ...
 
@@ -752,7 +752,7 @@ def edge_paths_to_selection(
     *,
     start_vertices: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     next_vertex_index: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'selection': Bool}:
+) -> Bool:
     """Build a GeometryNodeEdgePathsToSelection; omitted inputs keep Blender defaults."""
     ...
 
@@ -775,7 +775,7 @@ def edges_of_vertex(
 def edges_to_face_groups(
     *,
     boundary_edges: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'face_group_id': Int}:
+) -> Int:
     """Build a GeometryNodeEdgesToFaceGroups; omitted inputs keep Blender defaults."""
     ...
 
@@ -853,7 +853,7 @@ def fill_curve(
     group_id: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     fill_rule: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Even-Odd',
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Triangles',
-) -> {'mesh': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeFillCurve; omitted inputs keep Blender defaults."""
     ...
 
@@ -864,7 +864,7 @@ def fillet_curve(
     limit_radius: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     count: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Bézier',
-) -> {'curve': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeFilletCurve; omitted inputs keep Blender defaults."""
     ...
 
@@ -881,14 +881,14 @@ def flip_faces(
     *,
     mesh: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'mesh': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeFlipFaces; omitted inputs keep Blender defaults."""
     ...
 
 def geometry_to_instance(
     *,
     geometry: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'instances': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeGeometryToInstance; omitted inputs keep Blender defaults."""
     ...
 
@@ -899,7 +899,7 @@ def get_attribute_names(
     filter_domain: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     data_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Float',
     domain: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Point',
-) -> {'names': String}:
+) -> String:
     """Build a GeometryNodeGetAttributeNames; omitted inputs keep Blender defaults."""
     ...
 
@@ -930,7 +930,7 @@ def dial_gizmo(
     screen_space: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     radius: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     color_id: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'PRIMARY',
-) -> {'transform': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeGizmoDial; omitted inputs keep Blender defaults."""
     ...
 
@@ -941,7 +941,7 @@ def linear_gizmo(
     direction: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     color_id: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'PRIMARY',
     draw_style: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'ARROW',
-) -> {'transform': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeGizmoLinear; omitted inputs keep Blender defaults."""
     ...
 
@@ -950,7 +950,7 @@ def grease_pencil_to_curves(
     grease_pencil: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     layers_as_instances: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'curves': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeGreasePencilToCurves; omitted inputs keep Blender defaults."""
     ...
 
@@ -983,7 +983,7 @@ def clip_grid(
 def grid_curl(
     *,
     grid: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'curl': Vector}:
+) -> Vector:
     """Build a GeometryNodeGridCurl; omitted inputs keep Blender defaults."""
     ...
 
@@ -1001,21 +1001,21 @@ def grid_dilate_erode(
 def grid_divergence(
     *,
     grid: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'divergence': Float}:
+) -> Float:
     """Build a GeometryNodeGridDivergence; omitted inputs keep Blender defaults."""
     ...
 
 def grid_gradient(
     *,
     grid: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'gradient': Vector}:
+) -> Vector:
     """Build a GeometryNodeGridGradient; omitted inputs keep Blender defaults."""
     ...
 
 def grid_laplacian(
     *,
     grid: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'laplacian': Float}:
+) -> Float:
     """Build a GeometryNodeGridLaplacian; omitted inputs keep Blender defaults."""
     ...
 
@@ -1054,7 +1054,7 @@ def grid_to_mesh(
     grid: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     threshold: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     adaptivity: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'mesh': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeGridToMesh; omitted inputs keep Blender defaults."""
     ...
 
@@ -1078,42 +1078,42 @@ def import_csv(
     *,
     path: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     delimiter: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'point_cloud': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeImportCSV; omitted inputs keep Blender defaults."""
     ...
 
 def import_obj(
     *,
     path: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'instances': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeImportOBJ; omitted inputs keep Blender defaults."""
     ...
 
 def import_ply(
     *,
     path: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'mesh': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeImportPLY; omitted inputs keep Blender defaults."""
     ...
 
 def import_stl(
     *,
     path: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'mesh': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeImportSTL; omitted inputs keep Blender defaults."""
     ...
 
 def import_text(
     *,
     path: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'string': String}:
+) -> String:
     """Build a GeometryNodeImportText; omitted inputs keep Blender defaults."""
     ...
 
 def import_vdb(
     *,
     path: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'volume': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeImportVDB; omitted inputs keep Blender defaults."""
     ...
 
@@ -1135,7 +1135,7 @@ def index_switch(
     ...
 
 def active_camera(
-) -> {'active_camera': Object}:
+) -> Object:
     """Build a GeometryNodeInputActiveCamera; omitted inputs keep Blender defaults."""
     ...
 
@@ -1147,22 +1147,22 @@ def curve_handle_positions(
     ...
 
 def curve_tilt(
-) -> {'tilt': Float}:
+) -> Float:
     """Build a GeometryNodeInputCurveTilt; omitted inputs keep Blender defaults."""
     ...
 
 def is_edge_smooth(
-) -> {'smooth': Bool}:
+) -> Bool:
     """Build a GeometryNodeInputEdgeSmooth; omitted inputs keep Blender defaults."""
     ...
 
 def id(
-) -> {'id': Int}:
+) -> Int:
     """Build a GeometryNodeInputID; omitted inputs keep Blender defaults."""
     ...
 
 def index(
-) -> {'index': Int}:
+) -> Int:
     """Build a GeometryNodeInputIndex; omitted inputs keep Blender defaults."""
     ...
 
@@ -1174,27 +1174,27 @@ def instance_bounds(
     ...
 
 def instance_reference(
-) -> {'reference_index': Int}:
+) -> Int:
     """Build a GeometryNodeInputInstanceReference; omitted inputs keep Blender defaults."""
     ...
 
 def instance_rotation(
-) -> {'rotation': Rotation}:
+) -> Rotation:
     """Build a GeometryNodeInputInstanceRotation; omitted inputs keep Blender defaults."""
     ...
 
 def instance_scale(
-) -> {'scale': Vector}:
+) -> Vector:
     """Build a GeometryNodeInputInstanceScale; omitted inputs keep Blender defaults."""
     ...
 
 def material(
-) -> {'material': Material}:
+) -> Material:
     """Build a GeometryNodeInputMaterial; omitted inputs keep Blender defaults."""
     ...
 
 def material_index(
-) -> {'material_index': Int}:
+) -> Int:
     """Build a GeometryNodeInputMaterialIndex; omitted inputs keep Blender defaults."""
     ...
 
@@ -1204,7 +1204,7 @@ def edge_angle(
     ...
 
 def edge_neighbors(
-) -> {'face_count': Int}:
+) -> Int:
     """Build a GeometryNodeInputMeshEdgeNeighbors; omitted inputs keep Blender defaults."""
     ...
 
@@ -1214,14 +1214,14 @@ def edge_vertices(
     ...
 
 def face_area(
-) -> {'area': Float}:
+) -> Float:
     """Build a GeometryNodeInputMeshFaceArea; omitted inputs keep Blender defaults."""
     ...
 
 def is_face_planar(
     *,
     threshold: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'planar': Bool}:
+) -> Bool:
     """Build a GeometryNodeInputMeshFaceIsPlanar; omitted inputs keep Blender defaults."""
     ...
 
@@ -1251,7 +1251,7 @@ def named_attribute(
 def named_layer_selection(
     *,
     name: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'selection': Bool}:
+) -> Bool:
     """Build a GeometryNodeInputNamedLayerSelection; omitted inputs keep Blender defaults."""
     ...
 
@@ -1263,17 +1263,17 @@ def normal(
     ...
 
 def object(
-) -> {'object': Object}:
+) -> Object:
     """Build a GeometryNodeInputObject; omitted inputs keep Blender defaults."""
     ...
 
 def position(
-) -> {'position': Vector}:
+) -> Vector:
     """Build a GeometryNodeInputPosition; omitted inputs keep Blender defaults."""
     ...
 
 def radius(
-) -> {'radius': Float}:
+) -> Float:
     """Build a GeometryNodeInputRadius; omitted inputs keep Blender defaults."""
     ...
 
@@ -1283,7 +1283,7 @@ def scene_time(
     ...
 
 def is_face_smooth(
-) -> {'smooth': Bool}:
+) -> Bool:
     """Build a GeometryNodeInputShadeSmooth; omitted inputs keep Blender defaults."""
     ...
 
@@ -1296,17 +1296,17 @@ def shortest_edge_paths(
     ...
 
 def is_spline_cyclic(
-) -> {'cyclic': Bool}:
+) -> Bool:
     """Build a GeometryNodeInputSplineCyclic; omitted inputs keep Blender defaults."""
     ...
 
 def spline_resolution(
-) -> {'resolution': Int}:
+) -> Int:
     """Build a GeometryNodeInputSplineResolution; omitted inputs keep Blender defaults."""
     ...
 
 def curve_tangent(
-) -> {'tangent': Vector}:
+) -> Vector:
     """Build a GeometryNodeInputTangent; omitted inputs keep Blender defaults."""
     ...
 
@@ -1324,7 +1324,7 @@ def instance_on_points(
     instance_index: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     rotation: Annotated[Rotation, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     scale: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'instances': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeInstanceOnPoints; omitted inputs keep Blender defaults."""
     ...
 
@@ -1334,7 +1334,7 @@ def instances_to_points(
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     position: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     radius: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'points': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeInstancesToPoints; omitted inputs keep Blender defaults."""
     ...
 
@@ -1352,14 +1352,14 @@ def interpolate_curves(
     ...
 
 def is_viewport(
-) -> {'is_viewport': Bool}:
+) -> Bool:
     """Build a GeometryNodeIsViewport; omitted inputs keep Blender defaults."""
     ...
 
 def join_geometry(
     *,
     geometry: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'geometry': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeJoinGeometry; omitted inputs keep Blender defaults."""
     ...
 
@@ -1376,7 +1376,7 @@ def get_list_item(
 def material_selection(
     *,
     material: Annotated[Material, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'selection': Bool}:
+) -> Bool:
     """Build a GeometryNodeMaterialSelection; omitted inputs keep Blender defaults."""
     ...
 
@@ -1395,7 +1395,7 @@ def merge_by_distance(
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     distance: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'All',
-) -> {'geometry': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeMergeByDistance; omitted inputs keep Blender defaults."""
     ...
 
@@ -1405,7 +1405,7 @@ def merge_layers(
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     group_id: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'MERGE_BY_NAME',
-) -> {'grease_pencil': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeMergeLayers; omitted inputs keep Blender defaults."""
     ...
 
@@ -1414,7 +1414,7 @@ def merge_points(
     geometry: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     merge_id: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'geometry': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeMergePoints; omitted inputs keep Blender defaults."""
     ...
 
@@ -1453,7 +1453,7 @@ def mesh_circle(
     vertices: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     radius: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     fill_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'NONE',
-) -> {'mesh': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeMeshCircle; omitted inputs keep Blender defaults."""
     ...
 
@@ -1495,7 +1495,7 @@ def cylinder(
 def face_group_boundaries(
     *,
     face_set: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'boundary_edges': Bool}:
+) -> Bool:
     """Build a GeometryNodeMeshFaceSetBoundaries; omitted inputs keep Blender defaults."""
     ...
 
@@ -1525,7 +1525,7 @@ def mesh_line(
     resolution: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     count_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'TOTAL',
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'OFFSET',
-) -> {'mesh': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeMeshLine; omitted inputs keep Blender defaults."""
     ...
 
@@ -1534,7 +1534,7 @@ def mesh_to_curve(
     mesh: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'EDGES',
-) -> {'curve': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeMeshToCurve; omitted inputs keep Blender defaults."""
     ...
 
@@ -1544,7 +1544,7 @@ def mesh_to_density_grid(
     density: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     voxel_size: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     gradient_width: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'density_grid': Float}:
+) -> Float:
     """Build a GeometryNodeMeshToDensityGrid; omitted inputs keep Blender defaults."""
     ...
 
@@ -1555,7 +1555,7 @@ def mesh_to_points(
     position: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     radius: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'VERTICES',
-) -> {'points': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeMeshToPoints; omitted inputs keep Blender defaults."""
     ...
 
@@ -1564,7 +1564,7 @@ def mesh_to_sdf_grid(
     mesh: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     voxel_size: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     band_width: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'sdf_grid': Float}:
+) -> Float:
     """Build a GeometryNodeMeshToSDFGrid; omitted inputs keep Blender defaults."""
     ...
 
@@ -1576,7 +1576,7 @@ def mesh_to_volume(
     interior_band_width: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     voxel_size: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     resolution_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Amount',
-) -> {'volume': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeMeshToVolume; omitted inputs keep Blender defaults."""
     ...
 
@@ -1593,7 +1593,7 @@ def offset_corner_in_face(
     *,
     corner_index: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     offset: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'corner_index': Int}:
+) -> Int:
     """Build a GeometryNodeOffsetCornerInFace; omitted inputs keep Blender defaults."""
     ...
 
@@ -1610,7 +1610,7 @@ def points(
     count: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     position: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     radius: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'points': Geometry}:
+) -> Geometry:
     """Build a GeometryNodePoints; omitted inputs keep Blender defaults."""
     ...
 
@@ -1628,7 +1628,7 @@ def points_to_curves(
     points: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     curve_group_id: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     weight: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'curves': Geometry}:
+) -> Geometry:
     """Build a GeometryNodePointsToCurves; omitted inputs keep Blender defaults."""
     ...
 
@@ -1637,7 +1637,7 @@ def points_to_sdf_grid(
     points: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     radius: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     voxel_size: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'sdf_grid': Float}:
+) -> Float:
     """Build a GeometryNodePointsToSDFGrid; omitted inputs keep Blender defaults."""
     ...
 
@@ -1645,7 +1645,7 @@ def points_to_vertices(
     *,
     points: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'mesh': Geometry}:
+) -> Geometry:
     """Build a GeometryNodePointsToVertices; omitted inputs keep Blender defaults."""
     ...
 
@@ -1657,7 +1657,7 @@ def points_to_volume(
     radius: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     voxel_size: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     resolution_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Amount',
-) -> {'volume': Geometry}:
+) -> Geometry:
     """Build a GeometryNodePointsToVolume; omitted inputs keep Blender defaults."""
     ...
 
@@ -1692,7 +1692,7 @@ def realize_instances(
     realize_all: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     depth: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     realize_to_point_domain: Annotated[Bool, EvaluationMode.COMPILE_TIME_ONLY] = False,
-) -> {'geometry': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeRealizeInstances; omitted inputs keep Blender defaults."""
     ...
 
@@ -1701,7 +1701,7 @@ def remove_named_attribute(
     geometry: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     name: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     pattern_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Exact',
-) -> {'geometry': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeRemoveAttribute; omitted inputs keep Blender defaults."""
     ...
 
@@ -1712,7 +1712,7 @@ def rename_attribute(
     new: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     overwrite: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Single',
-) -> {'geometry': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeRenameAttribute; omitted inputs keep Blender defaults."""
     ...
 
@@ -1721,7 +1721,7 @@ def replace_material(
     geometry: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     old: Annotated[Material, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     new: Annotated[Material, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'geometry': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeReplaceMaterial; omitted inputs keep Blender defaults."""
     ...
 
@@ -1733,7 +1733,7 @@ def resample_curve(
     length: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     keep_last_segment: Annotated[Bool, EvaluationMode.COMPILE_TIME_ONLY] = True,
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Count',
-) -> {'curve': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeResampleCurve; omitted inputs keep Blender defaults."""
     ...
 
@@ -1741,7 +1741,7 @@ def reverse_curve(
     *,
     curve: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'curve': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeReverseCurve; omitted inputs keep Blender defaults."""
     ...
 
@@ -1752,7 +1752,7 @@ def rotate_instances(
     rotation: Annotated[Rotation, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     pivot_point: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     local_space: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'instances': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeRotateInstances; omitted inputs keep Blender defaults."""
     ...
 
@@ -1761,7 +1761,7 @@ def sdf_grid_boolean(
     grid_2: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     grid_1: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     operation: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'DIFFERENCE',
-) -> {'grid': Float}:
+) -> Float:
     """Build a GeometryNodeSDFGridBoolean; omitted inputs keep Blender defaults."""
     ...
 
@@ -1769,7 +1769,7 @@ def sdf_grid_fillet(
     *,
     grid: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     iterations: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'grid': Float}:
+) -> Float:
     """Build a GeometryNodeSDFGridFillet; omitted inputs keep Blender defaults."""
     ...
 
@@ -1777,7 +1777,7 @@ def sdf_grid_laplacian(
     *,
     grid: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     iterations: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'grid': Float}:
+) -> Float:
     """Build a GeometryNodeSDFGridLaplacian; omitted inputs keep Blender defaults."""
     ...
 
@@ -1786,7 +1786,7 @@ def sdf_grid_mean(
     grid: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     width: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     iterations: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'grid': Float}:
+) -> Float:
     """Build a GeometryNodeSDFGridMean; omitted inputs keep Blender defaults."""
     ...
 
@@ -1794,7 +1794,7 @@ def sdf_grid_mean_curvature(
     *,
     grid: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     iterations: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'grid': Float}:
+) -> Float:
     """Build a GeometryNodeSDFGridMeanCurvature; omitted inputs keep Blender defaults."""
     ...
 
@@ -1803,7 +1803,7 @@ def sdf_grid_median(
     grid: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     width: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     iterations: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'grid': Float}:
+) -> Float:
     """Build a GeometryNodeSDFGridMedian; omitted inputs keep Blender defaults."""
     ...
 
@@ -1811,7 +1811,7 @@ def sdf_grid_offset(
     *,
     grid: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     distance: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'grid': Float}:
+) -> Float:
     """Build a GeometryNodeSDFGridOffset; omitted inputs keep Blender defaults."""
     ...
 
@@ -1867,7 +1867,7 @@ def sample_nearest(
     geometry: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     sample_position: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     domain: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'POINT',
-) -> {'index': Int}:
+) -> Int:
     """Build a GeometryNodeSampleNearest; omitted inputs keep Blender defaults."""
     ...
 
@@ -1903,7 +1903,7 @@ def scale_elements(
     axis: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     domain: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'FACE',
     scale_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Uniform',
-) -> {'geometry': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeScaleElements; omitted inputs keep Blender defaults."""
     ...
 
@@ -1914,12 +1914,12 @@ def scale_instances(
     scale: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     center: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     local_space: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'instances': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeScaleInstances; omitted inputs keep Blender defaults."""
     ...
 
 def self_object(
-) -> {'self_object': Object}:
+) -> Object:
     """Build a GeometryNodeSelfObject; omitted inputs keep Blender defaults."""
     ...
 
@@ -1946,7 +1946,7 @@ def set_handle_positions(
     position: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     offset: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'LEFT',
-) -> {'curve': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSetCurveHandlePositions; omitted inputs keep Blender defaults."""
     ...
 
@@ -1956,7 +1956,7 @@ def set_curve_normal(
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     normal: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Minimum Twist',
-) -> {'curve': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSetCurveNormal; omitted inputs keep Blender defaults."""
     ...
 
@@ -1965,7 +1965,7 @@ def set_curve_radius(
     curve: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     radius: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'curve': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSetCurveRadius; omitted inputs keep Blender defaults."""
     ...
 
@@ -1974,7 +1974,7 @@ def set_curve_tilt(
     curve: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     tilt: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'curve': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSetCurveTilt; omitted inputs keep Blender defaults."""
     ...
 
@@ -1982,7 +1982,7 @@ def set_geometry_name(
     *,
     geometry: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     name: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'geometry': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSetGeometryName; omitted inputs keep Blender defaults."""
     ...
 
@@ -1993,7 +1993,7 @@ def set_grease_pencil_color(
     color: Annotated[Color, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     opacity: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'STROKE',
-) -> {'grease_pencil': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSetGreasePencilColor; omitted inputs keep Blender defaults."""
     ...
 
@@ -2001,7 +2001,7 @@ def set_grease_pencil_depth(
     *,
     grease_pencil: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     depth_order: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = '2D',
-) -> {'grease_pencil': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSetGreasePencilDepth; omitted inputs keep Blender defaults."""
     ...
 
@@ -2010,7 +2010,7 @@ def set_grease_pencil_softness(
     grease_pencil: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     softness: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'grease_pencil': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSetGreasePencilSoftness; omitted inputs keep Blender defaults."""
     ...
 
@@ -2029,7 +2029,7 @@ def set_id(
     geometry: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     id: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'geometry': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSetID; omitted inputs keep Blender defaults."""
     ...
 
@@ -2038,7 +2038,7 @@ def set_material(
     geometry: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     material: Annotated[Material, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'geometry': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSetMaterial; omitted inputs keep Blender defaults."""
     ...
 
@@ -2047,7 +2047,7 @@ def set_material_index(
     geometry: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     material_index: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'geometry': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSetMaterialIndex; omitted inputs keep Blender defaults."""
     ...
 
@@ -2060,7 +2060,7 @@ def set_mesh_normal(
     custom_normal: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     domain: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'POINT',
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'SHARPNESS',
-) -> {'mesh': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSetMeshNormal; omitted inputs keep Blender defaults."""
     ...
 
@@ -2069,7 +2069,7 @@ def set_nurbs_order(
     curves: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     order: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'curves': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSetNURBSOrder; omitted inputs keep Blender defaults."""
     ...
 
@@ -2078,7 +2078,7 @@ def set_nurbs_weight(
     curves: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     weight: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'curves': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSetNURBSWeight; omitted inputs keep Blender defaults."""
     ...
 
@@ -2087,7 +2087,7 @@ def set_point_radius(
     points: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     radius: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'points': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSetPointRadius; omitted inputs keep Blender defaults."""
     ...
 
@@ -2097,7 +2097,7 @@ def set_position(
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     position: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     offset: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'geometry': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSetPosition; omitted inputs keep Blender defaults."""
     ...
 
@@ -2107,7 +2107,7 @@ def set_shade_smooth(
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     shade_smooth: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     domain: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'FACE',
-) -> {'mesh': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSetShadeSmooth; omitted inputs keep Blender defaults."""
     ...
 
@@ -2116,7 +2116,7 @@ def set_spline_cyclic(
     geometry: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     cyclic: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'curve': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSetSplineCyclic; omitted inputs keep Blender defaults."""
     ...
 
@@ -2125,7 +2125,7 @@ def set_spline_resolution(
     geometry: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     resolution: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'curve': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSetSplineResolution; omitted inputs keep Blender defaults."""
     ...
 
@@ -2136,7 +2136,7 @@ def sort_elements(
     group_id: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     sort_weight: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     domain: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'POINT',
-) -> {'geometry': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSortElements; omitted inputs keep Blender defaults."""
     ...
 
@@ -2165,7 +2165,7 @@ def split_edges(
     *,
     mesh: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'mesh': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSplitEdges; omitted inputs keep Blender defaults."""
     ...
 
@@ -2187,7 +2187,7 @@ def store_named_attribute(
     value: Annotated[Bool | Color | Float | Int | Rotation | Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     data_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'FLOAT',
     domain: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'POINT',
-) -> {'geometry': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeStoreNamedAttribute; omitted inputs keep Blender defaults."""
     ...
 
@@ -2197,7 +2197,7 @@ def store_named_grid(
     name: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     grid: Annotated[Bool | Float | Int | Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     data_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'FLOAT',
-) -> {'volume': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeStoreNamedGrid; omitted inputs keep Blender defaults."""
     ...
 
@@ -2205,7 +2205,7 @@ def join_strings(
     *,
     delimiter: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     strings: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'string': String}:
+) -> String:
     """Build a GeometryNodeStringJoin; omitted inputs keep Blender defaults."""
     ...
 
@@ -2213,7 +2213,7 @@ def subdivide_curve(
     *,
     curve: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     cuts: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'curve': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSubdivideCurve; omitted inputs keep Blender defaults."""
     ...
 
@@ -2221,7 +2221,7 @@ def subdivide_mesh(
     *,
     mesh: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     level: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'mesh': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSubdivideMesh; omitted inputs keep Blender defaults."""
     ...
 
@@ -2235,7 +2235,7 @@ def subdivision_surface(
     quality: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     boundary_smooth: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'All',
     uv_smooth: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Keep Boundaries',
-) -> {'mesh': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeSubdivisionSurface; omitted inputs keep Blender defaults."""
     ...
 
@@ -2252,7 +2252,7 @@ def tag_filter(
     *,
     tag_filter: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     tags: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'match': Bool}:
+) -> Bool:
     """Build a GeometryNodeTagFilter; omitted inputs keep Blender defaults."""
     ...
 
@@ -2288,7 +2288,7 @@ def set_face_set(
     mesh: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     face_set: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'mesh': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeToolSetFaceSet; omitted inputs keep Blender defaults."""
     ...
 
@@ -2298,7 +2298,7 @@ def set_selection(
     selection: Annotated[Bool | Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     domain: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'POINT',
     selection_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'BOOLEAN',
-) -> {'geometry': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeToolSetSelection; omitted inputs keep Blender defaults."""
     ...
 
@@ -2332,7 +2332,7 @@ def transform_geometry(
     rotation: Annotated[Rotation, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     scale: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Components',
-) -> {'geometry': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeTransform; omitted inputs keep Blender defaults."""
     ...
 
@@ -2342,7 +2342,7 @@ def translate_instances(
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     translation: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     local_space: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'instances': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeTranslateInstances; omitted inputs keep Blender defaults."""
     ...
 
@@ -2352,7 +2352,7 @@ def triangulate(
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     n_gon_method: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Beauty',
     quad_method: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Shortest Diagonal',
-) -> {'mesh': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeTriangulate; omitted inputs keep Blender defaults."""
     ...
 
@@ -2365,7 +2365,7 @@ def trim_curve(
     start_001: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     end_001: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'FACTOR',
-) -> {'curve': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeTrimCurve; omitted inputs keep Blender defaults."""
     ...
 
@@ -2378,14 +2378,14 @@ def uv_unwrap(
     iterations: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     no_flip: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     method: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Angle Based',
-) -> {'uv': Vector}:
+) -> Vector:
     """Build a GeometryNodeUVUnwrap; omitted inputs keep Blender defaults."""
     ...
 
 def vertex_of_corner(
     *,
     corner_index: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'vertex_index': Int}:
+) -> Int:
     """Build a GeometryNodeVertexOfCorner; omitted inputs keep Blender defaults."""
     ...
 
@@ -2398,7 +2398,7 @@ def volume_cube(
     resolution_x: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     resolution_y: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     resolution_z: Annotated[Int, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'volume': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeVolumeCube; omitted inputs keep Blender defaults."""
     ...
 
@@ -2410,7 +2410,7 @@ def volume_to_mesh(
     voxel_amount: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     voxel_size: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     resolution_mode: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'Grid',
-) -> {'mesh': Geometry}:
+) -> Geometry:
     """Build a GeometryNodeVolumeToMesh; omitted inputs keep Blender defaults."""
     ...
 
@@ -2419,7 +2419,7 @@ def warning(
     show: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     message: Annotated[String, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     warning_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'ERROR',
-) -> {'show': Bool}:
+) -> Bool:
     """Build a GeometryNodeWarning; omitted inputs keep Blender defaults."""
     ...
 
@@ -2442,14 +2442,14 @@ def implicit_conversion(
 def reroute(
     *,
     input: Annotated[Color, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'output': Color}:
+) -> Color:
     """Build a NodeReroute; omitted inputs keep Blender defaults."""
     ...
 
 def blackbody(
     *,
     temperature: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'color': Color}:
+) -> Color:
     """Build a ShaderNodeBlackbody; omitted inputs keep Blender defaults."""
     ...
 
@@ -2459,7 +2459,7 @@ def clamp(
     min: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     max: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     clamp_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'MINMAX',
-) -> {'result': Float}:
+) -> Float:
     """Build a ShaderNodeClamp; omitted inputs keep Blender defaults."""
     ...
 
@@ -2468,7 +2468,7 @@ def combine_xyz(
     x: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     y: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     z: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'vector': Vector}:
+) -> Vector:
     """Build a ShaderNodeCombineXYZ; omitted inputs keep Blender defaults."""
     ...
 
@@ -2476,7 +2476,7 @@ def float_curve(
     *,
     factor: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     value: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'value': Float}:
+) -> Float:
     """Build a ShaderNodeFloatCurve; omitted inputs keep Blender defaults."""
     ...
 
@@ -2484,7 +2484,7 @@ def gamma(
     *,
     color: Annotated[Color, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     gamma: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'color': Color}:
+) -> Color:
     """Build a ShaderNodeGamma; omitted inputs keep Blender defaults."""
     ...
 
@@ -2516,7 +2516,7 @@ def math(
     value_002: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     operation: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'ADD',
     use_clamp: Annotated[Bool, EvaluationMode.COMPILE_TIME_ONLY] = False,
-) -> {'value': Float}:
+) -> Float:
     """Build a ShaderNodeMath; omitted inputs keep Blender defaults."""
     ...
 
@@ -2547,7 +2547,7 @@ def mix_legacy(
     blend_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'MIX',
     use_alpha: Annotated[Bool, EvaluationMode.COMPILE_TIME_ONLY] = False,
     use_clamp: Annotated[Bool, EvaluationMode.COMPILE_TIME_ONLY] = False,
-) -> {'color': Color}:
+) -> Color:
     """Build a ShaderNodeMixRGB; omitted inputs keep Blender defaults."""
     ...
 
@@ -2555,7 +2555,7 @@ def rgb_curves(
     *,
     fac: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     color: Annotated[Color, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'color': Color}:
+) -> Color:
     """Build a ShaderNodeRGBCurve; omitted inputs keep Blender defaults."""
     ...
 
@@ -2695,7 +2695,7 @@ def color_ramp(
 def value(
     *,
     value: Annotated[Float, EvaluationMode.COMPILE_TIME_ONLY] = None,
-) -> {'value': Float}:
+) -> Float:
     """Build a ShaderNodeValue; omitted inputs keep Blender defaults."""
     ...
 
@@ -2703,7 +2703,7 @@ def vector_curves(
     *,
     fac: Annotated[Float, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     vector: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
-) -> {'vector': Vector}:
+) -> Vector:
     """Build a ShaderNodeVectorCurve; omitted inputs keep Blender defaults."""
     ...
 
@@ -2727,7 +2727,7 @@ def vector_rotate(
     rotation: Annotated[Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     invert: Annotated[Bool, EvaluationMode.COMPILE_TIME_ONLY] = False,
     rotation_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'AXIS_ANGLE',
-) -> {'vector': Vector}:
+) -> Vector:
     """Build a ShaderNodeVectorRotate; omitted inputs keep Blender defaults."""
     ...
 

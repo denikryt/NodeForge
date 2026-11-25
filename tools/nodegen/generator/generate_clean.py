@@ -231,7 +231,8 @@ def render_interface(items):
             names = {'BOOL': 'Bool', 'INT': 'Int', 'FLOAT': 'Float', 'GEOMETRY': 'Geometry',
                      'VECTOR': 'Vector', 'COLOR': 'Color', 'ROTATION': 'Rotation',
                      'OBJECT': 'Object', 'MATERIAL': 'Material', 'STRING': 'String'}
-            return_type = '{' + ', '.join(repr(key) + ': ' + names[t] for key, t in sig['static']) + '}'
+            return_type = (names[sig['static'][0][1]] if len(sig['static']) == 1 else
+                           '{' + ', '.join(repr(key) + ': ' + names[t] for key, t in sig['static']) + '}')
         lines.append(f"def {i['name']}(")
         lines.extend(f'    {argument},' for argument in args)
         lines += [f') -> {return_type}:',
@@ -348,7 +349,7 @@ def deliver(context, socket, value):
 
 def materialize(context, node_id, named, items=(), rna=None, menus=(), orders=(),
                 kind=None, elements=None, capture_types=None,
-                constant_rna=None, constant_outputs=None):
+                constant_rna=None, constant_outputs=None, scalar_name=None):
     node = make_node(context, node_id, rna or {}, orders)
     requested_names = set_collection(node, kind, elements, capture_types) if kind else ()
     for key, value in menus:
@@ -395,10 +396,12 @@ def materialize(context, node_id, named, items=(), rna=None, menus=(), orders=()
     if tuple(observed_names[base_count:]) != requested_names:
         raise ValueError(f'{node_id}: collection output labels differ from {requested_names!r}')
     observed = tuple(zip(observed_names, (socket_type(socket) for socket in outputs)))
-    expected = tuple(zip(context.result_names, context.result_types))
+    expected = tuple(zip((scalar_name,) if scalar_name is not None else context.result_names, context.result_types))
     if observed != expected:
         raise ValueError(f'{node_id}: output schema {observed!r} does not match {expected!r}; '
                          f'physical identifiers {[socket.identifier for socket in outputs]!r}')
+    if scalar_name is not None:
+        return context.value(outputs[0], context.result_types[0])
     return {key: context.value(socket, typ) for (key, typ), socket in zip(observed, outputs)}
 
 '''
@@ -430,6 +433,20 @@ def render_backend(items):
             kwargs.extend([f'kind={k!r}', 'elements=elements'])
             if k == 'capture':
                 kwargs.append(f"capture_types={tuple(sorted(d['types']))!r}")
+        sig = i['result_rule']
+        if not sig['dynamic_result'] and len(sig['static']) == 1:
+            kwargs.append(f"scalar_name={sig['static'][0][0]!r}")
+        # Menu requires at least one explicit item, so its base cannot be the whole result.
+        if sig['dynamic_result'] and (not i['dynamic'] or i['dynamic']['kind'] != 'menu'):
+            scalar_names = {key: schema[0][0] for key, schema in sig['map'].items() if len(schema) == 1}
+            if scalar_names:
+                keys = set(scalar_names.values())
+                if len(keys) == 1:
+                    expected = repr(next(iter(keys)))
+                else:
+                    deps = '(' + ', '.join(sig['deps']) + (',' if len(sig['deps']) == 1 else '') + ')'
+                    expected = f'{scalar_names!r}[{deps}]'
+                kwargs.append(f"scalar_name={expected} if context.result_names is None else None")
         props = '{' + ', '.join(repr(f['key']) + ': ' + f['param'] for f in fields) + '}'
         menu = ('(' + ', '.join('(' + repr(f['key']) + ', ' + f['param'] + ')' for f in menus)
                 + (',' if len(menus) == 1 else '') + ')')
@@ -471,6 +488,11 @@ def output_types(arguments, parameters, signatures):
     except KeyError:
         raise ValueError(f'Unsupported result configuration: {key!r}') from None
 
+def public_result(schema):
+    """Choose the public Nodes carrier from the complete validated schema."""
+    return next(iter(schema.values())) if len(schema) == 1 else schema
+
+
 def with_collection_results(base, entries):
     """Append explicit collection keys without normalizing or overwriting them."""
     output = dict(base)
@@ -501,20 +523,20 @@ def render_semantic(items):
             typemap={k:v.upper() for k,v in i['dynamic']['types'].items()}
             lines.extend([f"    types = {{{', '.join(repr(k)+': NFType.'+v for k,v in sorted(typemap.items()))}}}",
                           "    entries = capture_entries(static_value(arguments, 'elements'), types)",
-                          "    return with_collection_results(base, ((name, types[token]) for token, name in entries))"])
+                          "    return public_result(with_collection_results(base, ((name, types[token]) for token, name in entries)))"])
         elif kind=='menu':
             lines.extend(["    names = menu_names(static_value(arguments, 'elements'))",
                           f"    selected = static_value(arguments, {next(f['param'] for f in i['fields'] if f['kind'] == 'menu' and f['key'] == 'Menu')!r})",
                           "    if selected not in names:",
                           "        raise ValueError('Invalid Menu selection / elements')",
-                          "    return with_collection_results(base, ((name, NFType.BOOL) for name in names))"])
+                          "    return public_result(with_collection_results(base, ((name, NFType.BOOL) for name in names)))"])
         elif kind=='index':
             lines.extend(["    count = static_value(arguments, 'elements')",
                           "    if type(count) is not int or count < 0:",
                           "        raise ValueError('elements must be nonnegative')",
-                          '    return base'])
+                          '    return public_result(base)'])
         else:
-            lines.append('    return base')
+            lines.append('    return public_result(base)')
         lines.append('')
     return '\n'.join(lines)+'\n'
 

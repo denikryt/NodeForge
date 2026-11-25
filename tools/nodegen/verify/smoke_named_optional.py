@@ -1,6 +1,6 @@
 """Compile small named-parameter examples and verify native Blender socket defaults.
 
-Works with NodeForge 0.99.0. A failed case includes its NF source and traceback.
+Uses the bundled Nodes result contracts. A failed case includes its NF source and traceback.
 """
 from __future__ import annotations
 import argparse
@@ -19,7 +19,7 @@ from NodeForge import compiler, packages
 
 
 def nf(call, results, grouped=False):
-    names = ', '.join(f"result[{key!r}]" for key in results)
+    names = 'result' if len(results) == 1 else ', '.join(f"result[{key!r}]" for key in results)
     content = call[:-1]
     separator = ', ' if not content.endswith('(') else ''
     return ("from packages import nodes as gen\n\n"
@@ -60,7 +60,7 @@ CASES = [
     {'name': 'plain_index', 'node': 'GeometryNodeInputIndex',
      'call': 'index()', 'values': {}},
     {'name': 'builtin_and_package_index', 'node': 'GeometryNodeInputIndex',
-     'source': 'from packages import nodes\n\ndef entry():\n    a = index()\n    b = nodes.index().index\n    return a, b\n',
+     'source': 'from packages import nodes\n\ndef entry():\n    a = index()\n    b = nodes.index()\n    return a, b\n',
      'count': 2, 'values': {}},
     {'name': 'plain_index_grouped', 'node': 'GeometryNodeInputIndex',
      'call': 'index()', 'values': {}, 'grouped': True},

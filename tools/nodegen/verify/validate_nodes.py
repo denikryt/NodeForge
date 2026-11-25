@@ -79,6 +79,8 @@ def source_for(item,cfg,mode,runtime,params,output_keys,menu_override=None,eleme
     call=f"gen.{item['name']}({', '.join(args)})"
     projections = [f'result.{key}' if is_exact_attribute_key(key) else f'result[{key!r}]'
                    for key in output_keys]
+    if len(output_keys) == 1:
+        projections = ['result']
     result = '{' + ', '.join(f'{key!r}: {expr}' for key, expr in zip(output_keys, projections)) + '}'
     declaration=', '.join(f'p{i}: {t}' for i,t in enumerate(params))
     return f"from packages import nodes as gen\n\ndef entry({declaration}):\n    result = {call}\n    return {result}\n"
@@ -101,20 +103,45 @@ def reference_output_schema(oracle, item, cfg, effective_elements, normalized):
     return rows
 
 
-def check_output_links(root, native, schema):
+def check_output_links(root, native, schema, *, grouped=None):
     """Trace each root output through its optional grouped call to the native socket."""
     outlet = next(node for node in root.nodes if node.bl_idname == 'NodeGroupOutput')
+    expected_root_keys = tuple(row[0] for row in schema)
+    root_outputs = tuple(s for s in outlet.inputs if s.bl_idname != 'NodeSocketVirtual')
+    if tuple(s.name for s in root_outputs) != expected_root_keys:
+        raise AssertionError('wrong root result shape')
+    expected_types = tuple(marker(row[3]) for row in schema)
+    if tuple(marker(s.bl_idname) for s in root_outputs) != expected_types:
+        raise AssertionError('wrong root result types')
     actual = []
+    expected_named = len(schema) > 1
+    expected_keys = tuple(row[0] for row in schema) if expected_named else ('Result',)
+    call_node = None
     for key, identifier, name, physical in schema:
         links = list(outlet.inputs[key].links)
         if len(links) != 1:
             raise AssertionError(f'{key!r}: expected one root output link')
         socket = links[0].from_socket
-        if socket.node.bl_idname == 'GeometryNodeGroup':
-            if socket.name != key:
+        is_group = socket.node.bl_idname == 'GeometryNodeGroup'
+        if grouped is not None and is_group != grouped:
+            raise AssertionError(f'{key!r}: unexpected compilation form')
+        if is_group:
+            child = socket.node.node_tree
+            marker_key = 'nodeforge_named_results_v1'
+            if (marker_key in child) != expected_named or (expected_named and child[marker_key] != True):
+                raise AssertionError(f'{key!r}: wrong named result marker')
+            if tuple(s.name for s in socket.node.outputs) != expected_keys:
+                raise AssertionError(f'{key!r}: wrong grouped result shape')
+            if tuple(marker(s.bl_idname) for s in socket.node.outputs) != expected_types:
+                raise AssertionError(f'{key!r}: wrong grouped result types')
+            if call_node is not None and socket.node != call_node:
+                raise AssertionError(f'{key!r}: outputs from distinct calls')
+            call_node = socket.node
+            expected_group_key = key if expected_named else 'Result'
+            if socket.name != expected_group_key:
                 raise AssertionError(f'{key!r}: grouped projection points to {socket.name!r}')
             child_out = next(node for node in socket.node.node_tree.nodes if node.bl_idname == 'NodeGroupOutput')
-            child_links = list(child_out.inputs[key].links)
+            child_links = list(child_out.inputs[expected_group_key].links)
             if len(child_links) != 1:
                 raise AssertionError(f'{key!r}: expected one physical child output link')
             socket = child_links[0].from_socket
@@ -178,7 +205,7 @@ def run_case(item,cfg,mode,runtime,elements=None,menu_override=None):
         if len(natives)!=1:raise AssertionError(f'Expected one physical {item["node"]}, found {len(natives)}')
         native=natives[0]
         stage='compare'
-        record['actual_outputs'] = check_output_links(root, native, schema)
+        record['actual_outputs'] = check_output_links(root, native, schema, grouped=mode=='grouped')
         actual=basic_snapshot(native)
         actual_defaults=input_defaults(native)
         if actual_defaults != expected_defaults:
@@ -235,7 +262,7 @@ def main():
                 selected=selected[args.state_start:args.state_stop]
                 scenarios=[(cfg,'grouped' if args.grouped else 'inline',runtime,None,None)
                            for cfg in selected for runtime in (False,True)]
-                if item['dynamic']:
+                if item['dynamic'] and selected:
                     cfg=selected[0];kind=item['dynamic']['kind']
                     if kind=='capture':
                         choices=[f'{t}:Item {i}' for i,t in enumerate(item['dynamic']['types'])][:2]

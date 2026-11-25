@@ -233,13 +233,11 @@ def bundled_nodes():
 
 @pytest.mark.parametrize('inline', [False, True])
 @pytest.mark.parametrize('call,key,physical', [
-    ('sample_index(data_type="FLOAT")', 'value', 'GeometryNodeSampleIndex'),
     ('cylinder()', 'mesh', 'GeometryNodeMeshCylinder'),
     ('sample_curve(data_type="FLOAT_VECTOR")', 'value', 'GeometryNodeSampleCurve'),
     ('named_attribute(data_type="FLOAT")', 'attribute', 'GeometryNodeInputNamedAttribute'),
     ('capture_attribute(elements="FLOAT:Weight")', 'Weight', 'GeometryNodeCaptureAttribute'),
     ('menu_switch(elements="A,lower", menu="lower", data_type="FLOAT")', 'lower', 'GeometryNodeMenuSwitch'),
-    ('index_switch(elements=3, data_type="FLOAT")', 'output', 'GeometryNodeIndexSwitch'),
 ])
 def test_generated_named_projections_share_native_call(bundled_nodes, inline, call, key, physical):
     """Dot and bracket projection of the same generated occurrence share one socket."""
@@ -474,3 +472,152 @@ def _result_types_choose(args):
     assert instance.inputs[0].default_value == 7.0
     assert (NAMED_RESULTS_PROP in child) == (after != 'direct')
     assert (child[EXTENSION_FINGERPRINT_PROP] == old_fp) == (before == after)
+
+
+@pytest.mark.parametrize('inline', [False, True])
+@pytest.mark.parametrize('call,physical,output', [
+    ('position()', 'GeometryNodeInputPosition', 'Position'),
+    ('sample_index(data_type="FLOAT")', 'GeometryNodeSampleIndex', 'Value'),
+    ('index_switch(elements=3, data_type="FLOAT")', 'GeometryNodeIndexSwitch', 'Output'),
+    ('domain_size(component="POINTCLOUD")', 'GeometryNodeAttributeDomainSize', 'Point Count'),
+    ('domain_size(component="INSTANCES")', 'GeometryNodeAttributeDomainSize', 'Instance Count'),
+])
+def test_generated_direct_values_share_native_call(bundled_nodes, inline, call, physical, output):
+    """Direct values can be bound and reused, preserving native socket identity."""
+    from helpers import compile_group
+    from NodeForge.blender.interface import NAMED_RESULTS_PROP
+    expression = call[:-1] + (', ' if not call.endswith('()') else '') + f'__inline__={inline})'
+    group = compile_group(f'''from packages import nodes
+
+def entry():
+    r = nodes.{expression}
+    alias = r
+    return {{'a': r, 'b': alias}}
+''', 'GeneratedDirectReuse')
+    outlet = next(n for n in group.nodes if n.bl_idname == 'NodeGroupOutput')
+    a, b = (outlet.inputs[k].links[0].from_socket for k in ('a', 'b'))
+    assert a == b
+    if not inline:
+        assert a.name == 'Result'
+        child = a.node.node_tree
+        assert NAMED_RESULTS_PROP not in child
+        a = next(n for n in child.nodes if n.bl_idname == 'NodeGroupOutput').inputs['Result'].links[0].from_socket
+    else:
+        child = group
+    assert a.node.bl_idname == physical and a.name == output
+    assert len([n for n in child.nodes if n.bl_idname == physical]) == 1
+
+
+@pytest.mark.parametrize('inline', [False, True])
+def test_generated_wrong_scalar_physical_name(tmp_path, inline):
+    """Same-typed native output with the wrong name is rejected before publication."""
+    import shutil
+    from pathlib import Path
+    from NodeForge import packages
+    from NodeForge.errors import CompileError
+    from helpers import compile_group
+    target = tmp_path / 'nodes'
+    shutil.copytree(Path(__file__).resolve().parents[2] / 'packages/nodes', target)
+    path = target / 'systems/blender/backend.py'
+    source = path.read_text()
+    start = source.index('\ndef domain_size(')
+    end = source.index('\ndef ', start + 1)
+    original = source[start:end]
+    changed = original.replace("rna={'component': component}", "rna={'component': 'INSTANCES'}")
+    assert original != changed
+    path.write_text(source[:start] + changed + source[end:])
+    packages.install_package_directory(target)
+    before = {g.as_pointer() for g in bpy.data.node_groups}
+    with pytest.raises(CompileError, match='output schema'):
+        compile_group(f'from packages import nodes\n\ndef main():\n    return nodes.domain_size(component="POINTCLOUD", __inline__={inline})\n', 'WrongNativeName')
+    assert before == {g.as_pointer() for g in bpy.data.node_groups}
+
+
+@pytest.mark.parametrize('fault', ['marker', 'shape'])
+def test_catalogue_oracle_rejects_wrong_direct_group_shape(bundled_nodes, monkeypatch, fault):
+    """The oracle derives direct shape independently rather than trusting the actual marker."""
+    from pathlib import Path
+    import importlib.util
+    import sys
+    from helpers import compile_group
+    from NodeForge.blender.interface import NAMED_RESULTS_PROP
+    path = Path(__file__).resolve().parents[2] / 'tools/nodegen/verify/validate_nodes.py'
+    spec = importlib.util.spec_from_file_location('direct_socket_verifier', path)
+    verifier = importlib.util.module_from_spec(spec)
+    monkeypatch.setattr(sys, 'path', list(sys.path))
+    spec.loader.exec_module(verifier)
+    root = compile_group('from packages import nodes\n\ndef main():\n    return {"point_count": nodes.domain_size(component="POINTCLOUD", __inline__=False)}\n', 'OracleDirect')
+    child = next(n.node_tree for n in root.nodes if n.bl_idname == 'GeometryNodeGroup')
+    native = next(n for n in child.nodes if n.bl_idname == 'GeometryNodeAttributeDomainSize')
+    schema = [('point_count', native.outputs['Point Count'].identifier, 'Point Count', 'NodeSocketInt')]
+    assert verifier.check_output_links(root, native, schema, grouped=True) == schema
+    if fault == 'marker':
+        child[NAMED_RESULTS_PROP] = True
+    else:
+        next(s for s in child.interface.items_tree if s.item_type == 'SOCKET' and s.in_out == 'OUTPUT').name = 'point_count'
+    with pytest.raises(AssertionError, match='wrong named result marker|wrong grouped result shape'):
+        verifier.check_output_links(root, native, schema, grouped=True)
+
+
+@pytest.mark.parametrize('inline', [False, True])
+def test_generated_direct_nested_repeat_evaluates_real_geometry(bundled_nodes, inline):
+    """Direct Float, Vector and Geometry results compose across runtime repeat and source calls."""
+    from helpers import compile_entry_group
+    group = compile_entry_group(f'''from packages import nodes
+
+def shifted(v: Vector, __inline__={inline}):
+    return nodes.vector_math(vector=v, operation="LENGTH", __inline__={inline})
+
+def entry(count: Int=2):
+    g = nodes.mesh_line(count=3, start_location=vector(0, 0, 0), offset=vector(1, 0, 0), __inline__={inline})
+    delta = shifted(vector(0, 3, 4))
+    for i in repeat_range(count):
+        g = nodes.set_position(geometry=g, offset=vector(0, delta, 0), __inline__={inline})
+    return g
+''', 'GeneratedDirectEvaluation', 'entry')
+    mesh = bpy.data.meshes.new('DirectEvalMesh')
+    obj = bpy.data.objects.new('DirectEvalObject', mesh)
+    bpy.context.collection.objects.link(obj)
+    try:
+        obj.modifiers.new('Evaluate', 'NODES').node_group = group
+        evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+        result = evaluated.to_mesh()
+        try:
+            assert sorted(tuple(round(float(c), 5) for c in v.co) for v in result.vertices) == [(0, 10, 0), (1, 10, 0), (2, 10, 0)]
+        finally:
+            evaluated.to_mesh_clear()
+    finally:
+        bpy.data.objects.remove(obj, do_unlink=True)
+        bpy.data.meshes.remove(mesh)
+
+
+@pytest.mark.parametrize('mode', ['inline', 'grouped'])
+def test_generated_collection_shapes_against_native_reference(bundled_nodes, monkeypatch, tmp_path, mode):
+    """Compare all collection types and domains plus boundary-size labels and counts."""
+    from pathlib import Path
+    import sys
+    tool = Path(__file__).resolve().parents[2] / 'tools/nodegen'
+    monkeypatch.setattr(sys, 'path', [str(tool), str(tool / 'verify'), *sys.path])
+    import build
+    from validate_nodes import run_case
+    spec = build.read_spec(build.DEFAULT_SPEC)
+    report = build.generate(spec, ['GeometryNodeCaptureAttribute', 'GeometryNodeIndexSwitch', 'GeometryNodeMenuSwitch'], tmp_path)
+    rows = []
+    for item in report['wrappers']:
+        kind = item['dynamic']['kind']
+        for cfg in item['configurations']:
+            if kind == 'capture':
+                types = item['dynamic']['types']
+                labels = ['Weight', 'weight', 'Two Words', 'é'*31+'a', '方向', 'class']
+                elements = ','.join(f'{typ}:{label}' for typ,label in zip(types,labels))
+                variants = [('', None), (elements, None)]
+            elif kind == 'menu':
+                variants = [('é'*31+'a', 'é'*31+'a'), ('A,Two Words,lower', 'lower')]
+            else:
+                variants = [(0,None), (1,None), (16,None)]
+            # Menu override and generated configuration can normalize separately;
+            # each comparison is against a fresh independently configured node.
+            for elements, menu in variants:
+                rows.append(run_case(item,cfg,mode,True,elements,menu))
+    failures = [r for r in rows if r['status'] == 'failed']
+    assert not failures, [(r['node'],r['state'],r['elements'],r.get('error')) for r in failures]

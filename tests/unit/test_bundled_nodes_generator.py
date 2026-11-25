@@ -445,3 +445,61 @@ def test_unexpected_preparation_error_aborts_generation(generator_modules, tmp_p
         build.build(spec, target, archive=True)
     assert {name: (owner / name).read_bytes() for name in build.FILES} == before
     assert archive.read_bytes() == archive_before
+
+
+@pytest.mark.parametrize('node', ['FunctionNodeInputBool', 'FunctionNodeInputInt',
+                                  'FunctionNodeInputString', 'FunctionNodeInputVector',
+                                  'FunctionNodeInputRotation', 'FunctionNodeInputColor', 'ShaderNodeValue'])
+@pytest.mark.parametrize('fault', ['missing', 'empty', 'unsupported'])
+def test_all_constant_sources_require_baseline_identity(generator_modules, tmp_path, node, fault):
+    """Every eligible constant keeps its public parameter or fails before publication."""
+    build, generator, _ = generator_modules
+    spec = build.read_spec(build.DEFAULT_SPEC)
+    inspected = spec['nodes'][node]
+    prepared = generator.prepare_node(node, inspected)
+    assert len(generator.constant_parameters(prepared, inspected)) == 1
+    outputs = inspected['inventory']['baseline']['outputs']
+    if fault == 'missing':
+        del outputs[0]['identifier']
+    elif fault == 'empty':
+        outputs.clear()
+    else:
+        outputs[0]['bl_idname'] = 'NodeSocketMatrix'
+    with pytest.raises(generator.ResultSchemaError, match=rf'{node} state baseline'):
+        generator.constant_parameters(prepared, inspected)
+    # One full fresh-build injection per node exercises the publication boundary.
+    if fault == 'empty':
+        target = tmp_path / 'fresh'
+        with pytest.raises(generator.ResultSchemaError, match=rf'{node} state baseline'):
+            build.build(spec, target, archive=True)
+        assert not target.exists()
+        assert not list(tmp_path.glob('*.zip'))
+
+
+def test_generated_result_carriers_follow_complete_schemas(generator_modules):
+    """All generated static and dynamic result declarations preserve explicit forms."""
+    import ast
+    from NodeForge.extensions.registry import ExtensionOwnerSession, capture_owner_code_snapshot
+    from NodeForge.extension_result_api import ResultStaticArg
+    from NodeForge.nf_types import NFType
+    from collections import Counter
+    build, generator, _ = generator_modules
+    root = PACKAGE / 'systems/blender'
+    owner = ExtensionOwnerSession(capture_owner_code_snapshot(('system', 'nodeforge.nodes', 'blender'), root))
+    families, _ = owner.normalize_interface()
+    ids = {cid.name: cid for cid in families}
+    counts = Counter(family[0].result.kind for family in families.values())
+    assert counts == {'NF_SET': 189, 'NAMED_RESULTS': 63, 'DYNAMIC_RESULTS': 45}
+    spec = build.read_spec(build.DEFAULT_SPEC)
+    for name in ('GeometryNodeAttributeDomainSize', 'ShaderNodeVectorMath', 'ShaderNodeMapRange', 'ShaderNodeTexVoronoi'):
+        item = generator.prepare_node(name, spec['nodes'][name])
+        rule = generator.result_rule(item)
+        assert rule['dynamic_result']
+        assert len({schema[0][0] for schema in rule['map'].values() if len(schema) == 1}) > 1
+    for component, expected in [('POINTCLOUD', NFType.INT), ('INSTANCES', NFType.INT),
+                                 ('MESH', (('point_count', NFType.INT), ('edge_count', NFType.INT),
+                                           ('face_count', NFType.INT), ('face_corner_count', NFType.INT)))]:
+        assert owner.invoke_result_resolver(ids['domain_size'], {'component': ResultStaticArg(NFType.STRING, component)}) == expected
+    for count in (0, 1, 128):
+        assert owner.invoke_result_resolver(ids['index_switch'], {'elements': ResultStaticArg(NFType.INT, count),
+            'data_type': ResultStaticArg(NFType.STRING, 'FLOAT')}) is NFType.FLOAT
