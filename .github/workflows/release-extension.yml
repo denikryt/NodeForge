@@ -75,6 +75,8 @@ jobs:
           cp -R packages/nodes staging/packages/
           test -f staging/packages/nodes/nodeforge_package.json
           test -f staging/packages/nodes/systems/blender/interface.py
+          # The generator and inspector are development tools, not extension runtime files.
+          test ! -e staging/tools
           # Only these code directories are part of the extension (no tests or .git).
           test -d staging/blender && test -d staging/extensions && test -d staging/semantic && test -d staging/editor
           find staging -name __pycache__ -type d -prune -exec rm -rf {} +
@@ -155,7 +157,7 @@ jobs:
               assert 'packages/nodes/nodeforge_package.json' in files
               assert 'packages/nodes/systems/blender/interface.py' in files
               assert not any(n.startswith('package_install/nodeforge.nodes-') for n in files)
-              assert not any(n.startswith(('.git/', 'tests/', 'dev/')) for n in files)
+              assert not any(n.startswith(('.git/', 'tests/', 'dev/', 'tools/')) for n in files)
           PY
           "$BLENDER" -b --command extension server-generate --repo-dir public
           test -s public/index.json

@@ -18,7 +18,7 @@ files = "Install NodeForge libraries in Blender's user data directory"
 [build]
 paths_exclude_pattern = [
     ".git/", ".github/", ".pytest_cache/", ".venv/", "__pycache__/",
-    "tests/", "dev/", "plans/", "local/", "media/", "docs/", "mkdocs.yml", "*.pyc",
+    "tests/", "dev/", "tools/", "plans/", "local/", "media/", "docs/", "mkdocs.yml", "*.pyc",
     "*.pyo", "*.blend[1-9]", "AGENTS.md", "*.patch", "/*.zip",
     "*.log", "*.tmp", "*.tar", "*.xz",
 ]

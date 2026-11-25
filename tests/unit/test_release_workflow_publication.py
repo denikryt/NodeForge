@@ -78,6 +78,8 @@ def test_library_release_assets_are_downloaded_from_latest_releases():
     assert "len(staged_archives) == len(BUNDLED_PACKAGES)" in build
     assert "'packages/nodes/nodeforge_package.json' in files" in build
     assert "'packages/nodes/systems/blender/interface.py' in files" in build
+    assert "test ! -e staging/tools" in stage
+    assert "'dev/', 'tools/'" in build
 
 
 def test_extension_staging_includes_text_editor_modules():
