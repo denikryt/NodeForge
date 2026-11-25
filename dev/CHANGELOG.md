@@ -858,9 +858,11 @@ lifecycle.
 
 - Add explicit named source-function returns and static and dynamic named Extension API results, with exact keys, dot and string-key projection, and independent semantic and backend phases.
 - Preserve named output links across group replacement only when the output key and physical socket type match; preserve positional output behavior and transactional rollback.
-- Upgrade bundled Nodes to 1.6.0, with named results for all generated wrappers, independent physical socket validation, exact dynamic collection labels and deterministic three-file generation. Migrate Nodes consumers and dynamic result resolvers to the named contract.
+- Upgrade bundled Nodes to 1.6.0, with explicit direct single-output and named multi-output wrappers, independent physical socket validation, exact dynamic collection labels and deterministic three-file generation. Migrate Nodes consumers to the revised result forms.
 - Add named result signature previews and field completion, and verify source, extension, editor, group replacement, package installation and Blender 5.2 native socket provenance.
 - Reject malformed required native output labels before generator publication; retain named signature and field completion across incomplete declarations and resolve bare imported package calls with the compiler's ambiguity rules. Document the named dynamic result protocol's minimum version.
 - Reject missing, malformed, or duplicate required physical output identifiers and malformed output type metadata before generated Nodes publication, including Capture Attribute probes.
 - Reject malformed required constant-output baseline identities and output record containers before generation; distinguish explicit unsupported nodes from unexpected generation errors.
 - Reject empty or unrepresentable baseline output sets for supported fixed constant sources before publication.
+- Extend `DynamicResults` to explicitly resolve either one direct runtime type or a named schema, retaining named singleton declarations, exact backend validation and the existing transactional group update policy.
+- Add direct/named editor previews, independent grouped/native provenance checks and 12 characterization fixtures covering source, extension and bundled Nodes result forms.

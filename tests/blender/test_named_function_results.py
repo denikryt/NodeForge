@@ -621,3 +621,63 @@ def test_generated_collection_shapes_against_native_reference(bundled_nodes, mon
                 rows.append(run_case(item,cfg,mode,True,elements,menu))
     failures = [r for r in rows if r['status'] == 'failed']
     assert not failures, [(r['node'],r['state'],r['elements'],r.get('error')) for r in failures]
+
+
+@pytest.mark.parametrize('semantic_state', [False, True])
+@pytest.mark.parametrize('inline', [False, True])
+@pytest.mark.parametrize('typ', ['Float', 'Vector', 'Geometry'])
+def test_direct_dynamic_typed_forwarding_and_second_call_rollback(tmp_path, semantic_state, inline, typ):
+    """A failing second occurrence rolls back both calls; retry forwards typed leaves."""
+    from test_extension_boundary_matrix import _package
+    from helpers import compile_group
+    from NodeForge.errors import CompileError
+    interface = f'''from dataclasses import dataclass
+from typing import Annotated
+from NodeForge import {typ}, String, DynamicResults, EvaluationMode
+EXTENSION_API = 2
+EXTENSIONS = {{'forward': '.backend:forward'}}
+@dataclass(frozen=True)
+class _State:
+    value: {typ}
+    form: str
+
+def forward(value: Annotated[{typ}, EvaluationMode.RUNTIME_ONLY], form: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'DIRECT') -> DynamicResults: ...
+'''
+    semantic = f'''from NodeForge.nf_types import NFType
+
+def _result_types_forward(args):
+    return NFType.{typ.upper()}
+'''
+    if semantic_state:
+        semantic += '''\nfrom .interface import _State
+
+def forward(value, form='DIRECT') -> _State:
+    return _State(value, form)
+'''
+    backend = ('def forward(context, state):\n    value, form = state.value, state.form\n' if semantic_state else
+               "def forward(context, value, form='DIRECT'):\n")
+    backend += '''    context.new_generated_mesh(role='forward-probe', name_hint='Probe')
+    assert context.result_names is None
+    return {'value': value} if form == 'BAD' else value
+'''
+    _package(tmp_path, name='typed_forward', interface=interface, semantic=semantic, backend=backend)
+    source = f'''from packages import typed_forward
+
+def main(value: {typ}):
+    first = forward(value, __inline__={inline})
+    second = forward(first, form='BAD', __inline__={inline})
+    return second
+'''
+    groups = {g.as_pointer() for g in bpy.data.node_groups}
+    meshes = {m.as_pointer() for m in bpy.data.meshes}
+    with pytest.raises(CompileError, match='runtime leaves'):
+        compile_group(source, 'DirectTypedRetry')
+    assert {g.as_pointer() for g in bpy.data.node_groups} == groups
+    assert {m.as_pointer() for m in bpy.data.meshes} == meshes
+    group = compile_group(source.replace("form='BAD'", "form='DIRECT'"), 'DirectTypedRetry')
+    output = next(n for n in group.nodes if n.bl_idname == 'NodeGroupOutput')
+    socket = next(s for s in output.inputs if s.bl_idname != 'NodeSocketVirtual')
+    assert socket.links[0].from_socket.bl_idname == 'NodeSocket' + typ
+    assert all(link.is_valid for link in group.links)
+    calls = [n for n in group.nodes if n.bl_idname == 'GeometryNodeGroup']
+    assert len(calls) == (0 if inline else 2)
