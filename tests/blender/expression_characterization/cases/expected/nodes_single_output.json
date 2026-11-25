@@ -1,0 +1,187 @@
+{
+  "definitions": [
+    {
+      "graph": {
+        "interface": [
+          {
+            "in_out": "OUTPUT",
+            "name": "curve",
+            "socket_type": "NodeSocketGeometry"
+          },
+          {
+            "in_out": "OUTPUT",
+            "name": "index",
+            "socket_type": "NodeSocketInt"
+          },
+          {
+            "in_out": "OUTPUT",
+            "name": "x",
+            "socket_type": "NodeSocketFloat"
+          }
+        ],
+        "links": [
+          {
+            "from": [
+              "n2",
+              "Socket_0"
+            ],
+            "to": [
+              "n4",
+              "Vector"
+            ]
+          },
+          {
+            "from": [
+              "n2",
+              "Socket_0"
+            ],
+            "to": [
+              "n5",
+              "Start"
+            ]
+          },
+          {
+            "from": [
+              "n2",
+              "Socket_0"
+            ],
+            "to": [
+              "n6",
+              "Vector"
+            ]
+          },
+          {
+            "from": [
+              "n3",
+              "Index"
+            ],
+            "to": [
+              "n1",
+              "Socket_1"
+            ]
+          },
+          {
+            "from": [
+              "n4",
+              "Vector"
+            ],
+            "to": [
+              "n5",
+              "End"
+            ]
+          },
+          {
+            "from": [
+              "n5",
+              "Curve"
+            ],
+            "to": [
+              "n1",
+              "Socket_0"
+            ]
+          },
+          {
+            "from": [
+              "n6",
+              "X"
+            ],
+            "to": [
+              "n1",
+              "Socket_2"
+            ]
+          }
+        ],
+        "nodes": [
+          {
+            "bl_idname": "NodeGroupInput",
+            "id": "n0",
+            "properties": {}
+          },
+          {
+            "bl_idname": "NodeGroupOutput",
+            "id": "n1",
+            "properties": {}
+          },
+          {
+            "bl_idname": "GeometryNodeGroup",
+            "group": {
+              "graph": {
+                "interface": [
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "Result",
+                    "socket_type": "NodeSocketVector"
+                  }
+                ],
+                "links": [
+                  {
+                    "from": [
+                      "n2",
+                      "Position"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_0"
+                    ]
+                  }
+                ],
+                "nodes": [
+                  {
+                    "bl_idname": "NodeGroupInput",
+                    "id": "n0",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "NodeGroupOutput",
+                    "id": "n1",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "GeometryNodeInputPosition",
+                    "id": "n2",
+                    "properties": {}
+                  }
+                ]
+              },
+              "id": "g1",
+              "unique": false
+            },
+            "id": "n2",
+            "properties": {}
+          },
+          {
+            "bl_idname": "GeometryNodeInputIndex",
+            "id": "n3",
+            "properties": {}
+          },
+          {
+            "bl_idname": "ShaderNodeVectorMath",
+            "id": "n4",
+            "properties": {
+              "operation": "ADD"
+            }
+          },
+          {
+            "bl_idname": "GeometryNodeCurvePrimitiveLine",
+            "id": "n5",
+            "properties": {
+              "mode": "POINTS"
+            }
+          },
+          {
+            "bl_idname": "ShaderNodeSeparateXYZ",
+            "id": "n6",
+            "properties": {}
+          }
+        ]
+      },
+      "name": "entry"
+    }
+  ],
+  "graph": {
+    "interface": [],
+    "links": [],
+    "nodes": []
+  },
+  "kind": "graph"
+}

@@ -113,3 +113,11 @@ package and installed Python dependencies.
 The previously observed Blender add-on double-unregister failure was fixed by
 Rev2 F11. The full **non-Mesh Compute** Blender suite now includes this
 lifecycle regression as a passing test rather than a baseline exception.
+
+
+## Plan 50 — explicit direct and named function results
+
+- Source named singleton/multi, exact keys, aliases and reuse: `source_named_singleton`, `source_named_multi`, `failure_named_projection` characterization cases; `test_named_function_results.py` in unit and Blender suites.
+- Static direct/tuple/named and dynamic explicit shapes: `extension_static_named`, `extension_dynamic_direct`, `extension_dynamic_explicit_shapes`, `extension_dynamic_semantic_state`, `failure_dynamic_result_shape`, `failure_direct_projection`; existing `extension_dynamic_singleton` and `extension_dynamic_mixed` remain named controls. `test_extension_dynamic_results.py` and `test_named_function_results.py` cover exact result validation, physical ownership, transactions and group updates.
+- Bundled Nodes static and invocation-dependent output contracts: `nodes_single_output`, `nodes_dynamic_output_shapes`, `nodes_named_multi_collection` use installed bundled sources in isolated inventories. The independent native verifier checks socket identity, ordered schema, marker and grouped interface; the generator suite exercises malformed required output records and failure atomicity.
+- Editor result resolution and field projection: `test_editor_intelligence.py`. Independent characterization assertions pin exact output labels, native source identifiers and shared call occurrences.

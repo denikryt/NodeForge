@@ -789,5 +789,125 @@
       "top-level"
     ],
     "outcome": "graph"
+  },
+  {
+    "id": "source_named_singleton",
+    "description": "Explicit source singleton with two projections of one occurrence",
+    "tags": [
+      "top-level",
+      "named-results-followup"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "source_named_multi",
+    "description": "Source named order, alias, rebinding, nesting and imported contract",
+    "tags": [
+      "top-level",
+      "named-results-followup"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "extension_static_named",
+    "description": "Static named singleton/multi and direct/positional controls",
+    "tags": [
+      "top-level",
+      "named-results-followup",
+      "extension-graphs"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "extension_dynamic_direct",
+    "description": "Dynamic direct Float/Vector, arithmetic, member and chained call",
+    "tags": [
+      "top-level",
+      "named-results-followup",
+      "extension-graphs"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "extension_dynamic_explicit_shapes",
+    "description": "Direct and both named forms in one graph in both compilation modes",
+    "tags": [
+      "top-level",
+      "named-results-followup",
+      "extension-graphs"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "extension_dynamic_semantic_state",
+    "description": "Explicit dynamic forms after semantic-state packing",
+    "tags": [
+      "top-level",
+      "named-results-followup",
+      "extension-graphs"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "nodes_single_output",
+    "description": "Bundled static single result chaining",
+    "tags": [
+      "top-level",
+      "named-results-followup",
+      "bundled-nodes"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "nodes_dynamic_output_shapes",
+    "description": "Bundled dynamic direct/named and varying physical socket names",
+    "tags": [
+      "top-level",
+      "named-results-followup",
+      "bundled-nodes"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "nodes_named_multi_collection",
+    "description": "Bundled multi-result and dynamic collection labels",
+    "tags": [
+      "top-level",
+      "named-results-followup",
+      "bundled-nodes"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "failure_named_projection",
+    "description": "Unknown named key is rejected",
+    "tags": [
+      "top-level",
+      "named-results-followup",
+      "negative"
+    ],
+    "outcome": "compile_error"
+  },
+  {
+    "id": "failure_dynamic_result_shape",
+    "description": "Dynamic backend cannot return named dict for direct result",
+    "tags": [
+      "top-level",
+      "named-results-followup",
+      "extension-graphs",
+      "negative"
+    ],
+    "outcome": "compile_error"
+  },
+  {
+    "id": "failure_direct_projection",
+    "description": "Direct dynamic result cannot be projected as a named mapping",
+    "tags": [
+      "top-level",
+      "named-results-followup",
+      "extension-graphs",
+      "negative"
+    ],
+    "outcome": "compile_error"
   }
 ]

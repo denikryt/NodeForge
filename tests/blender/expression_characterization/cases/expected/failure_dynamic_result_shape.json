@@ -1,0 +1,5 @@
+{
+  "exception": "RootUpdateError",
+  "kind": "compile_error",
+  "message": "Extension implementation must return ExtensionBackendValue runtime leaves"
+}

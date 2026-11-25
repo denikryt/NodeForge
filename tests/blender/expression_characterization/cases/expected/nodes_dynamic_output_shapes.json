@@ -1,0 +1,546 @@
+{
+  "definitions": [
+    {
+      "graph": {
+        "interface": [
+          {
+            "in_out": "OUTPUT",
+            "name": "points",
+            "socket_type": "NodeSocketInt"
+          },
+          {
+            "in_out": "OUTPUT",
+            "name": "instances",
+            "socket_type": "NodeSocketInt"
+          },
+          {
+            "in_out": "OUTPUT",
+            "name": "edges",
+            "socket_type": "NodeSocketInt"
+          },
+          {
+            "in_out": "OUTPUT",
+            "name": "length",
+            "socket_type": "NodeSocketFloat"
+          },
+          {
+            "in_out": "OUTPUT",
+            "name": "normal",
+            "socket_type": "NodeSocketVector"
+          },
+          {
+            "default": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "in_out": "INPUT",
+            "name": "v",
+            "socket_type": "NodeSocketVector"
+          },
+          {
+            "in_out": "INPUT",
+            "name": "g",
+            "socket_type": "NodeSocketGeometry"
+          }
+        ],
+        "links": [
+          {
+            "from": [
+              "n0",
+              "Socket_0"
+            ],
+            "to": [
+              "n5",
+              "Socket_0"
+            ]
+          },
+          {
+            "from": [
+              "n0",
+              "Socket_0"
+            ],
+            "to": [
+              "n6",
+              "Socket_0"
+            ]
+          },
+          {
+            "from": [
+              "n0",
+              "Socket_1"
+            ],
+            "to": [
+              "n2",
+              "Socket_0"
+            ]
+          },
+          {
+            "from": [
+              "n0",
+              "Socket_1"
+            ],
+            "to": [
+              "n3",
+              "Socket_0"
+            ]
+          },
+          {
+            "from": [
+              "n0",
+              "Socket_1"
+            ],
+            "to": [
+              "n4",
+              "Socket_0"
+            ]
+          },
+          {
+            "from": [
+              "n2",
+              "Socket_1"
+            ],
+            "to": [
+              "n1",
+              "Socket_2"
+            ]
+          },
+          {
+            "from": [
+              "n3",
+              "Socket_1"
+            ],
+            "to": [
+              "n1",
+              "Socket_3"
+            ]
+          },
+          {
+            "from": [
+              "n4",
+              "Socket_2"
+            ],
+            "to": [
+              "n1",
+              "Socket_4"
+            ]
+          },
+          {
+            "from": [
+              "n5",
+              "Socket_1"
+            ],
+            "to": [
+              "n1",
+              "Socket_5"
+            ]
+          },
+          {
+            "from": [
+              "n6",
+              "Socket_1"
+            ],
+            "to": [
+              "n1",
+              "Socket_6"
+            ]
+          }
+        ],
+        "nodes": [
+          {
+            "bl_idname": "NodeGroupInput",
+            "id": "n0",
+            "properties": {}
+          },
+          {
+            "bl_idname": "NodeGroupOutput",
+            "id": "n1",
+            "properties": {}
+          },
+          {
+            "bl_idname": "GeometryNodeGroup",
+            "group": {
+              "graph": {
+                "interface": [
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "Result",
+                    "socket_type": "NodeSocketInt"
+                  },
+                  {
+                    "in_out": "INPUT",
+                    "name": "geometry",
+                    "socket_type": "NodeSocketGeometry"
+                  }
+                ],
+                "links": [
+                  {
+                    "from": [
+                      "n0",
+                      "Socket_0"
+                    ],
+                    "to": [
+                      "n2",
+                      "Geometry"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Point Count"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_1"
+                    ]
+                  }
+                ],
+                "nodes": [
+                  {
+                    "bl_idname": "NodeGroupInput",
+                    "id": "n0",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "NodeGroupOutput",
+                    "id": "n1",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "GeometryNodeAttributeDomainSize",
+                    "id": "n2",
+                    "properties": {
+                      "component": "POINTCLOUD"
+                    }
+                  }
+                ]
+              },
+              "id": "g1",
+              "unique": false
+            },
+            "id": "n2",
+            "properties": {}
+          },
+          {
+            "bl_idname": "GeometryNodeGroup",
+            "group": {
+              "graph": {
+                "interface": [
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "Result",
+                    "socket_type": "NodeSocketInt"
+                  },
+                  {
+                    "in_out": "INPUT",
+                    "name": "geometry",
+                    "socket_type": "NodeSocketGeometry"
+                  }
+                ],
+                "links": [
+                  {
+                    "from": [
+                      "n0",
+                      "Socket_0"
+                    ],
+                    "to": [
+                      "n2",
+                      "Geometry"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Instance Count"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_1"
+                    ]
+                  }
+                ],
+                "nodes": [
+                  {
+                    "bl_idname": "NodeGroupInput",
+                    "id": "n0",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "NodeGroupOutput",
+                    "id": "n1",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "GeometryNodeAttributeDomainSize",
+                    "id": "n2",
+                    "properties": {
+                      "component": "INSTANCES"
+                    }
+                  }
+                ]
+              },
+              "id": "g2",
+              "unique": false
+            },
+            "id": "n3",
+            "properties": {}
+          },
+          {
+            "bl_idname": "GeometryNodeGroup",
+            "group": {
+              "graph": {
+                "interface": [
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "point_count",
+                    "socket_type": "NodeSocketInt"
+                  },
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "edge_count",
+                    "socket_type": "NodeSocketInt"
+                  },
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "face_count",
+                    "socket_type": "NodeSocketInt"
+                  },
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "face_corner_count",
+                    "socket_type": "NodeSocketInt"
+                  },
+                  {
+                    "in_out": "INPUT",
+                    "name": "geometry",
+                    "socket_type": "NodeSocketGeometry"
+                  }
+                ],
+                "links": [
+                  {
+                    "from": [
+                      "n0",
+                      "Socket_0"
+                    ],
+                    "to": [
+                      "n2",
+                      "Geometry"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Edge Count"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_2"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Face Corner Count"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_4"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Face Count"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_3"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Point Count"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_1"
+                    ]
+                  }
+                ],
+                "nodes": [
+                  {
+                    "bl_idname": "NodeGroupInput",
+                    "id": "n0",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "NodeGroupOutput",
+                    "id": "n1",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "GeometryNodeAttributeDomainSize",
+                    "id": "n2",
+                    "properties": {
+                      "component": "MESH"
+                    }
+                  }
+                ]
+              },
+              "id": "g3",
+              "unique": false
+            },
+            "id": "n4",
+            "properties": {}
+          },
+          {
+            "bl_idname": "GeometryNodeGroup",
+            "group": {
+              "graph": {
+                "interface": [
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "Result",
+                    "socket_type": "NodeSocketFloat"
+                  },
+                  {
+                    "default": [
+                      0.0,
+                      0.0,
+                      0.0
+                    ],
+                    "in_out": "INPUT",
+                    "name": "vector",
+                    "socket_type": "NodeSocketVector"
+                  }
+                ],
+                "links": [
+                  {
+                    "from": [
+                      "n0",
+                      "Socket_0"
+                    ],
+                    "to": [
+                      "n2",
+                      "Vector"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Value"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_1"
+                    ]
+                  }
+                ],
+                "nodes": [
+                  {
+                    "bl_idname": "NodeGroupInput",
+                    "id": "n0",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "NodeGroupOutput",
+                    "id": "n1",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "ShaderNodeVectorMath",
+                    "id": "n2",
+                    "properties": {
+                      "operation": "LENGTH"
+                    }
+                  }
+                ]
+              },
+              "id": "g4",
+              "unique": false
+            },
+            "id": "n5",
+            "properties": {}
+          },
+          {
+            "bl_idname": "GeometryNodeGroup",
+            "group": {
+              "graph": {
+                "interface": [
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "Result",
+                    "socket_type": "NodeSocketVector"
+                  },
+                  {
+                    "default": [
+                      0.0,
+                      0.0,
+                      0.0
+                    ],
+                    "in_out": "INPUT",
+                    "name": "vector",
+                    "socket_type": "NodeSocketVector"
+                  }
+                ],
+                "links": [
+                  {
+                    "from": [
+                      "n0",
+                      "Socket_0"
+                    ],
+                    "to": [
+                      "n2",
+                      "Vector"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Vector"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_1"
+                    ]
+                  }
+                ],
+                "nodes": [
+                  {
+                    "bl_idname": "NodeGroupInput",
+                    "id": "n0",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "NodeGroupOutput",
+                    "id": "n1",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "ShaderNodeVectorMath",
+                    "id": "n2",
+                    "properties": {
+                      "operation": "NORMALIZE"
+                    }
+                  }
+                ]
+              },
+              "id": "g5",
+              "unique": false
+            },
+            "id": "n6",
+            "properties": {}
+          }
+        ]
+      },
+      "name": "entry"
+    }
+  ],
+  "graph": {
+    "interface": [],
+    "links": [],
+    "nodes": []
+  },
+  "kind": "graph"
+}

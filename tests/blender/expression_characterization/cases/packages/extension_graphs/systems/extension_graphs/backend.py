@@ -52,3 +52,37 @@ def consume_part(context, semantic_state):
     node.inputs[1].default_value = 4.0
     context.group.links.new(value.socket, node.inputs[0])
     return context.value(node.outputs[0], NFType.FLOAT)
+
+
+
+def named_one(context, value):
+    """Materialize an explicit singleton dictionary."""
+    return {"value": scale(context, value)}
+
+
+def named_two(context, value):
+    """Return leaves in reverse declaration order to test key matching."""
+    return {"original": value, "scaled": scale(context, value)}
+
+
+def positional_one(context, value):
+    """Return an explicit tuple rather than a direct leaf."""
+    return (scale(context, value),)
+
+
+def shape(context, value, form="DIRECT"):
+    """Materialize the explicitly selected result shape."""
+    if form == "VECTOR":
+        vector = context.group.nodes.new("ShaderNodeCombineXYZ")
+        context.group.links.new(value.socket, vector.inputs[0])
+        return context.value(vector.outputs[0], NFType.VECTOR)
+    if form == "ONE" or form == "BAD":
+        return named_one(context, value)
+    if form == "MULTI":
+        return named_two(context, value)
+    return scale(context, value)
+
+
+def shape_state(context, semantic_state):
+    """Use the reconstructed state with the same physical operation."""
+    return shape(context, semantic_state.value, semantic_state.form)
