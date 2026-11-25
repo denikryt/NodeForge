@@ -41,7 +41,7 @@ def main():
             for grouped in (False,True):
                 label=f'{fn}_{"explicit" if kwargs else "default"}_{"grouped" if grouped else "inline"}'
                 source=(f'from packages import nodes as gen\n\n'
-                        f'def entry():\n    x, = gen.{fn}({kwargs}{", " if kwargs else ""}__inline__={not grouped})\n    return x\n')
+                        f'def entry():\n    x = gen.{fn}({kwargs}{", " if kwargs else ""}__inline__={not grouped}).{fn}\n    return x\n')
                 before={g.as_pointer() for g in bpy.data.node_groups}
                 result={'name':label,'node':node_id,'source':source,'status':'failed'}
                 try:

@@ -155,3 +155,57 @@ def _result_types_foo(arguments):
     assert not wrapper.links
     assert child[NAMED_RESULTS_PROP]
     assert child[EXTENSION_FINGERPRINT_PROP] != fingerprint
+
+
+@pytest.fixture
+def bundled_nodes():
+    """Install the exact generated owner from this repository into an isolated inventory."""
+    from pathlib import Path
+    from NodeForge import packages
+    packages.install_package_directory(Path(__file__).resolve().parents[2] / 'packages' / 'nodes')
+
+
+@pytest.mark.parametrize('inline', [False, True])
+@pytest.mark.parametrize('call,key,physical', [
+    ('sample_index(data_type="FLOAT")', 'value', 'GeometryNodeSampleIndex'),
+    ('cylinder()', 'mesh', 'GeometryNodeMeshCylinder'),
+    ('sample_curve(data_type="FLOAT_VECTOR")', 'value', 'GeometryNodeSampleCurve'),
+    ('named_attribute(data_type="FLOAT")', 'attribute', 'GeometryNodeInputNamedAttribute'),
+    ('capture_attribute(elements="FLOAT:Weight")', 'Weight', 'GeometryNodeCaptureAttribute'),
+    ('menu_switch(elements="A,lower", menu="lower", data_type="FLOAT")', 'lower', 'GeometryNodeMenuSwitch'),
+    ('index_switch(elements=3, data_type="FLOAT")', 'output', 'GeometryNodeIndexSwitch'),
+])
+def test_generated_named_projections_share_native_call(bundled_nodes, inline, call, key, physical):
+    """Dot and bracket projection of the same generated occurrence share one socket."""
+    from helpers import compile_group
+    expression = call[:-1] + (', ' if not call.endswith('()') else '') + f'__inline__={inline})'
+    group = compile_group(f'''from packages import nodes
+
+def entry():
+    r = nodes.{expression}
+    return {{'a': r.{key}, 'b': r[{key!r}]}}
+''', 'GeneratedNamedProjection')
+    output = next(n for n in group.nodes if n.bl_idname == 'NodeGroupOutput')
+    a, b = (output.inputs[k].links[0].from_socket for k in ('a','b'))
+    assert a == b
+    groups = [group] if inline else [a.node.node_tree]
+    assert len([n for g in groups for n in g.nodes if n.bl_idname == physical]) == 1
+
+
+@pytest.mark.parametrize('call', [
+    'capture_attribute(elements="FLOAT:geometry")',
+    'capture_attribute(elements="FLOAT:a,FLOAT:a")',
+    'capture_attribute(elements="FLOAT:")',
+    'capture_attribute(elements="FLOAT:' + 'x'*64 + '")',
+    'menu_switch(elements="output,B", menu="B")',
+    'menu_switch(elements="", menu="A")',
+    'menu_switch(elements="A,A", menu="A")',
+])
+def test_generated_invalid_collection_schema_is_rejected_before_publication(bundled_nodes, call):
+    """Invalid explicit keys and grammar fail before any native group is published."""
+    from helpers import compile_group
+    from NodeForge.errors import CompileError
+    before = {g.as_pointer() for g in bpy.data.node_groups}
+    with pytest.raises(CompileError, match='Dynamic result resolver'):
+        compile_group(f'from packages import nodes\n\ndef entry():\n    r = nodes.{call}\n    return r["geometry"]\n', 'InvalidGeneratedSchema')
+    assert {g.as_pointer() for g in bpy.data.node_groups} == before

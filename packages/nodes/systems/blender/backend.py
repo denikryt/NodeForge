@@ -3,7 +3,31 @@
 No Inspector state tables are needed at runtime. Blender is the authority for
 RNA properties, Menu sockets, and the resulting physical socket layout.
 """
+import keyword
+import re
 from NodeForge.extension_api import ExtensionBackendValue, NFType
+
+
+def sanitized(raw):
+    v=re.sub('[^a-z0-9_]+','_',raw.lower()).strip('_')
+    if not v or v[0].isdigit() or keyword.iskeyword(v):v='option_'+v
+    return v
+
+def capture_entries(elements, supported):
+    """Parse capture collection entries, preserving exact item labels."""
+    chunks = tuple(tuple(chunk.strip().split(':', 1)) for chunk in elements.split(',')) if elements else ()
+    if any(len(pair) != 2 or pair[0] not in supported or not pair[1] for pair in chunks):
+        raise ValueError('elements must be TYPE:Name entries with supported types')
+    if len({pair[1] for pair in chunks}) != len(chunks):
+        raise ValueError('Duplicate capture item names')
+    return chunks
+
+def menu_names(elements):
+    """Parse ordered, unique Menu Switch labels."""
+    names = tuple(chunk.strip() for chunk in elements.split(',')) if elements else ()
+    if not all(names) or len(names) != len(set(names)):
+        raise ValueError('elements must contain unique nonempty Menu names')
+    return names
 
 _TYPES = {
     'NodeSocketFloat': NFType.FLOAT, 'NodeSocketInt': NFType.INT,
@@ -75,20 +99,17 @@ def set_collection(node, kind, elements, capture_types):
         while len(items) > elements: items.remove(items[-1])
         while len(items) < elements: items.new()
     elif kind == 'menu':
-        names = [x.strip() for x in elements.split(',')] if elements else []
-        if not all(names) or len(names) != len(set(names)):
-            raise ValueError('elements must contain unique nonempty Menu names')
-        if [x.name for x in node.enum_items] != names:
+        names = menu_names(elements)
+        if tuple(x.name for x in node.enum_items) != names:
             node.enum_items.clear()
             for name in names: node.enum_items.new(name)
+        return names
     elif kind == 'capture':
-        chunks = [x.strip().split(':', 1) for x in elements.split(',')] if elements else []
-        if any(len(x) != 2 or x[0] not in capture_types or not x[1] for x in chunks):
-            raise ValueError('elements must be TYPE:Name entries with supported types')
-        if len({x[1] for x in chunks}) != len(chunks):
-            raise ValueError('Duplicate capture item names')
-        for token, name in chunks:
+        entries = capture_entries(elements, capture_types)
+        for token, name in entries:
             node.capture_items.new(token, name)
+        return tuple(name for _, name in entries)
+    return ()
 
 
 def deliver(context, socket, value):
@@ -107,8 +128,7 @@ def materialize(context, node_id, named, items=(), rna=None, menus=(), orders=()
                 kind=None, elements=None, capture_types=None,
                 constant_rna=None, constant_outputs=None):
     node = make_node(context, node_id, rna or {}, orders)
-    if kind:
-        set_collection(node, kind, elements, capture_types)
+    requested_names = set_collection(node, kind, elements, capture_types) if kind else ()
     for key, value in menus:
         candidates = [sock for sock in node.inputs if sock.identifier == key]
         if len(candidates) != 1:
@@ -144,11 +164,20 @@ def materialize(context, node_id, named, items=(), rna=None, menus=(), orders=()
             raise ValueError(f'{node_id}: missing or ambiguous writable output {key!r}')
         matches[0].default_value = value
     outputs = active_sockets(node.outputs, dynamic=bool(kind))
-    if len(outputs) != len(context.result_types):
-        raise ValueError(f'{node_id} produced {len(outputs)} outputs, '
-                         f'but NodeForge expects {len(context.result_types)}')
-    return tuple(context.value(socket, typ)
-                 for socket, typ in zip(outputs, context.result_types))
+    if len(outputs) != len(context.result_types) or len(requested_names) > len(outputs):
+        raise ValueError(f'{node_id}: unexpected output count; '
+                         f'physical identifiers {[socket.identifier for socket in outputs]!r}')
+    base_count = len(outputs) - len(requested_names)
+    observed_names = tuple(sanitized(socket.name) if index < base_count else socket.name
+                           for index, socket in enumerate(outputs))
+    if tuple(observed_names[base_count:]) != requested_names:
+        raise ValueError(f'{node_id}: collection output labels differ from {requested_names!r}')
+    observed = tuple(zip(observed_names, (socket_type(socket) for socket in outputs)))
+    expected = tuple(zip(context.result_names, context.result_types))
+    if observed != expected:
+        raise ValueError(f'{node_id}: output schema {observed!r} does not match {expected!r}; '
+                         f'physical identifiers {[socket.identifier for socket in outputs]!r}')
+    return {key: context.value(socket, typ) for (key, typ), socket in zip(observed, outputs)}
 
 
 

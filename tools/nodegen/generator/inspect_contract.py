@@ -114,7 +114,8 @@ def prepare_node(node_id, node):
         seen.add(key)
         def contract(sock):return {'socket':sock['identifier'],'by':'identifier',
                                    'type':marker(sock['bl_idname']),'physical':sock['bl_idname']}
-        converted_inputs=list(map(contract,inputs));converted_outputs=list(map(contract,outputs))
+        converted_inputs=list(map(contract,inputs))
+        converted_outputs=[dict(contract(sock), name=sock['name']) for sock in outputs]
         input_types.update(a['type'] for a in converted_inputs)
         configurations.append({'key':list(key),'inspector_state':node['joint']['states'].index(st),
                                'rna':{k:as_argument(k,v) for k,v in st['rna'].items()},'menus':menus,

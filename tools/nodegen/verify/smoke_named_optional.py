@@ -18,14 +18,19 @@ if os.environ.get('NODEFORGE_CORE_PARENT'):
 from NodeForge import compiler, packages
 
 
-def nf(call, results=('x',), grouped=False):
-    names = ', '.join(results)
-    lhs = names + (',' if len(results) == 1 else '')
+def nf(call, results, grouped=False):
+    names = ', '.join(f"result[{key!r}]" for key in results)
     content = call[:-1]
     separator = ', ' if not content.endswith('(') else ''
     return ("from packages import nodes as gen\n\n"
-            f"def entry():\n    {lhs} = gen.{content}{separator}__inline__={not grouped})\n"
+            f"def entry():\n    result = gen.{content}{separator}__inline__={not grouped})\n"
             f"    return {names}\n")
+
+
+DEFAULT_KEYS = {'resample_curve': ('curve',), 'math': ('value',),
+                'named_attribute': ('attribute', 'exists'), 'index': ('index',),
+                'sample_index': ('value',), 'index_switch': ('output',),
+                'menu_switch': ('output', 'A', 'B', 'C')}
 
 
 # Each case is an independent physical-node test, not just Python signature introspection.
@@ -49,13 +54,13 @@ CASES = [
     {'name': 'math_omitted_input', 'node': 'ShaderNodeMath',
      'call': "math(value=2.0, operation='MULTIPLY')", 'values': {'Value_001': 0.5}},
     {'name': 'named_attribute_name_default', 'node': 'GeometryNodeInputNamedAttribute',
-     'call': "named_attribute()", 'values': {'Name': ''}, 'results': ('x', 'y')},
+     'call': "named_attribute()", 'values': {'Name': ''}, 'results': ('attribute', 'exists')},
     {'name': 'named_attribute_explicit', 'node': 'GeometryNodeInputNamedAttribute',
-     'call': "named_attribute(name='velocity')", 'values': {'Name': 'velocity'}, 'results': ('x', 'y')},
+     'call': "named_attribute(name='velocity')", 'values': {'Name': 'velocity'}, 'results': ('attribute', 'exists')},
     {'name': 'plain_index', 'node': 'GeometryNodeInputIndex',
      'call': 'index()', 'values': {}},
     {'name': 'builtin_and_package_index', 'node': 'GeometryNodeInputIndex',
-     'source': 'from packages import nodes\n\ndef entry():\n    a = index()\n    b, = nodes.index()\n    return a, b\n',
+     'source': 'from packages import nodes\n\ndef entry():\n    a = index()\n    b = nodes.index().index\n    return a, b\n',
      'count': 2, 'values': {}},
     {'name': 'plain_index_grouped', 'node': 'GeometryNodeInputIndex',
      'call': 'index()', 'values': {}, 'grouped': True},
@@ -66,7 +71,7 @@ CASES = [
      'values': {'Index': 1, 'Item_0': 3.0, 'Item_1': 4.0, 'Item_2': 5.0}},
     {'name': 'menu_dynamic', 'node': 'GeometryNodeMenuSwitch',
      'call': "menu_switch(1.5, 2.5, 3.5, elements='A,B,C', menu='C', data_type='FLOAT')",
-     'values': {'A': 1.5, 'B': 2.5, 'C': 3.5}, 'results': ('x', 'y', 'z', 'w')},
+     'values': {'A': 1.5, 'B': 2.5, 'C': 3.5}, 'results': ('output', 'A', 'B', 'C')},
     {'name': 'resample_grouped', 'node': 'GeometryNodeResampleCurve',
      'call': "resample_curve(count=29, mode='Count')", 'values': {'Count': 29}, 'grouped': True},
     {'name': 'inactive_length_rejected', 'node': 'GeometryNodeResampleCurve',
@@ -92,7 +97,7 @@ def main():
         packages.install_package_directory(Path(args.package))
         for case in CASES:
             before = {g.as_pointer() for g in bpy.data.node_groups}
-            src = case['source'] if 'source' in case else nf(case['call'], case.get('results', ('x',)), case.get('grouped', False))
+            src = case['source'] if 'source' in case else nf(case['call'], case.get('results', DEFAULT_KEYS[case['call'].split('(', 1)[0]]), case.get('grouped', False))
             record = {'name': case['name'], 'source': src, 'status': 'failed'}
             try:
                 try:

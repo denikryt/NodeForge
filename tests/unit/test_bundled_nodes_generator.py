@@ -75,3 +75,124 @@ def test_generator_can_target_an_alternate_package(tmp_path):
     assert coverage['configurations'] == 2671
     assert coverage['excluded_zones']
     assert coverage['skipped']
+
+
+@pytest.fixture(scope='module')
+def generator_modules():
+    """Load the build tool from its own source tree, not the installed library."""
+    sys.path.insert(0, str(BUILD.parent))
+    try:
+        import build
+        import generate_clean
+        import inspect_contract
+        yield build, generate_clean, inspect_contract
+    finally:
+        sys.path.remove(str(BUILD.parent))
+
+
+def test_emitted_parser_definitions_and_phase_isolation(generator_modules):
+    """Each real phase uses its own generated definitions without runtime generator imports."""
+    import ast
+    import inspect
+    from NodeForge.extension_result_api import ResultStaticArg
+    from NodeForge.nf_types import NFType
+    from NodeForge.extensions.registry import ExtensionOwnerSession, capture_owner_code_snapshot
+    build, generator, inspector = generator_modules
+    root = PACKAGE / 'systems' / 'blender'
+    assert sorted(p.name for p in root.glob('*.py')) == sorted(build.FILES)
+    for filename, functions in [('backend.py', (generator.capture_entries, generator.menu_names, inspector.sanitized)),
+                                ('semantic.py', (generator.capture_entries, generator.menu_names))]:
+        parsed = {node.name: node for node in ast.parse((root / filename).read_text()).body
+                  if isinstance(node, ast.FunctionDef)}
+        for function in functions:
+            assert ast.dump(parsed[function.__name__]) == ast.dump(ast.parse(inspect.getsource(function)).body[0])
+    owner = ExtensionOwnerSession(capture_owner_code_snapshot(('system', 'nodeforge.nodes', 'blender'), root))
+    families, _ = owner.normalize_interface()
+    ids = {cid.name: cid for cid in families}
+    assert families[ids['cylinder']][0].result.kind == 'NAMED_RESULTS'
+    before = set(sys.modules)
+    args = {'elements': ResultStaticArg(NFType.STRING, 'FLOAT:Weight,VECTOR:two words')}
+    # Capture's domain is irrelevant to its result schema.
+    assert owner.invoke_result_resolver(ids['capture_attribute'], args) == (
+        ('geometry', NFType.GEOMETRY), ('selection', NFType.BOOL), ('Weight', NFType.FLOAT), ('two words', NFType.VECTOR))
+    assert set(owner._phase_modules['SEMANTIC']) == {'semantic'}
+    assert not owner._phase_modules['IMPLEMENTATION']
+    with owner._mounted('IMPLEMENTATION'):
+        owner._resolve_implementation_mounted(ids['capture_attribute'])
+        backend = owner._phase_modules['IMPLEMENTATION']['backend']
+        assert backend.capture_entries('FLOAT:Weight,VECTOR:two words', ('FLOAT', 'VECTOR')) == (
+            ('FLOAT', 'Weight'), ('VECTOR', 'two words'))
+        assert backend.menu_names('A, lower,Two Words') == ('A', 'lower', 'Two Words')
+        assert backend.sanitized('Point Count') == 'point_count'
+        assert owner._full_name('semantic') not in sys.modules
+    assert set(owner._phase_modules['IMPLEMENTATION']) == {'backend'}
+    assert not any(name.startswith(owner.snapshot.module_base) for name in set(sys.modules) - before)
+
+
+@pytest.mark.parametrize('text,expected', [('', ()), ('FLOAT:a', (('FLOAT','a'),)),
+    (' FLOAT:Weight , VECTOR:weight ', (('FLOAT','Weight'),('VECTOR','weight'))),
+    ('FLOAT: a:b', (('FLOAT',' a:b'),)), ('FLOAT :a', None), ('FLOAT:', None),
+    ('FLOAT:a,FLOAT:a', None), ('FLOAT:a,', None), ('BOGUS:a', None), ('a', None)])
+def test_capture_parser_preserves_grammar(generator_modules, text, expected):
+    """Capture parsing strips chunks, not the individual type and name fields."""
+    _, generator, _ = generator_modules
+    if expected is None:
+        with pytest.raises(ValueError):
+            generator.capture_entries(text, ('FLOAT','VECTOR'))
+    else:
+        assert generator.capture_entries(text, ('FLOAT','VECTOR')) == expected
+
+
+@pytest.mark.parametrize('text,expected', [('', ()), (' A ,a,Two Words ', ('A','a','Two Words')),
+    ('A,A', None), ('A,,B', None), (' ', None)])
+def test_menu_parser_preserves_grammar(generator_modules, text, expected):
+    """Menu names are stripped, ordered, case-sensitive and nonempty."""
+    _, generator, _ = generator_modules
+    if expected is None:
+        with pytest.raises(ValueError):
+            generator.menu_names(text)
+    else:
+        assert generator.menu_names(text) == expected
+
+
+def test_name_only_result_variations_are_dynamic(generator_modules):
+    """Equal NFTypes do not erase distinct native output names."""
+    build, generator, inspector = generator_modules
+    spec = build.read_spec(build.DEFAULT_SPEC)
+    for node, names in [('GeometryNodeAttributeDomainSize', {'point_count','instance_count','layer_count'}),
+                        ('ShaderNodeTexVoronoi', {'distance','radius'})]:
+        item = inspector.prepare_node(node, spec['nodes'][node])
+        rule = generator.result_rule(item)
+        assert rule['dynamic_result']
+        assert names <= {name for schema in rule['map'].values() for name, _ in schema}
+        for cfg in item['configurations']:
+            values = {field['param']: cfg['rna' if field['kind']=='rna' else 'menus'][field['key']]
+                      for field in item['fields']}
+            assert rule['map'][tuple(values[key] for key in rule['deps'])] == generator.result_signature(item, cfg)
+
+
+def test_schema_collision_is_fatal_and_build_does_not_publish(generator_modules, tmp_path, monkeypatch):
+    """A mandatory same-layout collision is not a skipped unsupported node."""
+    import shutil
+    build, generator, _ = generator_modules
+    spec = build.read_spec(build.DEFAULT_SPEC)
+    node = 'GeometryNodeMeshCylinder'
+    original = generator.prepare_node
+    def colliding(name, data):
+        prepared = original(name, data)
+        if name == node:
+            first, second = prepared['configurations'][0]['outputs'][:2]
+            second['name'] = first['name'].upper()
+        return prepared
+    monkeypatch.setattr(generator, 'prepare_node', colliding)
+    target = tmp_path / 'nodes'
+    shutil.copytree(PACKAGE, target, ignore=shutil.ignore_patterns('__pycache__'))
+    owner = target / 'systems' / 'blender'
+    before = {name: (owner / name).read_bytes() for name in build.FILES}
+    with pytest.raises(generator.ResultSchemaError, match='GeometryNodeMeshCylinder state .*physical sockets'):
+        generator.generate(spec, [node], owner)
+    assert {name: (owner / name).read_bytes() for name in build.FILES} == before
+    with pytest.raises(generator.ResultSchemaError, match='GeometryNodeMeshCylinder'):
+        build.build(spec, target, archive=True)
+    assert {name: (owner / name).read_bytes() for name in build.FILES} == before
+    assert not list(tmp_path.glob('*.zip'))
