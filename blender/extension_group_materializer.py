@@ -13,6 +13,7 @@ from .extension_backend import _selected_spec, lower_extension_call
 from .group_authority import find_unique_authoritative_group
 from .socket_types import socket_type_for_nf_type, validate_runtime_value_socket
 from .values import make_value
+from .interface import set_named_results
 
 
 EXTENSION_AUTHORITY_PROP = 'nodeforge_extension_call_authority_v1'
@@ -101,6 +102,7 @@ def materialize_extension_call(context, operation, operands, x, y):
         fingerprint = _fingerprint(operation, spec, registry)
 
         def populate(candidate, resources):
+            set_named_results(candidate, operation.result_names is not None)
             for name, argument in zip(input_names, operation.arguments):
                 candidate.interface.new_socket(
                     name=name, in_out='INPUT', socket_type=socket_type_for_nf_type(argument.value.typ),

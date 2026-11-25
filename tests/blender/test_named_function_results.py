@@ -114,3 +114,44 @@ def main(value: Float):
         assert a.node == b.node and a.node.bl_idname == 'GeometryNodeGroup'
         assert (a.name,b.name) == ('doubled','original')
         assert [s.name for s in a.node.inputs] == ['Dependency_0']
+
+
+def test_grouped_extension_named_rename_drops_external_link(tmp_path):
+    """A rebuilt extension occurrence retains authority but not a renamed output link."""
+    from NodeForge import packages, compiler
+    from NodeForge.blender.interface import NAMED_RESULTS_PROP
+    from NodeForge.blender.extension_group_materializer import EXTENSION_FINGERPRINT_PROP
+    from test_extension_dynamic_results import _write_package
+    from helpers import compile_group
+    root = tmp_path / 'fixture'
+    _write_package(root)
+    owner = root / 'systems' / 'dynamic'
+    interface = owner / 'interface.py'
+    interface.write_text(interface.read_text().replace('EvaluationMode, Float', 'EvaluationMode, Float, Bool').replace('value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]', 'value: Annotated[Float, EvaluationMode.RUNTIME_ONLY], renamed: Annotated[Bool, EvaluationMode.COMPILE_TIME_ONLY] = False'))
+    (owner / 'semantic.py').write_text('''from NodeForge.nf_types import NFType
+
+def _result_types_foo(arguments):
+    return {'new' if arguments['renamed'].value else 'old': NFType.FLOAT}
+''')
+    (owner / 'backend.py').write_text('''def foo(context, value, renamed):
+    return {'new' if renamed else 'old': value}
+''')
+    packages.install_package_directory(root)
+    def source(renamed):
+        key = 'new' if renamed else 'old'
+        return f'from packages import dynamic\n\ndef main(value: Float):\n    return foo(value, renamed={renamed}, __inline__=False).{key}\n'
+    group = compile_group(source(False), 'NamedExtensionRename')
+    child = next(n.node_tree for n in group.nodes if n.bl_idname == 'GeometryNodeGroup')
+    assert child[NAMED_RESULTS_PROP]
+    fingerprint = child[EXTENSION_FINGERPRINT_PROP]
+    wrapper = bpy.data.node_groups.new('NamedExtensionExternal', 'GeometryNodeTree')
+    instance = wrapper.nodes.new('GeometryNodeGroup')
+    instance.node_tree = child
+    target = wrapper.nodes.new('ShaderNodeMath')
+    wrapper.links.new(instance.outputs['old'], target.inputs[0])
+    compiler.update_expression_group(group, source(True))
+    assert instance.node_tree == child
+    assert list(instance.outputs.keys()) == ['new']
+    assert not wrapper.links
+    assert child[NAMED_RESULTS_PROP]
+    assert child[EXTENSION_FINGERPRINT_PROP] != fingerprint

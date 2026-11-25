@@ -6,6 +6,7 @@ import bpy
 
 from ..errors import CompileError
 from .interface import (
+    has_named_results,
     _get_group_input_declarations,
     _get_group_input_defaults,
     _interface_socket_key,
@@ -138,7 +139,7 @@ def _validate_group_external_state_for_replacement(replacement_group, state):
     # make its connection ambiguous when the physical socket type is unchanged.
     new_outputs = [item for item in replacement_group.interface.items_tree
                    if item.item_type == "SOCKET" and item.in_out == "OUTPUT"]
-    if len(new_outputs) == 1:
+    if len(new_outputs) == 1 and not has_named_results(replacement_group):
         new_output = new_outputs[0]
         for link in state.get("links", []):
             for endpoint in (link.get("from", {}), link.get("to", {})):
@@ -146,6 +147,8 @@ def _validate_group_external_state_for_replacement(replacement_group, state):
                     continue
                 old_key = endpoint["socket_key"]
                 old_group = endpoint["node"].node_tree
+                if has_named_results(old_group):
+                    continue
                 old_outputs = [item for item in old_group.interface.items_tree
                                if item.item_type == "SOCKET" and item.in_out == "OUTPUT"]
                 if (len(old_outputs) == 1 and old_key[1] == old_outputs[0].name
