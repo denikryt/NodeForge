@@ -157,6 +157,72 @@ def _result_types_foo(arguments):
     assert child[EXTENSION_FINGERPRINT_PROP] != fingerprint
 
 
+@pytest.mark.parametrize('before,after,expected', [
+    ('a', 'b', []), ('a', 'a', ['a']), ('a', 'vector', []),
+    ('ab', 'ba', ['a', 'b']), ('ab', 'b', ['b']),
+    ('positional', 'Result', ['Result']), ('Result', 'positional', ['Result']),
+    ('positional', 'a', []), ('a', 'positional', []),
+    ('positional', 'Result', None), ('Result', 'positional', None),
+])
+def test_grouped_extension_named_output_update(tmp_path, before, after, expected):
+    """A rebuilt extension occurrence matches exact physical output identity across shapes."""
+    from NodeForge import packages, compiler
+    from NodeForge.blender.interface import NAMED_RESULTS_PROP
+    from test_extension_dynamic_results import _write_package
+    from helpers import compile_group
+    root = tmp_path / 'fixture'
+    _write_package(root)
+    installed = packages.install_package_directory(root)
+    owner = installed.root / 'systems' / 'dynamic'
+    def source(shape):
+        """Write the current static interface and corresponding physical implementation."""
+        keys = {'vector': ('a',), 'ab': ('a', 'b'), 'ba': ('b', 'a')}.get(shape, (shape,))
+        typ = 'Vector' if shape == 'vector' else 'Float'
+        annotation = 'Float' if shape == 'positional' else '{' + ', '.join(f'{key!r}: {typ}' for key in keys) + '}'
+        (owner / 'interface.py').write_text(f'''from typing import Annotated
+from NodeForge import EvaluationMode, Float, Vector
+EXTENSION_API = 2
+EXTENSIONS = {{'foo': '.backend:foo'}}
+def foo(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> {annotation}: ...
+''')
+        (owner / 'semantic.py').unlink(missing_ok=True)
+        body = 'return value' if shape == 'positional' else 'return {' + ', '.join(f'{key!r}: value' for key in keys) + '}'
+        if shape == 'vector':
+            body = "node = context.group.nodes.new('GeometryNodeInputPosition'); return {'a': context.value(node.outputs[0], NFType.VECTOR)}"
+        (owner / 'backend.py').write_text('from NodeForge.nf_types import NFType\ndef foo(context, value):\n    ' + body + '\n')
+        packages.invalidate_caches()
+        projection = '' if shape == 'positional' else f'[{keys[0]!r}]'
+        return f'from packages import dynamic\n\ndef main(value: Float):\n    return foo(value, __inline__=False){projection}\n'
+    group = compile_group(source(before), 'NamedExtensionUpdate')
+    child = next(n.node_tree for n in group.nodes if n.bl_idname == 'GeometryNodeGroup')
+    assert (NAMED_RESULTS_PROP in child) == (before != 'positional')
+    wrapper = bpy.data.node_groups.new('NamedExtensionExternal', 'GeometryNodeTree')
+    instance = wrapper.nodes.new('GeometryNodeGroup')
+    instance.node_tree = child
+    instance.inputs[0].default_value = 7.0
+    for output in instance.outputs:
+        target = wrapper.nodes.new('ShaderNodeMath')
+        wrapper.links.new(output, target.inputs[0])
+    if expected is None:
+        from NodeForge.blender import group_backend
+        before_groups = {g.as_pointer() for g in bpy.data.node_groups}
+        old_links = sorted(link.from_socket.name for link in wrapper.links)
+        group_backend._TEST_CUTOVER_FAIL_AFTER_RESET = True
+        try:
+            with pytest.raises(Exception, match='cutover'):
+                compiler.update_expression_group(group, source(after))
+        finally:
+            group_backend._TEST_CUTOVER_FAIL_AFTER_RESET = False
+        expected, after = old_links, before
+        assert {g.as_pointer() for g in bpy.data.node_groups} == before_groups
+    else:
+        compiler.update_expression_group(group, source(after))
+    assert instance.node_tree == child
+    assert sorted(link.from_socket.name for link in wrapper.links) == expected
+    assert (NAMED_RESULTS_PROP in child) == (after != 'positional')
+    assert instance.inputs[0].default_value == 7.0
+
+
 @pytest.fixture
 def bundled_nodes():
     """Install the exact generated owner from this repository into an isolated inventory."""
@@ -209,3 +275,59 @@ def test_generated_invalid_collection_schema_is_rejected_before_publication(bund
     with pytest.raises(CompileError, match='Dynamic result resolver'):
         compile_group(f'from packages import nodes\n\ndef entry():\n    r = nodes.{call}\n    return r["geometry"]\n', 'InvalidGeneratedSchema')
     assert {g.as_pointer() for g in bpy.data.node_groups} == before
+
+
+@pytest.mark.parametrize('inline', [False, True])
+def test_package_source_named_results(tmp_path, inline):
+    """Source exports and local functions share identical named projection rules."""
+    from NodeForge import packages
+    from test_qualified_package_callables import _write_source_package
+    from helpers import compile_group
+    root = tmp_path / 'named_package'
+    _write_source_package(root, 'vendor.named', {'measure': '''def measure(value: Float):
+    return {"first": value + 1, "Second Value": value + 2}
+'''})
+    packages.install_package_directory(root)
+    group = compile_group(f'''from packages import named
+
+def entry(value: Float):
+    r = named.measure(value, __inline__={inline})
+    return {{"a": r.first, "b": r["Second Value"]}}
+''', 'NamedPackage')
+    outlet = next(n for n in group.nodes if n.bl_idname == 'NodeGroupOutput')
+    a, b = (outlet.inputs[key].links[0].from_socket for key in ('a', 'b'))
+    if inline:
+        assert a.node.bl_idname == b.node.bl_idname == 'ShaderNodeMath' and a.node != b.node
+    else:
+        assert a.node == b.node and a.node.bl_idname == 'GeometryNodeGroup'
+        assert (a.name, b.name) == ('first', 'Second Value')
+
+
+def test_catalogue_oracle_detects_same_type_output_swap(monkeypatch):
+    """The independent verifier rejects a wrong physical source even for equal types."""
+    from pathlib import Path
+    import importlib.util
+    path = Path(__file__).resolve().parents[2] / 'tools/nodegen/verify/validate_nodes.py'
+    spec = importlib.util.spec_from_file_location('named_socket_verifier', path)
+    verifier = importlib.util.module_from_spec(spec)
+    # The standalone verifier inserts its generator directory into sys.path.
+    import sys
+    monkeypatch.setattr(sys, 'path', list(sys.path))
+    spec.loader.exec_module(verifier)
+    group = bpy.data.node_groups.new('SameTypeOutputSwap', 'GeometryNodeTree')
+    try:
+        native = group.nodes.new('GeometryNodeMeshCylinder')
+        group.interface.new_socket(name='top', in_out='OUTPUT', socket_type='NodeSocketBool')
+        group.interface.new_socket(name='bottom', in_out='OUTPUT', socket_type='NodeSocketBool')
+        outlet = group.nodes.new('NodeGroupOutput')
+        schema = [(key, native.outputs[label].identifier, label, 'NodeSocketBool')
+                  for key, label in [('top', 'Top'), ('bottom', 'Bottom')]]
+        group.links.new(native.outputs['Top'], outlet.inputs['top'])
+        group.links.new(native.outputs['Bottom'], outlet.inputs['bottom'])
+        assert verifier.check_output_links(group, native, schema) == schema
+        group.links.new(native.outputs['Bottom'], outlet.inputs['top'])
+        group.links.new(native.outputs['Top'], outlet.inputs['bottom'])
+        with pytest.raises(AssertionError, match='wrong output provenance'):
+            verifier.check_output_links(group, native, schema)
+    finally:
+        bpy.data.node_groups.remove(group, do_unlink=True)

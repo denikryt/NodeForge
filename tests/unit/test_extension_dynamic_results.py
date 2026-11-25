@@ -318,16 +318,16 @@ def _result_types_foo(args):
     assert result.extension_state_type == state
 
 
-def test_dynamic_editor_signature_reports_unbound_tuple_without_fabricated_fields(tmp_path):
+def test_dynamic_editor_signature_reports_unresolved_named_result_without_fabricated_fields(tmp_path):
     """Editor completion shows the marker while leaving per-call arity unspecified."""
     from NodeForge.editor.intelligence import _extension_signatures, _return_preview
     owner = _owner(tmp_path, _DYNAMIC_INTERFACE, semantic=_DYNAMIC_SEMANTIC,
                    backend="def foo(*args, **kw): pass\n")
     specs = next(iter(owner.normalize_interface()[0].values()))
     signature, = _extension_signatures("foo", specs)
-    assert signature.outputs[0].typ == "tuple[dynamic]"
-    assert len(signature.outputs) == 1
-    assert "tuple[dynamic]" in _return_preview(signature)
+    assert signature.result_kind == "dynamic"
+    assert not signature.outputs
+    assert "unresolved" in _return_preview(signature)
     assert len(signature.parameters) == 4
 
 

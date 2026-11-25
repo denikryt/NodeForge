@@ -20,6 +20,21 @@ def basic_snapshot(node):
     def each(xs):return [(s.identifier,s.name,s.bl_idname,bool(s.enabled),bool(getattr(s,'is_unavailable',False)),bool(getattr(s,'is_inactive',False))) for s in xs]
     return {'inputs':each(node.inputs),'outputs':each(node.outputs)}
 
+
+def input_defaults(node):
+    """Record native default values independently of wrapper declarations."""
+    values = []
+    for socket in node.inputs:
+        if not hasattr(socket, 'default_value'):
+            continue
+        value = socket.default_value
+        if isinstance(value, bpy.types.ID):
+            value = (value.bl_rna.identifier, value.name_full)
+        elif hasattr(value, '__iter__') and not isinstance(value, str):
+            value = tuple(value)
+        values.append((socket.identifier, value))
+    return values
+
 def filtered(sock):
     return sock.bl_idname not in ('NodeSocketVirtual','NodeSocketMenu') and sock.enabled and not getattr(sock,'is_unavailable',False)
 
@@ -149,6 +164,7 @@ def run_case(item,cfg,mode,runtime,elements=None,menu_override=None):
             for i,(sock,typ) in enumerate(available):
                 ref_group.links.new(ref_in.outputs[f'p{i}'],sock)
         expected=basic_snapshot(oracle)
+        expected_defaults=input_defaults(oracle)
         expected_links=[(link.to_socket.identifier,link.to_socket.name,link.to_socket.bl_idname)
                         for link in ref_group.links if link.to_node==oracle]
         schema = reference_output_schema(oracle, item, cfg, effective_elements, normalized)
@@ -164,12 +180,15 @@ def run_case(item,cfg,mode,runtime,elements=None,menu_override=None):
         stage='compare'
         record['actual_outputs'] = check_output_links(root, native, schema)
         actual=basic_snapshot(native)
+        actual_defaults=input_defaults(native)
+        if actual_defaults != expected_defaults:
+            raise AssertionError(f'Input default mismatch: {actual_defaults!r} vs {expected_defaults!r}')
         if actual!=expected:raise AssertionError(f'Blender socket mismatch: actual={actual}, expected={expected}')
         actual_rna={name:(','.join(sorted(getattr(native,name)))
                           if native.bl_rna.properties[name].is_enum_flag else getattr(native,name))
                     for name in cfg['rna']}
         if actual_rna!=readback:raise AssertionError(f'RNA mismatch: {actual_rna} vs {readback}')
-        for key,val in record['menu'].items():
+        for key,val in actual_menu.items():
             found=[s for s in native.inputs if s.identifier==key]
             if len(found)!=1 or found[0].default_value!=val:raise AssertionError(f'Menu mismatch {key!r}')
         actual_links=[(link.to_socket.identifier,link.to_socket.name,link.to_socket.bl_idname)
