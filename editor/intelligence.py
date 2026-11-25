@@ -2,7 +2,8 @@
 
 Catalog selection comes from the same ResolvedEnvironment used by the compiler.
 Only the cursor context and preliminary display of source input declarations are
-editor-specific; this module neither compiles a group nor executes DSL source.
+editor-specific. Dynamic result completion uses pure semantic compilation of
+complete fragments, never the physical backend.
 """
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ from pathlib import Path
 
 from ..semantic.builtin_registry import BUILTIN_NAMES
 from ..semantic.constants import TYPE_TOKEN_NAMES
+from ..result_keys import is_exact_attribute_key, validate_named_result_key
+from ..errors import CompileError
 
 
 @dataclass(frozen=True)
@@ -42,6 +45,7 @@ class Output:
 
     name: str
     typ: str
+    key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -52,6 +56,7 @@ class Signature:
     parameters: tuple[Parameter, ...] = ()
     outputs: tuple[Output, ...] = ()
     source_record: object | None = field(default=None, compare=False, repr=False)
+    result_kind: str = "positional"
 
 
 @dataclass(frozen=True)
@@ -229,6 +234,21 @@ def _source_return_values(fn: ast.FunctionDef, parameters: list[Parameter],
 
     # A return tuple can rebind an earlier result before a later element reads it.
     invalidate_named_targets(returned)
+    if isinstance(returned, ast.Dict):
+        outputs = []
+        for key, expr in zip(returned.keys, returned.values):
+            if not isinstance(key, ast.Constant):
+                return ()
+            try:
+                validate_named_result_key(key.value)
+            except ValueError:
+                return ()
+            bound = resolve(expr)
+            typ = bound[0].typ if bound else "?"
+            if typ == "?" and isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name):
+                typ = _CORE_OUTPUT_TYPES.get(expr.func.id, "?")
+            outputs.append(Output(key.value, typ, key.value))
+        return tuple(outputs) if len({o.key for o in outputs}) == len(outputs) else ()
     elements = returned.elts if isinstance(returned, ast.Tuple) else [returned]
     outputs = []
     duplicates: dict[str, int] = {}
@@ -262,10 +282,13 @@ def _definition_signature(fn: ast.FunctionDef, display_name: str) -> Signature:
         default = ast.unparse(fn.args.defaults[index - offset]) if index >= offset else None
         parameters.append(Parameter(arg.arg, typ, default, arg.arg, label))
     outputs = ()
+    result_kind = "positional"
     if fn.body and isinstance(fn.body[-1], ast.Return) and fn.body[-1].value is not None:
         returned = fn.body[-1].value
         outputs = _source_return_values(fn, parameters, returned)
-        if not isinstance(returned, ast.Tuple):
+        if isinstance(returned, ast.Dict):
+            result_kind = "named"
+        elif not isinstance(returned, ast.Tuple):
             label = None
             if (isinstance(fn.returns, ast.Subscript) and
                     isinstance(fn.returns.value, ast.Name) and
@@ -283,7 +306,7 @@ def _definition_signature(fn: ast.FunctionDef, display_name: str) -> Signature:
                 isinstance(returned, ast.Attribute) and inferred.typ != '?')
             outputs = (Output(label or (inferred.name if raw_socket else 'Value'),
                               annotation or inferred.typ),)
-    return Signature(display_name, tuple(parameters), outputs)
+    return Signature(display_name, tuple(parameters), outputs, result_kind=result_kind)
 
 
 def _def_signatures(source: str) -> dict[str, tuple[Signature, ...]]:
@@ -315,7 +338,7 @@ def _def_signatures(source: str) -> dict[str, tuple[Signature, ...]]:
 def _typespec_label(spec) -> str:
     """Convert an extension's frozen TypeSpec to a concise display label."""
     if spec.kind == "DYNAMIC_RESULTS":
-        return "tuple[dynamic]"
+        return "named results (dynamic)"
     if spec.kind == "NF_SET":
         return " | ".join(sorted(t.value.title() for t in spec.nf_types))
     if spec.kind == "TUPLE_FIXED":
@@ -336,19 +359,28 @@ def _extension_signatures(name: str, specs) -> tuple[Signature, ...]:
             default = None if param.default is inspect.Parameter.empty else repr(param.default)
             kw = None if param.kind is inspect.Parameter.POSITIONAL_ONLY else param.name
             parameters.append(Parameter(param.name, _typespec_label(param.type_spec), default, kw))
+        result_kind = "positional"
         if spec.result.kind == "DYNAMIC_RESULTS":
-            outputs = (Output("Results", "tuple[dynamic]"),)
+            result_kind = "dynamic"
+            outputs = ()
+        elif spec.result.kind == "NAMED_RESULTS":
+            result_kind = "named"
+            outputs = tuple(Output(key, typ.value.title(), key) for key, typ in spec.result.named_items)
         elif spec.result.kind == "TUPLE_FIXED":
             outputs = tuple(Output(f"Value {i + 1}", _typespec_label(item))
                             for i, item in enumerate(spec.result.items))
         else:
             outputs = (Output("Value", _typespec_label(spec.result)),)
-        result.append(Signature(name, tuple(parameters), outputs))
+        result.append(Signature(name, tuple(parameters), outputs, result_kind=result_kind))
     return tuple(result)
 
 
 def _return_preview(signature: Signature) -> str:
     """Show short verified result types beside member-completion names."""
+    if signature.result_kind == "dynamic":
+        return "→ named results (unresolved)"
+    if signature.result_kind == "named":
+        return "→ {" + ", ".join(f"{value.key}: {value.typ}" for value in signature.outputs) + "}"
     types = [value.typ for value in signature.outputs]
     if not types or "?" in types:
         return ""
@@ -534,6 +566,149 @@ class SymbolIndex:
         return namespaces
 
 
+def _call_result_signature(call, names, shadowed):
+    """Select only an unambiguous declared result schema for a simple callable path."""
+    if not isinstance(call, ast.Call):
+        return None
+    path = ast.unparse(call.func).split('.')
+    if not all(part.isidentifier() for part in path) or path[0] in shadowed:
+        return None
+    signatures = names.get('.'.join(path[:-1]), {}).get(path[-1], ())
+    if not signatures:
+        return None
+    first = signatures[0]
+    if first.result_kind == 'dynamic' and all(s.result_kind == 'dynamic' for s in signatures):
+        return first
+    if first.result_kind == 'named' and all(s.result_kind == 'named' and s.outputs == first.outputs for s in signatures):
+        return first
+    return None
+
+
+def _receiver_context(prefix, frames):
+    """Locate a completed receiver in a straight-line module or function body."""
+    match = re.search(r'\.([^\W\d]\w*)?$', prefix)
+    if not match:
+        return None
+    partial = match.group(1) or ''
+    marker = 'nodeforge_editor_result_probe'
+    while marker in prefix:
+        marker += '_'
+    closing = ''.join({'(': ')', '[': ']', '{': '}'}[frame['open']] for frame in reversed(frames))
+    try:
+        tree = ast.parse(prefix[:match.start() + 1] + marker + closing)
+    except SyntaxError:
+        return None
+    receiver = next((node.value for node in ast.walk(tree)
+                     if isinstance(node, ast.Attribute) and node.attr == marker), None)
+    if receiver is None:
+        return None
+    def contains(statement):
+        """Check whether a statement owns the receiver occurrence."""
+        return any(node is receiver for node in ast.walk(statement))
+    previous = []
+    for statement in tree.body:
+        if not contains(statement):
+            previous.append(statement)
+            continue
+        if isinstance(statement, ast.FunctionDef):
+            prior = []
+            for child in statement.body:
+                if contains(child):
+                    if not isinstance(child, (ast.Assign, ast.AnnAssign, ast.Expr, ast.Return)):
+                        return None
+                    return receiver, partial, previous, statement, prior
+                prior.append(child)
+            return None
+        if isinstance(statement, (ast.Assign, ast.AnnAssign, ast.Expr)):
+            return receiver, partial, previous, None, previous
+        return None
+    return None
+
+
+def _straight_line_result(receiver, prior, names, function):
+    """Track only definite named bindings, invalidating ambiguous assignments."""
+    bindings = {}
+    shadowed = set()
+    if function is not None:
+        shadowed.update(arg.arg for arg in (*function.args.posonlyargs, *function.args.args, *function.args.kwonlyargs))
+    def schema(expr):
+        """Look up a definite local binding or a declared call schema."""
+        if isinstance(expr, ast.Name):
+            return bindings.get(expr.id)
+        return _call_result_signature(expr, names, shadowed)
+    for statement in prior:
+        if isinstance(statement, ast.Assign) and len(statement.targets) == 1 and isinstance(statement.targets[0], ast.Name):
+            target = statement.targets[0].id
+            selected = schema(statement.value)
+            bindings.pop(target, None)
+            shadowed.add(target)
+            if selected is not None:
+                bindings[target] = selected
+        elif isinstance(statement, (ast.ImportFrom, ast.FunctionDef, ast.Pass)):
+            continue
+        else:
+            # Do not infer a receiver after a branch, mutation, or unknown rebinding.
+            bindings.clear()
+            shadowed.update(node.id for node in ast.walk(statement) if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)))
+        if any(isinstance(node, ast.NamedExpr) for node in ast.walk(statement)):
+            bindings.clear()
+            shadowed.update(node.target.id for node in ast.walk(statement) if isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name))
+    return schema(receiver)
+
+
+def _resolved_dynamic_outputs(context, index):
+    """Use the existing pure compiler on a complete, straight-line receiver fragment."""
+    from ..compiler_identities import GroupCompilationIdentity, ModuleId, module_definition_function_id
+    from ..semantic.group import analyze_group_source
+    from ..semantic.ir import IRBindLeaves, IRNamedOutputs
+    from ..semantic.source_callable_session import SourceCallableSession
+    from ..semantic.source_modules import parse_source_module
+    receiver, _, module_prior, function, prior = context
+    allowed = (ast.ImportFrom, ast.FunctionDef, ast.Assign, ast.Pass)
+    if any(not isinstance(statement, allowed) for statement in module_prior):
+        return ()
+    if any(not isinstance(statement, (ast.Assign, ast.Pass)) for statement in prior) and function is not None:
+        return ()
+    # No loops, branches, mutation, or incomplete expressions are executed by the editor.
+    probe = 'nodeforge_editor_probe'
+    used = {node.id for statement in [*module_prior, *prior, receiver] for node in ast.walk(statement) if isinstance(node, ast.Name)}
+    while probe in used:
+        probe += '_'
+    assignment = ast.Assign(targets=[ast.Name(id=probe, ctx=ast.Store())], value=receiver)
+    session = SourceCallableSession(resolved_environment=index.environment)
+    identity = GroupCompilationIdentity(None, 'editor', 'editor', 'editor')
+    try:
+        if function is None:
+            module = ast.Module(body=[*module_prior, assignment], type_ignores=[])
+            source = ast.unparse(ast.fix_missing_locations(module))
+            prepared = analyze_group_source(source, compilation_identity=identity,
+                                            resolved_environment=index.environment, source_callable_session=session)
+            statements = prepared.body.statements
+        else:
+            # Prepare the containing typed function with only its complete preceding body.
+            # The probe is the final structural assignment, followed by a scalar return.
+            probe_fn = ast.FunctionDef(name=function.name, args=function.args,
+                                      body=[*prior, assignment, ast.Return(value=ast.Constant(value=0))],
+                                      decorator_list=[], returns=None, type_comment=None, type_params=[])
+            module = ast.Module(body=[*module_prior, probe_fn], type_ignores=[])
+            source = ast.unparse(ast.fix_missing_locations(module))
+            snapshot = parse_source_module(source, ModuleId('ROOT_TEXT', 'editor'))
+            environment, constants = session.callable_environment_for_module(snapshot)
+            function_id = module_definition_function_id(snapshot.definition_ref(function.name), '[]')
+            prepared = session.prepare_definition(function_id=function_id, identity=identity,
+                fn=snapshot.definitions[function.name], callable_environment=environment,
+                compile_time_values=constants, helper_namespace='editor', source_module=snapshot)
+            statements = prepared.group.body.statements[:-1]
+        if not statements or not isinstance(statements[-1], IRBindLeaves):
+            return ()
+        result = statements[-1].value.result
+        if isinstance(result, IRNamedOutputs):
+            return tuple(Output(key, value.typ.value.title(), key) for key, value in result.items)
+    except (CompileError, SyntaxError, ValueError, TypeError):
+        return ()
+    return ()
+
+
 def _tokens_before(source: str, offset: int):
     """Yield tokens from the incomplete source prefix, ignoring tokenizer EOF errors."""
     text = source[:offset]
@@ -692,6 +867,21 @@ def cursor_assistance(source: str, line: int, column: int, index: SymbolIndex) -
                             seen[key] = Suggestion(key + "=", key + "=", "parameter", parameter.label())
                 candidates = tuple(seen.values())
                 return Assistance(candidates, signatures, active_parameter, column - len(partial), column, line)
+
+    receiver_context = _receiver_context(prefix, frames)
+    if receiver_context is not None:
+        receiver, partial, module_prior, function, prior = receiver_context
+        signature = _straight_line_result(receiver, prior, names, function)
+        if signature is not None:
+            outputs = signature.outputs
+            if signature.result_kind == 'dynamic':
+                outputs = _resolved_dynamic_outputs(receiver_context, index)
+                if not outputs and not signatures:
+                    signatures = (signature,)
+            candidates = tuple(Suggestion(output.key, output.key, 'field', output.typ)
+                               for output in outputs if is_exact_attribute_key(output.key)
+                               and output.key.startswith(partial) and output.key != partial)
+            return Assistance(candidates, signatures, active_parameter, column - len(partial), column, line)
 
     suffix = prefix.split("\n")[-1]
     match = re.search(r"(?<![\w.])(?:([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\.)?([A-Za-z_]\w*)?$", suffix)

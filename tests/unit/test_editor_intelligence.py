@@ -482,3 +482,37 @@ def mutated(geo: Geometry):
         ('Geo', 'Geometry'), ('Weight', 'Float')]
     assert [(o.name, o.typ) for o in signatures['mutated'][0].outputs] == [
         ('Geo', '?'), ('Geo 2', '?')]
+
+
+def test_named_source_signature_and_receiver_completion(editor_index):
+    """Preserve exact keys and expose only Python-spelling-safe fields."""
+    index, _ = editor_index
+    prefix = ('def measure(value: Float):\n'
+              '    return {"value": value, "class": value, "two words": value, '
+              '"K": value, "K": value, "unknown": value * 2}\n')
+    signature = help_at_caret(prefix + 'x = measure(|', index).signatures[0]
+    assert signature.result_kind == 'named'
+    assert [o.key for o in signature.outputs] == ['value', 'class', 'two words', 'K', 'K', 'unknown']
+    assert signature.outputs[0].typ == 'Float'
+    for tail in ('x = measure(1.0).|', 'r = measure(1.0)\nx = r.|',
+                 'r = measure(1.0)\na = r\nx = a.|'):
+        assert {c.insert for c in help_at_caret(prefix + tail, index).candidates} == {'value', 'K', 'unknown'}
+    assert not help_at_caret(prefix + 'r = measure(1.0)\nr = 3\nx = r.|', index).candidates
+    assert not help_at_caret(prefix + 'r = measure(1.0)\nif True:\n    r = 3\nx = r.|', index).candidates
+    singleton = help_at_caret('def f(x: Float):\n    return {"value": x}\nx = f(|', index).signatures[0]
+    assert singleton.result_kind == 'named' and singleton.outputs[0].key == 'value'
+
+
+def test_bundled_named_extension_receiver_completion(editor_index):
+    """Use declared schemas and the compiler's dynamic result resolver, without bpy."""
+    packages.install_package_directory(Path(__file__).resolve().parents[2] / 'packages/nodes')
+    index = SymbolIndex(resolve_environment())
+    prefix = 'from packages import nodes as n\n'
+    assert {c.insert for c in help_at_caret(prefix + 'x = n.cylinder().|', index).candidates} == {'mesh', 'top', 'side', 'bottom', 'uv_map'}
+    signature = help_at_caret(prefix + 'x = n.face_group_boundaries(|', index).signatures[0]
+    assert signature.result_kind == 'named' and signature.outputs[0].key == 'boundary_edges'
+    assert help_at_caret(prefix + 'x = n.domain_size(|', index).signatures[0].result_kind == 'dynamic'
+    assert {c.insert for c in help_at_caret(prefix + 'x = n.domain_size(component="POINTCLOUD").|', index).candidates} == {'point_count'}
+    assert {c.insert for c in help_at_caret(prefix + 'r = n.domain_size(component="INSTANCES")\nx = r.|', index).candidates} == {'instance_count'}
+    assert {c.insert for c in help_at_caret(prefix + 'def f(g: Geometry):\n    r = n.domain_size(geometry=g, component="POINTCLOUD")\n    x = r.|', index).candidates} == {'point_count'}
+    assert not help_at_caret(prefix + 'x = n.domain_size(component=unknown).|', index).candidates
