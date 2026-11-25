@@ -61,7 +61,7 @@ def test_backend_cannot_see_ambient_manual_root_input_without_raw_request():
             root.interface.new_socket(name='Radius', in_out='INPUT', socket_type='NodeSocketFloat')
             manual = root.nodes.new('NodeGroupInput') if existing else None
             prior = manual.as_pointer() if manual else None
-            compiler.compile_source_in_tree('from packages import dynamic\na, b = foo(1.0)', root)
+            compiler.compile_source_in_tree('from packages import dynamic\nr = foo(1.0)\na = r.double\nb = r.original', root)
             assert not any(link.from_node.bl_idname == 'NodeGroupInput' for link in root.links)
             assert sum(node.bl_idname == 'NodeGroupInput' for node in root.nodes) == int(existing)
             if manual:
@@ -78,7 +78,9 @@ def test_backend_sees_input_only_after_explicit_raw_dsl_call():
         before = manual.as_pointer()
         compiler.compile_source_in_tree('''from packages import dynamic
 radius = node('NodeGroupInput', output='Radius', typ=Float)
-a, b = foo(radius)
+r = foo(radius)
+a = r.double
+b = r.original
 ''', root)
         assert next(node for node in root.nodes if node.bl_idname == 'NodeGroupInput').as_pointer() == before
         assert any(link.from_node.bl_idname == 'NodeGroupInput'
@@ -94,7 +96,7 @@ def test_backend_inserted_group_input_is_not_adopted():
         manual = root.nodes.new('NodeGroupInput')
         before = manual.as_pointer()
         with pytest.raises(CompileError, match='unauthorized Group Input'):
-            compiler.compile_source_in_tree('from packages import dynamic\na, b = foo(1.0)', root)
+            compiler.compile_source_in_tree('from packages import dynamic\nr = foo(1.0)\na = r.double\nb = r.original', root)
         assert len(root.nodes) == 1 and root.nodes[0].as_pointer() == before
 
 
@@ -103,7 +105,7 @@ def test_removed_extension_group_retires_with_connected_owned_resources():
     with tempfile.TemporaryDirectory() as tmp:
         _install_fixture(tmp, backend_mode='owned_resources')
         root = bpy.data.node_groups.new('NFExt_retire_child', 'GeometryNodeTree')
-        compiler.compile_source_in_tree('from packages import dynamic\na, b = foo(1.0, __inline__=False)', root)
+        compiler.compile_source_in_tree('from packages import dynamic\nr = foo(1.0, __inline__=False)\na = r.double\nb = r.original', root)
         group = _child(root)
         authority = group[EXTENSION_AUTHORITY_PROP]
         info = next(node for node in group.nodes if node.bl_idname == 'GeometryNodeObjectInfo')
@@ -121,7 +123,7 @@ def test_manually_referenced_extension_group_and_resources_remain_live():
     with tempfile.TemporaryDirectory() as tmp:
         _install_fixture(tmp, backend_mode='owned_resources')
         root = bpy.data.node_groups.new('NFExt_preserve_child', 'GeometryNodeTree')
-        compiler.compile_source_in_tree('from packages import dynamic\na, b = foo(1.0, __inline__=False)', root)
+        compiler.compile_source_in_tree('from packages import dynamic\nr = foo(1.0, __inline__=False)\na = r.double\nb = r.original', root)
         child = _child(root)
         obj = next(node for node in child.nodes if node.bl_idname == 'GeometryNodeObjectInfo').inputs['Object'].default_value
         obj_name, mesh_name = obj.name, obj.data.name
@@ -139,7 +141,7 @@ def test_copied_group_authority_is_not_deletion_proof():
     with tempfile.TemporaryDirectory() as tmp:
         _install_fixture(tmp)
         root = bpy.data.node_groups.new('NFExt_duplicate_authority', 'GeometryNodeTree')
-        compiler.compile_source_in_tree('from packages import dynamic\na, b = foo(1.0, __inline__=False)', root)
+        compiler.compile_source_in_tree('from packages import dynamic\nr = foo(1.0, __inline__=False)\na = r.double\nb = r.original', root)
         child = _child(root)
         copied = child.copy()
         compiler.compile_source_in_tree('a = cube(1)', root)
@@ -152,7 +154,7 @@ def test_reopened_ownership_metadata_is_not_deletion_proof():
     with tempfile.TemporaryDirectory() as tmp:
         _install_fixture(tmp)
         root = bpy.data.node_groups.new('NFExt_unverified_authority', 'GeometryNodeTree')
-        compiler.compile_source_in_tree('from packages import dynamic\na, b = foo(1.0, __inline__=False)', root)
+        compiler.compile_source_in_tree('from packages import dynamic\nr = foo(1.0, __inline__=False)\na = r.double\nb = r.original', root)
         child = _child(root)
         registry = bpy.app.driver_namespace[SESSION_PUBLISHED_GROUPS_KEY]
         registry.pop(child.as_pointer(), None)
@@ -167,8 +169,7 @@ def test_source_group_rebuild_retires_removed_extension_occurrence():
         source = '''from packages import dynamic
 
 def nf_fixture(v: Float):
-    a, b = foo(v, __inline__=False)
-    return a
+    return foo(v, __inline__=False).double
 '''
         group = compiler.create_expression_group(source, 'NFExt_source_child_retirement')
         child = _child(group)
@@ -190,7 +191,7 @@ def test_failed_replacement_does_not_retire_committed_child():
     with tempfile.TemporaryDirectory() as tmp:
         _install_fixture(tmp, backend_mode='owned_resources')
         root = bpy.data.node_groups.new('NFExt_failure_preserves_child', 'GeometryNodeTree')
-        source = 'from packages import dynamic\na,b=foo(1.0,__inline__=False)'
+        source = 'from packages import dynamic\nr = foo(1.0,__inline__=False)\na = r.double\nb = r.original'
         compiler.compile_source_in_tree(source, root)
         original = _child(root)
         original_ptr = original.as_pointer()

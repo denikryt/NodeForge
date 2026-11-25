@@ -20,6 +20,8 @@ from typing import Iterable, Mapping
 
 from ..compiler_identities import normalize_library_package_id
 from ..errors import CompileError
+from ..nf_types import NFType
+from ..result_keys import validate_named_result_key
 from .contracts import (
     ExtensionCallableId,
     ExtensionCallableSpec,
@@ -522,8 +524,8 @@ class ExtensionOwnerSession:
             except Exception as exc:
                 raise CompileError(f"Dynamic result resolver preflight failed for {self.snapshot.owner_key}: {exc}") from exc
 
-    def invoke_result_resolver(self, callable_id: ExtensionCallableId, arguments, *, overload_index=None) -> tuple:
-        """Resolve one exact ordered executable tuple within the owner's SEMANTIC generation."""
+    def invoke_result_resolver(self, callable_id: ExtensionCallableId, arguments, *, overload_index=None) -> tuple[tuple[str, NFType], ...]:
+        """Resolve one ordered named executable schema within the owner's SEMANTIC generation."""
         families, _ = self.normalize_interface()
         family = families.get(callable_id)
         if not family or family[0].result.kind != "DYNAMIC_RESULTS":
@@ -538,12 +540,14 @@ class ExtensionOwnerSession:
                 result = function(arguments)
             except Exception as exc:
                 raise CompileError(f"Dynamic result resolver {label} failed: {exc}") from exc
-        from ..nf_types import NFType
-        if type(result) not in (tuple, list) or not result or any(type(typ) is not NFType for typ in result):
-            raise CompileError(
-                f"Dynamic result resolver {label} must return a nonempty tuple/list of exact NFType members"
-            )
-        return tuple(result)
+        if type(result) is not dict or not result or any(type(typ) is not NFType for typ in result.values()):
+            raise CompileError(f"Dynamic result resolver {label} must return a nonempty dict of names to exact NFType members")
+        for name in result:
+            try:
+                validate_named_result_key(name)
+            except ValueError as exc:
+                raise CompileError(f"Dynamic result resolver {label}: {exc}") from exc
+        return tuple(result.items())
 
     def type_specs(self) -> Mapping[ExtensionTypeId, ExtensionTypeSpec]:
         """Return the immutable normalized semantic record schemas for this owner."""
@@ -795,7 +799,7 @@ class ExtensionRegistry:
         """Return the conservative owner-code fingerprint for one admitted owner."""
         return self._session_for_owner(owner_key).snapshot.fingerprint
 
-    def invoke_result_resolver(self, callable_id: ExtensionCallableId, arguments, *, overload_index=None) -> tuple:
+    def invoke_result_resolver(self, callable_id: ExtensionCallableId, arguments, *, overload_index=None) -> tuple[tuple[str, NFType], ...]:
         """Delegate one call-local signature request to the selected owner session."""
         return self._session_for_owner(callable_id.owner).invoke_result_resolver(
             callable_id, arguments, overload_index=overload_index,

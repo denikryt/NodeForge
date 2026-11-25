@@ -27,6 +27,7 @@ from .contracts import (
 )
 from ..nf_types import NFType
 from ..extension_result_api import DynamicResults
+from ..result_keys import validate_named_result_key
 
 
 EXTENSION_API_VERSION = 2
@@ -78,7 +79,10 @@ def normalize_implementation_ref(
 
 def _marker_nf_type(annotation: object) -> NFType | None:
     """Return the canonical type for one exact exported annotation marker."""
-    return MARKER_TO_NF_TYPE.get(annotation)
+    try:
+        return MARKER_TO_NF_TYPE.get(annotation)
+    except TypeError:
+        return None
 
 
 def _normalize_nf_set(annotation: object, *, context: str) -> TypeSpec:
@@ -116,6 +120,8 @@ def normalize_semantic_type_annotation(
     direct = _marker_nf_type(annotation)
     if direct is not None:
         return TypeSpec("NF_SET", frozenset({direct}))
+    if isinstance(annotation, dict):
+        raise CompileError(f"{context} cannot use a named executable result declaration")
     scalar_kind = _PYTHON_SCALAR_KINDS.get(annotation)
     if scalar_kind is not None:
         return TypeSpec("PY_SCALAR", python_scalar_kind=scalar_kind)
@@ -321,6 +327,20 @@ def _normalize_result_annotation(
     """Normalize one executable or frontend-semantic public result."""
     if annotation is DynamicResults:
         return TypeSpec("DYNAMIC_RESULTS")
+    if type(annotation) is dict:
+        if not annotation:
+            raise CompileError(f"{context} named results must be nonempty")
+        items = []
+        for name, marker in annotation.items():
+            try:
+                validate_named_result_key(name)
+            except ValueError as exc:
+                raise CompileError(f"{context}: {exc}") from exc
+            typ = _marker_nf_type(marker)
+            if typ is None:
+                raise CompileError(f"{context} named result {name!r} must declare one exact NodeForge marker")
+            items.append((name, typ))
+        return TypeSpec("NAMED_RESULTS", named_items=tuple(items))
     try:
         semantic = normalize_semantic_type_annotation(annotation, class_type_ids=class_type_ids, context=context)
     except CompileError:

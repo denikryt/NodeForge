@@ -414,12 +414,14 @@ def _source_result_spec(contract):
     return RuntimeCallResult(types[0]) if len(types) == 1 else TupleCallResult(types)
 
 
-def _extension_result_spec(spec: ExtensionCallableSpec, resolved_types=None):
+def _extension_result_spec(spec: ExtensionCallableSpec, resolved_schema=None):
     """Convert one exact extension result TypeSpec to the existing analyzed call shape."""
     if spec.result.kind == "DYNAMIC_RESULTS":
-        if resolved_types is None:
+        if resolved_schema is None:
             raise CompileError("Internal error: dynamic extension result has not been resolved")
-        return TupleCallResult(tuple(resolved_types))
+        return NamedOutputsCallResult(tuple(resolved_schema))
+    if spec.result.kind == "NAMED_RESULTS":
+        return NamedOutputsCallResult(spec.result.named_items)
     if spec.result.kind == "NF_SET":
         return RuntimeCallResult(next(iter(spec.result.nf_types)))
     return TupleCallResult(tuple(next(iter(item.nf_types)) for item in spec.result.items))
@@ -631,12 +633,12 @@ def _analyze_extension_backend_call(
         )
 
     overload_index = selected_index if len(family) > 1 else None
-    result_types = None
+    resolved_schema = None
     if selected_spec.result.kind == "DYNAMIC_RESULTS":
-        result_types = registry.invoke_result_resolver(
+        resolved_schema = registry.invoke_result_resolver(
             selected_spec.id, MappingProxyType(resolver_arguments), overload_index=overload_index,
         )
-    result_spec = _extension_result_spec(selected_spec, result_types)
+    result_spec = _extension_result_spec(selected_spec, resolved_schema)
     analyzed_call = AnalyzedCall(
         target=resolved,
         runtime_operands=tuple(runtime_operands),
@@ -899,7 +901,7 @@ def _analyze_extension_semantic_call(
         else:
             bound.arguments[parameter.name] = acquired_items[0]
 
-    result_types = None
+    resolved_schema = None
     if spec.result.kind == "DYNAMIC_RESULTS":
         resolver_arguments = {}
         for parameter in spec.parameters:
@@ -919,7 +921,7 @@ def _analyze_extension_semantic_call(
             resolver_arguments[parameter.name] = (
                 tuple(argument_items) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else argument_items[0]
             )
-        result_types = registry.invoke_result_resolver(spec.id, MappingProxyType(resolver_arguments))
+        resolved_schema = registry.invoke_result_resolver(spec.id, MappingProxyType(resolver_arguments))
 
     semantic_value = registry.invoke_semantic(spec.id, *bound.args, **bound.kwargs)
     packed = invocation.pack_result(semantic_return, semantic_value)
@@ -935,7 +937,7 @@ def _analyze_extension_semantic_call(
 
     if execution_form is not ExtensionExecutionForm.SEMANTIC_THEN_BACKEND:
         raise CompileError("Internal error: semantic extension call has unexpected execution form")
-    result_spec = _extension_result_spec(spec, result_types)
+    result_spec = _extension_result_spec(spec, resolved_schema)
     runtime_operands = tuple(AnalyzedCallOperand(None, source.typ) for source in dependencies)
     analyzed_call = AnalyzedCall(
         target=resolved,

@@ -59,12 +59,12 @@
             "interface": [
               {
                 "in_out": "OUTPUT",
-                "name": "Result_0",
+                "name": "scalar",
                 "socket_type": "NodeSocketFloat"
               },
               {
                 "in_out": "OUTPUT",
-                "name": "Result_1",
+                "name": "vector",
                 "socket_type": "NodeSocketVector"
               },
               {

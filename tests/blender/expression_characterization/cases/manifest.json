@@ -741,7 +741,7 @@
   },
   {
     "id": "extension_dynamic_mixed",
-    "description": "Grouped DynamicResults returns a heterogeneous Float and Vector tuple",
+    "description": "Grouped DynamicResults returns a heterogeneous named Float and Vector results",
     "tags": [
       "extension-graphs",
       "extension",
@@ -751,7 +751,7 @@
   },
   {
     "id": "extension_dynamic_singleton",
-    "description": "Call-specific singleton DynamicResults preserves tuple unpacking and socket types",
+    "description": "Call-specific singleton DynamicResults preserves named projection and socket types",
     "tags": [
       "extension-graphs",
       "extension",

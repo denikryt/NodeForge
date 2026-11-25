@@ -136,3 +136,65 @@ def test_named_results_cannot_be_runtime_values_or_zone_state(tail):
     """A named result cannot cross runtime socket or zone-state boundaries whole."""
     with pytest.raises(CompileError):
         _compile(tail)
+
+
+@pytest.mark.parametrize('postponed', [False, True])
+def test_static_extension_mapping_annotations(tmp_path, postponed):
+    """Evaluated dictionary annotations normalize to immutable ordered exact markers."""
+    from test_extension_dynamic_results import _owner, _dynamic_semantic_environment, _INTERFACE
+    from NodeForge.semantic.analysis import analyze_expression
+    from NodeForge.semantic.lowering import lower_analyzed_expression
+    interface = _INTERFACE.replace('-> DynamicResults:', '-> {"first": Float, "Two Words": Float}:')
+    if postponed:
+        interface = 'from __future__ import annotations\n' + interface
+    owner = _owner(tmp_path, interface, backend='def foo(context, value): return {"Two Words": value, "first": value}')
+    env, cid = _dynamic_semantic_environment(owner)
+    spec = owner.normalize_interface()[0][cid][0]
+    assert spec.result.kind == 'NAMED_RESULTS'
+    assert spec.result.named_items == (('first', NFType.FLOAT), ('Two Words', NFType.FLOAT))
+    expr = ast.parse('foo(f)["Two Words"]',mode='eval').body
+    analysis = analyze_expression(expr, env)
+    program = lower_analyzed_expression(expr, analysis)
+    call = next(op for op in program.operations if isinstance(op, IRCall))
+    assert call.result_names == ('first', 'Two Words')
+    assert program.result == call.results[1]
+
+
+@pytest.mark.parametrize('annotation', ['{}', '{"": Float}', '{1: Float}', '{"x": Float | Int}',
+    '{"x": {"y": Float}}', '{"x": 1}', '{"x" * 64: Float}'])
+def test_invalid_static_extension_named_annotation(tmp_path, annotation):
+    """Invalid mappings cannot enter a normalized executable contract."""
+    from test_extension_dynamic_results import _owner, _INTERFACE
+    interface = _INTERFACE.replace('Float, DynamicResults', 'Float, Int, DynamicResults').replace('-> DynamicResults:', f'-> {annotation}:')
+    owner = _owner(tmp_path, interface, backend='def foo(context, value): return value')
+    with pytest.raises(CompileError):
+        owner.normalize_interface()
+
+
+def test_named_type_spec_cannot_be_nested_or_parameter(tmp_path):
+    """Named executable schemas do not participate in semantic-state or parameter types."""
+    import inspect
+    from NodeForge.extensions.contracts import TypeSpec, ExtensionParameterSpec
+    spec = TypeSpec('NAMED_RESULTS', named_items=(('x', NFType.FLOAT),))
+    with pytest.raises(ValueError):
+        TypeSpec('LIST', item=spec)
+    with pytest.raises(TypeError):
+        ExtensionParameterSpec('x', inspect.Parameter.POSITIONAL_OR_KEYWORD, spec, None)
+    with pytest.raises(ValueError):
+        TypeSpec('NAMED_RESULTS', named_items=(('x', NFType.FLOAT), ('x', NFType.INT)))
+
+
+def test_dynamic_extension_can_change_only_names(tmp_path):
+    """Different keys of equal types remain distinct resolved contracts."""
+    from test_extension_dynamic_results import _owner, _dynamic_semantic_environment, _DYNAMIC_INTERFACE
+    from NodeForge.semantic.analysis import analyze_expression
+    from NodeForge.semantic.lowering import lower_analyzed_expression
+    owner = _owner(tmp_path, _DYNAMIC_INTERFACE, backend='def foo(context, *args, **kwargs): pass',
+        semantic='from NodeForge.nf_types import NFType\ndef _result_types_foo(args): return {args["domain"].value: NFType.INT}')
+    env, _ = _dynamic_semantic_environment(owner)
+    for key in ('POINT', 'FACE'):
+        expr = ast.parse(f'foo(geo, domain={key!r})[{key!r}]', mode='eval').body
+        analysis = analyze_expression(expr, env)
+        call = next(op for op in lower_analyzed_expression(expr, analysis).operations if isinstance(op, IRCall))
+        assert call.result_names == (key,)
+        assert call.results[0].typ is NFType.INT

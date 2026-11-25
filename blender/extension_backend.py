@@ -95,16 +95,31 @@ def _validate_result_leaf(value, expected_type: NFType, context: ExtensionBacken
 def _validate_result(value, result_spec: TypeSpec, context: ExtensionBackendContext):
     """Compare physical return shape against the exact typed Call IR result tuple."""
     expected_types = context.result_types
+    names = context.result_names
     if result_spec.kind == "NF_SET":
         declared_types = (next(iter(result_spec.nf_types)),)
     elif result_spec.kind == "TUPLE_FIXED":
         declared_types = tuple(next(iter(item.nf_types)) for item in result_spec.items)
+    elif result_spec.kind == "NAMED_RESULTS":
+        declared_names = tuple(name for name, _ in result_spec.named_items)
+        declared_types = tuple(typ for _, typ in result_spec.named_items)
+        if names != declared_names:
+            raise CompileError("Extension Call IR result names disagree with the selected callable contract")
     elif result_spec.kind == "DYNAMIC_RESULTS":
         declared_types = expected_types
+        if names is None:
+            raise CompileError("Dynamic extension Call IR requires named results")
     else:
         raise CompileError("Internal error: non-executable result reached the physical backend")
     if expected_types != declared_types:
         raise CompileError("Extension Call IR results disagree with the selected callable contract")
+    if result_spec.kind in {"NAMED_RESULTS", "DYNAMIC_RESULTS"}:
+        if type(value) is not dict or set(value) != set(names):
+            raise CompileError(f"Extension implementation must return a dict with exact result keys {names!r}")
+        return tuple(_validate_result_leaf(value[name], typ, context)
+                     for name, typ in zip(names, expected_types))
+    if names is not None:
+        raise CompileError("Positional extension Call IR cannot carry named results")
     if result_spec.kind == "NF_SET":
         return _validate_result_leaf(value, expected_types[0], context)
     if not isinstance(value, tuple) or len(value) != len(expected_types):
@@ -129,6 +144,7 @@ def lower_extension_call(context, operation, operands, x, y):
         location=(x, y),
         generated_resource_transaction=transaction,
         result_types=tuple(item.typ for item in operation.results),
+        result_names=operation.result_names,
     )
     try:
         if operation.extension_state_type is None:

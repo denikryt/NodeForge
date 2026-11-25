@@ -20,9 +20,9 @@ def test_grouped_dynamic_results_have_distinct_occurrences_and_external_referenc
         source = '''from packages import dynamic
 
 def nf_fixture(v: Float):
-    a, b = foo(v, __inline__=False)
-    c, d = foo(a, __inline__=False)
-    return c, d
+    first = foo(v, __inline__=False)
+    second = foo(first.double, __inline__=False)
+    return second.double, second.original
 '''
         group = compile_group(source, 'NFExt_grouped_dynamic')
         group_nodes = [node for node in group.nodes if node.bl_idname == 'GeometryNodeGroup']
@@ -33,7 +33,7 @@ def nf_fixture(v: Float):
         assert group_a.get(EXTENSION_AUTHORITY_PROP) != group_b.get(EXTENSION_AUTHORITY_PROP)
         for node in group_nodes:
             assert [s.name for s in node.inputs] == ['value']
-            assert [s.name for s in node.outputs] == ['Result_0', 'Result_1']
+            assert [s.name for s in node.outputs] == ['double', 'original']
             assert len([n for n in node.node_tree.nodes if n.bl_idname == 'ShaderNodeMath']) == 1
         before = {g.get(EXTENSION_AUTHORITY_PROP): g.as_pointer() for g in (group_a, group_b)}
         compiler.update_expression_group(group, source)
@@ -51,8 +51,8 @@ def test_inline_dynamic_results_keep_direct_nodes_and_no_extension_group():
         source = '''from packages import dynamic
 
 def nf_fixture(v: Float):
-    a, b = foo(v)
-    return a, b
+    r = foo(v)
+    return r.double, r.original
 '''
         group = compile_group(source, 'NFExt_inline_dynamic')
         assert len([node for node in group.nodes if node.bl_idname == 'GeometryNodeGroup']) == 0
@@ -86,7 +86,7 @@ def nf_fixture(value: Int):
 
 
 @pytest.mark.parametrize('bad,pattern', [
-    ('short', '2-item tuple'), ('wrong_type', 'expected FLOAT'),
+    ('short', 'exact result keys'), ('wrong_type', 'expected FLOAT'),
     ('input_socket', 'output sockets'), ('wrong_socket_type', 'physical socket type'),
 ])
 def test_grouped_invalid_backend_result_rolls_back_owned_group_and_resources(bad,pattern):
@@ -101,33 +101,32 @@ def test_grouped_invalid_backend_result_rolls_back_owned_group_and_resources(bad
             compile_group('''from packages import dynamic
 
 def nf_fixture(v: Float):
-    a, b = foo(v, __inline__=False)
-    return a, b
+    r = foo(v, __inline__=False)
+    return r.double, r.original
 ''', 'NFExt_grouped_bad_'+bad)
         assert {g.as_pointer() for g in bpy.data.node_groups} == groups_before
         assert {m.as_pointer() for m in bpy.data.meshes} == meshes_before
 
 
-def test_singleton_dynamic_results_remain_tuple_when_grouped():
+def test_singleton_dynamic_results_remain_named_when_grouped():
     with tempfile.TemporaryDirectory() as temp:
         directory = Path(temp) / 'package'
         _write_package(directory)
         semantic = directory / 'systems' / 'dynamic' / 'semantic.py'
-        semantic.write_text(semantic.read_text().replace('(NFType.FLOAT, NFType.FLOAT)', '(NFType.FLOAT,)'))
+        semantic.write_text(semantic.read_text().replace('{"double": NFType.FLOAT, "original": NFType.FLOAT}', '{"double": NFType.FLOAT}'))
         backend = directory / 'systems' / 'dynamic' / 'backend.py'
         body = backend.read_text()
         body = body.replace('assert context.result_types == (NFType.FLOAT, NFType.FLOAT)',
                             'assert context.result_types == (NFType.FLOAT,)')
-        body = body.replace('return (context.value(node.outputs[0], NFType.FLOAT), value)',
-                            'return (context.value(node.outputs[0], NFType.FLOAT),)')
+        body = body.replace("return {'original': value, 'double': context.value(node.outputs[0], NFType.FLOAT)}",
+                            "return {'double': context.value(node.outputs[0], NFType.FLOAT)}")
         backend.write_text(body)
         packages.install_package_directory(directory)
         group = compile_group('''from packages import dynamic
 
 def nf_fixture(v: Float):
-    (a,) = foo(v, __inline__=False)
-    return a
+    return foo(v, __inline__=False).double
 ''', 'NFExt_grouped_singleton')
         grouped = [node for node in group.nodes if node.bl_idname == 'GeometryNodeGroup']
         assert len(grouped) == 1
-        assert [s.name for s in grouped[0].outputs] == ['Result_0']
+        assert [s.name for s in grouped[0].outputs] == ['double']

@@ -25,7 +25,7 @@ def _write_package(root: Path, *, bad: str = "") -> None:
     (root / "nodeforge_package.json").write_text(json.dumps({
         "schema_version": 1, "id": "vendor.extension.dynamic",
         "name": "Dynamic Result Fixture", "version": "1.0.0", "author": "Tests",
-        "description": "Dynamic tuple physical verification", "nodeforge_min_version": "0.93.3",
+        "description": "Dynamic named result physical verification", "nodeforge_min_version": "0.93.3",
         "nodeforge_max_version": None, "contents": {"systems": "systems"},
         "permissions": {"python": True},
     }), encoding="utf-8")
@@ -39,17 +39,18 @@ def foo(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> DynamicResults:
     (owner / "semantic.py").write_text('''
 from NodeForge.nf_types import NFType
 def _result_types_foo(arguments):
-    return (NFType.FLOAT, NFType.FLOAT)
+    return {"double": NFType.FLOAT, "original": NFType.FLOAT}
 ''', encoding="utf-8")
     variant = {
-        "": "return (context.value(node.outputs[0], NFType.FLOAT), value)",
-        "short": "return (context.value(node.outputs[0], NFType.FLOAT),)",
-        "long": "return (context.value(node.outputs[0], NFType.FLOAT), value, value)",
+        "": "return {'original': value, 'double': context.value(node.outputs[0], NFType.FLOAT)}",
+        "short": "return {'double': context.value(node.outputs[0], NFType.FLOAT)}",
+        "long": "return {'double': context.value(node.outputs[0], NFType.FLOAT), 'original': value, 'extra': value}",
         "scalar": "return context.value(node.outputs[0], NFType.FLOAT)",
-        "wrong_type": "return (ExtensionBackendValue(node.outputs[0], NFType.BOOL), value)",
-        "input_socket": "return (ExtensionBackendValue(node.inputs[0], NFType.FLOAT), value)",
-        "wrong_socket_type": "other = context.group.nodes.new('GeometryNodeInputPosition'); return (ExtensionBackendValue(other.outputs[0], NFType.FLOAT), value)",
-        "foreign_socket": "return (ExtensionBackendValue(bpy.data.node_groups['NFTest_other_dynamic'].nodes[0].outputs[0], NFType.FLOAT), value)",
+        "tuple": "return (context.value(node.outputs[0], NFType.FLOAT), value)",
+        "wrong_type": "return {'double': ExtensionBackendValue(node.outputs[0], NFType.BOOL), 'original': value}",
+        "input_socket": "return {'double': ExtensionBackendValue(node.inputs[0], NFType.FLOAT), 'original': value}",
+        "wrong_socket_type": "other = context.group.nodes.new('GeometryNodeInputPosition'); return {'double': ExtensionBackendValue(other.outputs[0], NFType.FLOAT), 'original': value}",
+        "foreign_socket": "return {'double': ExtensionBackendValue(bpy.data.node_groups['NFTest_other_dynamic'].nodes[0].outputs[0], NFType.FLOAT), 'original': value}",
     }[bad]
     (owner / "backend.py").write_text(f'''
 import bpy
@@ -70,12 +71,12 @@ def foo(context, value):
 _SOURCE = '''from packages import dynamic
 
 def nf_fixture(value: Float['Value']=3.0):
-    a, b = foo(value)
-    return a, b
+    r = foo(value)
+    return r.double, r.original
 '''
 
 
-def test_dynamic_tuple_creates_valid_typed_nodes_and_immutable_context():
+def test_dynamic_mapping_creates_valid_typed_nodes_and_immutable_context():
     """The selected IR result types reach one backend and validate exact sockets."""
     with tempfile.TemporaryDirectory() as tmp:
         source = Path(tmp) / "package"
@@ -86,15 +87,17 @@ def test_dynamic_tuple_creates_valid_typed_nodes_and_immutable_context():
         assert len([socket for socket in group.interface.items_tree if socket.item_type == "SOCKET" and socket.in_out == "OUTPUT"]) == 2
         test_context = ExtensionBackendContext(group=group, location=(0, 0),
                                                generated_resource_transaction=object(),
-                                               result_types=(NFType.FLOAT,))
+                                               result_types=(NFType.FLOAT,), result_names=("value",))
         with pytest.raises(AttributeError):
             test_context.result_types = (NFType.INT,)
+        with pytest.raises(AttributeError):
+            test_context.result_names = ("other",)
         bpy.data.node_groups.remove(group)
 
 
 @pytest.mark.parametrize("bad,pattern", [
-    ("short", "2-item tuple"), ("long", "2-item tuple"),
-    ("scalar", "2-item tuple"), ("wrong_type", "expected FLOAT"),
+    ("short", "exact result keys"), ("long", "exact result keys"),
+    ("scalar", "exact result keys"), ("tuple", "exact result keys"), ("wrong_type", "expected FLOAT"),
     ("input_socket", "output sockets"), ("wrong_socket_type", "physical socket type"),
     ("foreign_socket", "current Geometry Nodes group"),
 ])
@@ -120,8 +123,8 @@ def test_dynamic_backend_rejects_malformed_result_and_rolls_back(bad, pattern):
             bpy.data.node_groups.remove(foreign)
 
 
-def test_dynamic_extension_compiles_typed_tuple_in_root():
-    """Root Compile publishes a physical DynamicResults tuple with valid sockets."""
+def test_dynamic_extension_compiles_typed_mapping_in_root():
+    """Root Compile publishes a physical DynamicResults mapping with valid sockets."""
     from NodeForge import compiler
     with tempfile.TemporaryDirectory() as tmp:
         source = Path(tmp) / "package"
@@ -130,8 +133,8 @@ def test_dynamic_extension_compiles_typed_tuple_in_root():
         root = bpy.data.node_groups.new("NFTest_dynamic_direct_root", "GeometryNodeTree")
         try:
             result = compiler.compile_source_in_tree('''from packages import dynamic
-value_a, value_b = foo(1.0)
-combined = value_a + value_b
+r = foo(1.0)
+combined = r.double + r.original
 ''', root)
             assert result.outcome == "ROOT_REPLACEMENT"
             operations = {node.operation: node for node in root.nodes

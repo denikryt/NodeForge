@@ -17,16 +17,16 @@ def mixed(context, value):
     scaled = scale(context, value)
     vector = context.group.nodes.new("ShaderNodeCombineXYZ")
     context.group.links.new(value.socket, vector.inputs[0])
-    return (scaled, context.value(vector.outputs[0], NFType.VECTOR))
+    return {"scalar": scaled, "vector": context.value(vector.outputs[0], NFType.VECTOR)}
 
 
 def choose(context, value, form="FLOAT"):
-    """Return a singleton typed tuple selected by form."""
+    """Return a singleton named result selected by form."""
     if form == "VECTOR":
         vector = context.group.nodes.new("ShaderNodeCombineXYZ")
         context.group.links.new(value.socket, vector.inputs[0])
-        return (context.value(vector.outputs[0], NFType.VECTOR),)
-    return (value,)
+        return {"value": context.value(vector.outputs[0], NFType.VECTOR)}
+    return {"value": value}
 
 
 def capture(context, geometry):

@@ -16,7 +16,7 @@ from NodeForge.nf_types import NFType
 from NodeForge.resolved_environment import PackageCallableExport, ResolvedPackageNamespace
 from NodeForge.semantic.analysis import SemanticEnvironment, analyze_expression
 from NodeForge.semantic.body import _BodyIdentityAllocator
-from NodeForge.semantic.call_resolution import CallableEnvironment, TupleCallResult
+from NodeForge.semantic.call_resolution import CallableEnvironment, NamedOutputsCallResult
 from NodeForge.semantic.ir import (
     IRCall, IRExtensionMaterializationMode, IRExtensionMaterialization,
     IRCallableKind, IRCallableTarget, IRValue,
@@ -43,7 +43,7 @@ CALLED = 0
 def _result_types_foo(arguments):
     global CALLED
     CALLED += 1
-    return (NFType.FLOAT,)
+    return {"value": NFType.FLOAT}
 ''')
     (owner_path / "backend.py").write_text(backend or "def foo(context, value): return value\n")
     owner = ExtensionOwnerSession(capture_owner_code_snapshot(("system", "fixture.extension", "one"), owner_path))
@@ -77,7 +77,7 @@ def _ir(source, env):
 
 
 def test_default_true_and_false_freeze_one_physical_mode_and_singleton_tuple(tmp_path):
-    """The grouped child receives the already resolved dynamic tuple, not a new resolver call."""
+    """The grouped child receives the already resolved dynamic schema, not a new resolver call."""
     env, cid, owner = _synthetic(tmp_path)
     materializations = []
     for source, mode in (("syn.foo(x)", "INLINE"),
@@ -86,8 +86,8 @@ def test_default_true_and_false_freeze_one_physical_mode_and_singleton_tuple(tmp
         analyzed, call = _ir(source, env)
         assert call.extension_materialization.mode.value == mode
         assert call.extension_materialization.call_site.callee == cid
-        assert analyzed.result.types == (NFType.FLOAT,)
-        assert isinstance(analyzed.result, TupleCallResult)
+        assert analyzed.result.items == (("value", NFType.FLOAT),)
+        assert isinstance(analyzed.result, NamedOutputsCallResult)
         assert tuple(result.typ for result in call.results) == (NFType.FLOAT,)
         materializations.append(call.extension_materialization.call_site)
     assert [item.ordinal for item in materializations] == [0, 1, 2]

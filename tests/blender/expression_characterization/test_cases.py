@@ -275,7 +275,7 @@ def test_extension_baselines_pin_dynamic_typed_outputs_and_semantic_dependencies
     child, = [node['group']['graph'] for node in heterogeneous['nodes'] if 'group' in node]
     assert [(item['name'], item['socket_type']) for item in child['interface']
             if item['in_out'] == 'OUTPUT'] == [
-        ('Result_0', 'NodeSocketFloat'), ('Result_1', 'NodeSocketVector'),
+        ('scalar', 'NodeSocketFloat'), ('vector', 'NodeSocketVector'),
     ]
     assert any(node['bl_idname'] == 'ShaderNodeSeparateXYZ' for node in heterogeneous['nodes'])
 
@@ -286,7 +286,7 @@ def test_extension_baselines_pin_dynamic_typed_outputs_and_semantic_dependencies
                    if item['in_out'] == 'OUTPUT'] for group in child_groups]
     assert signatures == [['NodeSocketVector'], ['NodeSocketFloat']]
     assert [item['name'] for group in child_groups for item in group['interface']
-            if item['in_out'] == 'OUTPUT'] == ['Result_0', 'Result_0']
+            if item['in_out'] == 'OUTPUT'] == ['value', 'value']
 
     semantic = load_case_baseline('extension_semantic_dependency')['graph']
     child, = [node['group']['graph'] for node in semantic['nodes'] if 'group' in node]

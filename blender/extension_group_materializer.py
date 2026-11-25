@@ -39,6 +39,8 @@ def _input_names(operation, spec):
 
 def _output_names(operation, spec):
     """Use the selected result carrier, never its coincidental output count."""
+    if operation.result_names is not None:
+        return operation.result_names
     if spec.result.kind == 'NF_SET':
         if len(operation.results) != 1:
             raise CompileError('Extension scalar result has invalid arity')
@@ -53,7 +55,7 @@ def _fingerprint(operation, spec, registry):
         spec, tuple((a.parameter_index, a.variadic_index, a.value.typ) for a in operation.arguments),
         tuple((a.parameter_index, a.variadic_index, a.value) for a in operation.static_arguments),
         operation.extension_state_type, operation.extension_state,
-        tuple(r.typ for r in operation.results), spec.result.kind,
+        tuple(r.typ for r in operation.results), operation.result_names, spec.result.kind,
         registry.owner_fingerprint(operation.target.extension_callable_id.owner),
     )
     return hashlib.sha256(repr(payload).encode('utf-8')).hexdigest()

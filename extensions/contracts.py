@@ -9,6 +9,7 @@ from typing import Literal
 
 from ..evaluation_modes import EvaluationMode
 from ..nf_types import NFType
+from ..result_keys import validate_named_result_key
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,7 @@ class PythonScalarKind(str, Enum):
 TypeSpecKind = Literal[
     "NF_SET",
     "DYNAMIC_RESULTS",
+    "NAMED_RESULTS",
     "PY_SCALAR",
     "RECORD",
     "LIST",
@@ -93,13 +95,14 @@ class TypeSpec:
     python_scalar_kind: PythonScalarKind | None = None
     record_type: ExtensionTypeId | None = None
     item: "TypeSpec | None" = None
+    named_items: tuple[tuple[str, NFType], ...] = ()
 
     def __post_init__(self) -> None:
         """Freeze recursive members and reject malformed canonical specifications."""
         object.__setattr__(self, "nf_types", frozenset(self.nf_types))
         object.__setattr__(self, "items", tuple(self.items))
         allowed = {
-            "NF_SET", "DYNAMIC_RESULTS", "PY_SCALAR", "RECORD", "LIST",
+            "NF_SET", "DYNAMIC_RESULTS", "NAMED_RESULTS", "PY_SCALAR", "RECORD", "LIST",
             "TUPLE_FIXED", "TUPLE_VAR", "DICT_STR", "OPTIONAL",
         }
         if self.kind not in allowed:
@@ -115,6 +118,12 @@ class TypeSpec:
         if self.item is not None and not isinstance(self.item, TypeSpec):
             raise TypeError("TypeSpec.item must be TypeSpec or None")
 
+        object.__setattr__(self, "named_items", tuple(self.named_items))
+        if any(member.kind == "NAMED_RESULTS" for member in self.items) or (
+                self.item is not None and self.item.kind == "NAMED_RESULTS"):
+            raise ValueError("Named results cannot be nested in a TypeSpec")
+        if self.kind != "NAMED_RESULTS" and self.named_items:
+            raise ValueError("Only NAMED_RESULTS may carry named_items")
         populated = {
             "nf": bool(self.nf_types),
             "items": bool(self.items),
@@ -122,7 +131,19 @@ class TypeSpec:
             "record": self.record_type is not None,
             "item": self.item is not None,
         }
-        if self.kind == "DYNAMIC_RESULTS":
+        if self.kind == "NAMED_RESULTS":
+            if any(populated.values()) or not self.named_items:
+                raise ValueError("NAMED_RESULTS requires only nonempty named_items")
+            names = set()
+            for row in self.named_items:
+                if not isinstance(row, tuple) or len(row) != 2:
+                    raise TypeError("NAMED_RESULTS items must be (name, NFType) pairs")
+                name, typ = row
+                validate_named_result_key(name)
+                if name in names or type(typ) is not NFType:
+                    raise ValueError("NAMED_RESULTS requires unique keys and exact NFTypes")
+                names.add(name)
+        elif self.kind == "DYNAMIC_RESULTS":
             if any(populated.values()):
                 raise ValueError("DYNAMIC_RESULTS must carry no payload")
         elif self.kind == "NF_SET":
@@ -166,6 +187,8 @@ class ExtensionTypeSpec:
                 raise ValueError("ExtensionTypeSpec field names must be Python identifiers")
             if not isinstance(spec, TypeSpec):
                 raise TypeError("ExtensionTypeSpec field types must be TypeSpec records")
+            if spec.kind == "NAMED_RESULTS":
+                raise ValueError("Named results cannot be semantic record fields")
             names.append(name)
         if len(names) != len(set(names)):
             raise ValueError("ExtensionTypeSpec field names must be unique")
@@ -186,7 +209,7 @@ def is_frontend_semantic_type_spec(spec: TypeSpec) -> bool:
 
 def is_executable_result_type_spec(spec: TypeSpec) -> bool:
     """Return whether *spec* is an executable public result shape from the backend-only declarative extension contract."""
-    if spec.kind == "DYNAMIC_RESULTS":
+    if spec.kind in {"DYNAMIC_RESULTS", "NAMED_RESULTS"}:
         return True
     if spec.kind == "NF_SET":
         return len(spec.nf_types) == 1
