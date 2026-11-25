@@ -131,12 +131,15 @@ def compile_function_definition(
             if name not in inventory.parameters
         ),
     )
-    outputs = tuple(
-        GroupOutputContract(index, name, typ)
-        for index, (name, typ) in enumerate(body.output_summary.explicit_outputs)
-    )
-    if len(outputs) != len(shape.elements):
+    explicit = body.output_summary.explicit_outputs
+    if len(explicit) != len(shape.elements):
         raise CompileError(f"{fn.name}() return output count changed during semantic preparation")
+    outputs = []
+    for index, (element, (name, typ)) in enumerate(zip(shape.elements, explicit)):
+        if element.index != index or element.socket_name != name:
+            raise CompileError(f"{fn.name}() return output label or position changed during semantic preparation")
+        outputs.append(GroupOutputContract(index, name, typ, element.result_name))
+    outputs = tuple(outputs)
     if fn.returns is not None:
         if len(outputs) != 1:
             raise CompileError(f"{fn.name}() scalar return annotation is incompatible with tuple return")

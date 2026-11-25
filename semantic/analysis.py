@@ -403,6 +403,17 @@ def _call_result_types(result):
 
 
 
+def _source_result_spec(contract):
+    """Preserve the explicit carrier and ordered leaves of a prepared source call."""
+    outputs = contract.outputs
+    if not outputs:
+        raise CompileError(f"Source function {contract.function_id.name}() has no outputs")
+    if outputs[0].result_name is not None:
+        return NamedOutputsCallResult(tuple((output.result_name, output.typ) for output in outputs))
+    types = tuple(output.typ for output in outputs)
+    return RuntimeCallResult(types[0]) if len(types) == 1 else TupleCallResult(types)
+
+
 def _extension_result_spec(spec: ExtensionCallableSpec, resolved_types=None):
     """Convert one exact extension result TypeSpec to the existing analyzed call shape."""
     if spec.result.kind == "DYNAMIC_RESULTS":
@@ -1409,9 +1420,9 @@ def analyze_expression(expr, environment):
                 try:
                     key = _const_eval(node.slice, environment.const_eval_values)
                 except ConstEvalUnavailable as exc:
-                    raise CompileError("raw node output lookup requires a compile-time string key") from exc
+                    raise CompileError("named result lookup requires a compile-time string key") from exc
                 if not isinstance(key, str) or not key:
-                    raise CompileError("raw node output lookup requires a non-empty string key")
+                    raise CompileError("named result lookup requires a non-empty string key")
                 shape = base.result_shape.get(key)
                 resolved_name = None
                 structural = base.resolved_name.structural_binding if base.resolved_name is not None else None
@@ -1957,10 +1968,7 @@ def analyze_expression(expr, environment):
                         runtime_operands.append(AnalyzedCallOperand(parameter_name, actual, parameter.input_index))
                     else:
                         static_operands.append(AnalyzedStaticCallOperand(parameter.input_index, folded))
-                result_types = tuple(output.typ for output in prepared.contract.outputs)
-                if not result_types:
-                    raise CompileError(f"{name}() definition has no return values")
-                result_spec = RuntimeCallResult(result_types[0]) if len(result_types) == 1 else TupleCallResult(result_types)
+                result_spec = _source_result_spec(prepared.contract)
                 return record(node, ExpressionFact(
                     call_result_shape(result_spec),
                     analyzed_call=AnalyzedCall(
@@ -2060,10 +2068,7 @@ def analyze_expression(expr, environment):
                         runtime_operands.append(AnalyzedCallOperand(param, actual_type, parameter.input_index))
                     else:
                         static_operands.append(AnalyzedStaticCallOperand(parameter.input_index, folded))
-                result_types = tuple(output.typ for output in prepared.contract.outputs)
-                if not result_types:
-                    raise CompileError(f"Local function {name}() has no outputs")
-                result_spec = RuntimeCallResult(result_types[0]) if len(result_types) == 1 else TupleCallResult(result_types)
+                result_spec = _source_result_spec(prepared.contract)
                 analyzed_call = AnalyzedCall(
                     target=resolved,
                     runtime_operands=tuple(runtime_operands),
@@ -2186,10 +2191,7 @@ def analyze_expression(expr, environment):
                         )
                     else:
                         static_operands.append(AnalyzedStaticCallOperand(parameter.input_index, folded))
-                result_types = tuple(output.typ for output in prepared.contract.outputs)
-                if not result_types:
-                    raise CompileError(f"Library function {name} has no outputs")
-                result_spec = RuntimeCallResult(result_types[0]) if len(result_types) == 1 else TupleCallResult(result_types)
+                result_spec = _source_result_spec(prepared.contract)
                 analyzed_call = AnalyzedCall(
                     target=resolved,
                     runtime_operands=tuple(runtime_operands),

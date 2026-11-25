@@ -185,7 +185,7 @@ class IRTuple:
 
 @dataclass(frozen=True)
 class IRNamedOutputs:
-    """Store declared raw-node outputs without collapsing one-entry ``outputs=``."""
+    """Store declared named outputs without collapsing one-entry results."""
 
     items: tuple[tuple[str, IRValue], ...]
 
@@ -386,6 +386,7 @@ class IRCall:
     static_arguments: tuple[IRStaticCallArgument, ...] = ()
     extension_state_type: TypeSpec | None = None
     extension_state: object | None = None
+    result_names: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         """Validate call records before backend realization."""
@@ -487,6 +488,8 @@ class IRCall:
             if len(input_selectors) != len(set(input_selectors)):
                 raise ValueError("raw node IRCall input selectors must be unique")
             if self.raw_output_mode is IRRawNodeOutputMode.SINGLE_OUTPUT:
+                if self.result_names is not None:
+                    raise ValueError("SINGLE_OUTPUT raw node IRCall cannot carry named results")
                 if len(self.results) != 1:
                     raise ValueError("SINGLE_OUTPUT raw node IRCall requires exactly one result")
                 if option_map.get("outputs") is not None:
@@ -519,10 +522,20 @@ class IRCall:
                     raise ValueError("NAMED_OUTPUTS raw node IRCall requires unique output selectors")
                 if len(outputs) != len(self.results):
                     raise ValueError("NAMED_OUTPUTS raw node IRCall result count must match declared outputs")
+                if self.result_names != tuple(names):
+                    raise ValueError("NAMED_OUTPUTS raw node IRCall result names must match declared outputs")
                 if option_map.get("output") is not None or option_map.get("typ") is not None:
                     raise ValueError("NAMED_OUTPUTS raw node IRCall cannot carry single-output metadata")
         elif self.raw_output_mode is not None:
             raise ValueError("raw output mode is valid only for node() builtin calls")
+        if self.result_names is not None:
+            if (not isinstance(self.result_names, tuple)
+                    or len(self.result_names) != len(self.results)
+                    or any(not isinstance(name, str) or not name for name in self.result_names)
+                    or len(set(self.result_names)) != len(self.result_names)):
+                raise ValueError("IRCall result names must be distinct nonempty strings matching result arity")
+            if self.target.kind is IRCallableKind.BUILTIN and self.raw_output_mode is not IRRawNodeOutputMode.NAMED_OUTPUTS:
+                raise ValueError("Only named raw nodes can carry builtin result names")
 
 
 @dataclass(frozen=True)

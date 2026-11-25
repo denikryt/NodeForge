@@ -811,6 +811,10 @@ def _lower_source_call(context, operation, operands, x, y):
         raise CompileError("Internal error: prepared source callable FunctionId mismatch")
     if len(contract.outputs) != len(operation.results):
         raise CompileError("Internal error: source-call result arity changed before Blender lowering")
+    names = tuple(output.result_name for output in contract.outputs)
+    expected_names = names if names and names[0] is not None else None
+    if operation.result_names != expected_names:
+        raise CompileError("Internal error: source-call result names changed before Blender lowering")
     for result, output in zip(operation.results, contract.outputs):
         if result.typ is not output.typ:
             raise CompileError("Internal error: source-call result type changed before Blender lowering")

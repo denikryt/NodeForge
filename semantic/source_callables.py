@@ -9,6 +9,7 @@ from typing import Mapping
 from .callable_contracts import SourceCallableContract
 from ..compiler_identities import FunctionId, GroupCompilationIdentity, normalize_library_package_id
 from ..errors import CompileError
+from ..result_keys import validate_named_result_key
 from ..nf_types import NFType, serialize_nf_type
 
 
@@ -20,11 +21,12 @@ class LocalReturnElement:
     socket_name: str
     key: str
     expression: ast.expr
+    result_name: str | None = None
 
 
 @dataclass(frozen=True)
 class LocalReturnShape:
-    """Describe the fixed scalar/tuple return surface of one local function."""
+    """Describe the fixed scalar, tuple or named return surface of one local function."""
 
     elements: tuple[LocalReturnElement, ...]
 
@@ -92,6 +94,28 @@ def analyze_local_return_shape(fn: ast.FunctionDef, *, output_label: str | None 
     value = returns[0].value
     if value is None:
         raise CompileError(f"Local function {fn.name}() return must produce at least one value")
+    if isinstance(value, ast.Dict):
+        if fn.returns is not None or output_label is not None:
+            raise CompileError(f"Local function {fn.name}() scalar return annotation cannot annotate named results")
+        if not value.keys:
+            raise CompileError(f"Local function {fn.name}() cannot return an empty named result")
+        named = []
+        seen = set()
+        for index, (key, expression) in enumerate(zip(value.keys, value.values)):
+            if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
+                raise CompileError(f"Local function {fn.name}() named result keys must be literal strings")
+            name = key.value
+            try:
+                validate_named_result_key(name)
+            except ValueError as exc:
+                raise CompileError(f"Local function {fn.name}() {exc}") from exc
+            if name in seen:
+                raise CompileError(f"Local function {fn.name}() duplicate named result key {name!r}")
+            if isinstance(expression, (ast.Dict, ast.Tuple, ast.List)):
+                raise CompileError(f"Local function {fn.name}() cannot return nested named results")
+            seen.add(name)
+            named.append(LocalReturnElement(index, name, f"return:{index}", expression, name))
+        return LocalReturnShape(tuple(named))
     if isinstance(value, ast.List):
         raise CompileError(f"Local function {fn.name}() cannot return a list; use a flat tuple return")
     expressions = list(value.elts) if isinstance(value, ast.Tuple) else [value]
