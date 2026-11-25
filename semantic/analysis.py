@@ -419,6 +419,8 @@ def _extension_result_spec(spec: ExtensionCallableSpec, resolved_schema=None):
     if spec.result.kind == "DYNAMIC_RESULTS":
         if resolved_schema is None:
             raise CompileError("Internal error: dynamic extension result has not been resolved")
+        if type(resolved_schema) is NFType:
+            return RuntimeCallResult(resolved_schema)
         return NamedOutputsCallResult(tuple(resolved_schema))
     if spec.result.kind == "NAMED_RESULTS":
         return NamedOutputsCallResult(spec.result.named_items)

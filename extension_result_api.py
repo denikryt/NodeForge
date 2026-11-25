@@ -2,7 +2,7 @@
 
 
 class DynamicResults:
-    """Annotation-only opt-in to invocation-dependent executable named results."""
+    """Annotation-only opt-in to invocation-dependent direct or named executable results."""
 
     def __new__(cls, *args, **kwargs):
         """Reject runtime construction of the declaration-only result marker."""

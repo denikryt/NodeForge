@@ -42,7 +42,7 @@ def _output_names(operation, spec):
     """Use the selected result carrier, never its coincidental output count."""
     if operation.result_names is not None:
         return operation.result_names
-    if spec.result.kind == 'NF_SET':
+    if spec.result.kind in {'NF_SET', 'DYNAMIC_RESULTS'}:
         if len(operation.results) != 1:
             raise CompileError('Extension scalar result has invalid arity')
         return ('Result',)

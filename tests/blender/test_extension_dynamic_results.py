@@ -147,3 +147,28 @@ combined = r.double + r.original
             assert all(link.is_valid for link in root.links)
         finally:
             bpy.data.node_groups.remove(root)
+
+
+@pytest.mark.parametrize('inline', [False, True])
+@pytest.mark.parametrize('bad', ['dict', 'tuple', 'list', 'wrong_type', 'input_socket'])
+def test_dynamic_direct_backend_shape_is_exact(tmp_path, inline, bad):
+    """A direct schema rejects alternative carriers and invalid physical leaves atomically."""
+    source = tmp_path / 'package'
+    _write_package(source)
+    owner = source / 'systems' / 'dynamic'
+    (owner / 'semantic.py').write_text('from NodeForge.nf_types import NFType\ndef _result_types_foo(args): return NFType.FLOAT\n')
+    backend = owner / 'backend.py'
+    text = backend.read_text().replace('assert context.result_types == (NFType.FLOAT, NFType.FLOAT)',
+                                       'assert context.result_types == (NFType.FLOAT,) and context.result_names is None')
+    leaf = 'context.value(node.outputs[0], NFType.FLOAT)'
+    invalid = {'dict': "{'value': " + leaf + '}', 'tuple': '(' + leaf + ',)',
+               'list': '[' + leaf + ']', 'wrong_type': 'ExtensionBackendValue(node.outputs[0], NFType.INT)',
+               'input_socket': 'ExtensionBackendValue(node.inputs[0], NFType.FLOAT)'}[bad]
+    backend.write_text(text.replace("{'original': value, 'double': context.value(node.outputs[0], NFType.FLOAT)}", invalid))
+    packages.install_package_directory(source)
+    groups = {g.as_pointer() for g in bpy.data.node_groups}
+    meshes = {m.as_pointer() for m in bpy.data.meshes}
+    with pytest.raises(CompileError, match='runtime leaves|expected FLOAT|output sockets'):
+        compile_group(f'from packages import dynamic\n\ndef main(value: Float):\n    return foo(value, __inline__={inline})\n', 'InvalidDynamicDirect')
+    assert {g.as_pointer() for g in bpy.data.node_groups} == groups
+    assert {m.as_pointer() for m in bpy.data.meshes} == meshes

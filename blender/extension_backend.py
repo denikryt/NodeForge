@@ -107,20 +107,20 @@ def _validate_result(value, result_spec: TypeSpec, context: ExtensionBackendCont
             raise CompileError("Extension Call IR result names disagree with the selected callable contract")
     elif result_spec.kind == "DYNAMIC_RESULTS":
         declared_types = expected_types
-        if names is None:
-            raise CompileError("Dynamic extension Call IR requires named results")
+        if names is None and len(expected_types) != 1:
+            raise CompileError("Dynamic extension direct Call IR requires exactly one result")
     else:
         raise CompileError("Internal error: non-executable result reached the physical backend")
     if expected_types != declared_types:
         raise CompileError("Extension Call IR results disagree with the selected callable contract")
-    if result_spec.kind in {"NAMED_RESULTS", "DYNAMIC_RESULTS"}:
+    if result_spec.kind == "NAMED_RESULTS" or (result_spec.kind == "DYNAMIC_RESULTS" and names is not None):
         if type(value) is not dict or set(value) != set(names):
             raise CompileError(f"Extension implementation must return a dict with exact result keys {names!r}")
         return tuple(_validate_result_leaf(value[name], typ, context)
                      for name, typ in zip(names, expected_types))
     if names is not None:
         raise CompileError("Positional extension Call IR cannot carry named results")
-    if result_spec.kind == "NF_SET":
+    if result_spec.kind in {"NF_SET", "DYNAMIC_RESULTS"}:
         return _validate_result_leaf(value, expected_types[0], context)
     if not isinstance(value, tuple) or len(value) != len(expected_types):
         raise CompileError(f"Extension implementation must return a {len(expected_types)}-item tuple")

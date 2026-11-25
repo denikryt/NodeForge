@@ -331,3 +331,146 @@ def test_catalogue_oracle_detects_same_type_output_swap(monkeypatch):
             verifier.check_output_links(group, native, schema)
     finally:
         bpy.data.node_groups.remove(group, do_unlink=True)
+
+
+@pytest.mark.parametrize('semantic_state', [False, True])
+@pytest.mark.parametrize('inline', [False, True])
+@pytest.mark.parametrize('form', ['DIRECT', 'ONE', 'MULTI'])
+def test_explicit_dynamic_result_forms(tmp_path, semantic_state, inline, form):
+    """Both execution paths realize the explicit direct or named shape exactly once."""
+    from test_extension_boundary_matrix import _package
+    from helpers import compile_group
+    from NodeForge.blender.interface import NAMED_RESULTS_PROP
+    interface = '''from dataclasses import dataclass
+from typing import Annotated
+from NodeForge import Float, String, DynamicResults, EvaluationMode
+EXTENSION_API = 2
+EXTENSIONS = {'choose': '.backend:choose'}
+@dataclass(frozen=True)
+class _State:
+    value: Float
+    form: str
+
+def choose(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY], form: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'DIRECT') -> DynamicResults: ...
+'''
+    semantic = '''from NodeForge.nf_types import NFType
+
+def _result_types_choose(args):
+    form = args['form'].value
+    if form == 'DIRECT':
+        return NFType.FLOAT
+    if form == 'ONE':
+        return {'value': NFType.FLOAT}
+    return {'value': NFType.FLOAT, 'original': NFType.FLOAT}
+'''
+    if semantic_state:
+        semantic += '''\nfrom .interface import _State
+
+def choose(value, form='DIRECT') -> _State:
+    return _State(value, form)
+'''
+    backend = 'from NodeForge.nf_types import NFType\n'
+    backend += ('def choose(context, state):\n    value, form = state.value, state.form\n' if semantic_state else
+                "def choose(context, value, form='DIRECT'):\n")
+    backend += '''    node = context.group.nodes.new('ShaderNodeMath')
+    node.operation = 'MULTIPLY'
+    context.group.links.new(value.socket, node.inputs[0])
+    node.inputs[1].default_value = 2.0
+    result = context.value(node.outputs[0], NFType.FLOAT)
+    if form == 'DIRECT':
+        assert context.result_names is None
+        return result
+    if form == 'ONE':
+        assert context.result_names == ('value',)
+        return {'value': result}
+    assert context.result_names == ('value', 'original')
+    return {'original': value, 'value': result}
+'''
+    _package(tmp_path, name='explicit_shapes', interface=interface, semantic=semantic, backend=backend)
+    value = 'r' if form == 'DIRECT' else 'r.value'
+    other = 'r' if form == 'DIRECT' else 'r["value"]' if form == 'ONE' else 'r.original'
+    group = compile_group(f'''from packages import explicit_shapes
+
+def main(value: Float):
+    r = choose(value, form={form!r}, __inline__={inline})
+    return {{'a': {value}, 'b': {other}}}
+''', 'ExplicitShapes')
+    output = next(n for n in group.nodes if n.bl_idname == 'NodeGroupOutput')
+    a,b = [output.inputs[key].links[0].from_socket for key in ('a','b')]
+    assert (a == b) == (form != 'MULTI')
+    if inline:
+        child = group
+    else:
+        assert a.node == b.node and a.node.bl_idname == 'GeometryNodeGroup'
+        child = a.node.node_tree
+        assert (NAMED_RESULTS_PROP in child) == (form != 'DIRECT')
+        assert tuple(a.node.outputs.keys()) == {'DIRECT': ('Result',), 'ONE': ('value',), 'MULTI': ('value', 'original')}[form]
+    assert len([n for n in child.nodes if n.bl_idname == 'ShaderNodeMath']) == 1
+
+
+@pytest.mark.parametrize('before,after,expected', [
+    ('direct', 'direct', ['Result']), ('direct', 'named', []),
+    ('named', 'direct', []), ('named', 'multi', ['value']),
+    ('multi', 'direct', []), ('direct', 'multi', []),
+    ('direct', 'same_key', ['Result']), ('same_key', 'direct', ['Result']),
+    ('direct', 'named', None), ('named', 'direct', None),
+])
+def test_dynamic_result_shape_update(tmp_path, before, after, expected):
+    """Invocation-dependent carrier changes retain authority and exact named link identity."""
+    from test_extension_boundary_matrix import _package
+    from helpers import compile_group
+    from NodeForge import compiler
+    from NodeForge.blender.interface import NAMED_RESULTS_PROP
+    from NodeForge.blender.extension_group_materializer import EXTENSION_FINGERPRINT_PROP
+    _package(tmp_path, name='shape_update', interface='''from typing import Annotated
+from NodeForge import Float, String, EvaluationMode, DynamicResults
+EXTENSION_API = 2
+EXTENSIONS = {'choose': '.backend:choose'}
+def choose(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY], shape: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY]) -> DynamicResults: ...
+''', semantic='''from NodeForge.nf_types import NFType
+def _result_types_choose(args):
+    shape = args['shape'].value
+    if shape == 'direct': return NFType.FLOAT
+    if shape == 'same_key': return {'Result': NFType.FLOAT}
+    if shape == 'named': return {'value': NFType.FLOAT}
+    return {'value': NFType.FLOAT, 'other': NFType.FLOAT}
+''', backend='''def choose(context, value, shape):
+    if shape == 'direct': return value
+    if shape == 'same_key': return {'Result': value}
+    if shape == 'named': return {'value': value}
+    return {'other': value, 'value': value}
+''')
+    def source(shape):
+        projection = '' if shape == 'direct' else '.Result' if shape == 'same_key' else '.value'
+        return f'from packages import shape_update\n\ndef main(value: Float):\n    return choose(value, shape={shape!r}, __inline__=False){projection}\n'
+    group = compile_group(source(before), 'ShapeUpdate')
+    child = next(n.node_tree for n in group.nodes if n.bl_idname == 'GeometryNodeGroup')
+    old_fp = child[EXTENSION_FINGERPRINT_PROP]
+    wrapper = bpy.data.node_groups.new('ShapeExternal', 'GeometryNodeTree')
+    instance = wrapper.nodes.new('GeometryNodeGroup')
+    instance.node_tree = child
+    instance.inputs[0].default_value = 7.0
+    for output in instance.outputs:
+        wrapper.links.new(output, wrapper.nodes.new('ShaderNodeMath').inputs[0])
+    if expected is None:
+        from NodeForge.blender import group_backend
+        pointers = {g.as_pointer() for g in bpy.data.node_groups}
+        links = sorted(link.from_socket.name for link in wrapper.links)
+        group_backend._TEST_CUTOVER_FAIL_AFTER_RESET = True
+        try:
+            with pytest.raises(Exception, match='cutover'):
+                compiler.update_expression_group(group, source(after))
+        finally:
+            group_backend._TEST_CUTOVER_FAIL_AFTER_RESET = False
+        assert {g.as_pointer() for g in bpy.data.node_groups} == pointers
+        assert instance.node_tree == child
+        assert sorted(link.from_socket.name for link in wrapper.links) == links
+        assert child[EXTENSION_FINGERPRINT_PROP] == old_fp
+        assert (NAMED_RESULTS_PROP in child) == (before != 'direct')
+        expected = []
+    compiler.update_expression_group(group, source(after))
+    assert instance.node_tree == child
+    assert sorted(link.from_socket.name for link in wrapper.links) == expected
+    assert instance.inputs[0].default_value == 7.0
+    assert (NAMED_RESULTS_PROP in child) == (after != 'direct')
+    assert (child[EXTENSION_FINGERPRINT_PROP] == old_fp) == (before == after)

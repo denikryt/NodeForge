@@ -361,7 +361,7 @@ def _source_imports(source: str):
 def _typespec_label(spec) -> str:
     """Convert an extension's frozen TypeSpec to a concise display label."""
     if spec.kind == "DYNAMIC_RESULTS":
-        return "named results (dynamic)"
+        return "dynamic results"
     if spec.kind == "NF_SET":
         return " | ".join(sorted(t.value.title() for t in spec.nf_types))
     if spec.kind == "TUPLE_FIXED":
@@ -401,7 +401,7 @@ def _extension_signatures(name: str, specs) -> tuple[Signature, ...]:
 def _return_preview(signature: Signature) -> str:
     """Show short verified result types beside member-completion names."""
     if signature.result_kind == "dynamic":
-        return "→ named results (unresolved)"
+        return "→ dynamic result (unresolved)"
     if signature.result_kind == "named":
         return "→ {" + ", ".join(f"{value.key}: {value.typ}" for value in signature.outputs) + "}"
     types = [value.typ for value in signature.outputs]
@@ -730,7 +730,7 @@ def _resolved_dynamic_outputs(context, index):
     """Use the existing pure compiler on a complete, straight-line receiver fragment."""
     from ..compiler_identities import GroupCompilationIdentity, ModuleId, module_definition_function_id
     from ..semantic.group import analyze_group_source
-    from ..semantic.ir import IRBindLeaves, IRNamedOutputs
+    from ..semantic.ir import IRAssign, IRBindLeaves, IRNamedOutputs, IRValue
     from ..semantic.source_callable_session import SourceCallableSession
     from ..semantic.source_modules import parse_source_module
     receiver, _, module_prior, function, prior = context
@@ -769,9 +769,11 @@ def _resolved_dynamic_outputs(context, index):
                 fn=snapshot.definitions[function.name], callable_environment=environment,
                 compile_time_values=constants, helper_namespace='editor', source_module=snapshot)
             statements = prepared.group.body.statements[:-1]
-        if not statements or not isinstance(statements[-1], IRBindLeaves):
+        if not statements or not isinstance(statements[-1], (IRAssign, IRBindLeaves)):
             return ()
         result = statements[-1].value.result
+        if isinstance(result, IRValue):
+            return (Output("Value", result.typ.value.title()),)
         if isinstance(result, IRNamedOutputs):
             return tuple(Output(key, value.typ.value.title(), key) for key, value in result.items)
     except (CompileError, SyntaxError, ValueError, TypeError):
@@ -956,7 +958,10 @@ def cursor_assistance(source: str, line: int, column: int, index: SymbolIndex) -
             outputs = signature.outputs
             if signature.result_kind == 'dynamic':
                 outputs = _resolved_dynamic_outputs(receiver_context, index)
-                if not outputs and not signatures:
+                if outputs:
+                    signature = replace(signature, outputs=outputs,
+                                        result_kind="named" if outputs[0].key is not None else "positional")
+                if not signatures:
                     signatures = (signature,)
             candidates = tuple(Suggestion(output.key, output.key, 'field', output.typ)
                                for output in outputs if is_exact_attribute_key(output.key)

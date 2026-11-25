@@ -216,7 +216,7 @@ def test_empty_dynamic_values_still_resolve_a_named_result(tmp_path):
 
 
 @pytest.mark.parametrize("expression", ["[]", "()", "(NFType.FLOAT,)", "[NFType.FLOAT]", "{}", "{'': NFType.FLOAT}", "None", "{NFType.FLOAT}",
-                                          "(NFType.FLOAT, 42)", "'FLOAT'"])
+                                          "(NFType.FLOAT, 42)", "'FLOAT'", "NFType", "{'value': {'nested': NFType.FLOAT}}", "{'value': 'FLOAT'}"])
 def test_dynamic_result_resolver_rejects_invalid_shapes_during_analysis(tmp_path, expression):
     """All malformed resolver outputs fail before typed Call IR or Blender creation."""
     import ast
@@ -400,3 +400,40 @@ def test_semantic_dynamic_resolver_reads_optional_none_once_per_call(tmp_path):
     assert len(semantic.RESOLVED) == len(semantic.SEEN) == 2
     assert semantic.RESOLVED[0]["optional"] is None
     assert isinstance(semantic.RESOLVED[1]["optional"], ResultRuntimeArg)
+
+
+@pytest.mark.parametrize('schema, names, types', [
+    ('NFType.FLOAT', None, ('FLOAT',)),
+    ('NFType.VECTOR', None, ('VECTOR',)),
+    ("{'value': NFType.FLOAT}", ('value',), ('FLOAT',)),
+    ("{'second': NFType.INT, 'first': NFType.FLOAT}", ('second', 'first'), ('INT', 'FLOAT')),
+])
+def test_explicit_dynamic_result_carrier(tmp_path, schema, names, types):
+    """The resolver declaration, rather than arity, chooses the IR result carrier."""
+    import ast
+    from NodeForge.semantic.analysis import analyze_expression
+    from NodeForge.semantic.ir import IRCall, IRNamedOutputs, IRValue
+    from NodeForge.semantic.lowering import lower_analyzed_expression
+    owner = _owner(tmp_path, _DYNAMIC_INTERFACE,
+                   backend='raise AssertionError("physical module imported by semantic analysis")\ndef foo(*args): pass\n',
+                   semantic=f'from NodeForge.nf_types import NFType\nCALLED = 0\ndef _result_types_foo(args):\n    global CALLED\n    CALLED += 1\n    return {schema}\n')
+    env, _ = _dynamic_semantic_environment(owner)
+    root = ast.parse('foo(geo, f)', mode='eval').body
+    program = lower_analyzed_expression(root, analyze_expression(root, env))
+    call = next(op for op in program.operations if isinstance(op, IRCall))
+    assert call.result_names == names
+    assert tuple(r.typ.value for r in call.results) == types
+    assert isinstance(program.result, IRValue if names is None else IRNamedOutputs)
+    assert owner._phase_modules['SEMANTIC']['semantic'].CALLED == 1
+
+
+def test_explicit_direct_result_rejects_named_projection(tmp_path):
+    """A direct result cannot be interpreted as a named singleton."""
+    import ast
+    from NodeForge.semantic.analysis import analyze_expression
+    owner = _owner(tmp_path, _INTERFACE, backend='def foo(context, value): return value',
+                   semantic='from NodeForge.nf_types import NFType\ndef _result_types_foo(args): return NFType.FLOAT')
+    env, _ = _dynamic_semantic_environment(owner)
+    for text in ("foo(f)['value']", 'foo(f).value'):
+        with pytest.raises(CompileError):
+            analyze_expression(ast.parse(text, mode='eval').body, env)

@@ -147,7 +147,7 @@ def _popup_rows(hint: Assistance, selection: int, region_height: int):
             rows.append(("  " + label, selected, role))
         rows.append((")", False, "heading"))
         if signature.result_kind == "dynamic":
-            rows.append(("→ named results (unresolved)", False, "result"))
+            rows.append(("→ dynamic result (unresolved)", False, "result"))
         elif signature.result_kind == "named" and len(outputs) == 1:
             result = outputs[0]
             rows.append((f"→ {{{result.key}: {result.typ}}}", False, "result"))

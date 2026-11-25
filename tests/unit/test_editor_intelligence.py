@@ -582,3 +582,41 @@ def test_unqualified_named_package_receiver_completion(editor_index):
         hint = help_at_caret(prefix + tail, index)
         assert not hint.candidates and not hint.signatures
     assert {c.insert for c in help_at_caret(prefix + 'x = nodes.cylinder().|', index).candidates} == mesh_fields
+
+
+def test_dynamic_direct_editor_preview_and_named_singleton(editor_index):
+    """A known direct result has a type preview, not a fabricated named field."""
+    import json
+    _, root = editor_index
+    pkg = root / 'shape_package'
+    owner = pkg / 'systems' / 'shapes'
+    owner.mkdir(parents=True)
+    (pkg / 'nodeforge_package.json').write_text(json.dumps({
+        'schema_version': 1, 'id': 'vendor.shapes', 'name': 'Shapes', 'version': '1.0.0',
+        'author': 'Tests', 'description': 'Explicit dynamic shapes', 'nodeforge_min_version': '0.101.0',
+        'nodeforge_max_version': None, 'contents': {'systems': 'systems'}, 'permissions': {'python': True},
+    }))
+    (owner / 'interface.py').write_text('''from typing import Annotated
+from NodeForge import Float, Bool, DynamicResults, EvaluationMode
+EXTENSION_API = 2
+EXTENSIONS = {'choose': '.backend:choose'}
+def choose(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY], named: Annotated[Bool, EvaluationMode.COMPILE_TIME_ONLY] = False) -> DynamicResults: ...
+''')
+    (owner / 'semantic.py').write_text('''from NodeForge.nf_types import NFType
+def _result_types_choose(args):
+    return {'value': NFType.FLOAT} if args['named'].value else NFType.FLOAT
+''')
+    (owner / 'backend.py').write_text('raise AssertionError("editor must not load backend")\ndef choose(*args): pass\n')
+    packages.install_package_directory(pkg)
+    index = SymbolIndex(resolve_environment())
+    for tail in ('x = shapes.choose(1.0).|', 'r = choose(1.0)\na = r\nx = a.|',
+                 'def f(x: Float):\n    y = choose(x).|'):
+        hint = help_at_caret('from packages import shapes\n' + tail, index)
+        assert not hint.candidates
+        assert hint.signatures[0].result_kind == 'positional'
+        assert [o.typ for o in hint.signatures[0].outputs] == ['Float']
+    hint = help_at_caret('from packages import shapes\nx = choose(1.0, named=True).|', index)
+    assert [c.insert for c in hint.candidates] == ['value']
+    assert hint.signatures[0].result_kind == 'named'
+    hint = help_at_caret('from packages import shapes\nx = choose(1.0, named=unknown).|', index)
+    assert not hint.candidates and hint.signatures[0].result_kind == 'dynamic'
