@@ -863,3 +863,4 @@ lifecycle.
 - Reject malformed required native output labels before generator publication; retain named signature and field completion across incomplete declarations and resolve bare imported package calls with the compiler's ambiguity rules. Document the named dynamic result protocol's minimum version.
 - Reject missing, malformed, or duplicate required physical output identifiers and malformed output type metadata before generated Nodes publication, including Capture Attribute probes.
 - Reject malformed required constant-output baseline identities and output record containers before generation; distinguish explicit unsupported nodes from unexpected generation errors.
+- Reject empty or unrepresentable baseline output sets for supported fixed constant sources before publication.

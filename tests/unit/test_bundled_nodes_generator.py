@@ -363,7 +363,13 @@ def test_invalid_output_records_are_fatal(generator_modules, tmp_path, probe, fa
     assert not list(tmp_path.glob('*.zip'))
 
 
-def test_failed_constant_build_preserves_existing_archive_and_recovers(generator_modules, tmp_path):
+@pytest.mark.parametrize('node, fault', [
+    ('ShaderNodeValue', 'missing-identifier'),
+    ('ShaderNodeValue', 'empty-outputs'),
+    ('ShaderNodeValue', 'unsupported-type'),
+    ('FunctionNodeInputInt', 'empty-outputs'),
+])
+def test_failed_constant_build_preserves_existing_archive_and_recovers(generator_modules, tmp_path, node, fault):
     """A successful build, rejected build, and corrected rebuild preserve the constant API."""
     build, generator, _ = generator_modules
     spec = build.read_spec(build.DEFAULT_SPEC)
@@ -372,28 +378,39 @@ def test_failed_constant_build_preserves_existing_archive_and_recovers(generator
     owner = target / 'systems/blender'
     before = {name: (owner / name).read_bytes() for name in build.FILES}
     archive_before = archive.read_bytes()
-    sock = spec['nodes']['ShaderNodeValue']['inventory']['baseline']['outputs'][0]
-    ident = sock.pop('identifier')
-    with pytest.raises(generator.ResultSchemaError, match='ShaderNodeValue state baseline'):
+    baseline = spec['nodes'][node]['inventory']['baseline']
+    original = [dict(sock) for sock in baseline['outputs']]
+    expected = ([{'param': 'value', 'type': 'Float', 'target': 'output', 'key': 'Value'}]
+                if node == 'ShaderNodeValue' else
+                [{'param': 'integer', 'type': 'Int', 'target': 'rna', 'key': 'integer'}])
+    assert next(item['constants'] for item in report['wrappers'] if item['node'] == node) == expected
+    if fault == 'missing-identifier':
+        del baseline['outputs'][0]['identifier']
+    elif fault == 'empty-outputs':
+        baseline['outputs'].clear()
+    else:
+        baseline['outputs'][0]['bl_idname'] = 'NodeSocketMatrix'
+    with pytest.raises(generator.ResultSchemaError, match=rf'{node} state baseline: .*physical sockets'):
         build.build(spec, target, archive=True)
     assert archive.read_bytes() == archive_before
     assert {name: (owner / name).read_bytes() for name in build.FILES} == before
-    sock['identifier'] = ident
+    baseline['outputs'] = original
     rebuilt, _ = build.build(spec, target, archive=True)
     assert rebuilt == report
     assert {name: (owner / name).read_bytes() for name in build.FILES} == before
 
 
 def test_known_unsupported_outcomes_are_not_schema_errors(generator_modules, tmp_path):
-    """Empty outputs, unsupported constant sockets and varying options retain omission semantics."""
+    """Unsupported active layouts and absent editable defaults retain omission semantics."""
     build, generator, _ = generator_modules
     spec = build.read_spec(build.DEFAULT_SPEC)
     node = 'GeometryNodeInputIndex'
     for layout in spec['nodes'][node]['joint']['socket_states'].values():
         layout['outputs'] = []
-    report = generator.generate(spec, [node, 'GeometryNodeListLength', 'ShaderNodeValue'], tmp_path)
+    report = generator.generate(spec, [node, 'FunctionNodeCombineMatrix', 'GeometryNodeListLength', 'ShaderNodeValue'], tmp_path)
     assert report['skipped'] == [
         {'node': node, 'reason': 'no representable configurations'},
+        {'node': 'FunctionNodeCombineMatrix', 'reason': 'no representable configurations'},
         {'node': 'GeometryNodeListLength', 'reason': 'Option keys vary across otherwise representable states'},
     ]
     constant_node = spec['nodes']['ShaderNodeValue']
@@ -402,8 +419,8 @@ def test_known_unsupported_outcomes_are_not_schema_errors(generator_modules, tmp
     sock['has_default_value'] = False
     assert generator.constant_parameters(item, constant_node) == []
     sock['bl_idname'] = 'NodeSocketMatrix'
-    sock.pop('identifier')
-    assert generator.constant_parameters(item, constant_node) == []
+    with pytest.raises(generator.ResultSchemaError, match='ShaderNodeValue state baseline: missing required output identifier'):
+        generator.constant_parameters(item, constant_node)
 
 
 def test_unexpected_preparation_error_aborts_generation(generator_modules, tmp_path, monkeypatch):

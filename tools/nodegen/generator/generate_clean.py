@@ -152,8 +152,6 @@ def constant_parameters(item, inspected):
     validate_output_types(node, 'baseline', baseline)
     supported = [sock for sock in baseline if marker(sock['bl_idname']) is not None]
     validate_output_identifiers(node, 'baseline', supported)
-    if not supported:
-        return []
     matches = [sock for sock in supported if sock['identifier'] == ident]
     if len(matches) != 1:
         raise ResultSchemaError(f'{node} state baseline: missing required output identifier {ident!r}; '
