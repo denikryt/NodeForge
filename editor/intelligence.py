@@ -309,20 +309,25 @@ def _definition_signature(fn: ast.FunctionDef, display_name: str) -> Signature:
     return Signature(display_name, tuple(parameters), outputs, result_kind=result_kind)
 
 
-def _def_signatures(source: str) -> dict[str, tuple[Signature, ...]]:
-    """Index function declarations by name, tolerating an incomplete editor buffer."""
+def _source_definitions(source: str) -> list[ast.FunctionDef]:
+    """Retain complete definitions and usable headers in an incomplete editor buffer."""
     try:
         definitions = [statement for statement in ast.parse(source).body
                        if isinstance(statement, ast.FunctionDef)]
     except SyntaxError as exc:
         # Incomplete typing at the caret must not erase fully parsed definitions
         # above the error. Retain the old header fallback for incomplete bodies.
-        try:
-            prefix = '\n'.join(source.split('\n')[:max(0, (exc.lineno or 1) - 1)])
-            definitions = [statement for statement in ast.parse(prefix).body
-                           if isinstance(statement, ast.FunctionDef)]
-        except SyntaxError:
-            definitions = []
+        lines = source.split('\n')
+        end = min(len(lines) - 1, max(0, (exc.lineno or 1) - 1))
+        while True:
+            try:
+                prefix = '\n'.join(lines[:end])
+                definitions = [statement for statement in ast.parse(prefix).body
+                               if isinstance(statement, ast.FunctionDef)]
+                break
+            except SyntaxError as prefix_error:
+                # A truncated body can leave its own incomplete header.
+                end = min(end - 1, max(0, (prefix_error.lineno or 1) - 1))
         for line in source.splitlines():
             if not line.startswith('def ') or not line.rstrip().endswith(':'):
                 continue
@@ -332,7 +337,25 @@ def _def_signatures(source: str) -> dict[str, tuple[Signature, ...]]:
                 continue
             if isinstance(definition, ast.FunctionDef) and not any(fn.name == definition.name for fn in definitions):
                 definitions.append(definition)
-    return {fn.name: (_definition_signature(fn, fn.name),) for fn in definitions}
+    return definitions
+
+
+def _def_signatures(source: str) -> dict[str, tuple[Signature, ...]]:
+    """Index declared signatures, even when the current expression is incomplete."""
+    return {fn.name: (_definition_signature(fn, fn.name),) for fn in _source_definitions(source)}
+
+
+def _source_imports(source: str):
+    """Recover complete module imports independently of incomplete expressions."""
+    for line in source.splitlines():
+        if not line.startswith('from '):
+            continue
+        try:
+            statement = ast.parse(line).body[0]
+        except SyntaxError:
+            continue
+        if isinstance(statement, ast.ImportFrom):
+            yield statement
 
 
 def _typespec_label(spec) -> str:
@@ -507,15 +530,7 @@ class SymbolIndex:
         namespaces: dict[str, dict[str, tuple[Signature, ...]]] = {"": top}
         local_index = env.catalog("local").local_index
         # One-line imports are valid even if the expression at the caret isn't.
-        for line in source.splitlines():
-            if not line.lstrip().startswith("from "):
-                continue
-            try:
-                statement = ast.parse(line.strip()).body[0]
-            except SyntaxError:
-                continue
-            if not isinstance(statement, ast.ImportFrom):
-                continue
+        for statement in _source_imports(source):
             module = statement.module or ""
             if module == "packages":
                 for item in statement.names:
@@ -566,14 +581,15 @@ class SymbolIndex:
         return namespaces
 
 
-def _call_result_signature(call, names, shadowed):
+def _call_result_signature(call, names, shadowed, bare_signatures):
     """Select only an unambiguous declared result schema for a simple callable path."""
     if not isinstance(call, ast.Call):
         return None
     path = ast.unparse(call.func).split('.')
     if not all(part.isidentifier() for part in path) or path[0] in shadowed:
         return None
-    signatures = names.get('.'.join(path[:-1]), {}).get(path[-1], ())
+    signatures = (bare_signatures(path[0]) if len(path) == 1 else
+                  names.get('.'.join(path[:-1]), {}).get(path[-1], ()))
     if not signatures:
         return None
     first = signatures[0]
@@ -625,17 +641,71 @@ def _receiver_context(prefix, frames):
     return None
 
 
-def _straight_line_result(receiver, prior, names, function):
+def _bare_signature_lookup(source, names, index):
+    """Select bare signatures through the compiler's declaration-only name resolution."""
+    imports = tuple(_source_imports(source))
+    if not any(statement.module == 'packages' for statement in imports):
+        return lambda name: names[''].get(name, ())
+
+    from ..compiler_identities import ModuleId
+    from ..semantic.call_resolution import CallableKind, UNRESOLVED, resolve_simple_callable
+    from ..semantic.group import resolve_module_callable_environment
+    from ..semantic.source_callable_session import SourceCallableSession
+    from ..semantic.source_modules import parse_source_module
+
+    try:
+        # Name resolution needs only declarations. Do not compile incomplete
+        # bodies or residualize arbitrary module statements to display a schema.
+        definitions = [ast.FunctionDef(name=fn.name, args=fn.args,
+                       body=[ast.Return(value=ast.Constant(value=0))], decorator_list=[],
+                       returns=None, type_comment=None, type_params=[])
+                       for fn in _source_definitions(source)]
+        module = ast.Module(body=[*imports, *definitions], type_ignores=[])
+        snapshot = parse_source_module(ast.unparse(ast.fix_missing_locations(module)),
+                                       ModuleId('ROOT_TEXT', 'editor'))
+        session = SourceCallableSession(resolved_environment=index.environment)
+        environment, _ = resolve_module_callable_environment(snapshot, index.environment, session)
+    except (CompileError, SyntaxError, ValueError, TypeError):
+        return lambda name: ()
+
+    def signatures(name):
+        """Project only the callable selected by the compiler's namespace rules."""
+        if name in environment.package_namespaces or name in environment.local_namespaces:
+            return ()
+        try:
+            resolved = resolve_simple_callable(name, environment)
+        except CompileError:
+            return ()
+        if resolved is UNRESOLVED:
+            return ()
+        if resolved.kind is CallableKind.EXTENSION:
+            specs = index.environment.extension_registry.callable_specs(resolved.target)
+            return _extension_signatures(name, specs)
+        if resolved.kind is CallableKind.MODULE_DEFINITION:
+            binding = resolved.target
+            return index._record_signatures(binding.record, name, definition=binding.definition.name,
+                                            snapshot=binding.snapshot)
+        if resolved.kind is CallableKind.LIBRARY:
+            binding = resolved.target
+            return index._record_signatures(binding.record, name, definition=binding.canonical_name)
+        return names[''].get(name, ())
+
+    return signatures
+
+
+def _straight_line_result(context, names, bare_signatures):
     """Track only definite named bindings, invalidating ambiguous assignments."""
+    receiver, _, _, function, prior = context
     bindings = {}
     shadowed = set()
     if function is not None:
-        shadowed.update(arg.arg for arg in (*function.args.posonlyargs, *function.args.args, *function.args.kwonlyargs))
+        from ..semantic.source_bindings import collect_function_lexical_inventory
+        shadowed.update(collect_function_lexical_inventory(function).owned_names)
     def schema(expr):
         """Look up a definite local binding or a declared call schema."""
         if isinstance(expr, ast.Name):
             return bindings.get(expr.id)
-        return _call_result_signature(expr, names, shadowed)
+        return _call_result_signature(expr, names, shadowed, bare_signatures)
     for statement in prior:
         if isinstance(statement, ast.Assign) and len(statement.targets) == 1 and isinstance(statement.targets[0], ast.Name):
             target = statement.targets[0].id
@@ -814,6 +884,15 @@ def cursor_assistance(source: str, line: int, column: int, index: SymbolIndex) -
         return Assistance(candidates, (), 0, column - len(partial), column, line)
 
     names = index.symbols(source)
+    lookup = None
+
+    def bare_signatures(name):
+        """Share one declaration environment across bare calls in this cursor snapshot."""
+        nonlocal lookup
+        if lookup is None:
+            lookup = _bare_signature_lookup(source, names, index)
+        return lookup(name)
+
     frames: list[dict] = []
     for tok in tokens:
         if tok.type != tokenize.OP:
@@ -842,8 +921,9 @@ def cursor_assistance(source: str, line: int, column: int, index: SymbolIndex) -
     active_parameter = 0
     if frame is not None:
         path = frame["name"].split(".")
-        signatures = tuple(index._typed_signature(signature) for signature in
-                           names.get(".".join(path[:-1]), {}).get(path[-1], ()))
+        declared = (bare_signatures(path[0]) if len(path) == 1 else
+                    names.get(".".join(path[:-1]), {}).get(path[-1], ()))
+        signatures = tuple(index._typed_signature(signature) for signature in declared)
         active_parameter = frame["position"]
         segment = prefix[frame["arg_start"]:]
         named = re.match(r"\s*([A-Za-z_]\w*)\s*=", segment)
@@ -871,7 +951,7 @@ def cursor_assistance(source: str, line: int, column: int, index: SymbolIndex) -
     receiver_context = _receiver_context(prefix, frames)
     if receiver_context is not None:
         receiver, partial, module_prior, function, prior = receiver_context
-        signature = _straight_line_result(receiver, prior, names, function)
+        signature = _straight_line_result(receiver_context, names, bare_signatures)
         if signature is not None:
             outputs = signature.outputs
             if signature.result_kind == 'dynamic':

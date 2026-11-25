@@ -22,6 +22,10 @@ BLOCKED = {'NodeSocketVector2D', 'NodeSocketVector4D', 'NodeSocketVectorXYZ2D',
            'NodeSocketMatrix','NodeSocketCollection','NodeSocketImage','NodeSocketFont',
            'NodeSocketSound','NodeSocketClosure','NodeSocketBundle'}
 
+class ResultSchemaError(ValueError):
+    """A supported configuration cannot express an unambiguous result contract."""
+
+
 def marker(bl):
     if bl in BLOCKED:
         return None
@@ -37,7 +41,14 @@ def sanitized(raw):
     if not v or v[0].isdigit() or keyword.iskeyword(v):v='option_'+v
     return v
 
-def detect_dynamic(node, representative):
+def validate_output_labels(node_id, state, outputs):
+    """Reject malformed display labels before required output schemas are derived."""
+    if any(type(sock.get('name')) is not str for sock in outputs):
+        raise ResultSchemaError(f"{node_id} state {state}: invalid output display labels; "
+                                f"physical sockets {outputs!r}")
+
+
+def detect_dynamic(node_id, node):
     collections=[c for st in node['joint']['states'] if st['status']=='applied' for c in st['collections']]
     names={c['name'] for c in collections}
     recognized={'index_switch_items':'index','capture_items':'capture','enum_items':'menu'}
@@ -50,12 +61,18 @@ def detect_dynamic(node, representative):
     if kind=='capture':
         # Derive enum token -> NFType using the observed physical socket created
         # by that enum token, not by guessing the token's meaning.
+        def identity(sock):
+            """Compare probe sockets without requiring labels for unsupported types."""
+            label = sock.get('name')
+            return (sock['identifier'], label if type(label) is str else None, sock['bl_idname'])
         for trial in desc['attempts']:
             if trial.get('status')!='accepted':continue
             before=node['joint']['socket_states'][trial['before']]['outputs']
             after=node['joint']['socket_states'][trial['after']]['outputs']
-            before_ids={(s['identifier'],s['name'],s['bl_idname']) for s in before}
-            extras=[s for s in after if (s['identifier'],s['name'],s['bl_idname']) not in before_ids and s['bl_idname']!='NodeSocketVirtual']
+            for state, sockets in ((trial['before'], before), (trial['after'], after)):
+                validate_output_labels(node_id, state, [s for s in sockets if marker(s['bl_idname']) is not None])
+            before_ids={identity(s) for s in before}
+            extras=[s for s in after if identity(s) not in before_ids and s['bl_idname']!='NodeSocketVirtual']
             if len(extras)==1 and marker(extras[0]['bl_idname']):
                 types[trial['args'][0]]=marker(extras[0]['bl_idname'])
     initial_names=[]
@@ -69,7 +86,7 @@ def detect_dynamic(node, representative):
 def prepare_node(node_id, node):
     states=[s for s in node['joint']['states'] if s['status']=='applied']
     if not states:raise ValueError('No applied states')
-    dynamic=detect_dynamic(node,states[0])
+    dynamic=detect_dynamic(node_id,node)
     valid=[]; unsupported=[]
     for st in states:
         layout=node['joint']['socket_states'][st['socket_state_id']]
@@ -87,7 +104,9 @@ def prepare_node(node_id, node):
             unsupported.append({'index':node['joint']['states'].index(st),'rna':st['rna'],
                                 'menu':{m['identifier']:m['value'] for m in st['menus']},
                                 'reason':'unsupported_socket_type' if bad else 'no_outputs','sockets':bad})
-        else:valid.append((st, inputs, outputs))
+        else:
+            validate_output_labels(node_id, node['joint']['states'].index(st), outputs)
+            valid.append((st, inputs, outputs))
     if not valid:
         return {'node':node_id,'name':sanitized(node_id),'fields':[],'configurations':[],
                 'unsupported':unsupported,'input_types':[],'total_states':len(states),'dynamic':dynamic}

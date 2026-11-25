@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "NodeForge Tests",
   "description": "Deterministic Extension API v2 graph characterization fixtures",
-  "nodeforge_min_version": "0.97.0",
+  "nodeforge_min_version": "0.101.0",
   "nodeforge_max_version": null,
   "contents": {"systems": "systems"},
   "permissions": {"python": true}

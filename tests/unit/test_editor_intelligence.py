@@ -516,3 +516,69 @@ def test_bundled_named_extension_receiver_completion(editor_index):
     assert {c.insert for c in help_at_caret(prefix + 'r = n.domain_size(component="INSTANCES")\nx = r.|', index).candidates} == {'instance_count'}
     assert {c.insert for c in help_at_caret(prefix + 'def f(g: Geometry):\n    r = n.domain_size(geometry=g, component="POINTCLOUD")\n    x = r.|', index).candidates} == {'point_count'}
     assert not help_at_caret(prefix + 'x = n.domain_size(component=unknown).|', index).candidates
+
+
+@pytest.mark.parametrize('tail', ['    y = f(x).|', '    y = f(x).|value\n    return y'])
+def test_named_receiver_in_first_incomplete_function_statement(editor_index, tail):
+    """A trailing incomplete def header cannot erase preceding complete declarations."""
+    index, _ = editor_index
+    prefix = 'def f(x: Float):\n    return {"value": x}\n\ndef g(x: Float):\n'
+    assert [c.insert for c in help_at_caret(prefix + tail, index).candidates] == ['value']
+    hint = help_at_caret(prefix + '    y = f(|', index)
+    assert hint.signatures[0].result_kind == 'named'
+    assert hint.signatures[0].outputs[0].key == 'value'
+
+
+def test_unqualified_named_package_receiver_completion(editor_index):
+    """Bare package calls use the same names, precedence and ambiguity as compilation."""
+    import json
+    _, tmp_path = editor_index
+    packages.install_package_directory(Path(__file__).resolve().parents[2] / 'packages/nodes')
+    index = SymbolIndex(resolve_environment())
+    prefix = 'from packages import nodes\n'
+    mesh_fields = {'mesh', 'top', 'side', 'bottom', 'uv_map'}
+    hint = help_at_caret(prefix + 'x = cylinder(|', index)
+    assert hint.signatures[0].result_kind == 'named'
+    assert {o.key for o in hint.signatures[0].outputs} == mesh_fields
+    assert help_at_caret(prefix + 'x = domain_size(|', index).signatures[0].result_kind == 'dynamic'
+    for tail in ('x = cylinder().|', 'r = cylinder()\nx = r.|',
+                 'def f():\n    x = cylinder().|', 'def f():\n    r = cylinder()\n    x = r.|'):
+        assert {c.insert for c in help_at_caret(prefix + tail, index).candidates} == mesh_fields
+    for tail in ('x = domain_size(component="INSTANCES").|',
+                 'r = domain_size(component="INSTANCES")\nx = r.|',
+                 'def f(g: Geometry):\n    x = domain_size(geometry=g, component="INSTANCES").|',
+                 'def f(g: Geometry):\n    r = domain_size(geometry=g, component="INSTANCES")\n    x = r.|'):
+        assert [c.insert for c in help_at_caret(prefix + tail, index).candidates] == ['instance_count']
+    unresolved = help_at_caret(prefix + 'x = domain_size(component=unknown).|', index)
+    assert not unresolved.candidates and unresolved.signatures[0].result_kind == 'dynamic'
+    for tail in ('cylinder = 1\nx = cylinder().|',
+                 'def f(cylinder: Float):\n    x = cylinder().|',
+                 'def f():\n    cylinder = cylinder().|',
+                 'from local.simple import radius as cylinder\nx = cylinder().|',
+                 'from local import terrain as cylinder\nx = cylinder().|',
+                 'x = cylinder().|mesh\ndef cylinder():\n    return {"local": 1}',
+                 'def cylinder():\n    return {"local": 1}\nx = cylinder().|',
+                 'x = cube().|'):
+        assert not help_at_caret(prefix + tail, index).candidates
+    assert not help_at_caret('from packages import nodes as cylinder\nx = cylinder().|', index).candidates
+    # A second imported package may introduce ambiguity, even if its result
+    # fields happen to be identical. Explicit qualification stays available.
+    root = tmp_path / 'other_package'
+    (root / 'functions').mkdir(parents=True)
+    (root / 'functions' / 'geometry.nf').write_text(
+        'def cylinder():\n    return {"other": 1}\n'
+        'def domain_size():\n    return {"other": 1}\n', encoding='utf-8')
+    (root / 'nodeforge_package.json').write_text(json.dumps({
+        'schema_version': 1, 'id': 'vendor.other', 'import_name': 'other',
+        'name': 'Other', 'version': '1.0.0', 'author': 'Test',
+        'description': 'Ambiguous named exports', 'nodeforge_min_version': '0.101.0',
+        'contents': {'functions': 'functions'},
+    }), encoding='utf-8')
+    packages.install_package_directory(root)
+    index = SymbolIndex(resolve_environment())
+    assert [c.insert for c in help_at_caret('from packages import other\nx = cylinder().|', index).candidates] == ['other']
+    prefix += 'from packages import other\n'
+    for tail in ('x = cylinder().|', 'r = cylinder()\nx = r.|', 'x = domain_size().|'):
+        hint = help_at_caret(prefix + tail, index)
+        assert not hint.candidates and not hint.signatures
+    assert {c.insert for c in help_at_caret(prefix + 'x = nodes.cylinder().|', index).candidates} == mesh_fields

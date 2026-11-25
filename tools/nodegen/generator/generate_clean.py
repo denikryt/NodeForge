@@ -13,11 +13,7 @@ import json
 import sys
 from pathlib import Path
 
-from inspect_contract import prepare_node, sanitized
-
-
-class ResultSchemaError(ValueError):
-    """A supported configuration cannot express an unambiguous result contract."""
+from inspect_contract import ResultSchemaError, prepare_node, sanitized
 
 
 def capture_entries(elements, supported):

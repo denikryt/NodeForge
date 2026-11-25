@@ -197,3 +197,45 @@ def test_schema_collision_is_fatal_and_build_does_not_publish(generator_modules,
         build.build(spec, target, archive=True)
     assert {name: (owner / name).read_bytes() for name in build.FILES} == before
     assert not list(tmp_path.glob('*.zip'))
+
+
+@pytest.mark.parametrize('node, identifier', [('GeometryNodeInputIndex', 'Index'),
+                                              ('GeometryNodeCaptureAttribute', 'Geometry')])
+@pytest.mark.parametrize('label', [None, 42, ['invalid'], 'missing'])
+def test_invalid_required_output_label_is_fatal(generator_modules, tmp_path, node, identifier, label):
+    """Malformed native metadata cannot turn a supported wrapper into a skip."""
+    import shutil
+    build, generator, _ = generator_modules
+    spec = build.read_spec(build.DEFAULT_SPEC)
+    for layout in spec['nodes'][node]['joint']['socket_states'].values():
+        for socket in layout['outputs']:
+            if socket['identifier'] == identifier:
+                if label == 'missing':
+                    del socket['name']
+                else:
+                    socket['name'] = label
+    target = tmp_path / 'nodes'
+    shutil.copytree(PACKAGE, target, ignore=shutil.ignore_patterns('__pycache__'))
+    owner = target / 'systems/blender'
+    before = {name: (owner / name).read_bytes() for name in build.FILES}
+    with pytest.raises(generator.ResultSchemaError, match=rf'{node} state .*physical sockets .*{identifier}'):
+        generator.generate(spec, [node], owner)
+    assert {name: (owner / name).read_bytes() for name in build.FILES} == before
+    with pytest.raises(generator.ResultSchemaError, match=node):
+        build.build(spec, target, archive=True)
+    assert {name: (owner / name).read_bytes() for name in build.FILES} == before
+    assert not list(tmp_path.glob('*.zip'))
+
+
+def test_unsupported_output_type_remains_a_skip(generator_modules, tmp_path):
+    """A malformed label on an unrepresentable matrix socket is not a required schema."""
+    build, generator, _ = generator_modules
+    spec = build.read_spec(build.DEFAULT_SPEC)
+    node = 'FunctionNodeCombineMatrix'
+    for layout in spec['nodes'][node]['joint']['socket_states'].values():
+        for socket in layout['outputs']:
+            if socket['bl_idname'] == 'NodeSocketMatrix':
+                socket.pop('name', None)
+    report = generator.generate(spec, [node, 'GeometryNodeInputIndex'], tmp_path)
+    assert report['summary'] == {'wrappers': 1, 'states': 1}
+    assert report['skipped'] == [{'node': node, 'reason': 'no representable configurations'}]
