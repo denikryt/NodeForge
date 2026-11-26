@@ -878,3 +878,4 @@ lifecycle.
 - Upgrade bundled Nodes to 1.8.0 (requires NodeForge 0.103.0): Capture Attribute uses a dictionary of named values; Menu Switch uses a compile-time list of labels. Remove the old collection string syntax; keep Index Switch and the core Capture builtin unchanged.
 - Reconstruct native Capture, Menu and Index collections before copying defaults and links in group/root publication and rollback. Validate physical collection slots and independent input/output provenance.
 - Add structured argument IntelliSense, characterization, generator and physical regression coverage.
+- Preserve native binary32 conversion of static Int operands delivered to Float Menu Switch sockets, with exact default readback.

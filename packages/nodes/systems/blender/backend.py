@@ -7,6 +7,7 @@ import keyword
 import re
 from NodeForge.extension_api import ExtensionBackendValue, NFType
 from NodeForge.extension_result_api import validate_named_result_key
+from NodeForge.semantic.numeric_semantics import normalize_float_constant
 
 
 def sanitized(raw):
@@ -187,7 +188,9 @@ def deliver_collection(context, socket, value):
         actual = socket.default_value
         if isinstance(value, tuple):
             actual = tuple(actual)
-        if actual != value:
+        # A static Int delivered to a Float socket is stored as binary32.
+        expected = normalize_float_constant(value) if socket_type(socket) is NFType.FLOAT and type(value) is int else value
+        if actual != expected:
             raise ValueError(f'Collection input default changed for {socket.identifier!r}')
 
 

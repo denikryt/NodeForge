@@ -907,3 +907,57 @@ def main({decl}):
         assert socket.is_linked and socket.bl_idname == 'NodeSocketRotation'
     else:
         assert not socket.is_linked and tuple(socket.default_value) == expected
+
+
+@pytest.mark.parametrize('inline', [True, False])
+@pytest.mark.parametrize('value', [1, 16777217, 2147483647, -16777217, -2147483648, 16777217.0])
+def test_structured_menu_float_default_native_conversion(bundled_nodes, inline, value):
+    """Static numeric operands must match the native Float socket representation."""
+    from helpers import compile_group
+    from NodeForge import compiler
+
+    reference = bpy.data.node_groups.new('MenuFloatReference', 'GeometryNodeTree')
+    try:
+        node = reference.nodes.new('GeometryNodeMenuSwitch')
+        node.data_type = 'FLOAT'
+        slot = node.inputs[1]
+        slot.default_value = value
+        expected = slot.default_value
+    finally:
+        bpy.data.node_groups.remove(reference)
+
+    source = f'''from packages import nodes
+
+def main():
+    return nodes.menu_switch({value!r}, data_type="FLOAT", elements=["A", "B"],
+                             __inline__={inline}).output
+'''
+    root = compile_group(source, 'StructuredMenuFloatConversion')
+    for _ in range(2):
+        groups = [root] + [n.node_tree for n in root.nodes if n.bl_idname == 'GeometryNodeGroup']
+        menu, = [n for g in groups for n in g.nodes if n.bl_idname == 'GeometryNodeMenuSwitch']
+        socket = menu.inputs['A']
+        assert socket.bl_idname == 'NodeSocketFloat'
+        assert not socket.is_linked and socket.default_value == expected
+        compiler.update_expression_group(root, source)
+
+
+def test_collection_float_default_readback_rejects_wrong_native_value(monkeypatch):
+    """Float conversion must not mask an incorrect physical default."""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / 'packages/nodes/systems/blender/backend.py'
+    spec = importlib.util.spec_from_file_location('collection_readback_probe', path)
+    backend = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(backend)
+    group = bpy.data.node_groups.new('MenuFloatReadbackFault', 'GeometryNodeTree')
+    try:
+        node = group.nodes.new('GeometryNodeMenuSwitch')
+        node.data_type = 'FLOAT'
+        socket = node.inputs[1]
+        monkeypatch.setattr(backend, 'deliver', lambda context, socket, value: setattr(socket, 'default_value', 16777218.0))
+        with pytest.raises(ValueError, match='Collection input default changed'):
+            backend.deliver_collection(None, socket, 16777217)
+    finally:
+        bpy.data.node_groups.remove(group)
