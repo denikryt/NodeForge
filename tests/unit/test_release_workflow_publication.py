@@ -65,13 +65,21 @@ def test_library_release_assets_are_downloaded_from_latest_releases():
     assert "for package_id, repository in BUNDLED_PACKAGES.items():" in download
     assert "'--repo', repository" in download
     assert "f'{package_id}-v*_nf-v*.zip'" in download
+    local = _step(_job("build"), "name: Check generated Blender Nodes sources")
+    assert "tools/nodegen/cli.py generate --check" in local
     stage = _step(_job("build"), "name: Stage extension contents")
+    assert "cp -R packages/nodes staging/packages/" in stage
+    assert "staging/packages/nodes/nodeforge_package.json" in stage
     assert "expected = set(BUNDLED_PACKAGES)" in stage
     assert "manifest['nodeforge_min_version']" in stage
     assert "minimum.split('.')" in stage
     assert "assert set(seen) == set(expected)" in stage
     build = _step(_job("build"), "name: Validate and build")
     assert "len(staged_archives) == len(BUNDLED_PACKAGES)" in build
+    assert "'packages/nodes/nodeforge_package.json' in files" in build
+    assert "'packages/nodes/systems/blender/interface.py' in files" in build
+    assert "test ! -e staging/tools" in stage
+    assert "'dev/', 'tools/'" in build
 
 
 def test_extension_staging_includes_text_editor_modules():
@@ -89,7 +97,8 @@ def test_publishing_jobs_depend_on_one_verified_build():
 
     assert "needs: [build, test-extension]" in release
     assert "needs: build" in _job("test-extension")
-    assert "needs: [build, publish-release]" in pages
+    assert "needs: build-pages" in pages
+    assert "needs: [build, publish-release]" in _job("build-pages")
     assert "contents: write" in release
     assert "pages: write" in pages and "id-token: write" in pages
     assert "name: github-pages" in pages
@@ -122,10 +131,11 @@ def test_pages_retry_reuses_existing_pages_artifact():
     """Deploy retries never re-upload an artifact or retry immutable release creation."""
     build = _job("build")
     pages = _job("deploy-pages")
-    prepared = _step(build, "name: Preserve built Pages artifact")
-    assert f"if: {TAG_PUSH_ONLY}" in prepared
+    build_pages = _job("build-pages")
+    prepared = _step(build_pages, "name: Preserve combined Pages artifact")
+    assert f"if: {TAG_PUSH_ONLY}" in build_pages
     assert "uses: actions/upload-pages-artifact@v3" in prepared
-    assert "path: public/" in prepared
+    assert "path: combined/" in prepared
     assert "retention-days: 30" in prepared
     assert "id: deployment" in pages and "uses: actions/deploy-pages@v4" in pages
     assert "upload-pages-artifact" not in pages

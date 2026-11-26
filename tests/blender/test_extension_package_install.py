@@ -143,3 +143,26 @@ def test_z_reenable_upgrades_an_older_included_package(tmp_path):
     assert ui._refresh_startup_browser_items() is None
     props = bpy.context.scene.gn_script_mvp
     assert {row.package_id for row in props.package_items} >= set(updated)
+
+
+def test_included_nodes_package_exposes_generated_blender_wrappers():
+    """Release bootstrap installs the generated Nodes package as a normal library."""
+    extension = _installed_extension()
+    packages = importlib.import_module(extension.__name__ + '.packages')
+    compiler = importlib.import_module(extension.__name__ + '.compiler')
+    records = {record.manifest.package_id: record for record in packages.active_package_records()}
+    assert 'nodeforge.nodes' in records
+    assert records['nodeforge.nodes'].manifest.import_name == 'nodes'
+    assert any(record.system_id == 'blender' and record.package_id == 'nodeforge.nodes'
+               for record in packages.system_package_records())
+    source = ('from packages import nodes\n\n'
+              'def entry():\n'
+              '    scalar, = nodes.value(value=2.5)\n'
+              '    return scalar\n')
+    group = compiler.create_expression_group(source, name='NF_BundledNodesSmoke')
+    try:
+        native = [node for node in group.nodes if node.bl_idname == 'ShaderNodeValue']
+        assert len(native) == 1
+        assert native[0].outputs['Value'].default_value == pytest.approx(2.5)
+    finally:
+        bpy.data.node_groups.remove(group)

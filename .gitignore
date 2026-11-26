@@ -11,3 +11,9 @@ local/**/*.nodeforge
 plans/
 # Generated documentation
 /site/
+
+# Bundled Nodes is stored as source; archives are release artifacts only.
+package_install/nodeforge.nodes*.zip
+# Inspector runs and node-generation test reports are local build artifacts.
+tools/nodegen/data/inspection/
+nodegen-results/

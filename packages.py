@@ -622,22 +622,42 @@ def system_package_records() -> list[SystemPackageRecord]:
 
 
 def install_included_packages(extension_root: Path) -> tuple[str, ...]:
-    """Install newer versioned ZIPs shipped with this extension as regular Packages.
+    """Install versioned bundled packages from directories or legacy ZIPs.
 
-    All candidate IDs are validated before mutation, and the installed state
-    remains the sole version authority. An invalid top-level state aborts the batch.
+    Built-in package source trees live at ``packages/<package-name>/`` inside
+    the extension. They are validated and copied into the ordinary user package
+    inventory, exactly like installed ZIPs. Existing equal/newer installs win.
+    The legacy ``package_install/*.zip`` mechanism remains supported for other
+    bundled packages. Never execute library files directly from extension source.
     """
-    archive_dir = Path(extension_root) / "package_install"
-    if not archive_dir.is_dir():
+    extension_root = Path(extension_root)
+    source_dir = extension_root / "packages"
+    archive_dir = extension_root / "package_install"
+    directories = (
+        sorted(child for child in source_dir.iterdir()
+               if child.is_dir() and (child / MANIFEST_NAME).is_file())
+        if source_dir.is_dir() else []
+    )
+    archives = sorted(archive_dir.glob("*.zip")) if archive_dir.is_dir() else []
+    if not directories and not archives:
         return ()
-    archives = sorted(archive_dir.glob("*.zip"))
-    if not archives:
-        return ()
-    # Fail closed before even extracting one archive into the user inventory.
+
+    # Validate every candidate before mutating the user's installed inventory.
+    # A duplicate package ID across source directories and archives is an error.
     state = load_package_state()
     candidates = []
     errors = []
-    seen = set()
+    seen: set[str] = set()
+    for directory in directories:
+        try:
+            manifest = validate_package_root(directory)
+            if manifest.package_id in seen:
+                return (f"Duplicate included package ID: {manifest.package_id}",)
+            seen.add(manifest.package_id)
+            candidates.append(("directory", directory, manifest.package_id, manifest.version))
+        except Exception as exc:
+            errors.append(f"{directory.name}: {exc}")
+
     for archive in archives:
         staging = packages_dir() / ".staging" / uuid.uuid4().hex
         staging.mkdir(parents=True, exist_ok=False)
@@ -645,15 +665,15 @@ def install_included_packages(extension_root: Path) -> tuple[str, ...]:
             root = _extract_zip_to_staging(archive, staging)
             manifest = validate_package_root(root)
             if manifest.package_id in seen:
-                # Ambiguous release contents must not partially change inventory.
                 return (f"Duplicate included package ID: {manifest.package_id}",)
             seen.add(manifest.package_id)
-            candidates.append((archive, manifest.package_id, manifest.version))
+            candidates.append(("zip", archive, manifest.package_id, manifest.version))
         except Exception as exc:
             errors.append(f"{archive.name}: {exc}")
         finally:
             shutil.rmtree(staging, ignore_errors=True)
-    for archive, package_id, version in candidates:
+
+    for kind, source, package_id, version in candidates:
         installed = state["packages"].get(package_id)
         origin = "user"
         if installed is not None:
@@ -669,9 +689,12 @@ def install_included_packages(extension_root: Path) -> tuple[str, ...]:
                 errors.append(f"{package_id}: installed package is invalid: {exc}")
                 continue
         try:
-            install_package_zip(archive, replace=installed is not None, origin=origin)
+            if kind == "directory":
+                install_package_directory(source, replace=installed is not None, origin=origin)
+            else:
+                install_package_zip(source, replace=installed is not None, origin=origin)
         except Exception as exc:
-            errors.append(f"{archive.name}: {exc}")
+            errors.append(f"{source.name}: {exc}")
     return tuple(errors)
 
 
