@@ -2,7 +2,7 @@
 
 
 class DynamicResults:
-    """Annotation-only opt-in to invocation-dependent executable result tuples."""
+    """Annotation-only opt-in to invocation-dependent direct or named executable results."""
 
     def __new__(cls, *args, **kwargs):
         """Reject runtime construction of the declaration-only result marker."""
@@ -11,6 +11,7 @@ class DynamicResults:
 
 from dataclasses import dataclass
 from .nf_types import NFType
+from .result_keys import validate_named_result_key
 
 
 @dataclass(frozen=True)

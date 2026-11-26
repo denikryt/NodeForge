@@ -1135,6 +1135,7 @@ def _raw_call(*, mode, results, outputs=None, output=None, typ=None, inputs=(), 
         (),
         base + tuple(options),
         mode,
+        result_names=tuple(row[0] for row in outputs) if outputs else None,
     )
 
 
@@ -1629,9 +1630,9 @@ def test_call_ir_all_analyzed_runtime_operand_and_result_types_are_nftype():
 
 def test_raw_named_output_selection_preserves_attribute_and_string_subscript_diagnostics():
     """Structural raw outputs accept only declared attributes or compile-time non-empty string keys."""
-    with pytest.raises(CompileError, match="Unknown raw node output 'Y'"):
+    with pytest.raises(CompileError, match="Unknown named result 'Y'"):
         _lower('node("ShaderNodeSeparateXYZ", outputs={"X": Float}).Y')
-    with pytest.raises(CompileError, match="Unknown raw node output 'Y'"):
+    with pytest.raises(CompileError, match="Unknown named result 'Y'"):
         _lower('node("ShaderNodeSeparateXYZ", outputs={"X": Float})["Y"]')
     with pytest.raises(CompileError, match="compile-time string key"):
         _lower(

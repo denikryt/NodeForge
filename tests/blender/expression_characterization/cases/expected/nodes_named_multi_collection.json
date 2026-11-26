@@ -1,0 +1,577 @@
+{
+  "definitions": [
+    {
+      "graph": {
+        "interface": [
+          {
+            "in_out": "OUTPUT",
+            "name": "mesh",
+            "socket_type": "NodeSocketGeometry"
+          },
+          {
+            "in_out": "OUTPUT",
+            "name": "captured",
+            "socket_type": "NodeSocketFloat"
+          },
+          {
+            "in_out": "OUTPUT",
+            "name": "menu",
+            "socket_type": "NodeSocketBool"
+          },
+          {
+            "in_out": "OUTPUT",
+            "name": "index",
+            "socket_type": "NodeSocketFloat"
+          },
+          {
+            "default": 0.0,
+            "in_out": "INPUT",
+            "name": "x",
+            "socket_type": "NodeSocketFloat"
+          }
+        ],
+        "links": [
+          {
+            "from": [
+              "n0",
+              "Socket_0"
+            ],
+            "to": [
+              "n3",
+              "Socket_0"
+            ]
+          },
+          {
+            "from": [
+              "n0",
+              "Socket_0"
+            ],
+            "to": [
+              "n4",
+              "Socket_0"
+            ]
+          },
+          {
+            "from": [
+              "n0",
+              "Socket_0"
+            ],
+            "to": [
+              "n5",
+              "Socket_0"
+            ]
+          },
+          {
+            "from": [
+              "n2",
+              "Socket_0"
+            ],
+            "to": [
+              "n3",
+              "Socket_1"
+            ]
+          },
+          {
+            "from": [
+              "n3",
+              "Socket_2"
+            ],
+            "to": [
+              "n1",
+              "Socket_1"
+            ]
+          },
+          {
+            "from": [
+              "n3",
+              "Socket_4"
+            ],
+            "to": [
+              "n1",
+              "Socket_2"
+            ]
+          },
+          {
+            "from": [
+              "n3",
+              "Socket_4"
+            ],
+            "to": [
+              "n4",
+              "Socket_1"
+            ]
+          },
+          {
+            "from": [
+              "n4",
+              "Socket_2"
+            ],
+            "to": [
+              "n5",
+              "Socket_1"
+            ]
+          },
+          {
+            "from": [
+              "n4",
+              "Socket_4"
+            ],
+            "to": [
+              "n1",
+              "Socket_3"
+            ]
+          },
+          {
+            "from": [
+              "n5",
+              "Socket_2"
+            ],
+            "to": [
+              "n1",
+              "Socket_4"
+            ]
+          }
+        ],
+        "nodes": [
+          {
+            "bl_idname": "NodeGroupInput",
+            "id": "n0",
+            "properties": {}
+          },
+          {
+            "bl_idname": "NodeGroupOutput",
+            "id": "n1",
+            "properties": {}
+          },
+          {
+            "bl_idname": "GeometryNodeGroup",
+            "group": {
+              "graph": {
+                "interface": [
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "mesh",
+                    "socket_type": "NodeSocketGeometry"
+                  },
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "top",
+                    "socket_type": "NodeSocketBool"
+                  },
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "side",
+                    "socket_type": "NodeSocketBool"
+                  },
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "bottom",
+                    "socket_type": "NodeSocketBool"
+                  },
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "uv_map",
+                    "socket_type": "NodeSocketVector"
+                  }
+                ],
+                "links": [
+                  {
+                    "from": [
+                      "n2",
+                      "Bottom"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_3"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Mesh"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_0"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Side"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_2"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Top"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_1"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "UV Map"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_4"
+                    ]
+                  }
+                ],
+                "nodes": [
+                  {
+                    "bl_idname": "NodeGroupInput",
+                    "id": "n0",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "NodeGroupOutput",
+                    "id": "n1",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "GeometryNodeMeshCylinder",
+                    "id": "n2",
+                    "properties": {}
+                  }
+                ]
+              },
+              "id": "g1",
+              "unique": false
+            },
+            "id": "n2",
+            "properties": {}
+          },
+          {
+            "bl_idname": "GeometryNodeGroup",
+            "group": {
+              "graph": {
+                "interface": [
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "geometry",
+                    "socket_type": "NodeSocketGeometry"
+                  },
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "selection",
+                    "socket_type": "NodeSocketBool"
+                  },
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "Two Words",
+                    "socket_type": "NodeSocketFloat"
+                  },
+                  {
+                    "default": 0.0,
+                    "in_out": "INPUT",
+                    "name": "items_0",
+                    "socket_type": "NodeSocketFloat"
+                  },
+                  {
+                    "in_out": "INPUT",
+                    "name": "geometry",
+                    "socket_type": "NodeSocketGeometry"
+                  }
+                ],
+                "links": [
+                  {
+                    "from": [
+                      "n0",
+                      "Socket_0"
+                    ],
+                    "to": [
+                      "n2",
+                      "Value"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n0",
+                      "Socket_1"
+                    ],
+                    "to": [
+                      "n2",
+                      "Geometry"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Attribute"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_4"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Geometry"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_2"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Selection"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_3"
+                    ]
+                  }
+                ],
+                "nodes": [
+                  {
+                    "bl_idname": "NodeGroupInput",
+                    "id": "n0",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "NodeGroupOutput",
+                    "id": "n1",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "GeometryNodeCaptureAttribute",
+                    "capture_items": [
+                      {
+                        "data_type": "FLOAT",
+                        "name": "Two Words"
+                      }
+                    ],
+                    "id": "n2",
+                    "properties": {
+                      "domain": "POINT"
+                    }
+                  }
+                ]
+              },
+              "id": "g2",
+              "unique": false
+            },
+            "id": "n3",
+            "properties": {}
+          },
+          {
+            "bl_idname": "GeometryNodeGroup",
+            "group": {
+              "graph": {
+                "interface": [
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "output",
+                    "socket_type": "NodeSocketFloat"
+                  },
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "A",
+                    "socket_type": "NodeSocketBool"
+                  },
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "Two Words",
+                    "socket_type": "NodeSocketBool"
+                  },
+                  {
+                    "default": 0.0,
+                    "in_out": "INPUT",
+                    "name": "items_0",
+                    "socket_type": "NodeSocketFloat"
+                  },
+                  {
+                    "default": 0.0,
+                    "in_out": "INPUT",
+                    "name": "items_1",
+                    "socket_type": "NodeSocketFloat"
+                  }
+                ],
+                "links": [
+                  {
+                    "from": [
+                      "n0",
+                      "Socket_0"
+                    ],
+                    "to": [
+                      "n2",
+                      "Item_2"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n0",
+                      "Socket_1"
+                    ],
+                    "to": [
+                      "n2",
+                      "Item_3"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Item_2"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_3"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Item_3"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_4"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Output"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_2"
+                    ]
+                  }
+                ],
+                "nodes": [
+                  {
+                    "bl_idname": "NodeGroupInput",
+                    "id": "n0",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "NodeGroupOutput",
+                    "id": "n1",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "GeometryNodeMenuSwitch",
+                    "enum_items": [
+                      "A",
+                      "Two Words"
+                    ],
+                    "id": "n2",
+                    "properties": {
+                      "data_type": "FLOAT"
+                    }
+                  }
+                ]
+              },
+              "id": "g3",
+              "unique": false
+            },
+            "id": "n4",
+            "properties": {}
+          },
+          {
+            "bl_idname": "GeometryNodeGroup",
+            "group": {
+              "graph": {
+                "interface": [
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "Result",
+                    "socket_type": "NodeSocketFloat"
+                  },
+                  {
+                    "default": 0.0,
+                    "in_out": "INPUT",
+                    "name": "items_0",
+                    "socket_type": "NodeSocketFloat"
+                  },
+                  {
+                    "default": 0.0,
+                    "in_out": "INPUT",
+                    "name": "items_1",
+                    "socket_type": "NodeSocketFloat"
+                  }
+                ],
+                "links": [
+                  {
+                    "from": [
+                      "n0",
+                      "Socket_0"
+                    ],
+                    "to": [
+                      "n2",
+                      "Item_0"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n0",
+                      "Socket_1"
+                    ],
+                    "to": [
+                      "n2",
+                      "Item_1"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Output"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_2"
+                    ]
+                  }
+                ],
+                "nodes": [
+                  {
+                    "bl_idname": "NodeGroupInput",
+                    "id": "n0",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "NodeGroupOutput",
+                    "id": "n1",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "GeometryNodeIndexSwitch",
+                    "id": "n2",
+                    "item_count": 2,
+                    "properties": {
+                      "data_type": "FLOAT"
+                    }
+                  }
+                ]
+              },
+              "id": "g4",
+              "unique": false
+            },
+            "id": "n5",
+            "properties": {}
+          }
+        ]
+      },
+      "name": "entry"
+    }
+  ],
+  "graph": {
+    "interface": [],
+    "links": [],
+    "nodes": []
+  },
+  "kind": "graph"
+}

@@ -7,58 +7,71 @@ Original generation.json remains test input / audit evidence, not runtime code.
 from __future__ import annotations
 import argparse
 import itertools
-import re
+import inspect
 import json
-import sys
 from pathlib import Path
 
-from inspect_contract import prepare_node, sanitized
+from inspect_contract import (ResultSchemaError, UnsupportedNodeError, marker,
+                              output_records, prepare_node, sanitized,
+                              validate_output_identifiers, validate_output_types)
 
 
-def result_signature(cfg):
-    return tuple(s['type'].upper() for s in cfg['outputs'])
+def capture_entries(elements, supported):
+    """Parse capture collection entries, preserving exact item labels."""
+    chunks = tuple(tuple(chunk.strip().split(':', 1)) for chunk in elements.split(',')) if elements else ()
+    if any(len(pair) != 2 or pair[0] not in supported or not pair[1] for pair in chunks):
+        raise ValueError('elements must be TYPE:Name entries with supported types')
+    if len({pair[1] for pair in chunks}) != len(chunks):
+        raise ValueError('Duplicate capture item names')
+    return chunks
+
+
+def menu_names(elements):
+    """Parse ordered, unique Menu Switch labels."""
+    names = tuple(chunk.strip() for chunk in elements.split(',')) if elements else ()
+    if not all(names) or len(names) != len(set(names)):
+        raise ValueError('elements must contain unique nonempty Menu names')
+    return names
+
+
+def result_signature(item, cfg):
+    """Return the ordered base result schema, validating the complete observed layout."""
+    outputs = cfg['outputs']
+    dynamic = item['dynamic']
+    collection_count = len(dynamic['initial_names']) if dynamic and dynamic['kind'] == 'menu' else 0
+    base_count = len(outputs) - collection_count
+    keys = tuple(sanitized(socket['name']) if index < base_count else socket['name']
+                 for index, socket in enumerate(outputs))
+    try:
+        valid_keys = all(key and '\0' not in key and len(key.encode('utf-8')) <= 63 for key in keys)
+    except UnicodeError:
+        valid_keys = False
+    if base_count <= 0 or len(keys) != len(set(keys)) or not valid_keys:
+        raise ResultSchemaError(f"{item['node']} state {cfg['inspector_state']}: invalid output keys {keys!r}; "
+                                f"physical sockets {outputs!r}")
+    return tuple((key, socket['type'].upper()) for key, socket in zip(keys[:base_count], outputs))
 
 
 def result_rule(item):
-    """Find smallest set of compile-time fields that determines output types.
-
-    For example Compare's 220 configs all return Bool -> zero fields.
-    Named Attribute's output types depend only on data_type.
-    """
+    """Find the smallest set of compile-time fields determining the ordered schema."""
     configs = item['configurations']
-    signatures = {result_signature(c) for c in configs}
-    variable = len(signatures) > 1 or item['dynamic'] and item['dynamic']['kind'] in ('capture','menu')
+    signatures = [result_signature(item, cfg) for cfg in configs]
+    variable = len(set(signatures)) > 1 or item['dynamic'] and item['dynamic']['kind'] in ('capture','menu','index')
     if not variable:
-        return {'dynamic_result': False, 'static': result_signature(configs[0])}
+        return {'dynamic_result': False, 'static': signatures[0]}
     fields = item['fields']
-    def values(c):
-        return {f['param']: c['rna'][f['key']] if f['kind']=='rna' else c['menus'][f['key']] for f in fields}
-    subset = None
-    for size in range(len(fields)+1):
-        for choice in itertools.combinations([f['param'] for f in fields], size):
+    for size in range(len(fields) + 1):
+        for choice in itertools.combinations(fields, size):
             group = {}
-            if all(group.setdefault(tuple(values(c)[f] for f in choice), result_signature(c)) == result_signature(c)
-                   for c in configs):
-                subset = list(choice)
-                break
-        if subset is not None:
-            break
-    if subset is None:
-        raise ValueError(f"Cannot resolve output types for {item['node']}")
-    mapping = {}
-    for c in configs:
-        v = values(c)
-        signature = result_signature(c)
-        if item['dynamic'] and item['dynamic']['kind']=='menu':
-            # Menu Switch's first output is the data-type-dependent result;
-            # remaining boolean outputs are one per configured menu element.
-            signature = signature[:1]
-        mapping[tuple(v[f] for f in subset)] = signature
-    return {'dynamic_result': True, 'deps': subset, 'map': mapping}
-
-
-def literal(value):
-    return repr(value)
+            for cfg, signature in zip(configs, signatures):
+                key = tuple(cfg['rna' if field['kind'] == 'rna' else 'menus'][field['key']]
+                            for field in choice)
+                if key in group and group[key] != signature:
+                    break
+                group[key] = signature
+            else:
+                return {'dynamic_result': True, 'deps': [field['param'] for field in choice], 'map': group}
+    raise ResultSchemaError(f"{item['node']}: Cannot resolve output schema for {configs!r}")
 
 
 def public_name(node_id, inspected):
@@ -83,7 +96,7 @@ def named_inputs(item):
             if dynamic in ('index', 'menu') and ident.startswith('Item_'):
                 continue
             if ident in per_state:
-                raise ValueError(f"Ambiguous duplicate input socket identifier: {item['node']} {ident!r}")
+                raise UnsupportedNodeError(f"Ambiguous duplicate input socket identifier: {item['node']} {ident!r}")
             per_state.add(ident)
             observed.setdefault(ident, set()).add(socket['type'])
     field_names = {f['param'] for f in item['fields']}
@@ -131,10 +144,20 @@ def constant_parameters(item, inspected):
     if len(signature) != 1:
         return []
     ident, typ = signature[0]
-    baseline = inspected['inventory']['baseline']['outputs']
-    matches = [sock for sock in baseline
-               if sock['identifier'] == ident and sock.get('has_default_value')]
+    node = item['node']
+    baseline = output_records(node, 'baseline', inspected['inventory'].get('baseline'))
+    validate_output_types(node, 'baseline', baseline)
+    supported = [sock for sock in baseline if marker(sock['bl_idname']) is not None]
+    validate_output_identifiers(node, 'baseline', supported)
+    matches = [sock for sock in supported if sock['identifier'] == ident]
     if len(matches) != 1:
+        raise ResultSchemaError(f'{node} state baseline: missing required output identifier {ident!r}; '
+                                f'physical sockets {baseline!r}')
+    has_default = matches[0].get('has_default_value')
+    if type(has_default) is not bool:
+        raise ResultSchemaError(f'{node} state baseline: invalid has_default_value for output {ident!r}; '
+                                f'physical sockets {baseline!r}')
+    if not has_default:
         return []
     properties = inspected['inventory']['properties']
     # Blender's FunctionNodeInput* constant sources store their effective
@@ -173,7 +196,7 @@ def render_interface(items):
                    | {t for i in items if i['dynamic'] for t in i['input_types']}
                    | {param['type'] for i in items for param in i['constants']})
     types += sorted({t.title() if t != 'BOOL' else 'Bool' for i in items
-                     if not i['result_rule']['dynamic_result'] for t in i['result_rule']['static']})
+                     if not i['result_rule']['dynamic_result'] for _, t in i['result_rule']['static']})
     imports = sorted(set(['EvaluationMode', 'Bool', 'Int', 'String'] + types +
                          (['DynamicResults'] if any(i['result_rule']['dynamic_result'] for i in items) else [])))
     lines = ['"""One wrapper per Blender node. Fixed sockets are named and optional."""',
@@ -205,7 +228,8 @@ def render_interface(items):
             names = {'BOOL': 'Bool', 'INT': 'Int', 'FLOAT': 'Float', 'GEOMETRY': 'Geometry',
                      'VECTOR': 'Vector', 'COLOR': 'Color', 'ROTATION': 'Rotation',
                      'OBJECT': 'Object', 'MATERIAL': 'Material', 'STRING': 'String'}
-            return_type = 'tuple[' + ', '.join(names[t] for t in sig['static']) + ']'
+            return_type = (names[sig['static'][0][1]] if len(sig['static']) == 1 else
+                           '{' + ', '.join(repr(key) + ': ' + names[t] for key, t in sig['static']) + '}')
         lines.append(f"def {i['name']}(")
         lines.extend(f'    {argument},' for argument in args)
         lines += [f') -> {return_type}:',
@@ -219,9 +243,13 @@ BACKEND_HEADER = '''"""Physical Blender operations shared by the generated wrapp
 No Inspector state tables are needed at runtime. Blender is the authority for
 RNA properties, Menu sockets, and the resulting physical socket layout.
 """
+import keyword
+import re
 from NodeForge.extension_api import ExtensionBackendValue, NFType
 
-_TYPES = {
+'''
+
+BACKEND_HELPERS = '''_TYPES = {
     'NodeSocketFloat': NFType.FLOAT, 'NodeSocketInt': NFType.INT,
     'NodeSocketBool': NFType.BOOL, 'NodeSocketVector': NFType.VECTOR,
     'NodeSocketColor': NFType.COLOR, 'NodeSocketRotation': NFType.ROTATION,
@@ -291,20 +319,17 @@ def set_collection(node, kind, elements, capture_types):
         while len(items) > elements: items.remove(items[-1])
         while len(items) < elements: items.new()
     elif kind == 'menu':
-        names = [x.strip() for x in elements.split(',')] if elements else []
-        if not all(names) or len(names) != len(set(names)):
-            raise ValueError('elements must contain unique nonempty Menu names')
-        if [x.name for x in node.enum_items] != names:
+        names = menu_names(elements)
+        if tuple(x.name for x in node.enum_items) != names:
             node.enum_items.clear()
             for name in names: node.enum_items.new(name)
+        return names
     elif kind == 'capture':
-        chunks = [x.strip().split(':', 1) for x in elements.split(',')] if elements else []
-        if any(len(x) != 2 or x[0] not in capture_types or not x[1] for x in chunks):
-            raise ValueError('elements must be TYPE:Name entries with supported types')
-        if len({x[1] for x in chunks}) != len(chunks):
-            raise ValueError('Duplicate capture item names')
-        for token, name in chunks:
+        entries = capture_entries(elements, capture_types)
+        for token, name in entries:
             node.capture_items.new(token, name)
+        return tuple(name for _, name in entries)
+    return ()
 
 
 def deliver(context, socket, value):
@@ -321,10 +346,9 @@ def deliver(context, socket, value):
 
 def materialize(context, node_id, named, items=(), rna=None, menus=(), orders=(),
                 kind=None, elements=None, capture_types=None,
-                constant_rna=None, constant_outputs=None):
+                constant_rna=None, constant_outputs=None, scalar_name=None):
     node = make_node(context, node_id, rna or {}, orders)
-    if kind:
-        set_collection(node, kind, elements, capture_types)
+    requested_names = set_collection(node, kind, elements, capture_types) if kind else ()
     for key, value in menus:
         candidates = [sock for sock in node.inputs if sock.identifier == key]
         if len(candidates) != 1:
@@ -360,17 +384,28 @@ def materialize(context, node_id, named, items=(), rna=None, menus=(), orders=()
             raise ValueError(f'{node_id}: missing or ambiguous writable output {key!r}')
         matches[0].default_value = value
     outputs = active_sockets(node.outputs, dynamic=bool(kind))
-    if len(outputs) != len(context.result_types):
-        raise ValueError(f'{node_id} produced {len(outputs)} outputs, '
-                         f'but NodeForge expects {len(context.result_types)}')
-    return tuple(context.value(socket, typ)
-                 for socket, typ in zip(outputs, context.result_types))
+    if len(outputs) != len(context.result_types) or len(requested_names) > len(outputs):
+        raise ValueError(f'{node_id}: unexpected output count; '
+                         f'physical identifiers {[socket.identifier for socket in outputs]!r}')
+    base_count = len(outputs) - len(requested_names)
+    observed_names = tuple(sanitized(socket.name) if index < base_count else socket.name
+                           for index, socket in enumerate(outputs))
+    if tuple(observed_names[base_count:]) != requested_names:
+        raise ValueError(f'{node_id}: collection output labels differ from {requested_names!r}')
+    observed = tuple(zip(observed_names, (socket_type(socket) for socket in outputs)))
+    expected = tuple(zip((scalar_name,) if scalar_name is not None else context.result_names, context.result_types))
+    if observed != expected:
+        raise ValueError(f'{node_id}: output schema {observed!r} does not match {expected!r}; '
+                         f'physical identifiers {[socket.identifier for socket in outputs]!r}')
+    if scalar_name is not None:
+        return context.value(outputs[0], context.result_types[0])
+    return {key: context.value(socket, typ) for (key, typ), socket in zip(observed, outputs)}
 
 '''
 
 
 def render_backend(items):
-    lines = [BACKEND_HEADER]
+    lines = [BACKEND_HEADER, inspect.getsource(sanitized), inspect.getsource(capture_entries), inspect.getsource(menu_names), BACKEND_HELPERS]
     for i in items:
         fields = [f for f in i['fields'] if f['kind'] == 'rna']
         menus = [f for f in i['fields'] if f['kind'] == 'menu']
@@ -395,6 +430,20 @@ def render_backend(items):
             kwargs.extend([f'kind={k!r}', 'elements=elements'])
             if k == 'capture':
                 kwargs.append(f"capture_types={tuple(sorted(d['types']))!r}")
+        sig = i['result_rule']
+        if not sig['dynamic_result'] and len(sig['static']) == 1:
+            kwargs.append(f"scalar_name={sig['static'][0][0]!r}")
+        # Menu requires at least one explicit item, so its base cannot be the whole result.
+        if sig['dynamic_result'] and (not i['dynamic'] or i['dynamic']['kind'] != 'menu'):
+            scalar_names = {key: schema[0][0] for key, schema in sig['map'].items() if len(schema) == 1}
+            if scalar_names:
+                keys = set(scalar_names.values())
+                if len(keys) == 1:
+                    expected = repr(next(iter(keys)))
+                else:
+                    deps = '(' + ', '.join(sig['deps']) + (',' if len(sig['deps']) == 1 else '') + ')'
+                    expected = f'{scalar_names!r}[{deps}]'
+                kwargs.append(f"scalar_name={expected} if context.result_names is None else None")
         props = '{' + ', '.join(repr(f['key']) + ': ' + f['param'] for f in fields) + '}'
         menu = ('(' + ', '.join('(' + repr(f['key']) + ', ' + f['param'] + ')' for f in menus)
                 + (',' if len(menus) == 1 else '') + ')')
@@ -415,12 +464,14 @@ def render_backend(items):
     return '\n'.join(lines) + '\n'
 
 
-SEMANTIC_HEADER='''"""Only invocation-dependent output types require semantic resolvers."""
+SEMANTIC_HEADER='''"""Only invocation-dependent output schemas require semantic resolvers."""
 from NodeForge.nf_types import NFType
-from NodeForge.extension_result_api import ResultStaticArg
+from NodeForge.extension_result_api import ResultStaticArg, validate_named_result_key
 
 
-def static_value(arguments, param):
+'''
+
+SEMANTIC_HELPERS = '''def static_value(arguments, param):
     value = arguments[param]
     if not isinstance(value, ResultStaticArg):
         raise TypeError(f'{param} must be compile-time')
@@ -434,48 +485,55 @@ def output_types(arguments, parameters, signatures):
     except KeyError:
         raise ValueError(f'Unsupported result configuration: {key!r}') from None
 
+def public_result(schema):
+    """Choose the public Nodes carrier from the complete validated schema."""
+    return next(iter(schema.values())) if len(schema) == 1 else schema
+
+
+def with_collection_results(base, entries):
+    """Append explicit collection keys without normalizing or overwriting them."""
+    output = dict(base)
+    for key, typ in entries:
+        validate_named_result_key(key)
+        if key in output:
+            raise ValueError(f'Duplicate output key {key!r}')
+        output[key] = typ
+    return output
+
+
 '''
 
 
 def render_semantic(items):
     dynamic=[i for i in items if i['result_rule']['dynamic_result']]
     if not dynamic: return ''
-    lines=[SEMANTIC_HEADER]
+    lines = [SEMANTIC_HEADER, inspect.getsource(capture_entries), inspect.getsource(menu_names), SEMANTIC_HELPERS]
     for i in dynamic:
         rule=i['result_rule']; mapping=rule['map']; kind=i['dynamic']['kind'] if i['dynamic'] else None
         lines.append(f"_SIGNATURE_{i['name']} = {{")
         for key,v in sorted(mapping.items(), key=lambda entry:repr(entry[0])):
-            lines.append(f"    {key!r}: ({', '.join('NFType.'+x for x in v)}{',' if len(v)==1 else ''}),")
+            lines.append(f"    {key!r}: {{" + ", ".join(repr(name) + ": NFType." + typ for name, typ in v) + "},")
         lines.append('}')
         lines.append(f'\ndef _result_types_{i["name"]}(arguments):')
         lines.append(f"    base = output_types(arguments, {rule['deps']!r}, _SIGNATURE_{i['name']})")
         if kind=='capture':
             typemap={k:v.upper() for k,v in i['dynamic']['types'].items()}
-            # Conversion types originate from successful Blender Inspector probes.
-            lines.extend(["    items = static_value(arguments, 'elements')",
-                          "    if not items: return base",
-                          "    names = set()", "    output = list(base)",
-                          "    for raw in items.split(','):",
-                          "        pair = raw.strip().split(':', 1)",
-                          f"        if len(pair) != 2 or pair[0] not in {tuple(sorted(typemap))!r} or not pair[1] or pair[1] in names:",
-                          "            raise ValueError('Invalid Capture Attribute elements')",
-                          "        names.add(pair[1])",
-                          f"        output.append(NFType[{{{', '.join(repr(k)+': '+repr(v) for k,v in sorted(typemap.items()))}}}[pair[0]]])",
-                          '    return tuple(output)'])
+            lines.extend([f"    types = {{{', '.join(repr(k)+': NFType.'+v for k,v in sorted(typemap.items()))}}}",
+                          "    entries = capture_entries(static_value(arguments, 'elements'), types)",
+                          "    return public_result(with_collection_results(base, ((name, types[token]) for token, name in entries)))"])
         elif kind=='menu':
-            lines.extend(["    raw = static_value(arguments, 'elements')",
-                          "    names = [s.strip() for s in raw.split(',')] if raw else []",
+            lines.extend(["    names = menu_names(static_value(arguments, 'elements'))",
                           f"    selected = static_value(arguments, {next(f['param'] for f in i['fields'] if f['kind'] == 'menu' and f['key'] == 'Menu')!r})",
-                          "    if not all(names) or len(names) != len(set(names)) or selected not in names:",
+                          "    if selected not in names:",
                           "        raise ValueError('Invalid Menu selection / elements')",
-                          "    return base + (NFType.BOOL,) * len(names)"])
+                          "    return public_result(with_collection_results(base, ((name, NFType.BOOL) for name in names)))"])
         elif kind=='index':
             lines.extend(["    count = static_value(arguments, 'elements')",
                           "    if type(count) is not int or count < 0:",
                           "        raise ValueError('elements must be nonnegative')",
-                          '    return base'])
+                          '    return public_result(base)'])
         else:
-            lines.append('    return base')
+            lines.append('    return public_result(base)')
         lines.append('')
     return '\n'.join(lines)+'\n'
 
@@ -524,7 +582,7 @@ def generate(spec, requested, out):
                 occupied.add(candidate)
             prefer_blender_defaults(p, spec['nodes'][name])
             prepared.append(p)
-        except Exception as e:
+        except UnsupportedNodeError as e:
             skipped.append({'node':name,'reason':str(e)})
     # Blender UI labels are unique for this sample; explicitly reject ambiguous APIs.
     name_to_ids = {}

@@ -40,7 +40,7 @@ CALLED = 0
 def _result_types_foo(arguments):
     global CALLED
     CALLED += 1
-    return ()
+    return {"value": arguments["value"].typ}
 ''', backend="def foo(context, value): return value\n")
     families, _ = owner.normalize_interface()
     spec = next(iter(families.values()))[0]
@@ -96,7 +96,7 @@ def test_two_dynamic_exports_can_share_same_semantic_module(tmp_path):
     interface += 'def bar(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> DynamicResults: ...\n'
     owner = _owner(tmp_path, interface,
                    backend="def foo(context, value): return value\ndef bar(context, value): return value\n",
-                   semantic="def _result_types_foo(args): return ()\ndef _result_types_bar(args): return ()\n")
+                   semantic="def _result_types_foo(args): return {'value': args['value'].typ}\ndef _result_types_bar(args): return {'value': args['value'].typ}\n")
     registry = ExtensionRegistry((owner,))
     assert {cid.name for cid in registry._families} == {"foo", "bar"}
     assert set(owner._phase_modules["SEMANTIC"]) == {"semantic"}
@@ -165,7 +165,7 @@ def _result_types_foo(arguments):
     assert isinstance(arguments['geometry'], ResultRuntimeArg)
     assert isinstance(arguments['selection'], (ResultRuntimeArg, ResultStaticArg))
     assert isinstance(arguments['domain'], ResultStaticArg)
-    return (NFType.GEOMETRY, NFType.BOOL, *(arg.typ for arg in arguments['values']))
+    return {"geometry": NFType.GEOMETRY, "selection": NFType.BOOL, **{f"value_{i}": arg.typ for i, arg in enumerate(arguments['values'])}}
 '''
 
 
@@ -188,7 +188,7 @@ def test_resolver_uses_call_local_actual_types_and_exact_ir(tmp_path):
         root = ast.parse(text, mode="eval").body
         analysis = analyze_expression(root, env)
         analyzed = analysis.facts[root].analyzed_call
-        assert analyzed.result.types == expected
+        assert tuple(typ for _, typ in analyzed.result.items) == expected
         program = lower_analyzed_expression(root, analysis)
         call = next(item for item in program.operations if isinstance(item, IRCall))
         assert tuple(result.typ for result in call.results) == expected
@@ -202,21 +202,21 @@ def test_resolver_uses_call_local_actual_types_and_exact_ir(tmp_path):
         module.LAST_ARGUMENTS["domain"] = None
 
 
-def test_empty_dynamic_values_still_resolve_a_structural_tuple(tmp_path):
+def test_empty_dynamic_values_still_resolve_a_named_result(tmp_path):
     """A one-element resolver result does not silently become a scalar expression."""
     import ast
     from NodeForge.nf_types import NFType
     from NodeForge.semantic.analysis import analyze_expression
     owner = _owner(tmp_path, _DYNAMIC_INTERFACE, backend="def foo(*args, **kw): pass\n",
-                   semantic="from NodeForge.nf_types import NFType\ndef _result_types_foo(args): return [NFType.FLOAT]\n")
+                   semantic="from NodeForge.nf_types import NFType\ndef _result_types_foo(args): return {'value': NFType.FLOAT}\n")
     env, _ = _dynamic_semantic_environment(owner)
     root = ast.parse("foo(geo)", mode="eval").body
     result = analyze_expression(root, env).facts[root].analyzed_call.result
-    assert result.types == (NFType.FLOAT,)
+    assert tuple(typ for _, typ in result.items) == (NFType.FLOAT,)
 
 
-@pytest.mark.parametrize("expression", ["[]", "()", "None", "{NFType.FLOAT}",
-                                          "(NFType.FLOAT, 42)", "'FLOAT'"])
+@pytest.mark.parametrize("expression", ["[]", "()", "(NFType.FLOAT,)", "[NFType.FLOAT]", "{}", "{'': NFType.FLOAT}", "None", "{NFType.FLOAT}",
+                                          "(NFType.FLOAT, 42)", "'FLOAT'", "NFType", "{'value': {'nested': NFType.FLOAT}}", "{'value': 'FLOAT'}"])
 def test_dynamic_result_resolver_rejects_invalid_shapes_during_analysis(tmp_path, expression):
     """All malformed resolver outputs fail before typed Call IR or Blender creation."""
     import ast
@@ -234,17 +234,17 @@ def test_snapshot_owned_resolver_remains_unchanged_when_source_changes(tmp_path)
     import ast
     from NodeForge.nf_types import NFType
     from NodeForge.semantic.analysis import analyze_expression
-    semantic = "from NodeForge.nf_types import NFType\ndef _result_types_foo(args): return (NFType.FLOAT,)\n"
+    semantic = "from NodeForge.nf_types import NFType\ndef _result_types_foo(args): return {\"value\": NFType.FLOAT}\n"
     old = _owner(tmp_path, _DYNAMIC_INTERFACE, backend="def foo(*args, **kw): pass\n", semantic=semantic)
     old_env, _ = _dynamic_semantic_environment(old)
     expression = ast.parse("foo(geo, f)", mode="eval").body
-    assert analyze_expression(expression, old_env).facts[expression].analyzed_call.result.types == (NFType.FLOAT,)
-    (tmp_path / "semantic.py").write_text(semantic.replace("NFType.FLOAT,", "NFType.INT,"), encoding="utf-8")
+    assert tuple(typ for _, typ in analyze_expression(expression, old_env).facts[expression].analyzed_call.result.items) == (NFType.FLOAT,)
+    (tmp_path / "semantic.py").write_text(semantic.replace("NFType.FLOAT", "NFType.INT"), encoding="utf-8")
     new = ExtensionOwnerSession(capture_owner_code_snapshot(old.snapshot.owner_key, tmp_path))
     new_env, _ = _dynamic_semantic_environment(new)
     assert old.snapshot.fingerprint != new.snapshot.fingerprint
-    assert analyze_expression(expression, old_env).facts[expression].analyzed_call.result.types == (NFType.FLOAT,)
-    assert analyze_expression(expression, new_env).facts[expression].analyzed_call.result.types == (NFType.INT,)
+    assert tuple(typ for _, typ in analyze_expression(expression, old_env).facts[expression].analyzed_call.result.items) == (NFType.FLOAT,)
+    assert tuple(typ for _, typ in analyze_expression(expression, new_env).facts[expression].analyzed_call.result.items) == (NFType.INT,)
 
 
 def test_overloads_share_one_resolver_with_selected_actual_type(tmp_path):
@@ -264,13 +264,13 @@ def foo(value: Annotated[Vector, EvaluationMode.RUNTIME_ONLY]) -> DynamicResults
 def foo(value): ...
 '''
     owner = _owner(tmp_path, interface, backend="def foo(*args): pass\n",
-                   semantic="def _result_types_foo(args): return (args['value'].typ,)\n")
+                   semantic="def _result_types_foo(args): return {'value': args['value'].typ}\n")
     env, _ = _dynamic_semantic_environment(owner)
     for source, index, typ in [("foo(f)", 0, NFType.FLOAT), ("foo(v)", 1, NFType.VECTOR)]:
         root = ast.parse(source, mode="eval").body
         call = analyze_expression(root, env).facts[root].analyzed_call
         assert call.extension_overload_index == index
-        assert call.result.types == (typ,)
+        assert tuple(typ for _, typ in call.result.items) == (typ,)
 
 
 def test_public_semantic_state_and_private_result_resolver_coexist(tmp_path):
@@ -302,7 +302,7 @@ def foo(value) -> _State:
 def _result_types_foo(args):
     global RESOLVES
     RESOLVES += 1
-    return (args['value'].typ,)
+    return {'value': args['value'].typ}
 '''
     owner = _owner(tmp_path, interface, semantic=semantic,
                    backend="def foo(context, state): return None\n")
@@ -312,22 +312,22 @@ def _result_types_foo(args):
     assert classify_extension_execution(spec, state, has_implementation=True) is ExtensionExecutionForm.SEMANTIC_THEN_BACKEND
     root = ast.parse("foo(f)", mode="eval").body
     result = analyze_expression(root, env).facts[root].analyzed_call
-    assert result.result.types == (NFType.FLOAT,)
+    assert tuple(typ for _, typ in result.result.items) == (NFType.FLOAT,)
     sem = owner._phase_modules["SEMANTIC"]["semantic"]
     assert sem.CALLS == sem.RESOLVES == 1
     assert result.extension_state_type == state
 
 
-def test_dynamic_editor_signature_reports_unbound_tuple_without_fabricated_fields(tmp_path):
+def test_dynamic_editor_signature_reports_unresolved_named_result_without_fabricated_fields(tmp_path):
     """Editor completion shows the marker while leaving per-call arity unspecified."""
     from NodeForge.editor.intelligence import _extension_signatures, _return_preview
     owner = _owner(tmp_path, _DYNAMIC_INTERFACE, semantic=_DYNAMIC_SEMANTIC,
                    backend="def foo(*args, **kw): pass\n")
     specs = next(iter(owner.normalize_interface()[0].values()))
     signature, = _extension_signatures("foo", specs)
-    assert signature.outputs[0].typ == "tuple[dynamic]"
-    assert len(signature.outputs) == 1
-    assert "tuple[dynamic]" in _return_preview(signature)
+    assert signature.result_kind == "dynamic"
+    assert not signature.outputs
+    assert "unresolved" in _return_preview(signature)
     assert len(signature.parameters) == 4
 
 
@@ -350,9 +350,9 @@ def test_call_specific_tuple_index_rejects_out_of_range(tmp_path):
     owner = _owner(tmp_path, _DYNAMIC_INTERFACE, backend="def foo(*args): pass\n",
                    semantic=_DYNAMIC_SEMANTIC)
     env, _ = _dynamic_semantic_environment(owner)
-    good = ast.parse("foo(geo, f)[2]", mode="eval").body
+    good = ast.parse('foo(geo, f)["value_0"]', mode="eval").body
     assert analyze_expression(good, env).facts[good].result_shape is not None
-    bad = ast.parse("foo(geo, f)[5]", mode="eval").body
+    bad = ast.parse('foo(geo, f)["missing"]', mode="eval").body
     with pytest.raises(CompileError):
         analyze_expression(bad, env)
 
@@ -372,13 +372,13 @@ def test_optional_backend_dynamic_resolver_sees_omission_separately_from_values(
 SEEN = []
 def _result_types_foo(arguments):
     SEEN.append(dict(arguments))
-    return (NFType.GEOMETRY,)
+    return {"geometry": NFType.GEOMETRY}
 '''
     owner = _owner(tmp_path, source, backend="def foo(*a, **kw): pass\n", semantic=semantic)
     env, _ = _dynamic_semantic_environment(owner)
     for expression in ("foo(geo)", "foo(geo, selection=b, domain='POINT')"):
         node = ast.parse(expression, mode="eval").body
-        assert analyze_expression(node, env).facts[node].analyzed_call.result.types == (NFType.GEOMETRY,)
+        assert tuple(typ for _, typ in analyze_expression(node, env).facts[node].analyzed_call.result.items) == (NFType.GEOMETRY,)
     first, second = owner._phase_modules["SEMANTIC"]["semantic"].SEEN
     assert first["domain"] is None
     assert isinstance(first["selection"], ResultStaticArg) and first["selection"].value is True
@@ -400,3 +400,40 @@ def test_semantic_dynamic_resolver_reads_optional_none_once_per_call(tmp_path):
     assert len(semantic.RESOLVED) == len(semantic.SEEN) == 2
     assert semantic.RESOLVED[0]["optional"] is None
     assert isinstance(semantic.RESOLVED[1]["optional"], ResultRuntimeArg)
+
+
+@pytest.mark.parametrize('schema, names, types', [
+    ('NFType.FLOAT', None, ('FLOAT',)),
+    ('NFType.VECTOR', None, ('VECTOR',)),
+    ("{'value': NFType.FLOAT}", ('value',), ('FLOAT',)),
+    ("{'second': NFType.INT, 'first': NFType.FLOAT}", ('second', 'first'), ('INT', 'FLOAT')),
+])
+def test_explicit_dynamic_result_carrier(tmp_path, schema, names, types):
+    """The resolver declaration, rather than arity, chooses the IR result carrier."""
+    import ast
+    from NodeForge.semantic.analysis import analyze_expression
+    from NodeForge.semantic.ir import IRCall, IRNamedOutputs, IRValue
+    from NodeForge.semantic.lowering import lower_analyzed_expression
+    owner = _owner(tmp_path, _DYNAMIC_INTERFACE,
+                   backend='raise AssertionError("physical module imported by semantic analysis")\ndef foo(*args): pass\n',
+                   semantic=f'from NodeForge.nf_types import NFType\nCALLED = 0\ndef _result_types_foo(args):\n    global CALLED\n    CALLED += 1\n    return {schema}\n')
+    env, _ = _dynamic_semantic_environment(owner)
+    root = ast.parse('foo(geo, f)', mode='eval').body
+    program = lower_analyzed_expression(root, analyze_expression(root, env))
+    call = next(op for op in program.operations if isinstance(op, IRCall))
+    assert call.result_names == names
+    assert tuple(r.typ.value for r in call.results) == types
+    assert isinstance(program.result, IRValue if names is None else IRNamedOutputs)
+    assert owner._phase_modules['SEMANTIC']['semantic'].CALLED == 1
+
+
+def test_explicit_direct_result_rejects_named_projection(tmp_path):
+    """A direct result cannot be interpreted as a named singleton."""
+    import ast
+    from NodeForge.semantic.analysis import analyze_expression
+    owner = _owner(tmp_path, _INTERFACE, backend='def foo(context, value): return value',
+                   semantic='from NodeForge.nf_types import NFType\ndef _result_types_foo(args): return NFType.FLOAT')
+    env, _ = _dynamic_semantic_environment(owner)
+    for text in ("foo(f)['value']", 'foo(f).value'):
+        with pytest.raises(CompileError):
+            analyze_expression(ast.parse(text, mode='eval').body, env)

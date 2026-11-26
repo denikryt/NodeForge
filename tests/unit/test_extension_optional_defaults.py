@@ -160,13 +160,13 @@ SEEN = []
 def _result_types_sample(arguments):
     assert not hasattr(arguments, "__setitem__")
     SEEN.append(dict(arguments))
-    return (NFType.GEOMETRY, NFType.FLOAT)
+    return {"geometry": NFType.GEOMETRY, "value": NFType.FLOAT}
 '''
     owner = _owner(tmp_path, interface, semantic=semantic)
     call, _ = _analyzed(owner, "sample(geo)")
-    assert call.result.types == (NFType.GEOMETRY, NFType.FLOAT)
+    assert tuple(typ for _, typ in call.result.items) == (NFType.GEOMETRY, NFType.FLOAT)
     call, _ = _analyzed(owner, "sample(geo, optional=i, runtime_optional=f)")
-    assert call.result.types == (NFType.GEOMETRY, NFType.FLOAT)
+    assert tuple(typ for _, typ in call.result.items) == (NFType.GEOMETRY, NFType.FLOAT)
     seen = owner._phase_modules["SEMANTIC"]["semantic"].SEEN
     assert len(seen) == 2
     assert seen[0]["optional"] is None and seen[0]["runtime_optional"] is None
@@ -239,7 +239,7 @@ def sample(base, *, optional=None) -> _State:
 def _result_types_sample(arguments):
     assert not hasattr(arguments, "__setitem__")
     RESOLVED.append(dict(arguments))
-    return (NFType.FLOAT, NFType.INT)
+    return {"value": NFType.FLOAT, "index": NFType.INT}
 '''
 
 
@@ -250,7 +250,7 @@ def test_semantic_then_backend_omission_is_compact_and_dynamic_resolver_is_typed
     from NodeForge.semantic.ir import IRCall
     owner = _owner(tmp_path, _SEMANTIC_BACKEND_INTERFACE, semantic=_SEMANTIC_BACKEND)
     analyzed, program = _analyzed(owner, "sample(f)")
-    assert analyzed.result.types == (NFType.FLOAT, NFType.INT)
+    assert tuple(typ for _, typ in analyzed.result.items) == (NFType.FLOAT, NFType.INT)
     assert len(analyzed.runtime_operands) == 1
     call, = [op for op in program.operations if isinstance(op, IRCall)]
     assert len(call.arguments) == 1

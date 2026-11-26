@@ -146,11 +146,16 @@ def _popup_rows(hint: Assistance, selection: int, region_height: int):
             role = "active" if index == hint.active_parameter else "parameter"
             rows.append(("  " + label, selected, role))
         rows.append((")", False, "heading"))
-        if len(outputs) == 1:
+        if signature.result_kind == "dynamic":
+            rows.append(("→ dynamic result (unresolved)", False, "result"))
+        elif signature.result_kind == "named" and len(outputs) == 1:
+            result = outputs[0]
+            rows.append((f"→ {{{result.key}: {result.typ}}}", False, "result"))
+        elif len(outputs) == 1:
             result = outputs[0]
             rows.append((f"→ {result.name}: {result.typ}", False, "result"))
         elif len(outputs) > 1:
-            rows.append((f"→ {len(outputs)} outputs:", False, "result"))
+            rows.append((f"→ {len(outputs)} {'named ' if signature.result_kind == 'named' else ''}outputs:", False, "result"))
             for output in outputs[:output_lines]:
                 rows.append((f"  {output.name}: {output.typ}", False, "result"))
             if len(outputs) > output_lines:

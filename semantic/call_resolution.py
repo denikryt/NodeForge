@@ -228,7 +228,7 @@ class ContextReadCallResult:
 
 @dataclass(frozen=True)
 class NamedOutputsCallResult:
-    """Describe raw ``outputs=`` structural results in declared source order."""
+    """Describe structural named results in declared source order."""
 
     items: tuple[tuple[str, NFType], ...]
 

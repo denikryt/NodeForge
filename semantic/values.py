@@ -125,7 +125,7 @@ class TupleResultShape:
 
 @dataclass(frozen=True)
 class NamedOutputsResultShape:
-    """Describe declared outputs returned by raw ``node(..., outputs=...)`` syntax."""
+    """Describe declared named outputs returned by a callable."""
 
     items: tuple[tuple[str, RuntimeResultShape], ...]
 
@@ -151,7 +151,7 @@ class NamedOutputsResultShape:
             if item_name == name:
                 return shape
         known = ", ".join(repr(item_name) for item_name, _ in self.items) or "<none>"
-        raise CompileError(f"Unknown raw node output {name!r}; declared outputs are: {known}")
+        raise CompileError(f"Unknown named result {name!r}; declared outputs are: {known}")
 
 
 SemanticResultShape: TypeAlias = RuntimeResultShape | ArrayResultShape | TupleResultShape | NamedOutputsResultShape | ExtensionResultShape
@@ -255,7 +255,7 @@ class StructuralBindingSymbol:
             if leaf.projection_key[1] == name:
                 return leaf
         known = ", ".join(repr(leaf.projection_key[1]) for leaf in self.leaves) or "<none>"
-        raise CompileError(f"Unknown raw node output {name!r}; declared outputs are: {known}")
+        raise CompileError(f"Unknown named result {name!r}; declared outputs are: {known}")
 
 
 StructuralArrayItem: TypeAlias = StructuralRuntimeLeaf | StructuralBindingSymbol | StructuralArrayRef

@@ -63,7 +63,7 @@ def test_extension_in_private_candidate_does_not_modify_real_root():
         root = bpy.data.node_groups.new('NFExt_stage_extension', 'GeometryNodeTree')
         original = root.nodes.new('GeometryNodeMeshCube')
         before = original.as_pointer()
-        prepared, backend, session = _prepare('from packages import dynamic\na, b = foo(1.0)', root)
+        prepared, backend, session = _prepare('from packages import dynamic\nr = foo(1.0)\na = r.double\nb = r.original', root)
         tx = BlenderGroupBuildTransaction()
         candidate = build_private_root_candidate(prepared, root, backend, session,
                                                   transaction=tx, root_owner_uuid='extension-stage-extension')
@@ -86,11 +86,11 @@ def test_failing_backend_cannot_mutate_authoritative_root_via_context_group():
         root = bpy.data.node_groups.new('NFExt_stage_backend_fails', 'GeometryNodeTree')
         old = root.nodes.new('GeometryNodeMeshCube')
         before = old.as_pointer()
-        prepared, backend, session = _prepare('from packages import dynamic\na, b = foo(1.0)', root)
+        prepared, backend, session = _prepare('from packages import dynamic\nr = foo(1.0)\na = r.double\nb = r.original', root)
         groups = {g.as_pointer() for g in bpy.data.node_groups}
         meshes = {m.as_pointer() for m in bpy.data.meshes}
         tx = BlenderGroupBuildTransaction()
-        with pytest.raises(CompileError, match='2-item tuple'):
+        with pytest.raises(CompileError, match='exact result keys'):
             build_private_root_candidate(prepared, root, backend, session,
                                          transaction=tx, root_owner_uuid='extension-stage-error')
         tx.rollback()

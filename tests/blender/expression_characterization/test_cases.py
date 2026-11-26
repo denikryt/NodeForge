@@ -270,12 +270,12 @@ def test_extension_baselines_pin_inline_vs_grouped_topology():
 
 
 def test_extension_baselines_pin_dynamic_typed_outputs_and_semantic_dependencies():
-    """Call-specific result types, tuple arity and compacted semantic input are observable."""
+    """Call-specific result types, named arity and compacted semantic input are observable."""
     heterogeneous = load_case_baseline('extension_dynamic_mixed')['graph']
     child, = [node['group']['graph'] for node in heterogeneous['nodes'] if 'group' in node]
     assert [(item['name'], item['socket_type']) for item in child['interface']
             if item['in_out'] == 'OUTPUT'] == [
-        ('Result_0', 'NodeSocketFloat'), ('Result_1', 'NodeSocketVector'),
+        ('scalar', 'NodeSocketFloat'), ('vector', 'NodeSocketVector'),
     ]
     assert any(node['bl_idname'] == 'ShaderNodeSeparateXYZ' for node in heterogeneous['nodes'])
 
@@ -286,7 +286,7 @@ def test_extension_baselines_pin_dynamic_typed_outputs_and_semantic_dependencies
                    if item['in_out'] == 'OUTPUT'] for group in child_groups]
     assert signatures == [['NodeSocketVector'], ['NodeSocketFloat']]
     assert [item['name'] for group in child_groups for item in group['interface']
-            if item['in_out'] == 'OUTPUT'] == ['Result_0', 'Result_0']
+            if item['in_out'] == 'OUTPUT'] == ['value', 'value']
 
     semantic = load_case_baseline('extension_semantic_dependency')['graph']
     child, = [node['group']['graph'] for node in semantic['nodes'] if 'group' in node]
@@ -334,3 +334,48 @@ def test_harness_capture_items_change_snapshot():
         assert second['nodes'][0]['capture_items'][0]['data_type'] == 'QUATERNION'
     finally:
         bpy.data.node_groups.remove(group)
+
+
+
+def test_explicit_result_characterization_invariants():
+    """Check declared output shapes and shared physical producers independently of goldens."""
+    def entry(case):
+        return next(d["graph"] for d in run_case(case)["definitions"] if d["name"] == "entry")
+
+    def children(graph):
+        return [n["group"]["graph"] for n in graph["nodes"] if "graph" in n.get("group", {})]
+
+    def outputs(graph):
+        return [(i["name"], i["socket_type"]) for i in graph["interface"] if i["in_out"] == "OUTPUT"]
+
+    def output_sources(graph):
+        output, = [n["id"] for n in graph["nodes"] if n["bl_idname"] == "NodeGroupOutput"]
+        return [tuple(l["from"]) for l in graph["links"] if l["to"][0] == output]
+
+    one = entry("source_named_singleton")
+    child, = children(one)
+    assert outputs(child) == [("value", "NodeSocketFloat")]
+    a, b = output_sources(one)
+    assert a == b
+    assert sum(n["bl_idname"] == "ShaderNodeMath" for n in child["nodes"]) == 1
+
+    multi = entry("extension_dynamic_explicit_shapes")
+    assert [outputs(c) for c in children(multi)] == [
+        [("Result", "NodeSocketFloat")], [("value", "NodeSocketFloat")],
+        [("scaled", "NodeSocketFloat"), ("original", "NodeSocketFloat")],
+    ]
+    assert len(set(output_sources(multi))) == 4  # five leaves, two use one socket
+
+    native = children(entry("nodes_dynamic_output_shapes"))
+    assert [outputs(c) for c in native] == [
+        [("Result", "NodeSocketInt")], [("Result", "NodeSocketInt")],
+        [(k, "NodeSocketInt") for k in ("point_count", "edge_count", "face_count", "face_corner_count")],
+        [("Result", "NodeSocketFloat")], [("Result", "NodeSocketVector")],
+    ]
+    assert [output_sources(c)[0][1] for c in (native[0], native[1], native[3], native[4])] == [
+        "Point Count", "Instance Count", "Value", "Vector",
+    ]
+    collections = children(entry("nodes_named_multi_collection"))
+    assert outputs(collections[1])[-1] == ("Two Words", "NodeSocketFloat")
+    assert outputs(collections[2])[-1] == ("Two Words", "NodeSocketBool")
+    assert outputs(collections[3]) == [("Result", "NodeSocketFloat")]

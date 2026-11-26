@@ -1158,3 +1158,101 @@ def test_rotation_default_and_user_edit_persist_after_blend_reopen(tmp_path):
     compiler.update_expression_group(restored_group, after)
     assert tuple(restored_node.inputs[0].default_value) == (normalize_float_constant(1e-7), 0.0, 0.0)
     assert all(link.is_valid for link in restored_group.links)
+
+
+@pytest.mark.parametrize('before,after,expected', [
+    ('return {"a": x}', 'return {"b": x}', []),
+    ('return {"a": x}', 'return {"a": x + 1}', ['a']),
+    ('return {"a": x}', 'return {"a": vector(1, 2, 3)}', []),
+    ('return {"a": x, "b": x + 1}', 'return {"b": x + 1, "a": x}', ['a', 'b']),
+    ('return {"a": x, "b": x + 1}', 'return {"b": x}', ['b']),
+    ('return x', 'return {"a": x}', []),
+    ('return {"a": x}', 'return x', []),
+    ('return x', 'return {"X": x}', ['X']),
+    ('return {"X": x}', 'return x', ['X']),
+])
+def test_named_output_identity_on_update(before, after, expected):
+    """Only exact named physical socket keys survive a published update."""
+    from NodeForge.blender.interface import NAMED_RESULTS_PROP
+    def source(body):
+        return 'def nf_fixture(x: Float = 2.0):\n    ' + body + '\n'
+    group = compile_group(source(before), 'NFTest_named_output_update')
+    wrapper = bpy.data.node_groups.new('NFTest_named_output_wrapper', 'GeometryNodeTree')
+    node = wrapper.nodes.new('GeometryNodeGroup')
+    node.node_tree = group
+    node.inputs[0].default_value = 7.0
+    for socket in node.outputs:
+        target = wrapper.nodes.new('ShaderNodeMath')
+        wrapper.links.new(socket, target.inputs[0])
+    compiler.update_expression_group(group, source(after))
+    assert node.node_tree == group
+    assert sorted(link.from_socket.name for link in wrapper.links) == expected
+    assert (NAMED_RESULTS_PROP in group) == ('{' in after)
+    assert node.inputs[0].default_value == 7.0
+
+
+@pytest.mark.parametrize('named', [True, False])
+def test_named_output_marker_and_links_rollback(named):
+    """A destructive cutover failure restores both marker presence and external links."""
+    from NodeForge.blender.interface import NAMED_RESULTS_PROP
+    before = 'return {"X": x}' if named else 'return x'
+    after = 'return x' if named else 'return {"X": x}'
+    def source(body):
+        return 'def nf_fixture(x: Float):\n    ' + body + '\n'
+    group = compile_group(source(before), 'NFTest_named_rollback')
+    wrapper = bpy.data.node_groups.new('NFTest_named_rollback_wrapper', 'GeometryNodeTree')
+    node = wrapper.nodes.new('GeometryNodeGroup')
+    node.node_tree = group
+    target = wrapper.nodes.new('ShaderNodeMath')
+    wrapper.links.new(node.outputs[0], target.inputs[0])
+    old_name = node.outputs[0].name
+    groups = set(bpy.data.node_groups.keys())
+    blender_group_backend._TEST_CUTOVER_FAIL_AFTER_RESET = True
+    try:
+        with pytest.raises(Exception, match='cutover'):
+            compiler.update_expression_group(group, source(after))
+    finally:
+        blender_group_backend._TEST_CUTOVER_FAIL_AFTER_RESET = False
+    assert node.node_tree == group
+    assert (NAMED_RESULTS_PROP in group) == named
+    assert [link.from_socket.name for link in wrapper.links] == [old_name]
+    assert set(bpy.data.node_groups.keys()) == groups
+
+
+def test_named_marker_survives_save_and_reopen(tmp_path):
+    """Saved named groups retain their output link identity policy."""
+    from NodeForge.blender.interface import NAMED_RESULTS_PROP
+    source = 'def nf_fixture(x: Float):\n    return {"a": x}\n'
+    group = compile_group(source, 'NFTest_named_reopen')
+    wrapper = bpy.data.node_groups.new('NFTest_named_reopen_wrapper', 'GeometryNodeTree')
+    wrapper.use_fake_user = True
+    node = wrapper.nodes.new('GeometryNodeGroup')
+    node.node_tree = group
+    math = wrapper.nodes.new('ShaderNodeMath')
+    wrapper.links.new(node.outputs['a'], math.inputs[0])
+    filename = str(tmp_path / 'named.blend')
+    bpy.ops.wm.save_as_mainfile(filepath=filename)
+    bpy.ops.wm.open_mainfile(filepath=filename)
+    group = bpy.data.node_groups['NFTest_named_reopen']
+    wrapper = bpy.data.node_groups['NFTest_named_reopen_wrapper']
+    assert group[NAMED_RESULTS_PROP]
+    compiler.update_expression_group(group, source.replace('"a"', '"b"'))
+    assert not wrapper.links
+
+
+def test_equivalent_candidate_cannot_skip_named_shape_change():
+    """Physical equivalence and identical fingerprints do not imply carrier equivalence."""
+    from NodeForge.blender.interface import NAMED_RESULTS_PROP, set_named_results
+    from NodeForge.function_instances import stamp_function_metadata
+    group = bpy.data.node_groups.new('NFTest_equivalent_named', 'GeometryNodeTree')
+    group.interface.new_socket(name='Result', in_out='OUTPUT', socket_type='NodeSocketFloat')
+    stamp_function_metadata(group, instance_key=None, definition_owner=None, fingerprint='same')
+    backend = blender_group_backend.BlenderGroupBackend(populate_candidate=lambda *a, **kw: None)
+    def populate(candidate, resources):
+        candidate.interface.new_socket(name='Result', in_out='OUTPUT', socket_type='NodeSocketFloat')
+        set_named_results(candidate, True)
+        stamp_function_metadata(candidate, instance_key=None, definition_owner=None, fingerprint='same')
+    tx = blender_group_backend.BlenderGroupBuildTransaction()
+    assert backend.publish_candidate(name=group.name, existing_group=group, build_tx=tx,
+                                     populate=populate, preserve_if_equivalent=True, outermost=True) == group
+    assert group[NAMED_RESULTS_PROP]

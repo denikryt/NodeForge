@@ -58,18 +58,19 @@ def build(spec: dict, package: Path, *, check: bool = False,
     """Replace generated owner files only; never rewrite package metadata."""
     package = package.resolve()
     manifest = package / 'nodeforge_package.json'
-    if not manifest.exists():
-        if check:
-            raise FileNotFoundError(f'Package manifest does not exist: {manifest}')
-        package.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(DEFAULT_PACKAGE / 'nodeforge_package.json', manifest)
-    metadata = json.loads(manifest.read_text(encoding='utf-8'))
+    create_manifest = not manifest.exists()
+    if create_manifest and check:
+        raise FileNotFoundError(f'Package manifest does not exist: {manifest}')
+    manifest_source = DEFAULT_PACKAGE / 'nodeforge_package.json' if create_manifest else manifest
+    metadata = json.loads(manifest_source.read_text(encoding='utf-8'))
     if metadata['contents'].get('systems') != 'systems':
         raise ValueError('Package manifest must declare contents.systems = "systems"')
     with TemporaryDirectory(prefix='nf-nodegen-') as tmp:
         scratch = Path(tmp)
         source = scratch / 'blender'
         report = generate(spec, candidates(spec), source)
+        if report['summary']['wrappers'] == 0:
+            raise ValueError('No supported wrappers produced')
         target = package / 'systems' / 'blender'
         if check:
             for filename in FILES:
@@ -77,10 +78,10 @@ def build(spec: dict, package: Path, *, check: bool = False,
                     raise ValueError(f'Out-of-date generated file: {target / filename}')
         else:
             target.mkdir(parents=True, exist_ok=True)
+            if create_manifest:
+                shutil.copyfile(manifest_source, manifest)
             for filename in FILES:
                 shutil.copyfile(source / filename, target / filename)
-        if report['summary']['wrappers'] == 0:
-            raise ValueError('No supported wrappers produced')
     output = None
     if archive:
         minimum = metadata['nodeforge_min_version']

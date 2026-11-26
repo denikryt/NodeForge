@@ -69,7 +69,7 @@
             "interface": [
               {
                 "in_out": "OUTPUT",
-                "name": "Result_0",
+                "name": "value",
                 "socket_type": "NodeSocketVector"
               },
               {
@@ -144,7 +144,7 @@
             "interface": [
               {
                 "in_out": "OUTPUT",
-                "name": "Result_0",
+                "name": "value",
                 "socket_type": "NodeSocketFloat"
               },
               {

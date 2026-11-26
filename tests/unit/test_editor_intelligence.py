@@ -482,3 +482,142 @@ def mutated(geo: Geometry):
         ('Geo', 'Geometry'), ('Weight', 'Float')]
     assert [(o.name, o.typ) for o in signatures['mutated'][0].outputs] == [
         ('Geo', '?'), ('Geo 2', '?')]
+
+
+def test_named_source_signature_and_receiver_completion(editor_index):
+    """Preserve exact keys and expose only Python-spelling-safe fields."""
+    index, _ = editor_index
+    prefix = ('def measure(value: Float):\n'
+              '    return {"value": value, "class": value, "two words": value, '
+              '"K": value, "K": value, "unknown": value * 2}\n')
+    signature = help_at_caret(prefix + 'x = measure(|', index).signatures[0]
+    assert signature.result_kind == 'named'
+    assert [o.key for o in signature.outputs] == ['value', 'class', 'two words', 'K', 'K', 'unknown']
+    assert signature.outputs[0].typ == 'Float'
+    for tail in ('x = measure(1.0).|', 'r = measure(1.0)\nx = r.|',
+                 'r = measure(1.0)\na = r\nx = a.|'):
+        assert {c.insert for c in help_at_caret(prefix + tail, index).candidates} == {'value', 'K', 'unknown'}
+    assert not help_at_caret(prefix + 'r = measure(1.0)\nr = 3\nx = r.|', index).candidates
+    assert not help_at_caret(prefix + 'r = measure(1.0)\nif True:\n    r = 3\nx = r.|', index).candidates
+    singleton = help_at_caret('def f(x: Float):\n    return {"value": x}\nx = f(|', index).signatures[0]
+    assert singleton.result_kind == 'named' and singleton.outputs[0].key == 'value'
+
+
+def test_bundled_named_extension_receiver_completion(editor_index):
+    """Use declared schemas and the compiler's dynamic result resolver, without bpy."""
+    packages.install_package_directory(Path(__file__).resolve().parents[2] / 'packages/nodes')
+    index = SymbolIndex(resolve_environment())
+    prefix = 'from packages import nodes as n\n'
+    assert {c.insert for c in help_at_caret(prefix + 'x = n.cylinder().|', index).candidates} == {'mesh', 'top', 'side', 'bottom', 'uv_map'}
+    signature = help_at_caret(prefix + 'x = n.face_group_boundaries(|', index).signatures[0]
+    assert signature.result_kind == 'positional' and signature.outputs[0].typ == 'Bool' and signature.outputs[0].key is None
+    assert help_at_caret(prefix + 'x = n.domain_size(|', index).signatures[0].result_kind == 'dynamic'
+    assert not help_at_caret(prefix + 'x = n.domain_size(component="POINTCLOUD").|', index).candidates
+    assert not help_at_caret(prefix + 'r = n.domain_size(component="INSTANCES")\nx = r.|', index).candidates
+    assert not help_at_caret(prefix + 'def f(g: Geometry):\n    r = n.domain_size(geometry=g, component="POINTCLOUD")\n    x = r.|', index).candidates
+    assert not help_at_caret(prefix + 'x = n.domain_size(component=unknown).|', index).candidates
+
+
+@pytest.mark.parametrize('tail', ['    y = f(x).|', '    y = f(x).|value\n    return y'])
+def test_named_receiver_in_first_incomplete_function_statement(editor_index, tail):
+    """A trailing incomplete def header cannot erase preceding complete declarations."""
+    index, _ = editor_index
+    prefix = 'def f(x: Float):\n    return {"value": x}\n\ndef g(x: Float):\n'
+    assert [c.insert for c in help_at_caret(prefix + tail, index).candidates] == ['value']
+    hint = help_at_caret(prefix + '    y = f(|', index)
+    assert hint.signatures[0].result_kind == 'named'
+    assert hint.signatures[0].outputs[0].key == 'value'
+
+
+def test_unqualified_named_package_receiver_completion(editor_index):
+    """Bare package calls use the same names, precedence and ambiguity as compilation."""
+    import json
+    _, tmp_path = editor_index
+    packages.install_package_directory(Path(__file__).resolve().parents[2] / 'packages/nodes')
+    index = SymbolIndex(resolve_environment())
+    prefix = 'from packages import nodes\n'
+    mesh_fields = {'mesh', 'top', 'side', 'bottom', 'uv_map'}
+    hint = help_at_caret(prefix + 'x = cylinder(|', index)
+    assert hint.signatures[0].result_kind == 'named'
+    assert {o.key for o in hint.signatures[0].outputs} == mesh_fields
+    assert help_at_caret(prefix + 'x = domain_size(|', index).signatures[0].result_kind == 'dynamic'
+    for tail in ('x = cylinder().|', 'r = cylinder()\nx = r.|',
+                 'def f():\n    x = cylinder().|', 'def f():\n    r = cylinder()\n    x = r.|'):
+        assert {c.insert for c in help_at_caret(prefix + tail, index).candidates} == mesh_fields
+    for tail in ('x = domain_size(component="INSTANCES").|',
+                 'r = domain_size(component="INSTANCES")\nx = r.|',
+                 'def f(g: Geometry):\n    x = domain_size(geometry=g, component="INSTANCES").|',
+                 'def f(g: Geometry):\n    r = domain_size(geometry=g, component="INSTANCES")\n    x = r.|'):
+        hint = help_at_caret(prefix + tail, index)
+        assert not hint.candidates and hint.signatures[0].outputs[0].typ == 'Int'
+    unresolved = help_at_caret(prefix + 'x = domain_size(component=unknown).|', index)
+    assert not unresolved.candidates and unresolved.signatures[0].result_kind == 'dynamic'
+    for tail in ('cylinder = 1\nx = cylinder().|',
+                 'def f(cylinder: Float):\n    x = cylinder().|',
+                 'def f():\n    cylinder = cylinder().|',
+                 'from local.simple import radius as cylinder\nx = cylinder().|',
+                 'from local import terrain as cylinder\nx = cylinder().|',
+                 'x = cylinder().|mesh\ndef cylinder():\n    return {"local": 1}',
+                 'def cylinder():\n    return {"local": 1}\nx = cylinder().|',
+                 'x = cube().|'):
+        assert not help_at_caret(prefix + tail, index).candidates
+    assert not help_at_caret('from packages import nodes as cylinder\nx = cylinder().|', index).candidates
+    # A second imported package may introduce ambiguity, even if its result
+    # fields happen to be identical. Explicit qualification stays available.
+    root = tmp_path / 'other_package'
+    (root / 'functions').mkdir(parents=True)
+    (root / 'functions' / 'geometry.nf').write_text(
+        'def cylinder():\n    return {"other": 1}\n'
+        'def domain_size():\n    return {"other": 1}\n', encoding='utf-8')
+    (root / 'nodeforge_package.json').write_text(json.dumps({
+        'schema_version': 1, 'id': 'vendor.other', 'import_name': 'other',
+        'name': 'Other', 'version': '1.0.0', 'author': 'Test',
+        'description': 'Ambiguous named exports', 'nodeforge_min_version': '0.101.0',
+        'contents': {'functions': 'functions'},
+    }), encoding='utf-8')
+    packages.install_package_directory(root)
+    index = SymbolIndex(resolve_environment())
+    assert [c.insert for c in help_at_caret('from packages import other\nx = cylinder().|', index).candidates] == ['other']
+    prefix += 'from packages import other\n'
+    for tail in ('x = cylinder().|', 'r = cylinder()\nx = r.|', 'x = domain_size().|'):
+        hint = help_at_caret(prefix + tail, index)
+        assert not hint.candidates and not hint.signatures
+    assert {c.insert for c in help_at_caret(prefix + 'x = nodes.cylinder().|', index).candidates} == mesh_fields
+
+
+def test_dynamic_direct_editor_preview_and_named_singleton(editor_index):
+    """A known direct result has a type preview, not a fabricated named field."""
+    import json
+    _, root = editor_index
+    pkg = root / 'shape_package'
+    owner = pkg / 'systems' / 'shapes'
+    owner.mkdir(parents=True)
+    (pkg / 'nodeforge_package.json').write_text(json.dumps({
+        'schema_version': 1, 'id': 'vendor.shapes', 'name': 'Shapes', 'version': '1.0.0',
+        'author': 'Tests', 'description': 'Explicit dynamic shapes', 'nodeforge_min_version': '0.102.0',
+        'nodeforge_max_version': None, 'contents': {'systems': 'systems'}, 'permissions': {'python': True},
+    }))
+    (owner / 'interface.py').write_text('''from typing import Annotated
+from NodeForge import Float, Bool, DynamicResults, EvaluationMode
+EXTENSION_API = 2
+EXTENSIONS = {'choose': '.backend:choose'}
+def choose(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY], named: Annotated[Bool, EvaluationMode.COMPILE_TIME_ONLY] = False) -> DynamicResults: ...
+''')
+    (owner / 'semantic.py').write_text('''from NodeForge.nf_types import NFType
+def _result_types_choose(args):
+    return {'value': NFType.FLOAT} if args['named'].value else NFType.FLOAT
+''')
+    (owner / 'backend.py').write_text('raise AssertionError("editor must not load backend")\ndef choose(*args): pass\n')
+    packages.install_package_directory(pkg)
+    index = SymbolIndex(resolve_environment())
+    for tail in ('x = shapes.choose(1.0).|', 'r = choose(1.0)\na = r\nx = a.|',
+                 'def f(x: Float):\n    y = choose(x).|'):
+        hint = help_at_caret('from packages import shapes\n' + tail, index)
+        assert not hint.candidates
+        assert hint.signatures[0].result_kind == 'positional'
+        assert [o.typ for o in hint.signatures[0].outputs] == ['Float']
+    hint = help_at_caret('from packages import shapes\nx = choose(1.0, named=True).|', index)
+    assert [c.insert for c in hint.candidates] == ['value']
+    assert hint.signatures[0].result_kind == 'named'
+    hint = help_at_caret('from packages import shapes\nx = choose(1.0, named=unknown).|', index)
+    assert not hint.candidates and hint.signatures[0].result_kind == 'dynamic'

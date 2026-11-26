@@ -853,3 +853,17 @@ lifecycle.
 - Add a pinned Blender 5.2 inspection catalogue and regression checks for package discovery, generated bindings, and real Blender compilation.
 - Install bundled `nodeforge.nodes` from `packages/nodes/` directly into the versioned user package inventory; stop tracking and shipping a nested Nodes ZIP.
 - Add `tools/nodegen/cli.py` with `inspect`, `generate`, `test`, and `build` commands; merge seven Inspector stages into a versioned specification before generation.
+
+## 0.102.0
+
+- Add explicit named source-function returns and static and dynamic named Extension API results, with exact keys, dot and string-key projection, and independent semantic and backend phases.
+- Preserve named output links across group replacement only when the output key and physical socket type match; preserve positional output behavior and transactional rollback.
+- Upgrade bundled Nodes to 1.7.0 (requires NodeForge 0.102.0), with explicit direct single-output and named multi-output wrappers, independent physical socket validation, exact dynamic collection labels and deterministic three-file generation. Migrate Nodes consumers to the revised result forms.
+- Add named result signature previews and field completion, and verify source, extension, editor, group replacement, package installation and Blender 5.2 native socket provenance.
+- Reject malformed required native output labels before generator publication; retain named signature and field completion across incomplete declarations and resolve bare imported package calls with the compiler's ambiguity rules. Document the named dynamic result protocol's minimum version.
+- Reject missing, malformed, or duplicate required physical output identifiers and malformed output type metadata before generated Nodes publication, including Capture Attribute probes.
+- Reject malformed required constant-output baseline identities and output record containers before generation; distinguish explicit unsupported nodes from unexpected generation errors.
+- Reject empty or unrepresentable baseline output sets for supported fixed constant sources before publication.
+- Extend `DynamicResults` to explicitly resolve either one direct runtime type or a named schema, retaining named singleton declarations, exact backend validation and the existing transactional group update policy.
+- Add direct/named editor previews, independent grouped/native provenance checks and 12 characterization fixtures covering source, extension and bundled Nodes result forms.
+- Restore interdependent group links and input overrides using live node and socket identities during equivalent updates and transaction rollback.

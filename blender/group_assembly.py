@@ -10,7 +10,7 @@ from ..compiler_identities import BindingId
 from .values import Value, make_value
 from .nodes import _new_node, _socket_type_for
 from .storage import _store_group_source, INPUT_DEFAULTS_PROP
-from .interface import _create_group_input_socket
+from .interface import _create_group_input_socket, set_named_results
 from ..function_instances import (
     FUNCTION_ROOT_OWNER_ID_PROP,
     function_group_owner_scope as make_function_group_owner_scope,
@@ -76,6 +76,8 @@ def _populate_group(
         raise TypeError("request must be BlenderGroupBuildRequest")
     prepared = request.prepared_compilation
     identity = prepared.identity
+    named = any(output.result_name is not None for output in prepared.interface.outputs)
+    set_named_results(group, named)
     try:
         group.color_tag = "CONVERTER"
     except Exception:
@@ -150,6 +152,7 @@ def _populate_group(
     trace_context = nullcontext(None)
     if request.function_compilation_inputs is not None and request.function_compilation_trace is not None:
         own_inputs = dict(request.function_compilation_inputs)
+        own_inputs["named_results"] = named
         own_inputs["lowered_source"] = prepared.normalized_lowered_source
         # Source text alone cannot capture changed constants baked into typed IR.
         # Frozen IR records have deterministic value-based representations, so

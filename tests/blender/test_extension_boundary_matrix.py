@@ -41,7 +41,7 @@ def choose(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY],
 '''
 _DYNAMIC_SEMANTIC = '''from NodeForge.nf_types import NFType
 def _result_types_choose(args):
-    return (NFType.VECTOR,) if args['form'].value == 'VECTOR' else (NFType.FLOAT,)
+    return {'value': NFType.VECTOR if args['form'].value == 'VECTOR' else NFType.FLOAT}
 '''
 _DYNAMIC_BACKEND = '''from NodeForge.nf_types import NFType
 
@@ -50,25 +50,25 @@ def choose(context, value, form='FLOAT'):
     if form == 'VECTOR':
         node = context.group.nodes.new('ShaderNodeCombineXYZ')
         context.group.links.new(value.socket, node.inputs['X'])
-        return (context.value(node.outputs[0], NFType.VECTOR),)
-    return (value,)
+        return {'value': context.value(node.outputs[0], NFType.VECTOR)}
+    return {'value': value}
 '''
 
 
-def test_dynamic_results_overloads_remain_distinct_tuples_across_root_grouped_updates(tmp_path):
+def test_dynamic_results_overloads_remain_distinct_named_results_across_root_grouped_updates(tmp_path):
     _package(tmp_path, name='extension_dynamic_types', interface=_DYNAMIC_INTERFACE,
              semantic=_DYNAMIC_SEMANTIC, backend=_DYNAMIC_BACKEND)
     root = bpy.data.node_groups.new('NFExt_dynamic_matrix_root', 'GeometryNodeTree')
     source = '''from packages import extension_dynamic_types
-(a,) = choose(1.0, form='FLOAT', __inline__=False)
-(b,) = choose(2.0, form='VECTOR', __inline__=False)
+a = choose(1.0, form='FLOAT', __inline__=False).value
+b = choose(2.0, form='VECTOR', __inline__=False).value
 '''
     compiler.compile_source_in_tree(source, root)
     groups = [node for node in root.nodes if node.bl_idname == 'GeometryNodeGroup']
     assert len(groups) == 2
     groups_by_type = {n.outputs[0].bl_idname: n.node_tree for n in groups}
     assert set(groups_by_type) == {'NodeSocketFloat', 'NodeSocketVector'}
-    assert all([s.name for s in n.outputs] == ['Result_0'] for n in groups)
+    assert all([s.name for s in n.outputs] == ['value'] for n in groups)
     authority = {g[EXTENSION_AUTHORITY_PROP]: g.as_pointer() for g in groups_by_type.values()}
     assert len(authority) == 2
     float_group = groups_by_type['NodeSocketFloat']
@@ -198,7 +198,7 @@ def test_grouped_extension_identity_survives_actual_blend_save_reopen(tmp_path):
         except packages.PackageError as exc:
             if 'already installed' not in str(exc):
                 raise
-        src = "from packages import extension_reopen\\n(a,) = choose(1.0, __inline__=False)\\n"
+        src = "from packages import extension_reopen\\na = choose(1.0, __inline__=False).value\\n"
         root = bpy.data.node_groups.new('NFExt_reopen_grouped_root', 'GeometryNodeTree')
         root.use_fake_user = True
         compiler.compile_source_in_tree(src, root, module_context='text:extension-reopen')
@@ -237,27 +237,32 @@ def many(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY],
          *values: Annotated[Float | Vector | Int, EvaluationMode.RUNTIME_ONLY]) -> DynamicResults: ...
 '''
     semantic = '''def _result_types_many(args):
-    return (args['value'].typ, *(part.typ for part in args['values']))
+    return {'value': args['value'].typ, **{f'part_{i}': part.typ for i, part in enumerate(args['values'])}}
 '''
     backend = '''def many(context, value, *values):
     assert context.result_types == (value.typ, *(part.typ for part in values))
-    return (value, *values)
+    return {'value': value, **{f'part_{i}': part for i, part in enumerate(values)}}
 '''
     _package(tmp_path, name='extension_variadic_results', interface=interface,
              semantic=semantic, backend=backend)
     root = bpy.data.node_groups.new('NFExt_variadic_dynamic_root', 'GeometryNodeTree')
     compiler.compile_source_in_tree('''from packages import extension_variadic_results
-(a, b) = many(1.0, vector(1, 2, 3), __inline__=False)
-(c, d, e) = many(2.0, 3, 4, __inline__=False)
+first = many(1.0, vector(1, 2, 3), __inline__=False)
+a = first.value
+b = first.part_0
+second = many(2.0, 3, 4, __inline__=False)
+c = second.value
+d = second.part_0
+e = second.part_1
 ''', root)
     nodes = [n for n in root.nodes if n.bl_idname == 'GeometryNodeGroup']
     assert len(nodes) == 2
     by_arity = {len(n.outputs): n for n in nodes}
     assert set(by_arity) == {2, 3}
     assert [(s.name, s.bl_idname) for s in by_arity[2].outputs] == [
-        ('Result_0', 'NodeSocketFloat'), ('Result_1', 'NodeSocketVector')]
+        ('value', 'NodeSocketFloat'), ('part_0', 'NodeSocketVector')]
     assert [(s.name, s.bl_idname) for s in by_arity[3].outputs] == [
-        ('Result_0', 'NodeSocketFloat'), ('Result_1', 'NodeSocketInt'),
-        ('Result_2', 'NodeSocketInt')]
+        ('value', 'NodeSocketFloat'), ('part_0', 'NodeSocketInt'),
+        ('part_1', 'NodeSocketInt')]
     assert [s.name for s in by_arity[2].inputs] == ['value', 'values_0']
     assert [s.name for s in by_arity[3].inputs] == ['value', 'values_0', 'values_1']

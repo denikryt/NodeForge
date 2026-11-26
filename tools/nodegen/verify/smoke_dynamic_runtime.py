@@ -22,8 +22,8 @@ def main():
             if dyn:
                 kind=dyn['kind']
                 if kind=='index':scenarios=[(0,None),(1,None),(4,None)]
-                elif kind=='capture':scenarios=[('FLOAT:Scalar,VECTOR:Direction',None),('ROTATION:Orientation',None)]
-                elif kind=='menu':scenarios=[('A,B,C','C'),('Z,X','X'),('A','A')]
+                elif kind=='capture':scenarios=[('FLOAT:Scalar Weight,VECTOR:direction',None),('ROTATION:Orientation',None)]
+                elif kind=='menu':scenarios=[('A,Two Words,lower','lower'),('Z,X','X'),('A','A')]
             for elements,menu in scenarios:
                 for mode in ('inline','grouped'):
                     for runtime in (False,True):

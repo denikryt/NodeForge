@@ -397,6 +397,8 @@ def lower_analyzed_expression(expr, analysis, *, dependency_sources=None):
                     static_arguments=static_arguments,
                     extension_state_type=extension_state_type,
                     extension_state=extension_state,
+                    result_names=(tuple(name for name, _ in analyzed.result.items)
+                                  if isinstance(analyzed.result, NamedOutputsCallResult) else None),
                 )
             )
             if isinstance(analyzed.result, ProjectedCallResult):

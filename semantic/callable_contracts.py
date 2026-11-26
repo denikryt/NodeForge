@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from ..compiler_identities import BindingId, FunctionId, InputDeclarationId, InterfaceInputOrigin
 from ..errors import CompileError
+from ..result_keys import validate_named_result_key
 from ..nf_types import NFType
 from .numeric_semantics import normalize_float_constant, normalize_int_constant
 from .ir import IRPanelDeclaration
@@ -51,6 +52,7 @@ class GroupOutputContract:
     index: int
     display_name: str
     typ: NFType
+    result_name: str | None = None
 
     def __post_init__(self) -> None:
         """Validate ordered semantic output metadata."""
@@ -60,6 +62,19 @@ class GroupOutputContract:
             raise ValueError("GroupOutputContract.display_name must be a non-empty string")
         if not isinstance(self.typ, NFType):
             raise TypeError("GroupOutputContract.typ must be an NFType")
+        if self.result_name is not None:
+            validate_named_result_key(self.result_name)
+            if self.result_name != self.display_name:
+                raise ValueError("Named output key must equal its display label")
+
+
+def _validate_output_contracts(outputs):
+    """Require contiguous positions and a wholly named or wholly positional schema."""
+    if [item.index for item in outputs] != list(range(len(outputs))):
+        raise ValueError("Output indices must be contiguous final positions")
+    names = [item.result_name for item in outputs if item.result_name is not None]
+    if names and (len(names) != len(outputs) or len(names) != len(set(names))):
+        raise ValueError("Named outputs must all have distinct names")
 
 
 @dataclass(frozen=True)
@@ -77,8 +92,7 @@ class GroupInterfaceContract:
             raise TypeError("GroupInterfaceContract.inputs must contain GroupInputContract records")
         if not all(isinstance(item, GroupOutputContract) for item in self.outputs):
             raise TypeError("GroupInterfaceContract.outputs must contain GroupOutputContract records")
-        if [item.index for item in self.outputs] != list(range(len(self.outputs))):
-            raise ValueError("GroupInterfaceContract output indices must be contiguous final positions")
+        _validate_output_contracts(self.outputs)
         origins = [item.interface_origin for item in self.inputs if item.interface_origin is not None]
         if len(origins) != len(set(origins)):
             raise ValueError("GroupInterfaceContract interface origins must be unique")
@@ -135,6 +149,7 @@ class SourceCallableContract:
             raise TypeError("SourceCallableContract.parameters must contain SourceCallableParameter records")
         if not all(isinstance(item, GroupOutputContract) for item in self.outputs):
             raise TypeError("SourceCallableContract.outputs must contain GroupOutputContract records")
+        _validate_output_contracts(self.outputs)
         positions = [item.input_index for item in self.parameters]
         if len(positions) != len(set(positions)):
             raise ValueError("SourceCallableContract parameter positions must be unique")

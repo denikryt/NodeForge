@@ -25,7 +25,7 @@ def test_root_inline_dynamic_backend_publishes_without_append_and_stable_identit
         _package(tmp)
         root = bpy.data.node_groups.new('NFExt_public_inline', 'GeometryNodeTree')
         old = root.nodes.new('GeometryNodeMeshCube')
-        code = 'from packages import dynamic\na, b = foo(1.0)\n'
+        code = 'from packages import dynamic\nr = foo(1.0)\na = r.double\nb = r.original\n'
         first = compiler.compile_source_in_tree(code, root)
         assert first.outcome == 'ROOT_REPLACEMENT'
         assert not any(n.bl_idname == 'GeometryNodeMeshCube' for n in root.nodes)
@@ -51,7 +51,7 @@ def test_root_grouped_extension_has_per_root_authority_and_preserves_manual_inpu
             root.interface.new_socket(name='Value', in_out='INPUT', socket_type='NodeSocketFloat')
             inlet = root.nodes.new('NodeGroupInput')
             inlet.label = 'Keep input'
-        code = 'from packages import dynamic\na, b = foo(1.0, __inline__=False)\n'
+        code = 'from packages import dynamic\nr = foo(1.0, __inline__=False)\na = r.double\nb = r.original\n'
         first = []
         for root in roots:
             compiler.compile_source_in_tree(code, root, module_context='text:same')
@@ -75,8 +75,8 @@ def test_failed_root_backend_keeps_old_root_and_no_owner_stamp():
         pointer = manual.as_pointer()
         before_groups = {g.as_pointer() for g in bpy.data.node_groups}
         before_meshes = {m.as_pointer() for m in bpy.data.meshes}
-        with pytest.raises(CompileError, match='2-item tuple'):
-            compiler.compile_source_in_tree('from packages import dynamic\na,b = foo(1.0)', root)
+        with pytest.raises(CompileError, match='exact result keys'):
+            compiler.compile_source_in_tree('from packages import dynamic\nr = foo(1.0)\na = r.double\nb = r.original', root)
         assert root.nodes[0].as_pointer() == pointer and len(root.nodes) == 1
         assert COMPOSITION_ROOT_ID_PROP not in root
         assert {g.as_pointer() for g in bpy.data.node_groups} == before_groups
@@ -87,7 +87,7 @@ def test_groups_only_after_root_extension_keeps_root_and_manifest_unchanged():
     with tempfile.TemporaryDirectory() as tmp:
         _package(tmp)
         root = bpy.data.node_groups.new('NFExt_group_only_after_root', 'GeometryNodeTree')
-        compiler.compile_source_in_tree('from packages import dynamic\na, b = foo(1.0)', root)
+        compiler.compile_source_in_tree('from packages import dynamic\nr = foo(1.0)\na = r.double\nb = r.original', root)
         before_nodes = tuple(n.as_pointer() for n in root.nodes)
         before_manifest = root.get('nodeforge_generated_resources_manifest_v1')
         before_uuid = root[COMPOSITION_ROOT_ID_PROP]
@@ -145,7 +145,7 @@ def test_postcommit_root_resource_cleanup_exception_keeps_undo_signal(monkeypatc
     with tempfile.TemporaryDirectory() as tmp:
         _package(tmp)
         root = bpy.data.node_groups.new('NFExt_postcommit_root_resource', 'GeometryNodeTree')
-        compiler.compile_source_in_tree('from packages import dynamic\na,b=foo(1.0)', root)
+        compiler.compile_source_in_tree('from packages import dynamic\nr = foo(1.0)\na = r.double\nb = r.original', root)
         uuid_before = root[COMPOSITION_ROOT_ID_PROP]
         old_manifest = read_group_manifest(root)
         assert old_manifest and old_manifest['resources']

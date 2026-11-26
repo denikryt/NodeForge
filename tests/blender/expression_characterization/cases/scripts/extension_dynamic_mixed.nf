@@ -1,3 +1,5 @@
 from packages import extension_graphs
-scalar, vector_value = mixed(2.0, __inline__=False)
+result = mixed(2.0, __inline__=False)
+scalar = result.scalar
+vector_value = result.vector
 result = scalar + vector_value.x

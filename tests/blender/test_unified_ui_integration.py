@@ -133,3 +133,51 @@ def test_selected_module_reload_operator_from_bound_text(editor_context):
         assert bpy.ops.nodeforge.reload_selected_library_group() == {'FINISHED'}
     assert node.node_tree.as_pointer() == pointer
     assert 'x + 6' in str(node.node_tree['nodeforge_library_source'])
+
+
+def test_local_add_named_nodes_group_from_linked_folder(editor_context, tmp_path):
+    """The real Local operator inserts a group using named package and Local results."""
+    from pathlib import Path
+    from NodeForge import local_sources, packages
+    from NodeForge.blender.interface import NAMED_RESULTS_PROP
+    area, tree, _ = editor_context
+    packages.install_included_packages(Path(__file__).resolve().parents[2])
+    folder = tmp_path / 'named_result_sources'
+    nested = folder / 'named_shapes'
+    nested.mkdir(parents=True)
+    (nested / 'shape.nf').write_text('''from packages import nodes
+
+def shape(radius: Float):
+    r = nodes.cylinder(radius=radius)
+    return {"mesh": r.mesh, "top": r["top"]}
+''')
+    script = folder / 'entry.nf'
+    script.write_text('''from local.named_result_sources.named_shapes.shape import shape
+
+def entry(radius: Float):
+    r = shape(radius)
+    return {"Mesh": r.mesh, "Top": r.top}
+''')
+    local_sources.link_local_source_folder(str(folder))
+    try:
+        props = bpy.context.scene.gn_script_mvp
+        props.local_browser_path = str(folder)
+        ui._refresh_catalog_items(props, 'local')
+        props.local_index = next(i for i, item in enumerate(props.local_items) if item.path == str(script))
+        with bpy.context.temp_override(area=area):
+            assert bpy.ops.nodeforge.create_function_group(namespace='local') == {'FINISHED'}
+        assert len(tree.nodes) == 1
+        node = tree.nodes[0]
+        assert node.bl_idname == 'GeometryNodeGroup'
+        assert list(node.outputs.keys()) == ['Mesh', 'Top']
+        assert node.node_tree[NAMED_RESULTS_PROP]
+        outlet = next(n for n in node.node_tree.nodes if n.bl_idname == 'NodeGroupOutput')
+        mesh = outlet.inputs['Mesh'].links[0].from_socket
+        top = outlet.inputs['Top'].links[0].from_socket
+        assert mesh.node == top.node and mesh.node.bl_idname == 'GeometryNodeGroup'
+        assert (mesh.name, top.name) == ('mesh', 'top')
+        inner = next(n for n in mesh.node.node_tree.nodes if n.bl_idname == 'NodeGroupOutput')
+        assert inner.inputs['mesh'].links[0].from_socket.name == 'Mesh'
+        assert inner.inputs['top'].links[0].from_socket.name == 'Top'
+    finally:
+        local_sources.unlink_local_source_folder(str(folder))

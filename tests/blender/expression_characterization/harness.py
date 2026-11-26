@@ -176,6 +176,12 @@ def _node_snapshot(node, node_id):
             {"name": str(item.name), "data_type": str(item.data_type)}
             for item in node.capture_items
         ]
+    if node.bl_idname == "GeometryNodeAttributeDomainSize":
+        row["properties"]["component"] = str(node.component)
+    elif node.bl_idname == "GeometryNodeMenuSwitch":
+        row["enum_items"] = [str(item.name) for item in node.enum_items]
+    elif node.bl_idname == "GeometryNodeIndexSwitch":
+        row["item_count"] = len(node.index_switch_items)
     defaults = _semantic_unlinked_defaults(node)
     if defaults:
         row["defaults"] = defaults
@@ -446,6 +452,8 @@ def _case_extension_fixture(case):
     if "extension-graphs" in case["tags"]:
         fixture = CASES_DIR / "packages" / "extension_graphs"
         packages.install_package_directory(fixture, replace=True)
+    if "bundled-nodes" in case["tags"]:
+        packages.install_package_directory(ROOT / "packages" / "nodes", replace=True)
     yield
 
 

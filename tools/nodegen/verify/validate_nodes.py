@@ -8,8 +8,9 @@ from pathlib import Path
 import bpy
 if os.environ.get('NODEFORGE_CORE_PARENT'):sys.path.insert(0,os.environ['NODEFORGE_CORE_PARENT'])
 sys.path.insert(0,str(Path(__file__).resolve().parents[1] / 'generator'))
-from inspect_contract import marker
+from inspect_contract import marker, sanitized
 from NodeForge import compiler, packages
+from NodeForge.result_keys import is_exact_attribute_key
 
 SOCKETS={'Float':'NodeSocketFloat','Int':'NodeSocketInt','Bool':'NodeSocketBool','Vector':'NodeSocketVector',
          'Color':'NodeSocketColor','Rotation':'NodeSocketRotation','Geometry':'NodeSocketGeometry',
@@ -18,6 +19,21 @@ SOCKETS={'Float':'NodeSocketFloat','Int':'NodeSocketInt','Bool':'NodeSocketBool'
 def basic_snapshot(node):
     def each(xs):return [(s.identifier,s.name,s.bl_idname,bool(s.enabled),bool(getattr(s,'is_unavailable',False)),bool(getattr(s,'is_inactive',False))) for s in xs]
     return {'inputs':each(node.inputs),'outputs':each(node.outputs)}
+
+
+def input_defaults(node):
+    """Record native default values independently of wrapper declarations."""
+    values = []
+    for socket in node.inputs:
+        if not hasattr(socket, 'default_value'):
+            continue
+        value = socket.default_value
+        if isinstance(value, bpy.types.ID):
+            value = (value.bl_rna.identifier, value.name_full)
+        elif hasattr(value, '__iter__') and not isinstance(value, str):
+            value = tuple(value)
+        values.append((socket.identifier, value))
+    return values
 
 def filtered(sock):
     return sock.bl_idname not in ('NodeSocketVirtual','NodeSocketMenu') and sock.enabled and not getattr(sock,'is_unavailable',False)
@@ -43,7 +59,7 @@ def runtime_inputs(node, dynamic, cfg):
         return [(s,marker(s.bl_idname)) for s in node.inputs if filtered(s) and marker(s.bl_idname)]
     return [([s for s in node.inputs if s.identifier==x['socket']][0],x['type']) for x in cfg['inputs']]
 
-def source_for(item,cfg,mode,runtime,params,output_count,menu_override=None,elements=None,available=()):
+def source_for(item,cfg,mode,runtime,params,output_keys,menu_override=None,elements=None,available=()):
     opts={f['param']:cfg['rna'][f['key']] if f['kind']=='rna' else cfg['menus'][f['key']] for f in item['fields']}
     if menu_override is not None:
         menu = next(f['param'] for f in item['fields'] if f['kind']=='menu' and f['key']=='Menu')
@@ -61,11 +77,80 @@ def source_for(item,cfg,mode,runtime,params,output_count,menu_override=None,elem
     args = positional + keywords + [f'{k}={v!r}' for k,v in opts.items()]
     args.append(f'__inline__={mode=="inline"}')
     call=f"gen.{item['name']}({', '.join(args)})"
-    names=[f'x{i}' for i in range(output_count)]
-    lhs=', '.join(names)+(',' if len(names)==1 else '')
-    result=', '.join(names) if len(names)>1 else names[0]
+    if len(output_keys) == 1:
+        projections = ['result']
+    else:
+        projections = [f'result.{key}' if is_exact_attribute_key(key) else f'result[{key!r}]'
+                       for key in output_keys]
+    result = '{' + ', '.join(f'{key!r}: {expr}' for key, expr in zip(output_keys, projections)) + '}'
     declaration=', '.join(f'p{i}: {t}' for i,t in enumerate(params))
-    return f"from packages import nodes as gen\n\ndef entry({declaration}):\n    {lhs} = {call}\n    return {result}\n"
+    return f"from packages import nodes as gen\n\ndef entry({declaration}):\n    result = {call}\n    return {result}\n"
+
+
+def reference_output_schema(oracle, item, cfg, normalized):
+    """Derive ordered keys and physical origins from independent native sockets."""
+    dynamic = item['dynamic']
+    kind = dynamic['kind'] if dynamic else None
+    sockets = [s for s in oracle.outputs if filtered(s) and (dynamic or not s.is_inactive)]
+    collection_count = len(oracle.capture_items) if kind == 'capture' else len(oracle.enum_items) if kind == 'menu' else 0
+    base_count = len(sockets) - collection_count
+    rows = [(sanitized(sock.name) if index < base_count else sock.name,
+             sock.identifier, sock.name, sock.bl_idname) for index, sock in enumerate(sockets)]
+    catalogue = cfg['outputs'][:1] if kind == 'menu' else cfg['outputs']
+    if not normalized:
+        expected = [(sanitized(sock['name']), sock['socket'], sock['name'], sock['physical']) for sock in catalogue]
+        if rows[:base_count] != expected:
+            raise AssertionError(f'Independent reference differs from generation metadata: {rows[:base_count]!r} vs {expected!r}')
+    return rows
+
+
+def check_output_links(root, native, schema, *, grouped=None):
+    """Trace each root output through its optional grouped call to the native socket."""
+    outlet = next(node for node in root.nodes if node.bl_idname == 'NodeGroupOutput')
+    expected_root_keys = tuple(row[0] for row in schema)
+    root_outputs = tuple(s for s in outlet.inputs if s.bl_idname != 'NodeSocketVirtual')
+    if tuple(s.name for s in root_outputs) != expected_root_keys:
+        raise AssertionError('wrong root result shape')
+    expected_types = tuple(marker(row[3]) for row in schema)
+    if tuple(marker(s.bl_idname) for s in root_outputs) != expected_types:
+        raise AssertionError('wrong root result types')
+    actual = []
+    expected_named = len(schema) > 1
+    expected_keys = tuple(row[0] for row in schema) if expected_named else ('Result',)
+    call_node = None
+    for key, identifier, name, physical in schema:
+        links = list(outlet.inputs[key].links)
+        if len(links) != 1:
+            raise AssertionError(f'{key!r}: expected one root output link')
+        socket = links[0].from_socket
+        is_group = socket.node.bl_idname == 'GeometryNodeGroup'
+        if grouped is not None and is_group != grouped:
+            raise AssertionError(f'{key!r}: unexpected compilation form')
+        if is_group:
+            child = socket.node.node_tree
+            marker_key = 'nodeforge_named_results_v1'
+            if (marker_key in child) != expected_named or (expected_named and child[marker_key] != True):
+                raise AssertionError(f'{key!r}: wrong named result marker')
+            if tuple(s.name for s in socket.node.outputs) != expected_keys:
+                raise AssertionError(f'{key!r}: wrong grouped result shape')
+            if tuple(marker(s.bl_idname) for s in socket.node.outputs) != expected_types:
+                raise AssertionError(f'{key!r}: wrong grouped result types')
+            if call_node is not None and socket.node != call_node:
+                raise AssertionError(f'{key!r}: outputs from distinct calls')
+            call_node = socket.node
+            expected_group_key = key if expected_named else 'Result'
+            if socket.name != expected_group_key:
+                raise AssertionError(f'{key!r}: grouped projection points to {socket.name!r}')
+            child_out = next(node for node in socket.node.node_tree.nodes if node.bl_idname == 'NodeGroupOutput')
+            child_links = list(child_out.inputs[expected_group_key].links)
+            if len(child_links) != 1:
+                raise AssertionError(f'{key!r}: expected one physical child output link')
+            socket = child_links[0].from_socket
+        if socket.node != native or (socket.identifier, socket.name, socket.bl_idname) != (identifier, name, physical):
+            raise AssertionError(f'{key!r}: wrong output provenance: {socket.identifier!r}, {socket.name!r}, {socket.bl_idname!r}')
+        actual.append((key, socket.identifier, socket.name, socket.bl_idname))
+    return actual
+
 
 def run_case(item,cfg,mode,runtime,elements=None,menu_override=None):
     dynamic=item['dynamic']
@@ -107,10 +192,12 @@ def run_case(item,cfg,mode,runtime,elements=None,menu_override=None):
             for i,(sock,typ) in enumerate(available):
                 ref_group.links.new(ref_in.outputs[f'p{i}'],sock)
         expected=basic_snapshot(oracle)
+        expected_defaults=input_defaults(oracle)
         expected_links=[(link.to_socket.identifier,link.to_socket.name,link.to_socket.bl_idname)
                         for link in ref_group.links if link.to_node==oracle]
-        output_count=len([s for s in oracle.outputs if filtered(s)]) if dynamic else len(cfg['outputs'])
-        code=source_for(item,cfg,mode,runtime,param_types,output_count,menu_override,elements,available=available)
+        schema = reference_output_schema(oracle, item, cfg, normalized)
+        record['expected_outputs'] = schema
+        code=source_for(item,cfg,mode,runtime,param_types,[row[0] for row in schema],menu_override,elements,available=available)
         record['source']=code
         stage='compile'
         root=compiler.create_expression_group(code,f'Unified_{item["name"]}_{cfg["inspector_state"]}_{mode}')
@@ -119,13 +206,17 @@ def run_case(item,cfg,mode,runtime,elements=None,menu_override=None):
         if len(natives)!=1:raise AssertionError(f'Expected one physical {item["node"]}, found {len(natives)}')
         native=natives[0]
         stage='compare'
+        record['actual_outputs'] = check_output_links(root, native, schema, grouped=mode=='grouped')
         actual=basic_snapshot(native)
+        actual_defaults=input_defaults(native)
+        if actual_defaults != expected_defaults:
+            raise AssertionError(f'Input default mismatch: {actual_defaults!r} vs {expected_defaults!r}')
         if actual!=expected:raise AssertionError(f'Blender socket mismatch: actual={actual}, expected={expected}')
         actual_rna={name:(','.join(sorted(getattr(native,name)))
                           if native.bl_rna.properties[name].is_enum_flag else getattr(native,name))
                     for name in cfg['rna']}
         if actual_rna!=readback:raise AssertionError(f'RNA mismatch: {actual_rna} vs {readback}')
-        for key,val in record['menu'].items():
+        for key,val in actual_menu.items():
             found=[s for s in native.inputs if s.identifier==key]
             if len(found)!=1 or found[0].default_value!=val:raise AssertionError(f'Menu mismatch {key!r}')
         actual_links=[(link.to_socket.identifier,link.to_socket.name,link.to_socket.bl_idname)
@@ -172,13 +263,13 @@ def main():
                 selected=selected[args.state_start:args.state_stop]
                 scenarios=[(cfg,'grouped' if args.grouped else 'inline',runtime,None,None)
                            for cfg in selected for runtime in (False,True)]
-                if item['dynamic']:
+                if item['dynamic'] and selected:
                     cfg=selected[0];kind=item['dynamic']['kind']
                     if kind=='capture':
-                        choices=[f'{t}:Item{i}' for i,t in enumerate(item['dynamic']['types'])][:2]
+                        choices=[f'{t}:Item {i}' for i,t in enumerate(item['dynamic']['types'])][:2]
                         if choices:scenarios.extend((cfg,mode,False,','.join(choices),None) for mode in ('inline','grouped'))
                     if kind=='index':scenarios.extend((cfg,mode,False,4,None) for mode in ('inline','grouped'))
-                    if kind=='menu':scenarios.extend((cfg,mode,False,'A,B,C','C') for mode in ('inline','grouped'))
+                    if kind=='menu':scenarios.extend((cfg,mode,False,'A,Two Words,lower','lower') for mode in ('inline','grouped'))
                 for cfg,mode,runtime,elements,menu_override in scenarios:
                     if args.limit and attempts>=args.limit:break
                     record=run_case(item,cfg,mode,runtime,elements,menu_override)

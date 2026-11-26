@@ -1,17 +1,17 @@
 """Resolve the result signature at each invocation, not at extension declaration."""
 
 from NodeForge.nf_types import NFType
-from .interface import Part
+from .interface import Part, ShapeState
 
 
 def _result_types_mixed(arguments):
     """Select Float and Vector leaves for each mixed() call."""
-    return (NFType.FLOAT, NFType.VECTOR)
+    return {"scalar": NFType.FLOAT, "vector": NFType.VECTOR}
 
 
 def _result_types_choose(arguments):
-    """Select a singleton tuple whose type follows the compile-time form."""
-    return (NFType.VECTOR,) if arguments["form"].value == "VECTOR" else (NFType.FLOAT,)
+    """Select a singleton named result whose type follows the compile-time form."""
+    return {"value": NFType.VECTOR if arguments["form"].value == "VECTOR" else NFType.FLOAT}
 
 
 def make_part(value) -> Part:
@@ -22,3 +22,26 @@ def make_part(value) -> Part:
 def consume_part(part) -> Part:
     """Forward a record as semantic state to the physical backend."""
     return part
+
+
+
+def _result_types_shape(arguments):
+    """Resolve explicit shape without physical evaluation."""
+    form = arguments["form"].value
+    if form == "VECTOR":
+        return NFType.VECTOR
+    if form == "ONE":
+        return {"value": NFType.FLOAT}
+    if form == "MULTI":
+        return {"scaled": NFType.FLOAT, "original": NFType.FLOAT}
+    return NFType.FLOAT
+
+
+def _result_types_shape_state(arguments):
+    """Use the same schema for semantic-state execution."""
+    return _result_types_shape(arguments)
+
+
+def shape_state(value, form="DIRECT") -> ShapeState:
+    """Carry the runtime leaf and the selected form into BACKEND."""
+    return ShapeState(value, form)

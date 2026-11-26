@@ -18,6 +18,7 @@ from ..errors import CompileError
 from ..compiler_identities import GroupCompilationIdentity
 from .group_build_request import BlenderGroupBuildRequest
 from .storage import _reset_node_group
+from .interface import NAMED_RESULTS_PROP, has_named_results
 from .update import (
     _capture_group_external_state,
     _restore_group_external_state,
@@ -323,6 +324,9 @@ def _copy_group_contents(src_group, dst_group, *, copy_role=None):
     except Exception:
         pass
     _copy_custom_properties(src_group, dst_group, strict=True)
+    if (src_group.get(NAMED_RESULTS_PROP) != dst_group.get(NAMED_RESULTS_PROP)
+            or (NAMED_RESULTS_PROP in src_group) != (NAMED_RESULTS_PROP in dst_group)):
+        raise CompileError("Group result shape marker changed during copy")
 
 
 
@@ -1119,7 +1123,9 @@ class BlenderGroupBackend:
                 old_contract = stored_interface_contract(existing_group)
                 live_contract = interface_contract(existing_group)
                 new_contract = interface_contract(replacement)
-                if old_fp and new_fp and old_fp == new_fp and old_contract and old_contract == live_contract and old_contract == new_contract:
+                if (old_fp and new_fp and old_fp == new_fp and old_contract
+                        and old_contract == live_contract == new_contract
+                        and has_named_results(existing_group) == has_named_results(replacement)):
                     tx.rollback()
                     build_tx.rollback_to_savepoint(savepoint)
                     if finalize_before_commit is not None:

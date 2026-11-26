@@ -467,7 +467,7 @@ def test_structural_array_provenance_survives_identity_expression_result_not_onl
 def test_compile_time_required_projection_probes_distinguish_unavailable_from_hard_errors():
     """Static projection contracts contextualize only genuine CTFE unavailability."""
     named_bindings = {"key": TYPE_STRING}
-    with pytest.raises(CompileError, match="raw node output lookup requires a compile-time string key"):
+    with pytest.raises(CompileError, match="named result lookup requires a compile-time string key"):
         _analyze(
             'node("ShaderNodeSeparateXYZ", outputs={"X": Float})[key]',
             bindings=named_bindings,

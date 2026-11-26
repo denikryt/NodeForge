@@ -33,7 +33,7 @@ class ExtensionBackendValue:
 class ExtensionBackendContext:
     """Expose the minimal physical realization surface to one extension invocation."""
 
-    def __init__(self, *, group, location, generated_resource_transaction, result_types=()):
+    def __init__(self, *, group, location, generated_resource_transaction, result_types=(), result_names=None):
         """Bind one invocation to the candidate group and immutable typed output contract."""
         if group is None:
             raise ValueError("ExtensionBackendContext requires a target node group")
@@ -51,6 +51,17 @@ class ExtensionBackendContext:
         if not isinstance(result_types, tuple) or any(type(typ) is not NFType for typ in result_types):
             raise TypeError("ExtensionBackendContext.result_types must be a tuple of exact NFType members")
         self._result_types = result_types
+        if result_names is not None:
+            if (not isinstance(result_names, tuple) or not result_names or len(result_names) != len(result_types)
+                    or any(not isinstance(name, str) or not name for name in result_names)
+                    or len(set(result_names)) != len(result_names)):
+                raise ValueError("ExtensionBackendContext.result_names must match the ordered result types")
+        self._result_names = result_names
+
+    @property
+    def result_names(self) -> tuple[str, ...] | None:
+        """Return exact ordered result names, or None for a positional contract."""
+        return self._result_names
 
     @property
     def result_types(self) -> tuple[NFType, ...]:

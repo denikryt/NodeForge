@@ -13,6 +13,7 @@ from .extension_backend import _selected_spec, lower_extension_call
 from .group_authority import find_unique_authoritative_group
 from .socket_types import socket_type_for_nf_type, validate_runtime_value_socket
 from .values import make_value
+from .interface import set_named_results
 
 
 EXTENSION_AUTHORITY_PROP = 'nodeforge_extension_call_authority_v1'
@@ -39,7 +40,9 @@ def _input_names(operation, spec):
 
 def _output_names(operation, spec):
     """Use the selected result carrier, never its coincidental output count."""
-    if spec.result.kind == 'NF_SET':
+    if operation.result_names is not None:
+        return operation.result_names
+    if spec.result.kind in {'NF_SET', 'DYNAMIC_RESULTS'}:
         if len(operation.results) != 1:
             raise CompileError('Extension scalar result has invalid arity')
         return ('Result',)
@@ -53,7 +56,7 @@ def _fingerprint(operation, spec, registry):
         spec, tuple((a.parameter_index, a.variadic_index, a.value.typ) for a in operation.arguments),
         tuple((a.parameter_index, a.variadic_index, a.value) for a in operation.static_arguments),
         operation.extension_state_type, operation.extension_state,
-        tuple(r.typ for r in operation.results), spec.result.kind,
+        tuple(r.typ for r in operation.results), operation.result_names, spec.result.kind,
         registry.owner_fingerprint(operation.target.extension_callable_id.owner),
     )
     return hashlib.sha256(repr(payload).encode('utf-8')).hexdigest()
@@ -99,6 +102,7 @@ def materialize_extension_call(context, operation, operands, x, y):
         fingerprint = _fingerprint(operation, spec, registry)
 
         def populate(candidate, resources):
+            set_named_results(candidate, operation.result_names is not None)
             for name, argument in zip(input_names, operation.arguments):
                 candidate.interface.new_socket(
                     name=name, in_out='INPUT', socket_type=socket_type_for_nf_type(argument.value.typ),

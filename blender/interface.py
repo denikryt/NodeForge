@@ -3,12 +3,26 @@
 INPUT_DEFAULTS_PROP = "gn_script_mvp_input_defaults"
 INPUT_DECLARATIONS_PROP = "gn_script_mvp_input_declarations"
 INPUT_DECLARATIONS_SCHEMA_VERSION = 1
+NAMED_RESULTS_PROP = "nodeforge_named_results_v1"
 from ..errors import CompileError
 from .socket_types import socket_type_for_nf_type
 from ..compiler_identities import InputDeclarationId
 from ..nf_types import NFType, serialize_nf_type
 from .values import make_value
 from ..semantic.callable_contracts import canonicalize_color_components
+
+
+def has_named_results(group):
+    """Read the persistent result carrier; legacy groups are positional."""
+    return bool(group.get(NAMED_RESULTS_PROP, False))
+
+
+def set_named_results(group, named):
+    """Persist named shape or remove the marker for positional results."""
+    if named:
+        group[NAMED_RESULTS_PROP] = True
+    elif NAMED_RESULTS_PROP in group:
+        del group[NAMED_RESULTS_PROP]
 
 
 def _json_safe_default(value):

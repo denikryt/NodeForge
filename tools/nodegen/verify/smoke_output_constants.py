@@ -1,6 +1,5 @@
 """Verify optional Blender source-node constants: omission and explicit assignment.
 
-Only the two zero-input sources in the fixed 64-node selection qualify.
 Color is stored in node.value (RNA); Value stores its data in output.default_value.
 """
 import argparse, json, math, os, shutil, sys, traceback
@@ -41,7 +40,7 @@ def main():
             for grouped in (False,True):
                 label=f'{fn}_{"explicit" if kwargs else "default"}_{"grouped" if grouped else "inline"}'
                 source=(f'from packages import nodes as gen\n\n'
-                        f'def entry():\n    x, = gen.{fn}({kwargs}{", " if kwargs else ""}__inline__={not grouped})\n    return x\n')
+                        f'def entry():\n    x = gen.{fn}({kwargs}{", " if kwargs else ""}__inline__={not grouped})\n    return x\n')
                 before={g.as_pointer() for g in bpy.data.node_groups}
                 result={'name':label,'node':node_id,'source':source,'status':'failed'}
                 try:
