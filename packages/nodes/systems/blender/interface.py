@@ -409,11 +409,11 @@ def bounding_box(
     ...
 
 def capture_attribute(
-    *items: Annotated[Bool | Color | Float | Geometry | Int | Rotation | Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME],
+    *,
     geometry: Annotated[Geometry, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     selection: Annotated[Bool, EvaluationMode.COMPILE_TIME_OR_RUNTIME] = None,
     domain: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'POINT',
-    elements: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = '',
+    elements: Annotated[dict[str, Bool | Color | Float | Int | Rotation | Vector], EvaluationMode.COMPILE_TIME_OR_RUNTIME] = {},
 ) -> DynamicResults:
     """Build a GeometryNodeCaptureAttribute; omitted inputs keep Blender defaults."""
     ...
@@ -1384,7 +1384,7 @@ def menu_switch(
     *items: Annotated[Bool | Color | Float | Geometry | Int | Material | Object | Rotation | String | Vector, EvaluationMode.COMPILE_TIME_OR_RUNTIME],
     data_type: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'GEOMETRY',
     menu: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'A',
-    elements: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = 'A,B',
+    elements: Annotated[list[String], EvaluationMode.COMPILE_TIME_ONLY] = ['A', 'B'],
 ) -> DynamicResults:
     """Build a GeometryNodeMenuSwitch; omitted inputs keep Blender defaults."""
     ...

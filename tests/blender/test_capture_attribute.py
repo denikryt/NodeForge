@@ -341,7 +341,7 @@ def test_collection_default_corruption_aborts_group_cutover_and_retries(monkeypa
     source = '''from packages import nodes
 
 def main():
-    value = nodes.menu_switch(1.0, 2.0, 3.0, elements="One,Two,Three", menu="Three", data_type="FLOAT").output
+    value = nodes.menu_switch(1.0, 2.0, 3.0, elements=["One","Two","Three"], menu="Three", data_type="FLOAT").output
     return {"geometry": point(vector(value,0.0,0.0))}
 '''
     group = compiler.create_expression_group(source,'NF_collection_fault')

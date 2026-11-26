@@ -1,24 +1,21 @@
 """Only invocation-dependent output schemas require semantic resolvers."""
 from NodeForge.nf_types import NFType
-from NodeForge.extension_result_api import ResultStaticArg, validate_named_result_key
+from NodeForge.extension_result_api import ResultRuntimeArg, ResultStaticArg, validate_named_result_key
 
 
 
-def capture_entries(elements, supported):
-    """Parse capture collection entries, preserving exact item labels."""
-    chunks = tuple(tuple(chunk.strip().split(':', 1)) for chunk in elements.split(',')) if elements else ()
-    if any(len(pair) != 2 or pair[0] not in supported or not pair[1] for pair in chunks):
-        raise ValueError('elements must be TYPE:Name entries with supported types')
-    if len({pair[1] for pair in chunks}) != len(chunks):
-        raise ValueError('Duplicate capture item names')
-    return chunks
-
-def menu_names(elements):
-    """Parse ordered, unique Menu Switch labels."""
-    names = tuple(chunk.strip() for chunk in elements.split(',')) if elements else ()
-    if not all(names) or len(names) != len(set(names)):
-        raise ValueError('elements must contain unique nonempty Menu names')
-    return names
+def menu_labels(elements):
+    """Validate the exact ordered labels shared by both generated phases."""
+    from NodeForge.extension_result_api import validate_named_result_key
+    if type(elements) is not list or not elements:
+        raise ValueError('elements must be a nonempty list of Menu labels')
+    for name in elements:
+        if type(name) is not str:
+            raise ValueError('Menu labels must be strings')
+        validate_named_result_key(name)
+    if len(elements) != len(set(elements)):
+        raise ValueError('Duplicate Menu label')
+    return tuple(elements)
 
 def static_value(arguments, param):
     value = arguments[param]
@@ -119,9 +116,11 @@ _SIGNATURE_capture_attribute = {
 
 def _result_types_capture_attribute(arguments):
     base = output_types(arguments, [], _SIGNATURE_capture_attribute)
-    types = {'BOOLEAN': NFType.BOOL, 'FLOAT': NFType.FLOAT, 'INT': NFType.INT, 'RGBA': NFType.COLOR, 'ROTATION': NFType.ROTATION, 'VECTOR': NFType.VECTOR}
-    entries = capture_entries(static_value(arguments, 'elements'), types)
-    return public_result(with_collection_results(base, ((name, types[token]) for token, name in entries)))
+    types = {NFType.BOOL, NFType.COLOR, NFType.FLOAT, NFType.INT, NFType.ROTATION, NFType.VECTOR}
+    elements = arguments['elements']
+    if any(not isinstance(value, (ResultRuntimeArg, ResultStaticArg)) or value.typ not in types for value in elements.values()):
+        raise ValueError('Unsupported Capture element type')
+    return public_result(with_collection_results(base, ((name, value.typ) for name, value in elements.items())))
 
 _SIGNATURE_arc = {
     ('POINTS',): {'curve': NFType.GEOMETRY, 'center': NFType.VECTOR, 'normal': NFType.VECTOR, 'radius': NFType.FLOAT},
@@ -373,7 +372,10 @@ _SIGNATURE_menu_switch = {
 
 def _result_types_menu_switch(arguments):
     base = output_types(arguments, ['data_type'], _SIGNATURE_menu_switch)
-    names = menu_names(static_value(arguments, 'elements'))
+    elements = arguments['elements']
+    if any(not isinstance(value, ResultStaticArg) or value.typ is not NFType.STRING for value in elements):
+        raise ValueError('Menu labels must be compile-time strings')
+    names = menu_labels([value.value for value in elements])
     selected = static_value(arguments, 'menu')
     if selected not in names:
         raise ValueError('Invalid Menu selection / elements')

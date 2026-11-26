@@ -6,6 +6,7 @@ RNA properties, Menu sockets, and the resulting physical socket layout.
 import keyword
 import re
 from NodeForge.extension_api import ExtensionBackendValue, NFType
+from NodeForge.extension_result_api import validate_named_result_key
 
 
 def sanitized(raw):
@@ -13,21 +14,18 @@ def sanitized(raw):
     if not v or v[0].isdigit() or keyword.iskeyword(v):v='option_'+v
     return v
 
-def capture_entries(elements, supported):
-    """Parse capture collection entries, preserving exact item labels."""
-    chunks = tuple(tuple(chunk.strip().split(':', 1)) for chunk in elements.split(',')) if elements else ()
-    if any(len(pair) != 2 or pair[0] not in supported or not pair[1] for pair in chunks):
-        raise ValueError('elements must be TYPE:Name entries with supported types')
-    if len({pair[1] for pair in chunks}) != len(chunks):
-        raise ValueError('Duplicate capture item names')
-    return chunks
-
-def menu_names(elements):
-    """Parse ordered, unique Menu Switch labels."""
-    names = tuple(chunk.strip() for chunk in elements.split(',')) if elements else ()
-    if not all(names) or len(names) != len(set(names)):
-        raise ValueError('elements must contain unique nonempty Menu names')
-    return names
+def menu_labels(elements):
+    """Validate the exact ordered labels shared by both generated phases."""
+    from NodeForge.extension_result_api import validate_named_result_key
+    if type(elements) is not list or not elements:
+        raise ValueError('elements must be a nonempty list of Menu labels')
+    for name in elements:
+        if type(name) is not str:
+            raise ValueError('Menu labels must be strings')
+        validate_named_result_key(name)
+    if len(elements) != len(set(elements)):
+        raise ValueError('Duplicate Menu label')
+    return tuple(elements)
 
 _TYPES = {
     'NodeSocketFloat': NFType.FLOAT, 'NodeSocketInt': NFType.INT,
@@ -91,7 +89,7 @@ def make_node(context, node_id, properties, orders):
     raise ValueError(f'Blender rejected RNA configuration {properties!r}: {last_error}')
 
 
-def set_collection(node, kind, elements, capture_types):
+def set_collection(context, node, kind, elements, capture_types):
     if kind == 'index':
         if type(elements) is not int or elements < 0:
             raise ValueError('elements must be a nonnegative integer')
@@ -99,16 +97,33 @@ def set_collection(node, kind, elements, capture_types):
         while len(items) > elements: items.remove(items[-1])
         while len(items) < elements: items.new()
     elif kind == 'menu':
-        names = menu_names(elements)
+        names = menu_labels(elements)
         if tuple(x.name for x in node.enum_items) != names:
             node.enum_items.clear()
             for name in names: node.enum_items.new(name)
+        if tuple(x.name for x in node.enum_items) != names:
+            raise ValueError('Blender changed the Menu collection labels')
         return names
     elif kind == 'capture':
-        entries = capture_entries(elements, capture_types)
-        for token, name in entries:
+        if type(elements) is not dict:
+            raise TypeError('Capture elements must be a dictionary')
+        names = tuple(elements)
+        if context.result_names != ('geometry', 'selection', *names):
+            raise ValueError('Capture elements disagree with resolved result keys')
+        types = context.result_types[2:]
+        persisted = {'VECTOR': 'FLOAT_VECTOR', 'RGBA': 'FLOAT_COLOR', 'ROTATION': 'QUATERNION'}
+        expected_items = []
+        node.capture_items.clear()
+        for (name, value), typ in zip(elements.items(), types):
+            validate_named_result_key(name)
+            if typ not in capture_types or (isinstance(value, ExtensionBackendValue) and value.typ is not typ):
+                raise TypeError(f'Unsupported Capture element type for {name!r}')
+            token = capture_types[typ]
             node.capture_items.new(token, name)
-        return tuple(name for _, name in entries)
+            expected_items.append((name, persisted.get(token, token)))
+        if tuple((item.name, item.data_type) for item in node.capture_items) != tuple(expected_items):
+            raise ValueError('Blender changed the Capture collection labels or types')
+        return names
     return ()
 
 
@@ -124,11 +139,63 @@ def deliver(context, socket, value):
         socket.default_value = value
 
 
+def collection_input_slots(node, kind, names, expected_types):
+    """Check native collection roles and paired item identifiers before delivery."""
+    capture = kind == 'capture'
+    fixed_in = ('Geometry', 'Selection') if capture else ('Menu',)
+    fixed_out = ('Geometry', 'Selection') if capture else ('Output',)
+    inputs = list(node.inputs)
+    outputs = list(node.outputs)
+    if (tuple(s.identifier for s in inputs[:len(fixed_in)]) != fixed_in
+            or tuple(s.identifier for s in outputs[:len(fixed_out)]) != fixed_out
+            or len(inputs) != len(fixed_in) + len(names) + 1
+            or len(outputs) != len(fixed_out) + len(names) + int(capture)
+            or inputs[-1].bl_idname != 'NodeSocketVirtual'
+            or (capture and outputs[-1].bl_idname != 'NodeSocketVirtual')):
+        raise ValueError(f'{kind}: unexpected fixed or virtual socket layout')
+    if capture and (tuple(socket_type(s) for s in inputs[:2]) != (NFType.GEOMETRY, NFType.BOOL)
+                    or tuple(socket_type(s) for s in outputs[:2]) != (NFType.GEOMETRY, NFType.BOOL)):
+        raise ValueError('Capture fixed socket types disagree')
+    if not capture and inputs[0].bl_idname != 'NodeSocketMenu':
+        raise ValueError('Menu fixed socket type disagrees')
+    slots = inputs[len(fixed_in):-1]
+    result_slots = outputs[len(fixed_out):-1] if capture else outputs[len(fixed_out):]
+    identifiers = set()
+    for name, typ, inp, out in zip(names, expected_types, slots, result_slots):
+        prefix = 'Value' if capture else 'Item'
+        out_prefix = 'Attribute' if capture else 'Item'
+        suffix = inp.identifier[len(prefix):] if inp.identifier.startswith(prefix) else None
+        valid_suffix = suffix is not None and ((capture and suffix == '') or
+                       (suffix.startswith('_') and suffix[1:].isdigit()))
+        if (not valid_suffix or suffix in identifiers or out.identifier != out_prefix + suffix
+                or inp.name != name or out.name != name or inp.is_output or not out.is_output
+                or not inp.enabled or not out.enabled or socket_type(inp) is not typ
+                or socket_type(out) is not (typ if capture else NFType.BOOL)):
+            raise ValueError(f'{kind}: collection socket identity/type/order mismatch for {name!r}')
+        identifiers.add(suffix)
+    return slots
+
+
+def deliver_collection(context, socket, value):
+    """Deliver and verify the exact collection operand without implicit name lookup."""
+    deliver(context, socket, value)
+    if isinstance(value, ExtensionBackendValue):
+        links = list(socket.links)
+        if len(links) != 1 or links[0].from_socket != value.socket:
+            raise ValueError(f'Wrong collection input link for {socket.identifier!r}')
+    else:
+        actual = socket.default_value
+        if isinstance(value, tuple):
+            actual = tuple(actual)
+        if actual != value:
+            raise ValueError(f'Collection input default changed for {socket.identifier!r}')
+
+
 def materialize(context, node_id, named, items=(), rna=None, menus=(), orders=(),
                 kind=None, elements=None, capture_types=None,
                 constant_rna=None, constant_outputs=None, scalar_name=None):
     node = make_node(context, node_id, rna or {}, orders)
-    requested_names = set_collection(node, kind, elements, capture_types) if kind else ()
+    requested_names = set_collection(context, node, kind, elements, capture_types) if kind else ()
     for key, value in menus:
         candidates = [sock for sock in node.inputs if sock.identifier == key]
         if len(candidates) != 1:
@@ -145,12 +212,22 @@ def materialize(context, node_id, named, items=(), rna=None, menus=(), orders=()
         if len(matches) != 1:
             raise ValueError(f'{node_id}: input {key!r} is unavailable or ambiguous in this configuration')
         deliver(context, matches[0], value)
-    # Only collection-created sockets remain positional.
-    variable_inputs = [sock for sock in available if sock.identifier not in named]
-    if len(items) > len(variable_inputs):
-        raise ValueError(f'{node_id} has {len(variable_inputs)} variable inputs; got {len(items)}')
-    for socket, value in zip(variable_inputs, items):
-        deliver(context, socket, value)
+    # Capture uses exact dictionary slots; Menu retains ordered positional values.
+    if kind in ('capture', 'menu'):
+        expected_types = (context.result_types[2:] if kind == 'capture'
+                          else (context.result_types[0],) * len(requested_names))
+        variable_inputs = collection_input_slots(node, kind, requested_names, expected_types)
+        values = tuple(elements.values()) if kind == 'capture' else items
+        if len(values) > len(variable_inputs) or (kind == 'capture' and len(values) != len(variable_inputs)):
+            raise ValueError(f'{node_id} has {len(variable_inputs)} variable inputs; got {len(values)}')
+        for socket, value in zip(variable_inputs, values):
+            deliver_collection(context, socket, value)
+    else:
+        variable_inputs = [sock for sock in available if sock.identifier not in named]
+        if len(items) > len(variable_inputs):
+            raise ValueError(f'{node_id} has {len(variable_inputs)} variable inputs; got {len(items)}')
+        for socket, value in zip(variable_inputs, items):
+            deliver(context, socket, value)
     # A missing optional constant is intentionally not assigned: Blender owns
     # its defaults. These are compile-time-only knobs, never runtime links.
     for key, value in (constant_rna or {}).items():
@@ -1086,17 +1163,17 @@ def bounding_box(
 
 def capture_attribute(
     context,
-    *items,
+    *,
     geometry=None,
     selection=None,
     domain='POINT',
-    elements='',
+    elements={},
 ):
     return materialize(
         context,
         'GeometryNodeCaptureAttribute',
         named={'Geometry': geometry, 'Selection': selection},
-        items=items,
+        items=(),
         rna={'domain': domain},
         menus=(),
         orders=[('domain',)],
@@ -1104,7 +1181,7 @@ def capture_attribute(
         constant_outputs={},
         kind='capture',
         elements=elements,
-        capture_types=('BOOLEAN', 'FLOAT', 'INT', 'RGBA', 'ROTATION', 'VECTOR'),
+        capture_types={NFType.BOOL: 'BOOLEAN', NFType.FLOAT: 'FLOAT', NFType.INT: 'INT', NFType.COLOR: 'RGBA', NFType.ROTATION: 'ROTATION', NFType.VECTOR: 'VECTOR'},
     )
 
 def cluster_by_connected(
@@ -3308,7 +3385,7 @@ def menu_switch(
     *items,
     data_type='GEOMETRY',
     menu='A',
-    elements='A,B',
+    elements=['A', 'B'],
 ):
     return materialize(
         context,

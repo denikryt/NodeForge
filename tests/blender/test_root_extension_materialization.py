@@ -177,9 +177,9 @@ def test_groups_only_before_first_root_compile_does_not_stamp_composition_identi
 
 @pytest.mark.parametrize('inline', [True, False])
 @pytest.mark.parametrize('kind,expr,expected', [
-    ('GeometryNodeMenuSwitch', 'nodes.menu_switch(1.0, 2.0, 3.0, elements="One,Two,Three", menu="Three", data_type="FLOAT", __inline__={inline}).output', (1., 2., 3.)),
+    ('GeometryNodeMenuSwitch', 'nodes.menu_switch(1.0, 2.0, 3.0, elements=["One","Two","Three"], menu="Three", data_type="FLOAT", __inline__={inline}).output', (1., 2., 3.)),
     ('GeometryNodeIndexSwitch', 'nodes.index_switch(1.0, 2.0, 3.0, elements=3, index=2, data_type="FLOAT", __inline__={inline})', (1., 2., 3.)),
-    ('GeometryNodeCaptureAttribute', 'nodes.capture_attribute(0.75, True, geometry=cube(1), elements="FLOAT:Geometry,BOOLEAN:Selection", __inline__={inline})', (.75, True)),
+    ('GeometryNodeCaptureAttribute', 'nodes.capture_attribute(geometry=cube(1), elements={{"Geometry": 0.75, "Selection": True}}, __inline__={inline})', (.75, True)),
 ])
 def test_standalone_collection_root_and_group_recompilation(inline, kind, expr, expected):
     """First root transfer and equivalent group updates keep collection defaults and slots."""
@@ -236,7 +236,7 @@ def test_collection_transaction_restores_changed_child_and_parent(savepoint):
     source = '''from packages import nodes
 
 def main():
-    first = nodes.menu_switch(1.0, 2.0, 3.0, data_type="FLOAT", elements="One,Two,Three", menu="Three", __inline__=False).output
+    first = nodes.menu_switch(1.0, 2.0, 3.0, data_type="FLOAT", elements=["One","Two","Three"], menu="Three", __inline__=False).output
     second = nodes.index_switch(1.0, first, 2.0, data_type="FLOAT", elements=3, index=1, __inline__=False)
     return {"geometry": point(vector(first, second, 0.0))}
 '''
@@ -275,7 +275,7 @@ packages.install_package_directory(Path({str(project / 'packages/nodes')!r}))
 source = """from packages import nodes
 
 def main():
-    a = nodes.menu_switch(1.0, 2.0, 3.0, elements='One,Two,Three', menu='Three', data_type='FLOAT', __inline__=False).output
+    a = nodes.menu_switch(1.0, 2.0, 3.0, elements=['One','Two','Three'], menu='Three', data_type='FLOAT', __inline__=False).output
     b = nodes.index_switch(1.0, a, 2.0, elements=3, index=1, data_type='FLOAT', __inline__=False)
     return {{'geometry': point(vector(a,b,0.0))}}
 """

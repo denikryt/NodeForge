@@ -64,7 +64,7 @@ CASES = [
      'call': "index_switch(3.0, 4.0, 5.0, index=1, elements=3)",
      'values': {'Index': 1, 'Item_0': 3.0, 'Item_1': 4.0, 'Item_2': 5.0}},
     {'name': 'menu_dynamic', 'node': 'GeometryNodeMenuSwitch',
-     'call': "menu_switch(1.5, 2.5, 3.5, elements='A,B,C', menu='C', data_type='FLOAT')",
+     'call': "menu_switch(1.5, 2.5, 3.5, elements=['A','B','C'], menu='C', data_type='FLOAT')",
      'values': {'A': 1.5, 'B': 2.5, 'C': 3.5}, 'results': ('output', 'A', 'B', 'C')},
     {'name': 'resample_grouped', 'node': 'GeometryNodeResampleCurve',
      'call': "resample_curve(count=29, mode='Count')", 'values': {'Count': 29}, 'grouped': True},

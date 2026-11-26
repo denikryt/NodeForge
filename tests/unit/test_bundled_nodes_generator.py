@@ -91,18 +91,18 @@ def generator_modules():
         sys.path.remove(str(BUILD.parent))
 
 
-def test_emitted_parser_definitions_and_phase_isolation(generator_modules):
+def test_emitted_collection_validator_and_phase_isolation(generator_modules):
     """Each real phase uses its own generated definitions without runtime generator imports."""
     import ast
     import inspect
-    from NodeForge.extension_result_api import ResultStaticArg
+    from NodeForge.extension_result_api import ResultStaticArg, ResultRuntimeArg
     from NodeForge.nf_types import NFType
     from NodeForge.extensions.registry import ExtensionOwnerSession, capture_owner_code_snapshot
     build, generator, inspector = generator_modules
     root = PACKAGE / 'systems' / 'blender'
     assert sorted(p.name for p in root.glob('*.py')) == sorted(build.FILES)
-    for filename, functions in [('backend.py', (generator.capture_entries, generator.menu_names, inspector.sanitized)),
-                                ('semantic.py', (generator.capture_entries, generator.menu_names))]:
+    for filename, functions in [('backend.py', (generator.menu_labels, inspector.sanitized)),
+                                ('semantic.py', (generator.menu_labels,))]:
         parsed = {node.name: node for node in ast.parse((root / filename).read_text()).body
                   if isinstance(node, ast.FunctionDef)}
         for function in functions:
@@ -112,7 +112,7 @@ def test_emitted_parser_definitions_and_phase_isolation(generator_modules):
     ids = {cid.name: cid for cid in families}
     assert families[ids['cylinder']][0].result.kind == 'NAMED_RESULTS'
     before = set(sys.modules)
-    args = {'elements': ResultStaticArg(NFType.STRING, 'FLOAT:Weight,VECTOR:two words')}
+    args = {'elements': {'Weight': ResultStaticArg(NFType.FLOAT, 0.75), 'two words': ResultRuntimeArg(NFType.VECTOR)}}
     # Capture's domain is irrelevant to its result schema.
     assert owner.invoke_result_resolver(ids['capture_attribute'], args) == (
         ('geometry', NFType.GEOMETRY), ('selection', NFType.BOOL), ('Weight', NFType.FLOAT), ('two words', NFType.VECTOR))
@@ -121,39 +121,24 @@ def test_emitted_parser_definitions_and_phase_isolation(generator_modules):
     with owner._mounted('IMPLEMENTATION'):
         owner._resolve_implementation_mounted(ids['capture_attribute'])
         backend = owner._phase_modules['IMPLEMENTATION']['backend']
-        assert backend.capture_entries('FLOAT:Weight,VECTOR:two words', ('FLOAT', 'VECTOR')) == (
-            ('FLOAT', 'Weight'), ('VECTOR', 'two words'))
-        assert backend.menu_names('A, lower,Two Words') == ('A', 'lower', 'Two Words')
+        assert backend.menu_labels(['A, lower','Two Words']) == ('A, lower', 'Two Words')
+        assert not hasattr(backend, 'capture_entries') and not hasattr(backend, 'menu_names')
         assert backend.sanitized('Point Count') == 'point_count'
         assert owner._full_name('semantic') not in sys.modules
     assert set(owner._phase_modules['IMPLEMENTATION']) == {'backend'}
     assert not any(name.startswith(owner.snapshot.module_base) for name in set(sys.modules) - before)
 
 
-@pytest.mark.parametrize('text,expected', [('', ()), ('FLOAT:a', (('FLOAT','a'),)),
-    (' FLOAT:Weight , VECTOR:weight ', (('FLOAT','Weight'),('VECTOR','weight'))),
-    ('FLOAT: a:b', (('FLOAT',' a:b'),)), ('FLOAT :a', None), ('FLOAT:', None),
-    ('FLOAT:a,FLOAT:a', None), ('FLOAT:a,', None), ('BOGUS:a', None), ('a', None)])
-def test_capture_parser_preserves_grammar(generator_modules, text, expected):
-    """Capture parsing strips chunks, not the individual type and name fields."""
+@pytest.mark.parametrize('labels,expected', [([], None), ([' A ', 'a,b', 'Two Words'], (' A ','a,b','Two Words')),
+    (['A','A'], None), (['A','','B'], None), ([' '], (' ',)), ('A,B',None), ([1],None), (['é'*32],None)])
+def test_menu_labels_exact_validation(generator_modules, labels, expected):
+    """List labels preserve exact spelling and reject malformed declarations."""
     _, generator, _ = generator_modules
     if expected is None:
         with pytest.raises(ValueError):
-            generator.capture_entries(text, ('FLOAT','VECTOR'))
+            generator.menu_labels(labels)
     else:
-        assert generator.capture_entries(text, ('FLOAT','VECTOR')) == expected
-
-
-@pytest.mark.parametrize('text,expected', [('', ()), (' A ,a,Two Words ', ('A','a','Two Words')),
-    ('A,A', None), ('A,,B', None), (' ', None)])
-def test_menu_parser_preserves_grammar(generator_modules, text, expected):
-    """Menu names are stripped, ordered, case-sensitive and nonempty."""
-    _, generator, _ = generator_modules
-    if expected is None:
-        with pytest.raises(ValueError):
-            generator.menu_names(text)
-    else:
-        assert generator.menu_names(text) == expected
+        assert generator.menu_labels(labels) == expected
 
 
 def test_name_only_result_variations_are_dynamic(generator_modules):
