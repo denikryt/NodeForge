@@ -207,6 +207,28 @@ def is_frontend_semantic_type_spec(spec: TypeSpec) -> bool:
     return spec.kind == "LIST" and is_frontend_semantic_type_spec(spec.item)
 
 
+def is_structured_parameter_type_spec(spec: TypeSpec) -> bool:
+    """Recognize one-level declarative containers of scalar NodeForge values."""
+    return spec.kind in {"LIST", "DICT_STR"} and spec.item.kind == "NF_SET"
+
+
+def validate_structured_static_leaf(leaf, spec: TypeSpec) -> None:
+    """Check the selected type and canonical detached value without re-inference."""
+    from ..extension_result_api import ResultStaticArg
+    from ..semantic.callable_contracts import canonicalize_group_input_default
+
+    if not isinstance(leaf, ResultStaticArg) or leaf.typ not in spec.nf_types:
+        raise ValueError("Structured static leaf requires a declared NFType")
+    canonical = canonicalize_group_input_default(leaf.typ, leaf.value)
+    def identical(a, b):
+        """Compare canonical literal carriers as well as their values."""
+        return type(a) is type(b) and a == b and (
+            type(a) is not tuple or all(identical(x, y) for x, y in zip(a, b))
+        )
+    if not identical(canonical, leaf.value):
+        raise ValueError("Structured static leaf is not canonical")
+
+
 def is_executable_result_type_spec(spec: TypeSpec) -> bool:
     """Return whether *spec* is an executable public result shape from the backend-only declarative extension contract."""
     if spec.kind in {"DYNAMIC_RESULTS", "NAMED_RESULTS"}:
@@ -244,6 +266,28 @@ class ExtensionParameterSpec:
             raise TypeError("extension parameter kind must be inspect.Parameter.kind")
         if not isinstance(self.type_spec, TypeSpec):
             raise TypeError("extension parameter type_spec must be TypeSpec")
+        if is_structured_parameter_type_spec(self.type_spec):
+            if self.kind not in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}:
+                raise ValueError("Structured extension parameters must be fixed named parameters")
+            if not isinstance(self.evaluation_mode, EvaluationMode) or self.default_type is not None:
+                raise ValueError("Structured extension parameters require EvaluationMode and no default_type")
+            if self.default is not inspect.Parameter.empty:
+                if self.evaluation_mode is EvaluationMode.RUNTIME_ONLY or type(self.default) is not tuple:
+                    raise ValueError("Invalid structured extension parameter default")
+                if self.type_spec.kind == "DICT_STR":
+                    keys = []
+                    for row in self.default:
+                        if type(row) is not tuple or len(row) != 2 or type(row[0]) is not str:
+                            raise ValueError("Invalid structured dictionary default entry")
+                        validate_named_result_key(row[0])
+                        keys.append(row[0])
+                        validate_structured_static_leaf(row[1], self.type_spec.item)
+                    if len(set(keys)) != len(keys):
+                        raise ValueError("Duplicate structured dictionary default key")
+                else:
+                    for leaf in self.default:
+                        validate_structured_static_leaf(leaf, self.type_spec.item)
+            return
         if self.type_spec.kind == "NF_SET":
             if not isinstance(self.evaluation_mode, EvaluationMode):
                 raise TypeError("direct NF_SET extension parameter requires EvaluationMode")
@@ -306,7 +350,7 @@ class ExtensionCallableSpec:
         )
 
 
-def validate_extension_argument_positions(positions) -> None:
+def validate_extension_argument_positions(positions, structured_arguments=()) -> None:
     """Validate canonical fixed/variadic positions carried across extension call layers."""
     combined = tuple(positions)
     if any(position is None for position, _variadic in combined):
@@ -324,6 +368,38 @@ def validate_extension_argument_positions(positions) -> None:
             ordered = sorted(int(value) for value in values)
             if ordered != list(range(len(ordered))):
                 raise ValueError("extension variadic indices must be contiguous from zero")
+    if type(structured_arguments) is not tuple:
+        raise ValueError("Structured argument layout must be an immutable tuple")
+    previous = -1
+    for row in structured_arguments:
+        if type(row) is not tuple or len(row) != 2:
+            raise ValueError("Invalid structured argument layout row")
+        position, keys = row
+        if type(position) is not int or position <= previous or type(keys) is not tuple:
+            raise ValueError("Structured argument positions must be strictly increasing")
+        previous = position
+        if all(type(key) is str for key in keys):
+            for key in keys:
+                validate_named_result_key(key)
+            if len(set(keys)) != len(keys):
+                raise ValueError("Duplicate structured argument key")
+        elif not (all(type(key) is int for key in keys) and keys == tuple(range(len(keys)))):
+            raise ValueError("Invalid structured argument keys or list indices")
+        if set(by_parameter.get(position, ())) != set(range(len(keys))):
+            raise ValueError("Structured argument leaf positions do not match layout")
+
+
+def validate_structured_static_positions(static_operands, layout) -> None:
+    """Require selected static types exactly on structured leaf positions."""
+    if type(layout) is not tuple:
+        raise ValueError("Structured argument layout must be immutable")
+    positions = dict(layout)
+    for operand in static_operands:
+        if operand.parameter_index in positions:
+            if type(operand.static_type) is not NFType or operand.value is None:
+                raise ValueError("Structured static operand requires selected NFType and value")
+        elif operand.static_type is not None:
+            raise ValueError("Only structured static operands carry selected NFType")
 
 
 __all__ = [

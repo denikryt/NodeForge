@@ -131,7 +131,9 @@ def test_marker_classes_are_annotation_only_and_non_instantiable():
         ("Annotated[Float, EvaluationMode.RUNTIME_ONLY, EvaluationMode.COMPILE_TIME_ONLY]", "exactly one"),
         ("Annotated[NFType.FLOAT, EvaluationMode.RUNTIME_ONLY]", "NFType"),
         ("Annotated[Any, EvaluationMode.RUNTIME_ONLY]", "Any"),
-        ("Annotated[list[Float], EvaluationMode.RUNTIME_ONLY]", "Unsupported"),
+        ("list[Float]", "EvaluationMode"),
+        ("Annotated[list[list[Float]], EvaluationMode.RUNTIME_ONLY]", "Unsupported"),
+        ("Annotated[dict[int, Float], EvaluationMode.RUNTIME_ONLY]", "Unsupported"),
         ("Annotated[tuple[Float, Int], EvaluationMode.RUNTIME_ONLY]", "Unsupported"),
     ],
 )

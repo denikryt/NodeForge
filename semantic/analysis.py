@@ -92,6 +92,7 @@ from .evaluation_resolution import CompileTimeSelection, RuntimeRequired, resolv
 from ..extensions.contracts import (
     ExtensionCallableSpec,
     TypeSpec,
+    is_structured_parameter_type_spec,
 )
 from ..extensions.semantics import (
     ExtensionDependencySource,
@@ -519,20 +520,91 @@ def _analyze_extension_backend_call(
     # Each explicit source occurrence is acquired exactly once before type-based
     # candidate selection. Defaults are already detached contract data.
     acquired: dict[int, tuple[str, object, NFType]] = {}
-    for source_node in explicit_nodes:
-        mode = required_modes[id(source_node)]
+    structured = {}
+    structured_sources = {}
+    if len(family) == 1:
+        _, spec, bound = candidates[0]
+        for parameter in spec.parameters:
+            if is_structured_parameter_type_spec(parameter.type_spec):
+                value = bound.arguments[parameter.name]
+                if isinstance(value, ast.AST):
+                    structured_sources[id(value)] = parameter
+                else:
+                    keys = tuple(key for key, _ in value) if parameter.type_spec.kind == "DICT_STR" else tuple(range(len(value)))
+                    leaves = tuple(leaf for _, leaf in value) if parameter.type_spec.kind == "DICT_STR" else value
+                    structured[parameter.name] = (keys, leaves)
+
+    def acquire(source_node, mode):
+        """Acquire one source leaf with the existing scalar evaluation policy."""
         try:
             selection = resolve_argument_evaluation(source_node, environment.const_eval_values, mode)
         except ConstEvalUnavailable as exc:
             raise CompileError(f"{name}() argument must be available at compile time") from exc
         if isinstance(selection, CompileTimeSelection):
             acquired[id(source_node)] = ("static", selection.value, None)
-            continue
+            return
         if not isinstance(selection, RuntimeRequired):
             raise CompileError("Internal error: extension evaluation selector returned unsupported state")
         fact = analyze(source_node)
         actual_type = _require_runtime_type(fact, f"{name}() argument")
         acquired[id(source_node)] = ("runtime", source_node, actual_type)
+
+    def static_leaf(value, item_spec):
+        """Select and detach one already acquired static value."""
+        typ = select_declared_nf_type(item_spec, static_nf_type(value, declared=item_spec))
+        return ResultStaticArg(typ, canonicalize_group_input_default(typ, value))
+
+    for source_node in explicit_nodes:
+        mode = required_modes[id(source_node)]
+        parameter = structured_sources.get(id(source_node))
+        if parameter is None:
+            acquire(source_node, mode)
+            continue
+        item_spec = parameter.type_spec.item
+        if parameter.type_spec.kind == "DICT_STR":
+            from ..result_keys import validate_named_result_key
+            if not isinstance(source_node, ast.Dict) or any(key is None for key in source_node.keys):
+                raise CompileError("Structured dictionary requires a dictionary display without expansion")
+            keys = []
+            for key_node in source_node.keys:
+                try:
+                    key = _const_eval(key_node, environment.const_eval_values)
+                    if type(key) is not str:
+                        raise ValueError("Structured keys must be compile-time strings")
+                    validate_named_result_key(key)
+                except (ValueError, ConstEvalUnavailable) as exc:
+                    raise CompileError(f"Invalid structured dictionary key: {exc}") from exc
+                if key in keys:
+                    raise CompileError(f"Duplicate structured dictionary key {key!r}")
+                keys.append(key)
+            leaves = source_node.values
+        elif isinstance(source_node, ast.List):
+            keys = tuple(range(len(source_node.elts)))
+            leaves = source_node.elts
+        else:
+            if mode is EvaluationMode.RUNTIME_ONLY:
+                raise CompileError("Runtime-only structured list requires a list display")
+            try:
+                values = _const_eval(source_node, environment.const_eval_values)
+            except ConstEvalUnavailable as exc:
+                raise CompileError("Structured list must be a display or compile-time list") from exc
+            if type(values) is not list:
+                raise CompileError("Structured list requires a list value")
+            structured[parameter.name] = (tuple(range(len(values))), tuple(static_leaf(v, item_spec) for v in values))
+            continue
+        acquired_leaves = []
+        for leaf in leaves:
+            if isinstance(leaf, ast.Starred):
+                raise CompileError("Structured list does not support expansion")
+            acquire(leaf, mode)
+            representation, payload, actual_type = acquired[id(leaf)]
+            if representation == "static":
+                acquired_leaves.append(static_leaf(payload, item_spec))
+            else:
+                if not type_spec_accepts_nf(item_spec, actual_type):
+                    raise CompileError(f"{name}() structured leaf type {actual_type.value} is not accepted")
+                acquired_leaves.append(leaf)
+        structured[parameter.name] = (tuple(keys), tuple(acquired_leaves))
 
     deferred_ambiguity: AmbiguousStaticNFType | None = None
 
@@ -544,6 +616,10 @@ def _analyze_extension_backend_call(
         candidate_ambiguity: AmbiguousStaticNFType | None = None
         for parameter_name, value in bound.arguments.items():
             parameter = parameters[parameter_name]
+            if parameter_name in structured:
+                # Structured declarations are admitted only in single-signature families;
+                # their leaves were checked during acquisition.
+                continue
             if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
                 occurrences = tuple(value)
             else:
@@ -594,7 +670,24 @@ def _analyze_extension_backend_call(
     runtime_operands: list[AnalyzedCallOperand] = []
     static_operands: list[AnalyzedStaticCallOperand] = []
     resolver_arguments: dict[str, object] = {}
+    structured_arguments = []
     for parameter_index, parameter in enumerate(selected_spec.parameters):
+        if parameter.name in structured:
+            keys, leaves = structured[parameter.name]
+            structured_arguments.append((parameter_index, keys))
+            resolved_leaves = []
+            for ordinal, leaf in enumerate(leaves):
+                if isinstance(leaf, ResultStaticArg):
+                    static_operands.append(AnalyzedStaticCallOperand(parameter_index, leaf.value, ordinal, leaf.typ))
+                    resolved_leaves.append(leaf)
+                else:
+                    actual_type = acquired[id(leaf)][2]
+                    runtime_nodes.append(leaf)
+                    runtime_operands.append(AnalyzedCallOperand(parameter.name, actual_type, parameter_index, ordinal))
+                    resolved_leaves.append(ResultRuntimeArg(actual_type))
+            resolver_arguments[parameter.name] = (dict(zip(keys, resolved_leaves))
+                if parameter.type_spec.kind == "DICT_STR" else resolved_leaves)
+            continue
         value = selected_bound.arguments.get(parameter.name, ()) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else selected_bound.arguments.get(parameter.name)
         occurrences = tuple(value) if parameter.kind is inspect.Parameter.VAR_POSITIONAL else (value,)
         resolved_items = []
@@ -647,6 +740,7 @@ def _analyze_extension_backend_call(
         options=(),
         result=result_spec,
         static_operands=tuple(static_operands),
+        structured_arguments=tuple(structured_arguments),
         extension_overload_index=overload_index,
         extension_materialization=extension_materialization,
     )

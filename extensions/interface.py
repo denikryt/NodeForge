@@ -24,9 +24,10 @@ from .contracts import (
     TypeSpec,
     is_executable_result_type_spec,
     is_frontend_semantic_type_spec,
+    is_structured_parameter_type_spec,
 )
 from ..nf_types import NFType
-from ..extension_result_api import DynamicResults
+from ..extension_result_api import DynamicResults, ResultStaticArg
 from ..result_keys import validate_named_result_key
 
 
@@ -310,7 +311,14 @@ def _normalize_parameter_annotation(
         modes = [item for item in metadata if isinstance(item, EvaluationMode)]
         if len(modes) != 1:
             raise CompileError(f"{context} must declare exactly one EvaluationMode")
-        spec = _normalize_nf_set(base, context=context)
+        origin = typing.get_origin(base)
+        args = typing.get_args(base)
+        if origin is list and len(args) == 1:
+            spec = TypeSpec("LIST", item=_normalize_nf_set(args[0], context=context))
+        elif origin is dict and len(args) == 2 and args[0] is str:
+            spec = TypeSpec("DICT_STR", item=_normalize_nf_set(args[1], context=context))
+        else:
+            spec = _normalize_nf_set(base, context=context)
         return spec, modes[0]
     spec = normalize_semantic_type_annotation(annotation, class_type_ids=class_type_ids, context=context)
     if not is_frontend_semantic_type_spec(spec):
@@ -415,7 +423,30 @@ def _normalize_declaration(
         )
         default = parameter.default
         default_type = None
-        if default is not inspect.Parameter.empty:
+        if is_structured_parameter_type_spec(type_spec):
+            context = f"{callable_id.name}() parameter {parameter.name!r}"
+            if parameter.kind not in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}:
+                raise CompileError(f"{context} structured parameter must be fixed and named")
+            if default is not inspect.Parameter.empty:
+                expected = dict if type_spec.kind == "DICT_STR" else list
+                if mode is EvaluationMode.RUNTIME_ONLY or type(default) is not expected:
+                    raise CompileError(f"{context} invalid structured default")
+                def typed_leaf(value):
+                    """Detach one selected default leaf from the owner's container."""
+                    canonical, typ = _normalize_default(value, type_spec.item, context=context)
+                    return ResultStaticArg(typ, canonical)
+                if expected is dict:
+                    for key in default:
+                        try:
+                            if type(key) is not str:
+                                raise ValueError("Structured keys must be exact strings")
+                            validate_named_result_key(key)
+                        except ValueError as exc:
+                            raise CompileError(f"{context}: {exc}") from exc
+                    default = tuple((key, typed_leaf(value)) for key, value in default.items())
+                else:
+                    default = tuple(typed_leaf(value) for value in default)
+        elif default is not inspect.Parameter.empty:
             if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
                 raise CompileError(f"{callable_id.name}() variadic parameter cannot declare a default")
             if type_spec.kind != "NF_SET":
@@ -433,6 +464,11 @@ def _normalize_declaration(
         context=f"{callable_id.name}() result",
         class_type_ids=class_type_ids,
     )
+    if any(is_structured_parameter_type_spec(p.type_spec) for p in parameters) and (
+        not is_executable_result_type_spec(result)
+        or any(is_frontend_semantic_type_spec(p.type_spec) for p in parameters)
+    ):
+        raise CompileError("Structured extension parameters require BACKEND_ONLY execution")
     return ExtensionCallableSpec(callable_id, tuple(parameters), result)
 
 

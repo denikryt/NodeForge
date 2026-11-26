@@ -10,7 +10,7 @@ from ..compiler_identities import BindingId, CallSiteId, ExtensionCallSiteId, Fu
 from ..nf_types import NFType
 from ..type_capabilities import REPEAT_ITEM_TYPES
 from .group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
-from ..extensions.contracts import ExtensionCallableId, PythonScalarKind, TypeSpec, validate_extension_argument_positions
+from ..extensions.contracts import ExtensionCallableId, PythonScalarKind, TypeSpec, validate_extension_argument_positions, validate_structured_static_positions
 
 
 def _is_ir_option_value(value) -> bool:
@@ -323,6 +323,7 @@ class IRCallArgument:
     parameter_name: str | None
     value: IRValue
     parameter_index: int | None = None
+    # Indexed slot of either a variadic parameter or a declared container.
     variadic_index: int | None = None
 
     def __post_init__(self) -> None:
@@ -352,6 +353,7 @@ class IRStaticCallArgument:
     parameter_index: int
     value: object
     variadic_index: int | None = None
+    static_type: NFType | None = None
 
     def __post_init__(self) -> None:
         """Require one non-negative position and detached immutable value."""
@@ -388,6 +390,8 @@ class IRCall:
     extension_state: object | None = None
     result_names: tuple[str, ...] | None = None
 
+    structured_arguments: tuple[tuple[int, tuple[str | int, ...]], ...] = ()
+
     def __post_init__(self) -> None:
         """Validate call records before backend realization."""
         object.__setattr__(self, "results", tuple(self.results))
@@ -406,6 +410,10 @@ class IRCall:
             raise TypeError("IRCall arguments must be IRCallArgument records")
         if not all(isinstance(item, IRStaticCallArgument) for item in self.static_arguments):
             raise TypeError("IRCall static_arguments must be IRStaticCallArgument records")
+        if self.structured_arguments and (self.target.kind is not IRCallableKind.EXTENSION
+                or self.extension_state_type is not None or self.target.extension_overload_index is not None):
+            raise ValueError("Structured arguments require a non-overloaded backend-only extension")
+        validate_structured_static_positions(self.static_arguments, self.structured_arguments)
         if self.target.kind is not IRCallableKind.EXTENSION and self.extension_materialization is not None:
             raise ValueError("only extension calls can carry IRExtensionMaterialization")
         if self.target.kind is IRCallableKind.BUILTIN:
@@ -440,8 +448,8 @@ class IRCall:
                 if self.extension_state is not None:
                     raise ValueError("extension_state requires extension_state_type")
                 validate_extension_argument_positions(
-                    (item.parameter_index, item.variadic_index)
-                    for item in (*self.arguments, *self.static_arguments)
+                    ((item.parameter_index, item.variadic_index)
+                     for item in (*self.arguments, *self.static_arguments)), self.structured_arguments
                 )
             else:
                 if not isinstance(self.extension_state_type, TypeSpec):

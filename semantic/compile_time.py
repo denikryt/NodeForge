@@ -50,7 +50,7 @@ def _seed_const_copy_memo(value, memo, seen):
     memo preserves aliases and container cycles within one execution path.
     """
     if _is_const_vector(value):
-        memo[id(value)] = tuple(normalize_float_constant(item) for item in value)
+        memo[id(value)] = ConstVector(tuple(normalize_float_constant(item) for item in value))
         return
     if type(value) in (bool, int, float, str, type(None)):
         return
