@@ -11,7 +11,6 @@ from __future__ import annotations
 import ast
 import inspect
 import io
-import keyword
 import re
 import tokenize
 from dataclasses import dataclass, field, replace
@@ -360,16 +359,10 @@ def _source_imports(source: str):
 
 def _typespec_label(spec) -> str:
     """Convert an extension's frozen TypeSpec to a concise display label."""
-    if spec.kind == "DYNAMIC_RESULTS":
-        return "dynamic results"
     if spec.kind == "NF_SET":
         return " | ".join(sorted(t.value.title() for t in spec.nf_types))
-    if spec.kind == "TUPLE_FIXED":
-        return "tuple[" + ", ".join(_typespec_label(item) for item in spec.items) + "]"
     if spec.kind == "RECORD":
         return spec.record_type.name
-    if spec.kind == "PY_SCALAR":
-        return spec.python_scalar_kind.value.title()
     return spec.kind.title()
 
 
@@ -419,7 +412,6 @@ class SymbolIndex:
         """Retain one immutable environment; resolve imported names on demand."""
         self.environment = environment
         self._source_cache: dict[tuple[Path, str], tuple[int, Signature]] = {}
-        self._typed_cache: dict[Path, tuple[int, tuple[Output, ...] | None]] = {}
 
     def _record_signatures(self, record, name: str, *, definition: str | None = None,
                            snapshot=None) -> tuple[Signature, ...]:
@@ -461,10 +453,6 @@ class SymbolIndex:
         except OSError:
             return {}
         return {name: self._record_signatures(record, name, definition=name) for name in names}
-
-    def _typed_signature(self, signature: Signature) -> Signature:
-        """Retain declared parameter types and source-level signature details."""
-        return signature
 
     def _export_signatures(self, export, name: str) -> tuple[Signature, ...]:
         """Read source-backed or Extension API signatures of a selected export."""
@@ -923,9 +911,8 @@ def cursor_assistance(source: str, line: int, column: int, index: SymbolIndex) -
     active_parameter = 0
     if frame is not None:
         path = frame["name"].split(".")
-        declared = (bare_signatures(path[0]) if len(path) == 1 else
-                    names.get(".".join(path[:-1]), {}).get(path[-1], ()))
-        signatures = tuple(index._typed_signature(signature) for signature in declared)
+        signatures = (bare_signatures(path[0]) if len(path) == 1 else
+                      names.get(".".join(path[:-1]), {}).get(path[-1], ()))
         active_parameter = frame["position"]
         segment = prefix[frame["arg_start"]:]
         named = re.match(r"\s*([A-Za-z_]\w*)\s*=", segment)

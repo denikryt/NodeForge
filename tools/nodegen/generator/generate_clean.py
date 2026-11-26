@@ -8,9 +8,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import inspect
-import re
 import json
-import sys
 from pathlib import Path
 
 from inspect_contract import (ResultSchemaError, UnsupportedNodeError, marker,
@@ -74,10 +72,6 @@ def result_rule(item):
             else:
                 return {'dynamic_result': True, 'deps': [field['param'] for field in choice], 'map': group}
     raise ResultSchemaError(f"{item['node']}: Cannot resolve output schema for {configs!r}")
-
-
-def literal(value):
-    return repr(value)
 
 
 def public_name(node_id, inspected):

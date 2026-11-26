@@ -18,19 +18,13 @@ if os.environ.get('NODEFORGE_CORE_PARENT'):
 from NodeForge import compiler, packages
 
 
-def nf(call, results, grouped=False):
-    names = 'result' if len(results) == 1 else ', '.join(f"result[{key!r}]" for key in results)
+def nf(call, results=None, grouped=False):
+    names = 'result' if results is None or len(results) == 1 else ', '.join(f"result[{key!r}]" for key in results)
     content = call[:-1]
     separator = ', ' if not content.endswith('(') else ''
     return ("from packages import nodes as gen\n\n"
             f"def entry():\n    result = gen.{content}{separator}__inline__={not grouped})\n"
             f"    return {names}\n")
-
-
-DEFAULT_KEYS = {'resample_curve': ('curve',), 'math': ('value',),
-                'named_attribute': ('attribute', 'exists'), 'index': ('index',),
-                'sample_index': ('value',), 'index_switch': ('output',),
-                'menu_switch': ('output', 'A', 'B', 'C')}
 
 
 # Each case is an independent physical-node test, not just Python signature introspection.
@@ -97,7 +91,7 @@ def main():
         packages.install_package_directory(Path(args.package))
         for case in CASES:
             before = {g.as_pointer() for g in bpy.data.node_groups}
-            src = case['source'] if 'source' in case else nf(case['call'], case.get('results', DEFAULT_KEYS[case['call'].split('(', 1)[0]]), case.get('grouped', False))
+            src = case['source'] if 'source' in case else nf(case['call'], case.get('results'), case.get('grouped', False))
             record = {'name': case['name'], 'source': src, 'status': 'failed'}
             try:
                 try:

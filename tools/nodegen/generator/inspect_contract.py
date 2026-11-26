@@ -5,11 +5,8 @@ inferred from names or hard-coded mode lists. Unsupported physical sockets
 are recorded as unrepresentable rather than silently retyped. This prototype
 keeps dynamic item sockets positional and ordinary inputs keyword-only.
 """
-import argparse
-import json
 import keyword
 import re
-from pathlib import Path
 
 CANONICAL = {
     'NodeSocketFloat':'Float', 'NodeSocketInt':'Int', 'NodeSocketBool':'Bool',
@@ -36,9 +33,6 @@ def marker(bl):
     for prefix, v in sorted(CANONICAL.items(), key=lambda pair:-len(pair[0])):
         if bl.startswith(prefix):return v
     return None
-
-def good_socket(s):
-    return not (s.get('is_unavailable') or s.get('is_inactive') or not s.get('enabled',True) or s['bl_idname']=='NodeSocketVirtual')
 
 def sanitized(raw):
     v=re.sub('[^a-z0-9_]+','_',raw.lower()).strip('_')

@@ -77,16 +77,17 @@ def source_for(item,cfg,mode,runtime,params,output_keys,menu_override=None,eleme
     args = positional + keywords + [f'{k}={v!r}' for k,v in opts.items()]
     args.append(f'__inline__={mode=="inline"}')
     call=f"gen.{item['name']}({', '.join(args)})"
-    projections = [f'result.{key}' if is_exact_attribute_key(key) else f'result[{key!r}]'
-                   for key in output_keys]
     if len(output_keys) == 1:
         projections = ['result']
+    else:
+        projections = [f'result.{key}' if is_exact_attribute_key(key) else f'result[{key!r}]'
+                       for key in output_keys]
     result = '{' + ', '.join(f'{key!r}: {expr}' for key, expr in zip(output_keys, projections)) + '}'
     declaration=', '.join(f'p{i}: {t}' for i,t in enumerate(params))
     return f"from packages import nodes as gen\n\ndef entry({declaration}):\n    result = {call}\n    return {result}\n"
 
 
-def reference_output_schema(oracle, item, cfg, effective_elements, normalized):
+def reference_output_schema(oracle, item, cfg, normalized):
     """Derive ordered keys and physical origins from independent native sockets."""
     dynamic = item['dynamic']
     kind = dynamic['kind'] if dynamic else None
@@ -194,7 +195,7 @@ def run_case(item,cfg,mode,runtime,elements=None,menu_override=None):
         expected_defaults=input_defaults(oracle)
         expected_links=[(link.to_socket.identifier,link.to_socket.name,link.to_socket.bl_idname)
                         for link in ref_group.links if link.to_node==oracle]
-        schema = reference_output_schema(oracle, item, cfg, effective_elements, normalized)
+        schema = reference_output_schema(oracle, item, cfg, normalized)
         record['expected_outputs'] = schema
         code=source_for(item,cfg,mode,runtime,param_types,[row[0] for row in schema],menu_override,elements,available=available)
         record['source']=code
