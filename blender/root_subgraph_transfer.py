@@ -13,7 +13,7 @@ from . import raw_nodes
 from .group_backend import (
     _copy_node_properties,
     _sync_bundle_dynamic_items,
-    _STANDALONE_COLLECTION_NODES, _standalone_items, _verify_standalone_copy,
+    _STANDALONE_COLLECTION_NODES, _verify_standalone_copy,
     _resolve_standalone_copy_socket, _verify_standalone_defaults,
     _sync_repeat_zone_dynamic_items,
 )
@@ -114,8 +114,6 @@ def _strict_rna_equal(src, dst):
 
 def _dynamic_contract(node):
     kind = node.bl_idname
-    if kind in _STANDALONE_COLLECTION_NODES:
-        return _standalone_items(node)
     if kind in {'NodeSeparateBundle', 'NodeCombineBundle'}:
         return tuple((item.name, item.socket_type, getattr(item, 'structure_type', None))
                      for item in node.bundle_items)
@@ -283,8 +281,8 @@ def transfer_private_root_subgraph(candidate, target, *, interface_signature):
         left = endpoint(src_from, link.from_socket, dst_from, output=True)
         right = endpoint(src_to, link.to_socket, dst_to, output=False)
         # Preserve Blender's multi-input order by copying input-link insertion order.
-        source_links.append((left, right, link))
-    for left, right, _source in source_links:
+        source_links.append((left, right))
+    for left, right in source_links:
         target.links.new(left, right)
     # Blender may reset mapping state while links are rebuilt. Restore it last.
     for src in stage.nodes:
@@ -300,8 +298,8 @@ def transfer_private_root_subgraph(candidate, target, *, interface_signature):
             raw_nodes.validate_raw_node_after_cutover(dst, target)
     if _interface_signature(target) != interface_signature:
         raise CompileError('Root transfer modified an authoritative interface')
-    for _left, right, source in source_links:
-        if not any(link.from_socket == _left and link.to_socket == right for link in target.links):
+    for left, right in source_links:
+        if not any(link.from_socket == left and link.to_socket == right for link in target.links):
             raise CompileError('Root transfer lost a private-candidate link')
     return RootSubgraphTransfer(tuple(created), new_input)
 

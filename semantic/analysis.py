@@ -40,15 +40,11 @@ from .builtin_calls import (
     INPUT_DECLARATION_PLACEMENT_ERROR,
     analyze_builtin_call,
 )
-from ..function_instances import (
-    function_group_owner_scope,
-    function_materialization_owner_scope,
-)
+from ..function_instances import function_materialization_owner_scope
 from .call_modifiers import extract_function_call_modifiers, reject_unsupported_modifiers
 from .constants import (
     OBJECT_PROPERTY_TYPES,
     TYPE_BOOL,
-    TYPE_BUNDLE,
     TYPE_FLOAT,
     TYPE_GEOMETRY,
     TYPE_INT,
@@ -462,13 +458,10 @@ def _extension_materialization(modifiers, environment, resolved):
 
 
 def _analyze_extension_backend_call(
-    node: ast.Call,
     cleaned_call: ast.Call,
     resolved: ResolvedCallable,
-    modifiers,
     environment: SemanticEnvironment,
     analyze,
-    facts,
     call_result_shape,
     extension_materialization,
 ):
@@ -1073,13 +1066,10 @@ def _analyze_extension_call(
         if semantic_return is not None:
             raise CompileError(f"Overloaded extension callable {resolved.source_name}() cannot define semantic.py implementation")
         return _analyze_extension_backend_call(
-            node,
             cleaned_call,
             resolved,
-            modifiers,
             environment,
             analyze,
-            facts,
             call_result_shape,
             _extension_materialization(modifiers, environment, resolved),
         )
@@ -1096,13 +1086,10 @@ def _analyze_extension_call(
                 else _extension_materialization(modifiers, environment, resolved))
     if execution_form is ExtensionExecutionForm.BACKEND_ONLY:
         return _analyze_extension_backend_call(
-            node,
             cleaned_call,
             resolved,
-            modifiers,
             environment,
             analyze,
-            facts,
             call_result_shape,
             physical,
         )
