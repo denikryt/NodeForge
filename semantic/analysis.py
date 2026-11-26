@@ -519,7 +519,7 @@ def _analyze_extension_backend_call(
     # interpreted relative to each candidate's declared NF_SET.
     # Each explicit source occurrence is acquired exactly once before type-based
     # candidate selection. Defaults are already detached contract data.
-    acquired: dict[int, tuple[str, object, NFType]] = {}
+    acquired: dict[int, CompileTimeSelection | ResultRuntimeArg] = {}
     structured = {}
     structured_sources = {}
     if len(family) == 1:
@@ -541,13 +541,12 @@ def _analyze_extension_backend_call(
         except ConstEvalUnavailable as exc:
             raise CompileError(f"{name}() argument must be available at compile time") from exc
         if isinstance(selection, CompileTimeSelection):
-            acquired[id(source_node)] = ("static", selection.value, None)
-            return
+            return selection
         if not isinstance(selection, RuntimeRequired):
             raise CompileError("Internal error: extension evaluation selector returned unsupported state")
         fact = analyze(source_node)
         actual_type = _require_runtime_type(fact, f"{name}() argument")
-        acquired[id(source_node)] = ("runtime", source_node, actual_type)
+        return ResultRuntimeArg(actual_type)
 
     def static_leaf(value, item_spec):
         """Select and detach one already acquired static value."""
@@ -558,7 +557,7 @@ def _analyze_extension_backend_call(
         mode = required_modes[id(source_node)]
         parameter = structured_sources.get(id(source_node))
         if parameter is None:
-            acquire(source_node, mode)
+            acquired[id(source_node)] = acquire(source_node, mode)
             continue
         item_spec = parameter.type_spec.item
         if parameter.type_spec.kind == "DICT_STR":
@@ -596,13 +595,13 @@ def _analyze_extension_backend_call(
         for leaf in leaves:
             if isinstance(leaf, ast.Starred):
                 raise CompileError("Structured list does not support expansion")
-            acquire(leaf, mode)
-            representation, payload, actual_type = acquired[id(leaf)]
-            if representation == "static":
-                acquired_leaves.append(static_leaf(payload, item_spec))
+            selection = acquire(leaf, mode)
+            if isinstance(selection, CompileTimeSelection):
+                acquired_leaves.append(static_leaf(selection.value, item_spec))
             else:
-                if not type_spec_accepts_nf(item_spec, actual_type):
-                    raise CompileError(f"{name}() structured leaf type {actual_type.value} is not accepted")
+                if not type_spec_accepts_nf(item_spec, selection.typ):
+                    raise CompileError(f"{name}() structured leaf type {selection.typ.value} is not accepted")
+                acquired[id(leaf)] = selection
                 acquired_leaves.append(leaf)
         structured[parameter.name] = (tuple(keys), tuple(acquired_leaves))
 
@@ -626,16 +625,18 @@ def _analyze_extension_backend_call(
                 occurrences = (value,)
             for occurrence in occurrences:
                 if isinstance(occurrence, ast.AST):
-                    representation, payload, actual_type = acquired[id(occurrence)]
-                    if representation == "static":
+                    selection = acquired[id(occurrence)]
+                    if isinstance(selection, CompileTimeSelection):
                         try:
-                            actual_type = static_nf_type(payload, declared=parameter.type_spec)
+                            actual_type = static_nf_type(selection.value, declared=parameter.type_spec)
                         except AmbiguousStaticNFType as exc:
                             # Other arguments can still make this candidate ineligible.
                             candidate_ambiguity = exc
                             continue
                         except CompileError:
                             return False
+                    else:
+                        actual_type = selection.typ
                 else:
                     if occurrence is None and parameter.default is None:
                         # Omitted typed inputs carry no type evidence for overload selection.
@@ -681,10 +682,10 @@ def _analyze_extension_backend_call(
                     static_operands.append(AnalyzedStaticCallOperand(parameter_index, leaf.value, ordinal, leaf.typ))
                     resolved_leaves.append(leaf)
                 else:
-                    actual_type = acquired[id(leaf)][2]
+                    selection = acquired[id(leaf)]
                     runtime_nodes.append(leaf)
-                    runtime_operands.append(AnalyzedCallOperand(parameter.name, actual_type, parameter_index, ordinal))
-                    resolved_leaves.append(ResultRuntimeArg(actual_type))
+                    runtime_operands.append(AnalyzedCallOperand(parameter.name, selection.typ, parameter_index, ordinal))
+                    resolved_leaves.append(selection)
             resolver_arguments[parameter.name] = (dict(zip(keys, resolved_leaves))
                 if parameter.type_spec.kind == "DICT_STR" else resolved_leaves)
             continue
@@ -701,20 +702,18 @@ def _analyze_extension_backend_call(
                 resolved_items.append(None)
                 continue
             if isinstance(occurrence, ast.AST):
-                representation, payload, actual_type = acquired[id(occurrence)]
-                if representation == "runtime":
-                    resolved_items.append(ResultRuntimeArg(actual_type))
+                selection = acquired[id(occurrence)]
+                if isinstance(selection, ResultRuntimeArg):
+                    resolved_items.append(selection)
                     runtime_nodes.append(occurrence)
                     runtime_operands.append(
-                        AnalyzedCallOperand(parameter.name, actual_type, parameter_index, transport_variadic)
+                        AnalyzedCallOperand(parameter.name, selection.typ, parameter_index, transport_variadic)
                     )
                 else:
-                    actual_type = static_nf_type(payload, declared=parameter.type_spec)
-                    expected_type = select_declared_nf_type(parameter.type_spec, actual_type)
-                    canonical = canonicalize_group_input_default(expected_type, payload)
-                    resolved_items.append(ResultStaticArg(expected_type, canonical))
+                    leaf = static_leaf(selection.value, parameter.type_spec)
+                    resolved_items.append(leaf)
                     static_operands.append(
-                        AnalyzedStaticCallOperand(parameter_index, canonical, transport_variadic)
+                        AnalyzedStaticCallOperand(parameter_index, leaf.value, transport_variadic)
                     )
             else:
                 if parameter.default_type is None:

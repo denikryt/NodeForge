@@ -34,8 +34,8 @@ def _selected_spec(registry, operation) -> ExtensionCallableSpec:
     return family[index]
 
 
-def _physical_argument_value(value: Value, group) -> ExtensionBackendValue:
-    """Convert one compiler-owned runtime value into the public physical wrapper."""
+def _validate_physical_argument_value(value: Value, group) -> None:
+    """Validate one compiler-owned runtime value before exposing it to an extension."""
     if not isinstance(value, Value):
         raise CompileError("Internal error: extension runtime operand is not a Value")
     validate_runtime_value_socket(
@@ -45,7 +45,6 @@ def _physical_argument_value(value: Value, group) -> ExtensionBackendValue:
         context="extension runtime argument",
         require_output=True,
     )
-    return ExtensionBackendValue(value.socket, value.typ)
 
 
 def _validate_argument_transport(spec, operation, operands, group):
@@ -60,7 +59,6 @@ def _validate_argument_transport(spec, operation, operands, group):
             raise CompileError("Structured argument key kind does not match selected declaration")
     if len(operation.arguments) != len(operands):
         raise CompileError("Extension runtime operand count does not match Call IR")
-    physical_operands = []
     for argument, operand in zip(operation.arguments, operands):
         if not isinstance(operand, Value) or operand.typ is not argument.value.typ:
             raise CompileError("Extension runtime operand type does not match Call IR")
@@ -72,7 +70,7 @@ def _validate_argument_transport(spec, operation, operands, group):
                     or parameter.evaluation_mode is EvaluationMode.COMPILE_TIME_ONLY
                     or not type_spec_accepts_nf(parameter.type_spec.item, operand.typ)):
                 raise CompileError("Invalid structured runtime argument mode or type")
-        physical_operands.append(_physical_argument_value(operand, group))
+        _validate_physical_argument_value(operand, group)
     for argument in operation.static_arguments:
         if argument.parameter_index not in range(len(spec.parameters)):
             raise CompileError("Invalid extension static argument position")
@@ -84,20 +82,19 @@ def _validate_argument_transport(spec, operation, operands, group):
                 validate_structured_static_leaf(ResultStaticArg(argument.static_type, argument.value), parameter.type_spec.item)
             except (TypeError, ValueError) as exc:
                 raise CompileError(f"Invalid structured static argument: {exc}") from exc
-    return physical_operands
 
 
 def _bound_arguments(spec: ExtensionCallableSpec, operation, operands, group) -> inspect.BoundArguments:
     """Reconstruct canonical public BoundArguments from static/runtime IR carriers."""
-    physical_operands = _validate_argument_transport(spec, operation, operands, group)
+    _validate_argument_transport(spec, operation, operands, group)
     signature = spec.python_signature()
     layout = dict(operation.structured_arguments)
     by_position: dict[int, list[tuple[int | None, object]]] = {}
-    for argument, value in zip(operation.arguments, physical_operands):
+    for argument, value in zip(operation.arguments, operands):
         if argument.parameter_index is None:
             raise CompileError("Internal error: extension runtime operand has no parameter position")
         by_position.setdefault(argument.parameter_index, []).append(
-            (argument.variadic_index, value)
+            (argument.variadic_index, ExtensionBackendValue(value.socket, value.typ))
         )
     for argument in operation.static_arguments:
         by_position.setdefault(argument.parameter_index, []).append((argument.variadic_index, argument.value))
@@ -211,7 +208,8 @@ def lower_extension_call(context, operation, operands, x, y):
                 if stored.operand_index >= len(operands):
                     raise CompileError("Internal error: extension semantic state operand reference is out of range")
                 value = operands[stored.operand_index]
-                return value.typ, _physical_argument_value(value, context.group)
+                _validate_physical_argument_value(value, context.group)
+                return value.typ, ExtensionBackendValue(value.socket, value.typ)
 
             semantic_state = unpack_value(
                 operation.extension_state_type,
