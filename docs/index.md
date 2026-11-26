@@ -17,6 +17,7 @@ NodeForge is a Python-like language for building native Blender Geometry Nodes g
 
 ## Libraries
 
+- [Nodes Library](NODES_GUIDE.md)
 - [Math Methods](MATH_METHODS.md), [Math Functions](FUNCTIONS.md), and [Math Examples](MATH_EXAMPLES.md)
 - [L-System Guide](LSYSTEMS_SCRIPTING.md)
 - [L-System Reference](LSYSTEMS.md)

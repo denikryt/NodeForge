@@ -200,6 +200,19 @@ if count is not None:
 
 Omit the keyword in `.nf` calls to use this behavior. Explicit `.nf` arguments such as `count=None` and direct parameter annotations such as `Int | None` are unsupported. Supplied values retain their declared type and evaluation-mode checks.
 
+### Structured parameters
+
+For a fixed parameter of a backend-only callable, use `Annotated[dict[str, T], mode]` or `Annotated[list[T], mode]`. Choose a direct type or a union of direct types for `T`. The evaluation mode applies to each value.
+
+| Annotation | Argument in `.nf` |
+| --- | --- |
+| `dict[str, T]` | Inline dictionary with unique compile-time string keys and one value per key. Keys follow the [named result key rules](WRITING_FUNCTIONS.md#named-results). |
+| `list[T]` | Inline list. Compile-time and mixed modes also accept an existing compile-time list. |
+
+For example, `elements: Annotated[dict[str, Float | Vector], EvaluationMode.COMPILE_TIME_OR_RUNTIME] = {}` accepts `elements={"position": position(), "weight": 0.5}`. The backend receives an ordered Python dict containing an `ExtensionBackendValue` and a Python float in this example. Grouped calls expose sockets for runtime values only.
+
+Compile-time and mixed parameters can declare matching list or dict defaults, including empty containers. Runtime-only parameters require an argument. Nested collection types, `None` containers or entries, and expansion inside collections are unsupported. Structured parameters are available with `DynamicResults`. Overloaded callables and callables with a same-name semantic implementation cannot declare them.
+
 ### Direct results
 
 A backend-only callable may return one exact direct type:
@@ -218,6 +231,10 @@ def split(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY]) -> tuple[Float, 
 
 Variadic tuples such as `tuple[Float, ...]` and union results such as `Float | Int` are not executable direct-result contracts.
 
+### Named results
+
+Declare fixed names and types with a dictionary annotation such as `-> {"scaled": Float, "original": Float}`. The keys follow the [named result rules](WRITING_FUNCTIONS.md#named-results). Return a Python dict with exactly those keys and an `ExtensionBackendValue` for each. The declaration determines output order.
+
 ### Invocation-dependent results
 
 Use `DynamicResults` when a call's output count or types depend on its arguments:
@@ -226,7 +243,7 @@ Use `DynamicResults` when a call's output count or types depend on its arguments
 2. Define `_result_types_<public_name>(arguments)` in the same owner's `semantic.py`. Use the callable's key in `EXTENSIONS` as `<public_name>`.
 3. Return the output types from the resolver and matching runtime values from the backend.
 
-This extension forwards one or more values as a typed tuple:
+This extension returns one value directly or names multiple outputs.
 
 ```python
 # interface.py
@@ -247,11 +264,13 @@ def forward_values(
 # semantic.py
 
 def _result_types_forward_values(arguments):
-    """Return each supplied value's actual type in argument order."""
+    """Choose a direct type or name the outputs in argument order."""
     values = arguments['values']
     if not values:
         raise ValueError('forward_values requires at least one value')
-    return tuple(value.typ for value in values)
+    if len(values) == 1:
+        return values[0].typ
+    return {f"value_{i}": value.typ for i, value in enumerate(values)}
 ```
 
 ```python
@@ -259,7 +278,9 @@ def _result_types_forward_values(arguments):
 
 def forward_values(context, *values):
     """Forward the current invocation's typed runtime values."""
-    return tuple(values)
+    if context.result_names is None:
+        return values[0]
+    return dict(zip(context.result_names, values))
 ```
 
 Call it from `.nf` source using the installed package's import name:
@@ -269,11 +290,11 @@ from packages import tools
 
 def example(value: Float):
     single = tools.forward_values(value)
-    direction, number = tools.forward_values(position(), index())
-    return single[0], direction, number
+    pair = tools.forward_values(position(), index())
+    return single, pair.value_0, pair.value_1
 ```
 
-A single result is still a tuple: use `[0]` or a one-element unpack target.
+A one-entry dict still returns a named result. Use an exact `NFType` for a direct result.
 
 The resolver's `arguments` is a read-only mapping from parameter names to the following values. Defaults are included; variadic arguments retain their source order.
 
@@ -282,6 +303,7 @@ The resolver's `arguments` is a read-only mapping from parameter names to the fo
 | Direct runtime value | `ResultRuntimeArg`: `.typ` is the actual `NFType`. |
 | Direct compile-time value | `ResultStaticArg`: `.typ` and the canonical immutable `.value`. |
 | Omitted parameter declared with `= None` | Python `None`. |
+| Structured parameter | A dict or list of `ResultStaticArg` and `ResultRuntimeArg` values, in argument order. |
 | Variadic parameter | A tuple of argument views, empty when no arguments were supplied. |
 | Semantic record or list | A reconstructed semantic value with `RuntimeRef` runtime leaves. |
 
@@ -289,11 +311,11 @@ Import `ResultRuntimeArg` and `ResultStaticArg` from `NodeForge.extension_result
 
 Resolver rules:
 
-- Return a nonempty tuple or list of exact `NFType` members in output order, for example `(NFType.FLOAT, NFType.INT)`. Import `NFType` from `NodeForge.extension_api`.
+- Return an exact `NFType` such as `NFType.FLOAT`, or a nonempty dict of names to exact `NFType` members in output order. Import `NFType` from `NodeForge.extension_api`. Use a fixed tuple annotation for positional results.
 - Use argument types and compile-time data to select outputs. Create Blender nodes and resources in the backend. Importing registered physical implementation modules from the resolver is rejected.
 - For overloads, annotate every alternative with `DynamicResults` and provide one resolver for the public name.
 
-The backend must return a Python tuple of `ExtensionBackendValue` objects, including for a single result. See [`context.result_types`](#extensionbackendcontext) for output validation and [Loading and reload behavior](#loading-and-reload-behavior) for resolver loading.
+For a direct result, return one `ExtensionBackendValue`. For named results, return a dict with the exact resolved keys and matching values. See [`context.result_types`](#extensionbackendcontext) for output validation and [Loading and reload behavior](#loading-and-reload-behavior) for resolver loading.
 
 ### Overloads
 
@@ -515,7 +537,7 @@ Do not construct compiler values or depend on compiler internals. Use the suppli
 
 `context.location` is the `(x, y)` placement anchor for the extension call.
 
-`context.result_types` is the read-only tuple of exact `NFType` members for this call's outputs. It is available for fixed and [invocation-dependent results](#invocation-dependent-results). Return values must match its count, order, and types. Each runtime leaf must use an output socket of the matching physical type in `context.group`; input sockets and sockets from other groups are rejected. Invalid backend results reject compilation before the candidate group is published.
+`context.result_types` is the read-only tuple of exact `NFType` members for this call's outputs. It is available for fixed and [invocation-dependent results](#invocation-dependent-results). `context.result_names` is the ordered tuple of names aligned with those types for named results, or `None` for direct and positional results. Return values must match the declared result shape and types. Each runtime leaf must use an output socket of the matching physical type in `context.group`; input sockets and sockets from other groups are rejected. Invalid backend results reject compilation before the candidate group is published.
 
 `context.value(socket, typ)` validates and wraps an output socket from the current group as the declared NodeForge type:
 
@@ -560,6 +582,6 @@ Package installation validates Extension API declarations before the candidate p
 - `EXTENSION_API` must equal `2` and `EXTENSIONS` must be non-empty;
 - `__inline__` and `__unique__` are compiler-reserved and cannot be extension parameters;
 - public extension signatures do not support `**kwargs`;
-- executable results use one exact NodeForge type, a fixed tuple of exact types, or [`DynamicResults`](#invocation-dependent-results).
+- executable results use one exact NodeForge type, a fixed tuple of exact types, a [named result](#named-results), or [`DynamicResults`](#invocation-dependent-results).
 
 Treat validation failures as declaration errors rather than compensating for malformed contracts inside backend code.

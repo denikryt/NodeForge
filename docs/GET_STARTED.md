@@ -14,7 +14,7 @@ To install from a file, download the latest Extension ZIP from [GitHub Releases]
 
 When switching from the earlier ZIP add-on, disable the old NodeForge add-on before enabling the Extension. Your Local files and installed packages remain in Blender's user-data directories.
 
-The add-on adds a **NodeForge** tab to the Geometry Node Editor sidebar. It comes with the [Math](MATH_METHODS.md) and [L-System](LSYSTEMS_SCRIPTING.md) libraries, which are installed or updated when the Extension is enabled.
+The add-on adds a **NodeForge** tab to the Geometry Node Editor sidebar. Enabling the extension installs or updates its bundled libraries. See the guides for [Nodes](NODES_GUIDE.md), [Math](MATH_METHODS.md), and [L-System](LSYSTEMS_SCRIPTING.md).
 
 ## Update NodeForge
 

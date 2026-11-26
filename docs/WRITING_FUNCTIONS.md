@@ -69,9 +69,9 @@ Parameters use ordinary positional-or-keyword syntax. Positional-only parameters
 
 ## Return values
 
-End the function with exactly one `return` at the function body's indentation level. Return one value or a flat, nonempty tuple of values. Use branches to assign a result, then return it after the branches; early and branch-local returns are unsupported.
+End the function with exactly one `return` at the function body's indentation level. Return one value, a flat nonempty tuple, or a named result. Use branches to assign a result, then return it after the branches; early and branch-local returns are unsupported.
 
-A single return annotation declares the output type; its `Type["Label"]` form also sets the output socket label. For multiple outputs, omit the return annotation and return a flat tuple. The compiler determines each output's type from its returned value.
+A single return annotation declares the output type; its `Type["Label"]` form also sets the output socket label. For positional multiple outputs, omit the return annotation and return a flat tuple. The compiler determines each output's type from its returned value.
 
 ```python
 def measure(geometry: Geometry, scale: Float = 2.0):
@@ -87,6 +87,21 @@ The output sockets above are **Resized** and **Doubled**, in return order. A ret
 The caller can unpack multiple outputs or select one with a compile-time integer index. A function can call other functions in its module. Recursive call cycles are not supported.
 
 Save the module in Local to reuse its functions in other scripts. See [Import functions](MODULES.md#import-functions).
+
+### Named results
+
+Return a dictionary literal to name the outputs. Omit the return annotation. Each entry supplies a single socket value, and its key becomes the exact output name. Output sockets follow the order of the entries.
+
+```python
+def measure(size: Float):
+    return {"mesh": cube(size), "Edge Length": size}
+
+result = measure(2.0)
+mesh = result.mesh
+length = result["Edge Length"]
+```
+
+Use unique, nonempty string literals as keys, up to 63 UTF-8 bytes each. NUL characters are unsupported. Read a field with dot syntax when it preserves the exact name, or use a compile-time string key. Select fields before using them as socket values. Named results, including singletons, do not support positional indexing or unpacking.
 
 ## Inline wrappers
 

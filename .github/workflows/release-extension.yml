@@ -65,6 +65,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/nodegen/cli.py generate --check
+          python3 tools/nodegen/cli.py coverage --check
       - name: Stage extension contents
         run: |
           set -euo pipefail

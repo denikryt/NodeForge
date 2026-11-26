@@ -1,6 +1,6 @@
 # NodeForge Geometry Nodes Coverage
 
-This document shows the Blender Geometry Nodes areas and domains currently covered by NodeForge.
+This document shows core NodeForge language and workflow coverage. For individual nodes and configurations in the bundled library, see the [Nodes coverage reference](NODES.md).
 
 | Geometry Nodes area | NodeForge | Note |
 | --- | --- | --- |

@@ -85,7 +85,7 @@ NodeForge scripts can call reusable functions and can be extended through instal
 
 ## Additional libraries
 
-The Extension includes **NodeForge Math** for math operations and **NodeForge L-System** for procedural L-system generation. Both libraries are installed automatically when you enable NodeForge.
+Enabling NodeForge installs three bundled libraries for Blender node functions, math operations, and procedural L-system generation. See [Nodes](docs/NODES_GUIDE.md), [Math](docs/MATH_METHODS.md), and [L-System](docs/LSYSTEMS_SCRIPTING.md).
 
 Install or update other libraries from **NodeForge → Packages → Install ZIP**.
 
