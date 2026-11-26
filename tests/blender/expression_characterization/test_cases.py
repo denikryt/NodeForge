@@ -379,3 +379,29 @@ def test_explicit_result_characterization_invariants():
     assert outputs(collections[1])[-1] == ("Two Words", "NodeSocketFloat")
     assert outputs(collections[2])[-1] == ("Two Words", "NodeSocketBool")
     assert outputs(collections[3]) == [("Result", "NodeSocketFloat")]
+
+
+def test_structured_parameter_characterization_invariants():
+    """Pin runtime-only child inputs, exact native item identity and shared projections."""
+    def entry(case):
+        return next(d['graph'] for d in run_case(case)['definitions'] if d['name'] == 'entry')
+
+    generic = entry('extension_structured_parameters')
+    child, = [n['group']['graph'] for n in generic['nodes'] if 'group' in n]
+    assert [(i['name'],i['socket_type']) for i in child['interface'] if i['in_out'] == 'INPUT'] == [
+        ('items[x]','NodeSocketFloat'), ('extra[0]','NodeSocketFloat')]
+    assert sum(n['bl_idname'] == 'ShaderNodeMath' for n in child['nodes']) == 3
+    assert sum(n['bl_idname'] == 'ShaderNodeMath' for n in generic['nodes']) == 3
+    outlet, = [n['id'] for n in generic['nodes'] if n['bl_idname'] == 'NodeGroupOutput']
+    assert len({tuple(l['from']) for l in generic['links'] if l['to'][0] == outlet}) == 2
+    native = entry('nodes_structured_mixed')
+    child, = [n['group']['graph'] for n in native['nodes'] if 'group' in n]
+    assert [i['name'] for i in child['interface'] if i['in_out'] == 'INPUT'] == ['geometry','elements[X, y]']
+    capture, = [n for n in child['nodes'] if n['bl_idname'] == 'GeometryNodeCaptureAttribute']
+    assert capture['capture_items'] == [{'data_type':'FLOAT','name':'X, y'}, {'data_type':'FLOAT','name':'weight'}, {'data_type':'FLOAT_VECTOR','name':'rest'}]
+    assert capture['defaults']['Value_1'] == .75
+    assert {l['to'][1] for l in child['links'] if l['to'][0] == capture['id']} == {'Geometry','Value'}
+    assert not any(n['bl_idname'] == 'ShaderNodeValue' for n in child['nodes'])
+    menu, = [n for n in native['nodes'] if n['bl_idname'] == 'GeometryNodeMenuSwitch']
+    assert menu['enum_items'] == ['One, two','Third']
+    assert len([l for l in native['links'] if l['to'][0] == menu['id']]) == 2

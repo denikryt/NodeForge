@@ -909,5 +909,36 @@
       "negative"
     ],
     "outcome": "compile_error"
+  },
+  {
+    "id": "extension_structured_parameters",
+    "description": "Mixed runtime and static dictionary/list leaves, grouped named and inline direct result reuse",
+    "tags": [
+      "top-level",
+      "structured-parameters",
+      "extension-graphs"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "nodes_structured_mixed",
+    "description": "Capture dictionary with exact labels and static defaults, Menu compile-time list",
+    "tags": [
+      "top-level",
+      "structured-parameters",
+      "bundled-nodes"
+    ],
+    "outcome": "graph"
+  },
+  {
+    "id": "failure_structured_duplicate_key",
+    "description": "Repeated dictionary key rejected before dynamic result resolution",
+    "tags": [
+      "top-level",
+      "structured-parameters",
+      "bundled-nodes",
+      "negative"
+    ],
+    "outcome": "compile_error"
   }
 ]

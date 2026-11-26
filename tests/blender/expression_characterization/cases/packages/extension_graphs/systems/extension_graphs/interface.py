@@ -12,6 +12,7 @@ class Part:
     value: Float
 
 EXTENSIONS = {
+    "structured": ".backend:structured",
     "named_one": ".backend:named_one",
     "named_two": ".backend:named_two",
     "positional_one": ".backend:positional_one",
@@ -87,4 +88,13 @@ def shape(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY], form: Annotated[
 
 def shape_state(value: Annotated[Float, EvaluationMode.RUNTIME_ONLY], form: Annotated[String, EvaluationMode.COMPILE_TIME_ONLY] = "DIRECT") -> DynamicResults:
     """Select a result shape and forward runtime semantic state."""
+    ...
+
+
+def structured(
+    items: Annotated[dict[str, Float], EvaluationMode.COMPILE_TIME_OR_RUNTIME],
+    extra: Annotated[list[Float], EvaluationMode.COMPILE_TIME_OR_RUNTIME],
+    labels: Annotated[list[String], EvaluationMode.COMPILE_TIME_ONLY] = ["total"],
+) -> DynamicResults:
+    """Combine mixed leaves with an explicit direct or named result."""
     ...

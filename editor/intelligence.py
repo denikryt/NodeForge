@@ -20,6 +20,7 @@ from ..semantic.builtin_registry import BUILTIN_NAMES
 from ..semantic.constants import TYPE_TOKEN_NAMES
 from ..result_keys import is_exact_attribute_key, validate_named_result_key
 from ..errors import CompileError
+from ..extensions.contracts import is_structured_parameter_type_spec
 
 
 @dataclass(frozen=True)
@@ -363,7 +364,21 @@ def _typespec_label(spec) -> str:
         return " | ".join(sorted(t.value.title() for t in spec.nf_types))
     if spec.kind == "RECORD":
         return spec.record_type.name
+    if is_structured_parameter_type_spec(spec):
+        leaf = _typespec_label(spec.item)
+        return f"dict[str, {leaf}]" if spec.kind == "DICT_STR" else f"list[{leaf}]"
     return spec.kind.title()
+
+
+def _extension_default_label(parameter) -> str | None:
+    """Display frozen structured defaults as the public list or dictionary."""
+    if parameter.default is inspect.Parameter.empty:
+        return None
+    if is_structured_parameter_type_spec(parameter.type_spec):
+        if parameter.type_spec.kind == "DICT_STR":
+            return repr({key: leaf.value for key, leaf in parameter.default})
+        return repr([leaf.value for leaf in parameter.default])
+    return repr(parameter.default)
 
 
 def _extension_signatures(name: str, specs) -> tuple[Signature, ...]:
@@ -372,7 +387,7 @@ def _extension_signatures(name: str, specs) -> tuple[Signature, ...]:
     for spec in specs:
         parameters = []
         for param in spec.parameters:
-            default = None if param.default is inspect.Parameter.empty else repr(param.default)
+            default = _extension_default_label(param)
             kw = None if param.kind is inspect.Parameter.POSITIONAL_ONLY else param.name
             parameters.append(Parameter(param.name, _typespec_label(param.type_spec), default, kw))
         result_kind = "positional"

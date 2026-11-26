@@ -1,0 +1,327 @@
+{
+  "definitions": [
+    {
+      "graph": {
+        "interface": [
+          {
+            "in_out": "OUTPUT",
+            "name": "geometry",
+            "socket_type": "NodeSocketGeometry"
+          },
+          {
+            "in_out": "OUTPUT",
+            "name": "captured",
+            "socket_type": "NodeSocketFloat"
+          },
+          {
+            "in_out": "OUTPUT",
+            "name": "rest",
+            "socket_type": "NodeSocketVector"
+          },
+          {
+            "in_out": "OUTPUT",
+            "name": "value",
+            "socket_type": "NodeSocketFloat"
+          },
+          {
+            "in_out": "OUTPUT",
+            "name": "choice",
+            "socket_type": "NodeSocketBool"
+          },
+          {
+            "default": 0.0,
+            "in_out": "INPUT",
+            "name": "x",
+            "socket_type": "NodeSocketFloat"
+          }
+        ],
+        "links": [
+          {
+            "from": [
+              "n0",
+              "Socket_0"
+            ],
+            "to": [
+              "n3",
+              "Socket_1"
+            ]
+          },
+          {
+            "from": [
+              "n2",
+              "Mesh"
+            ],
+            "to": [
+              "n3",
+              "Socket_0"
+            ]
+          },
+          {
+            "from": [
+              "n3",
+              "Socket_2"
+            ],
+            "to": [
+              "n1",
+              "Socket_1"
+            ]
+          },
+          {
+            "from": [
+              "n3",
+              "Socket_4"
+            ],
+            "to": [
+              "n1",
+              "Socket_2"
+            ]
+          },
+          {
+            "from": [
+              "n3",
+              "Socket_4"
+            ],
+            "to": [
+              "n4",
+              "Item_3"
+            ]
+          },
+          {
+            "from": [
+              "n3",
+              "Socket_5"
+            ],
+            "to": [
+              "n4",
+              "Item_2"
+            ]
+          },
+          {
+            "from": [
+              "n3",
+              "Socket_6"
+            ],
+            "to": [
+              "n1",
+              "Socket_3"
+            ]
+          },
+          {
+            "from": [
+              "n4",
+              "Item_2"
+            ],
+            "to": [
+              "n1",
+              "Socket_5"
+            ]
+          },
+          {
+            "from": [
+              "n4",
+              "Output"
+            ],
+            "to": [
+              "n1",
+              "Socket_4"
+            ]
+          }
+        ],
+        "nodes": [
+          {
+            "bl_idname": "NodeGroupInput",
+            "id": "n0",
+            "properties": {}
+          },
+          {
+            "bl_idname": "NodeGroupOutput",
+            "id": "n1",
+            "properties": {}
+          },
+          {
+            "bl_idname": "GeometryNodeMeshLine",
+            "id": "n2",
+            "properties": {
+              "mode": "OFFSET"
+            }
+          },
+          {
+            "bl_idname": "GeometryNodeGroup",
+            "group": {
+              "graph": {
+                "interface": [
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "geometry",
+                    "socket_type": "NodeSocketGeometry"
+                  },
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "selection",
+                    "socket_type": "NodeSocketBool"
+                  },
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "X, y",
+                    "socket_type": "NodeSocketFloat"
+                  },
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "weight",
+                    "socket_type": "NodeSocketFloat"
+                  },
+                  {
+                    "in_out": "OUTPUT",
+                    "name": "rest",
+                    "socket_type": "NodeSocketVector"
+                  },
+                  {
+                    "in_out": "INPUT",
+                    "name": "geometry",
+                    "socket_type": "NodeSocketGeometry"
+                  },
+                  {
+                    "default": 0.0,
+                    "in_out": "INPUT",
+                    "name": "elements[X, y]",
+                    "socket_type": "NodeSocketFloat"
+                  }
+                ],
+                "links": [
+                  {
+                    "from": [
+                      "n0",
+                      "Socket_0"
+                    ],
+                    "to": [
+                      "n2",
+                      "Geometry"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n0",
+                      "Socket_1"
+                    ],
+                    "to": [
+                      "n2",
+                      "Value"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Attribute"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_4"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Attribute_1"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_5"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Attribute_2"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_6"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Geometry"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_2"
+                    ]
+                  },
+                  {
+                    "from": [
+                      "n2",
+                      "Selection"
+                    ],
+                    "to": [
+                      "n1",
+                      "Socket_3"
+                    ]
+                  }
+                ],
+                "nodes": [
+                  {
+                    "bl_idname": "NodeGroupInput",
+                    "id": "n0",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "NodeGroupOutput",
+                    "id": "n1",
+                    "properties": {}
+                  },
+                  {
+                    "bl_idname": "GeometryNodeCaptureAttribute",
+                    "capture_items": [
+                      {
+                        "data_type": "FLOAT",
+                        "name": "X, y"
+                      },
+                      {
+                        "data_type": "FLOAT",
+                        "name": "weight"
+                      },
+                      {
+                        "data_type": "FLOAT_VECTOR",
+                        "name": "rest"
+                      }
+                    ],
+                    "defaults": {
+                      "Value_1": 0.75
+                    },
+                    "id": "n2",
+                    "properties": {
+                      "domain": "POINT"
+                    }
+                  }
+                ]
+              },
+              "id": "g1",
+              "unique": false
+            },
+            "id": "n3",
+            "properties": {}
+          },
+          {
+            "bl_idname": "GeometryNodeMenuSwitch",
+            "enum_items": [
+              "One, two",
+              "Third"
+            ],
+            "id": "n4",
+            "properties": {
+              "data_type": "FLOAT"
+            }
+          }
+        ]
+      },
+      "name": "entry"
+    }
+  ],
+  "graph": {
+    "interface": [],
+    "links": [],
+    "nodes": []
+  },
+  "kind": "graph"
+}

@@ -45,3 +45,10 @@ def _result_types_shape_state(arguments):
 def shape_state(value, form="DIRECT") -> ShapeState:
     """Carry the runtime leaf and the selected form into BACKEND."""
     return ShapeState(value, form)
+
+
+def _result_types_structured(arguments):
+    """Use detached labels and the typed leaves without executing backend code."""
+    assert all(leaf.typ is NFType.FLOAT for leaf in arguments['items'].values())
+    labels = arguments['labels']
+    return {labels[0].value: NFType.FLOAT} if labels else NFType.FLOAT
