@@ -871,3 +871,10 @@ lifecycle.
 ## 0.102.1
 
 - Document the bundled Nodes library and add a reproducible Blender 5.2 node coverage reference, including socket and dynamic item limitations. Add `nodegen coverage` to generate or check the Markdown reference without modifying the package.
+
+## 0.103.0
+
+- Support one-level typed dictionary and list parameters in declarative BACKEND_ONLY extensions, including DynamicResults, per-leaf evaluation modes, detached defaults, scoped grouped inputs and exact declaration identity. Preserve typed Vector constants and required runtime input state during group updates.
+- Upgrade bundled Nodes to 1.8.0 (requires NodeForge 0.103.0): Capture Attribute uses a dictionary of named values; Menu Switch uses a compile-time list of labels. Remove the old collection string syntax; keep Index Switch and the core Capture builtin unchanged.
+- Reconstruct native Capture, Menu and Index collections before copying defaults and links in group/root publication and rollback. Validate physical collection slots and independent input/output provenance.
+- Add structured argument IntelliSense, characterization, generator and physical regression coverage.

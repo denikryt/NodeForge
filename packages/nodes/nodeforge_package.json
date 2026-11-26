@@ -3,10 +3,10 @@
   "id": "nodeforge.nodes",
   "import_name": "nodes",
   "name": "NodeForge Nodes",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "author": "NodeForge Contributors",
   "description": "Blender 5.2 node wrappers for NodeForge, including generated native bindings.",
-  "nodeforge_min_version": "0.102.0",
+  "nodeforge_min_version": "0.103.0",
   "contents": {
     "systems": "systems"
   }
