@@ -62,14 +62,17 @@ def result_rule(item):
     if not variable:
         return {'dynamic_result': False, 'static': signatures[0]}
     fields = item['fields']
-    def values(c):
-        return {f['param']: c['rna'][f['key']] if f['kind']=='rna' else c['menus'][f['key']] for f in fields}
-    for size in range(len(fields)+1):
-        for choice in itertools.combinations([f['param'] for f in fields], size):
+    for size in range(len(fields) + 1):
+        for choice in itertools.combinations(fields, size):
             group = {}
-            if all(group.setdefault(tuple(values(c)[f] for f in choice), signature) == signature
-                   for c, signature in zip(configs, signatures)):
-                return {'dynamic_result': True, 'deps': list(choice), 'map': group}
+            for cfg, signature in zip(configs, signatures):
+                key = tuple(cfg['rna' if field['kind'] == 'rna' else 'menus'][field['key']]
+                            for field in choice)
+                if key in group and group[key] != signature:
+                    break
+                group[key] = signature
+            else:
+                return {'dynamic_result': True, 'deps': [field['param'] for field in choice], 'map': group}
     raise ResultSchemaError(f"{item['node']}: Cannot resolve output schema for {configs!r}")
 
 
