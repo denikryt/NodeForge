@@ -13,7 +13,8 @@ from . import raw_nodes
 from .group_backend import (
     _copy_node_properties,
     _sync_bundle_dynamic_items,
-    _sync_capture_attribute_dynamic_items,
+    _STANDALONE_COLLECTION_NODES, _standalone_items, _verify_standalone_copy,
+    _resolve_standalone_copy_socket, _verify_standalone_defaults,
     _sync_repeat_zone_dynamic_items,
 )
 from .root_update import _interface_signature
@@ -113,8 +114,8 @@ def _strict_rna_equal(src, dst):
 
 def _dynamic_contract(node):
     kind = node.bl_idname
-    if kind == 'GeometryNodeCaptureAttribute':
-        return tuple((item.name, item.data_type) for item in node.capture_items)
+    if kind in _STANDALONE_COLLECTION_NODES:
+        return _standalone_items(node)
     if kind in {'NodeSeparateBundle', 'NodeCombineBundle'}:
         return tuple((item.name, item.socket_type, getattr(item, 'structure_type', None))
                      for item in node.bundle_items)
@@ -134,7 +135,9 @@ def _curve_contract(node):
 def _strict_node_parity(src, dst):
     if src.bl_idname != dst.bl_idname:
         raise CompileError('Root transfer changed a node type')
-    if (_socket_contract(src, outputs=False) != _socket_contract(dst, outputs=False)
+    if src.bl_idname in _STANDALONE_COLLECTION_NODES:
+        _verify_standalone_copy(src, dst)
+    elif (_socket_contract(src, outputs=False) != _socket_contract(dst, outputs=False)
             or _socket_contract(src, outputs=True) != _socket_contract(dst, outputs=True)):
         raise CompileError(f'Root transfer socket parity failed for {src.bl_idname} ({src.name})')
     if _dynamic_contract(src) != _dynamic_contract(dst):
@@ -142,6 +145,9 @@ def _strict_node_parity(src, dst):
     if _curve_contract(src) != _curve_contract(dst):
         raise CompileError(f'Root transfer lost CurveMapping on {src.bl_idname}')
     _strict_rna_equal(src, dst)
+    if src.bl_idname in _STANDALONE_COLLECTION_NODES and not raw_nodes.is_raw_node(src):
+        _verify_standalone_defaults(src, dst)
+        return
     for direction in (False, True):
         before = _raw_defaults(src, outputs=direction)
         after = _raw_defaults(dst, outputs=direction)
@@ -224,12 +230,11 @@ def transfer_private_root_subgraph(candidate, target, *, interface_signature):
     # A temporary name index points at destination objects despite Blender's name
     # disambiguation against still-live root nodes during staging.
     _sync_repeat_zone_dynamic_items(stage, nodes)
-    _sync_capture_attribute_dynamic_items(stage, nodes)
     _sync_bundle_dynamic_items(stage, nodes)
     from .group_backend import _copy_socket_default, _copy_curve_mapping
     for src in stage.nodes:
         dst = nodes[src.name]
-        if dst is original_input:
+        if dst is original_input or src.bl_idname in _STANDALONE_COLLECTION_NODES:
             continue
         for direction in ('inputs', 'outputs'):
             original_sockets = getattr(src, direction)
@@ -259,17 +264,24 @@ def transfer_private_root_subgraph(candidate, target, *, interface_signature):
     for link in stage.links:
         src_from, src_to = link.from_node, link.to_node
         dst_from, dst_to = nodes[src_from.name], nodes[src_to.name]
-        try:
-            left_index = next(i for i, s in enumerate(src_from.outputs) if s == link.from_socket)
-            right_index = next(i for i, s in enumerate(src_to.inputs) if s == link.to_socket)
-            left, right = dst_from.outputs[left_index], dst_to.inputs[right_index]
-        except (StopIteration, IndexError) as exc:
-            raise CompileError('Root transfer cannot resolve an exact linked socket') from exc
-        if (_socket_contract(src_from, outputs=True)[left_index]
-                != _socket_contract(dst_from, outputs=True)[left_index]
-                or _socket_contract(src_to, outputs=False)[right_index]
-                != _socket_contract(dst_to, outputs=False)[right_index]):
-            raise CompileError('Root transfer linked socket identity differs from candidate')
+        def endpoint(src, socket, dst, *, output):
+            if raw_nodes.is_raw_node(src):
+                return raw_nodes.resolve_cutover_socket(src, socket, dst, direction='output' if output else 'input')
+            if src.bl_idname in _STANDALONE_COLLECTION_NODES:
+                return _resolve_standalone_copy_socket(src, socket, dst, output=output)
+            original = src.outputs if output else src.inputs
+            copied = dst.outputs if output else dst.inputs
+            try:
+                index = list(original).index(socket)
+                result = copied[index]
+            except (ValueError, IndexError) as exc:
+                raise CompileError('Root transfer cannot resolve an exact linked socket') from exc
+            if _socket_contract(src, outputs=output)[index] != _socket_contract(dst, outputs=output)[index]:
+                raise CompileError('Root transfer linked socket identity differs from candidate')
+            return result
+
+        left = endpoint(src_from, link.from_socket, dst_from, output=True)
+        right = endpoint(src_to, link.to_socket, dst_to, output=False)
         # Preserve Blender's multi-input order by copying input-link insertion order.
         source_links.append((left, right, link))
     for left, right, _source in source_links:
@@ -280,6 +292,10 @@ def transfer_private_root_subgraph(candidate, target, *, interface_signature):
         if dst is not original_input and hasattr(src, 'mapping') and hasattr(dst, 'mapping'):
             _copy_curve_mapping(src.mapping, dst.mapping)
             _strict_node_parity(src, dst)
+        if src.bl_idname in _STANDALONE_COLLECTION_NODES:
+            _verify_standalone_copy(src, dst)
+            if not raw_nodes.is_raw_node(src):
+                _verify_standalone_defaults(src, dst)
         if raw_nodes.is_raw_node(src) and dst is not original_input:
             raw_nodes.validate_raw_node_after_cutover(dst, target)
     if _interface_signature(target) != interface_signature:

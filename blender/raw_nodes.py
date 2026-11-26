@@ -732,6 +732,12 @@ def copy_raw_node_properties(src_node, dst_node):
     except Exception as exc:
         raise RuntimeError(f"raw node cutover failed to copy identity/layout: {exc}") from exc
 
+    # Native collection reconstruction requires Blender. Ordinary raw metadata
+    # copying also serves the Blender-independent boundary tests.
+    if src_node.bl_idname in {"GeometryNodeCaptureAttribute", "GeometryNodeMenuSwitch", "GeometryNodeIndexSwitch"}:
+        from .group_backend import _copy_standalone_collection
+        _copy_standalone_collection(src_node, dst_node)
+
     _copy_owned_raw_metadata(src_node, dst_node, schema_version=spec["schema_version"])
 
     for contract in spec["inputs"]:

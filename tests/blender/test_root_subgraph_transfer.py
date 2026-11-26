@@ -273,3 +273,54 @@ def test_transfer_preserves_bundle_dynamic_items_even_without_links():
         assert tuple((i.name, i.socket_type) for i in copied.bundle_items) == expected
     finally:
         _close(root, candidate, tx)
+
+
+@pytest.mark.parametrize('kind', ['Capture','Menu','Index'])
+def test_transfer_standalone_collection_gapped_native_ids(kind):
+    """The exact stage copy follows verified logical slots rather than reused native IDs."""
+    root, old, candidate, tx = _stage()
+    try:
+        stage = candidate.stage
+        if kind == 'Capture':
+            native = stage.nodes.new('GeometryNodeCaptureAttribute')
+            native.capture_items.new('BOOLEAN','Removed')
+            native.capture_items.new('BOOLEAN','Selection')
+            native.capture_items.new('FLOAT','Weight')
+            native.capture_items.remove(native.capture_items[0])
+            native.inputs[3].default_value = .75
+            producer = stage.nodes.new('FunctionNodeInputBool')
+            producer.boolean = True
+            consumer = stage.nodes.new('FunctionNodeBooleanMath')
+            i,j = 2,2
+        elif kind == 'Menu':
+            native = stage.nodes.new('GeometryNodeMenuSwitch')
+            native.data_type = 'FLOAT'
+            native.enum_items.clear()
+            for name in ('Removed','A','B'):
+                native.enum_items.new(name)
+            native.enum_items.remove(native.enum_items[0])
+            native.inputs[0].default_value = 'B'
+            native.inputs[2].default_value = .75
+            producer = stage.nodes.new('ShaderNodeValue')
+            consumer = stage.nodes.new('ShaderNodeMath')
+            i,j = 1,0
+        else:
+            native = stage.nodes.new('GeometryNodeIndexSwitch')
+            native.index_switch_items.new()
+            native.index_switch_items.remove(native.index_switch_items[0])
+            native.inputs[2].default_value = .75
+            producer = stage.nodes.new('ShaderNodeValue')
+            consumer = stage.nodes.new('ShaderNodeMath')
+            i,j = 1,0
+        stage.links.new(producer.outputs[0], native.inputs[i])
+        stage.links.new(native.outputs[j],consumer.inputs[0])
+        transferred = transfer_private_root_subgraph(candidate,root,interface_signature=_interface_signature(root))
+        copied, = [n for n in transferred.created_nodes if n.bl_idname == native.bl_idname]
+        assert copied.inputs[i].identifier != native.inputs[i].identifier
+        assert copied.inputs[i].is_linked and copied.outputs[j].is_linked
+        assert copied.inputs[i+1].default_value == .75
+        assert copied.inputs[i+1].is_linked is False
+        if kind == 'Capture':
+            assert not copied.inputs[1].is_linked and not copied.outputs[1].is_linked
+    finally:
+        _close(root,candidate,tx)

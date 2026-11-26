@@ -617,3 +617,24 @@ def nf_fixture():
     node = _one_node(group, "FunctionNodeCompare")
     check(_raw_schema_version(node) == 1, "failed v1 replacement did not restore v1 metadata generation")
     check(node.operation == "GREATER_THAN", "failed v1 replacement did not restore prior node state")
+
+
+@pytest.mark.parametrize('call,kind,expected', [
+    ('node("GeometryNodeMenuSwitch", props={"data_type": "FLOAT"}, inputs={"Menu": "B", "A": 1.0, "B": 4.0}, output="Output", typ=Float)', 'GeometryNodeMenuSwitch', ('B',1.,4.)),
+    ('node("GeometryNodeIndexSwitch", props={"data_type": "FLOAT"}, inputs={"Index": 1, "0": 1.0, "1": 4.0}, output="Output", typ=Float)', 'GeometryNodeIndexSwitch', (1,1.,4.)),
+])
+def test_raw_standalone_collection_copy_preserves_declared_locators(call,kind,expected):
+    """Raw default layouts retain the exact declared IDs and literal contracts."""
+    source = f'def main():\n    value = {call}\n    return value\n'
+    group = compile_group(source, 'RawStandaloneCollection')
+    original = raw_nodes.raw_node_spec(_one_node(group,kind))
+    compiler.update_expression_group(group,source)
+    copied = _one_node(group,kind)
+    assert raw_nodes.raw_node_spec(copied) == original
+    assert tuple(s.default_value for s in list(copied.inputs)[:-1]) == expected
+    root = bpy.data.node_groups.new('RawStandaloneRoot','GeometryNodeTree')
+    for _ in range(2):
+        compile_root(f'value = {call}\n',root)
+        copied = _one_node(root,kind)
+        assert raw_nodes.raw_node_spec(copied) == original
+        assert tuple(s.default_value for s in list(copied.inputs)[:-1]) == expected

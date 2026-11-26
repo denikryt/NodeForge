@@ -16,7 +16,8 @@ from ..function_instances import FUNCTION_ROOT_OWNER_ID_PROP
 from .group_authority import is_authority_ineligible_group, mark_transaction_private
 from .group_backend import (
     BlenderGroupBuildTransaction, _copy_node_properties, _sync_curve_mapping_state,
-    _sync_capture_attribute_dynamic_items, _sync_repeat_zone_dynamic_items,
+    _STANDALONE_COLLECTION_NODES, _resolve_standalone_copy_socket, _sync_repeat_zone_dynamic_items,
+    _verify_standalone_copy, _verify_standalone_defaults,
     _sync_bundle_dynamic_items,
 )
 from . import raw_nodes
@@ -264,7 +265,6 @@ def _copy_missing_old_nodes(tree, backup, old_ptrs):
         target.parent = mapped.get(parent.name) if parent is not None else None
         target.location = tuple(source.location)
     _sync_repeat_zone_dynamic_items(backup, mapped)
-    _sync_capture_attribute_dynamic_items(backup, mapped)
     _sync_bundle_dynamic_items(backup, mapped)
     _sync_curve_mapping_state(backup, mapped)
     io = {n.name: n for n in tree.nodes if n.bl_idname in _IO_TYPES}
@@ -275,13 +275,33 @@ def _copy_missing_old_nodes(tree, backup, old_ptrs):
             continue
         if link.from_node.bl_idname in _IO_TYPES and link.to_node.bl_idname in _IO_TYPES:
             continue  # Physical I/O-only edges were never deleted.
-        left = _resolve_socket(source, _socket_ref(link.from_node, link.from_socket, output=True), output=True)
-        right = _resolve_socket(dest, _socket_ref(link.to_node, link.to_socket, output=False), output=False)
+        def endpoint(original, socket, target, *, output):
+            if original.bl_idname in _STANDALONE_COLLECTION_NODES:
+                if raw_nodes.is_raw_node(original):
+                    return raw_nodes.resolve_cutover_socket(original, socket, target, direction='output' if output else 'input')
+                return _resolve_standalone_copy_socket(original, socket, target, output=output)
+            return _resolve_socket(target, _socket_ref(original, socket, output=output), output=output)
+
+        left = endpoint(link.from_node, link.from_socket, source, output=True)
+        right = endpoint(link.to_node, link.to_socket, dest, output=False)
         if left is None or right is None:
             raise RuntimeError(f'Cannot restore root link {link.from_node.name} -> {link.to_node.name}')
         if any(edge.from_socket == left and edge.to_socket == right for edge in tree.links):
             continue
-        tree.links.new(left, right)
+        restored = tree.links.new(left, right)
+        if (link.from_node.bl_idname in _STANDALONE_COLLECTION_NODES
+                or link.to_node.bl_idname in _STANDALONE_COLLECTION_NODES):
+            if restored.from_socket != left or restored.to_socket != right or not restored.is_valid:
+                raise CompileError('Collection copy: Blender did not preserve the restored root link')
+    for original in backup.nodes:
+        if original.bl_idname not in _STANDALONE_COLLECTION_NODES:
+            continue
+        target = mapped[original.name]
+        _verify_standalone_copy(original, target)
+        if raw_nodes.is_raw_node(original):
+            raw_nodes.validate_raw_node_after_cutover(target, tree)
+        else:
+            _verify_standalone_defaults(original, target)
     return mapped
 
 
