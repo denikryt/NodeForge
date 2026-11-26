@@ -7,6 +7,7 @@ pipeline. The Inspector and generator remain independent tools.
 Commands:
     inspect    run the Inspector and save its merged Blender specification
     generate   regenerate the package from a saved Inspector specification
+    coverage   generate the Nodes coverage reference from the pinned specification
     test       validate the current generated package without modifying it
     build      inspect + generate + test (full pipeline)
 
@@ -27,6 +28,7 @@ ROOT = TOOLS.parents[1]
 DEFAULT_SPEC = TOOLS / 'data' / 'blender-5.2.spec.json.gz'
 DEFAULT_PACKAGE = ROOT / 'packages' / 'nodes'
 DEFAULT_RESULTS = ROOT.parent / 'nodegen-results'
+DEFAULT_COVERAGE = ROOT / 'docs' / 'NODES.md'
 
 
 def current_spec() -> Path:
@@ -105,12 +107,20 @@ def main() -> None:
             p.add_argument('--check', action='store_true')
         if name == 'test':
             p.add_argument('--quick', action='store_true', help='Use representative cases, not all configurations')
+    coverage = sub.add_parser('coverage', help='Generate the bundled Nodes Markdown reference')
+    coverage.add_argument('--spec', type=Path, default=DEFAULT_SPEC, help='Inspector spec (default: pinned Blender 5.2 catalogue)')
+    coverage.add_argument('--package', type=Path, default=DEFAULT_PACKAGE, help='Package whose generated sources must match the spec')
+    coverage.add_argument('--output', type=Path, default=DEFAULT_COVERAGE, help='Markdown destination (default: docs/NODES.md)')
+    coverage.add_argument('--check', action='store_true', help='Check the reference without writing it')
     args = parser.parse_args()
     if args.command == 'inspect':
         path = inspector(args.blender, args.inspect_output)
         print(f'INSPECTOR_SPEC {path}')
     elif args.command == 'generate':
         generation(args.spec or current_spec(), args.output, args.results, check=args.check)
+    elif args.command == 'coverage':
+        from coverage_report import write_coverage
+        write_coverage(args.spec, args.package, args.output, check=args.check)
     elif args.command == 'test':
         validation(args.spec or current_spec(), args.output, args.blender, args.results,
                    all_states=not args.quick)

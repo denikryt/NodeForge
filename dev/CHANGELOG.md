@@ -867,3 +867,7 @@ lifecycle.
 - Extend `DynamicResults` to explicitly resolve either one direct runtime type or a named schema, retaining named singleton declarations, exact backend validation and the existing transactional group update policy.
 - Add direct/named editor previews, independent grouped/native provenance checks and 12 characterization fixtures covering source, extension and bundled Nodes result forms.
 - Restore interdependent group links and input overrides using live node and socket identities during equivalent updates and transaction rollback.
+
+## 0.102.1
+
+- Document the bundled Nodes library and add a reproducible Blender 5.2 node coverage reference, including socket and dynamic item limitations. Add `nodegen coverage` to generate or check the Markdown reference without modifying the package.
