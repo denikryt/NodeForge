@@ -448,7 +448,20 @@
   "graph": {
     "interface": [],
     "links": [],
-    "nodes": []
+    "nodes": [
+      {
+        "bl_idname": "GeometryNodeGroup",
+        "definition": "entry",
+        "id": "n0",
+        "properties": {}
+      },
+      {
+        "bl_idname": "GeometryNodeGroup",
+        "definition": "independent",
+        "id": "n1",
+        "properties": {}
+      }
+    ]
   },
   "kind": "graph"
 }

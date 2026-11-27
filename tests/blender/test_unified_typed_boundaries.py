@@ -17,15 +17,15 @@ def _compose(source: str):
     """Compile a definition-only module into a fresh existing user tree."""
     tree = bpy.data.node_groups.new('NFTest_unified_typed_interface', 'GeometryNodeTree')
     compile_root(source, tree)
-    assert not list(tree.nodes)
+    placed, = tree.nodes
     # Root pointer addresses can be recycled after a previous test removes its tree.
     # Filter by the declaration's canonical public name, not just the test origin.
     fn_name = next(node.name for node in ast.parse(source).body if isinstance(node, ast.FunctionDef))
     groups = [g for g in bpy.data.node_groups
               if g.get('nodeforge_module_name') == fn_name
               and f"test:root:{tree.as_pointer()}" in str(g.get('nodeforge_module_origin', ''))]
-    assert len(groups) == 1
-    return tree, groups[0]
+    assert groups == [placed.node_tree]
+    return tree, placed.node_tree
 
 
 @pytest.mark.parametrize('source,input_type,output_type', [

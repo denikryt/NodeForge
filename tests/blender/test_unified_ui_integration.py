@@ -87,8 +87,8 @@ def test_detach_selected_copy_operator_preserves_canonical_group(editor_context)
     return cube(size)
 ''', tree)
     canonical = published_entry(tree, 'shape')
-    original_node = tree.nodes.new('GeometryNodeGroup')
-    original_node.node_tree = canonical
+    original_node, = [node for node in tree.nodes if node.bl_idname == 'GeometryNodeGroup']
+    assert original_node.node_tree == canonical
     duplicate = canonical.copy()
     other = tree.nodes.new('GeometryNodeGroup')
     other.node_tree = duplicate
@@ -112,12 +112,8 @@ def test_selected_module_reload_operator_from_bound_text(editor_context):
 ''')
     with bpy.context.temp_override(area=area):
         assert bpy.ops.gn_script_mvp.compile_expression() == {'FINISHED'}
-    assert not list(group.nodes)  # Group-only Compile leaves the root's composition manual.
-    canonical = next(item for item in bpy.data.node_groups
-                     if item.get('nodeforge_module_name') == 'bump'
-                     and 'nodeforge_module_definition' in item)
-    node = group.nodes.new('GeometryNodeGroup')
-    node.node_tree = canonical
+    node, = [candidate for candidate in group.nodes if candidate.bl_idname == 'GeometryNodeGroup']
+    assert node.node_tree.get('nodeforge_module_name') == 'bump'
     for candidate in group.nodes:
         candidate.select = False
     node.select = True

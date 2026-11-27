@@ -179,7 +179,14 @@
   "graph": {
     "interface": [],
     "links": [],
-    "nodes": []
+    "nodes": [
+      {
+        "bl_idname": "GeometryNodeGroup",
+        "definition": "nf_fixture",
+        "id": "n0",
+        "properties": {}
+      }
+    ]
   },
   "kind": "graph"
 }

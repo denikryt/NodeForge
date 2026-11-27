@@ -385,7 +385,7 @@ class GNSCRIPT_MVP_OT_compile_expression(Operator):
     """Compile a selected Text into the current base using one semantic route."""
     bl_idname = "gn_script_mvp.compile_expression"
     bl_label = "Compile Script"
-    bl_description = "Replace the root graph or update function groups from the selected script"
+    bl_description = "Build the root graph or place and update function groups from the selected script"
     bl_options = {'REGISTER', 'UNDO'}
 
     expression: StringProperty(default="")
@@ -432,8 +432,11 @@ class GNSCRIPT_MVP_OT_compile_expression(Operator):
         if result.skipped_boundary_links:
             self.report({'WARNING'},
                         f'Compiled {target.name}; skipped {result.skipped_boundary_links} incompatible or ambiguous boundary link(s)')
+        elif result.placed_function_groups:
+            names = ', '.join(result.placed_function_groups)
+            self.report({'INFO'}, f'Placed in {target.name}: {names}')
         elif result.outcome == 'GROUPS_ONLY':
-            self.report({'INFO'}, f'Updated function groups from: {target.name}')
+            self.report({'INFO'}, f'Updated function groups in: {target.name}')
         else:
             self.report({'INFO'}, f'Compiled root graph in: {target.name}')
         return {'FINISHED'}

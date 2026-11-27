@@ -96,7 +96,14 @@
   "graph": {
     "interface": [],
     "links": [],
-    "nodes": []
+    "nodes": [
+      {
+        "bl_idname": "GeometryNodeGroup",
+        "definition": "offset",
+        "id": "n0",
+        "properties": {}
+      }
+    ]
   },
   "kind": "graph"
 }

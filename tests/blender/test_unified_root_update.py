@@ -129,10 +129,10 @@ def test_compile_definition_only_and_zero_node_source_preserves_manual_root():
     tree, inlet, outlet = _root('NFR5_definitions')
     old = tree.nodes.new('GeometryNodeMeshCube')
     compile_root('def make_cube() -> Geometry:\n    return cube(1)\n', tree)
-    assert sum(node.bl_idname == 'GeometryNodeGroup' for node in tree.nodes) == 0
-    assert published_entry(tree, 'make_cube')
+    placed, = [node for node in tree.nodes if node.bl_idname == 'GeometryNodeGroup']
+    assert placed.node_tree == published_entry(tree, 'make_cube')
     compile_root('FLAG = False\n', tree)
-    assert {node.as_pointer() for node in tree.nodes} == {inlet.as_pointer(), outlet.as_pointer(), old.as_pointer()}
+    assert {node.as_pointer() for node in tree.nodes} == {node.as_pointer() for node in (inlet, outlet, old, placed)}
 
 
 @pytest.mark.parametrize('source', ['', '  \n  ', 'x = unknown(1)', 'output(value=1)', 'x = input_float("x")'])

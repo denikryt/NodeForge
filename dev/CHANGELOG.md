@@ -879,3 +879,7 @@ lifecycle.
 - Reconstruct native Capture, Menu and Index collections before copying defaults and links in group/root publication and rollback. Validate physical collection slots and independent input/output provenance.
 - Add structured argument IntelliSense, characterization, generator and physical regression coverage.
 - Preserve native binary32 conversion of static Int operands delivered to Float Menu Switch sockets, with exact default readback.
+
+## 0.103.1
+
+- Place compiled entry function groups in the active Geometry Nodes tree while preserving existing nodes and links.

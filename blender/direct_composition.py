@@ -95,3 +95,31 @@ def materialize_definition_entries(prepared, materializer, materialization_conte
             prepared_callable, materialization, materialization_context,
         ).group)
     return tuple(groups)
+
+
+def place_definition_entries(target, groups, created_nodes):
+    """Place missing entry groups and journal new nodes for the caller's rollback."""
+    from .library_groups import apply_function_node_display_name
+
+    existing = {
+        node.node_tree.as_pointer() for node in target.nodes
+        if node.bl_idname == 'GeometryNodeGroup' and node.node_tree is not None
+    }
+    missing = [group for group in groups if group.as_pointer() not in existing]
+    if not missing:
+        return
+
+    spacing = 80
+    right_edge = max(
+        (node.location_absolute.x + max(node.width, node.dimensions.x) for node in target.nodes),
+        default=-spacing,
+    )
+    x = right_edge + spacing
+    for group in missing:
+        node = target.nodes.new('GeometryNodeGroup')
+        created_nodes.append(node)
+        node.node_tree = group
+        apply_function_node_display_name(node, group)
+        node.location = (x, 0)
+        node.select = False
+        x += node.width + spacing

@@ -273,7 +273,14 @@
   "graph": {
     "interface": [],
     "links": [],
-    "nodes": []
+    "nodes": [
+      {
+        "bl_idname": "GeometryNodeGroup",
+        "definition": "entry",
+        "id": "n0",
+        "properties": {}
+      }
+    ]
   },
   "kind": "graph"
 }

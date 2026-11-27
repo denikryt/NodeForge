@@ -91,35 +91,85 @@ def test_unified_modes_replace_only_for_semantically_physical_top_level():
     assert sum(n.bl_idname == 'GeometryNodeMeshCube' for n in root.nodes) == 1
 
 
-def test_unified_groups_only_publishes_no_root_instances_and_reuses_authority():
-    """Definition compilation updates manual group references through their datablock."""
+def test_unified_groups_only_places_once_and_reuses_authority():
+    """Keep existing nodes and links when recompiling a placed function group."""
     root = _base('PR1_group_only')
     manual = root.nodes.new('GeometryNodeMeshCube')
-    saved = (manual.as_pointer(), tuple(manual.location))
+    root.nodes.active = manual
+    saved = (manual.as_pointer(), tuple(manual.location), manual.select)
     source = 'def calc(v: Float) -> Float:\n    return v + 1.0\n'
     result = compiler.compile_source_in_tree(source, root, module_context='text:PR1-source')
-    assert result.outcome == 'GROUPS_ONLY' and len(root.nodes) == 1
+    assert result.outcome == 'GROUPS_ONLY' and len(root.nodes) == 2
+    assert root.nodes.active == manual
     from NodeForge.function_instances import FUNCTION_DEFINITION_OWNER_PROP
     fn_group, = [g for g in bpy.data.node_groups if g.get('nodeforge_module_name') == 'calc'
                  and g.get(FUNCTION_DEFINITION_OWNER_PROP)
                  and 'text:PR1-source' in g.get('nodeforge_module_origin', '')]
-    group_node = root.nodes.new('GeometryNodeGroup')
-    group_node.node_tree = fn_group
+    group_node, = [node for node in root.nodes if node.bl_idname == 'GeometryNodeGroup']
+    assert group_node.node_tree == fn_group
+    assert result.placed_function_groups == (fn_group.name,)
+    assert group_node.location.x > manual.location.x + manual.width
     manual_math = root.nodes.new('ShaderNodeMath')
     root.links.new(group_node.outputs[0], manual_math.inputs[0])
     link_pointers = [(link.from_node.as_pointer(), link.to_node.as_pointer()) for link in root.links]
     root.name = 'PR1_group_only_renamed'
-    compiler.compile_source_in_tree('def calc(v: Float) -> Float:\n    return v * 2.0\n', root,
-                                    module_context='text:PR1-source')
+    recompiled = compiler.compile_source_in_tree('def calc(v: Float) -> Float:\n    return v * 2.0\n',
+                                                 root, module_context='text:PR1-source')
+    assert recompiled.placed_function_groups == ()
     assert group_node.node_tree is fn_group
     assert [(link.from_node.as_pointer(), link.to_node.as_pointer()) for link in root.links] == link_pointers
     assert manual_math.inputs[0].is_linked
-    assert (manual.as_pointer(), tuple(manual.location)) == saved
+    assert (manual.as_pointer(), tuple(manual.location), manual.select) == saved
     assert sum(n.bl_idname == 'GeometryNodeGroup' for n in root.nodes) == 1
     assert any(n.bl_idname == 'ShaderNodeMath' and n.operation == 'MULTIPLY'
                for n in fn_group.nodes)
     result = compiler.compile_source_in_tree('FLAG = False', root)
     assert result.outcome == 'GROUPS_ONLY' and group_node.node_tree is fn_group
+
+
+def test_unified_groups_only_reuses_group_already_placed_by_user():
+    """A manual instance of the same group already satisfies placement."""
+    source = 'def evaluate(v: Float) -> Float:\n    return v + 1.0\n'
+    origin = 'text:manual-instance'
+    other_root = _base('manual_instance_source')
+    compiler.compile_source_in_tree(source, other_root, module_context=origin)
+    instance, = other_root.nodes
+    root = _base('manual_instance_target')
+    manual = root.nodes.new('GeometryNodeGroup')
+    manual.node_tree = instance.node_tree
+    manual.location = (120, 240)
+
+    result = compiler.compile_source_in_tree(source, root, module_context=origin)
+
+    assert result.placed_function_groups == ()
+    assert list(root.nodes) == [manual]
+    assert tuple(manual.location) == (120, 240)
+
+
+def test_unified_groups_only_rolls_back_partial_placement(monkeypatch):
+    """A placement error leaves the original tree and group datablocks in place."""
+    from NodeForge.blender import direct_composition
+
+    root = _base('placement_rollback')
+    manual = root.nodes.new('GeometryNodeMeshCube')
+    group_ids = {group.as_pointer() for group in bpy.data.node_groups}
+    place = direct_composition.place_definition_entries
+
+    def fail_after_first(target, groups, created_nodes):
+        """Simulate a placement failure after one entry becomes visible."""
+        place(target, groups[:1], created_nodes)
+        raise RuntimeError('injected placement failure')
+
+    monkeypatch.setattr(direct_composition, 'place_definition_entries', fail_after_first)
+    with pytest.raises(RuntimeError, match='injected placement failure'):
+        compiler.compile_source_in_tree(
+            'def first() -> Geometry:\n    return cube(1)\n'
+            'def second() -> Geometry:\n    return cube(2)\n',
+            root, module_context='text:placement-rollback',
+        )
+
+    assert list(root.nodes) == [manual]
+    assert {group.as_pointer() for group in bpy.data.node_groups} == group_ids
 
 
 def test_unified_definitions_require_stable_origin_even_with_root_statements():
@@ -276,7 +326,7 @@ def b(x: Float) -> Float:
     assert seen == ['a', 'b'] and raised.value.may_have_mutated
     assert 'second function failed' in str(raised.value)
     assert isinstance(raised.value.__cause__, RuntimeError)
-    assert not list(root.nodes)
+    assert [node.node_tree.get('nodeforge_module_name') for node in root.nodes] == ['a']
 
 
 def test_single_compile_operator_preserves_undo_and_selected_text_origin(monkeypatch):
@@ -295,7 +345,9 @@ def test_single_compile_operator_preserves_undo_and_selected_text_origin(monkeyp
     assert ui.GNSCRIPT_MVP_OT_compile_expression.execute(operator, ctx) == {'FINISHED'}
     origin = text.get(TEXT_MODULE_CONTEXT_PROP)
     assert isinstance(origin, str) and origin
-    assert not list(root.nodes)
+    node, = root.nodes
+    assert node.node_tree.get('nodeforge_module_name') == 'make'
+    assert any(f'Placed in {root.name}: {node.node_tree.name}' == msg for _, msg in reports)
     assert not hasattr(ui, 'GNSCRIPT_MVP_OT_update_expression')
 
     def uncertain(*args, **kwargs):
@@ -415,7 +467,7 @@ def test_groups_only_postcommit_warning_without_escalation_keeps_success(monkeyp
 
 
 def test_internal_root_lowering_rejects_definitions_without_mutating_root():
-    """The internal root helper cannot revive obsolete definition-only placement."""
+    """Only the unified route can place groups for definition-only scripts."""
     from NodeForge.blender.direct_composition import compose_prepared_initial
 
     root = _base('PR1_internal_definition_only_rejected')
@@ -439,7 +491,9 @@ def test_internal_root_lowering_rejects_definitions_without_mutating_root():
     assert compiler.compile_source_in_tree(
         source, root, module_context='text:pr1-internal-guard',
     ).outcome == 'GROUPS_ONLY'
-    assert [node.as_pointer() for node in root.nodes] == [original_ptr]
+    existing, placed = root.nodes
+    assert existing.as_pointer() == original_ptr
+    assert placed.bl_idname == 'GeometryNodeGroup'
 
 
 def test_compile_operator_retains_undo_on_real_postcommit_cleanup_exception(monkeypatch):
@@ -477,4 +531,4 @@ def test_compile_operator_retains_undo_on_real_postcommit_cleanup_exception(monk
         assert ui.GNSCRIPT_MVP_OT_compile_expression.execute(operator, context) == {'FINISHED'}
     assert any('postcommit cleanup failed' in msg and 'UI postcommit warning-as-error' in msg
                for _, msg in reports)
-    assert not list(root.nodes)
+    assert [node.node_tree.get('nodeforge_module_name') for node in root.nodes] == ['calc']

@@ -24,9 +24,10 @@ def entry_a(x: Float) -> Float:
 def entry_d(x: Float) -> Float:
     return x + 2
 ''', group)
-    assert _group_nodes(group) == []
     entries = [published_entry(group, name) for name in ('entry_a', 'entry_d')]
-    assert len(entries) == 2
+    instances = _group_nodes(group)
+    assert [node.node_tree for node in instances] == entries
+    assert all(len(node.inputs) == 1 and not node.inputs[0].is_linked for node in instances)
     entry_a = entries[0]
     child = _group_nodes(entry_a)
     assert len(child) == 1 and child[0].node_tree.get('nodeforge_module_name') == 'middle'
@@ -56,8 +57,7 @@ def test_definition_only_constant_declarations_do_not_disable_entries():
 def constant_entry(x: Float) -> Float:
     return x + FACTOR
 ''', group)
-    assert _group_nodes(group) == []
-    assert published_entry(group, 'constant_entry')
+    assert [node.node_tree for node in _group_nodes(group)] == [published_entry(group, 'constant_entry')]
 
 
 def test_ambiguous_untyped_definition_only_entry_is_rejected():
@@ -92,8 +92,8 @@ def a(x: Float) -> Float:
 def b(x: Float) -> Float:
     return _common(x)
 ''', group)
-    assert _group_nodes(group) == []
     roots = [published_entry(group, name) for name in ('a', 'b')]
+    assert [node.node_tree for node in _group_nodes(group)] == roots
     shared = [_group_nodes(group)[0].node_tree for group in roots]
     assert shared[0].as_pointer() == shared[1].as_pointer()
     assert shared[0].get('nodeforge_module_name') == '_common'
@@ -130,9 +130,9 @@ def a():
 def b():
     return 2
 ''', tree)
-    assert _group_nodes(tree) == []
-    entries = [published_entry(tree, 'a')]
-    children = _group_nodes(entries[0])
+    entry = published_entry(tree, 'a')
+    assert [node.node_tree for node in _group_nodes(tree)] == [entry]
+    children = _group_nodes(entry)
     assert [node.node_tree.get('nodeforge_module_name') for node in children] == ['b']
 
 
@@ -151,7 +151,6 @@ def a():
 def b():
     return 2
 ''', tree)
-    assert _group_nodes(tree) == []
     entries = [published_entry(tree, name) for name in ('a', 'b')]
-    assert {group.get('nodeforge_module_name') for group in entries} == {'a', 'b'}
+    assert [node.node_tree for node in _group_nodes(tree)] == entries
     assert _group_nodes(entries[0]) == []

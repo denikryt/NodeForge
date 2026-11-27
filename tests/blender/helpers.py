@@ -57,11 +57,7 @@ def compile_group(source, name):
     return group
 
 def compile_entry_group(source, name, entry_name):
-    """Publish zero-incoming definitions and return the selected authoritative group.
-
-    The single Compile contract never inserts definition-only instances into
-    the root tree; tests select the canonical materialized datablock instead.
-    """
+    """Compile entry definitions and return the selected authoritative group."""
     target = bpy.data.node_groups.new(name + "_base", "GeometryNodeTree")
     result = compile_root(source, target)
     check(result.outcome == 'GROUPS_ONLY', f"expected group-only source for {name}")
