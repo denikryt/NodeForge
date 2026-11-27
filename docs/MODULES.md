@@ -56,16 +56,18 @@ moved = transform(shape, translation=vector(0, 0, 1))
 
 **Compile Script** uses the module in one of two ways:
 
-- With top-level node-building code, it replaces all ordinary nodes in the base tree, including manually created nodes and Group Nodes. Group Input and Group Output nodes remain in place. A grouped function call creates a Group Node; functions it calls appear inside that group. Unused declarations add no node.
-- Without top-level node-building code, it creates or updates the module's entry function node-group datablocks and their required dependencies. An entry is a function that no other function in the module calls. The declaration-only example creates groups for `small_cube` and `large_cube`. Place instances manually through Blender's **Add → Group** menu and connect their sockets as needed.
+- With top-level node-building code, it replaces all ordinary nodes in the base tree, including manually created nodes and Group Nodes. Group Input and Group Output nodes remain in place. A grouped function call creates a Group Node; functions it calls appear inside that group.
+- Without top-level node-building code, it keeps the existing nodes and places any missing function groups.
+
+In both cases, a function that neither the top-level code nor another function in the module calls gets its own Group Node in the open tree. For example, the declaration-only example adds `small_cube` and `large_cube`. If you also add top-level code that builds nodes, the two groups appear alongside those nodes. Connect the new Group Nodes as needed.
 
 Function names beginning with `_` follow the same entry and import rules as other function names.
 
 The mode follows the node-building operations remaining after compile-time evaluation. A call inside a function declaration does not select root replacement. Neither do imports, constants, or calls in a branch discarded at compile time. For example, compiling `FLAG = False` leaves the base tree and previously compiled function groups in place.
 
-Compiling without top-level node-building code preserves the base tree's nodes, layout, and connections. Recompiling a function with the same name and parameter signature from the same Text updates its existing group in place. Manually placed instances keep using that group; with an unchanged interface, their sockets and links remain connected. Interface changes can cause Blender to remove incompatible links, so inspect affected instances. Removing a declaration leaves its previously compiled group available while nodes still reference it.
+Automatically placed Group Nodes appear to the right of the other nodes. Recompiling from the same Text updates existing groups in place when the function name and parameter signature match. If the top-level code builds no nodes, an instance already in the open tree is reused, including one you placed by hand. Its connections stay in place when the sockets still match. Interface changes can cause Blender to remove incompatible links, so inspect affected instances. Removing a declaration leaves its previously compiled group available while nodes still reference it.
 
-Switching from node-building code to declarations or constants leaves the existing base graph in place. Switching back to node-building code replaces all ordinary base-tree nodes. Repeated node-building compiles replace nodes rather than accumulate them. See [Update a script](GET_STARTED.md#update-a-script) for interface-link preservation and target requirements.
+Switching from node-building code to declarations keeps the existing base graph and places any missing entry groups. Switching back to node-building code replaces all ordinary base-tree nodes. Repeated node-building compiles replace nodes rather than accumulate them. See [Update a script](GET_STARTED.md#update-a-script) for interface-link preservation and target requirements.
 
 The selected Text identifies its source functions across compiles, base-tree renames, and saving and reopening the `.blend` file. Keep using the same Text when updating those functions. Copied Texts with duplicate source identities are rejected.
 

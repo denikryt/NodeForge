@@ -14,7 +14,7 @@ To install from a file, download the latest Extension ZIP from [GitHub Releases]
 
 When switching from the earlier ZIP add-on, disable the old NodeForge add-on before enabling the Extension. Your Local files and installed packages remain in Blender's user-data directories.
 
-The add-on adds a **NodeForge** tab to the Geometry Node Editor sidebar. It comes with the [Math](MATH_METHODS.md) and [L-System](LSYSTEMS_SCRIPTING.md) libraries, which are installed or updated when the Extension is enabled.
+The add-on adds a **NodeForge** tab to the Geometry Node Editor sidebar. Enabling the extension installs or updates its bundled libraries. See the guides for [Nodes](NODES_GUIDE.md), [Math](MATH_METHODS.md), and [L-System](LSYSTEMS_SCRIPTING.md).
 
 ## Update NodeForge
 
@@ -36,7 +36,7 @@ def make_cube(size: Float["Size"] = 2.0) -> Geometry:
 
 5. Select that Text in **Text Script** and click **Compile Script**.
 
-Compilation creates the `make_cube` node-group datablock. In the Geometry Node Editor, use **Add → Group** to place an instance of that group. Connect its output to the base tree's **Group Output** Geometry input to display the cube. Change **Size** on the Group Node to see Blender reevaluate it.
+**Compile Script** adds a Group Node for `make_cube` to the open tree. Connect its output to the base tree's **Group Output** Geometry input to display the cube. Change **Size** on the Group Node to see Blender reevaluate it.
 
 A script can also build ordinary nodes directly:
 
@@ -44,7 +44,7 @@ A script can also build ordinary nodes directly:
 geometry = cube(2.0)
 ```
 
-**Compile Script** replaces all ordinary nodes in the open base tree with this script's nodes, including the manually placed Group Node from the previous example. Connect the Cube output to **Group Output** to display it.
+**Compile Script** replaces all ordinary nodes in the open base tree with this script's nodes, including the Group Node from the previous example. Connect the Cube output to **Group Output** to display it.
 
 ## Update a script
 
@@ -52,7 +52,7 @@ Edit the source in a Text datablock, select it under **Text Script**, open the b
 
 Compatible unambiguous links between the base tree's Group Input/Output nodes and rebuilt nodes can be restored; manual connections between replaced nodes are replaced by the script's graph. Inspect interface links after compiling, especially if node types or counts changed. A warning reports links that could not be restored.
 
-With only function declarations or compile-time statements, compilation preserves the base graph and updates eligible function groups. See [Compose the base tree](MODULES.md#compose-the-base-tree) for mode selection, manual group instances, and switching between the two workflows. Empty or invalid source is rejected.
+**Compile Script** places independent function groups alongside any nodes built by the top-level code. When the top-level code builds no nodes, existing nodes stay in place. See [Compose the base tree](MODULES.md#compose-the-base-tree) for the placement rules. Empty or invalid source is rejected.
 
 Root replacement rejects animation or drivers on ordinary base-tree nodes. **Compile Script** requires an editable base tree in the Geometry Nodes editor for both modes. Linked read-only trees and NodeForge-managed function or Mesh Compute trees are unsupported targets. Return from any nested group before compiling.
 
@@ -60,7 +60,7 @@ Root replacement rejects animation or drivers on ordinary base-tree nodes. **Com
 
 | Button | What it does |
 | --- | --- |
-| **Compile Script** | Replaces ordinary base-tree nodes for top-level node-building code; otherwise creates or updates function groups. |
+| **Compile Script** | Places independent function groups in the open tree. Top-level node-building code also replaces the ordinary nodes in that tree. |
 | **Reload Function from Source** | Rebuilds a selected source-backed Function Group from its current source. |
 | **Load Script From Selected NodeGroup** | Copies the selected function's stored module source into the selected Text, replacing its contents. |
 | **Install Mesh Compute** / **Reload Compute** | Install or reload an experimental [Mesh Compute](MESH_COMPUTE.md) modifier on a Mesh object. |

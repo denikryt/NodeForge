@@ -272,7 +272,7 @@ Appending to a collection inside runtime `if` branches or Repeat Zones is unsupp
 
 ### Multiple Function Outputs
 
-A function returning several values creates a separate output socket for each value. The caller receives a fixed tuple-like result identifying those outputs:
+A function returning a tuple creates a separate output socket for each value. The caller receives a positional result. For access by name, see [Named results](WRITING_FUNCTIONS.md#named-results).
 
 ```python
 def make_part(size: Float = 1.0):
@@ -285,7 +285,7 @@ part, doubled_size = make_part(2.0)
 
 The generated Group Node has a Geometry output and a Float output. Unpacking assigns a source name to each output; the number of names must match the number of outputs. The tuple-like result is not passed through a Blender socket as a single value.
 
-Assignment unpacking supports multiple-output call results. Unpacking an ordinary list or tuple literal in an assignment is unsupported. Compile-time loops support unpacking their items; see [Compile-Time Loops](#compile-time-loops).
+Assignment unpacking supports positional multiple-output call results. Unpacking an ordinary list or tuple literal in an assignment is unsupported. Compile-time loops support unpacking their items; see [Compile-Time Loops](#compile-time-loops).
 
 The caller can also retain the result and select one output with a compile-time index:
 
@@ -370,7 +370,7 @@ def quadruple(value: Float = 1.0) -> Float:
 result = quadruple(3.0)
 ```
 
-Each function ends with one `return`, which returns a value or a flat, nonempty tuple. Nested function declarations and recursive call cycles are unsupported.
+Each function ends with one `return`, which returns a value, a flat nonempty tuple, or [named results](WRITING_FUNCTIONS.md#named-results). Nested function declarations and recursive call cycles are unsupported.
 
 ```python
 def inspect(value: Float, pos: Vector):
@@ -379,7 +379,7 @@ def inspect(value: Float, pos: Vector):
 doubled, height, positive = inspect(2.0, vector(0, 0, 3))
 ```
 
-Multiple outputs can be unpacked in return order or selected with a compile-time integer index:
+Positional outputs can be unpacked in return order or selected with a compile-time integer index:
 
 ```python
 def measure(value: Float):
@@ -470,7 +470,8 @@ The group's sockets depend on the call:
 | Compile-time option | Stored in the implementation; no input socket. |
 | Runtime value retained in semantic backend state | Input named `Dependency_0`, `Dependency_1`, and so on. |
 | Scalar result | Output named **Result**. |
-| Tuple result, including [`DynamicResults`](EXTENSION_API.md#invocation-dependent-results) | Outputs named **Result_0**, **Result_1**, and so on, in return order. |
+| Positional tuple result | Outputs named **Result_0**, **Result_1**, and so on, in return order. |
+| Named result | Outputs use the exact result keys. |
 
 Pass a compile-time `Bool` for `__inline__`. Python extensions reject `__unique__`, including `__unique__=False`. Semantic-only extensions produce records or lists and accept neither modifier.
 
@@ -701,4 +702,4 @@ Builder methods can be used inside compile-time and runtime loops. A builder can
 
 ## Unsupported Python Syntax
 
-NodeForge does not support regular `import` statements, `lambda`, `while`, `try`, `class`, decorators, comprehensions, general dictionary or set expressions, `with`, `yield`, generators, assignment expressions, multiple assignment targets, or top-level `return`, `del`, `global`, and `nonlocal` statements. `break`, `continue`, `raise`, `assert`, and async statements are also unsupported. Dictionary syntax is accepted only as the compile-time `props`, `inputs`, or `outputs` declaration passed directly to `node(...)`.
+NodeForge does not support regular `import` statements, `lambda`, `while`, `try`, `class`, decorators, comprehensions, general dictionary or set expressions, `with`, `yield`, generators, assignment expressions, multiple assignment targets, or top-level `return`, `del`, `global`, and `nonlocal` statements. `break`, `continue`, `raise`, `assert`, and async statements are also unsupported. Dictionary syntax is accepted in named returns, in [structured extension arguments](EXTENSION_API.md#structured-parameters), and in compile-time `props`, `inputs`, or `outputs` declarations passed directly to `node(...)`.

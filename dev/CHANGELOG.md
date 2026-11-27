@@ -887,3 +887,5 @@ lifecycle.
 ## 0.103.2
 
 - Place uncalled independent function groups alongside top-level nodes in Compile Script, without duplicate instances on recompilation.
+- Add the bundled Nodes guide and document named results and structured extension parameters.
+- Check the generated Nodes coverage reference in CI.

@@ -2,46 +2,42 @@
 
 ## Compilation
 
-NodeForge compiles `.nf` source into Blender Geometry Nodes: function calls and expressions create nodes, and the values passed between them create links. Blender evaluates the generated graph to produce geometry or other output values. Changing a group input makes Blender reevaluate the graph. To change its nodes or connections through source code, edit the source and compile it again.
+NodeForge compiles a small, Python-like language for describing Blender Geometry Nodes graphs. It reads `.nf` code with Python's parser and uses the resulting syntax tree (AST) to understand calls, operators, and statements such as `def`, `for`, and `return`. NodeForge builds the graph. Blender runs it.
+
+## Nodes and links
+
+Think of a node as a function. Its arguments are input sockets. Its results come from output sockets. Pass a result from one call to another and NodeForge connects the two sockets. Arithmetic works the same way. A multiplication that depends on a graph value becomes a Math node.
 
 ## Compile-time and runtime values
 
-**Compile-time values** are known while NodeForge builds the graph. They can choose node options, function defaults, and how many copies of a graph fragment to create. They do not become adjustable sockets by themselves.
-
-**Runtime values** belong to the generated graph. They flow through sockets and fields, so Blender can evaluate the same graph with different values without recompiling the source.
-
-```python
-COPIES = 3
-
-def cube_row(spacing: Float = 1.5) -> Geometry:
-    parts = []
-    for i in range(COPIES):
-        part = transform(
-            cube(1.0),
-            translation=vector(i * spacing, 0, 0),
-        )
-        parts.append(part)
-    return join(parts)
-```
-
-`COPIES` and the loop index `i` are compile-time values: compilation creates three Cube and Transform paths. `spacing` is a runtime `Float` input connected to those paths. Changing **spacing** on the Group Node makes Blender reevaluate the existing graph.
-
-A source variable such as `spacing` names a typed value in the graph; it is not the current numeric value on a Group Node. A `for` loop with a runtime `Int` count creates a Repeat Zone instead of unrolling. An `if` with a runtime condition creates a runtime branch. Inside a function, a compile-time Boolean condition selects the branch during compilation. See [For Statements](SYNTAX.md#for-statements) and [If Statements](SYNTAX.md#if-statements).
+- **Compile-time values** are known while NodeForge builds the graph. In a parameter default, for example, NodeForge can calculate `2 + 2` and use `4` directly. A compile-time loop count can tell NodeForge how many times to build the same set of nodes.
+- **Runtime values** come from the graph, for example from a group input or a node output. A variable can name one of these values. Blender uses the current values when it runs the graph.
 
 ## Group inputs and outputs
 
-A typed function's parameters define its Group Node input sockets. Their types determine which values can be connected; defaults provide initial values. Its `return` defines the output socket or sockets. In `cube_row`, `spacing: Float = 1.5` creates a **spacing** input, and `return join(parts)` supplies a Geometry output.
+A function defined with `def` describes a node group. The typed parameters become its inputs, the body describes the nodes and links inside, and `return` defines the outputs.
 
-Each Group Node instance can have different input values or incoming links. Changing an input reevaluates the graph; editing the function source and recompiling changes the graph itself. See [Writing Functions](WRITING_FUNCTIONS.md) for parameters, labels, and multiple outputs.
+A call normally creates a Group Node. With `__inline__=True`, the nodes go directly into the caller's tree. That can be the main tree or another group. See [Writing Functions](WRITING_FUNCTIONS.md).
 
 ## Modules and functions
 
-A `.nf` file is a module. It can declare several functions, create nodes directly with top-level statements, or combine both. Grouped function calls create Group Nodes; functions can call other functions. A module without top-level node-building code creates or updates entry function groups for manual placement. See [`.nf` Modules](MODULES.md#compose-the-base-tree) for compilation modes and examples.
+A `.nf` file is a module. It can define functions and build nodes at the top level. Importing functions from another module skips that module's top-level node-building code.
 
-## Imports
+**Compile Script** has two modes.
 
-Import functions from Local files, Examples, or installed packages to use them in another module. Importing a module makes its functions available without running its top-level node-building statements. See [Imports](SYNTAX.md#imports) for the supported forms.
+- If the top-level code builds nodes, NodeForge replaces the ordinary nodes in the main tree, including nodes you added by hand. It keeps the tree's Group Input and Group Output nodes and its interface.
+- If the script builds no nodes at the top level, existing nodes stay in place.
 
-## Native Blender data
+In both modes, a function that neither the top-level code nor another function in the module calls gets its own Group Node in the main tree.
 
-Compiled nodes, groups, sockets, and links are Blender data. They can be inspected and saved in a `.blend` file; the generated graph continues evaluating when the NodeForge add-on is disabled. For compiling and updating a script in Blender, see [Get Started](GET_STARTED.md).
+When NodeForge updates a group, it keeps links to its sockets where it can match compatible sockets. See [Modules](MODULES.md#compose-the-base-tree) and [Updating a script](GET_STARTED.md#update-a-script).
+
+## Libraries
+
+Packages add functions to the language. They can provide `.nf` functions or Python functions that run during compilation. The [Extension API](EXTENSION_API.md) lets Python functions declare typed inputs and results and gives them a context for building nodes and links.
+
+NodeForge comes with Nodes, a library that makes Blender's Geometry Nodes available as functions in `.nf`. Each function represents one Blender node. The goal is to cover most nodes and let you use as many of their configurations as possible. The library is generated automatically from Blender's Python API. See the [Nodes Library guide](NODES_GUIDE.md).
+
+## Editor support
+
+In Blender's Text Editor, IntelliSense suggests functions, keyword arguments, and fields of named results.

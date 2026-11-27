@@ -132,12 +132,7 @@ def render_coverage(spec, report):
         '# NodeForge Nodes', '',
         f'Coverage reference for **Blender {spec["blender_version"]}**.', '',
         'The table maps Blender node names and `bpy` class identifiers to functions in the bundled `nodes` package. '
-        'NodeForge installs the bundled library automatically when the extension is enabled. '
-        'Import it with `from packages import nodes`. '
-        'See the [Package Guide](PACKAGES.md#importing-package-callables) for general import rules. '
-        'For node behavior, refer to the [Blender Geometry Nodes manual](https://docs.blender.org/manual/en/latest/modeling/geometry_nodes/index.html).', '',
-        'The library is generated from Blender’s Python API (`bpy`): the development Inspector probes node classes, '
-        'configuration properties and socket layouts, and the generator produces bindings for supported configurations.', '',
+        'For examples and generator commands, see the [Nodes Library guide](NODES_GUIDE.md).', '',
         '## Coverage summary', '',
         '| Measure | Count |', '| --- | ---: |',
         f'| Inspected node classes | {len(rows)} |',
