@@ -240,6 +240,135 @@ def _reconnect_boundary(tree, records, matched):
     return skipped
 
 
+def _backup_node_pairs(tree, backup):
+    """Bind the native copy to exact original nodes before any child mutation."""
+    from .update import _capture_node_identity
+
+    originals = tuple(tree.nodes)
+    copies = tuple(backup.nodes)
+    if (_interface_signature(tree) != _interface_signature(backup)
+            or len(originals) != len(copies)):
+        raise CompileError('Native root backup changed interface or node count')
+    def layout(node):
+        return tuple(tuple((socket.identifier, socket.name, socket.bl_idname) for socket in sockets)
+                     for sockets in (node.inputs, node.outputs))
+
+    pairs = {}
+    for original, mirror in zip(originals, copies):
+        identity = _capture_node_identity(original)
+        if _capture_node_identity(mirror) != identity or layout(original) != layout(mirror):
+            raise CompileError('Native root backup changed node/socket identity')
+        if _has_local_collection(original):
+            proofs = {}
+            _verify_standalone_copy(original, mirror, proofs=proofs)
+            _verify_standalone_defaults(original, mirror)
+            if raw_nodes.is_raw_node(original):
+                raw_nodes.validate_collection_raw_copy(original, mirror, proofs=proofs)
+        pairs[original.name] = (identity, original, mirror)
+    def edges(graph):
+        return Counter((link.from_node.name, _socket_ref(link.from_node, link.from_socket, output=True),
+                        link.to_node.name, _socket_ref(link.to_node, link.to_socket, output=False))
+                       for link in graph.links)
+    if edges(tree) != edges(backup):
+        raise CompileError('Native root backup changed link identity')
+    return pairs
+
+
+def _root_rollback_projection(transaction, tree, backup, pairs, removed):
+    """Prove event-local mirrors; discharge only deliberately deleted root endpoints.
+
+    With no removals this is the pre-deletion check. On failure, leave the journal
+    untouched so the ordinary strict rollback can still attempt recovery.
+    """
+    from .update import _capture_node_identity
+
+    for name, (identity, original, mirror) in pairs.items():
+        live = tree.nodes.get(name)
+        copied = backup.nodes.get(name)
+        if copied != mirror or copied is None or _capture_node_identity(copied) != identity:
+            raise CompileError(f'Rollback lost native backup node {name!r}')
+        if name in removed:
+            if live is not None:
+                raise CompileError(f'Rollback found unexpected replacement of deleted root node {name!r}')
+        elif live != original or live is None or _capture_node_identity(live) != identity:
+            raise CompileError(f'Rollback lost original root node {name!r}')
+
+    projected = []
+    for event in transaction._mutation_journal:
+        for key in ('group_nodes', 'links'):
+            records = event['external_state'][key]
+            root_records = [record for record in records if record['tree'] == tree]
+            mirror_records = [record for record in records if record['tree'] == backup]
+            # Match full captured payload, including old and new references, values
+            # and physical keys, with multiplicity within this exact mutation event.
+            unmatched = list(mirror_records)
+            for record in root_records:
+                identities = ([record['node']] if key == 'group_nodes' else
+                              [record[side]['node'] for side in ('from', 'to')])
+                for identity in identities:
+                    if identity[0] not in pairs or pairs[identity[0]][0] != identity:
+                        raise CompileError('Rollback record does not identify an original root node')
+                payload = {k: v for k, v in record.items() if k != 'tree'}
+                matches = [i for i, candidate in enumerate(unmatched)
+                           if {k: v for k, v in candidate.items() if k != 'tree'} == payload]
+                # Multiple identical link records are legal only at matching
+                # multiplicity. Group-node records must be individually unique.
+                if not matches or (key == 'group_nodes' and len(matches) != 1):
+                    raise CompileError(f'Rollback root backup record missing or ambiguous ({key})')
+                unmatched.pop(matches[0])
+            if unmatched:
+                raise CompileError(f'Rollback root backup has unmatched records ({key})')
+            if removed:
+                def keep(record):
+                    if record['tree'] != tree:
+                        return True
+                    names = ([record['node'][0]] if key == 'group_nodes' else
+                             [record[side]['node'][0] for side in ('from', 'to')])
+                    return not any(name in removed for name in names)
+                projected.append((records, [record for record in records if keep(record)]))
+    for records, kept in projected:
+        records[:] = kept
+
+
+def _remove_original_node(tree, node, removed):
+    """Record intentional deletion even when native removal raises afterwards."""
+    name = node.name
+    if tree.nodes.get(name) != node:
+        raise CompileError(f'Original root node {name!r} disappeared before cutover')
+    try:
+        tree.nodes.remove(node)
+    except Exception:
+        # Inspect the original handle, not a name which another node could take.
+        try:
+            pointer = node.as_pointer()
+        except ReferenceError:
+            removed.add(name)
+        else:
+            if not any(live.as_pointer() == pointer for live in tree.nodes):
+                removed.add(name)
+        raise
+    else:
+        removed.add(name)
+
+
+def _rehearse_root_restore(target, backup):
+    """Exercise reconstruction with old dependency versions and native I/O."""
+    scratch = target.copy()
+    try:
+        mark_transaction_private(scratch)
+        for node in _ordinary(scratch):
+            scratch.nodes.remove(node)
+        _copy_missing_old_nodes(scratch, backup, set())
+    except Exception as error:
+        try:
+            _remove_backup(scratch)
+        except Exception as cleanup:
+            error.add_note(f'Root rehearsal cleanup also failed: {cleanup}')
+        raise
+    else:
+        _remove_backup(scratch)
+
+
 def _copy_missing_old_nodes(tree, backup, old_ptrs):
     """Best-effort local reconstruction, retaining surviving structural nodes."""
     _validate_collection_copy_source(backup)
@@ -400,10 +529,16 @@ def replace_prepared_root(prepared, target, backend, session, *, root_owner_uuid
     candidate = None
     resource_tx = None
     cutover_started = False
+    removed = set()
+    backup_pairs = None
     io_detach_started = False
     try:
+        has_collections = _validate_collection_copy_source(target)
         backup = target.copy()
         mark_transaction_private(backup)
+        backup_pairs = _backup_node_pairs(target, backup)
+        if has_collections:
+            _rehearse_root_restore(target, backup)
         candidate = build_private_root_candidate(
             prepared, target, backend, session, transaction=transaction,
             root_owner_uuid=root_owner_uuid,
@@ -467,9 +602,10 @@ def replace_prepared_root(prepared, target, backend, session, *, root_owner_uuid
                 io_detach_started = True
                 node.parent = None
                 _place_absolute(node, absolute)
+        _root_rollback_projection(transaction, target, backup, backup_pairs, removed)
         for node in old:
             cutover_started = True
-            target.nodes.remove(node)
+            _remove_original_node(target, node, removed)
         skipped = _reconnect_boundary(target, boundary, matched)
         for pointer, node in sorted(matched.items(), key=lambda item: _parent_depth(item[1])):
             _place_absolute(node, old_positions[pointer])
@@ -519,17 +655,25 @@ def replace_prepared_root(prepared, target, backend, session, *, root_owner_uuid
                 discard_private_root_candidate(candidate)
             except Exception as cleanup_error:
                 errors.append(f'candidate cleanup: {cleanup_error}')
+        if removed and backup_pairs is not None:
+            try:
+                _root_rollback_projection(transaction, target, backup, backup_pairs, removed)
+            except Exception as projection_error:
+                errors.append(f'root rollback journal: {projection_error}')
         try:
             transaction.rollback()
         except Exception as rollback_error:
-            errors.append(f'nested-group/resource rollback: {rollback_error}')
-        if cutover_started and backup is not None:
+            detail = str(rollback_error)
+            if rollback_error.__cause__ is not None:
+                detail += f': {rollback_error.__cause__}'
+            errors.append(f'nested-group/resource rollback: {detail}')
+        if removed and backup is not None:
             try:
                 _copy_missing_old_nodes(target, backup, old_ptrs)
                 _restore_structural_io(target, io_nodes, io_positions, io_active, io_parent_names)
             except Exception as restore_error:
                 errors.append(f'root restoration: {restore_error}')
-        elif cutover_started:
+        elif removed:
             errors.append('root restoration: native root backup unavailable')
         elif io_detach_started:
             try:
@@ -541,6 +685,6 @@ def replace_prepared_root(prepared, target, backend, session, *, root_owner_uuid
             _remove_backup(backup)
         except Exception as cleanup_error:
             errors.append(f'backup cleanup: {cleanup_error}')
-        if any(node.as_pointer() not in preexisting_ptrs for node in target.nodes):
+        if {node.as_pointer() for node in target.nodes} != preexisting_ptrs:
             possible_change = True
         _fail(exc, errors, possible_change=possible_change)

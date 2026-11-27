@@ -21,12 +21,13 @@ class PrivateRootCandidate:
     stage: object
     endpoint: RootInputEndpoint
     resource_transaction: GeneratedResourceTransaction
+    transaction: object
 
 
 def discard_private_root_candidate(candidate: PrivateRootCandidate):
     """Dispose a stage; the outer root attempt owns resource rollback/commit."""
     if any(group is candidate.stage for group in bpy.data.node_groups):
-        bpy.data.node_groups.remove(candidate.stage, do_unlink=True)
+        candidate.transaction.discard_abandoned_tree(candidate.stage)
 
 
 def _new_private_copy(target):
@@ -65,7 +66,7 @@ def build_private_root_candidate(prepared, target, backend, session, *, transact
         (node for node in target.nodes if node.bl_idname == 'NodeGroupInput'), None
     )
     endpoint = RootInputEndpoint(existing_input=first_existing_input)
-    candidate = PrivateRootCandidate(stage, endpoint, tx)
+    candidate = PrivateRootCandidate(stage, endpoint, tx, transaction)
     try:
         if _interface_signature(target) != source_signature:
             raise CompileError('Authoritative root interface changed before private lowering')
@@ -79,11 +80,12 @@ def build_private_root_candidate(prepared, target, backend, session, *, transact
         if COMPOSITION_ROOT_ID_PROP in stage or GROUP_MANIFEST_PROP in stage:
             raise CompileError('Private candidate inherited authoritative root ownership metadata')
         return candidate
-    except Exception:
-        try:
-            tx.rollback()
-        finally:
-            discard_private_root_candidate(candidate)
+    except Exception as error:
+        for cleanup in (tx.rollback, lambda: discard_private_root_candidate(candidate)):
+            try:
+                cleanup()
+            except Exception as exc:
+                error.add_note(f"Private candidate cleanup also failed: {exc}")
         raise
 
 

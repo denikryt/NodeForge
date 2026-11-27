@@ -1033,6 +1033,30 @@ class BlenderGroupBuildTransaction:
         self._mutation_journal.append(event)
         return event
 
+    def discard_abandoned_tree(self, tree):
+        """Retire obligations for an exact, intentionally discarded build stage."""
+        if not _node_group_is_live(tree):
+            raise CompileError("Cannot retire rollback records for an unexpectedly absent stage")
+        if self.owns_group(tree) or not is_authority_ineligible_group(tree):
+            raise CompileError("Cannot discard authoritative or recovery state as a stage")
+        # Select while RNA is live. Never dereference the tree after removal.
+        selected = []
+        for event in self._mutation_journal:
+            for records in event["external_state"].values():
+                kept = [record for record in records if record["tree"] != tree]
+                if len(kept) != len(records):
+                    selected.append((records, kept))
+        failures = []
+        try:
+            removed = _remove_node_group_if_live(tree, failures=failures)
+        finally:
+            if not _node_group_is_live(tree):
+                for records, kept in selected:
+                    records[:] = kept
+        if not removed or _node_group_is_live(tree):
+            detail = failures[0] if failures else "datablock remains live"
+            raise CompileError(f"Abandoned stage disposal failed: {detail}")
+
     def savepoint(self):
         """Return a checkpoint for exact journal/cache restoration."""
         cache_snapshots = [
@@ -1433,6 +1457,27 @@ class BlenderGroupBackend:
             raise
         return backup
 
+    def _rehearse_collection_cutover(self, *sources):
+        """Verify each required reconstruction before resetting the live group."""
+        sources = [source for source in sources if _validate_collection_copy_source(source)]
+        if not sources:
+            return
+        scratch = bpy.data.node_groups.new("NodeForge.copy-rehearsal", "GeometryNodeTree")
+        try:
+            mark_transaction_private(scratch)
+            for source in sources:
+                _copy_group_contents(source, scratch)
+        except Exception as error:
+            failures = []
+            _remove_node_group_if_live(scratch, failures=failures)
+            for failure in failures:
+                error.add_note(f"Collection rehearsal cleanup also failed: {failure}")
+            raise
+        else:
+            failures = []
+            if not _remove_node_group_if_live(scratch, failures=failures):
+                raise CompileError("Collection rehearsal cleanup failed") from failures[0]
+
     def _update_existing(
         self,
         name, existing_group, build_tx, populate,
@@ -1442,6 +1487,15 @@ class BlenderGroupBackend:
         finalize_before_commit,
     ):
         """Build a private replacement, then cut over the authoritative datablock."""
+        admission_error = None
+        try:
+            _validate_collection_copy_source(existing_group)
+        except CompileError as exc:
+            if not preserve_if_equivalent or finalize_before_commit is not None:
+                raise
+            # Equivalence is established only after population. A genuinely
+            # no-copy path remains legal; a later copy must reject the old state.
+            admission_error = exc
         old_manifest = generated_resources.read_group_manifest(existing_group)
         captured_resources = generated_resources.capture_owned_resource_ids(existing_group, old_manifest)
         owner_uuid = old_manifest["owner_group_uuid"] if old_manifest is not None else uuid.uuid4().hex
@@ -1451,6 +1505,7 @@ class BlenderGroupBackend:
         replacement = bpy.data.node_groups.new("NodeForge.replacement." + name, "GeometryNodeTree")
         mark_transaction_private(replacement)
         backup = None
+        primary_error = None
         try:
             populate(replacement, tx)
             new_manifest = tx.manifest(empty=not bool(tx.resources)) if (old_manifest is not None or tx.resources) else None
@@ -1470,6 +1525,7 @@ class BlenderGroupBackend:
                     build_tx.rollback_to_savepoint(savepoint)
                     if finalize_before_commit is not None:
                         backup = self._new_private_backup(existing_group, name)
+                        self._rehearse_collection_cutover(backup)
                         external_state = _capture_group_external_state(existing_group)
                         build_tx.register_updated(
                             existing_group,
@@ -1486,11 +1542,16 @@ class BlenderGroupBackend:
                         except Exception:
                             build_tx.rollback_to_savepoint(savepoint)
                             raise
+                    build_tx.discard_abandoned_tree(replacement)
+                    replacement = None
                     if outermost:
                         build_tx.commit()
                     return existing_group
 
+            if admission_error is not None:
+                raise admission_error
             backup = self._new_private_backup(existing_group, name)
+            self._rehearse_collection_cutover(backup, replacement)
             external_state = _capture_group_external_state(existing_group)
             _validate_group_external_state_for_replacement(replacement, external_state)
             original_name = getattr(existing_group, "name", None)
@@ -1531,10 +1592,15 @@ class BlenderGroupBackend:
             backup = None
             if finalize_before_commit is not None:
                 finalize_before_commit(existing_group)
+            # Child updates during population may have captured this replacement.
+            # It is abandoned once the authoritative copy has been installed.
+            build_tx.discard_abandoned_tree(replacement)
+            replacement = None
             if outermost:
                 build_tx.commit()
             return existing_group
         except Exception as update_exc:
+            primary_error = update_exc
             rollback_failures = []
             try:
                 if outermost:
@@ -1558,8 +1624,14 @@ class BlenderGroupBackend:
                 raise update_exc from rollback_failures[0]
             raise
         finally:
-            _remove_node_group_if_live(replacement)
-            _remove_node_group_if_live(backup)
+            cleanup_failures = []
+            _remove_node_group_if_live(replacement, failures=cleanup_failures)
+            _remove_node_group_if_live(backup, failures=cleanup_failures)
+            if cleanup_failures:
+                if primary_error is None:
+                    raise CompileError("NodeForge private group cleanup failed") from cleanup_failures[0]
+                for failure in cleanup_failures:
+                    primary_error.add_note(f"NodeForge private group cleanup also failed: {failure}")
 
 
 __all__ = [
