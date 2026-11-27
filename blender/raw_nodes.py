@@ -718,7 +718,7 @@ def _copy_owned_raw_metadata(src_node, dst_node, *, schema_version: int) -> None
             ) from exc
 
 
-def copy_raw_node_properties(src_node, dst_node):
+def copy_raw_node_properties(src_node, dst_node, *, proofs=None):
     """Copy raw-owned properties/defaults while preserving metadata generation."""
     spec = raw_node_spec(src_node)
     if getattr(dst_node, "bl_idname", None) != spec["bl_idname"]:
@@ -734,9 +734,10 @@ def copy_raw_node_properties(src_node, dst_node):
 
     # Native collection reconstruction requires Blender. Ordinary raw metadata
     # copying also serves the Blender-independent boundary tests.
-    if src_node.bl_idname in {"GeometryNodeCaptureAttribute", "GeometryNodeMenuSwitch", "GeometryNodeIndexSwitch"}:
-        from .group_backend import _copy_standalone_collection
-        _copy_standalone_collection(src_node, dst_node)
+    if getattr(getattr(src_node, "bl_rna", None), "identifier", None) is not None:
+        from .group_backend import _copy_standalone_collection, _has_local_collection
+        if _has_local_collection(src_node):
+            _copy_standalone_collection(src_node, dst_node, proofs=proofs)
 
     _copy_owned_raw_metadata(src_node, dst_node, schema_version=spec["schema_version"])
 

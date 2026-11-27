@@ -106,12 +106,12 @@ def test_transfer_failure_leaves_manual_graph_and_discards_attempt_nodes(monkeyp
     original = root_subgraph_transfer._copy_node_properties
     calls = 0
 
-    def fail_second(src, dst):
+    def fail_second(src, dst, **kwargs):
         nonlocal calls
         calls += 1
         if calls == 2:
             raise RuntimeError('Extension copier failed after one node')
-        return original(src, dst)
+        return original(src, dst, **kwargs)
 
     monkeypatch.setattr(root_subgraph_transfer, '_copy_node_properties', fail_second)
     with pytest.raises(root_update.RootUpdateError, match='Extension copier failed') as info:

@@ -13,7 +13,7 @@ from . import raw_nodes
 from .group_backend import (
     _copy_node_properties,
     _sync_bundle_dynamic_items,
-    _STANDALONE_COLLECTION_NODES, _verify_standalone_copy,
+    _has_local_collection, _verify_standalone_copy,
     _resolve_standalone_copy_socket, _verify_standalone_defaults,
     _sync_repeat_zone_dynamic_items,
 )
@@ -74,7 +74,7 @@ def _strict_rna_equal(src, dst):
     ignored = {
         'rna_type', 'type', 'dimensions', 'inputs', 'outputs', 'internal_links',
         'select', 'width_hidden', 'height', 'name', 'location', 'location_absolute', 'parent',
-        'mapping', 'active_item', 'capture_items', 'repeat_items',
+        'mapping', 'active_item', 'repeat_items',
         'bundle_items', 'paired_output',  # Their structure is checked below.
     }
     for prop in src.bl_rna.properties:
@@ -130,11 +130,11 @@ def _curve_contract(node):
                  for curve in mapping.curves)
 
 
-def _strict_node_parity(src, dst):
+def _strict_node_parity(src, dst, *, proofs=None):
     if src.bl_idname != dst.bl_idname:
         raise CompileError('Root transfer changed a node type')
-    if src.bl_idname in _STANDALONE_COLLECTION_NODES:
-        _verify_standalone_copy(src, dst)
+    if _has_local_collection(src):
+        _verify_standalone_copy(src, dst, proofs=proofs)
     elif (_socket_contract(src, outputs=False) != _socket_contract(dst, outputs=False)
             or _socket_contract(src, outputs=True) != _socket_contract(dst, outputs=True)):
         raise CompileError(f'Root transfer socket parity failed for {src.bl_idname} ({src.name})')
@@ -143,7 +143,7 @@ def _strict_node_parity(src, dst):
     if _curve_contract(src) != _curve_contract(dst):
         raise CompileError(f'Root transfer lost CurveMapping on {src.bl_idname}')
     _strict_rna_equal(src, dst)
-    if src.bl_idname in _STANDALONE_COLLECTION_NODES and not raw_nodes.is_raw_node(src):
+    if _has_local_collection(src) and not raw_nodes.is_raw_node(src):
         _verify_standalone_defaults(src, dst)
         return
     for direction in (False, True):
@@ -201,6 +201,7 @@ def transfer_private_root_subgraph(candidate, target, *, interface_signature):
     stage, endpoint = candidate.stage, candidate.endpoint
     original_input = _strict_preflight(stage, target, endpoint, interface_signature)
     nodes = {}
+    proofs = {}
     created = []
     new_input = None
     for src in stage.nodes:
@@ -221,9 +222,9 @@ def transfer_private_root_subgraph(candidate, target, *, interface_signature):
         if src.bl_idname == 'NodeGroupInput':
             new_input = dst
         if raw_nodes.is_raw_node(src):
-            raw_nodes.copy_raw_node_properties(src, dst)
+            raw_nodes.copy_raw_node_properties(src, dst, proofs=proofs)
         else:
-            _copy_node_properties(src, dst)
+            _copy_node_properties(src, dst, proofs=proofs)
     # Dynamic sockets must exist before copying their defaults and rebuilding links.
     # A temporary name index points at destination objects despite Blender's name
     # disambiguation against still-live root nodes during staging.
@@ -232,7 +233,7 @@ def transfer_private_root_subgraph(candidate, target, *, interface_signature):
     from .group_backend import _copy_socket_default, _copy_curve_mapping
     for src in stage.nodes:
         dst = nodes[src.name]
-        if dst is original_input or src.bl_idname in _STANDALONE_COLLECTION_NODES:
+        if dst is original_input or _has_local_collection(src):
             continue
         for direction in ('inputs', 'outputs'):
             original_sockets = getattr(src, direction)
@@ -257,7 +258,7 @@ def transfer_private_root_subgraph(candidate, target, *, interface_signature):
     for src in stage.nodes:
         dst = nodes[src.name]
         if dst is not original_input and not hasattr(src, 'mapping'):
-            _strict_node_parity(src, dst)
+            _strict_node_parity(src, dst, proofs=proofs)
     source_links = []
     for link in stage.links:
         src_from, src_to = link.from_node, link.to_node
@@ -265,8 +266,8 @@ def transfer_private_root_subgraph(candidate, target, *, interface_signature):
         def endpoint(src, socket, dst, *, output):
             if raw_nodes.is_raw_node(src):
                 return raw_nodes.resolve_cutover_socket(src, socket, dst, direction='output' if output else 'input')
-            if src.bl_idname in _STANDALONE_COLLECTION_NODES:
-                return _resolve_standalone_copy_socket(src, socket, dst, output=output)
+            if _has_local_collection(src):
+                return _resolve_standalone_copy_socket(src, socket, dst, output=output, proofs=proofs)
             original = src.outputs if output else src.inputs
             copied = dst.outputs if output else dst.inputs
             try:
@@ -289,9 +290,9 @@ def transfer_private_root_subgraph(candidate, target, *, interface_signature):
         dst = nodes[src.name]
         if dst is not original_input and hasattr(src, 'mapping') and hasattr(dst, 'mapping'):
             _copy_curve_mapping(src.mapping, dst.mapping)
-            _strict_node_parity(src, dst)
-        if src.bl_idname in _STANDALONE_COLLECTION_NODES:
-            _verify_standalone_copy(src, dst)
+            _strict_node_parity(src, dst, proofs=proofs)
+        if _has_local_collection(src):
+            _verify_standalone_copy(src, dst, proofs=proofs)
             if not raw_nodes.is_raw_node(src):
                 _verify_standalone_defaults(src, dst)
         if raw_nodes.is_raw_node(src) and dst is not original_input:

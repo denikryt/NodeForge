@@ -244,8 +244,8 @@ def nf_fixture():
 ''', "NFTest_raw_rollback")
     original = raw_nodes.copy_raw_node_properties
 
-    def corrupt_literal_default(src_node, dst_node):
-        original(src_node, dst_node)
+    def corrupt_literal_default(src_node, dst_node, **kwargs):
+        original(src_node, dst_node, **kwargs)
         if getattr(dst_node, "bl_idname", None) == "FunctionNodeCompare":
             try:
                 expected_b = _contract(src_node, "B").get("default")
@@ -281,8 +281,8 @@ def nf_fixture():
 ''', "NFTest_raw_identifier_rollback")
     original = raw_nodes.copy_raw_node_properties
 
-    def corrupt_identifier(src_node, dst_node):
-        original(src_node, dst_node)
+    def corrupt_identifier(src_node, dst_node, **kwargs):
+        original(src_node, dst_node, **kwargs)
         if getattr(dst_node, "bl_idname", None) != "FunctionNodeCompare":
             return
         try:

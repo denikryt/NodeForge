@@ -348,8 +348,8 @@ def main():
     assert evaluate(group,'before_fault') == [(3.,0.,0.)]
     groups = {g.as_pointer() for g in bpy.data.node_groups}
     original = blender_group_backend._copy_standalone_collection
-    def corrupt(src,dst):
-        original(src,dst)
+    def corrupt(src,dst,**kwargs):
+        original(src,dst,**kwargs)
         if src.bl_idname == 'GeometryNodeMenuSwitch' and src.inputs[3].default_value == 4.0:
             dst.inputs[3].default_value = 0.0
     changed = source.replace('2.0, 3.0','2.0, 4.0')

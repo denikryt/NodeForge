@@ -162,7 +162,7 @@ def test_capture_root_copy_error_preserves_previous_graph_and_resources(tmp_path
     old = root.nodes.new('GeometryNodeMeshCube')
     before = old.as_pointer()
 
-    def reject_capture(*args):
+    def reject_capture(*args, **kwargs):
         raise CompileError('Extension Capture item reconstruction blocked')
 
     monkeypatch.setattr(group_backend, '_copy_standalone_collection', reject_capture)
