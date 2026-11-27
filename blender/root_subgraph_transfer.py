@@ -263,7 +263,6 @@ def transfer_private_root_subgraph(candidate, target, *, interface_signature):
         dst = nodes[src.name]
         if dst is not original_input and not hasattr(src, 'mapping'):
             _strict_node_parity(src, dst, proofs=proofs)
-    source_links = []
     copied_edges = []
     for link in stage.links:
         src_from, src_to = link.from_node, link.to_node
@@ -287,9 +286,8 @@ def transfer_private_root_subgraph(candidate, target, *, interface_signature):
         left = endpoint(src_from, link.from_socket, dst_from, output=True)
         right = endpoint(src_to, link.to_socket, dst_to, output=False)
         # Preserve Blender's multi-input order by copying input-link insertion order.
-        source_links.append((left, right))
         copied_edges.append((link, left, right))
-    for left, right in source_links:
+    for _, left, right in copied_edges:
         target.links.new(left, right)
     # Blender may reset mapping state while links are rebuilt. Restore it last.
     for src in stage.nodes:
@@ -305,7 +303,7 @@ def transfer_private_root_subgraph(candidate, target, *, interface_signature):
                              [nodes[src.name] for src in stage.nodes if _has_local_collection(src)])
     if _interface_signature(target) != interface_signature:
         raise CompileError('Root transfer modified an authoritative interface')
-    for left, right in source_links:
+    for _, left, right in copied_edges:
         if not any(link.from_socket == left and link.to_socket == right for link in target.links):
             raise CompileError('Root transfer lost a private-candidate link')
     return RootSubgraphTransfer(tuple(created), new_input)
