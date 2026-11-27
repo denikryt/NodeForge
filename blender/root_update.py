@@ -18,6 +18,7 @@ from .group_backend import (
     BlenderGroupBuildTransaction, _copy_node_properties, _sync_curve_mapping_state,
     _has_local_collection, _resolve_standalone_copy_socket, _sync_repeat_zone_dynamic_items,
     _verify_standalone_copy, _verify_standalone_defaults,
+    _validate_collection_copy_source, _verify_collection_edges,
     _sync_bundle_dynamic_items,
 )
 from . import raw_nodes
@@ -241,6 +242,7 @@ def _reconnect_boundary(tree, records, matched):
 
 def _copy_missing_old_nodes(tree, backup, old_ptrs):
     """Best-effort local reconstruction, retaining surviving structural nodes."""
+    _validate_collection_copy_source(backup)
     # Old nodes that survived a partial cutover are deliberately not duplicated.
     survived = {node.name: node for node in _ordinary(tree)
                 if node.as_pointer() in old_ptrs}
@@ -269,6 +271,7 @@ def _copy_missing_old_nodes(tree, backup, old_ptrs):
     _sync_bundle_dynamic_items(backup, mapped)
     _sync_curve_mapping_state(backup, mapped)
     io = {n.name: n for n in tree.nodes if n.bl_idname in _IO_TYPES}
+    copied_edges = []
     for link in backup.links:
         source = mapped.get(link.from_node.name) or io.get(link.from_node.name)
         dest = mapped.get(link.to_node.name) or io.get(link.to_node.name)
@@ -278,8 +281,6 @@ def _copy_missing_old_nodes(tree, backup, old_ptrs):
             continue  # Physical I/O-only edges were never deleted.
         def endpoint(original, socket, target, *, output):
             if _has_local_collection(original):
-                if raw_nodes.is_raw_node(original):
-                    return raw_nodes.resolve_cutover_socket(original, socket, target, direction='output' if output else 'input')
                 return _resolve_standalone_copy_socket(original, socket, target, output=output, proofs=proofs)
             return _resolve_socket(target, _socket_ref(original, socket, output=output), output=output)
 
@@ -287,6 +288,7 @@ def _copy_missing_old_nodes(tree, backup, old_ptrs):
         right = endpoint(link.to_node, link.to_socket, dest, output=False)
         if left is None or right is None:
             raise RuntimeError(f'Cannot restore root link {link.from_node.name} -> {link.to_node.name}')
+        copied_edges.append((link, left, right))
         if any(edge.from_socket == left and edge.to_socket == right for edge in tree.links):
             continue
         restored = tree.links.new(left, right)
@@ -299,10 +301,12 @@ def _copy_missing_old_nodes(tree, backup, old_ptrs):
             continue
         target = mapped[original.name]
         _verify_standalone_copy(original, target, proofs=proofs)
+        _verify_standalone_defaults(original, target)
         if raw_nodes.is_raw_node(original):
+            raw_nodes.validate_collection_raw_copy(original, target, proofs=proofs)
             raw_nodes.validate_raw_node_after_cutover(target, tree)
-        else:
-            _verify_standalone_defaults(original, target)
+    _verify_collection_edges(tree, copied_edges,
+                             [mapped[node.name] for node in backup.nodes if _has_local_collection(node)])
     return mapped
 
 

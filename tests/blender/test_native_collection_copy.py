@@ -370,7 +370,8 @@ def test_native_shared_menu_probe_isolation(trees):
     assert snapshot() == before
 
 
-def test_native_index_copy_evaluates_same_geometry(trees):
+@pytest.mark.parametrize("raw_metadata", [False, True])
+def test_native_index_copy_evaluates_same_geometry(trees, raw_metadata):
     """A reordered Index result must actually displace geometry by the intended value."""
     from test_bundle_runtime import _evaluate_single_vertex
     src, dst = trees('Index evaluation'), trees('Index copied evaluation')
@@ -389,6 +390,9 @@ def test_native_index_copy_evaluates_same_geometry(trees):
     src.links.new(combine.outputs[0], move.inputs['Offset'])
     src.links.new(entry.outputs[0], move.inputs['Geometry'])
     src.links.new(move.outputs[0], output.inputs[0])
+    if raw_metadata:
+        from NodeForge.blender import raw_nodes as raw
+        _raw_contract(node, [(node.inputs[2], raw.INPUT_LITERAL)], [node.outputs[0]])
     backend._copy_group_contents(src, dst)
     assert _evaluate_single_vertex(src, 'Original Index') == pytest.approx((12, 0, 0))
     assert _evaluate_single_vertex(dst, 'Copied Index') == pytest.approx((12, 0, 0))
@@ -474,3 +478,294 @@ def test_native_corrupt_ownership_is_rejected(trees, monkeypatch, fault):
     monkeypatch.setattr(backend, '_standalone_socket_layout', corrupt)
     with pytest.raises(CompileError, match='proof|layout'):
         backend._verify_standalone_copy(node, copied, proofs={})
+
+
+def _raw_contract(node, declarations, outputs):
+    """Tag an actual native graph using its current physical endpoints."""
+    from NodeForge.blender import raw_nodes as raw
+    def locator(socket):
+        return {'identifier': socket.identifier, 'socket_type': socket.bl_idname}
+    inputs = []
+    for socket, mode in declarations:
+        record = {'socket': locator(socket), 'mode': mode}
+        if mode == raw.INPUT_LITERAL:
+            record['default'] = socket.default_value
+        inputs.append(record)
+    raw._write_raw_metadata(node, node.bl_idname, {'data_type': node.data_type} if hasattr(node, 'data_type') else {}, inputs,
+                            [raw.RawPhysicalSocketRef(**locator(s)) for s in outputs], raw.RAW_SINGLE_MODE)
+    node['user_metadata'] = {'value': 42, 'name': 'preserve'}
+
+
+def _raw_index_graph(tree, *, gap=False):
+    """Reproduce old-ID collision or a missing old ID independently of the copier."""
+    from NodeForge.blender import raw_nodes as raw
+    node = tree.nodes.new('GeometryNodeIndexSwitch')
+    node.data_type = 'FLOAT'
+    if gap:
+        node.index_switch_items.new()
+        node.index_switch_items.remove(node.index_switch_items[0])
+    else:
+        node.index_switch_items.move(0, 1)
+    node.inputs[0].default_value = 1
+    node.inputs[1].default_value = 12
+    node.inputs[2].default_value = 42 if gap else 11
+    producer = tree.nodes.new('ShaderNodeValue')
+    producer.outputs[0].default_value = 17
+    tree.links.new(producer.outputs[0], node.inputs[1])
+    consumer = tree.nodes.new('ShaderNodeMath')
+    tree.links.new(node.outputs[0], consumer.inputs[0])
+    _raw_contract(node, [(node.inputs[1], raw.INPUT_SINGLE_LINK), (node.inputs[2], raw.INPUT_LITERAL)], [node.outputs[0]])
+    raw.validate_raw_node_after_cutover(node, tree)
+    return node
+
+
+def _copy_raw_role(src, dst, role):
+    """Exercise actual group and root exact-copy entry points."""
+    from types import SimpleNamespace
+    from NodeForge.blender import root_update
+    from NodeForge.blender.root_subgraph_transfer import transfer_private_root_subgraph
+    if role == 'transfer':
+        candidate = SimpleNamespace(stage=src, endpoint=SimpleNamespace(node=None, created_by_attempt=False))
+        transfer_private_root_subgraph(candidate, dst, interface_signature=root_update._interface_signature(dst))
+    elif role == 'root_restore':
+        root_update._copy_missing_old_nodes(dst, src, set())
+    else:
+        backend._copy_group_contents(src, dst, copy_role=role)
+
+
+@pytest.mark.parametrize('role', ['backup', 'cutover', None, 'transfer', 'root_restore'])
+@pytest.mark.parametrize('gap', [False, True])
+def test_raw_native_identity_remap(trees, role, gap):
+    """Raw literals, declared links and metadata follow logical items in every role."""
+    from NodeForge.blender import raw_nodes as raw
+    src, dst = trees('Raw source'), trees('Raw target')
+    node = _raw_index_graph(src, gap=gap)
+    before = _socket_rows(node)
+    source_metadata = node[raw.RAW_INPUTS_JSON_PROP]
+    outputs_metadata = node[raw.RAW_OUTPUTS_JSON_PROP]
+    _copy_raw_role(src, dst, role)
+    copied = dst.nodes[node.name]
+    assert _socket_rows(copied, physical=False) == _socket_rows(node, physical=False)
+    assert _links(dst) == _links(src)
+    assert [s.default_value for s in copied.inputs[:3]] == [1, 12, 42 if gap else 11]
+    assert copied.inputs[1].is_linked and not copied.inputs[2].is_linked
+    spec = raw.raw_node_spec(copied)
+    assert [entry['socket'].identifier for entry in spec['inputs']] == [s.identifier for s in copied.inputs[1:3]]
+    assert spec['inputs'][1]['default'] == (42 if gap else 11)
+    assert copied[raw.RAW_OUTPUTS_JSON_PROP] == outputs_metadata
+    assert copied['user_metadata'].to_dict() == node['user_metadata'].to_dict()
+    assert node[raw.RAW_INPUTS_JSON_PROP] == source_metadata and _socket_rows(node) == before
+    assert copied[raw.RAW_SCHEMA_VERSION_PROP] == node[raw.RAW_SCHEMA_VERSION_PROP] == 2
+    raw.validate_raw_node_after_cutover(copied, dst)
+
+
+@pytest.mark.parametrize('corruption', ['missing', 'wrong_class', 'wrong_direction', 'duplicate', 'stale_value', 'stale_mode', 'stale_prop', 'v1_invalid'])
+def test_raw_invalid_source_rejected_before_copy_reset(trees, corruption, monkeypatch):
+    """Invalid source metadata cannot trigger a rebuild or destructive destination reset."""
+    from NodeForge.blender import raw_nodes as raw
+    src, dst = trees('Invalid raw source'), trees('Existing destination')
+    node = _raw_index_graph(src)
+    prior = dst.nodes.new('ShaderNodeValue')
+    prior.outputs[0].default_value = 19
+    pointer = prior.as_pointer()
+    entries = json.loads(node[raw.RAW_INPUTS_JSON_PROP])
+    if corruption == 'missing':
+        entries[1]['socket']['identifier'] = 'missing'
+    elif corruption == 'wrong_class':
+        entries[1]['socket']['socket_type'] = 'NodeSocketInt'
+    elif corruption == 'wrong_direction':
+        entries[1]['socket']['identifier'] = node.outputs[0].identifier
+    elif corruption == 'duplicate':
+        entries.append(entries[1].copy())
+    elif corruption == 'stale_value':
+        entries[1]['default'] = 77
+    elif corruption == 'stale_mode':
+        entries[0]['mode'] = raw.INPUT_LITERAL
+        entries[0]['default'] = 12
+    elif corruption == 'stale_prop':
+        node[raw.RAW_PROPS_JSON_PROP] = json.dumps({'data_type': 'INT'})
+    else:
+        del node[raw.RAW_SCHEMA_VERSION_PROP]
+        entries = [{'name': 'missing', 'mode': raw.INPUT_LITERAL, 'default': 11}]
+        node[raw.RAW_OUTPUTS_JSON_PROP] = json.dumps([node.outputs[0].name])
+    node[raw.RAW_INPUTS_JSON_PROP] = json.dumps(entries)
+    def forbidden(*args, **kwargs):
+        pytest.fail('invalid source must not enter reconstruction')
+    monkeypatch.setattr(backend, '_reconstruct_collection', forbidden)
+    with pytest.raises((CompileError, RuntimeError)):
+        backend._copy_group_contents(src, dst, copy_role='cutover')
+    assert len(dst.nodes) == 1 and dst.nodes[0].as_pointer() == pointer
+    assert dst.nodes[0].outputs[0].default_value == 19
+
+
+def test_raw_v1_name_contract(trees):
+    """Legacy name-based contracts are preserved when they resolve to the same item."""
+    from NodeForge.blender import raw_nodes as raw
+    src, dst = trees('Legacy source'), trees('Legacy copy')
+    node = _raw_index_graph(src, gap=True)
+    entries = json.loads(node[raw.RAW_INPUTS_JSON_PROP])
+    for entry, socket in zip(entries, node.inputs[1:3]):
+        del entry['socket']
+        entry['name'] = socket.name
+    del node[raw.RAW_SCHEMA_VERSION_PROP]
+    node[raw.RAW_INPUTS_JSON_PROP] = json.dumps(entries)
+    node[raw.RAW_OUTPUTS_JSON_PROP] = json.dumps([node.outputs[0].name])
+    raw.validate_raw_node_after_cutover(node, src)
+    backend._copy_group_contents(src, dst)
+    copy = dst.nodes[node.name]
+    assert raw.raw_node_spec(copy)['schema_version'] == 1
+    assert copy[raw.RAW_INPUTS_JSON_PROP] == node[raw.RAW_INPUTS_JSON_PROP]
+    assert _socket_rows(copy, physical=False) == _socket_rows(node, physical=False)
+
+
+def test_raw_wrong_destination_existing_id_rejected(trees):
+    """Even an individually valid target locator must agree with source correspondence."""
+    from NodeForge.blender import raw_nodes as raw
+    src, dst = trees('Wrong ID source'), trees('Wrong ID copy')
+    node = _raw_index_graph(src)
+    # Both values are equal and unlinked, so local raw validation cannot see
+    # the identity error when a declared locator points at the other item.
+    src.links.remove(node.inputs[1].links[0])
+    node.inputs[1].default_value = node.inputs[2].default_value
+    _raw_contract(node, [(node.inputs[2], raw.INPUT_LITERAL)], [node.outputs[0]])
+    backend._copy_group_contents(src, dst)
+    copied = dst.nodes[node.name]
+    entries = json.loads(copied[raw.RAW_INPUTS_JSON_PROP])
+    entries[0]['socket']['identifier'] = copied.inputs[1].identifier
+    copied[raw.RAW_INPUTS_JSON_PROP] = json.dumps(entries)
+    raw.validate_raw_node_after_cutover(copied, dst)
+    with pytest.raises(CompileError, match='proved correspondence'):
+        raw.validate_collection_raw_copy(node, copied, proofs={})
+
+
+@pytest.mark.parametrize('role', ['backup', 'cutover', None, 'transfer', 'root_restore'])
+def test_raw_menu_rebuild_projects_final_locators(trees, role):
+    """An undeclared empty Menu selection survives; declared value uses final proof."""
+    from NodeForge.blender import raw_nodes as raw
+    src, dst = trees('Raw Menu source'), trees('Raw Menu copy')
+    node = src.nodes.new('GeometryNodeMenuSwitch')
+    node.data_type = 'FLOAT'
+    node.inputs[0].default_value = 'B'
+    node.enum_items.remove(node.enum_items[1])
+    node.enum_items.new('C')
+    node.inputs[1].default_value = 11
+    node.inputs[2].default_value = 22
+    _raw_contract(node, [(node.inputs[2], raw.INPUT_LITERAL)], [node.outputs[0]])
+    assert node.inputs[0].default_value == ''
+    _copy_raw_role(src, dst, role)
+    copied = dst.nodes[node.name]
+    assert copied.inputs[0].default_value == ''
+    assert [s.default_value for s in copied.inputs[1:3]] == [11, 22]
+    assert raw.raw_node_spec(copied)['inputs'][0]['socket'].identifier == copied.inputs[2].identifier
+    raw.validate_raw_node_after_cutover(copied, dst)
+
+
+def test_raw_gapped_late_root_rollback(trees, monkeypatch):
+    """AR-02: actual root late failure restores the raw literal and logical link."""
+    from NodeForge import compiler
+    from NodeForge.blender import root_update, raw_nodes as raw
+    tree = trees('Raw late rollback')
+    tree.interface.new_socket(name='Geometry', in_out='INPUT', socket_type='NodeSocketGeometry')
+    tree.interface.new_socket(name='Geometry', in_out='OUTPUT', socket_type='NodeSocketGeometry')
+    io = [tree.nodes.new(kind) for kind in ('NodeGroupInput', 'NodeGroupOutput')]
+    io_ptrs = [n.as_pointer() for n in io]
+    node = _raw_index_graph(tree, gap=True)
+    name = node.name
+    logical = _socket_rows(node, physical=False)
+    links = _links(tree)
+    inventory = {g.as_pointer() for g in bpy.data.node_groups}
+    def fail(*args):
+        raise RuntimeError('injected after old-node deletion')
+    monkeypatch.setattr(root_update, '_reconnect_boundary', fail)
+    with pytest.raises(root_update.RootUpdateError, match='injected after old-node deletion') as error:
+        compiler.compile_source_in_tree('a = cube(4)\n', tree, module_context='test:raw-gap')
+    assert 'root restoration:' not in str(error.value)
+    restored = tree.nodes[name]
+    assert _socket_rows(restored, physical=False) == logical
+    assert _links(tree) == links
+    assert restored.inputs[2].default_value == 42
+    assert raw.raw_node_spec(restored)['inputs'][1]['socket'].identifier == restored.inputs[2].identifier
+    assert [n.as_pointer() for n in io] == io_ptrs
+    assert {g.as_pointer() for g in bpy.data.node_groups} == inventory
+
+
+@pytest.mark.parametrize('role', ['backup', 'transfer', 'root_restore'])
+def test_collection_multi_input_native_order(trees, role):
+    """Preserve real native sort order including ordinary producers of a mixed input."""
+    src, dst = trees('Multi source'), trees('Multi copy')
+    node = src.nodes.new('GeometryNodeIndexSwitch')
+    node.data_type = 'GEOMETRY'
+    node.index_switch_items.move(0, 1)
+    join = src.nodes.new('GeometryNodeJoinGeometry')
+    a, b = [src.nodes.new('GeometryNodeMeshCube') for _ in range(2)]
+    for producer in (a, node, b):
+        src.links.new(producer.outputs[0], join.inputs[0])
+    src.links[0].swap_multi_input_sort_id(src.links[2])
+    order = [link.from_node.name for link in sorted(join.inputs[0].links, key=lambda l: l.multi_input_sort_id)]
+    _copy_raw_role(src, dst, role)
+    assert [link.from_node.name for link in sorted(dst.nodes[join.name].inputs[0].links, key=lambda l: l.multi_input_sort_id)] == order
+
+
+@pytest.mark.parametrize('role', ['backup', 'transfer', 'root_restore'])
+def test_raw_capture_dynamic_output_and_manual_edges(trees, role):
+    """Both raw directions and undeclared edges use the final logical ownership proof."""
+    from NodeForge.blender import raw_nodes as raw
+    src, dst = trees('Capture raw source'), trees('Capture raw copy')
+    node = src.nodes.new('GeometryNodeCaptureAttribute')
+    _populate(node, 'capture_items', 6)
+    cube = src.nodes.new('GeometryNodeMeshCube')
+    src.links.new(cube.outputs[0], node.inputs[0])
+    val = next(s for s in node.inputs if s.bl_idname == 'NodeSocketFloat')
+    out = next(s for s in node.outputs if s.bl_idname == 'NodeSocketFloat')
+    consumer = src.nodes.new('ShaderNodeMath')
+    src.links.new(out, consumer.inputs[0])
+    other = src.nodes.new('GeometryNodeTransform')
+    src.links.new(node.outputs[0], other.inputs[0])
+    _raw_contract(node, [(val, raw.INPUT_LITERAL)], [out])
+    entries = json.loads(node[raw.RAW_INPUTS_JSON_PROP])
+    entries[0]['socket']['user_field'] = 'preserve'
+    node[raw.RAW_INPUTS_JSON_PROP] = json.dumps(entries)
+    outputs = json.loads(node[raw.RAW_OUTPUTS_JSON_PROP])
+    outputs[0]['user_field'] = 42
+    node[raw.RAW_OUTPUTS_JSON_PROP] = json.dumps(outputs)
+    raw.validate_raw_node_after_cutover(node, src)
+    _copy_raw_role(src, dst, role)
+    copied = dst.nodes[node.name]
+    assert _socket_rows(copied, physical=False) == _socket_rows(node, physical=False)
+    assert _links(dst) == _links(src)
+    target_val = copied.inputs[list(node.inputs).index(val)]
+    target_out = copied.outputs[list(node.outputs).index(out)]
+    spec = raw.raw_node_spec(copied)
+    assert spec['inputs'][0]['socket'].identifier == target_val.identifier
+    assert spec['outputs'][0].identifier == target_out.identifier
+    assert json.loads(copied[raw.RAW_INPUTS_JSON_PROP])[0]['socket']['user_field'] == 'preserve'
+    assert json.loads(copied[raw.RAW_OUTPUTS_JSON_PROP])[0]['user_field'] == 42
+    raw.validate_raw_node_after_cutover(copied, dst)
+
+
+@pytest.mark.parametrize('fault', ['undeclared_default', 'wrong_endpoint'])
+def test_raw_post_link_parity_rejects_corruption(trees, fault, monkeypatch):
+    """Inject corruption after link creation, before final exact-copy validation."""
+    src, dst = trees('Post link source'), trees('Post link copy')
+    node = _raw_index_graph(src)
+    if fault == 'undeclared_default':
+        verify = backend._verify_standalone_defaults
+        def fail(source, target):
+            if target.id_data == dst and len(dst.links):
+                target.inputs[0].default_value = 7
+            return verify(source, target)
+        monkeypatch.setattr(backend, '_verify_standalone_defaults', fail)
+        expected = 'default readback differs'
+    else:
+        verify = backend._verify_collection_edges
+        def fail(tree, records, nodes):
+            copied = dst.nodes[node.name]
+            link = copied.outputs[0].links[0]
+            right = link.to_node.inputs[1]
+            tree.links.remove(link)
+            tree.links.new(copied.outputs[0], right)
+            return verify(tree, records, nodes)
+        monkeypatch.setattr(backend, '_verify_collection_edges', fail)
+        expected = 'linked endpoints differ'
+    with pytest.raises(CompileError, match=expected):
+        backend._copy_group_contents(src, dst)

@@ -15,7 +15,7 @@ from .group_backend import (
     _sync_bundle_dynamic_items,
     _has_local_collection, _verify_standalone_copy,
     _resolve_standalone_copy_socket, _verify_standalone_defaults,
-    _sync_repeat_zone_dynamic_items,
+    _sync_repeat_zone_dynamic_items, _validate_collection_copy_source, _verify_collection_edges,
 )
 from .root_update import _interface_signature
 
@@ -69,7 +69,7 @@ def _default_equal(a, b):
     return a == b
 
 
-def _strict_rna_equal(src, dst):
+def _strict_rna_equal(src, dst, *, proofs=None):
     """Verify supported writable properties after the existing node copier."""
     ignored = {
         'rna_type', 'type', 'dimensions', 'inputs', 'outputs', 'internal_links',
@@ -105,6 +105,9 @@ def _strict_rna_equal(src, dst):
                 if not _default_equal(old, new):
                     raise CompileError(f'Node property {src.bl_idname}.{name} changed during transfer')
 
+    if raw_nodes.is_raw_node(src) and _has_local_collection(src):
+        raw_nodes.validate_collection_raw_copy(src, dst, proofs=proofs)
+        return
     if set(src.keys()) != set(dst.keys()):
         raise CompileError(f'Node custom metadata differs after copying {src.bl_idname}')
     for key in src.keys():
@@ -142,8 +145,8 @@ def _strict_node_parity(src, dst, *, proofs=None):
         raise CompileError(f'Root transfer lost dynamic items on {src.bl_idname}')
     if _curve_contract(src) != _curve_contract(dst):
         raise CompileError(f'Root transfer lost CurveMapping on {src.bl_idname}')
-    _strict_rna_equal(src, dst)
-    if _has_local_collection(src) and not raw_nodes.is_raw_node(src):
+    _strict_rna_equal(src, dst, proofs=proofs)
+    if _has_local_collection(src):
         _verify_standalone_defaults(src, dst)
         return
     for direction in (False, True):
@@ -157,6 +160,7 @@ def _strict_preflight(stage, target, endpoint, interface_signature):
     if (_interface_signature(target) != interface_signature
             or _interface_signature(stage) != interface_signature):
         raise CompileError('Root interface changed before strict transfer')
+    _validate_collection_copy_source(stage)
     group_inputs = [node for node in stage.nodes if node.bl_idname == 'NodeGroupInput']
     if any(node.bl_idname == 'NodeGroupOutput' for node in stage.nodes):
         raise CompileError('Root backend inserted unapproved structural Group Output nodes')
@@ -260,14 +264,15 @@ def transfer_private_root_subgraph(candidate, target, *, interface_signature):
         if dst is not original_input and not hasattr(src, 'mapping'):
             _strict_node_parity(src, dst, proofs=proofs)
     source_links = []
+    copied_edges = []
     for link in stage.links:
         src_from, src_to = link.from_node, link.to_node
         dst_from, dst_to = nodes[src_from.name], nodes[src_to.name]
         def endpoint(src, socket, dst, *, output):
-            if raw_nodes.is_raw_node(src):
-                return raw_nodes.resolve_cutover_socket(src, socket, dst, direction='output' if output else 'input')
             if _has_local_collection(src):
                 return _resolve_standalone_copy_socket(src, socket, dst, output=output, proofs=proofs)
+            if raw_nodes.is_raw_node(src):
+                return raw_nodes.resolve_cutover_socket(src, socket, dst, direction='output' if output else 'input')
             original = src.outputs if output else src.inputs
             copied = dst.outputs if output else dst.inputs
             try:
@@ -283,6 +288,7 @@ def transfer_private_root_subgraph(candidate, target, *, interface_signature):
         right = endpoint(src_to, link.to_socket, dst_to, output=False)
         # Preserve Blender's multi-input order by copying input-link insertion order.
         source_links.append((left, right))
+        copied_edges.append((link, left, right))
     for left, right in source_links:
         target.links.new(left, right)
     # Blender may reset mapping state while links are rebuilt. Restore it last.
@@ -292,11 +298,11 @@ def transfer_private_root_subgraph(candidate, target, *, interface_signature):
             _copy_curve_mapping(src.mapping, dst.mapping)
             _strict_node_parity(src, dst, proofs=proofs)
         if _has_local_collection(src):
-            _verify_standalone_copy(src, dst, proofs=proofs)
-            if not raw_nodes.is_raw_node(src):
-                _verify_standalone_defaults(src, dst)
+            _strict_node_parity(src, dst, proofs=proofs)
         if raw_nodes.is_raw_node(src) and dst is not original_input:
             raw_nodes.validate_raw_node_after_cutover(dst, target)
+    _verify_collection_edges(target, copied_edges,
+                             [nodes[src.name] for src in stage.nodes if _has_local_collection(src)])
     if _interface_signature(target) != interface_signature:
         raise CompileError('Root transfer modified an authoritative interface')
     for left, right in source_links:

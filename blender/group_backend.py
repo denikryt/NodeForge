@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 import warnings
+from collections import Counter
 from dataclasses import replace
 from typing import Callable
 
@@ -269,6 +270,7 @@ def _copy_group_contents(src_group, dst_group, *, copy_role=None):
     ``copy_role`` is used only by Blender regression failure injection so backup
     construction and destructive authoritative cutover can be tested separately.
     """
+    _validate_collection_copy_source(src_group)
     _reset_node_group(dst_group)
     global _TEST_CUTOVER_FAIL_AFTER_RESET, _TEST_BACKUP_COPY_FAIL_AFTER_RESET
     if copy_role == "cutover" and _TEST_CUTOVER_FAIL_AFTER_RESET:
@@ -292,6 +294,7 @@ def _copy_group_contents(src_group, dst_group, *, copy_role=None):
     _sync_repeat_zone_dynamic_items(src_group, node_map)
     _sync_bundle_dynamic_items(src_group, node_map)
 
+    copied_edges = []
     for src_link in src_group.links:
         from_node = node_map.get(src_link.from_node.name)
         to_node = node_map.get(src_link.to_node.name)
@@ -301,6 +304,7 @@ def _copy_group_contents(src_group, dst_group, *, copy_role=None):
                 or _has_local_collection(src_link.to_node)):
             from_socket = _copy_link_endpoint(src_link.from_node, src_link.from_socket, from_node, output=True, proofs=proofs)
             to_socket = _copy_link_endpoint(src_link.to_node, src_link.to_socket, to_node, output=False, proofs=proofs)
+            copied_edges.append((src_link, from_socket, to_socket))
             link = dst_group.links.new(from_socket, to_socket)
             if link.from_socket != from_socket or link.to_socket != to_socket or not link.is_valid:
                 raise CompileError("Collection copy: Blender did not preserve the linked endpoints")
@@ -309,22 +313,29 @@ def _copy_group_contents(src_group, dst_group, *, copy_role=None):
             from_socket = _raw_nodes.resolve_cutover_socket(src_link.from_node, src_link.from_socket, from_node, direction="output")
             to_socket = _raw_nodes.resolve_cutover_socket(src_link.to_node, src_link.to_socket, to_node, direction="input")
             dst_group.links.new(from_socket, to_socket)
+            copied_edges.append((src_link, from_socket, to_socket))
             continue
         try:
             from_index = list(src_link.from_node.outputs).index(src_link.from_socket)
             to_index = list(src_link.to_node.inputs).index(src_link.to_socket)
-            dst_group.links.new(from_node.outputs[from_index], to_node.inputs[to_index])
+            from_socket, to_socket = from_node.outputs[from_index], to_node.inputs[to_index]
+            dst_group.links.new(from_socket, to_socket)
         except Exception:
             # Name fallback for ordinary dynamic sockets only.
-            dst_group.links.new(from_node.outputs[src_link.from_socket.name], to_node.inputs[src_link.to_socket.name])
+            from_socket, to_socket = from_node.outputs[src_link.from_socket.name], to_node.inputs[src_link.to_socket.name]
+            dst_group.links.new(from_socket, to_socket)
+        copied_edges.append((src_link, from_socket, to_socket))
     for src_node in src_group.nodes:
         dst_node = node_map[src_node.name]
         if _has_local_collection(src_node):
             _verify_standalone_copy(src_node, dst_node, proofs=proofs)
-            if not _raw_nodes.is_raw_node(src_node):
-                _verify_standalone_defaults(src_node, dst_node)
+            _verify_standalone_defaults(src_node, dst_node)
+            if _raw_nodes.is_raw_node(src_node):
+                _raw_nodes.validate_collection_raw_copy(src_node, dst_node, proofs=proofs)
         if _raw_nodes.is_raw_node(dst_node):
             _raw_nodes.validate_raw_node_after_cutover(dst_node, dst_group)
+    _verify_collection_edges(dst_group, copied_edges,
+                             [node_map[node.name] for node in src_group.nodes if _has_local_collection(node)])
     # CurveMapping can be reset by Blender while node sockets/topology are being
     # reconstructed, so restore it only after the final links are in place.
     _sync_curve_mapping_state(src_group, node_map)
@@ -736,13 +747,62 @@ def _resolve_standalone_copy_socket(src, socket, dst, *, output, proofs=None):
     return target_sockets[list(source_sockets).index(socket)]
 
 
+def _validate_collection_copy_source(tree):
+    """Admit a complete source and validate raw contracts before destination edits."""
+    from . import raw_nodes
+    admitted = set()
+    for node in tree.nodes:
+        if _has_local_collection(node):
+            admitted.add(node)
+            if raw_nodes.is_raw_node(node):
+                raw_nodes.validate_raw_node_after_cutover(node, tree)
+    if admitted and any(not link.is_valid for link in tree.links
+                        if link.from_node in admitted or link.to_node in admitted):
+        raise CompileError("Collection copy: invalid source link")
+    return bool(admitted)
+
+
+def _verify_collection_edges(tree, copied_edges, nodes):
+    """Verify final collection topology and restore native multi-input order.
+
+    Records include ordinary edges too: a multi-input receiving a collection
+    output may also have ordinary producers, whose relative order matters.
+    """
+    node_set = set(nodes)
+    if not node_set:
+        return
+    expected = [(left, right) for _, left, right in copied_edges
+                if left.node in node_set or right.node in node_set]
+    actual = [link for link in tree.links
+              if link.from_node in node_set or link.to_node in node_set]
+    if Counter((link.from_socket, link.to_socket) for link in actual) != Counter(expected):
+        raise CompileError("Collection copy: final linked endpoints differ")
+    if any(not link.is_valid for link in actual):
+        raise CompileError("Collection copy: invalid final link")
+    for socket in {right for _, right in expected if right.is_multi_input}:
+        desired = [left for _, left, right in sorted(copied_edges, key=lambda row: row[0].multi_input_sort_id)
+                   if right == socket]
+        ordered = sorted(socket.links, key=lambda link: link.multi_input_sort_id)
+        if Counter(link.from_socket for link in ordered) != Counter(desired):
+            raise CompileError("Collection copy: multi-input topology differs")
+        # Blender insertion order need not equal the source's native sort order
+        # (for example after a manual reorder or a partial rollback).
+        for index, left in enumerate(desired):
+            if ordered[index].from_socket != left:
+                match = next(i for i in range(index + 1, len(ordered)) if ordered[i].from_socket == left)
+                ordered[index].swap_multi_input_sort_id(ordered[match])
+                ordered[index], ordered[match] = ordered[match], ordered[index]
+        if [link.from_socket for link in sorted(socket.links, key=lambda link: link.multi_input_sort_id)] != desired:
+            raise CompileError("Collection copy: multi-input order differs")
+
+
 def _copy_link_endpoint(src, socket, dst, *, output, proofs=None):
     """Preserve the raw/collection/ordinary copy policy of one link endpoint."""
     from . import raw_nodes
-    if raw_nodes.is_raw_node(src):
-        return raw_nodes.resolve_cutover_socket(src, socket, dst, direction="output" if output else "input")
     if _has_local_collection(src):
         return _resolve_standalone_copy_socket(src, socket, dst, output=output, proofs=proofs)
+    if raw_nodes.is_raw_node(src):
+        return raw_nodes.resolve_cutover_socket(src, socket, dst, direction="output" if output else "input")
     source_sockets = src.outputs if output else src.inputs
     target_sockets = dst.outputs if output else dst.inputs
     try:
