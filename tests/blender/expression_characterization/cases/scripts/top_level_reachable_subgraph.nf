@@ -1,4 +1,4 @@
-# Only functions reached by executable top-level statements are materialized.
+# Explicit calls and independent uninvoked entries appear at root; dependencies stay nested.
 base = cube(1.0)
 through_chain = a(base)
 direct_leaf = c(base)

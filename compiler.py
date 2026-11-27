@@ -240,7 +240,7 @@ def compile_source_in_tree(source: str, target, *, module_context: str | None = 
         _validate_composition_root_owner_id(target, physical_root_id)
         reject_node_local_animation(target)
         updated = replace_prepared_root(prepared, target, backend, session,
-                                       root_owner_uuid=physical_root_id)
+                                       root_owner_uuid=physical_root_id, snapshot=snapshot)
         return RootCompileResult(target, 'ROOT_REPLACEMENT', updated.skipped_boundary_links)
 
     transaction = BlenderGroupBuildTransaction()

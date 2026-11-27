@@ -58,11 +58,11 @@ def ok(value: Float = len(L)):
 result = ok()
 '''
     tree, calls = _compose(source, 'isolated-list')
-    assert [call.node_tree.get('nodeforge_module_name') for call in calls] == ['ok']
+    assert [call.node_tree.get('nodeforge_module_name') for call in calls] == ['ok', 'unused']
     assert round(_evaluate_float_output(tree, calls[0].outputs[0]), 5) == 1.0
 
 
-def test_false_recursion_from_sibling_runtime_if_arm_does_not_reject_unused():
+def test_false_recursion_from_sibling_runtime_if_arm_reports_demanded_body_error():
     """Unknown branch mutation cannot leak into its alternative sibling arm."""
     source = '''L = [1]
 
@@ -79,8 +79,20 @@ def ok():
 
 result = ok()
 '''
-    tree, calls = _compose(source, 'false-conditional-cycle')
-    assert [call.node_tree.get('nodeforge_module_name') for call in calls] == ['ok']
+    tree = bpy.data.node_groups.new('NF-Rev2-false-conditional-cycle', 'GeometryNodeTree')
+    original = tree.nodes.new('GeometryNodeMeshCube').as_pointer()
+    inventory = {group.as_pointer() for group in bpy.data.node_groups}
+    prepared, *_ = compiler._prepare_direct_source(source, tree, module_context='text:false-cycle')
+    assert not prepared.source_call_graph.edges
+    # The now-demanded function has a separately unsupported runtime list mutation.
+    with pytest.raises(CompileError, match=r'append\(\) cannot promote a compile-time list'):
+        compile_root(source, tree, module_context='text:false-cycle')
+    assert [node.as_pointer() for node in tree.nodes] == [original]
+    assert {group.as_pointer() for group in bpy.data.node_groups} == inventory
+    valid = source.replace('        L.append(2)', '        value = 2.0').replace(
+        '        if len(L) == 2:\n            unused(flag)', '        value = 1.0')
+    tree, calls = _compose(valid, 'valid-conditional-siblings')
+    assert [call.node_tree.get('nodeforge_module_name') for call in calls] == ['ok', 'unused']
     assert round(_evaluate_float_output(tree, calls[0].outputs[0]), 5) == 1.0
 
 
@@ -123,7 +135,7 @@ y = g(2.0)
             if n.bl_idname == 'GeometryNodeGroup'] == ['h']
     second_source = source.replace('x = f(5.0)\n', '')
     second, second_calls = _compose(second_source, 'lexical-shadow-g')
-    assert len(second_calls) == 1
+    assert [call.node_tree.get('nodeforge_module_name') for call in second_calls] == ['g', 'f']
     assert round(_evaluate_float_output(second, second_calls[0].outputs[0]), 5) == 20.0
 
 
@@ -200,7 +212,7 @@ def outer({parameter}) -> Float:
     return copied
 result = outer(5.0)'''
     tree, calls = _compose(source, 'copied-numeric-' + str(expected))
-    assert [call.node_tree.get('nodeforge_module_name') for call in calls] == ['outer']
+    assert [call.node_tree.get('nodeforge_module_name') for call in calls] == ['outer', 'helper']
     assert not any(n.bl_idname == 'GeometryNodeGroup' for n in calls[0].node_tree.nodes)
     assert round(_evaluate_float_output(tree, calls[0].outputs[0]), 5) == expected
 

@@ -162,8 +162,8 @@ def test_top_level_baselines_pin_sharing_and_import_side_effects():
     assert nested == [imported["nodes"][0]["group"]["id"]]
 
 
-def test_top_level_baselines_pin_nesting_and_absent_unused_functions():
-    """A definition chain materializes three levels; shadowed defs remain unused."""
+def test_top_level_baselines_pin_nesting_and_independent_functions():
+    """A definition chain materializes three levels; independent shadowed defs are placed."""
     definitions = load_case_baseline("top_level_definition_chain")
     assert [node["definition"] for node in definitions["graph"]["nodes"]] == ["entry", "independent"]
     published = {item["name"]: item["graph"] for item in definitions["definitions"]}
@@ -174,7 +174,8 @@ def test_top_level_baselines_pin_nesting_and_absent_unused_functions():
     assert any(node["bl_idname"] == "ShaderNodeMath" for node in leaf["nodes"])
 
     shadowed = load_case_baseline("top_level_lexical_shadowing")["graph"]
-    assert len(shadowed["nodes"]) == 1
+    assert len(shadowed["nodes"]) == 2
+    assert shadowed["nodes"][0]["group"]["id"] != shadowed["nodes"][1]["group"]["id"]
     assert all(node["bl_idname"] != "GeometryNodeGroup"
                for node in shadowed["nodes"][0]["group"]["graph"]["nodes"])
 
@@ -212,13 +213,14 @@ def test_groups_only_baselines_place_entries_and_share_helper():
         assert any(node["bl_idname"] == "GeometryNodeGroup" for node in groups[name]["nodes"])
 
 
-def test_top_level_baseline_pins_only_reachable_function_groups():
-    """A→B→C and direct C share one leaf; D and E→B stay unmaterialized."""
+def test_top_level_baseline_pins_explicit_and_independent_function_groups():
+    """A→B→C and direct C share one leaf; independent D and E are placed."""
     graph = load_case_baseline("top_level_reachable_subgraph")["graph"]
     root_nodes = graph["nodes"]
     assert [node["bl_idname"] for node in root_nodes] == [
         "GeometryNodeMeshCube", "GeometryNodeGroup",
         "GeometryNodeGroup", "GeometryNodeMeshCube",
+        "GeometryNodeGroup", "GeometryNodeGroup",
     ]
     assert graph["links"] == [
         {"from": ["n0", "Mesh"], "to": ["n1", "Socket_0"]},
@@ -229,6 +231,8 @@ def test_top_level_baseline_pins_only_reachable_function_groups():
     b = next(node["group"] for node in a["graph"]["nodes"] if "group" in node)
     c = next(node["group"] for node in b["graph"]["nodes"] if "group" in node)
     direct_c = root_nodes[2]["group"]
+    wrapper = root_nodes[5]["group"]["graph"]
+    assert [node["group"] for node in wrapper["nodes"] if "group" in node] == [{"id": b["id"], "unique": False}]
     assert len({a["id"], b["id"], c["id"]}) == 3
     assert direct_c == {"id": c["id"], "unique": False}
     assert [node["bl_idname"] for node in c["graph"]["nodes"]] == [

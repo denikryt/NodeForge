@@ -177,3 +177,28 @@ def entry(radius: Float):
         assert inner.inputs['top'].links[0].from_socket.name == 'Top'
     finally:
         local_sources.unlink_local_source_folder(str(folder))
+
+
+def test_compile_operator_mixed_preview_twice(editor_context):
+    """The registered operator places independent groups inside the active tree once."""
+    area, tree, text = editor_context
+    text.write('''def a() -> Geometry:
+    return cube(1)
+def helper() -> Geometry:
+    return cube(2)
+def preview() -> Geometry:
+    return helper()
+result = a()
+''')
+    owners = None
+    for _ in range(2):
+        with bpy.context.temp_override(area=area):
+            assert bpy.ops.gn_script_mvp.compile_expression() == {'FINISHED'}
+        groups = [node for node in tree.nodes if node.bl_idname == 'GeometryNodeGroup']
+        assert [node.node_tree.get('nodeforge_module_name') for node in groups] == ['a', 'preview']
+        child, = [node for node in groups[1].node_tree.nodes if node.bl_idname == 'GeometryNodeGroup']
+        assert child.node_tree.get('nodeforge_module_name') == 'helper'
+        actual = [node.node_tree.as_pointer() for node in groups] + [child.node_tree.as_pointer()]
+        assert owners is None or actual == owners
+        owners = actual
+        assert not tree.links and not tree.interface.items_tree

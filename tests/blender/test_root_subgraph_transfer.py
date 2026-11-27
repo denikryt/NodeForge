@@ -19,9 +19,9 @@ def _stage(source='x = cube(1)', *, existing_input=False):
     if existing_input:
         entry = root.nodes.new('NodeGroupInput')
         entry.location = (-340, 120)
-    prepared, backend, session = _prepare(source, root)
+    prepared, backend, session, snapshot = _prepare(source, root)
     tx = BlenderGroupBuildTransaction()
-    candidate = build_private_root_candidate(prepared, root, backend, session, transaction=tx,
+    candidate = build_private_root_candidate(prepared, root, backend, session, snapshot=snapshot, transaction=tx,
                                               root_owner_uuid=new_root_owner_id())
     return root, original, candidate, tx
 
@@ -167,9 +167,9 @@ def test_transfer_raw_nonconsecutive_native_input_and_exact_link(existing_input)
     old = root.nodes.new('GeometryNodeMeshCube')
     source = ('value = node("NodeGroupInput", output=ID("'+radius.identifier+'"), typ=Float)\n'
               'a = cube(value)')
-    prepared, backend, session = _prepare(source, root)
+    prepared, backend, session, snapshot = _prepare(source, root)
     tx = BlenderGroupBuildTransaction()
-    candidate = build_private_root_candidate(prepared, root, backend, session, transaction=tx,
+    candidate = build_private_root_candidate(prepared, root, backend, session, snapshot=snapshot, transaction=tx,
                                               root_owner_uuid=new_root_owner_id())
     try:
         nodes = transfer_private_root_subgraph(candidate, root, interface_signature=_interface_signature(root))

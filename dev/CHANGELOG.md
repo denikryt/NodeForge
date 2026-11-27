@@ -883,3 +883,7 @@ lifecycle.
 ## 0.103.1
 
 - Place compiled entry function groups in the active Geometry Nodes tree while preserving existing nodes and links.
+
+## 0.103.2
+
+- Place uncalled independent function groups alongside top-level nodes in Compile Script, without duplicate instances on recompilation.

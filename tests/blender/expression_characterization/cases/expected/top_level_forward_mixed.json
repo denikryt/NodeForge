@@ -105,6 +105,53 @@
         "bl_idname": "GeometryNodeMeshCube",
         "id": "n2",
         "properties": {}
+      },
+      {
+        "bl_idname": "GeometryNodeGroup",
+        "group": {
+          "graph": {
+            "interface": [
+              {
+                "in_out": "OUTPUT",
+                "name": "Geometry",
+                "socket_type": "NodeSocketGeometry"
+              },
+              {
+                "in_out": "INPUT",
+                "name": "geometry",
+                "socket_type": "NodeSocketGeometry"
+              }
+            ],
+            "links": [
+              {
+                "from": [
+                  "n0",
+                  "Socket_0"
+                ],
+                "to": [
+                  "n1",
+                  "Socket_1"
+                ]
+              }
+            ],
+            "nodes": [
+              {
+                "bl_idname": "NodeGroupInput",
+                "id": "n0",
+                "properties": {}
+              },
+              {
+                "bl_idname": "NodeGroupOutput",
+                "id": "n1",
+                "properties": {}
+              }
+            ]
+          },
+          "id": "g2",
+          "unique": false
+        },
+        "id": "n3",
+        "properties": {}
       }
     ]
   },

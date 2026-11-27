@@ -49,7 +49,7 @@ def _new_private_copy(target):
         raise
 
 
-def build_private_root_candidate(prepared, target, backend, session, *, transaction, root_owner_uuid):
+def build_private_root_candidate(prepared, target, backend, session, *, transaction, root_owner_uuid, snapshot):
     """Lower physical root IR into private ``target.copy()`` only, never the user root."""
     from .direct_composition import compose_prepared_initial
 
@@ -72,7 +72,7 @@ def build_private_root_candidate(prepared, target, backend, session, *, transact
             raise CompileError('Authoritative root interface changed before private lowering')
         compose_prepared_initial(
             prepared, stage, backend, session, transaction=transaction,
-            root_input_endpoint=endpoint, generated_resource_transaction=tx,
+            root_input_endpoint=endpoint, generated_resource_transaction=tx, snapshot=snapshot,
         )
         if (_interface_signature(stage) != stage_signature
                 or _interface_signature(target) != source_signature):

@@ -60,7 +60,9 @@ def test_reload_ignores_unrelated_sibling_and_module_constant():
     )
     base = bpy.data.node_groups.new("NF-fingerprint-sibling-base", "GeometryNodeTree")
     compile_root(source, base, module_context=context)
-    call, = (node for node in base.nodes if node.bl_idname == "GeometryNodeGroup")
+    calls = [node for node in base.nodes if node.bl_idname == "GeometryNodeGroup"]
+    assert [node.node_tree.get("nodeforge_module_name") for node in calls] == ["f", "other"]
+    call = calls[0]
     group = call.node_tree
     before_fingerprint = stored_fingerprint(group)
     before_nodes = tuple(node.as_pointer() for node in group.nodes)

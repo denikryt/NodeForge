@@ -404,9 +404,9 @@ def test_direct_lowering_with_caller_transaction_does_not_commit(monkeypatch):
     from NodeForge.blender.direct_composition import compose_prepared_initial
     from NodeForge.blender.ir_lowering import RootInputEndpoint
     target, _, _ = _root('NFR5_owned_lowering')
-    prepared, backend, session, _snapshot = compiler._prepare_direct_source('a = cube(4)', target)
+    prepared, backend, session, snapshot = compiler._prepare_direct_source('a = cube(4)', target)
     tx = BlenderGroupBuildTransaction()
-    compose_prepared_initial(prepared, target, backend, session,
+    compose_prepared_initial(prepared, target, backend, session, snapshot=snapshot,
                              transaction=tx, root_input_endpoint=RootInputEndpoint())
     assert not tx._closed
     assert sum(n.bl_idname == 'GeometryNodeMeshCube' for n in target.nodes) == 1
@@ -734,7 +734,7 @@ def test_root_lowerer_propagates_without_owning_node_or_transaction_cleanup(monk
     from NodeForge.blender.ir_lowering import RootInputEndpoint
 
     tree, _, _ = _root('NFR5_lowering_delegates_failures')
-    prepared, backend, session, _snapshot = compiler._prepare_direct_source('a = cube(3)', tree)
+    prepared, backend, session, snapshot = compiler._prepare_direct_source('a = cube(3)', tree)
     tx = BlenderGroupBuildTransaction()
     old_pointers = {node.as_pointer() for node in tree.nodes}
 
@@ -746,7 +746,7 @@ def test_root_lowerer_propagates_without_owning_node_or_transaction_cleanup(monk
     monkeypatch.setattr(direct_composition, 'lower_body', fail_with_created_node)
     with pytest.raises(RuntimeError, match='caller must clean this node'):
         direct_composition.compose_prepared_initial(
-            prepared, tree, backend, session,
+            prepared, tree, backend, session, snapshot=snapshot,
             transaction=tx, root_input_endpoint=RootInputEndpoint(),
         )
     assert tx._closed is False
@@ -853,10 +853,16 @@ def test_update_failed_constant_delivery_keeps_published_nodes_and_realization(m
     assert group_refs == {g.as_pointer() for g in bpy.data.node_groups}
 
 
+@pytest.mark.parametrize('mixed', [False, True])
 @pytest.mark.parametrize('kind', ['Capture', 'Menu', 'Index'])
-def test_late_root_rollback_restores_gapped_collection_endpoints(kind, monkeypatch):
+def test_late_root_rollback_restores_gapped_collection_endpoints(kind, monkeypatch, mixed):
     """A deleted native item must not redirect a restored link to a same-type fixed slot."""
     tree, inlet, outlet = _root('NFR5_gapped_collection_' + kind)
+    old_source = 'def preview() -> Geometry:\n    return cube(1)\na = cube(2)\n'
+    if mixed:
+        compile_root(old_source, tree)
+        old_group = published_entry(tree, 'preview')
+        old_group_ptr = old_group.as_pointer()
     source = tree.nodes.new('FunctionNodeInputBool' if kind == 'Capture' else 'ShaderNodeValue')
     if kind == 'Capture':
         native = tree.nodes.new('GeometryNodeCaptureAttribute')
@@ -920,9 +926,13 @@ def test_late_root_rollback_restores_gapped_collection_endpoints(kind, monkeypat
     with monkeypatch.context() as patch:
         patch.setattr(root_update, '_reconnect_boundary', fail)
         with pytest.raises(root_update.RootUpdateError, match='injected collection late cutover failure') as info:
-            compile_root('a = cube(4)\n', tree)
+            compile_root(old_source.replace('cube(1)', 'cube(5)') if mixed else 'a = cube(4)\n', tree)
         assert info.value.may_have_mutated
     assert snapshot() == before
+    if mixed:
+        assert published_entry(tree, 'preview').as_pointer() == old_group_ptr
+        cube = next(n for n in old_group.nodes if n.bl_idname == 'GeometryNodeMeshCube')
+        assert tuple(cube.inputs[0].default_value) == (1.0, 1.0, 1.0)
     assert {g.as_pointer() for g in bpy.data.node_groups} == identities
     # A subsequent valid root publication still succeeds.
     compile_root('a = cube(4)\n', tree)

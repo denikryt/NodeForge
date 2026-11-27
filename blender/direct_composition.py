@@ -21,7 +21,7 @@ def validate_prepared_direct(prepared, target):
 
 
 def compose_prepared_initial(prepared, target, backend, session, *,
-                             transaction, root_input_endpoint,
+                             transaction, root_input_endpoint, snapshot,
                              generated_resource_transaction=None):
     """Lower root IR; the calling root updater owns commit, cleanup and rollback.
 
@@ -50,11 +50,15 @@ def compose_prepared_initial(prepared, target, backend, session, *,
         generated_resource_transaction=generated_resource_transaction,
     )
     lower_body(context, prepared.body, {}, base_depth=1)
+    groups = materialize_definition_entries(
+        prepared, context.function_materializer, context.function_materialization_context, snapshot,
+    )
+    place_definition_entries(target, groups, created_nodes=[])
     return target
 
 
 def materialize_definition_entries(prepared, materializer, materialization_context, snapshot):
-    """Publish only zero-incoming source definitions, without root node placement.
+    """Materialize uninvoked independent definitions, without root node placement.
 
     The caller owns the shared group transaction and its commit/rollback.  The
     same source-function IDs and materializer are used by direct compilation.
@@ -65,13 +69,18 @@ def materialize_definition_entries(prepared, materializer, materialization_conte
     from ..semantic.source_callables import serialize_local_signature
     from ..semantic.ir import IRFunctionMaterialization, IRFunctionMaterializationMode
 
+    from ..semantic.source_modules import uninvoked_entries
+
     graph = prepared.source_call_graph
     if graph is None:
-        raise CompileError('Definition-only compilation lacks a resolved call graph')
+        raise CompileError('Direct compilation lacks a resolved call graph')
+    entries = uninvoked_entries(graph, prepared.body)
+    if not entries:
+        return ()
     session = materialization_context.source_callable_session
     env, compile_time_values = session.callable_environment_for_module(snapshot)
     groups = []
-    for reference in graph.entries:
+    for reference in entries:
         fn = snapshot.definitions[reference.name]
         signature = compile_function_signature(
             fn, owner_scope=reference.stable_key(),

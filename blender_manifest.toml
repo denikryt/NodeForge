@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 id = "nodeforge"
 
-version = "0.103.1"
+version = "0.103.2"
 
 name = "NodeForge"
 tagline = "Compile a procedural DSL into Blender Geometry Nodes"
