@@ -16,22 +16,18 @@ from inspect_contract import (ResultSchemaError, UnsupportedNodeError, marker,
                               validate_output_identifiers, validate_output_types)
 
 
-def capture_entries(elements, supported):
-    """Parse capture collection entries, preserving exact item labels."""
-    chunks = tuple(tuple(chunk.strip().split(':', 1)) for chunk in elements.split(',')) if elements else ()
-    if any(len(pair) != 2 or pair[0] not in supported or not pair[1] for pair in chunks):
-        raise ValueError('elements must be TYPE:Name entries with supported types')
-    if len({pair[1] for pair in chunks}) != len(chunks):
-        raise ValueError('Duplicate capture item names')
-    return chunks
-
-
-def menu_names(elements):
-    """Parse ordered, unique Menu Switch labels."""
-    names = tuple(chunk.strip() for chunk in elements.split(',')) if elements else ()
-    if not all(names) or len(names) != len(set(names)):
-        raise ValueError('elements must contain unique nonempty Menu names')
-    return names
+def menu_labels(elements):
+    """Validate the exact ordered labels shared by both generated phases."""
+    from NodeForge.extension_result_api import validate_named_result_key
+    if type(elements) is not list or not elements:
+        raise ValueError('elements must be a nonempty list of Menu labels')
+    for name in elements:
+        if type(name) is not str:
+            raise ValueError('Menu labels must be strings')
+        validate_named_result_key(name)
+    if len(elements) != len(set(elements)):
+        raise ValueError('Duplicate Menu label')
+    return tuple(elements)
 
 
 def result_signature(item, cfg):
@@ -205,10 +201,10 @@ def render_interface(items):
              'EXTENSIONS = ' + repr({i['name']: '.backend:' + i['name'] for i in items}), '']
     for i in items:
         args = []
-        if i['dynamic']:
+        if i['dynamic'] and i['dynamic']['kind'] != 'capture':
             input_types = ' | '.join(i['input_types']) if i['input_types'] else 'Float'
             args.append(f'*items: Annotated[{input_types}, EvaluationMode.COMPILE_TIME_OR_RUNTIME]')
-        elif i['named_inputs'] or i['fields'] or i['constants']:
+        elif i['named_inputs'] or i['fields'] or i['constants'] or i['dynamic']:
             args.append('*')
         for inp in i['named_inputs']:
             annotation = ' | '.join(inp['types'])
@@ -218,9 +214,14 @@ def render_interface(items):
         for f in i['fields']:
             args.append(f"{f['param']}: Annotated[{f['marker']}, EvaluationMode.COMPILE_TIME_ONLY] = {f['default']!r}")
         if i['dynamic']:
-            d = i['dynamic']; k = d['kind']; kind = 'Int' if k == 'index' else 'String'
-            default = d['initial_count'] if k == 'index' else ','.join(d['initial_names']) if k == 'menu' else ''
-            args.append(f"elements: Annotated[{kind}, EvaluationMode.COMPILE_TIME_ONLY] = {default!r}")
+            d = i['dynamic']; k = d['kind']
+            if k == 'capture':
+                markers = ' | '.join(sorted(set(d['types'].values())))
+                args.append(f"elements: Annotated[dict[str, {markers}], EvaluationMode.COMPILE_TIME_OR_RUNTIME] = {{}}")
+            elif k == 'menu':
+                args.append(f"elements: Annotated[list[String], EvaluationMode.COMPILE_TIME_ONLY] = {d['initial_names']!r}")
+            else:
+                args.append(f"elements: Annotated[Int, EvaluationMode.COMPILE_TIME_ONLY] = {d['initial_count']!r}")
         sig = i['result_rule']
         if sig['dynamic_result']:
             return_type = 'DynamicResults'
@@ -246,6 +247,8 @@ RNA properties, Menu sockets, and the resulting physical socket layout.
 import keyword
 import re
 from NodeForge.extension_api import ExtensionBackendValue, NFType
+from NodeForge.extension_result_api import validate_named_result_key
+from NodeForge.semantic.numeric_semantics import normalize_float_constant
 
 '''
 
@@ -311,7 +314,7 @@ def make_node(context, node_id, properties, orders):
     raise ValueError(f'Blender rejected RNA configuration {properties!r}: {last_error}')
 
 
-def set_collection(node, kind, elements, capture_types):
+def set_collection(context, node, kind, elements, capture_types):
     if kind == 'index':
         if type(elements) is not int or elements < 0:
             raise ValueError('elements must be a nonnegative integer')
@@ -319,16 +322,33 @@ def set_collection(node, kind, elements, capture_types):
         while len(items) > elements: items.remove(items[-1])
         while len(items) < elements: items.new()
     elif kind == 'menu':
-        names = menu_names(elements)
+        names = menu_labels(elements)
         if tuple(x.name for x in node.enum_items) != names:
             node.enum_items.clear()
             for name in names: node.enum_items.new(name)
+        if tuple(x.name for x in node.enum_items) != names:
+            raise ValueError('Blender changed the Menu collection labels')
         return names
     elif kind == 'capture':
-        entries = capture_entries(elements, capture_types)
-        for token, name in entries:
+        if type(elements) is not dict:
+            raise TypeError('Capture elements must be a dictionary')
+        names = tuple(elements)
+        if context.result_names != ('geometry', 'selection', *names):
+            raise ValueError('Capture elements disagree with resolved result keys')
+        types = context.result_types[2:]
+        persisted = {'VECTOR': 'FLOAT_VECTOR', 'RGBA': 'FLOAT_COLOR', 'ROTATION': 'QUATERNION'}
+        expected_items = []
+        node.capture_items.clear()
+        for (name, value), typ in zip(elements.items(), types):
+            validate_named_result_key(name)
+            if typ not in capture_types or (isinstance(value, ExtensionBackendValue) and value.typ is not typ):
+                raise TypeError(f'Unsupported Capture element type for {name!r}')
+            token = capture_types[typ]
             node.capture_items.new(token, name)
-        return tuple(name for _, name in entries)
+            expected_items.append((name, persisted.get(token, token)))
+        if tuple((item.name, item.data_type) for item in node.capture_items) != tuple(expected_items):
+            raise ValueError('Blender changed the Capture collection labels or types')
+        return names
     return ()
 
 
@@ -344,11 +364,65 @@ def deliver(context, socket, value):
         socket.default_value = value
 
 
+def collection_input_slots(node, kind, names, expected_types):
+    """Check native collection roles and paired item identifiers before delivery."""
+    capture = kind == 'capture'
+    fixed_in = ('Geometry', 'Selection') if capture else ('Menu',)
+    fixed_out = ('Geometry', 'Selection') if capture else ('Output',)
+    inputs = list(node.inputs)
+    outputs = list(node.outputs)
+    if (tuple(s.identifier for s in inputs[:len(fixed_in)]) != fixed_in
+            or tuple(s.identifier for s in outputs[:len(fixed_out)]) != fixed_out
+            or len(inputs) != len(fixed_in) + len(names) + 1
+            or len(outputs) != len(fixed_out) + len(names) + int(capture)
+            or inputs[-1].bl_idname != 'NodeSocketVirtual'
+            or (capture and outputs[-1].bl_idname != 'NodeSocketVirtual')):
+        raise ValueError(f'{kind}: unexpected fixed or virtual socket layout')
+    if capture and (tuple(socket_type(s) for s in inputs[:2]) != (NFType.GEOMETRY, NFType.BOOL)
+                    or tuple(socket_type(s) for s in outputs[:2]) != (NFType.GEOMETRY, NFType.BOOL)):
+        raise ValueError('Capture fixed socket types disagree')
+    if not capture and inputs[0].bl_idname != 'NodeSocketMenu':
+        raise ValueError('Menu fixed socket type disagrees')
+    slots = inputs[len(fixed_in):-1]
+    result_slots = outputs[len(fixed_out):-1] if capture else outputs[len(fixed_out):]
+    identifiers = set()
+    for name, typ, inp, out in zip(names, expected_types, slots, result_slots):
+        prefix = 'Value' if capture else 'Item'
+        out_prefix = 'Attribute' if capture else 'Item'
+        suffix = inp.identifier[len(prefix):] if inp.identifier.startswith(prefix) else None
+        valid_suffix = suffix is not None and ((capture and suffix == '') or
+                       (suffix.startswith('_') and suffix[1:].isdigit()))
+        if (not valid_suffix or suffix in identifiers or out.identifier != out_prefix + suffix
+                or inp.name != name or out.name != name or inp.is_output or not out.is_output
+                or not inp.enabled or not out.enabled or socket_type(inp) is not typ
+                or socket_type(out) is not (typ if capture else NFType.BOOL)):
+            raise ValueError(f'{kind}: collection socket identity/type/order mismatch for {name!r}')
+        identifiers.add(suffix)
+    return slots
+
+
+def deliver_collection(context, socket, value):
+    """Deliver and verify the exact collection operand without implicit name lookup."""
+    deliver(context, socket, value)
+    if isinstance(value, ExtensionBackendValue):
+        links = list(socket.links)
+        if len(links) != 1 or links[0].from_socket != value.socket:
+            raise ValueError(f'Wrong collection input link for {socket.identifier!r}')
+    else:
+        actual = socket.default_value
+        if isinstance(value, tuple):
+            actual = tuple(actual)
+        # A static Int delivered to a Float socket is stored as binary32.
+        expected = normalize_float_constant(value) if socket_type(socket) is NFType.FLOAT and type(value) is int else value
+        if actual != expected:
+            raise ValueError(f'Collection input default changed for {socket.identifier!r}')
+
+
 def materialize(context, node_id, named, items=(), rna=None, menus=(), orders=(),
                 kind=None, elements=None, capture_types=None,
                 constant_rna=None, constant_outputs=None, scalar_name=None):
     node = make_node(context, node_id, rna or {}, orders)
-    requested_names = set_collection(node, kind, elements, capture_types) if kind else ()
+    requested_names = set_collection(context, node, kind, elements, capture_types) if kind else ()
     for key, value in menus:
         candidates = [sock for sock in node.inputs if sock.identifier == key]
         if len(candidates) != 1:
@@ -365,12 +439,22 @@ def materialize(context, node_id, named, items=(), rna=None, menus=(), orders=()
         if len(matches) != 1:
             raise ValueError(f'{node_id}: input {key!r} is unavailable or ambiguous in this configuration')
         deliver(context, matches[0], value)
-    # Only collection-created sockets remain positional.
-    variable_inputs = [sock for sock in available if sock.identifier not in named]
-    if len(items) > len(variable_inputs):
-        raise ValueError(f'{node_id} has {len(variable_inputs)} variable inputs; got {len(items)}')
-    for socket, value in zip(variable_inputs, items):
-        deliver(context, socket, value)
+    # Capture uses exact dictionary slots; Menu retains ordered positional values.
+    if kind in ('capture', 'menu'):
+        expected_types = (context.result_types[2:] if kind == 'capture'
+                          else (context.result_types[0],) * len(requested_names))
+        variable_inputs = collection_input_slots(node, kind, requested_names, expected_types)
+        values = tuple(elements.values()) if kind == 'capture' else items
+        if len(values) > len(variable_inputs) or (kind == 'capture' and len(values) != len(variable_inputs)):
+            raise ValueError(f'{node_id} has {len(variable_inputs)} variable inputs; got {len(values)}')
+        for socket, value in zip(variable_inputs, values):
+            deliver_collection(context, socket, value)
+    else:
+        variable_inputs = [sock for sock in available if sock.identifier not in named]
+        if len(items) > len(variable_inputs):
+            raise ValueError(f'{node_id} has {len(variable_inputs)} variable inputs; got {len(items)}')
+        for socket, value in zip(variable_inputs, items):
+            deliver(context, socket, value)
     # A missing optional constant is intentionally not assigned: Blender owns
     # its defaults. These are compile-time-only knobs, never runtime links.
     for key, value in (constant_rna or {}).items():
@@ -405,7 +489,7 @@ def materialize(context, node_id, named, items=(), rna=None, menus=(), orders=()
 
 
 def render_backend(items):
-    lines = [BACKEND_HEADER, inspect.getsource(sanitized), inspect.getsource(capture_entries), inspect.getsource(menu_names), BACKEND_HELPERS]
+    lines = [BACKEND_HEADER, inspect.getsource(sanitized), inspect.getsource(menu_labels), BACKEND_HELPERS]
     for i in items:
         fields = [f for f in i['fields'] if f['kind'] == 'rna']
         menus = [f for f in i['fields'] if f['kind'] == 'menu']
@@ -415,9 +499,9 @@ def render_backend(items):
             if order not in orders:
                 orders.append(order)
         params = ['context']
-        if i['dynamic']:
+        if i['dynamic'] and i['dynamic']['kind'] != 'capture':
             params.append('*items')
-        elif i['named_inputs'] or i['fields'] or i['constants']:
+        elif i['named_inputs'] or i['fields'] or i['constants'] or i['dynamic']:
             params.append('*')
         params += [f"{inp['param']}=None" for inp in i['named_inputs']]
         params += [f"{c['param']}=None" for c in i['constants']]
@@ -425,11 +509,11 @@ def render_backend(items):
         kwargs = []
         if i['dynamic']:
             d = i['dynamic']; k = d['kind']
-            default = d['initial_count'] if k == 'index' else ','.join(d['initial_names']) if k == 'menu' else ''
+            default = d['initial_count'] if k == 'index' else d['initial_names'] if k == 'menu' else {}
             params += [f'elements={default!r}']
             kwargs.extend([f'kind={k!r}', 'elements=elements'])
             if k == 'capture':
-                kwargs.append(f"capture_types={tuple(sorted(d['types']))!r}")
+                kwargs.append("capture_types={" + ", ".join(f"NFType.{typ.upper()}: {token!r}" for token, typ in sorted(d['types'].items())) + "}")
         sig = i['result_rule']
         if not sig['dynamic_result'] and len(sig['static']) == 1:
             kwargs.append(f"scalar_name={sig['static'][0][0]!r}")
@@ -456,7 +540,7 @@ def render_backend(items):
         lines.extend(f'    {param},' for param in params)
         lines.extend(['):', '    return materialize('])
         expression_parts = ['context', repr(i['node']), f'named={named}',
-                            'items=items' if i['dynamic'] else 'items=()',
+                            'items=items' if i['dynamic'] and i['dynamic']['kind'] != 'capture' else 'items=()',
                             f'rna={props}', f'menus={menu}', f'orders={orders!r}',
                             f'constant_rna={constant_rna}', f'constant_outputs={constant_outputs}'] + kwargs
         lines.extend(f'        {part},' for part in expression_parts)
@@ -466,7 +550,7 @@ def render_backend(items):
 
 SEMANTIC_HEADER='''"""Only invocation-dependent output schemas require semantic resolvers."""
 from NodeForge.nf_types import NFType
-from NodeForge.extension_result_api import ResultStaticArg, validate_named_result_key
+from NodeForge.extension_result_api import ResultRuntimeArg, ResultStaticArg, validate_named_result_key
 
 
 '''
@@ -507,7 +591,7 @@ def with_collection_results(base, entries):
 def render_semantic(items):
     dynamic=[i for i in items if i['result_rule']['dynamic_result']]
     if not dynamic: return ''
-    lines = [SEMANTIC_HEADER, inspect.getsource(capture_entries), inspect.getsource(menu_names), SEMANTIC_HELPERS]
+    lines = [SEMANTIC_HEADER, inspect.getsource(menu_labels), SEMANTIC_HELPERS]
     for i in dynamic:
         rule=i['result_rule']; mapping=rule['map']; kind=i['dynamic']['kind'] if i['dynamic'] else None
         lines.append(f"_SIGNATURE_{i['name']} = {{")
@@ -518,11 +602,16 @@ def render_semantic(items):
         lines.append(f"    base = output_types(arguments, {rule['deps']!r}, _SIGNATURE_{i['name']})")
         if kind=='capture':
             typemap={k:v.upper() for k,v in i['dynamic']['types'].items()}
-            lines.extend([f"    types = {{{', '.join(repr(k)+': NFType.'+v for k,v in sorted(typemap.items()))}}}",
-                          "    entries = capture_entries(static_value(arguments, 'elements'), types)",
-                          "    return public_result(with_collection_results(base, ((name, types[token]) for token, name in entries)))"])
+            lines.extend([f"    types = {{{', '.join('NFType.'+v for v in sorted(set(typemap.values())))}}}",
+                          "    elements = arguments['elements']",
+                          "    if any(not isinstance(value, (ResultRuntimeArg, ResultStaticArg)) or value.typ not in types for value in elements.values()):",
+                          "        raise ValueError('Unsupported Capture element type')",
+                          "    return public_result(with_collection_results(base, ((name, value.typ) for name, value in elements.items())))"])
         elif kind=='menu':
-            lines.extend(["    names = menu_names(static_value(arguments, 'elements'))",
+            lines.extend(["    elements = arguments['elements']",
+                          "    if any(not isinstance(value, ResultStaticArg) or value.typ is not NFType.STRING for value in elements):",
+                          "        raise ValueError('Menu labels must be compile-time strings')",
+                          "    names = menu_labels([value.value for value in elements])",
                           f"    selected = static_value(arguments, {next(f['param'] for f in i['fields'] if f['kind'] == 'menu' and f['key'] == 'Menu')!r})",
                           "    if selected not in names:",
                           "        raise ValueError('Invalid Menu selection / elements')",

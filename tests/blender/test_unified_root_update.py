@@ -851,3 +851,78 @@ def test_update_failed_constant_delivery_keeps_published_nodes_and_realization(m
     assert links == {(link.from_socket.as_pointer(), link.to_socket.as_pointer()) for link in tree.links}
     assert raw_nodes.raw_node_spec(node) == spec_before
     assert group_refs == {g.as_pointer() for g in bpy.data.node_groups}
+
+
+@pytest.mark.parametrize('kind', ['Capture', 'Menu', 'Index'])
+def test_late_root_rollback_restores_gapped_collection_endpoints(kind, monkeypatch):
+    """A deleted native item must not redirect a restored link to a same-type fixed slot."""
+    tree, inlet, outlet = _root('NFR5_gapped_collection_' + kind)
+    source = tree.nodes.new('FunctionNodeInputBool' if kind == 'Capture' else 'ShaderNodeValue')
+    if kind == 'Capture':
+        native = tree.nodes.new('GeometryNodeCaptureAttribute')
+        native.capture_items.new('BOOLEAN', 'Removed')
+        native.capture_items.new('BOOLEAN', 'Selection')
+        native.capture_items.new('FLOAT', 'Weight')
+        native.capture_items.remove(native.capture_items[0])
+        native.inputs[1].default_value = True
+        native.inputs[2].default_value = False
+        native.inputs[3].default_value = .75
+        source.boolean = True
+        slot = 2
+        output_slot = 2
+        sink = tree.nodes.new('FunctionNodeBooleanMath')
+        tree.links.new(inlet.outputs['Geometry'], native.inputs[0])
+        tree.links.new(native.outputs[0], outlet.inputs['Geometry'])
+    elif kind == 'Menu':
+        native = tree.nodes.new('GeometryNodeMenuSwitch')
+        native.data_type = 'FLOAT'
+        native.enum_items.clear()
+        native.enum_items.new('Removed')
+        native.enum_items.new('First').description = 'First description'
+        native.enum_items.new('Last').description = 'Last description'
+        native.enum_items.remove(native.enum_items[0])
+        native.inputs[0].default_value = 'Last'
+        native.inputs[2].default_value = 4.0
+        slot, output_slot = 1, 0
+        sink = tree.nodes.new('ShaderNodeMath')
+    else:
+        native = tree.nodes.new('GeometryNodeIndexSwitch')
+        native.index_switch_items.new()
+        native.index_switch_items.remove(native.index_switch_items[0])
+        native.inputs[0].default_value = 1
+        native.inputs[2].default_value = 4.0
+        slot, output_slot = 1, 0
+        sink = tree.nodes.new('ShaderNodeMath')
+    tree.links.new(source.outputs[0], native.inputs[slot])
+    tree.links.new(native.outputs[output_slot], sink.inputs[0])
+    name = native.name
+
+    def snapshot():
+        """Compare logical endpoints with physical ordinals, defaults and item order."""
+        node = tree.nodes[name]
+        vals = tuple(getattr(s, 'default_value', None) for s in node.inputs)
+        links = sorted((l.from_node.name, list(l.from_node.outputs).index(l.from_socket),
+                        l.to_node.name, list(l.to_node.inputs).index(l.to_socket)) for l in tree.links)
+        if kind == 'Capture':
+            items = tuple((i.name,i.data_type) for i in node.capture_items)
+        elif kind == 'Menu':
+            items = tuple((i.name,i.description) for i in node.enum_items)
+        else:
+            items = tuple(s.name for s in list(node.inputs)[1:-1])
+        return items, vals, links
+
+    before = snapshot()
+    identities = {g.as_pointer() for g in bpy.data.node_groups}
+    # The rollback backup retains source IDs; rebuilt native IDs may differ.
+    assert native.inputs[slot].identifier not in ('Value', 'Item_0')
+    def fail(*args):
+        raise RuntimeError('injected collection late cutover failure')
+    with monkeypatch.context() as patch:
+        patch.setattr(root_update, '_reconnect_boundary', fail)
+        with pytest.raises(root_update.RootUpdateError, match='injected collection late cutover failure') as info:
+            compile_root('a = cube(4)\n', tree)
+        assert info.value.may_have_mutated
+    assert snapshot() == before
+    assert {g.as_pointer() for g in bpy.data.node_groups} == identities
+    # A subsequent valid root publication still succeeds.
+    compile_root('a = cube(4)\n', tree)

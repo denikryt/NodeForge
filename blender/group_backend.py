@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 import warnings
+from collections import Counter
 from dataclasses import replace
 from typing import Callable
 
@@ -21,6 +22,7 @@ from .storage import _reset_node_group
 from .interface import NAMED_RESULTS_PROP, has_named_results
 from .update import (
     _capture_group_external_state,
+    _resolve_endpoint,
     _restore_group_external_state,
     _validate_group_external_state_for_replacement,
 )
@@ -166,7 +168,7 @@ def _copy_curve_mapping(src_mapping, dst_mapping):
         pass
 
 
-def _copy_node_properties(src_node, dst_node):
+def _copy_node_properties(src_node, dst_node, *, proofs=None):
     """Copy writable RNA/custom properties needed by NodeForge-generated nodes."""
     skip = {"rna_type", "type", "dimensions", "inputs", "outputs", "internal_links", "select", "width_hidden", "height"}
     try:
@@ -194,6 +196,9 @@ def _copy_node_properties(src_node, dst_node):
     except Exception:
         pass
     _copy_custom_properties(src_node, dst_node)
+    if _has_local_collection(src_node):
+        _copy_standalone_collection(src_node, dst_node, proofs=proofs)
+        return
     for index, src_socket in enumerate(src_node.inputs):
         if index < len(dst_node.inputs):
             _copy_socket_default(src_socket, dst_node.inputs[index])
@@ -266,6 +271,7 @@ def _copy_group_contents(src_group, dst_group, *, copy_role=None):
     ``copy_role`` is used only by Blender regression failure injection so backup
     construction and destructive authoritative cutover can be tested separately.
     """
+    _validate_collection_copy_source(src_group)
     _reset_node_group(dst_group)
     global _TEST_CUTOVER_FAIL_AFTER_RESET, _TEST_BACKUP_COPY_FAIL_AFTER_RESET
     if copy_role == "cutover" and _TEST_CUTOVER_FAIL_AFTER_RESET:
@@ -278,40 +284,59 @@ def _copy_group_contents(src_group, dst_group, *, copy_role=None):
     from . import raw_nodes as _raw_nodes
 
     node_map = {}
+    proofs = {}
     for src_node in src_group.nodes:
         dst_node = dst_group.nodes.new(src_node.bl_idname)
         if _raw_nodes.is_raw_node(src_node):
-            _raw_nodes.copy_raw_node_properties(src_node, dst_node)
+            _raw_nodes.copy_raw_node_properties(src_node, dst_node, proofs=proofs)
         else:
-            _copy_node_properties(src_node, dst_node)
+            _copy_node_properties(src_node, dst_node, proofs=proofs)
         node_map[src_node.name] = dst_node
     _sync_repeat_zone_dynamic_items(src_group, node_map)
-    _sync_capture_attribute_dynamic_items(src_group, node_map)
     _sync_bundle_dynamic_items(src_group, node_map)
 
+    copied_edges = []
     for src_link in src_group.links:
         from_node = node_map.get(src_link.from_node.name)
         to_node = node_map.get(src_link.to_node.name)
         if from_node is None or to_node is None:
             continue
+        if (_has_local_collection(src_link.from_node)
+                or _has_local_collection(src_link.to_node)):
+            from_socket = _copy_link_endpoint(src_link.from_node, src_link.from_socket, from_node, output=True, proofs=proofs)
+            to_socket = _copy_link_endpoint(src_link.to_node, src_link.to_socket, to_node, output=False, proofs=proofs)
+            copied_edges.append((src_link, from_socket, to_socket))
+            link = dst_group.links.new(from_socket, to_socket)
+            if link.from_socket != from_socket or link.to_socket != to_socket or not link.is_valid:
+                raise CompileError("Collection copy: Blender did not preserve the linked endpoints")
+            continue
         if _raw_nodes.is_raw_node(src_link.from_node) or _raw_nodes.is_raw_node(src_link.to_node):
             from_socket = _raw_nodes.resolve_cutover_socket(src_link.from_node, src_link.from_socket, from_node, direction="output")
             to_socket = _raw_nodes.resolve_cutover_socket(src_link.to_node, src_link.to_socket, to_node, direction="input")
             dst_group.links.new(from_socket, to_socket)
+            copied_edges.append((src_link, from_socket, to_socket))
             continue
         try:
             from_index = list(src_link.from_node.outputs).index(src_link.from_socket)
             to_index = list(src_link.to_node.inputs).index(src_link.to_socket)
-            dst_group.links.new(from_node.outputs[from_index], to_node.inputs[to_index])
+            from_socket, to_socket = from_node.outputs[from_index], to_node.inputs[to_index]
+            dst_group.links.new(from_socket, to_socket)
         except Exception:
-            # Name fallback for dynamic sockets.
-            try:
-                dst_group.links.new(from_node.outputs[src_link.from_socket.name], to_node.inputs[src_link.to_socket.name])
-            except Exception:
-                raise
-    for dst_node in node_map.values():
+            # Name fallback for ordinary dynamic sockets only.
+            from_socket, to_socket = from_node.outputs[src_link.from_socket.name], to_node.inputs[src_link.to_socket.name]
+            dst_group.links.new(from_socket, to_socket)
+        copied_edges.append((src_link, from_socket, to_socket))
+    for src_node in src_group.nodes:
+        dst_node = node_map[src_node.name]
+        if _has_local_collection(src_node):
+            _verify_standalone_copy(src_node, dst_node, proofs=proofs)
+            _verify_standalone_defaults(src_node, dst_node)
+            if _raw_nodes.is_raw_node(src_node):
+                _raw_nodes.validate_collection_raw_copy(src_node, dst_node, proofs=proofs)
         if _raw_nodes.is_raw_node(dst_node):
             _raw_nodes.validate_raw_node_after_cutover(dst_node, dst_group)
+    _verify_collection_edges(dst_group, copied_edges,
+                             [node_map[node.name] for node in src_group.nodes if _has_local_collection(node)])
     # CurveMapping can be reset by Blender while node sockets/topology are being
     # reconstructed, so restore it only after the final links are in place.
     _sync_curve_mapping_state(src_group, node_map)
@@ -418,57 +443,390 @@ def _sync_bundle_dynamic_items(src_group, node_map):
                 ) from exc
 
 
-def _sync_capture_attribute_dynamic_items(src_group, node_map):
-    """Rebuild and verify Capture items before transactional link restoration.
+# Native capability boundary. These identifiers describe RNA collection families,
+# not wrapper node layouts. Repeat and Bundle retain their existing copy owners.
+_LOCAL_COLLECTION_FAMILIES = frozenset({
+    "NodeGeometryCaptureAttributeItems", "NodeMenuSwitchItems",
+    "NodeIndexSwitchItems", "NodeFunctionFormatStringItems",
+})
+_DEDICATED_COLLECTION_FAMILIES = frozenset({
+    "NodeGeometryRepeatOutputItems", "NodeCombineBundleItems", "NodeSeparateBundleItems",
+})
 
-    Blender's persisted ``data_type`` tokens differ from the tokens accepted
-    by ``capture_items.new``. A failed reconstruction must abort publishing,
-    including when the missing item has no associated link.
-    """
-    constructor_types = {
-        "FLOAT": "FLOAT",
-        "INT": "INT",
-        "BOOLEAN": "BOOLEAN",
-        "FLOAT_VECTOR": "VECTOR",
-        "FLOAT_COLOR": "RGBA",
-        "QUATERNION": "ROTATION",
-    }
-    for src_node in src_group.nodes:
-        if getattr(src_node, "bl_idname", None) != "GeometryNodeCaptureAttribute":
+
+def _local_collection_property(node):
+    """Admit one local native item collection or reject unsupported ownership."""
+    candidates = []
+    for prop in getattr(getattr(node, "bl_rna", None), "properties", ()):
+        if prop.type != "COLLECTION" or prop.srna is None:
             continue
-        dst_node = node_map.get(src_node.name)
-        if dst_node is None or not hasattr(src_node, "capture_items") or not hasattr(dst_node, "capture_items"):
-            raise CompileError(f"Capture copy: missing node or item collection for {src_node.name!r}")
-        source_items = [(item.name, item.data_type) for item in src_node.capture_items]
-        try:
-            dst_node.capture_items.clear()
-        except Exception as exc:
-            raise CompileError(f"Capture copy: failed to clear items on {src_node.name!r}: {exc}") from exc
-        for item_name, persisted_type in source_items:
-            constructor_type = constructor_types.get(persisted_type)
-            if constructor_type is None:
-                raise CompileError(
-                    f"Capture copy: unsupported persisted data type {persisted_type!r} "
-                    f"for item {item_name!r} on {src_node.name!r}"
-                )
+        family = prop.srna.identifier
+        if family in {"NodeInputs", "NodeOutputs"}:
+            continue
+        methods = prop.srna.functions
+        if (family in _LOCAL_COLLECTION_FAMILIES or family in _DEDICATED_COLLECTION_FAMILIES
+                or any(name in methods for name in ("new", "remove", "clear"))):
+            candidates.append(prop)
+    if not candidates:
+        return None
+    if len(candidates) != 1:
+        raise CompileError(f"{node.bl_idname} copy: ambiguous native collection ownership")
+    prop = candidates[0]
+    family = prop.srna.identifier
+    if family in _DEDICATED_COLLECTION_FAMILIES:
+        return None
+    if (family not in _LOCAL_COLLECTION_FAMILIES
+            or not all(name in prop.srna.functions for name in ("new", "remove", "clear"))):
+        raise CompileError(f"{node.bl_idname} copy: unsupported native collection {family}")
+    return prop
+
+
+def _has_local_collection(node):
+    """Return whether the native collection has an admitted local owner."""
+    return _local_collection_property(node) is not None
+
+
+def _item_fields(item):
+    """Read writable native item scalars, refusing unhandled field shapes."""
+    fields = []
+    for prop in item.bl_rna.properties:
+        if prop.is_readonly:
+            continue
+        if prop.type not in {"STRING", "ENUM", "INT", "FLOAT", "BOOLEAN"} or getattr(prop, "is_array", False):
+            raise CompileError(f"Collection copy: unsupported writable item field {prop.identifier!r}")
+        fields.append((prop.identifier, getattr(item, prop.identifier)))
+    return tuple(fields)
+
+
+def _standalone_items(node):
+    """Read the ordered logical item state without physical socket IDs."""
+    prop = _local_collection_property(node)
+    if prop is None:
+        raise CompileError(f"{node.bl_idname} copy: missing local collection")
+    return tuple(_item_fields(item) for item in getattr(node, prop.identifier))
+
+
+def _physical_layout(node):
+    """Read the complete ordered physical socket identity and flags."""
+    result = []
+    for output, sockets in ((False, node.inputs), (True, node.outputs)):
+        rows = tuple((s.identifier, s.name, s.bl_idname, bool(s.is_output), bool(s.enabled),
+                      bool(s.hide), bool(s.is_multi_input)) for s in sockets)
+        if len({row[0] for row in rows}) != len(rows) or any(row[3] != output for row in rows):
+            raise CompileError(f"{node.bl_idname} copy: invalid native socket identity")
+        result.append(rows)
+    return tuple(result)
+
+
+def _standalone_socket_layout(node):
+    """Derive item ownership from ordered socket removals in a private tree."""
+    layout = _physical_layout(node)
+    items = _standalone_items(node)
+    prop = _local_collection_property(node)
+    probe = node.id_data.copy()
+    failure = None
+    try:
+        mark_transaction_private(probe)
+        if not is_authority_ineligible_group(probe) or probe == node.id_data:
+            raise CompileError("Collection copy: native probe is not private")
+        copied = probe.nodes.get(node.name)
+        if copied is None or _physical_layout(copied) != layout or _standalone_items(copied) != items:
+            raise CompileError(f"{node.bl_idname} copy: native probe differs from source")
+        collection = getattr(copied, prop.identifier)
+        before = layout
+        owners = [{}, {}]
+        for ordinal in range(len(collection) - 1, -1, -1):
+            collection.remove(collection[ordinal])
+            after = _physical_layout(copied)
+            if _standalone_items(copied) != items[:ordinal]:
+                raise CompileError(f"{node.bl_idname} copy: removal changed remaining items")
+            deltas = []
+            for old, new in zip(before, after):
+                ids = {row[0] for row in new}
+                if tuple(row for row in old if row[0] in ids) != new:
+                    raise CompileError(f"{node.bl_idname} copy: removal changed surviving layout")
+                deltas.append(tuple(row[0] for row in old if row[0] not in ids))
+            if not any(deltas):
+                raise CompileError(f"{node.bl_idname} copy: item has no independently observed sockets")
+            for owner, removed in zip(owners, deltas):
+                if any(ident in owner for ident in removed):
+                    raise CompileError(f"{node.bl_idname} copy: overlapping item ownership")
+                owner.update((ident, ("item", ordinal, index)) for index, ident in enumerate(removed))
+            before = after
+        if _physical_layout(node) != layout or _standalone_items(node) != items:
+            raise CompileError(f"{node.bl_idname} copy: native probe changed its source")
+        return tuple(tuple((owner.get(row[0], row[0]), *row[1:]) for row in rows)
+                     for owner, rows in zip(owners, layout))
+    except Exception as exc:
+        failure = exc
+        raise
+    finally:
+        cleanup_failures = []
+        if not _remove_node_group_if_live(probe, failures=cleanup_failures):
+            detail = f"Collection copy: native probe cleanup failed: {cleanup_failures!r}"
+            if failure is not None:
+                raise CompileError(f"{failure}; {detail}") from failure
+            raise CompileError(detail)
+
+
+def _proved_layout(node, layout, proofs):
+    """Reuse native slot correspondence only within one exact-copy invocation."""
+    if proofs is None:
+        proofs = {}
+    # Hide may be restored separately; it does not identify a collection item.
+    state = (_collection_config(node), _standalone_items(node),
+             tuple(tuple(row[:5] + row[6:] for row in rows) for rows in layout))
+    entry = proofs.get(node)
+    if entry is None or entry[0] != state:
+        observed = _standalone_socket_layout(node)
+        if len(observed) != len(layout) or any(
+                len(rows) != len(actual) or any(row[1:] != value[1:] for row, value in zip(rows, actual))
+                for rows, actual in zip(observed, layout)):
+            raise CompileError("Collection copy: incomplete or changed ownership proof")
+        roles = tuple(tuple(row[0] for row in rows) for rows in observed)
+        if any(len(set(keys)) != len(keys) for keys in roles):
+            raise CompileError("Collection copy: non-bijective ownership proof")
+        owned = set()
+        for keys, actual in zip(roles, layout):
+            next_slot = {}
+            for role, row in zip(keys, actual):
+                if isinstance(role, str) and role == row[0]:
+                    continue
+                if (not isinstance(role, tuple) or len(role) != 3 or role[0] != "item"
+                        or type(role[1]) is not int or not 0 <= role[1] < len(state[1])
+                        or role[2] != next_slot.get(role[1], 0)):
+                    raise CompileError("Collection copy: invalid item ownership proof")
+                owned.add(role[1])
+                next_slot[role[1]] = role[2] + 1
+        if owned != set(range(len(state[1]))):
+            raise CompileError("Collection copy: missing item ownership proof")
+        proofs[node] = state, roles
+    else:
+        roles = entry[1]
+    return tuple(tuple((role, *row[1:]) for role, row in zip(keys, rows)) for keys, rows in zip(roles, layout))
+
+
+def _collection_config(node):
+    """Read writable node-specific scalar configuration, including active items."""
+    generic = {prop.identifier for prop in bpy.types.Node.bl_rna.properties}
+    return tuple((prop.identifier, getattr(node, prop.identifier))
+                 for prop in node.bl_rna.properties
+                 if not prop.is_readonly and prop.type in {"STRING", "ENUM", "INT", "FLOAT", "BOOLEAN"}
+                 and not getattr(prop, "is_array", False)
+                 and (prop.identifier not in generic or prop.type == "ENUM"))
+
+
+def _verify_standalone_copy(src, dst, *, ignore_hide=False, proofs=None):
+    """Prove equal ordered ownership before using any corresponding sockets."""
+    if (src.bl_idname != dst.bl_idname
+            or _collection_config(src) != _collection_config(dst)
+            or _standalone_items(src) != _standalone_items(dst)):
+        raise CompileError(f"{src.bl_idname} copy: restored collection contract differs on {src.name!r}")
+    a, b = _physical_layout(src), _physical_layout(dst)
+    if tuple(tuple(row[0] for row in rows) for rows in a) != tuple(tuple(row[0] for row in rows) for rows in b):
+        a, b = _proved_layout(src, a, proofs), _proved_layout(dst, b, proofs)
+    if ignore_hide:
+        def without_hide(layout):
+            return tuple(tuple(row[:5] + row[6:] for row in rows) for rows in layout)
+        a, b = without_hide(a), without_hide(b)
+    if a != b:
+        raise CompileError(f"{src.bl_idname} copy: restored socket layout differs on {src.name!r}")
+
+
+def _standalone_default(value):
+    """Detach RNA array defaults for exact readback, retaining scalar and ID values."""
+    if value is None or isinstance(value, (str, int, float, bool, bpy.types.ID)):
+        return value
+    return tuple(value)
+
+
+def _verify_standalone_defaults(src, dst):
+    """Check exact RNA defaults after copying and after link construction."""
+    for source_sockets, target_sockets in ((src.inputs, dst.inputs), (src.outputs, dst.outputs)):
+        for source, target in zip(source_sockets, target_sockets):
+            if (hasattr(source, "default_value")
+                    and _standalone_default(source.default_value) != _standalone_default(target.default_value)):
+                raise CompileError(f"{src.bl_idname} copy: default readback differs at {source.identifier!r}")
+
+
+class _CollectionDefaultError(CompileError):
+    """A native default assignment/readback failed after verified reconstruction."""
+
+
+def _reconstruct_collection(src, dst, *, retain_prefix, proofs):
+    """Restore logical item fields and configuration, invalidating obsolete proof."""
+    items = _standalone_items(src)
+    config = _collection_config(src)
+    existing = _standalone_items(dst)
+    prop = _local_collection_property(src)
+    destination = getattr(dst, prop.identifier)
+    params = tuple(p for p in prop.srna.functions["new"].parameters if not p.is_output)
+    prefix = 0
+    if retain_prefix:
+        for old, new in zip(existing, items):
+            if old != new:
+                break
+            prefix += 1
+    if proofs is not None:
+        proofs.pop(dst, None)
+    while len(destination) > prefix:
+        destination.remove(destination[-1])
+    for fields in items[prefix:]:
+        values = dict(fields)
+        args = {}
+        for param in params:
+            if param.identifier in values:
+                args[param.identifier] = values[param.identifier]
+            elif param.type == "ENUM" and len(param.enum_items):
+                # Constructor initialization only; actual item fields are restored below.
+                args[param.identifier] = param.enum_items[0].identifier
+            else:
+                raise CompileError(f"{src.bl_idname} copy: unsupported constructor argument {param.identifier!r}")
+        item = destination.new(**args)
+        for name, value in fields:
+            if getattr(item, name) != value:
+                setattr(item, name, value)
+        if _item_fields(item) != fields:
+            raise CompileError(f"{src.bl_idname} copy: item readback differs")
+    for name, value in config:
+        if getattr(dst, name) != value:
+            setattr(dst, name, value)
+    return prefix
+
+
+def _restore_collection_defaults(src, dst, *, proofs):
+    """Restore defaults/flags after proof; distinguish native value failure from proof failure."""
+    _verify_standalone_copy(src, dst, ignore_hide=True, proofs=proofs)
+    for source_sockets, target_sockets in ((src.inputs, dst.inputs), (src.outputs, dst.outputs)):
+        for source, target in zip(source_sockets, target_sockets):
+            if source.hide != target.hide:
+                target.hide = source.hide
+    _verify_standalone_copy(src, dst, proofs=proofs)
+    for source_sockets, target_sockets in ((src.inputs, dst.inputs), (src.outputs, dst.outputs)):
+        for source, target in zip(source_sockets, target_sockets):
+            if not hasattr(source, "default_value"):
+                continue
+            expected = _standalone_default(source.default_value)
+            if _standalone_default(target.default_value) == expected:
+                continue
             try:
-                dst_node.capture_items.new(constructor_type, item_name)
-            except Exception as exc:
-                raise CompileError(
-                    f"Capture copy: failed to recreate item {item_name!r} "
-                    f"({persisted_type}) on {src_node.name!r}: {exc}"
-                ) from exc
-        actual = [(item.name, item.data_type) for item in dst_node.capture_items]
-        if actual != source_items:
+                target.default_value = expected
+            except (TypeError, ValueError) as exc:
+                raise _CollectionDefaultError(f"{src.bl_idname} copy: cannot assign {source.identifier!r}: {exc}") from exc
+            if _standalone_default(target.default_value) != expected:
+                raise _CollectionDefaultError(f"{src.bl_idname} copy: default readback differs at {source.identifier!r}")
+    _verify_standalone_defaults(src, dst)
+
+
+def _copy_standalone_collection(src, dst, *, proofs=None):
+    """Reconstruct a new node, allowing one full rebuild for native default state."""
+    if proofs is None:
+        proofs = {}
+    try:
+        prefix = _reconstruct_collection(src, dst, retain_prefix=True, proofs=proofs)
+        try:
+            _restore_collection_defaults(src, dst, proofs=proofs)
+        except _CollectionDefaultError as first:
+            if not prefix:
+                raise
+            # Some native state (e.g. unset enum selection) depends on how the
+            # collection was constructed. Use the same constructor, not a weaker copier.
+            try:
+                _reconstruct_collection(src, dst, retain_prefix=False, proofs=proofs)
+                _restore_collection_defaults(src, dst, proofs=proofs)
+            except Exception as final:
+                raise CompileError(f"{first}; rebuild failed: {final}") from final
+    except Exception as exc:
+        raise CompileError(f"{src.bl_idname} copy: failed to restore {src.name!r}: {exc}") from exc
+
+
+def _resolve_standalone_copy_socket(src, socket, dst, *, output, proofs=None):
+    """Resolve a collection endpoint only after checked exact-copy correspondence."""
+    _verify_standalone_copy(src, dst, proofs=proofs)
+    source_sockets = src.outputs if output else src.inputs
+    target_sockets = dst.outputs if output else dst.inputs
+    return target_sockets[list(source_sockets).index(socket)]
+
+
+def _validate_collection_copy_source(tree):
+    """Admit a complete source and validate raw contracts before destination edits."""
+    from . import raw_nodes
+    admitted = set()
+    for node in tree.nodes:
+        if _has_local_collection(node):
+            admitted.add(node)
+            if raw_nodes.is_raw_node(node):
+                raw_nodes.validate_raw_node_after_cutover(node, tree)
+    incident = [link for link in tree.links
+                if link.from_node in admitted or link.to_node in admitted] if admitted else []
+    if any(not link.is_valid for link in incident):
+        raise CompileError("Collection copy: invalid source link")
+    for socket in {link.to_socket for link in incident if link.to_socket.is_multi_input}:
+        links = socket.links
+        if len({link.multi_input_sort_id for link in links}) != len(links):
             raise CompileError(
-                f"Capture copy: restored item contract differs on {src_node.name!r}: "
-                f"expected {source_items!r}, got {actual!r}"
-            )
-        # Dynamic sockets only exist after item reconstruction; the generic
-        # node-property copier has already run, so restore their defaults here.
-        for item_name, _persisted_type in source_items:
-            _copy_socket_default(src_node.inputs[item_name], dst_node.inputs[item_name])
-            _copy_socket_default(src_node.outputs[item_name], dst_node.outputs[item_name])
+                f"Collection copy: ambiguous multi-input order on {socket.node.name!r}; "
+                "reconnect this input before updating")
+    return bool(admitted)
+
+
+def _verify_collection_edges(tree, copied_edges, nodes):
+    """Verify final collection topology and restore native multi-input order.
+
+    Records include ordinary edges too: a multi-input receiving a collection
+    output may also have ordinary producers, whose relative order matters.
+    """
+    node_set = set(nodes)
+    if not node_set:
+        return
+    expected = [(left, right) for _, left, right in copied_edges
+                if left.node in node_set or right.node in node_set]
+    actual = [link for link in tree.links
+              if link.from_node in node_set or link.to_node in node_set]
+    if Counter((link.from_socket, link.to_socket) for link in actual) != Counter(expected):
+        raise CompileError("Collection copy: final linked endpoints differ")
+    if any(not link.is_valid for link in actual):
+        raise CompileError("Collection copy: invalid final link")
+    for socket in {right for _, right in expected if right.is_multi_input}:
+        rows = [(source, left) for source, left, right in copied_edges if right == socket]
+        if len({source.multi_input_sort_id for source, _ in rows}) != len(rows):
+            raise CompileError("Collection copy: ambiguous source multi-input order")
+        desired = [(left, source.is_muted) for source, left in sorted(
+            rows, key=lambda row: row[0].multi_input_sort_id)]
+        def read():
+            links = sorted(socket.links, key=lambda link: link.multi_input_sort_id)
+            if (len({link.multi_input_sort_id for link in links}) != len(links)
+                    or any(not link.is_valid for link in links)):
+                return None
+            return [(link.from_socket, link.is_muted) for link in links]
+        if Counter(link.from_socket for link in socket.links) != Counter(left for left, _ in desired):
+            raise CompileError("Collection copy: multi-input topology differs")
+        if read() == desired:
+            continue
+        # Only collection-incident receivers are in scope. Rebuild once from
+        # the unambiguous source order, not by guessing Blender's tied IDs.
+        for link in list(socket.links):
+            tree.links.remove(link)
+        for left, muted in desired:
+            link = tree.links.new(left, socket)
+            link.is_muted = muted
+        if read() != desired:
+            raise CompileError("Collection copy: multi-input order differs")
+
+
+def _copy_link_endpoint(src, socket, dst, *, output, proofs=None):
+    """Preserve the raw/collection/ordinary copy policy of one link endpoint."""
+    from . import raw_nodes
+    if _has_local_collection(src):
+        return _resolve_standalone_copy_socket(src, socket, dst, output=output, proofs=proofs)
+    if raw_nodes.is_raw_node(src):
+        return raw_nodes.resolve_cutover_socket(src, socket, dst, direction="output" if output else "input")
+    source_sockets = src.outputs if output else src.inputs
+    target_sockets = dst.outputs if output else dst.inputs
+    try:
+        return target_sockets[list(source_sockets).index(socket)]
+    except (ValueError, IndexError):
+        return target_sockets[socket.name]
 
 
 def _sync_repeat_zone_dynamic_items(src_group, node_map):
@@ -692,6 +1050,30 @@ class BlenderGroupBuildTransaction:
         identity_record["mutations"].append(event)
         self._mutation_journal.append(event)
         return event
+
+    def discard_abandoned_tree(self, tree):
+        """Retire obligations for an exact, intentionally discarded build stage."""
+        if not _node_group_is_live(tree):
+            raise CompileError("Cannot retire rollback records for an unexpectedly absent stage")
+        if self.owns_group(tree) or not is_authority_ineligible_group(tree):
+            raise CompileError("Cannot discard authoritative or recovery state as a stage")
+        # Select while RNA is live. Never dereference the tree after removal.
+        selected = []
+        for event in self._mutation_journal:
+            for records in event["external_state"].values():
+                kept = [record for record in records if record["tree"] != tree]
+                if len(kept) != len(records):
+                    selected.append((records, kept))
+        failures = []
+        try:
+            removed = _remove_node_group_if_live(tree, failures=failures)
+        finally:
+            if not _node_group_is_live(tree):
+                for records, kept in selected:
+                    records[:] = kept
+        if not removed or _node_group_is_live(tree):
+            detail = failures[0] if failures else "datablock remains live"
+            raise CompileError(f"Abandoned stage disposal failed: {detail}")
 
     def savepoint(self):
         """Return a checkpoint for exact journal/cache restoration."""
@@ -1093,6 +1475,27 @@ class BlenderGroupBackend:
             raise
         return backup
 
+    def _rehearse_collection_cutover(self, *sources):
+        """Verify each required reconstruction before resetting the live group."""
+        sources = [source for source in sources if _validate_collection_copy_source(source)]
+        if not sources:
+            return
+        scratch = bpy.data.node_groups.new("NodeForge.copy-rehearsal", "GeometryNodeTree")
+        try:
+            mark_transaction_private(scratch)
+            for source in sources:
+                _copy_group_contents(source, scratch)
+        except Exception as error:
+            failures = []
+            _remove_node_group_if_live(scratch, failures=failures)
+            for failure in failures:
+                error.add_note(f"Collection rehearsal cleanup also failed: {failure}")
+            raise
+        else:
+            failures = []
+            if not _remove_node_group_if_live(scratch, failures=failures):
+                raise CompileError("Collection rehearsal cleanup failed") from failures[0]
+
     def _update_existing(
         self,
         name, existing_group, build_tx, populate,
@@ -1102,6 +1505,15 @@ class BlenderGroupBackend:
         finalize_before_commit,
     ):
         """Build a private replacement, then cut over the authoritative datablock."""
+        admission_error = None
+        try:
+            _validate_collection_copy_source(existing_group)
+        except CompileError as exc:
+            if not preserve_if_equivalent or finalize_before_commit is not None:
+                raise
+            # Equivalence is established only after population. A genuinely
+            # no-copy path remains legal; a later copy must reject the old state.
+            admission_error = exc
         old_manifest = generated_resources.read_group_manifest(existing_group)
         captured_resources = generated_resources.capture_owned_resource_ids(existing_group, old_manifest)
         owner_uuid = old_manifest["owner_group_uuid"] if old_manifest is not None else uuid.uuid4().hex
@@ -1111,6 +1523,7 @@ class BlenderGroupBackend:
         replacement = bpy.data.node_groups.new("NodeForge.replacement." + name, "GeometryNodeTree")
         mark_transaction_private(replacement)
         backup = None
+        primary_error = None
         try:
             populate(replacement, tx)
             new_manifest = tx.manifest(empty=not bool(tx.resources)) if (old_manifest is not None or tx.resources) else None
@@ -1130,6 +1543,7 @@ class BlenderGroupBackend:
                     build_tx.rollback_to_savepoint(savepoint)
                     if finalize_before_commit is not None:
                         backup = self._new_private_backup(existing_group, name)
+                        self._rehearse_collection_cutover(backup)
                         external_state = _capture_group_external_state(existing_group)
                         build_tx.register_updated(
                             existing_group,
@@ -1146,12 +1560,29 @@ class BlenderGroupBackend:
                         except Exception:
                             build_tx.rollback_to_savepoint(savepoint)
                             raise
+                    build_tx.discard_abandoned_tree(replacement)
+                    replacement = None
                     if outermost:
                         build_tx.commit()
                     return existing_group
 
+            if admission_error is not None:
+                raise admission_error
             backup = self._new_private_backup(existing_group, name)
+            self._rehearse_collection_cutover(backup, replacement)
             external_state = _capture_group_external_state(existing_group)
+            # A child interface reset can remove/reappend an edge in a shared
+            # multi-input. Do not extend the journal to repair native ordering.
+            # Refuse the mixed input only when a supported collection participates.
+            for record in external_state["links"]:
+                socket = _resolve_endpoint(record["tree"], record["to"], strict=True)
+                if socket.is_multi_input and len(socket.links) > 1 and any(
+                    _has_local_collection(link.from_node) or _has_local_collection(link.to_node)
+                    for link in socket.links
+                ):
+                    raise CompileError(
+                        f"Collection copy: cannot update a group sharing multi-input {socket.node.name!r} "
+                        "with a collection node; disconnect the shared input before updating")
             _validate_group_external_state_for_replacement(replacement, external_state)
             original_name = getattr(existing_group, "name", None)
             try:
@@ -1191,10 +1622,15 @@ class BlenderGroupBackend:
             backup = None
             if finalize_before_commit is not None:
                 finalize_before_commit(existing_group)
+            # Child updates during population may have captured this replacement.
+            # It is abandoned once the authoritative copy has been installed.
+            build_tx.discard_abandoned_tree(replacement)
+            replacement = None
             if outermost:
                 build_tx.commit()
             return existing_group
         except Exception as update_exc:
+            primary_error = update_exc
             rollback_failures = []
             try:
                 if outermost:
@@ -1218,8 +1654,14 @@ class BlenderGroupBackend:
                 raise update_exc from rollback_failures[0]
             raise
         finally:
-            _remove_node_group_if_live(replacement)
-            _remove_node_group_if_live(backup)
+            cleanup_failures = []
+            _remove_node_group_if_live(replacement, failures=cleanup_failures)
+            _remove_node_group_if_live(backup, failures=cleanup_failures)
+            if cleanup_failures:
+                if primary_error is None:
+                    raise CompileError("NodeForge private group cleanup failed") from cleanup_failures[0]
+                for failure in cleanup_failures:
+                    primary_error.add_note(f"NodeForge private group cleanup also failed: {failure}")
 
 
 __all__ = [

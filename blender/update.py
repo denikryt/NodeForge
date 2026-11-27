@@ -163,7 +163,7 @@ def _copy_socket_default_value(socket):
         return None
     try:
         val = socket.default_value
-        if isinstance(val, (float, int, bool)):
+        if isinstance(val, (float, int, bool, str)):
             return val
         try:
             return tuple(float(v) for v in val)
@@ -240,13 +240,18 @@ def _is_zero_like_default(value):
 
 def _captured_node_input_overrides(node):
     """Yield supported input sockets whose values differ from their exact script defaults."""
-    old_defaults = _get_group_input_defaults(getattr(node, "node_tree", None))
+    from .extension_group_materializer import EXTENSION_AUTHORITY_PROP
+    tree = getattr(node, "node_tree", None)
+    old_defaults = _get_group_input_defaults(tree)
+    extension_owned = tree is not None and bool(getattr(tree, "get", lambda *_: None)(EXTENSION_AUTHORITY_PROP))
     for socket, key in _socket_keys(getattr(node, "inputs", []), "INPUT"):
         value = _copy_socket_default_value(socket)
         if value is None:
             continue
         entry = old_defaults.get(key[1:]) if isinstance(old_defaults, dict) else None
-        if isinstance(entry, dict) and entry.get("nf_type") == "ROTATION":
+        if extension_owned and isinstance(entry, dict) and entry.get("declaration_id") and not entry.get("has_default", True):
+            yield socket, value
+        elif isinstance(entry, dict) and entry.get("nf_type") == "ROTATION":
             # Required Rotation inputs have no declared default; Blender's native
             # three-angle default is zero. Compare exactly so even sub-epsilon
             # user edits survive update, as for declared Rotation defaults.

@@ -10,7 +10,7 @@ from typing import Mapping, TYPE_CHECKING
 from ..compiler_identities import FunctionId, SourceDefinitionRef, library_function_id, library_function_id_for_record
 from ..errors import CompileError
 from .group_context import GROUP_CONTEXT_SPECS, GroupContextSlot
-from ..extensions.contracts import ExtensionCallableId, TypeSpec, validate_extension_argument_positions
+from ..extensions.contracts import ExtensionCallableId, TypeSpec, validate_extension_argument_positions, validate_structured_static_positions
 from ..nf_types import NFType
 from .ir import IRFunctionMaterialization, IRExtensionMaterialization
 
@@ -104,6 +104,7 @@ class AnalyzedCallOperand:
     parameter_name: str | None
     typ: NFType
     parameter_index: int | None = None
+    # Indexed slot of either a variadic parameter or a declared container.
     variadic_index: int | None = None
 
     def __post_init__(self) -> None:
@@ -133,6 +134,7 @@ class AnalyzedStaticCallOperand:
     parameter_index: int
     value: object
     variadic_index: int | None = None
+    static_type: NFType | None = None
 
     def __post_init__(self) -> None:
         """Require one non-negative callable input position."""
@@ -263,10 +265,15 @@ class AnalyzedCall:
     extension_state_type: TypeSpec | None = None
     extension_state: object | None = None
 
+    structured_arguments: tuple[tuple[int, tuple[str | int, ...]], ...] = ()
+
     def __post_init__(self) -> None:
         """Freeze normalized fields and reject non-core call targets."""
         if self.extension_materialization is not None and not isinstance(self.extension_materialization, IRExtensionMaterialization):
             raise TypeError("extension_materialization must be IRExtensionMaterialization")
+        if self.structured_arguments and (self.target.kind is not CallableKind.EXTENSION
+                or self.extension_state_type is not None or self.extension_overload_index is not None):
+            raise ValueError("Structured arguments require a non-overloaded backend-only extension")
         if self.target.kind is not CallableKind.EXTENSION and self.extension_materialization is not None:
             raise ValueError("only extension calls can carry IRExtensionMaterialization")
         if not isinstance(self.target, ResolvedCallable):
@@ -278,6 +285,7 @@ class AnalyzedCall:
             raise TypeError("runtime_operands must contain AnalyzedCallOperand records")
         if not all(isinstance(item, AnalyzedStaticCallOperand) for item in self.static_operands):
             raise TypeError("static_operands must contain AnalyzedStaticCallOperand records")
+        validate_structured_static_positions(self.static_operands, self.structured_arguments)
         if self.target.kind in {CallableKind.LOCAL_FUNCTION, CallableKind.LIBRARY, CallableKind.MODULE_DEFINITION}:
             if not isinstance(self.source_function_id, FunctionId):
                 raise TypeError("source-backed analyzed call requires FunctionId")
@@ -310,8 +318,8 @@ class AnalyzedCall:
                 if self.extension_state is not None:
                     raise ValueError("extension_state requires extension_state_type")
                 validate_extension_argument_positions(
-                    (item.parameter_index, item.variadic_index)
-                    for item in (*self.runtime_operands, *self.static_operands)
+                    ((item.parameter_index, item.variadic_index)
+                     for item in (*self.runtime_operands, *self.static_operands)), self.structured_arguments
                 )
             else:
                 if not isinstance(self.extension_state_type, TypeSpec):

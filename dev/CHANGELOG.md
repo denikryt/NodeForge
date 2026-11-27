@@ -867,3 +867,15 @@ lifecycle.
 - Extend `DynamicResults` to explicitly resolve either one direct runtime type or a named schema, retaining named singleton declarations, exact backend validation and the existing transactional group update policy.
 - Add direct/named editor previews, independent grouped/native provenance checks and 12 characterization fixtures covering source, extension and bundled Nodes result forms.
 - Restore interdependent group links and input overrides using live node and socket identities during equivalent updates and transaction rollback.
+
+## 0.102.1
+
+- Document the bundled Nodes library and add a reproducible Blender 5.2 node coverage reference, including socket and dynamic item limitations. Add `nodegen coverage` to generate or check the Markdown reference without modifying the package.
+
+## 0.103.0
+
+- Support one-level typed dictionary and list parameters in declarative BACKEND_ONLY extensions, including DynamicResults, per-leaf evaluation modes, detached defaults, scoped grouped inputs and exact declaration identity. Preserve typed Vector constants and required runtime input state during group updates.
+- Upgrade bundled Nodes to 1.8.0 (requires NodeForge 0.103.0): Capture Attribute uses a dictionary of named values; Menu Switch uses a compile-time list of labels. Remove the old collection string syntax; keep Index Switch and the core Capture builtin unchanged.
+- Reconstruct native Capture, Menu and Index collections before copying defaults and links in group/root publication and rollback. Validate physical collection slots and independent input/output provenance.
+- Add structured argument IntelliSense, characterization, generator and physical regression coverage.
+- Preserve native binary32 conversion of static Int operands delivered to Float Menu Switch sockets, with exact default readback.

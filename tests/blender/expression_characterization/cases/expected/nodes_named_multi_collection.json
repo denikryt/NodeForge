@@ -38,7 +38,7 @@
             ],
             "to": [
               "n3",
-              "Socket_0"
+              "Socket_1"
             ]
           },
           {
@@ -68,7 +68,7 @@
             ],
             "to": [
               "n3",
-              "Socket_1"
+              "Socket_0"
             ]
           },
           {
@@ -271,15 +271,15 @@
                     "socket_type": "NodeSocketFloat"
                   },
                   {
-                    "default": 0.0,
-                    "in_out": "INPUT",
-                    "name": "items_0",
-                    "socket_type": "NodeSocketFloat"
-                  },
-                  {
                     "in_out": "INPUT",
                     "name": "geometry",
                     "socket_type": "NodeSocketGeometry"
+                  },
+                  {
+                    "default": 0.0,
+                    "in_out": "INPUT",
+                    "name": "elements[Two Words]",
+                    "socket_type": "NodeSocketFloat"
                   }
                 ],
                 "links": [
@@ -290,7 +290,7 @@
                     ],
                     "to": [
                       "n2",
-                      "Value"
+                      "Geometry"
                     ]
                   },
                   {
@@ -300,7 +300,7 @@
                     ],
                     "to": [
                       "n2",
-                      "Geometry"
+                      "Value"
                     ]
                   },
                   {

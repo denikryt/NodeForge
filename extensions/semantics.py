@@ -13,6 +13,7 @@ from .contracts import (
     TypeSpec,
     is_executable_result_type_spec,
     is_frontend_semantic_type_spec,
+    is_structured_parameter_type_spec,
 )
 from ..extension_semantic_api import RuntimeRef
 from .values import (
@@ -44,6 +45,11 @@ def classify_extension_execution(
     has_semantic_parameter = any(is_frontend_semantic_type_spec(parameter.type_spec) for parameter in spec.parameters)
     public_semantic = is_frontend_semantic_type_spec(spec.result)
     public_executable = is_executable_result_type_spec(spec.result)
+
+    if any(is_structured_parameter_type_spec(p.type_spec) for p in spec.parameters) and (
+        semantic_return is not None or has_semantic_parameter or not public_executable
+    ):
+        raise CompileError("Structured extension parameters require BACKEND_ONLY execution")
 
     if semantic_return is None:
         if has_semantic_parameter or public_semantic:

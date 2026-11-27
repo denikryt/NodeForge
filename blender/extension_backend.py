@@ -8,7 +8,11 @@ from collections import OrderedDict
 from .socket_types import validate_runtime_value_socket
 from ..errors import CompileError
 from ..extension_api import ExtensionBackendContext, ExtensionBackendValue
-from ..extensions.contracts import ExtensionCallableSpec, TypeSpec
+from ..extensions.contracts import (ExtensionCallableSpec, TypeSpec,
+    is_structured_parameter_type_spec, validate_structured_static_leaf)
+from ..evaluation_modes import EvaluationMode
+from ..extension_result_api import ResultStaticArg
+from ..extensions.values import type_spec_accepts_nf
 from ..extensions.values import unpack_value
 from ..semantic.ir import IRCallOperandRef
 from ..nf_types import NFType
@@ -30,8 +34,8 @@ def _selected_spec(registry, operation) -> ExtensionCallableSpec:
     return family[index]
 
 
-def _physical_argument_value(value: Value, group) -> ExtensionBackendValue:
-    """Convert one compiler-owned runtime value into the public physical wrapper."""
+def _validate_physical_argument_value(value: Value, group) -> None:
+    """Validate one compiler-owned runtime value before exposing it to an extension."""
     if not isinstance(value, Value):
         raise CompileError("Internal error: extension runtime operand is not a Value")
     validate_runtime_value_socket(
@@ -41,18 +45,56 @@ def _physical_argument_value(value: Value, group) -> ExtensionBackendValue:
         context="extension runtime argument",
         require_output=True,
     )
-    return ExtensionBackendValue(value.socket, value.typ)
+
+
+def _validate_argument_transport(spec, operation, operands, group):
+    """Validate selected declaration, slots and physical operands before realization."""
+    layout = dict(operation.structured_arguments)
+    structured = {i: p for i, p in enumerate(spec.parameters) if is_structured_parameter_type_spec(p.type_spec)}
+    if layout.keys() != structured.keys():
+        raise CompileError("Structured argument layout does not match selected declaration")
+    for index, parameter in structured.items():
+        expected_key_type = str if parameter.type_spec.kind == "DICT_STR" else int
+        if any(type(key) is not expected_key_type for key in layout[index]):
+            raise CompileError("Structured argument key kind does not match selected declaration")
+    if len(operation.arguments) != len(operands):
+        raise CompileError("Extension runtime operand count does not match Call IR")
+    for argument, operand in zip(operation.arguments, operands):
+        if not isinstance(operand, Value) or operand.typ is not argument.value.typ:
+            raise CompileError("Extension runtime operand type does not match Call IR")
+        if argument.parameter_index not in range(len(spec.parameters)):
+            raise CompileError("Invalid extension argument parameter position")
+        parameter = spec.parameters[argument.parameter_index]
+        if argument.parameter_index in structured:
+            if (argument.parameter_name != parameter.name
+                    or parameter.evaluation_mode is EvaluationMode.COMPILE_TIME_ONLY
+                    or not type_spec_accepts_nf(parameter.type_spec.item, operand.typ)):
+                raise CompileError("Invalid structured runtime argument mode or type")
+        _validate_physical_argument_value(operand, group)
+    for argument in operation.static_arguments:
+        if argument.parameter_index not in range(len(spec.parameters)):
+            raise CompileError("Invalid extension static argument position")
+        if argument.parameter_index in structured:
+            parameter = structured[argument.parameter_index]
+            if parameter.evaluation_mode is EvaluationMode.RUNTIME_ONLY:
+                raise CompileError("Runtime-only structured argument cannot carry a static value")
+            try:
+                validate_structured_static_leaf(ResultStaticArg(argument.static_type, argument.value), parameter.type_spec.item)
+            except (TypeError, ValueError) as exc:
+                raise CompileError(f"Invalid structured static argument: {exc}") from exc
 
 
 def _bound_arguments(spec: ExtensionCallableSpec, operation, operands, group) -> inspect.BoundArguments:
     """Reconstruct canonical public BoundArguments from static/runtime IR carriers."""
+    _validate_argument_transport(spec, operation, operands, group)
     signature = spec.python_signature()
+    layout = dict(operation.structured_arguments)
     by_position: dict[int, list[tuple[int | None, object]]] = {}
     for argument, value in zip(operation.arguments, operands):
         if argument.parameter_index is None:
             raise CompileError("Internal error: extension runtime operand has no parameter position")
         by_position.setdefault(argument.parameter_index, []).append(
-            (argument.variadic_index, _physical_argument_value(value, group))
+            (argument.variadic_index, ExtensionBackendValue(value.socket, value.typ))
         )
     for argument in operation.static_arguments:
         by_position.setdefault(argument.parameter_index, []).append((argument.variadic_index, argument.value))
@@ -61,6 +103,12 @@ def _bound_arguments(spec: ExtensionCallableSpec, operation, operands, group) ->
     parameters = tuple(signature.parameters.values())
     for index, parameter in enumerate(parameters):
         items = by_position.get(index, [])
+        if index in layout:
+            keys = layout[index]
+            values = [value for _, value in sorted(items)]
+            arguments[parameter.name] = (dict(zip(keys, values))
+                if spec.parameters[index].type_spec.kind == "DICT_STR" else values)
+            continue
         if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
             if any(var_index is None for var_index, _value in items):
                 raise CompileError("Internal error: extension variadic parameter lost variadic indices")
@@ -160,7 +208,8 @@ def lower_extension_call(context, operation, operands, x, y):
                 if stored.operand_index >= len(operands):
                     raise CompileError("Internal error: extension semantic state operand reference is out of range")
                 value = operands[stored.operand_index]
-                return value.typ, _physical_argument_value(value, context.group)
+                _validate_physical_argument_value(value, context.group)
+                return value.typ, ExtensionBackendValue(value.socket, value.typ)
 
             semantic_state = unpack_value(
                 operation.extension_state_type,

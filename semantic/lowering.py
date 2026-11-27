@@ -369,7 +369,7 @@ def lower_analyzed_expression(expr, analysis, *, dependency_sources=None):
                 else:
                     raise CompileError("Internal error: raw node Call IR is missing output mode")
             static_arguments = tuple(
-                IRStaticCallArgument(item.parameter_index, item.value, item.variadic_index)
+                IRStaticCallArgument(item.parameter_index, item.value, item.variadic_index, item.static_type)
                 for item in analyzed.static_operands
             )
             extension_state_type = analyzed.extension_state_type
@@ -395,6 +395,7 @@ def lower_analyzed_expression(expr, analysis, *, dependency_sources=None):
                     materialization=analyzed.materialization,
                     extension_materialization=analyzed.extension_materialization,
                     static_arguments=static_arguments,
+                    structured_arguments=analyzed.structured_arguments,
                     extension_state_type=extension_state_type,
                     extension_state=extension_state,
                     result_names=(tuple(name for name, _ in analyzed.result.items)

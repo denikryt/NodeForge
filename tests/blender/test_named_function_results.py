@@ -236,8 +236,8 @@ def bundled_nodes():
     ('cylinder()', 'mesh', 'GeometryNodeMeshCylinder'),
     ('sample_curve(data_type="FLOAT_VECTOR")', 'value', 'GeometryNodeSampleCurve'),
     ('named_attribute(data_type="FLOAT")', 'attribute', 'GeometryNodeInputNamedAttribute'),
-    ('capture_attribute(elements="FLOAT:Weight")', 'Weight', 'GeometryNodeCaptureAttribute'),
-    ('menu_switch(elements="A,lower", menu="lower", data_type="FLOAT")', 'lower', 'GeometryNodeMenuSwitch'),
+    ('capture_attribute(elements={"Weight": 0.0})', 'Weight', 'GeometryNodeCaptureAttribute'),
+    ('menu_switch(elements=["A","lower"], menu="lower", data_type="FLOAT")', 'lower', 'GeometryNodeMenuSwitch'),
 ])
 def test_generated_named_projections_share_native_call(bundled_nodes, inline, call, key, physical):
     """Dot and bracket projection of the same generated occurrence share one socket."""
@@ -256,21 +256,23 @@ def entry():
     assert len([n for g in groups for n in g.nodes if n.bl_idname == physical]) == 1
 
 
-@pytest.mark.parametrize('call', [
-    'capture_attribute(elements="FLOAT:geometry")',
-    'capture_attribute(elements="FLOAT:a,FLOAT:a")',
-    'capture_attribute(elements="FLOAT:")',
-    'capture_attribute(elements="FLOAT:' + 'x'*64 + '")',
-    'menu_switch(elements="output,B", menu="B")',
-    'menu_switch(elements="", menu="A")',
-    'menu_switch(elements="A,A", menu="A")',
+@pytest.mark.parametrize('call,pattern', [
+    ('capture_attribute(elements={"geometry": 1.0})', 'Dynamic result resolver'),
+    ('capture_attribute(elements={"a":1.0,"a":2.0})', 'Duplicate structured dictionary key'),
+    ('capture_attribute(elements={"":1.0})', 'non-empty string'),
+    ('capture_attribute(elements={"' + 'x'*64 + '":1.0})', '63-byte'),
+    ('menu_switch(elements=["output","B"], menu="B")', 'Dynamic result resolver'),
+    ('menu_switch(elements=[], menu="A")', 'Dynamic result resolver'),
+    ('menu_switch(elements=["A","A"], menu="A")', 'Dynamic result resolver'),
+    ('capture_attribute(elements="FLOAT:Weight")', 'dictionary display'),
+    ('menu_switch(elements="A,B")', 'list value'),
 ])
-def test_generated_invalid_collection_schema_is_rejected_before_publication(bundled_nodes, call):
+def test_generated_invalid_collection_schema_is_rejected_before_publication(bundled_nodes, call, pattern):
     """Invalid explicit keys and grammar fail before any native group is published."""
     from helpers import compile_group
     from NodeForge.errors import CompileError
     before = {g.as_pointer() for g in bpy.data.node_groups}
-    with pytest.raises(CompileError, match='Dynamic result resolver'):
+    with pytest.raises(CompileError, match=pattern):
         compile_group(f'from packages import nodes\n\ndef entry():\n    r = nodes.{call}\n    return r["geometry"]\n', 'InvalidGeneratedSchema')
     assert {g.as_pointer() for g in bpy.data.node_groups} == before
 
@@ -608,17 +610,18 @@ def test_generated_collection_shapes_against_native_reference(bundled_nodes, mon
         for cfg in item['configurations']:
             if kind == 'capture':
                 types = item['dynamic']['types']
-                labels = ['Weight', 'weight', 'Two Words', 'é'*31+'a', '方向', 'class']
-                elements = ','.join(f'{typ}:{label}' for typ,label in zip(types,labels))
-                variants = [('', None), (elements, None)]
+                labels = ['Weight', 'weight', 'Two, Words: value', 'é'*31+'a', '方向', 'class']
+                elements = list(zip(types,labels))
+                variants = [([], None), (elements, None)]
             elif kind == 'menu':
-                variants = [('é'*31+'a', 'é'*31+'a'), ('A,Two Words,lower', 'lower')]
+                variants = [(['é'*31+'a'], 'é'*31+'a'), (['A','Two, Words','lower'], 'lower')]
             else:
                 variants = [(0,None), (1,None), (16,None)]
             # Menu override and generated configuration can normalize separately;
             # each comparison is against a fresh independently configured node.
             for elements, menu in variants:
-                rows.append(run_case(item,cfg,mode,True,elements,menu))
+                for runtime in (False, True):
+                    rows.append(run_case(item,cfg,mode,runtime,elements,menu))
     failures = [r for r in rows if r['status'] == 'failed']
     assert not failures, [(r['node'],r['state'],r['elements'],r.get('error')) for r in failures]
 
@@ -806,3 +809,155 @@ def main():
     assert snapshot() == before
     compiler.update_expression_group(group, source)
     assert snapshot() == before
+
+
+@pytest.mark.parametrize('inline', [True, False])
+def test_structured_capture_mixed_defaults_and_evaluated_geometry(bundled_nodes, inline):
+    """Exact keys, selected types and per-leaf defaults survive grouped materialization."""
+    from helpers import compile_group
+    from test_update_group import _evaluate_group_geometry_vertices as evaluate
+    root = compile_group(f'''from packages import nodes
+
+def main():
+    geo = nodes.mesh_line(count=3, start_location=vector(0,0,0), offset=vector(1,0,0))
+    v = vector(1,2,3)
+    r = nodes.capture_attribute(geometry=geo, elements={{"X, y: z": position().x, "weight": 0.75, "rest": v, "selected": index() > 0, "tint": (0.25, 0.5, 0.75, 1.0), "idx": index()}}, __inline__={inline})
+    return nodes.set_position(geometry=r.geometry, position=vector(r["X, y: z"], r.weight, r.idx))
+''', 'StructuredCaptureEvaluation')
+    groups = [root] + [n.node_tree for n in root.nodes if n.bl_idname == 'GeometryNodeGroup']
+    capture, = [n for g in groups for n in g.nodes if n.bl_idname == 'GeometryNodeCaptureAttribute']
+    assert [i.name for i in capture.capture_items] == ['X, y: z','weight','rest','selected','tint','idx']
+    assert [i.data_type for i in capture.capture_items] == ['FLOAT','FLOAT','FLOAT_VECTOR','BOOLEAN','FLOAT_COLOR','INT']
+    assert [s.is_linked for s in list(capture.inputs)[2:-1]] == [True,False,False,True,False,True]
+    assert capture.inputs['weight'].default_value == .75
+    assert tuple(capture.inputs['rest'].default_value) == (1.,2.,3.)
+    assert tuple(capture.inputs['tint'].default_value) == (.25,.5,.75,1.)
+    assert not any(n.bl_idname == 'ShaderNodeValue' for n in capture.id_data.nodes)
+    assert sorted(evaluate(root,'StructuredCaptureEval')) == [(0.,.75,0.),(1.,.75,1.),(2.,.75,2.)]
+
+
+@pytest.mark.parametrize('inline', [True, False])
+def test_structured_menu_ct_list_and_omitted_defaults(bundled_nodes, inline):
+    """A compile-time list preserves comma/colon labels and unprovided native defaults."""
+    from helpers import compile_group
+    root = compile_group(f'''from packages import nodes
+
+def main(x: Float):
+    labels = ["A, x", "B: y", "Third"]
+    r = nodes.menu_switch(x, 0.75, elements=labels, menu="B: y", data_type="FLOAT", __inline__={inline})
+    return {{"value":r.output, "chosen":r["B: y"]}}
+''', 'StructuredMenuLabels')
+    groups = [root] + [n.node_tree for n in root.nodes if n.bl_idname == 'GeometryNodeGroup']
+    menu, = [n for g in groups for n in g.nodes if n.bl_idname == 'GeometryNodeMenuSwitch']
+    assert [it.name for it in menu.enum_items] == ['A, x','B: y','Third']
+    assert menu.inputs['Menu'].default_value == 'B: y'
+    assert menu.inputs['A, x'].is_linked and not menu.inputs['B: y'].is_linked
+    assert menu.inputs['B: y'].default_value == .75
+    assert not menu.inputs['Third'].is_linked
+
+
+@pytest.mark.parametrize('inline', [True, False])
+def test_collection_oracle_rejects_same_type_input_swap(bundled_nodes, monkeypatch, inline):
+    """Independent input provenance detects equal-typed operands routed to wrong items."""
+    import sys
+    from pathlib import Path
+    from helpers import compile_group
+    tool = Path(__file__).resolve().parents[2] / 'tools/nodegen'
+    monkeypatch.setattr(sys, 'path', [str(tool), str(tool / 'verify'), *sys.path])
+    from validate_nodes import check_input_links
+    root = compile_group(f'''from packages import nodes
+
+def main(p0: Float, p1: Float):
+    r = nodes.capture_attribute(elements={{"left":p0, "right":p1}}, __inline__={inline})
+    return {{"left":r.left, "right":r.right}}
+''', 'CollectionInputOracle')
+    child = root if inline else next(n.node_tree for n in root.nodes if n.bl_idname == 'GeometryNodeGroup')
+    native = next(n for n in child.nodes if n.bl_idname == 'GeometryNodeCaptureAttribute')
+    slots = list(native.inputs)[2:-1]
+    expected = [(s.identifier,s.name,s.bl_idname,f'p{i}') for i,s in enumerate(slots)]
+    assert check_input_links(root,native,expected,grouped=not inline)
+    sources = [s.links[0].from_socket for s in slots]
+    for socket in slots:
+        child.links.remove(socket.links[0])
+    for socket,source in zip(slots,reversed(sources)):
+        child.links.new(source,socket)
+    with pytest.raises(AssertionError,match='Input provenance mismatch'):
+        check_input_links(root,native,expected,grouped=not inline)
+
+
+@pytest.mark.parametrize('inline', [True, False])
+@pytest.mark.parametrize('data_type,decl,values,expected', [
+    ('RGBA', '', '(0.25,0.5,0.75,1.0)', (.25,.5,.75,1.)),
+    ('VECTOR', '', 'vector(1,2,3)', (1.,2.,3.)),
+    ('ROTATION', 'rotation: Rotation', 'rotation', None),
+])
+def test_structured_menu_selected_input_types(bundled_nodes, inline, data_type, decl, values, expected):
+    """Changing the label carrier preserves ordinary selected Color/Vector/Rotation delivery."""
+    from helpers import compile_group
+    root = compile_group(f'''from packages import nodes
+
+def main({decl}):
+    r = nodes.menu_switch({values}, elements=["One"], menu="One", data_type="{data_type}", __inline__={inline})
+    return r.output
+''', 'StructuredMenuTyped')
+    groups = [root] + [n.node_tree for n in root.nodes if n.bl_idname == 'GeometryNodeGroup']
+    menu, = [n for g in groups for n in g.nodes if n.bl_idname == 'GeometryNodeMenuSwitch']
+    socket = menu.inputs['One']
+    if expected is None:
+        assert socket.is_linked and socket.bl_idname == 'NodeSocketRotation'
+    else:
+        assert not socket.is_linked and tuple(socket.default_value) == expected
+
+
+@pytest.mark.parametrize('inline', [True, False])
+@pytest.mark.parametrize('value', [1, 16777217, 2147483647, -16777217, -2147483648, 16777217.0])
+def test_structured_menu_float_default_native_conversion(bundled_nodes, inline, value):
+    """Static numeric operands must match the native Float socket representation."""
+    from helpers import compile_group
+    from NodeForge import compiler
+
+    reference = bpy.data.node_groups.new('MenuFloatReference', 'GeometryNodeTree')
+    try:
+        node = reference.nodes.new('GeometryNodeMenuSwitch')
+        node.data_type = 'FLOAT'
+        slot = node.inputs[1]
+        slot.default_value = value
+        expected = slot.default_value
+    finally:
+        bpy.data.node_groups.remove(reference)
+
+    source = f'''from packages import nodes
+
+def main():
+    return nodes.menu_switch({value!r}, data_type="FLOAT", elements=["A", "B"],
+                             __inline__={inline}).output
+'''
+    root = compile_group(source, 'StructuredMenuFloatConversion')
+    for _ in range(2):
+        groups = [root] + [n.node_tree for n in root.nodes if n.bl_idname == 'GeometryNodeGroup']
+        menu, = [n for g in groups for n in g.nodes if n.bl_idname == 'GeometryNodeMenuSwitch']
+        socket = menu.inputs['A']
+        assert socket.bl_idname == 'NodeSocketFloat'
+        assert not socket.is_linked and socket.default_value == expected
+        compiler.update_expression_group(root, source)
+
+
+def test_collection_float_default_readback_rejects_wrong_native_value(monkeypatch):
+    """Float conversion must not mask an incorrect physical default."""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / 'packages/nodes/systems/blender/backend.py'
+    spec = importlib.util.spec_from_file_location('collection_readback_probe', path)
+    backend = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(backend)
+    group = bpy.data.node_groups.new('MenuFloatReadbackFault', 'GeometryNodeTree')
+    try:
+        node = group.nodes.new('GeometryNodeMenuSwitch')
+        node.data_type = 'FLOAT'
+        socket = node.inputs[1]
+        monkeypatch.setattr(backend, 'deliver', lambda context, socket, value: setattr(socket, 'default_value', 16777218.0))
+        with pytest.raises(ValueError, match='Collection input default changed'):
+            backend.deliver_collection(None, socket, 16777217)
+    finally:
+        bpy.data.node_groups.remove(group)

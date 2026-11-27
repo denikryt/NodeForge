@@ -718,11 +718,81 @@ def _copy_owned_raw_metadata(src_node, dst_node, *, schema_version: int) -> None
             ) from exc
 
 
-def copy_raw_node_properties(src_node, dst_node):
+def _native_collection(node):
+    """Keep ordinary raw metadata operations independent of Blender imports."""
+    if getattr(getattr(node, "bl_rna", None), "identifier", None) is None:
+        return False
+    from .group_backend import _has_local_collection
+    return _has_local_collection(node)
+
+
+def _project_collection_metadata(src_node, dst_node, *, proofs):
+    """Project only persisted physical locators through the exact-copy proof."""
+    from .group_backend import _resolve_standalone_copy_socket
+    spec = raw_node_spec(src_node)
+    version = spec["schema_version"]
+    projected = {key: src_node[key] for key in src_node.keys()}
+    for direction, key in (("input", RAW_INPUTS_JSON_PROP), ("output", RAW_OUTPUTS_JSON_PROP)):
+        payload = _json_loads_node(src_node, key, [])
+        changed = False
+        for index, locator in enumerate(_declared_locators(spec, direction=direction)):
+            source = _resolve_spec_socket(src_node, locator, schema_version=version,
+                                          direction=direction, context="raw copy source")
+            target = _resolve_standalone_copy_socket(src_node, source, dst_node,
+                                                     output=direction == "output", proofs=proofs)
+            if version == 1:
+                declared = _resolve_spec_socket(dst_node, locator, schema_version=version,
+                                                direction=direction, context="raw copy destination")
+                if not _same_blender_ref(target, declared):
+                    raise CompileError("Legacy raw locator disagrees with proved correspondence")
+            else:
+                ref = _capture_physical_socket_ref(target, direction=direction, context="raw copy destination")
+                if ref != locator:
+                    # Preserve any unrelated JSON fields and unchanged records.
+                    record = payload[index]["socket"] if direction == "input" else payload[index]
+                    record.update(_serialize_physical_socket_ref(ref))
+                    changed = True
+        if changed:
+            projected[key] = _json_dumps(payload)
+    return projected
+
+
+def _metadata_value(value):
+    """Detach Blender custom-property containers for structural equality."""
+    if hasattr(value, "to_dict"):
+        return value.to_dict()
+    if hasattr(value, "to_list"):
+        return value.to_list()
+    return value
+
+
+def validate_collection_raw_copy(src_node, dst_node, *, proofs):
+    """Reject any raw metadata difference not established by the same socket proof."""
+    expected = _project_collection_metadata(src_node, dst_node, proofs=proofs)
+    if set(expected) != set(dst_node.keys()):
+        raise CompileError("Raw copy custom metadata keys differ")
+    for key, value in expected.items():
+        if _metadata_value(value) != _metadata_value(dst_node[key]):
+            raise CompileError(f"Raw copy metadata {key!r} disagrees with proved correspondence")
+
+
+def copy_raw_node_properties(src_node, dst_node, *, proofs=None):
     """Copy raw-owned properties/defaults while preserving metadata generation."""
     spec = raw_node_spec(src_node)
     if getattr(dst_node, "bl_idname", None) != spec["bl_idname"]:
         raise RuntimeError("raw node cutover bl_idname mismatch")
+    if _native_collection(src_node):
+        from .group_backend import _copy_node_properties
+        if proofs is None:
+            proofs = {}
+        validate_raw_node_after_cutover(src_node, src_node.id_data)
+        # Copy native state, not values reconstructed from the declared contract.
+        _copy_node_properties(src_node, dst_node, proofs=proofs)
+        for key, value in _project_collection_metadata(src_node, dst_node, proofs=proofs).items():
+            if key not in dst_node or _metadata_value(dst_node[key]) != _metadata_value(value):
+                dst_node[key] = value
+        validate_collection_raw_copy(src_node, dst_node, proofs=proofs)
+        return
     for prop_name, value in spec["props"].items():
         _set_node_property(dst_node, prop_name, value, "raw-node cutover")
     try:
@@ -788,8 +858,12 @@ def _declared_locators(spec, *, direction: str):
             yield contract["socket"]
 
 
-def resolve_cutover_socket(src_node, src_socket, dst_node, *, direction):
+def resolve_cutover_socket(src_node, src_socket, dst_node, *, direction, proofs=None):
     """Resolve one destination socket using raw metadata for declared contracts."""
+    if _native_collection(src_node):
+        from .group_backend import _resolve_standalone_copy_socket
+        return _resolve_standalone_copy_socket(src_node, src_socket, dst_node,
+                                              output=direction == "output", proofs=proofs)
     dst_collection = dst_node.outputs if direction == "output" else dst_node.inputs
     src_collection = src_node.outputs if direction == "output" else src_node.inputs
     if not is_raw_node(src_node):

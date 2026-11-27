@@ -148,7 +148,7 @@ def test_capture_copy_restores_persisted_quaternion_without_modifying_source():
 
 def test_capture_root_update_reconstruction_uses_same_checked_helper():
     """The shared root-update restoration path preserves unlinked Color items."""
-    from NodeForge.blender import root_update
+    from NodeForge.blender import group_backend
     src = bpy.data.node_groups.new('NFTest_capture_root_reconstruct','GeometryNodeTree')
     old=src.nodes.new('GeometryNodeCaptureAttribute')
     old.capture_items.new('RGBA','Tint')
@@ -156,7 +156,7 @@ def test_capture_root_update_reconstruction_uses_same_checked_helper():
     backup = bpy.data.node_groups.new('NFTest_capture_backup','GeometryNodeTree')
     cloned=backup.nodes.new('GeometryNodeCaptureAttribute')
     cloned.name=old.name
-    root_update._sync_capture_attribute_dynamic_items(src, {old.name:cloned})
+    group_backend._copy_node_properties(old, cloned)
     assert [(item.name,item.data_type) for item in cloned.capture_items] == [('Tint','FLOAT_COLOR'), ('Spin','QUATERNION')]
     assert cloned.outputs['Tint'].bl_idname == 'NodeSocketColor'
     assert cloned.inputs['Spin'].bl_idname == 'NodeSocketRotation'
@@ -267,3 +267,119 @@ def test_rotation_capture_root_update_rollback_restores_links(monkeypatch):
     assert [(i.name,i.data_type) for i in restored.capture_items]==original
     assert restored.outputs['Spin'].bl_idname=='NodeSocketRotation'
     assert len(root.links)==3 and all(link.is_valid for link in root.links)
+
+
+@pytest.mark.parametrize('kind,count', [('Capture', 0), ('Capture', 6), ('Menu', 1), ('Menu', 32), ('Index', 0), ('Index', 1), ('Index', 32)])
+def test_local_collection_copy_limits_and_exact_defaults(kind, count):
+    """All standalone layouts are copied before any values are applied, including empty layouts."""
+    ids = {'Capture':'GeometryNodeCaptureAttribute','Menu':'GeometryNodeMenuSwitch','Index':'GeometryNodeIndexSwitch'}
+    src = bpy.data.node_groups.new('NF_collection_limits_source', 'GeometryNodeTree')
+    dst = bpy.data.node_groups.new('NF_collection_limits_dest', 'GeometryNodeTree')
+    node = src.nodes.new(ids[kind])
+    if kind == 'Capture':
+        for typ, label in [('FLOAT','Geometry'),('BOOLEAN','Selection'),('INT','Index'),('VECTOR','Vector'),('RGBA','Tint'),('ROTATION','Spin')][:count]:
+            node.capture_items.new(typ, label)
+        values = (.75, True, 7, (.1,.2,.3), (.25,.5,.75,0.), (.1,.2,.3))[:count]
+        offset = 2
+    elif kind == 'Menu':
+        node.data_type = 'FLOAT'
+        node.enum_items.clear()
+        for i in range(count):
+            node.enum_items.new(f'Item {i}').description = f'Description {i}'
+        node.inputs[0].default_value = f'Item {count-1}'
+        values, offset = tuple(i+.25 for i in range(count)), 1
+    else:
+        node.index_switch_items.clear()
+        for i in range(count):
+            node.index_switch_items.new()
+        node.inputs[0].default_value = max(0,count-1)
+        values, offset = tuple(i+.25 for i in range(count)), 1
+    for index,value in enumerate(values, offset):
+        node.inputs[index].default_value = value
+    def defaults(n):
+        return tuple(tuple(v) if hasattr(v,'__iter__') and not isinstance(v,str) else v for v in [getattr(s,'default_value',None) for s in n.inputs])
+    expected = defaults(node)
+    blender_group_backend._copy_group_contents(src,dst,copy_role='backup')
+    copied, = dst.nodes[:]
+    assert defaults(copied) == expected
+    assert [s.name for s in copied.inputs] == [s.name for s in node.inputs]
+    assert [s.bl_idname for s in copied.outputs] == [s.bl_idname for s in node.outputs]
+    if kind == 'Menu':
+        assert [(i.name,i.description) for i in copied.enum_items] == [(i.name,i.description) for i in node.enum_items]
+    elif kind == 'Capture':
+        assert [(i.name,i.data_type) for i in copied.capture_items] == [(i.name,i.data_type) for i in node.capture_items]
+    else:
+        assert len(copied.index_switch_items) == count
+
+
+@pytest.mark.parametrize('fault', ['label','type','missing'])
+def test_checked_collection_endpoint_rejects_wrong_physical_layout(fault):
+    """A same-type wrong item or missing slot cannot be rescued by a display-name lookup."""
+    src = bpy.data.node_groups.new('NF_collection_fault_source', 'GeometryNodeTree')
+    dst = bpy.data.node_groups.new('NF_collection_fault_dest', 'GeometryNodeTree')
+    a = src.nodes.new('GeometryNodeCaptureAttribute')
+    a.capture_items.new('BOOLEAN','Selection')
+    a.capture_items.new('FLOAT','Other')
+    b = dst.nodes.new('GeometryNodeCaptureAttribute')
+    blender_group_backend._copy_node_properties(a,b)
+    if fault == 'label':
+        b.capture_items[0].name = 'Different'
+    elif fault == 'type':
+        b.capture_items[0].data_type = 'FLOAT'
+    else:
+        b.capture_items.remove(b.capture_items[0])
+    with pytest.raises(CompileError, match='copy:'):
+        blender_group_backend._resolve_standalone_copy_socket(a,a.inputs[2],b,output=False)
+
+
+def test_collection_default_corruption_aborts_group_cutover_and_retries(monkeypatch):
+    """A physical default changed after the local copy is caught before publication."""
+    from pathlib import Path
+    from NodeForge import packages
+    from test_update_group import _evaluate_group_geometry_vertices as evaluate
+    packages.install_package_directory(Path(__file__).resolve().parents[2] / 'packages' / 'nodes')
+    source = '''from packages import nodes
+
+def main():
+    value = nodes.menu_switch(1.0, 2.0, 3.0, elements=["One","Two","Three"], menu="Three", data_type="FLOAT").output
+    return {"geometry": point(vector(value,0.0,0.0))}
+'''
+    group = compiler.create_expression_group(source,'NF_collection_fault')
+    assert evaluate(group,'before_fault') == [(3.,0.,0.)]
+    groups = {g.as_pointer() for g in bpy.data.node_groups}
+    original = blender_group_backend._copy_standalone_collection
+    def corrupt(src,dst,**kwargs):
+        original(src,dst,**kwargs)
+        if src.bl_idname == 'GeometryNodeMenuSwitch' and src.inputs[3].default_value == 4.0:
+            dst.inputs[3].default_value = 0.0
+    changed = source.replace('2.0, 3.0','2.0, 4.0')
+    with monkeypatch.context() as patch:
+        patch.setattr(blender_group_backend,'_copy_standalone_collection',corrupt)
+        with pytest.raises(CompileError,match='default readback differs'):
+            compiler.update_expression_group(group,changed)
+    assert evaluate(group,'after_fault') == [(3.,0.,0.)]
+    assert groups == {g.as_pointer() for g in bpy.data.node_groups}
+    compiler.update_expression_group(group,changed)
+    assert evaluate(group,'after_retry') == [(4.,0.,0.)]
+
+
+def test_menu_copy_preserves_connected_enum_selection_and_descriptions():
+    """A linked Menu input retains its local enum and the physical incoming link."""
+    src = bpy.data.node_groups.new('NF_menu_link_source','GeometryNodeTree')
+    dst = bpy.data.node_groups.new('NF_menu_link_dest','GeometryNodeTree')
+    src.interface.new_socket(name='Selector',in_out='INPUT',socket_type='NodeSocketMenu')
+    entry = src.nodes.new('NodeGroupInput')
+    menu = src.nodes.new('GeometryNodeMenuSwitch')
+    menu.data_type = 'FLOAT'
+    menu.enum_items.clear()
+    menu.enum_items.new('One').description = 'First'
+    menu.enum_items.new('Two').description = 'Second'
+    menu.inputs[0].default_value = 'Two'
+    src.links.new(entry.outputs[0],menu.inputs[0])
+    blender_group_backend._copy_group_contents(src,dst,copy_role='backup')
+    other = dst.nodes[menu.name]
+    assert other.inputs[0].default_value == 'Two'
+    assert [(i.name,i.description) for i in other.enum_items] == [('One','First'),('Two','Second')]
+    link, = dst.links[:]
+    assert link.from_node.bl_idname == 'NodeGroupInput' and link.to_socket == other.inputs[0]
+    assert link.is_valid

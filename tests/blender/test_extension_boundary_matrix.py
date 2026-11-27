@@ -155,17 +155,17 @@ def test_capture_rotation_clone_and_update_through_root_and_group_boundaries(tmp
 
 
 def test_capture_root_copy_error_preserves_previous_graph_and_resources(tmp_path, monkeypatch):
-    from NodeForge.blender import root_subgraph_transfer
+    from NodeForge.blender import group_backend
     _package(tmp_path, name='extension_capture_reject', interface=_CAPTURE_INTERFACE,
              backend=_CAPTURE_BACKEND)
     root = bpy.data.node_groups.new('NFExt_capture_matrix_rollback', 'GeometryNodeTree')
     old = root.nodes.new('GeometryNodeMeshCube')
     before = old.as_pointer()
 
-    def reject_capture(*args):
+    def reject_capture(*args, **kwargs):
         raise CompileError('Extension Capture item reconstruction blocked')
 
-    monkeypatch.setattr(root_subgraph_transfer, '_sync_capture_attribute_dynamic_items', reject_capture)
+    monkeypatch.setattr(group_backend, '_copy_standalone_collection', reject_capture)
     source = 'from packages import extension_capture_reject\ngeo=cube(1)\nout=capture(geo)\n'
     with pytest.raises(RootUpdateError, match='Extension Capture item reconstruction blocked') as info:
         compiler.compile_source_in_tree(source, root)

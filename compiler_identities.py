@@ -93,7 +93,7 @@ class BindingId:
 
 @dataclass(frozen=True)
 class InputDeclarationId:
-    """Identify one direct explicit-input declaration across recompilations."""
+    """Identify one explicit input or structured extension leaf across recompilations."""
 
     owner_scope: str
     target_name: str

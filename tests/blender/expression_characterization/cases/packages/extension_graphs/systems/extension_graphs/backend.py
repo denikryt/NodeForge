@@ -86,3 +86,19 @@ def shape(context, value, form="DIRECT"):
 def shape_state(context, semantic_state):
     """Use the reconstructed state with the same physical operation."""
     return shape(context, semantic_state.value, semantic_state.form)
+
+
+def structured(context, items, extra, labels):
+    """Link runtime leaves and write static leaves into native math defaults."""
+    from NodeForge.extension_api import ExtensionBackendValue
+    value = items['x']
+    for operand in (items['weight'], *extra):
+        node = context.group.nodes.new('ShaderNodeMath')
+        node.operation = 'ADD'
+        for socket, argument in zip(node.inputs, (value, operand)):
+            if isinstance(argument, ExtensionBackendValue):
+                context.group.links.new(argument.socket, socket)
+            else:
+                socket.default_value = argument
+        value = context.value(node.outputs[0], NFType.FLOAT)
+    return {labels[0]: value} if labels else value

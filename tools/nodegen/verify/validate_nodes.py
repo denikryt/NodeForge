@@ -45,13 +45,13 @@ def dynamic_add(node, dynamic, elements):
         while len(node.index_switch_items)>elements:node.index_switch_items.remove(node.index_switch_items[-1])
         while len(node.index_switch_items)<elements:node.index_switch_items.new()
     elif kind=='menu':
-        desired=[x.strip() for x in elements.split(',') if x.strip()]
+        desired=list(elements)
         if [it.name for it in node.enum_items]!=desired:
             node.enum_items.clear()
             for name in desired:node.enum_items.new(name)
     elif kind=='capture':
-        for part in [x.strip() for x in elements.split(',') if x.strip()]:
-            token,name=part.split(':',1);node.capture_items.new(token,name)
+        for token,name in elements:
+            node.capture_items.new(token,name)
 
 def runtime_inputs(node, dynamic, cfg):
     if dynamic:
@@ -59,21 +59,44 @@ def runtime_inputs(node, dynamic, cfg):
         return [(s,marker(s.bl_idname)) for s in node.inputs if filtered(s) and marker(s.bl_idname)]
     return [([s for s in node.inputs if s.identifier==x['socket']][0],x['type']) for x in cfg['inputs']]
 
+def runtime_slots(item, runtime, available):
+    """Select source input slots; Rotation capture needs a typed runtime leaf."""
+    capture = item['dynamic'] and item['dynamic']['kind'] == 'capture'
+    return [index for index, (sock, typ) in enumerate(available)
+            if runtime or (capture and sock.identifier.startswith('Value') and typ == 'Rotation')]
+
+
+def capture_default_expression(socket, typ):
+    """Use independently observed defaults, with explicit Vector typing."""
+    value = socket.default_value
+    if typ in ('Vector', 'Color', 'Rotation'):
+        value = tuple(value)
+    return 'vector' + repr(value) if typ == 'Vector' else repr(value)
+
+
 def source_for(item,cfg,mode,runtime,params,output_keys,menu_override=None,elements=None,available=()):
     opts={f['param']:cfg['rna'][f['key']] if f['kind']=='rna' else cfg['menus'][f['key']] for f in item['fields']}
     if menu_override is not None:
         menu = next(f['param'] for f in item['fields'] if f['kind']=='menu' and f['key']=='Menu')
         opts[menu]=menu_override
-    if item['dynamic'] and elements is not None:opts['elements']=elements
+    kind = item['dynamic']['kind'] if item['dynamic'] else None
+    if kind and kind != 'capture' and elements is not None:opts['elements']=elements
     named={entry['socket']: entry['param'] for entry in item['named_inputs']}
     positional=[]
     keywords=[]
-    if runtime:
-        for index,(socket,typ) in enumerate(available):
+    capture=[]
+    param_by_slot = {slot: f'p{i}' for i, slot in enumerate(runtime_slots(item,runtime,available))}
+    for index,(socket,typ) in enumerate(available):
+        value = param_by_slot.get(index)
+        if kind == 'capture' and socket.identifier not in named:
+            capture.append(f'{socket.name!r}: {value if value is not None else capture_default_expression(socket,typ)}')
+        elif value is not None:
             if socket.identifier in named:
-                keywords.append(f'{named[socket.identifier]}=p{index}')
+                keywords.append(f'{named[socket.identifier]}={value}')
             else:
-                positional.append(f'p{index}')
+                positional.append(value)
+    if kind == 'capture' and (capture or elements is not None):
+        keywords.append('elements={' + ', '.join(capture) + '}')
     args = positional + keywords + [f'{k}={v!r}' for k,v in opts.items()]
     args.append(f'__inline__={mode=="inline"}')
     call=f"gen.{item['name']}({', '.join(args)})"
@@ -152,9 +175,37 @@ def check_output_links(root, native, schema, *, grouped=None):
     return actual
 
 
+def check_input_links(root, native, expected, *, grouped):
+    """Trace native input links to independent root parameter identities."""
+    call = None
+    if grouped:
+        calls = [n for n in root.nodes if n.bl_idname == 'GeometryNodeGroup' and n.node_tree == native.id_data]
+        if len(calls) != 1:
+            raise AssertionError('Missing or ambiguous native input owner')
+        call = calls[0]
+    actual = []
+    for link in native.id_data.links:
+        if link.to_node != native:
+            continue
+        source = link.from_socket
+        if source.node.bl_idname != 'NodeGroupInput':
+            raise AssertionError(f'Wrong native input source for {link.to_socket.identifier}')
+        if grouped:
+            targets = [s for s in call.inputs if s.identifier == source.identifier]
+            if len(targets) != 1 or len(targets[0].links) != 1:
+                raise AssertionError(f'Missing grouped input link for {source.identifier}')
+            source = targets[0].links[0].from_socket
+            if source.node.bl_idname != 'NodeGroupInput':
+                raise AssertionError('Wrong root input source')
+        actual.append((link.to_socket.identifier, link.to_socket.name, link.to_socket.bl_idname, source.name))
+    if sorted(actual) != sorted(expected):
+        raise AssertionError(f'Input provenance mismatch: {actual!r} vs {expected!r}')
+    return actual
+
+
 def run_case(item,cfg,mode,runtime,elements=None,menu_override=None):
     dynamic=item['dynamic']
-    effective_elements = elements if elements is not None else (dynamic['initial_count'] if dynamic and dynamic['kind']=='index' else ','.join(dynamic['initial_names']) if dynamic and dynamic['kind']=='menu' else '')
+    effective_elements = elements if elements is not None else (dynamic['initial_count'] if dynamic and dynamic['kind']=='index' else dynamic['initial_names'] if dynamic and dynamic['kind']=='menu' else [])
     record={'node':item['node'],'wrapper':item['name'],'state':cfg['inspector_state'],
             'rna':cfg['rna'],'menu':{**cfg['menus'],**({'Menu':menu_override} if menu_override else {})},
             'mode':mode,'runtime':runtime,'elements':elements,'status':'failed'}
@@ -184,17 +235,19 @@ def run_case(item,cfg,mode,runtime,elements=None,menu_override=None):
         actual_menu={key:[s for s in oracle.inputs if s.identifier==key][0].default_value for key in cfg['menus']}
         if actual_menu!=record['menu']:normalized=True
         available=runtime_inputs(oracle,dynamic,cfg)
-        param_types=[kind for sock,kind in available] if runtime else []
-        if runtime:
-            for i,(sock,typ) in enumerate(available):
+        chosen = [available[index] for index in runtime_slots(item,runtime,available)]
+        param_types=[kind for sock,kind in chosen]
+        if chosen:
+            for i,(sock,typ) in enumerate(chosen):
                 ref_group.interface.new_socket(name=f'p{i}',in_out='INPUT',socket_type=SOCKETS[typ])
             ref_in=ref_group.nodes.new('NodeGroupInput')
-            for i,(sock,typ) in enumerate(available):
+            for i,(sock,typ) in enumerate(chosen):
                 ref_group.links.new(ref_in.outputs[f'p{i}'],sock)
         expected=basic_snapshot(oracle)
         expected_defaults=input_defaults(oracle)
-        expected_links=[(link.to_socket.identifier,link.to_socket.name,link.to_socket.bl_idname)
+        expected_links=[(link.to_socket.identifier,link.to_socket.name,link.to_socket.bl_idname,link.from_socket.name)
                         for link in ref_group.links if link.to_node==oracle]
+        record['expected_inputs'] = expected_links
         schema = reference_output_schema(oracle, item, cfg, normalized)
         record['expected_outputs'] = schema
         code=source_for(item,cfg,mode,runtime,param_types,[row[0] for row in schema],menu_override,elements,available=available)
@@ -219,9 +272,7 @@ def run_case(item,cfg,mode,runtime,elements=None,menu_override=None):
         for key,val in actual_menu.items():
             found=[s for s in native.inputs if s.identifier==key]
             if len(found)!=1 or found[0].default_value!=val:raise AssertionError(f'Menu mismatch {key!r}')
-        actual_links=[(link.to_socket.identifier,link.to_socket.name,link.to_socket.bl_idname)
-                      for g in inner for link in g.links if link.to_node==native]
-        if sorted(actual_links)!=sorted(expected_links):raise AssertionError(f'Link mismatch: {actual_links} vs {expected_links}')
+        record['actual_inputs'] = check_input_links(root, native, expected_links, grouped=mode=='grouped')
         if any(not l.is_valid for g in [root,*inner] for l in g.links):
             raise AssertionError('Invalid Blender link')
         record['status']='inspector_not_reproducible' if normalized else 'passed'
@@ -266,10 +317,10 @@ def main():
                 if item['dynamic'] and selected:
                     cfg=selected[0];kind=item['dynamic']['kind']
                     if kind=='capture':
-                        choices=[f'{t}:Item {i}' for i,t in enumerate(item['dynamic']['types'])][:2]
-                        if choices:scenarios.extend((cfg,mode,False,','.join(choices),None) for mode in ('inline','grouped'))
+                        choices=[(t,f'Item {i}') for i,t in enumerate(item['dynamic']['types'])][:2]
+                        if choices:scenarios.extend((cfg,mode,False,choices,None) for mode in ('inline','grouped'))
                     if kind=='index':scenarios.extend((cfg,mode,False,4,None) for mode in ('inline','grouped'))
-                    if kind=='menu':scenarios.extend((cfg,mode,False,'A,Two Words,lower','lower') for mode in ('inline','grouped'))
+                    if kind=='menu':scenarios.extend((cfg,mode,False,['A','Two Words','lower'],'lower') for mode in ('inline','grouped'))
                 for cfg,mode,runtime,elements,menu_override in scenarios:
                     if args.limit and attempts>=args.limit:break
                     record=run_case(item,cfg,mode,runtime,elements,menu_override)

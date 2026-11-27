@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import bpy
 from dataclasses import replace
 
 from ..errors import CompileError
 from ..semantic.ir import IRExtensionMaterializationMode
-from .extension_backend import _selected_spec, lower_extension_call
+from .extension_backend import _selected_spec, lower_extension_call, _validate_argument_transport
 from .group_authority import find_unique_authoritative_group
 from .socket_types import socket_type_for_nf_type, validate_runtime_value_socket
 from .values import make_value
-from .interface import set_named_results
+from .interface import set_named_results, _record_group_input_declaration
+from ..compiler_identities import InputDeclarationId
 
 
 EXTENSION_AUTHORITY_PROP = 'nodeforge_extension_call_authority_v1'
@@ -26,11 +28,18 @@ def _input_names(operation, spec):
         return tuple(f'Dependency_{index}' for index in range(len(operation.arguments)))
     params = tuple(spec.python_signature().parameters)
     names = []
+    layout = dict(operation.structured_arguments)
     for argument in operation.arguments:
         if argument.parameter_index is None or argument.parameter_index >= len(params):
             raise CompileError('Invalid physical extension argument index')
         name = params[argument.parameter_index]
-        if argument.variadic_index is not None:
+        if argument.parameter_index in layout:
+            key = layout[argument.parameter_index][argument.variadic_index]
+            name = f'{name}[{key}]'
+            encoded = name.encode('utf-8')
+            if len(encoded) > 63:
+                name = encoded[:46].decode('utf-8', errors='ignore') + '~' + hashlib.sha256(encoded).hexdigest()[:16]
+        elif argument.variadic_index is not None:
             name = f'{name}_{argument.variadic_index}'
         names.append(name)
     if len(names) != len(set(names)):
@@ -54,7 +63,8 @@ def _fingerprint(operation, spec, registry):
     payload = (
         operation.target.extension_callable_id, operation.target.extension_overload_index,
         spec, tuple((a.parameter_index, a.variadic_index, a.value.typ) for a in operation.arguments),
-        tuple((a.parameter_index, a.variadic_index, a.value) for a in operation.static_arguments),
+        tuple((a.parameter_index, a.variadic_index, a.value, a.static_type) for a in operation.static_arguments),
+        operation.structured_arguments,
         operation.extension_state_type, operation.extension_state,
         tuple(r.typ for r in operation.results), operation.result_names, spec.result.kind,
         registry.owner_fingerprint(operation.target.extension_callable_id.owner),
@@ -87,6 +97,8 @@ def materialize_extension_call(context, operation, operands, x, y):
     if registry is None:
         raise CompileError('Grouped extension requires a resolved extension registry')
     spec = _selected_spec(registry, operation)
+    if operation.extension_state_type is None:
+        _validate_argument_transport(spec, operation, operands, context.group)
     input_names = _input_names(operation, spec)
     output_names = _output_names(operation, spec)
     identity = site.owner_scope + ':' + repr((site.callee.owner, site.callee.name, site.ordinal))
@@ -103,10 +115,16 @@ def materialize_extension_call(context, operation, operands, x, y):
 
         def populate(candidate, resources):
             set_named_results(candidate, operation.result_names is not None)
+            layout = dict(operation.structured_arguments)
             for name, argument in zip(input_names, operation.arguments):
-                candidate.interface.new_socket(
+                item = candidate.interface.new_socket(
                     name=name, in_out='INPUT', socket_type=socket_type_for_nf_type(argument.value.typ),
                 )
+                if argument.parameter_index in layout:
+                    key = layout[argument.parameter_index][argument.variadic_index]
+                    parameter = spec.parameters[argument.parameter_index].name
+                    declaration = InputDeclarationId(identity, json.dumps((parameter, key), ensure_ascii=False, separators=(',', ':')), 0)
+                    _record_group_input_declaration(candidate, declaration, name, argument.value.typ, None, interface_item=item)
             for name, result in zip(output_names, operation.results):
                 candidate.interface.new_socket(
                     name=name, in_out='OUTPUT', socket_type=socket_type_for_nf_type(result.typ),

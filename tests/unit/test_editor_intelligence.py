@@ -621,3 +621,41 @@ def _result_types_choose(args):
     assert hint.signatures[0].result_kind == 'named'
     hint = help_at_caret('from packages import shapes\nx = choose(1.0, named=unknown).|', index)
     assert not hint.candidates and hint.signatures[0].result_kind == 'dynamic'
+
+
+def test_structured_nodes_signature_and_compiler_resolved_completion(editor_index):
+    """Present actual containers and resolve exact result fields through semantic analysis."""
+    packages.install_package_directory(Path(__file__).resolve().parents[2] / 'packages/nodes')
+    index = SymbolIndex(resolve_environment())
+    prefix = 'from packages import nodes as n\n'
+    capture = help_at_caret(prefix + 'x = n.capture_attribute(|', index).signatures[0]
+    elements = next(p for p in capture.parameters if p.name == 'elements')
+    assert elements.typ == 'dict[str, Bool | Color | Float | Int | Rotation | Vector]'
+    assert elements.default == '{}'
+    menu = help_at_caret(prefix + 'x = n.menu_switch(|', index).signatures[0]
+    elements = next(p for p in menu.parameters if p.name == 'elements')
+    assert elements.typ == 'list[String]' and elements.default == "['A', 'B']"
+    for source in (
+        'x = n.capture_attribute(elements={"rest":position(), "a,b":index(), "weight":0.75}).|',
+        'r = n.capture_attribute(elements={"rest":position(), "a,b":index(), "weight":0.75})\nx = r.|',
+        'def f(a: Vector):\n    r = n.capture_attribute(elements={"rest":a, "a,b":index(), "weight":0.75})\n    x = r.|',
+    ):
+        hint = help_at_caret(prefix + source, index)
+        assert {c.insert for c in hint.candidates} == {'geometry','selection','rest','weight'}
+        assert {o.key:o.typ for o in hint.signatures[0].outputs} == {'geometry':'Geometry','selection':'Bool','rest':'Vector','a,b':'Int','weight':'Float'}
+    for source in (
+        'x = n.capture_attribute(elements={"bad":missing}).|',
+        'x = n.capture_attribute(elements={"bad":1.0,"bad":2.0}).|',
+    ):
+        hint = help_at_caret(prefix + source, index)
+        assert not hint.candidates and hint.signatures[0].result_kind == 'dynamic'
+    hint = help_at_caret(prefix + 'labels = ["Low", "High, x"]\nx = n.menu_switch(elements=labels, menu="Low").|', index)
+    assert {c.insert for c in hint.candidates} == {'output','Low'}
+    assert {o.key for o in hint.signatures[0].outputs} == {'output','Low','High, x'}
+    hint = help_at_caret(prefix + 'x = n.capture_attribute(elements={"x":vector(1,2,3), "y":|', index)
+    assert hint.signatures[0].parameters[hint.active_parameter].name == 'elements'
+    hint = help_at_caret(prefix + 'x = n.menu_switch(elements=["A",|', index)
+    assert hint.signatures[0].parameters[hint.active_parameter].name == 'elements'
+    hint = help_at_caret(prefix + 'x = n.capture_attribute(elements={"x":1.0, "y":2.0}, dom|', index)
+    assert [c.insert for c in hint.candidates] == ['domain=']
+    assert not help_at_caret(prefix + 'n = 2\nx = n.capture_attribute(elements={"x":1.0}).|', index).candidates
