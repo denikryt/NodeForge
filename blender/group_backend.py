@@ -22,6 +22,7 @@ from .storage import _reset_node_group
 from .interface import NAMED_RESULTS_PROP, has_named_results
 from .update import (
     _capture_group_external_state,
+    _resolve_endpoint,
     _restore_group_external_state,
     _validate_group_external_state_for_replacement,
 )
@@ -756,9 +757,16 @@ def _validate_collection_copy_source(tree):
             admitted.add(node)
             if raw_nodes.is_raw_node(node):
                 raw_nodes.validate_raw_node_after_cutover(node, tree)
-    if admitted and any(not link.is_valid for link in tree.links
-                        if link.from_node in admitted or link.to_node in admitted):
+    incident = [link for link in tree.links
+                if link.from_node in admitted or link.to_node in admitted] if admitted else []
+    if any(not link.is_valid for link in incident):
         raise CompileError("Collection copy: invalid source link")
+    for socket in {link.to_socket for link in incident if link.to_socket.is_multi_input}:
+        links = socket.links
+        if len({link.multi_input_sort_id for link in links}) != len(links):
+            raise CompileError(
+                f"Collection copy: ambiguous multi-input order on {socket.node.name!r}; "
+                "reconnect this input before updating")
     return bool(admitted)
 
 
@@ -780,19 +788,29 @@ def _verify_collection_edges(tree, copied_edges, nodes):
     if any(not link.is_valid for link in actual):
         raise CompileError("Collection copy: invalid final link")
     for socket in {right for _, right in expected if right.is_multi_input}:
-        desired = [left for _, left, right in sorted(copied_edges, key=lambda row: row[0].multi_input_sort_id)
-                   if right == socket]
-        ordered = sorted(socket.links, key=lambda link: link.multi_input_sort_id)
-        if Counter(link.from_socket for link in ordered) != Counter(desired):
+        rows = [(source, left) for source, left, right in copied_edges if right == socket]
+        if len({source.multi_input_sort_id for source, _ in rows}) != len(rows):
+            raise CompileError("Collection copy: ambiguous source multi-input order")
+        desired = [(left, source.is_muted) for source, left in sorted(
+            rows, key=lambda row: row[0].multi_input_sort_id)]
+        def read():
+            links = sorted(socket.links, key=lambda link: link.multi_input_sort_id)
+            if (len({link.multi_input_sort_id for link in links}) != len(links)
+                    or any(not link.is_valid for link in links)):
+                return None
+            return [(link.from_socket, link.is_muted) for link in links]
+        if Counter(link.from_socket for link in socket.links) != Counter(left for left, _ in desired):
             raise CompileError("Collection copy: multi-input topology differs")
-        # Blender insertion order need not equal the source's native sort order
-        # (for example after a manual reorder or a partial rollback).
-        for index, left in enumerate(desired):
-            if ordered[index].from_socket != left:
-                match = next(i for i in range(index + 1, len(ordered)) if ordered[i].from_socket == left)
-                ordered[index].swap_multi_input_sort_id(ordered[match])
-                ordered[index], ordered[match] = ordered[match], ordered[index]
-        if [link.from_socket for link in sorted(socket.links, key=lambda link: link.multi_input_sort_id)] != desired:
+        if read() == desired:
+            continue
+        # Only collection-incident receivers are in scope. Rebuild once from
+        # the unambiguous source order, not by guessing Blender's tied IDs.
+        for link in list(socket.links):
+            tree.links.remove(link)
+        for left, muted in desired:
+            link = tree.links.new(left, socket)
+            link.is_muted = muted
+        if read() != desired:
             raise CompileError("Collection copy: multi-input order differs")
 
 
@@ -1553,6 +1571,18 @@ class BlenderGroupBackend:
             backup = self._new_private_backup(existing_group, name)
             self._rehearse_collection_cutover(backup, replacement)
             external_state = _capture_group_external_state(existing_group)
+            # A child interface reset can remove/reappend an edge in a shared
+            # multi-input. Do not extend the journal to repair native ordering.
+            # Refuse the mixed input only when a supported collection participates.
+            for record in external_state["links"]:
+                socket = _resolve_endpoint(record["tree"], record["to"], strict=True)
+                if socket.is_multi_input and len(socket.links) > 1 and any(
+                    _has_local_collection(link.from_node) or _has_local_collection(link.to_node)
+                    for link in socket.links
+                ):
+                    raise CompileError(
+                        f"Collection copy: cannot update a group sharing multi-input {socket.node.name!r} "
+                        "with a collection node; disconnect the shared input before updating")
             _validate_group_external_state_for_replacement(replacement, external_state)
             original_name = getattr(existing_group, "name", None)
             try:

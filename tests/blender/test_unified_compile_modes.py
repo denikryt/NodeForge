@@ -319,6 +319,26 @@ def test_public_root_compiler_exposes_only_unified_route():
         compiler.compile_script_auto('def calc() -> Float:\n    return 1.0\n', root)
 
 
+def _postcommit_retirement_probe(monkeypatch, group_backend):
+    """Identify live journal backups retired after the actual commit PONR."""
+    phase = []
+    commit = group_backend.BlenderGroupBuildTransaction.commit
+
+    def tracked_commit(transaction):
+        phase.append(transaction)
+        try:
+            return commit(transaction)
+        finally:
+            phase.pop()
+
+    monkeypatch.setattr(group_backend.BlenderGroupBuildTransaction, 'commit', tracked_commit)
+
+    def retiring(group):
+        return bool(group is not None and phase and phase[-1]._closed and
+                    any(event.get('backup') == group for event in phase[-1]._mutation_journal))
+    return retiring
+
+
 def test_groups_only_postcommit_cleanup_exception_preserves_undo(monkeypatch):
     """A warning promoted to an exception after commit retains the Undo signal."""
     import warnings
@@ -339,11 +359,13 @@ def test_groups_only_postcommit_cleanup_exception_preserves_undo(monkeypatch):
     manual_pointer = manual.as_pointer()
     original_pointer = published.as_pointer()
     removal = group_backend._remove_node_group_if_live
+    retiring = _postcommit_retirement_probe(monkeypatch, group_backend)
 
     def cleanup_with_warning(group, *, failures=None):
         """Inject one failed postcommit retirement after removing the backup."""
+        inject = retiring(group)
         result = removal(group, failures=failures)
-        if failures is not None:
+        if inject and failures is not None:
             failures.append(RuntimeError('injected postcommit backup cleanup failure'))
         return result
 
@@ -371,11 +393,13 @@ def test_groups_only_postcommit_warning_without_escalation_keeps_success(monkeyp
     compiler.compile_source_in_tree('def calc(v: Float) -> Float:\n    return v + 1.0\n',
                                     root, module_context=origin)
     removal = group_backend._remove_node_group_if_live
+    retiring = _postcommit_retirement_probe(monkeypatch, group_backend)
 
     def cleanup_with_warning(group, *, failures=None):
         """Record a postcommit cleanup warning without aborting publication."""
+        inject = retiring(group)
         result = removal(group, failures=failures)
-        if failures is not None:
+        if inject and failures is not None:
             failures.append(RuntimeError('injected benign retirement failure'))
         return result
 
@@ -437,11 +461,13 @@ def test_compile_operator_retains_undo_on_real_postcommit_cleanup_exception(monk
     text.clear()
     text.write('def calc(v: Float) -> Float:\n    return v * 2.0\n')
     cleanup = group_backend._remove_node_group_if_live
+    retiring = _postcommit_retirement_probe(monkeypatch, group_backend)
 
     def fail_postcommit(group, *, failures=None):
         """Force a retirement warning after authoritative publication."""
+        inject = retiring(group)
         removed = cleanup(group, failures=failures)
-        if failures is not None:
+        if inject and failures is not None:
             failures.append(RuntimeError('UI postcommit warning-as-error'))
         return removed
 

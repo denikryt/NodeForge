@@ -442,3 +442,19 @@ def test_unset_menu_through_real_publication(trees, monkeypatch, raw_case, linke
     assert _snapshot(graph, interface_ids=False) == before and _inventory() == inventory
     if raw_case:
         raw.validate_raw_node_after_cutover(restored, graph)
+
+
+def test_nested_update_sharing_collection_multi_input_rejected(trees):
+    tree, child, shared, index = _graph(trees, False)
+    join = tree.nodes.new('GeometryNodeJoinGeometry')
+    tree.links.new(shared.outputs[0], join.inputs[0])
+    tree.links.new(index.outputs[0], join.inputs[0])
+    before, child_before = _snapshot(tree), _snapshot(child, interface_ids=False)
+    pointers = {n.name: n.as_pointer() for n in tree.nodes}
+    inventory = _inventory()
+    with pytest.raises(root_update.RootUpdateError, match='cannot update a group sharing multi-input'):
+        _compile(tree, _SOURCE.replace('cube(1)', 'cube(5)'))
+    assert _snapshot(tree) == before
+    assert _snapshot(child, interface_ids=False) == child_before
+    assert {n.name: n.as_pointer() for n in tree.nodes} == pointers
+    assert _inventory() == inventory

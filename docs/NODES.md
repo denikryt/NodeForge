@@ -1,6 +1,6 @@
 # NodeForge Nodes
 
-Coverage reference for **Nodes 1.7.0** and **Blender 5.2.0 LTS**.
+Coverage reference for **Blender 5.2.0 LTS**.
 
 The table maps Blender node names and `bpy` class identifiers to functions in the bundled `nodes` package. NodeForge installs the bundled library automatically when the extension is enabled. Import it with `from packages import nodes`. See the [Package Guide](PACKAGES.md#importing-package-callables) for general import rules. For node behavior, refer to the [Blender Geometry Nodes manual](https://docs.blender.org/manual/en/latest/modeling/geometry_nodes/index.html).
 

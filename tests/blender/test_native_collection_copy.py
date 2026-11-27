@@ -769,3 +769,28 @@ def test_raw_post_link_parity_rejects_corruption(trees, fault, monkeypatch):
         expected = 'linked endpoints differ'
     with pytest.raises(CompileError, match=expected):
         backend._copy_group_contents(src, dst)
+
+
+@pytest.mark.parametrize('role', ['backup', 'transfer', 'root_restore'])
+@pytest.mark.parametrize('count', [3, 17])
+def test_collection_tied_multi_input_rejected_before_copy(trees, role, count):
+    src, dst = trees('Ambiguous source'), trees('Untouched destination')
+    index = src.nodes.new('GeometryNodeIndexSwitch')
+    index.data_type = 'GEOMETRY'
+    join = src.nodes.new('GeometryNodeJoinGeometry')
+    cubes = [src.nodes.new('GeometryNodeMeshCube') for _ in range(count - 1)]
+    first = src.links.new(cubes[0].outputs[0], join.inputs[0])
+    src.links.new(index.outputs[0], join.inputs[0])
+    for cube in cubes[1:]:
+        src.links.new(cube.outputs[0], join.inputs[0])
+    src.links.remove(first)
+    src.links.new(cubes[0].outputs[0], join.inputs[0])
+    ids = [link.multi_input_sort_id for link in join.inputs[0].links]
+    assert len(set(ids)) < len(ids)
+    survivor = dst.nodes.new('ShaderNodeValue')
+    pointer = survivor.as_pointer()
+    before = _links(src)
+    with pytest.raises(CompileError, match='ambiguous multi-input order'):
+        _copy_raw_role(src, dst, role)
+    assert _links(src) == before
+    assert len(dst.nodes) == 1 and dst.nodes[0].as_pointer() == pointer
