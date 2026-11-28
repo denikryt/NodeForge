@@ -11,7 +11,10 @@ import ast
 from graphlib import CycleError, TopologicalSorter
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Mapping
+from typing import Mapping, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .ir import IRBody
 
 from ..compiler_identities import ModuleId, SourceDefinitionRef
 from ..errors import CompileError
@@ -149,6 +152,38 @@ class SourceCallGraph:
         """Return only definitions without incoming intra-module references."""
         incoming = {target for _, target in self.edges}
         return tuple(vertex for vertex in self.vertices if vertex not in incoming)
+
+
+def uninvoked_entries(graph: SourceCallGraph, body: IRBody) -> tuple[SourceDefinitionRef, ...]:
+    """Select independent definitions not invoked by executable root IR."""
+    from .ir import (IRAssign, IRBindLeaves, IRCall, IRCallableKind, IRDiscardExpression,
+                     IRFinalExpression, IRIf, IROutput, IRRepeat)
+
+    called = set()
+
+    def visit_program(program):
+        """Collect canonical module-definition calls from one expression."""
+        for op in program.operations:
+            if isinstance(op, IRCall) and op.target.kind is IRCallableKind.SOURCE_FUNCTION:
+                fid = op.target.function_id
+                if fid.kind == 'MODULE_DEF':
+                    called.add(SourceDefinitionRef(fid.module, fid.name))
+
+    def visit_body(current):
+        """Traverse retained control flow, without entering function definitions."""
+        for stmt in current.statements:
+            if isinstance(stmt, (IRAssign, IRBindLeaves, IRDiscardExpression, IRFinalExpression, IROutput)):
+                visit_program(stmt.value)
+            elif isinstance(stmt, IRIf):
+                visit_program(stmt.condition)
+                visit_body(stmt.true_body)
+                visit_body(stmt.false_body)
+            elif isinstance(stmt, IRRepeat):
+                visit_program(stmt.iterations)
+                visit_body(stmt.body)
+
+    visit_body(body)
+    return tuple(ref for ref in graph.entries if ref not in called)
 
 
 def resolve_source_call_graph(resolved: ResolvedSourceModule) -> SourceCallGraph:

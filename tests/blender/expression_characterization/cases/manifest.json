@@ -546,7 +546,7 @@
   },
   {
     "id": "top_level_forward_mixed",
-    "description": "Root ordinary nodes and a forward-declared function call; unused definition is not placed",
+    "description": "Root ordinary nodes and a forward-declared function call; unused independent definition is placed",
     "tags": [
       "top-level",
       "mixed",
@@ -636,7 +636,7 @@
   },
   {
     "id": "top_level_lexical_shadowing",
-    "description": "Parameter named like a module function is copied and used as data, without materializing shadowed callable",
+    "description": "Parameter named like a module function is copied and used as data, with independent shadowed callable placed separately",
     "tags": [
       "top-level",
       "shadowing",
@@ -688,7 +688,7 @@
   },
   {
     "id": "top_level_reachable_subgraph",
-    "description": "Mixed root nodes and A→B→C plus direct C reuse; unused standalone and B-calling definitions produce no groups",
+    "description": "Mixed root nodes and A→B→C plus direct C reuse; independent standalone and B-calling definitions appear at root",
     "tags": [
       "top-level",
       "mixed",

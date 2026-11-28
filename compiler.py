@@ -196,22 +196,25 @@ def _validate_composition_root_owner_id(target, root_id: str) -> None:
 
 @dataclass(frozen=True)
 class RootCompileResult:
-    """One unified root compilation outcome and its boundary-link losses."""
+    """One compilation outcome, with boundary-link losses and newly placed groups."""
 
     target: object
     outcome: str
     skipped_boundary_links: int = 0
+    placed_function_groups: tuple[str, ...] = ()
 
 
 def compile_source_in_tree(source: str, target, *, module_context: str | None = None,
                            resolved_environment=None) -> RootCompileResult:
-    """Replace root nodes for physical statements or publish definition groups only.
+    """Replace root nodes for physical statements or place missing definition groups.
 
     The semantic body is the sole mode selector; no source text or historical
     root state decides which physical graph owns this invocation.
     """
-    from .blender.root_update import validate_base_target, reject_node_local_animation, replace_prepared_root
-    from .blender.direct_composition import materialize_definition_entries
+    from .blender.root_update import (
+        RootUpdateError, reject_node_local_animation, replace_prepared_root, validate_base_target,
+    )
+    from .blender.direct_composition import materialize_definition_entries, place_definition_entries
     from .blender.function_materializer import FunctionMaterializationContext, FunctionMaterializer
     from .blender.group_backend import BlenderGroupBuildTransaction
     from .function_instances import (
@@ -237,7 +240,7 @@ def compile_source_in_tree(source: str, target, *, module_context: str | None = 
         _validate_composition_root_owner_id(target, physical_root_id)
         reject_node_local_animation(target)
         updated = replace_prepared_root(prepared, target, backend, session,
-                                       root_owner_uuid=physical_root_id)
+                                       root_owner_uuid=physical_root_id, snapshot=snapshot)
         return RootCompileResult(target, 'ROOT_REPLACEMENT', updated.skipped_boundary_links)
 
     transaction = BlenderGroupBuildTransaction()
@@ -246,30 +249,40 @@ def compile_source_in_tree(source: str, target, *, module_context: str | None = 
         function_compilation_trace=FunctionCompilationTrace(),
         source_callable_session=session,
     )
+    created_nodes = []
     try:
-        materialize_definition_entries(
+        groups = materialize_definition_entries(
             prepared, FunctionMaterializer(group_backend=backend), context, snapshot,
         )
+        place_definition_entries(target, groups, created_nodes)
+        placed_groups = tuple(node.node_tree.name for node in created_nodes)
         transaction.commit()
     except Exception as original_error:
         if transaction._closed:
             # Commit has crossed the point of no return. A cleanup warning
             # promoted to an exception cannot be repaired by rollback.
-            from .blender.root_update import RootUpdateError
             raise RootUpdateError(
                 f"Function groups were committed, but postcommit cleanup failed: {original_error}",
                 may_have_mutated=True,
             ) from original_error
+        rollback_failures = []
+        for node in reversed(created_nodes):
+            try:
+                target.nodes.remove(node)
+            except Exception as rollback_error:
+                rollback_failures.append(rollback_error)
         try:
             transaction.rollback()
         except Exception as rollback_error:
-            from .blender.root_update import RootUpdateError
+            rollback_failures.append(rollback_error)
+        if rollback_failures:
+            details = ", ".join(str(error) for error in rollback_failures)
             raise RootUpdateError(
-                f"Function-group rollback failed after {original_error}: {rollback_error}",
+                f"Function-group rollback failed after {original_error}: {details}",
                 may_have_mutated=True,
-            ) from rollback_error
+            ) from rollback_failures[0]
         raise
-    return RootCompileResult(target, 'GROUPS_ONLY', 0)
+    return RootCompileResult(target, 'GROUPS_ONLY', placed_function_groups=placed_groups)
 
 
 def _requires_mesh_compute(prepared) -> bool:

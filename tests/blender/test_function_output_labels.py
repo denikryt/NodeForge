@@ -49,8 +49,9 @@ def move():
     combined = join([left, right])
     return combined
 ''', root)
-    check(not list(root.nodes), 'group-only Compile inserted root instances')
     move = published_entry(root, 'move')
+    placed, = root.nodes
+    check(placed.node_tree == move, 'Compile should place the outer function group')
     check(_output_names(move) == ['Combined'], f'outer group outputs: {_output_names(move)}')
     shift_calls = [node for node in move.nodes if node.bl_idname == 'GeometryNodeGroup']
     check(len(shift_calls) == 2, 'expected two nested move_x calls')

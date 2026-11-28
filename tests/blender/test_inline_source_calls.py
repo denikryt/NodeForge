@@ -424,8 +424,8 @@ def test_standalone_and_declaration_only_materialization_ignore_compiler_paramet
     assert len(_nodes(standalone, 'ShaderNodeMath')) == 1
 
     root = _compose(source, 'NFTest_Inline_Definition_Only')
-    assert _nodes(root, 'GeometryNodeGroup') == []
     group = published_entry(root, 'inline_standalone')
+    assert [node.node_tree for node in _nodes(root, 'GeometryNodeGroup')] == [group]
     assert len([item for item in group.interface.items_tree
                 if item.item_type == 'SOCKET' and item.in_out == 'INPUT']) == 1
     assert len(_nodes(group, 'ShaderNodeMath')) == 1

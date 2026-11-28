@@ -506,13 +506,18 @@ def run_case(case):
             }
         else:
             actual_outcome = "graph"
+            groups_only = "top-level" in case["tags"] and outcome.outcome == "GROUPS_ONLY"
             result = {
                 "kind": "graph",
                 "graph": group_snapshot(
-                    group, include_dependencies=has_local or "top-level" in case["tags"],
+                    group, include_dependencies=not groups_only and (has_local or "top-level" in case["tags"]),
                 ),
             }
-            if "top-level" in case["tags"] and outcome.outcome == "GROUPS_ONLY":
+            if groups_only:
+                # Published graphs are recorded below. Root instances refer to them by name.
+                for node, row in zip(group.nodes, result["graph"]["nodes"]):
+                    if node.bl_idname == "GeometryNodeGroup":
+                        row["definition"] = node.node_tree.get("nodeforge_module_name")
                 published = [
                     candidate for candidate in bpy.data.node_groups
                     if candidate.as_pointer() not in before

@@ -67,8 +67,8 @@ def a() -> Geometry:
 def b() -> Geometry:
     return a()
 ''', target)
-    assert not any(node.bl_idname == 'GeometryNodeGroup' for node in target.nodes)
-    assert published_entry(target, 'b').get('nodeforge_module_name') == 'b'
+    placed, = target.nodes
+    assert placed.node_tree == published_entry(target, 'b')
 
 
 def test_explicit_int_runtime_range_count_entry_uses_int_socket():
@@ -80,8 +80,9 @@ def test_explicit_int_runtime_range_count_entry_uses_int_socket():
         x = x + 1.0
     return x
 ''', target)
-    assert not list(target.nodes)
+    placed, = target.nodes
     entry = published_entry(target, 'make_count')
+    assert placed.node_tree == entry
     assert any(item.name == 'count' and item.socket_type == 'NodeSocketInt'
                for item in entry.interface.items_tree if item.item_type == 'SOCKET')
     assert any(node.bl_idname == 'GeometryNodeRepeatInput' for node in entry.nodes)

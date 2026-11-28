@@ -482,7 +482,7 @@ def _fail(error, failures, *, possible_change):
     raise RootUpdateError(summary, may_have_mutated=possible_change or bool(failures)) from error
 
 
-def replace_prepared_root(prepared, target, backend, session, *, root_owner_uuid=None):
+def replace_prepared_root(prepared, target, backend, session, *, snapshot, root_owner_uuid=None):
     """Publish one privately lowered root graph with one rollback/commit owner."""
     import warnings
 
@@ -541,7 +541,7 @@ def replace_prepared_root(prepared, target, backend, session, *, root_owner_uuid
             _rehearse_root_restore(target, backup)
         candidate = build_private_root_candidate(
             prepared, target, backend, session, transaction=transaction,
-            root_owner_uuid=root_owner_uuid,
+            root_owner_uuid=root_owner_uuid, snapshot=snapshot,
         )
         resource_tx = candidate.resource_transaction
 

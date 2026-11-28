@@ -684,3 +684,81 @@ result = outer(5.0)'''
             compilation_identity=GroupCompilationIdentity(None, 'ROOT/later-shadow', 'ROOT/later-shadow', 'ROOT/later-shadow'),
             resolved_environment=environment,
             source_callable_session=SourceCallableSession(resolved_environment=environment))
+
+
+def _uninvoked(source):
+    """Analyze actual executable IR and return selected canonical entry names."""
+    from NodeForge.semantic.source_modules import uninvoked_entries
+    environment = ResolvedEnvironment({name: ResolvedCatalog(name, {})
+                                       for name in ('functions', 'examples', 'local')})
+    session = SourceCallableSession(resolved_environment=environment)
+    prepared = analyze_group_source(source,
+        compilation_identity=GroupCompilationIdentity(None, 'ROOT/entry-test', 'ROOT/entry-test', 'ROOT/entry-test'),
+        resolved_environment=environment, source_callable_session=session)
+    return [ref.name for ref in uninvoked_entries(prepared.source_call_graph, prepared.body)]
+
+
+@pytest.mark.parametrize(('root', 'expected'), [
+    ('result = a()', ['preview', 'other']),
+    ('alias = a\nresult = alias()', ['preview', 'other']),
+    ('alias = a', ['a', 'preview', 'other']),
+    ('result = a(__inline__=True)', ['preview', 'other']),
+    ('result = a(__unique__=True)', ['preview', 'other']),
+    ('result = a() + a()', ['preview', 'other']),
+    ('a()', ['preview', 'other']),
+    ('result = helper()', ['a', 'preview', 'other']),
+    ('for i in range(2):\n    result = a()', ['preview', 'other']),
+    ('for i in range(0):\n    a()', ['a', 'preview', 'other']),
+    ('result = a()\nfor i in repeat_range(2):\n    result = result + a()', ['preview', 'other']),
+    ('if False:\n    result = a()\nelse:\n    result = preview()', ['other']),
+])
+def test_uninvoked_entries_from_root_ir(root, expected):
+    """Only root invocations suppress independent entries; dependencies stay nested."""
+    declarations = '''def a() -> Float:
+    return 1.0
+
+def helper() -> Float:
+    return 2.0
+
+def preview() -> Float:
+    return helper()
+
+def other() -> Float:
+    return 3.0
+'''
+    assert _uninvoked(declarations + root) == expected
+    assert [ref.name for ref in _graph(declarations + root).entries] == ['a', 'preview', 'other']
+
+
+@pytest.mark.parametrize('source', [
+    'def a(__inline__=True) -> Float:\n    return 1.0\nx = a()',
+    'def a():\n    return 1.0, 2.0\nx, y = a()',
+    'def a():\n    return {"first": 1.0, "second": 2.0}\nx = a().first',
+    'def a() -> Bool:\n    return True\nif a():\n    x = 1.0\nelse:\n    x = 2.0',
+    'def a() -> Int:\n    return 2\nx = 1.0\nfor i in repeat_range(a()):\n    x = x + 1.0',
+    'x = a()\ndef a() -> Float:\n    return 1.0',
+])
+def test_uninvoked_entry_expression_and_control_flow_calls(source):
+    """Expression, condition, iteration and forward targets are canonical invocations."""
+    assert _uninvoked(source) == []
+
+
+def test_foreign_same_name_call_does_not_suppress_local_entry(tmp_path, monkeypatch):
+    """The same leaf name in another module has a distinct definition identity."""
+    from test_nested_package_functions import _install_namespace_package
+    from NodeForge import local_sources
+    monkeypatch.setattr(local_sources, "_catalog_input_paths", lambda: ((), ()))
+    from NodeForge import packages
+    from NodeForge.environment_resolution import resolve_environment
+    from NodeForge.semantic.source_modules import uninvoked_entries
+    try:
+        _install_namespace_package(tmp_path, {'foreign.nf': 'def a() -> Float:\n    return 2.0\n'})
+        environment = resolve_environment()
+        source = 'from packages import nested\ndef a() -> Float:\n    return 1.0\nx = nested.a()'
+        prepared = analyze_group_source(source,
+            compilation_identity=GroupCompilationIdentity(None, 'ROOT/entry-test', 'ROOT/entry-test', 'ROOT/entry-test'),
+            resolved_environment=environment,
+            source_callable_session=SourceCallableSession(resolved_environment=environment))
+        assert [ref.name for ref in uninvoked_entries(prepared.source_call_graph, prepared.body)] == ['a']
+    finally:
+        packages.set_packages_dir_for_tests(None)
