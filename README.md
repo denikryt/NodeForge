@@ -33,7 +33,7 @@ def make_cube(size: Float["Size"] = 2.0) -> Geometry:
 ```
 
 5. Return to the NodeForge sidebar and select the new text in **Text Script**.
-6. Click **Compile Script**. NodeForge creates a `make_cube` node-group datablock.
+6. Click **Compile Script**. NodeForge adds a Group Node for `make_cube` to the open tree.
 7. Connect the Group Node's **Value** output to the existing **Group Output** geometry input.
 
 See the [Get Started guide](https://denikryt.github.io/NodeForge/docs/latest/GET_STARTED/) for the complete beginner workflow.
@@ -85,7 +85,7 @@ NodeForge scripts can call reusable functions and can be extended through instal
 
 ## Additional libraries
 
-The Extension includes **NodeForge Math** for math operations and **NodeForge L-System** for procedural L-system generation. Both libraries are installed automatically when you enable NodeForge.
+Enabling NodeForge installs three bundled libraries for Blender node functions, math operations, and procedural L-system generation. See [Nodes](docs/NODES_GUIDE.md), [Math](docs/MATH_METHODS.md), and [L-System](docs/LSYSTEMS_SCRIPTING.md).
 
 Install or update other libraries from **NodeForge → Packages → Install ZIP**.
 

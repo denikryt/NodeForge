@@ -208,8 +208,7 @@ privileges. Install packages only from sources you trust. The
 evaluation modes, backend contexts, semantic values, and resource ownership.
 
 Owners declaring [`DynamicResults`](EXTENSION_API.md#invocation-dependent-results)
-require a same-owner `semantic.py` in the package ZIP. Set `nodeforge_min_version`
-to `0.94.0` or newer when using this API.
+require a same-owner `semantic.py` in the package ZIP.
 
 ## Public path constraints
 

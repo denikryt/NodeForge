@@ -28,6 +28,9 @@ nav:
       - Extension API Reference: EXTENSION_API.md
       - Geometry Nodes Coverage: GEOMETRY_NODES_COVERAGE.md
   - Libraries:
+      - Nodes:
+          - Guide: NODES_GUIDE.md
+          - Coverage Reference: NODES.md
       - Math:
           - Methods: MATH_METHODS.md
           - Functions: FUNCTIONS.md
